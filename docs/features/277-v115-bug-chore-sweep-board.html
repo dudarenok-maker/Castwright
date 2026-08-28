@@ -1,5 +1,5 @@
 <!--
-  DRIVING BOARD for docs/features/277-v115-bug-chore-sweep.md, Round 4.
+  DRIVING BOARD for docs/features/277-v115-bug-chore-sweep.md, Round 5.
 
   Hand-authored. NOT generated from the markdown, and the markdown must never be
   published in its place — passing the correct `url` while pointing at the `.md`
@@ -18,12 +18,17 @@
   file — so a redeploy never wipes progress, and this file stays the plan of
   record rather than a status snapshot that drifts from the board.
 
+  NOTE (2026-08-28): the previously-live board had drifted from this tracked
+  file — the deployed page said "audited 2026-08-25" while this file's last
+  commit said "audited 2026-08-18". This Round 5 rewrite closes that gap; keep
+  editing THIS file and republishing it, never patching the live page directly.
+
   Deliberately NOT a complete HTML document: the publisher wraps the file in its
   own <!doctype html><head></head><body> skeleton, so a doctype/<html>/<head>/
   <body> here would nest. Browsers still render it standalone for local preview.
 -->
 
-<title>v1.15 bug &amp; chore sweep — Round 4 board</title>
+<title>v1.15 bug &amp; chore sweep — Round 5 board</title>
 
 <style>
   :root {
@@ -204,8 +209,18 @@
   .tag.bug { color:var(--accent); border-color:var(--accent); }
   .tag.shipped { color:var(--ready); border-color:var(--ready); font-weight:700; }
   .tag.reopened { color:var(--gated); border-color:var(--gated); font-weight:700; }
+  .tag.gated { color:var(--gated); border-color:var(--gated); font-weight:700; }
+  .tag.premium { color:var(--onbox); border-color:var(--onbox); font-weight:700; }
   li.item.shipped { background:var(--ready-wash); }
   li.item.shipped .t { text-decoration:line-through; color:var(--muted); }
+
+  li.growth-row { display:grid; grid-template-columns:3rem 1fr; gap:.35rem .85rem;
+    padding:.8rem 1.3rem; border-bottom:1px solid var(--rule); align-items:start; }
+  li.growth-row:last-child { border-bottom:0; }
+  li.growth-row .num { font-family:var(--font-data); font-size:.95rem; font-weight:700;
+    color:var(--muted); padding-top:.05rem; }
+  li.growth-row .t { font-size:.94rem; line-height:1.4; }
+  li.growth-row .n { font-size:.83rem; color:var(--ink-2); margin-top:.22rem; }
 
   /* ---------- closing blocks ---------- */
   .cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(19rem,1fr));
@@ -253,50 +268,50 @@
 
   <header class="masthead">
     <div class="lead">
-      <p class="eyebrow">Plan 277 · Round 4 · driving board</p>
-      <h1>Draining the bug &amp; chore queue</h1>
-      <p class="standfirst">49 open items. Four different actions, not one backlog —
-        and a fifth of the queue that no amount of effort will ever clear.</p>
+      <p class="eyebrow">Plan 277 · Round 5 · driving board</p>
+      <h1>Deciding the bug &amp; chore queue</h1>
+      <p class="standfirst">58 real open items. The diff-shaped lane work is drained —
+        what's left is dominated by decisions and one overdue measurement session.</p>
     </div>
     <div class="stamp">
-      <span>baseline <b>main @ f2b2e866</b></span>
-      <span>taken <b>2026-08-11</b></span>
-      <span>audited <b>2026-08-18</b></span>
-      <span><b>14</b> bug · <b>35</b> chore (baseline)</span>
+      <span>baseline <b>main @ 67d0e990</b></span>
+      <span>taken <b>2026-08-28</b></span>
+      <span><b>31</b> of the original 49 (Round 4 baseline) closed since 08-11</span>
+      <span>raw open <b>60</b> (bug+chore) − <b>2</b> live agent-instruction children = <b>58</b> tracked</span>
       <button class="toggle" id="themeBtn" type="button" aria-label="Switch colour theme">◐ theme</button>
     </div>
   </header>
 
   <section class="drain" aria-labelledby="drainH">
-    <h2 id="drainH">The queue is not one pile</h2>
-    <p class="claim">Treating all 49 as a single backlog is why it looks immovable.
-      They split five ways — and only 20 of them are work you can dispatch tomorrow.</p>
+    <h2 id="drainH">The queue inverted, not just shrank</h2>
+    <p class="claim">Round 4 started 20-of-49 diff-shaped. Round 5 is 10-of-58 diff-shaped —
+      decisions and measurement are now the bottleneck, not code.</p>
 
     <div class="bar" role="group" aria-label="Filter items by disposition">
-      <button class="seg ready"   type="button" data-disp="ready"   aria-pressed="true" style="flex:20" title="20 diff-shaped items"><span>20</span></button>
-      <button class="seg design"  type="button" data-disp="design"  aria-pressed="true" style="flex:8"  title="8 design-first items"><span>8</span></button>
-      <button class="seg onbox"   type="button" data-disp="onbox"   aria-pressed="true" style="flex:6"  title="6 on-box items"><span>6</span></button>
+      <button class="seg ready"   type="button" data-disp="ready"   aria-pressed="true" style="flex:10" title="10 diff-shaped items"><span>10</span></button>
+      <button class="seg design"  type="button" data-disp="design"  aria-pressed="true" style="flex:26" title="26 decision-owed / design-first items"><span>26</span></button>
+      <button class="seg onbox"   type="button" data-disp="onbox"   aria-pressed="true" style="flex:7"  title="7 on-box items"><span>7</span></button>
       <button class="seg blocked" type="button" data-disp="blocked" aria-pressed="true" style="flex:10" title="10 blocked items"><span>10</span></button>
       <button class="seg gated"   type="button" data-disp="gated"   aria-pressed="true" style="flex:5"  title="5 gated items"><span>5</span></button>
     </div>
 
     <div class="legend">
       <div><i style="background:var(--ready)"></i><span><b>Ready</b> — dispatch now, in file-disjoint lanes</span></div>
-      <div><i style="background:var(--design)"></i><span><b>Design-first</b> — phase 1 only, closes in Round 5</span></div>
+      <div><i style="background:var(--design)"></i><span><b>Decision-owed / design-first</b> — a pick or a phase-1 pass, not a diff</span></div>
       <div><i style="background:var(--onbox)"></i><span><b>On-box</b> — the deliverable is a measurement</span></div>
       <div><i style="background:var(--blocked)"></i><span><b>Blocked</b> — a disposition decision, not work</span></div>
-      <div><i style="background:var(--gated)"></i><span><b>Gated</b> — live worktree or paused wave</span></div>
+      <div><i style="background:var(--gated)"></i><span><b>Gated</b> — live PR or branch right now, do not re-brief</span></div>
     </div>
     <p class="hint">Click a segment to filter the board. Tick an item to mark it cleared —
       progress is stored in this browser, so a redeploy of the page never wipes it.</p>
   </section>
 
   <div class="kpis">
-    <div class="kpi"><div class="v" id="kpiOpen">49</div><div class="l">open at baseline (08-11)</div></div>
-    <div class="kpi"><div class="v" style="color:var(--ready)">13</div><div class="l">closed since (08-18 audit)</div></div>
-    <div class="kpi"><div class="v" style="color:var(--gated)">4</div><div class="l">reopened since</div></div>
+    <div class="kpi"><div class="v" id="kpiOpen">58</div><div class="l">tracked &amp; open</div></div>
+    <div class="kpi"><div class="v" style="color:var(--ready)">31</div><div class="l">closed since Round 4 baseline (08-11)</div></div>
     <div class="kpi"><div class="v" style="color:var(--blocked)">10</div><div class="l">never, by effort</div></div>
-    <div class="kpi is-accent"><div class="v">63</div><div class="l">open queue today (net +27 vs baseline)</div></div>
+    <div class="kpi is-accent"><div class="v">3</div><div class="l">live PRs found &amp; excluded from re-brief</div></div>
+    <div class="kpi"><div class="v">60</div><div class="l">raw open bug+chore (2 agent-instruction children excluded)</div></div>
     <div class="kpi"><div class="v" id="kpiDone">0</div><div class="l">ticked here</div></div>
   </div>
 
@@ -309,492 +324,525 @@
     <button class="chip" type="button" data-area="fs"   aria-pressed="false">full-stack</button>
     <span class="spacer"></span>
     <button class="chip" type="button" id="hideDone" aria-pressed="false">hide ticked</button>
-    <span class="count" id="showing">49 of 49 shown</span>
+    <span class="count" id="showing">58 of 58 shown</span>
   </div>
 
-  <div class="callout">
-    <h3>Round 0 — the premise pass, before a single lane is briefed</h3>
-    <p><b>20 of the 49 were filed 14 or more days ago.</b> Round 3 ran this check and found
-      <b>4 of 10 premises dead in twenty minutes</b>; two plan docs were nearly written against
-      defects that do not exist. The trap here is larger.</p>
-    <p class="nums">
-      <b>#1826</b> <b>#1691</b> <b>#1393</b> <b>#1309</b> <b>#898</b> <b>#485</b>
-      <b>#1685</b> <b>#1600</b> <b>#1527</b> <b>#1084</b>
-      &nbsp;+ duplicate check on <b>#2056</b> vs <b>#2026</b>
-    </p>
-    <p>Two mechanics are non-negotiable. Fetch with <code>--comments</code> —
-      <code>gh issue view --json body</code> omits them, and comments are where owner decisions
-      land. And <b>a claim that something isn't there needs a command, not a reading</b>; the
-      command's pattern is the thing to doubt.</p>
-    <p><b>Already reclassified by this pass:</b> #2187's fix shipped (alignment 67.7 → 96.0%) and
-      is now discharged (on-box row C2 ran 2026-08-12/13) · #1976 is a bookkeeping shell that closes with #1996 ·
-      #2015's capture half is solved, only the rebuild is open.</p>
-  </div>
-
-  <div class="callout" style="border-left-color:var(--ready)">
-    <h3>2026-08-18 audit — 13 of the 49 closed since baseline; the tracker never recorded it</h3>
-    <p>Live GitHub state pulled by number (all 49), cross-checked against issue state/stateReason.
-      <b>Group 3 and Group 4 are fully drained</b> (5/5 and 2/2). Lane A closed 3 of 4 — #2006
-      reopened. Group 1 closed 1 of 4 (#2057). <b>Both "gated" items closed</b>: #1984 and #2128
-      — the live worktrees this board said not to touch both finished and merged. None of Group
-      7 (design-first), Group 8 (on-box), or Group 9 (blocked) moved.</p>
-    <p class="nums">
-      <b>closed 13</b> · <b>open 36</b> · <b>reopened 4</b>
-    </p>
-    <p><b>Closed:</b> #2057 #2239 #2161 #2228 #2196 #1969 #2106 #1826 #1691 #2230 #2235 #1984
-      #2128.<br><b>Reopened after a prior close</b> (verify the reopening reason before
-      re-briefing — do not assume the original fix regressed): #2006 #2015 #2026 #822.</p>
-    <p>Tracker <a href="https://github.com/dudarenok-maker/Castwright/issues/2042">#2042</a> still
-      carries only its original 2 comments and the plan doc (<span class="mono">docs/features/277-v115-bug-chore-sweep.md</span>)
-      has no commit since <span class="mono">ec7c241a</span> (the Round 4 plan itself) — so this
-      closure wave ran outside the plan's own bookkeeping. <b>Filing a Round 4 outcome comment on
-      #2042 is now owed</b>, same as Rounds 1–3 each got.</p>
-    <p><b>New since this board's 2026-08-11 baseline:</b> open bug+chore count is now
-      <b>63</b> (13 bug, 50 chore) against 49 at baseline — net +27 filed against 13 closed.
-      Almost none of the growth is organic sweep discovery: it is largely the Open Engine's own
-      independent work streams — the colon-rule/tag-clause chain (#2346, #2404, #2427), a
-      CodeQL clearance chain (#2416 + its 5 agent-instruction children #2417–2425), the on-box
-      register campaign (#2435 + #2453), and standalone decisions (#2433 dependabot, #2434
-      npm-audit gate, #2449 CI ffmpeg hang, #2303, #2331, #2347, #2352, #2362, #2366, #2367,
-      #2368, #2369). <b>Not folded into this board</b> — that is Round 5's triage, not this
-      audit's call to make unilaterally.</p>
-  </div>
+  <section class="group" aria-labelledby="collisionH" style="margin-bottom:1.25rem">
+    <header>
+      <h3 id="collisionH">Live collisions checked and excluded — not just issue state</h3>
+      <span class="disp gated">3 live PRs</span>
+      <span class="meta">a full open-PR + open-branch sweep, not a title read</span>
+      <p class="why">All three were headed for a fresh lane based on issue state alone — the
+        open-PR check is what moved them to <b>Gated</b> below instead. Two stale local-only
+        branches with no PR and no recent commits
+        (<span class="mono">docs/docs-2346-instruments</span>,
+        <span class="mono">fix/server-2687-external-files-floor-glob</span>) were also found and
+        are <em>not</em> treated as live.</p>
+    </header>
+    <ul class="items">
+      <li class="growth-row">
+        <div class="num mono">#2367</div>
+        <div class="body"><div class="t">PR #2753 open — analyzer GPU-split warning chain</div>
+        <div class="n">Was headed for the design-first growth bucket.</div></div>
+      </li>
+      <li class="growth-row">
+        <div class="num mono">#2582</div>
+        <div class="body"><div class="t">PR #2719 open — CUDA→CPU fallback detection</div>
+        <div class="n">Was headed for the decision-owed singles wave.</div></div>
+      </li>
+      <li class="growth-row">
+        <div class="num mono">#2641</div>
+        <div class="body"><div class="t">PR #2754 open — sidecar owner-note port-keying</div>
+        <div class="n">Was headed for the device/port-hygiene lane.</div></div>
+      </li>
+    </ul>
+  </section>
 
   <main id="board">
 
-    <!-- G1 -->
-    <section class="group" data-group="g1">
+    <!-- W0 -->
+    <section class="group" data-group="w0" id="w0">
       <header>
-        <h3>Bookkeeping closures</h3>
+        <h3>Wave 0 · bookkeeping</h3>
         <span class="disp ready">ready</span>
-        <span class="meta">4 items · one docs PR</span>
-        <span class="acts"><button class="btn" type="button" data-brief="g1">copy brief</button></span>
-        <p class="why">The cheapest reduction in the whole plan. <em>No code.</em> Bundle the
-          outstanding register-publish debts into the same PR.</p>
+        <span class="meta">4 items · no code</span>
+        <span class="acts"><button class="btn" type="button" data-brief="w0">copy brief</button></span>
+        <p class="why">The cheapest reduction available, same shape as every prior round's
+          bookkeeping group. <em>#1966's date gate expired 2026-08-14 — two weeks overdue.</em></p>
       </header>
       <ul class="items">
-        <li class="item shipped" data-id="2057" data-disp="ready" data-area="ops">
-          <input type="checkbox" aria-label="Mark 2057 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2057">#2057</a></div>
-          <div class="body"><div class="t">Reconcile the onbox register's owed #2026 row and republish the HTML twin</div>
-          <div class="n"><b>Unblocked since 2026-08-01</b>, when PR #2039 merged — actionable for ten days. The register gates every on-box PR; a stale row makes that gate lie.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag">ops</span><span class="tag">01 Aug</span></div>
-        </li>
-        <li class="item" data-id="1976" data-disp="ready" data-area="side">
-          <input type="checkbox" aria-label="Mark 1976 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1976">#1976</a></div>
-          <div class="body"><div class="t">A finished render strands ~3.9 GB of reclaimable VRAM</div>
-          <div class="n"><b>Annotate as a shell, don't schedule it.</b> Four of five criteria shipped; it closes when #1996 does. It reads like a live independent bug and is not one.</div></div>
-          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span><span class="tag">31 Jul</span></div>
-        </li>
         <li class="item" data-id="2056" data-disp="ready" data-area="side">
           <input type="checkbox" aria-label="Mark 2056 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2056">#2056</a></div>
           <div class="body"><div class="t">Russian neuter <span class="mono">-ее</span> mispronounced by Coqui XTTS v2</div>
-          <div class="n">Resolve against #2026 — duplicate, or split the upstream-blocked half cleanly. One honest ticket beats two half-descriptions.</div></div>
-          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span><span class="tag">01 Aug</span></div>
+          <div class="n">#2026 has now shipped — resolve #2056 against it: duplicate, or split the upstream-blocked half cleanly.</div></div>
+          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
         </li>
         <li class="item" data-id="2042" data-disp="ready" data-area="ops">
           <input type="checkbox" aria-label="Mark 2042 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2042">#2042</a></div>
           <div class="body"><div class="t">The sweep's own tracking issue</div>
-          <div class="n">Closes last, carrying the round's final numbers.</div></div>
-          <div class="tags"><span class="tag">ops</span><span class="tag">01 Aug</span></div>
-        </li>
-      </ul>
-    </section>
-
-    <!-- G2 -->
-    <section class="group" data-group="g2">
-      <header>
-        <h3>Lane A · server: <span class="mono">analysis.ts</span> + cast store</h3>
-        <span class="disp ready">ready</span>
-        <span class="meta">4 items · sequential</span>
-        <span class="acts"><button class="btn" type="button" data-brief="g2">copy brief</button></span>
-        <p class="why">All four touch the same files, so this is <em>one worktree run in order</em>
-          — not four parallel agents. Plan 277's invariant 1 is a constraint, not a suggestion.</p>
-      </header>
-      <ul class="items">
-        <li class="item shipped" data-id="2239" data-disp="ready" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2239 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2239">#2239</a></div>
-          <div class="body"><div class="t">Move <span class="mono">clearNotLinkedEdgesForDroppedRejections</span> out of <span class="mono">analysis.ts</span> into <span class="mono">store/</span></div>
-          <div class="n"><span class="mono">analysis.ts</span> is the file every cast-lock incident has run through; shrinking it is how the next one gets cheaper.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag">server</span><span class="tag">10 Aug</span></div>
-        </li>
-        <li class="item shipped" data-id="2161" data-disp="ready" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2161 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2161">#2161</a></div>
-          <div class="body"><div class="t"><span class="mono">rejectedPairs.forgotSupersededTo</span> can dangle the way <span class="mono">supersededBy</span> did before #2110</div>
-          <div class="n">A known-shape defect with a shipped precedent to copy.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag">server</span><span class="tag">06 Aug</span></div>
-        </li>
-        <li class="item shipped" data-id="2228" data-disp="ready" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2228 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2228">#2228</a></div>
-          <div class="body"><div class="t">srv-89 — no test stands up either analyzer persist block; three wiring facts are source-scan only</div>
-          <div class="n">Source-scan-only facts are exactly the <b>green-checking-nothing</b> class Round 2 catalogued seven times.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag">server</span><span class="tag">07 Aug</span></div>
-        </li>
-        <li class="item" data-id="2006" data-disp="ready" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2006 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2006">#2006</a></div>
-          <div class="body"><div class="t">srv-81 — the last open half of the three clone-consent TOCTOU gates</div>
-          <div class="n">Consent validated in one scope and written in another is a real correctness hole on a privacy-sensitive path.</div></div>
-          <div class="tags"><span class="tag reopened">⟳ reopened</span><span class="tag">server</span><span class="tag">31 Jul</span></div>
-        </li>
-      </ul>
-    </section>
-
-    <!-- G3 -->
-    <section class="group" data-group="g3">
-      <header>
-        <h3>Lane B · server: process, routes, voice scoring</h3>
-        <span class="disp ready">ready</span>
-        <span class="meta">5 items</span>
-        <span class="acts"><button class="btn" type="button" data-brief="g3">copy brief</button></span>
-        <p class="why">File-disjoint from Lane A. Two of these are <em>stale enough to premise-check
-          before briefing.</em></p>
-      </header>
-      <ul class="items">
-        <li class="item shipped" data-id="2196" data-disp="ready" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2196 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2196">#2196</a></div>
-          <div class="body"><div class="t">An out-of-process book folder move leaves a stale record that resurrects the old directory</div>
-          <div class="n"><b>Data-loss-adjacent</b> — the user's own filesystem action gets silently undone.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag bug">bug</span><span class="tag">server</span><span class="tag">06 Aug</span></div>
-        </li>
-        <li class="item shipped" data-id="1969" data-disp="ready" data-area="srv">
-          <input type="checkbox" aria-label="Mark 1969 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1969">#1969</a></div>
-          <div class="body"><div class="t">Reassigning a character's voice keeps scoring it against the old voice's persisted audition centroid</div>
-          <div class="n">Voice-match scores are wrong after any reassignment — a routine action.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag bug">bug</span><span class="tag">server</span><span class="tag">30 Jul</span></div>
-        </li>
-        <li class="item shipped" data-id="2106" data-disp="ready" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2106 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2106">#2106</a></div>
-          <div class="body"><div class="t"><span class="mono">findListenerPid</span> has no timeout, so a slow refusal resets the respawn budget forever</div>
-          <div class="n">Carries <span class="mono">needs-plan</span> — confirm it needs one rather than just a timeout. An unbounded respawn budget is an infinite-loop class, not a slowdown.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag bug">bug</span><span class="tag">server</span><span class="tag">05 Aug</span></div>
-        </li>
-        <li class="item shipped" data-id="1826" data-disp="ready" data-area="srv">
-          <input type="checkbox" aria-label="Mark 1826 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1826">#1826</a></div>
-          <div class="body"><div class="t">Serialize voice-library entry writes (per-uuid lock or <span class="mono">updatedAt</span> CAS)</div>
-          <div class="n"><b>Premise-check first</b> — the cast-lock sweep added a <span class="mono">voice-library-usage.ts</span> detector and may already cover this.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag">server</span><span class="tag age">26 Jul</span></div>
-        </li>
-        <li class="item shipped" data-id="1691" data-disp="ready" data-area="srv">
-          <input type="checkbox" aria-label="Mark 1691 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1691">#1691</a></div>
-          <div class="body"><div class="t">Make stage-1 cloud TPM reservation roster-aware (&gt;130-char-cast ceiling)</div>
-          <div class="n">A large cast blows the reservation ceiling silently. <b>Check against #1685</b> before dispatching.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag">server</span><span class="tag age">17 Jul</span></div>
-        </li>
-      </ul>
-    </section>
-
-    <!-- G4 -->
-    <section class="group" data-group="g4">
-      <header>
-        <h3>Lane C · frontend + test hygiene</h3>
-        <span class="disp ready">ready</span>
-        <span class="meta">2 items</span>
-        <span class="acts"><button class="btn" type="button" data-brief="g4">copy brief</button></span>
-        <p class="why">Small lane, but <em>#2235 goes first in the round</em> — a flake in the gate
-          corrupts every red-phase verification downstream of it.</p>
-      </header>
-      <ul class="items">
-        <li class="item shipped" data-id="2230" data-disp="ready" data-area="fe">
-          <input type="checkbox" aria-label="Mark 2230 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2230">#2230</a></div>
-          <div class="body"><div class="t">A 409 from the Listen-view book-meta editor is swallowed silently</div>
-          <div class="n">The edit vanishes with no error; the user retypes it and it vanishes again.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag bug">bug</span><span class="tag">frontend</span><span class="tag">07 Aug</span></div>
-        </li>
-        <li class="item shipped" data-id="2235" data-disp="ready" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2235 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2235">#2235</a></div>
-          <div class="body"><div class="t">Flaky <span class="mono">export.test.ts</span> dies with an uncaught ENOENT in its staging dir</div>
-          <div class="n">~1-in-2 standalone on a contended box. Round 1 put this class first for exactly this reason.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag bug">bug</span><span class="tag">test</span><span class="tag">07 Aug</span></div>
-        </li>
-      </ul>
-    </section>
-
-    <!-- G5 -->
-    <section class="group" data-group="g5">
-      <header>
-        <h3>Lane D · ops, config, CI</h3>
-        <span class="disp ready">ready</span>
-        <span class="meta">4 items</span>
-        <span class="acts"><button class="btn" type="button" data-brief="g5">copy brief</button></span>
-        <p class="why">Independent of the server lanes. <em>#1966's date gate expires 2026-08-14</em>,
-          so it lands naturally inside this round.</p>
-      </header>
-      <ul class="items">
-        <li class="item" data-id="2194" data-disp="ready" data-area="ops">
-          <input type="checkbox" aria-label="Mark 2194 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2194">#2194</a></div>
-          <div class="body"><div class="t">An existing <span class="mono">server/.env</span> keeps every knob locked after #2179, because upgrades never rewrite it</div>
-          <div class="n"><b>Every existing install silently ignores the new defaults</b> — an upgrade that does nothing.</div></div>
-          <div class="tags"><span class="tag">ops</span><span class="tag">06 Aug</span></div>
-        </li>
-        <li class="item" data-id="1994" data-disp="ready" data-area="ops">
-          <input type="checkbox" aria-label="Mark 1994 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1994">#1994</a></div>
-          <div class="body"><div class="t">Qwen has no golden duration baseline, so a speech-rate regression on the default engine is invisible</div>
-          <div class="n">The golden tier covers the fallback engine and not the hot path.</div></div>
-          <div class="tags"><span class="tag">ops</span><span class="tag">31 Jul</span></div>
-        </li>
-        <li class="item" data-id="2243" data-disp="ready" data-area="ops">
-          <input type="checkbox" aria-label="Mark 2243 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2243">#2243</a></div>
-          <div class="body"><div class="t">ops-56 — decide whether <span class="mono">docs/superpowers/plans/**</span> is a record or live instructions, then finish the review-gate sweep</div>
-          <div class="n"><b>Stale docs read as conformance</b> — the #2144 failure shape exactly.</div></div>
-          <div class="tags"><span class="tag">ops</span><span class="tag">10 Aug</span></div>
+          <div class="n">Update with Round 5's numbers; do not close until Round 5 lands.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
         </li>
         <li class="item" data-id="1966" data-disp="ready" data-area="ops">
           <input type="checkbox" aria-label="Mark 1966 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1966">#1966</a></div>
           <div class="body"><div class="t">ops-48 — evaluate <span class="mono">@nanonets/graft</span></div>
-          <div class="n">Date-gated to <b>2026-08-14</b>. Retires a standing "revisit later" with a yes/no.</div></div>
-          <div class="tags"><span class="tag">ops</span><span class="tag">30 Jul</span></div>
+          <div class="n"><b>Date-gated to 2026-08-14 — now two weeks overdue.</b> A yes/no, not a design.</div></div>
+          <div class="tags"><span class="tag age">gate expired</span><span class="tag">ops</span></div>
+        </li>
+        <li class="item" data-id="2435" data-disp="ready" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2435 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2435">#2435</a></div>
+          <div class="body"><div class="t">On-box register campaign tracker</div>
+          <div class="n">Update to reflect Wave 4/5's disposition of its remaining rows.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
         </li>
       </ul>
     </section>
 
-    <!-- G6 -->
-    <section class="group" data-group="g6">
+    <!-- W1 -->
+    <section class="group" data-group="w1" id="w1">
       <header>
-        <h3>#898 phase 2 — execute-only</h3>
+        <h3>Wave 1 · #898 phase 2 — execute-only</h3>
         <span class="disp ready">ready</span>
-        <span class="meta">1 item · own thread</span>
-        <span class="acts"><button class="btn" type="button" data-brief="g6">copy brief</button></span>
-        <p class="why"><em>The highest expected value single item in the plan — and it should not
-          wait behind the lanes.</em></p>
+        <span class="meta">1 item · dispatch first, unconditionally</span>
+        <span class="acts"><button class="btn" type="button" data-brief="w1">copy brief</button></span>
+        <p class="why"><em>Three rounds running this has been called the highest expected value
+          item in the plan, and it still has not shipped.</em> No further round should pass with
+          it sitting fully briefed.</p>
       </header>
       <ul class="items">
         <li class="item" data-id="898" data-disp="ready" data-area="srv">
           <input type="checkbox" aria-label="Mark 898 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/898">#898</a></div>
           <div class="body"><div class="t">srv-41 — pairing device-token hardening: TTL + scoped access</div>
-          <div class="n">Spec merged (#2147), plan merged (#2151 — 10 tasks, 65 steps, 28 mutations, two PRs in a load-bearing order), handover brief posted. <b>Phase 1 is complete; brief a fresh implementation thread from the ticket and nothing else.</b> Its design phase already produced one live auth bypass (#2144) as a side effect.</div></div>
-          <div class="tags"><span class="tag">server</span><span class="tag">security</span><span class="tag age">18 Jun</span></div>
+          <div class="n">Spec merged (#2147), plan merged (#2151 — 10 tasks, 65 steps, 28 mutations, two PRs in a load-bearing order), handover brief posted. Brief a fresh implementation thread from the ticket and nothing else — do <b>not</b> fork this session.</div></div>
+          <div class="tags"><span class="tag">server</span><span class="tag">security</span><span class="tag age">18 Jun · 3 rounds stale</span></div>
         </li>
       </ul>
     </section>
 
-    <!-- G7 -->
-    <section class="group" data-group="g7">
+    <!-- W2 -->
+    <section class="group" data-group="w2" id="w2">
       <header>
-        <h3>Design-first — phase 1 only</h3>
+        <h3>Wave 2 · decision-owed singles</h3>
         <span class="disp design">design</span>
-        <span class="meta">8 items · closes in Round 5</span>
-        <span class="acts"><button class="btn" type="button" data-brief="g7">copy brief</button></span>
-        <p class="why">Each has more than one defensible answer, so the deliverable is a ticket +
-          plan doc. Use the <em>cold-brief handoff</em> — a fresh agent reads the brief with no
-          access to the drafts. <em>Take the first four; defer the rest.</em></p>
+        <span class="meta">5 items · options pre-enumerated</span>
+        <span class="acts"><button class="btn" type="button" data-brief="w2">copy brief</button></span>
+        <p class="why"><b>Not diff-shaped, despite reading like small fixes.</b> Each is filed as
+          a decision request with 2–3 options already weighed by whoever found it — a same-day
+          owner pick, then a same-round implementation brief, is proportionate. Reading only the
+          title here would repeat Round 3's title-only-triage trap.</p>
       </header>
       <ul class="items">
-        <li class="item" data-id="1996" data-disp="design" data-area="side">
-          <input type="checkbox" aria-label="Mark 1996 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1996">#1996</a></div>
-          <div class="body"><div class="t">Reclaim a stranded VRAM pool at render completion, not just on a later admission failure</div>
-          <div class="n"><b>Take this round.</b> Attempt 1 (PR #2029) was killed by review. Traps are recorded: call <span class="mono">PlacementController._reclaim_stranded_cache</span>, not <span class="mono">_placement.reclaim</span>; tests must assert <b>ordering</b>, not that the hook was called; the idle watchdogs are the likely home. Closing it also closes #1976.</div></div>
-          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span><span class="tag">31 Jul</span></div>
+        <li class="item" data-id="2608" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2608 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2608">#2608</a></div>
+          <div class="body"><div class="t">Dash-invariant needle search: right-boundary not checked for a bare hit (fuzzy AND exact paths)</div>
+          <div class="n">Pick: extend the fuzzy anchor to the next word/sentence boundary, skip the mid-word-hit short-circuit for fuzzy hits entirely, or something else.</div></div>
+          <div class="tags"><span class="tag bug">bug</span><span class="tag">server</span></div>
         </li>
-        <li class="item" data-id="2015" data-disp="design" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2015 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2015">#2015</a></div>
-          <div class="body"><div class="t">srv-82 — <span class="mono">analysis.ts</span>'s five cast.json writes replay a merge base read at the start of the run</div>
-          <div class="n"><b>Take this round — the rebuild half only.</b> Four prior designs died on the capture problem, which PR #2185 solved. Do not re-solve capture.</div></div>
-          <div class="tags"><span class="tag reopened">⟳ reopened</span><span class="tag">server</span><span class="tag">31 Jul</span></div>
+        <li class="item" data-id="2496" data-disp="design" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2496 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2496">#2496</a></div>
+          <div class="body"><div class="t">Quarantine-health report misclassifies a "Not quarantined — still gates" register row</div>
+          <div class="n">Pick: exclude such rows entirely, relabel their bucket legend, or leave as-is. Option 1 needs a named regression test's expectations updated.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
         </li>
-        <li class="item" data-id="1932" data-disp="design" data-area="side">
-          <input type="checkbox" aria-label="Mark 1932 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1932">#1932</a></div>
-          <div class="body"><div class="t">side-18 — consolidate the two Coqui VRAM eviction mechanisms</div>
-          <div class="n"><b>Take this round.</b> Premise verified as holding in Round 3. Either consolidate, or document the split as deliberate and scope each in code — two mechanisms for one job is how the next OOM gets misdiagnosed.</div></div>
-          <div class="tags"><span class="tag">sidecar</span><span class="tag age">28 Jul</span></div>
+        <li class="item" data-id="2516" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2516 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2516">#2516</a></div>
+          <div class="body"><div class="t">Generation SSE reconnect retries deterministic precondition failures needlessly</div>
+          <div class="n">Pick: skip reconnect on any stable <span class="mono">errorCode</span>, a narrower subset, or leave as-is. <b>Explicitly marked "not urgent" by its own filer</b> — lowest priority in this wave, can slip a round for free.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
         </li>
-        <li class="item" data-id="2131" data-disp="design" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2131 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2131">#2131</a></div>
-          <div class="body"><div class="t">Decide whether an unresolvable <span class="mono">qa.asr.model</span> should fail early, not just non-fatally at first transcribe</div>
-          <div class="n"><b>Take this round.</b> Today a whole book renders before the QA gate discovers it cannot run.</div></div>
-          <div class="tags"><span class="tag">server</span><span class="tag">05 Aug</span></div>
+        <li class="item" data-id="2682" data-disp="design" data-area="side">
+          <input type="checkbox" aria-label="Mark 2682 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2682">#2682</a></div>
+          <div class="body"><div class="t"><span class="mono">asr.warm</span> footprint key can never learn past its 128MB seed</div>
+          <div class="n">Pick: leave the seed as a permanent floor, switch to the torch-allocator-peak instrument every other engine uses, or document it as structurally unfalsifiable for this model class.</div></div>
+          <div class="tags"><span class="tag">sidecar</span></div>
         </li>
-        <li class="item shipped" data-id="2059" data-disp="design" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2059 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2059">#2059</a></div>
-          <div class="body"><div class="t">Attribution-dialogue leading + interior dash produces a doubled comma</div>
-          <div class="n"><b>Shipped PR #2688.</b> Doubled commas from dash-to-comma conversion collapse to a single comma (51 unit tests). The design was decided and shipped, closing #2059.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag bug">bug</span><span class="tag">server</span><span class="tag">01 Aug</span></div>
-        </li>
-        <li class="item" data-id="1309" data-disp="design" data-area="ops">
-          <input type="checkbox" aria-label="Mark 1309 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1309">#1309</a></div>
-          <div class="body"><div class="t">ops-24 — the LAN port-443 forwarder collapses per-client identity, weakening rate limits</div>
-          <div class="n">Defer. Verified byte-for-byte in Round 3. Rate limits that cannot distinguish clients are not rate limits.</div></div>
-          <div class="tags"><span class="tag">ops</span><span class="tag age">04 Jul</span></div>
-        </li>
-        <li class="item" data-id="485" data-disp="design" data-area="side">
-          <input type="checkbox" aria-label="Mark 485 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/485">#485</a></div>
-          <div class="body"><div class="t">side-13 — import safety + provenance for shared voice artifacts</div>
-          <div class="n">Defer. Size M; gates fs-28 … fs-31, so it is holding up more than itself.</div></div>
-          <div class="tags"><span class="tag">sidecar</span><span class="tag age">02 Jun</span></div>
-        </li>
-        <li class="item" data-id="1393" data-disp="design" data-area="srv">
-          <input type="checkbox" aria-label="Mark 1393 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1393">#1393</a></div>
-          <div class="body"><div class="t">srv-58 — <span class="mono">reconcileResidentQwenTiers</span> can evict a Qwen tier a concurrent book is mid-render on</div>
-          <div class="n"><b>Paused after three rejected designs.</b> Its own verified facts — no per-segment tier stamp, and <span class="mono">inFlightByBook</span> cannot see splice or QA-repair renders — rule out the shape it was filed as. Restart needs a fresh thread from the <span class="mono">synthesiseChapter</span> publishing question, not a fourth revision.</div></div>
-          <div class="tags"><span class="tag">server</span><span class="tag age">06 Jul</span></div>
+        <li class="item" data-id="2747" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2747 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2747">#2747</a></div>
+          <div class="body"><div class="t"><span class="mono">blankCommentsAndStrings()</span> can hide a real unguarded spawn after a regex literal with an unpaired quote/backtick</div>
+          <div class="n">Pick: a real minimal JS tokenizer, accept-and-document the blind spot, or a narrower structural mitigation that fails loud instead of silently blanking.</div></div>
+          <div class="tags"><span class="tag bug">bug</span><span class="tag">test</span></div>
         </li>
       </ul>
     </section>
 
-    <!-- G8 -->
-    <section class="group" data-group="g8">
+    <!-- W2b -->
+    <section class="group" data-group="w2b" id="w2b">
       <header>
-        <h3>On-box — one GPU sitting clears six</h3>
-        <span class="disp onbox">on-box</span>
-        <span class="meta">6 items · one session</span>
-        <span class="acts"><button class="btn" type="button" data-brief="g8">copy brief</button></span>
-        <p class="why">The deliverable is a <em>measurement</em>, not a diff — dispatching a coding
-          agent at these accomplishes nothing. <em>Nothing else in the plan has this ratio.</em></p>
+        <h3>Wave 2b · #2596 — decision-owed, Premium tier</h3>
+        <span class="disp design">design</span>
+        <span class="meta">1 item · blast-radius review, not a same-day pick</span>
+        <span class="acts"><button class="btn" type="button" data-brief="w2b">copy brief</button></span>
+        <p class="why">Named separately from Wave 2 because the issue itself invokes the
+          model-routing table's <em>Premium</em> tier — real blast radius to a live user's
+          Pinokio install, with only acceptance-test coverage on the CLI half it would change.
+          Give this the adversarial-review weight it asks for; do not fold it into a quick pick.</p>
       </header>
       <ul class="items">
-        <li class="item" data-id="2187" data-disp="onbox" data-area="srv">
-          <input type="checkbox" aria-label="Mark 2187 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2187">#2187</a></div>
-          <div class="body"><div class="t">srv-59 follow-up — dialogue-structure aligner under-aligns on Russian dash dialogue</div>
-          <div class="n"><b>The fix already shipped</b> (<span class="mono">b2be5b7b</span>; book alignment 67.7 → 96.0%). <b>Superseded: the #2187 row ran 2026-08-12/13 and discharged.</b> Group C renumbered afterwards, so today's <span class="mono">C2</span> is the unrelated #2253 dialogue-convention row — do not discharge it against this instruction.</div></div>
-          <div class="tags"><span class="tag bug">bug</span><span class="tag">server</span><span class="tag">06 Aug</span></div>
+        <li class="item" data-id="2596" data-disp="design" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2596 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2596">#2596</a></div>
+          <div class="body"><div class="t"><span class="mono">resolve-release.js</span> can stamp a Pinokio venv from a stale CRLF checkout</div>
+          <div class="n">A working <span class="mono">rm</span> + <span class="mono">git checkout --</span> recipe is known (confirmed during #2588's review — <span class="mono">git rm --cached</span> was tried and is broken). The open question is whether to wire it generically (anything <span class="mono">.gitattributes</span> pins to <span class="mono">eol=lf</span>) or hardcode today's path, and whether install/update infra with no unit safety net is the right place to add it at all.</div></div>
+          <div class="tags"><span class="tag premium">premium</span><span class="tag">ops</span></div>
         </li>
-        <li class="item" data-id="2026" data-disp="onbox" data-area="side">
-          <input type="checkbox" aria-label="Mark 2026 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2026">#2026</a></div>
-          <div class="body"><div class="t">XTTS Russian quality: neuter <span class="mono">-ее</span>, no pause on a leading em-dash, rare language collapse</div>
-          <div class="n">Reproduces on a stock catalogue voice, so it is engine-level, not clone-related.</div></div>
-          <div class="tags"><span class="tag reopened">⟳ reopened</span><span class="tag bug">bug</span><span class="tag">sidecar</span><span class="tag">01 Aug</span></div>
+      </ul>
+    </section>
+
+    <!-- W3 -->
+    <section class="group" data-group="w3" id="w3">
+      <header>
+        <h3>Wave 3 · diff-shaped lane, one file</h3>
+        <span class="disp ready">ready</span>
+        <span class="meta">2 items · one lane</span>
+        <span class="acts"><button class="btn" type="button" data-brief="w3">copy brief</button></span>
+        <p class="why">Both in <span class="mono">server/tts-sidecar/main.py</span> — <b>one
+          lane, not two</b>, per the Round-1 Lane-4 rule (files that overlap share a lane
+          regardless of how unrelated the defects look).</p>
+      </header>
+      <ul class="items">
+        <li class="item" data-id="2750" data-disp="ready" data-area="side">
+          <input type="checkbox" aria-label="Mark 2750 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2750">#2750</a></div>
+          <div class="body"><div class="t">SpeakerEngine never restores its device pin after a cuda→cpu self-demotion</div>
+          <div class="n">Same class as #2642 (Whisper, already fixed) and #1730 gap-3 (Coqui) — #2642's audit enumerated all four engines and missed this one.</div></div>
+          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
         </li>
-        <li class="item" data-id="1998" data-disp="onbox" data-area="side">
-          <input type="checkbox" aria-label="Mark 1998 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1998">#1998</a></div>
-          <div class="body"><div class="t">A cloned voice on XTTS loses most of its speaker identity in a language other than the source clip's</div>
-          <div class="n">Measured 0.600 → 0.229.</div></div>
-          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span><span class="tag">31 Jul</span></div>
+        <li class="item" data-id="2752" data-disp="ready" data-area="side">
+          <input type="checkbox" aria-label="Mark 2752 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2752">#2752</a></div>
+          <div class="body"><div class="t"><span class="mono">design_voice()</span>'s 1.7B-Base evict guard blind to an in-flight base17 load</div>
+          <div class="n">Same blind-spot shape PR #2745 just fixed on the design side, in the opposite direction (<span class="mono">main.py:6472</span>).</div></div>
+          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
         </li>
+      </ul>
+    </section>
+
+    <!-- W4 -->
+    <section class="group" data-group="w4" id="w4">
+      <header>
+        <h3>Wave 4 · register mechanics — decide #2708 first</h3>
+        <span class="disp design">design</span>
+        <span class="meta">4 items · one decision gates a 3-item lane</span>
+        <span class="acts"><button class="btn" type="button" data-brief="w4">copy brief</button></span>
+        <p class="why">A self-replicating family: #2629's closure orphaned #2721 — a fix creating
+          the next ticket about itself. <b>Decide #2708 first</b> or risk a sixth register ticket
+          the same way.</p>
+      </header>
+      <ul class="items">
+        <li class="item" data-id="2708" data-disp="design" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2708 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2708">#2708</a></div>
+          <div class="body"><div class="t">ops-63 — decide whether the on-box register carries a changelog at all</div>
+          <div class="n"><b>Take this first.</b> Plausibly shapes what #2599/#2603/#2721 should even do.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
+        </li>
+        <li class="item" data-id="2599" data-disp="ready" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2599 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2599">#2599</a></div>
+          <div class="body"><div class="t"><span class="mono">check-onbox-register.mjs</span>'s <span class="mono">--against-published</span> check is blind to row content</div>
+          <div class="n">Only compares totals/counts/IDs, not row text.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
+        </li>
+        <li class="item" data-id="2603" data-disp="ready" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2603 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2603">#2603</a></div>
+          <div class="body"><div class="t">No mechanical guard validates <span class="mono">A\d+/E\d+</span> row citations against the register's actual headings</div>
+          <div class="n">Same family as #2599 — consider one combined fix.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
+        </li>
+        <li class="item" data-id="2721" data-disp="ready" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2721 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2721">#2721</a></div>
+          <div class="body"><div class="t">ops-64 — rehome the wrongId-widening deferral that #2629's closure orphans</div>
+          <div class="n">The citation-rot class, one level up: three sites pointed at #2629 as their open home, and it just closed.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
+        </li>
+      </ul>
+    </section>
+
+    <!-- W5 -->
+    <section class="group" data-group="w5" id="w5">
+      <header>
+        <h3>Wave 5 · on-box — one GPU sitting</h3>
+        <span class="disp onbox">on-box</span>
+        <span class="meta">7 items · one session</span>
+        <span class="acts"><button class="btn" type="button" data-brief="w5">copy brief</button></span>
+        <p class="why">The deliverable is a <em>measurement</em>, not a diff. <b>Zero GPU sittings
+          happened across all four prior rounds</b> despite this being called the best ratio in
+          the plan every single time — do not let it slip a fifth.</p>
+      </header>
+      <ul class="items">
         <li class="item" data-id="1084" data-disp="onbox" data-area="srv">
           <input type="checkbox" aria-label="Mark 1084 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1084">#1084</a></div>
           <div class="body"><div class="t">ASR content-QA never tuned or validated for non-English</div>
-          <div class="n">The gate went live on non-EN at <span class="mono">3a56bf74</span> with an English-tuned <span class="mono">maxWer: 0.4</span> cap. Pairs with #1527.</div></div>
-          <div class="tags"><span class="tag">server</span><span class="tag age">24 Jun</span></div>
+          <div class="n">Pairs with #1527.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
         </li>
         <li class="item" data-id="1527" data-disp="onbox" data-area="srv">
           <input type="checkbox" aria-label="Mark 1527 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1527">#1527</a></div>
           <div class="body"><div class="t">On-box <span class="mono">maxWer</span> calibration for es / fr / de / ru</div>
           <div class="n">The #1084 follow-up — same sitting, same corpus.</div></div>
-          <div class="tags"><span class="tag">server</span><span class="tag age">11 Jul</span></div>
+          <div class="tags"><span class="tag">server</span></div>
         </li>
         <li class="item" data-id="1685" data-disp="onbox" data-area="srv">
           <input type="checkbox" aria-label="Mark 1685 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1685">#1685</a></div>
-          <div class="body"><div class="t">Verify #1682 cloud request sizing on-box, and calibrate the stage-2 local input fraction</div>
-          <div class="n">Settle this before dispatching #1691 — they touch the same ceiling.</div></div>
-          <div class="tags"><span class="tag">server</span><span class="tag age">17 Jul</span></div>
+          <div class="body"><div class="t">Verify #1682 cloud request sizing on-box, calibrate the stage-2 local input fraction</div>
+          <div class="n">Verify #1691's ceiling didn't need this calibration to ship.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
+        </li>
+        <li class="item" data-id="2583" data-disp="onbox" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2583 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2583">#2583</a></div>
+          <div class="body"><div class="t">ops-67 — on-box acceptance gap: <span class="mono">ensureOrtMarker</span> owner==='plain'/'none' cases have no acceptance row</div>
+          <div class="n">Bookkeeping — add the missing register row(s).</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
+        </li>
+        <li class="item" data-id="2616" data-disp="onbox" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2616 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2616">#2616</a></div>
+          <div class="body"><div class="t">Group C: the Ночной дозор re-analysis session (C1–C4)</div>
+          <div class="n"><b>Re-scope before dispatch</b> — #2288 (one of its two paired code bugs) shipped without this session running; confirm what is actually still unmeasured.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
+        </li>
+        <li class="item" data-id="1998" data-disp="onbox" data-area="side">
+          <input type="checkbox" aria-label="Mark 1998 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1998">#1998</a></div>
+          <div class="body"><div class="t">A cloned voice on XTTS loses most of its speaker identity in a language other than the source clip's</div>
+          <div class="n">Measured 0.600 → 0.229.</div></div>
+          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
+        </li>
+        <li class="item" data-id="2700" data-disp="onbox" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2700 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2700">#2700</a></div>
+          <div class="body"><div class="t">Voice reassignment: validate a rebuilt audition centroid actually scores correctly</div>
+          <div class="n">The only prior on-box run hit <span class="mono">too-short</span> and never reached this case — confirm the discard-then-rebuild path scores correctly once it clears <span class="mono">MIN_DURATION_SEC</span>.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
         </li>
       </ul>
     </section>
 
-    <!-- G9 -->
-    <section class="group" data-group="g9">
+    <!-- W6 -->
+    <section class="group" data-group="w6" id="w6">
       <header>
-        <h3>Blocked — a disposition decision, not work</h3>
+        <h3>Wave 6 · design-first — a real premise pass owed</h3>
+        <span class="disp design">design</span>
+        <span class="meta">19 items · none verified yet</span>
+        <span class="acts"><button class="btn" type="button" data-brief="w6">copy brief</button></span>
+        <p class="why"><b>None of these have had the Round-3-style verification pass.</b> Most of
+          this wave is the growth bucket that sat untouched across all four prior rounds,
+          title-only. Fetch with <span class="mono">--comments</span> — <span class="mono">gh
+          issue view --json body</span> silently drops it, and that's where scope changes land.
+          Then take the first 4–6, defer the rest.</p>
+      </header>
+      <ul class="items">
+        <li class="item" data-id="2131" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2131 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2131">#2131</a></div>
+          <div class="body"><div class="t">Decide whether an unresolvable <span class="mono">qa.asr.model</span> should fail early</div>
+          <div class="n">Carryover from Round 4 Group 7 — not yet dispatched.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
+        </li>
+        <li class="item" data-id="1309" data-disp="design" data-area="ops">
+          <input type="checkbox" aria-label="Mark 1309 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1309">#1309</a></div>
+          <div class="body"><div class="t">ops-24 — the LAN port-443 forwarder collapses per-client identity</div>
+          <div class="n">Verified byte-for-byte in Round 3. Carryover, deferred twice by choice.</div></div>
+          <div class="tags"><span class="tag">ops</span><span class="tag age">stale</span></div>
+        </li>
+        <li class="item" data-id="485" data-disp="design" data-area="side">
+          <input type="checkbox" aria-label="Mark 485 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/485">#485</a></div>
+          <div class="body"><div class="t">side-13 — import safety + provenance for shared voice artifacts</div>
+          <div class="n">Size M; gates fs-28…fs-31. Carryover, deferred twice by choice.</div></div>
+          <div class="tags"><span class="tag">sidecar</span><span class="tag age">stale</span></div>
+        </li>
+        <li class="item" data-id="1393" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 1393 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1393">#1393</a></div>
+          <div class="body"><div class="t">srv-58 — <span class="mono">reconcileResidentQwenTiers</span> cross-book race</div>
+          <div class="n"><b>Paused after three rejected designs.</b> Restart needs a fresh thread from the <span class="mono">synthesiseChapter</span> publishing question, not a fourth revision.</div></div>
+          <div class="tags"><span class="tag">server</span><span class="tag age">paused</span></div>
+        </li>
+        <li class="item" data-id="2639" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2639 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2639">#2639</a></div>
+          <div class="body"><div class="t">User settings cannot express "the user explicitly chose this"</div>
+          <div class="n"><span class="mono">sidecarUrl</span>'s default is also a valid choice — an interface decision.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
+        </li>
+        <li class="item" data-id="2656" data-disp="design" data-area="side">
+          <input type="checkbox" aria-label="Mark 2656 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2656">#2656</a></div>
+          <div class="body"><div class="t">Determine whether stranded VRAM is a genuine leak or just the resident-model floor</div>
+          <div class="n">Successor to #1976/#1996 (both closed superseded). <b>Consider the #1932 decomposition-chain template</b> (#2689–2692) for this rather than one hand-run design thread.</div></div>
+          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
+        </li>
+        <li class="item" data-id="2303" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2303 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2303">#2303</a></div>
+          <div class="body"><div class="t">srv-96 — decide what cancelling an export should actually do</div>
+          <div class="n">Growth bucket — untouched across all four rounds, title-only.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
+        </li>
+        <li class="item" data-id="2331" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2331 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2331">#2331</a></div>
+          <div class="body"><div class="t"><span class="mono">priorCharacterId</span>: decide whether id-remap/merge sites should also record it</div>
+          <div class="n">Growth bucket — untouched, title-only.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
+        </li>
+        <li class="item" data-id="2347" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2347 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2347">#2347</a></div>
+          <div class="body"><div class="t">srv-33 — <span class="mono">workspaceDirOverride</span> outranks <span class="mono">WORKSPACE_DIR</span>, defeating worktree isolation</div>
+          <div class="n">Growth bucket — untouched, title-only.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
+        </li>
+        <li class="item" data-id="2352" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2352 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2352">#2352</a></div>
+          <div class="body"><div class="t">German's »…« primary and «…» secondary pairs are exact reverses — the Swiss entry is unreachable</div>
+          <div class="n">Growth bucket — untouched, title-only.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
+        </li>
+        <li class="item" data-id="2362" data-disp="design" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2362 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2362">#2362</a></div>
+          <div class="body"><div class="t">Decide what <span class="mono">check:onbox-register</span> compares beyond counts and row IDs</div>
+          <div class="n">Growth bucket. Overlaps Wave 4's register-mechanics family — resolve #2708 first, this may fold in.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
+        </li>
+        <li class="item" data-id="2366" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2366 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2366">#2366</a></div>
+          <div class="body"><div class="t">Stage 2 re-emits every sentence's text — 13,720 output tokens per call, dominates local wall clock</div>
+          <div class="n">Growth bucket — untouched, title-only.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
+        </li>
+        <li class="item" data-id="2369" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2369 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2369">#2369</a></div>
+          <div class="body"><div class="t">Russian stoplist: oblique pronoun cases and a class of -о manner adverbs may be scanned as tagged speakers</div>
+          <div class="n">Growth bucket — untouched, title-only.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
+        </li>
+        <li class="item" data-id="2433" data-disp="design" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2433 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2433">#2433</a></div>
+          <div class="body"><div class="t">ops-60 — decide whether to adopt <span class="mono">.github/dependabot.yml</span></div>
+          <div class="n">Growth bucket — untouched, title-only.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
+        </li>
+        <li class="item" data-id="2434" data-disp="design" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2434 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2434">#2434</a></div>
+          <div class="body"><div class="t">ops-61 — decide the shape of an npm audit CI gate</div>
+          <div class="n">Growth bucket — untouched, title-only.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
+        </li>
+        <li class="item" data-id="2449" data-disp="design" data-area="ops">
+          <input type="checkbox" aria-label="Mark 2449 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2449">#2449</a></div>
+          <div class="body"><div class="t">ops-62 — decide how CI's ffmpeg install should survive an apt hang</div>
+          <div class="n">Growth bucket — untouched, title-only.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
+        </li>
+        <li class="item" data-id="2346" data-disp="design" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2346 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2346">#2346</a></div>
+          <div class="body"><div class="t">The tag-clause guard (#2315) is inert for a paragraph typed wholly in a secondary-tier convention</div>
+          <div class="n">A real bug, likely resolvable without a full design pass once triaged. <b>Check <span class="mono">docs/docs-2346-instruments</span> first</b> — a stale branch (last touched 08-20, no PR) suggests someone already started and stalled.</div></div>
+          <div class="tags"><span class="tag bug">bug</span><span class="tag">server</span></div>
+        </li>
+        <li class="item" data-id="2404" data-disp="design" data-area="side">
+          <input type="checkbox" aria-label="Mark 2404 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2404">#2404</a></div>
+          <div class="body"><div class="t">Decision owed: Coqui designed-voice reassignment sharing a <span class="mono">resolvedVoiceName</span> and the #1969 audition-reference gate</div>
+          <div class="n">Pairs with #2346 (same colon-rule / tag-clause chain).</div></div>
+          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
+        </li>
+        <li class="item" data-id="2742" data-disp="design" data-area="side">
+          <input type="checkbox" aria-label="Mark 2742 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2742">#2742</a></div>
+          <div class="body"><div class="t">Qwen duration golden gate has weak statistical power against real regressions (single-draw assertion)</div>
+          <div class="n">Decide how many draws is enough — found by PR #2739's review, finding C2.</div></div>
+          <div class="tags"><span class="tag">sidecar</span></div>
+        </li>
+      </ul>
+    </section>
+
+    <!-- W7 -->
+    <section class="group" data-group="w7" id="w7">
+      <header>
+        <h3>Wave 7 · blocked + gated</h3>
         <span class="disp blocked">blocked</span>
-        <span class="meta">10 items · a fifth of the queue</span>
-        <span class="acts"><button class="btn" type="button" data-brief="g9">copy brief</button></span>
-        <p class="why"><em>No amount of effort clears these.</em> They wait on other people's
-          releases or on hardware that is not owned — and they distort every triage pass that
-          walks the queue. <em>Recommended: park with a <span class="mono">blocked</span> label
-          and a review date</em>, rather than closing, which loses the per-item context.</p>
+        <span class="meta">15 items · owner decision or do-not-touch</span>
+        <span class="acts"><button class="btn" type="button" data-brief="w7">copy brief</button></span>
+        <p class="why"><em>Blocked: no amount of effort clears these — unchanged since Round 4,
+          and the park-vs-collapse decision is now two rounds unanswered.</em> Gated: three have
+          a live open PR right now (see the collision callout above), two are fs-38 Wave 3,
+          still paused.</p>
       </header>
       <ul class="items">
         <li class="item" data-id="1228" data-disp="blocked" data-area="side">
           <input type="checkbox" aria-label="Mark 1228 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1228">#1228</a></div>
           <div class="body"><div class="t">side-23 — bump transformers to ≥5.3.0 (CVE-2026-4372)</div>
           <div class="n">Waits on <b>qwen-tts</b> upstream support.</div></div>
-          <div class="tags"><span class="tag">sidecar</span><span class="tag age">03 Jul</span></div>
+          <div class="tags"><span class="tag">sidecar</span></div>
         </li>
         <li class="item" data-id="893" data-disp="blocked" data-area="side">
           <input type="checkbox" aria-label="Mark 893 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/893">#893</a></div>
-          <div class="body"><div class="t">side-17 — sidecar engine-dep major bump (torch / transformers / huggingface_hub)</div>
+          <div class="body"><div class="t">side-17 — sidecar engine-dep major bump</div>
           <div class="n">Waits on <b>torchaudio EOL at 2.11</b>.</div></div>
-          <div class="tags"><span class="tag">sidecar</span><span class="tag age">18 Jun</span></div>
+          <div class="tags"><span class="tag">sidecar</span></div>
         </li>
         <li class="item" data-id="711" data-disp="blocked" data-area="ops">
           <input type="checkbox" aria-label="Mark 711 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/711">#711</a></div>
-          <div class="body"><div class="t">ops-14 — eslint 9→10 (+ <span class="mono">@eslint/js</span>)</div>
+          <div class="body"><div class="t">ops-14 — eslint 9→10</div>
           <div class="n">Waits on upstream <span class="mono">@eslint/js</span>.</div></div>
-          <div class="tags"><span class="tag">ops</span><span class="tag age">10 Jun</span></div>
+          <div class="tags"><span class="tag">ops</span></div>
         </li>
         <li class="item" data-id="431" data-disp="blocked" data-area="srv">
           <input type="checkbox" aria-label="Mark 431 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/431">#431</a></div>
-          <div class="body"><div class="t">srv-4 — track upstream-blocked deprecation chains (jsdom · archiver · @google/genai)</div>
-          <div class="n">A standing tracker; nothing to do until one of the three moves.</div></div>
-          <div class="tags"><span class="tag">server</span><span class="tag age">01 Jun</span></div>
+          <div class="body"><div class="t">srv-4 — track upstream-blocked deprecation chains</div>
+          <div class="n">A standing tracker; nothing to do until one of three moves.</div></div>
+          <div class="tags"><span class="tag">server</span></div>
         </li>
         <li class="item" data-id="790" data-disp="blocked" data-area="ops">
           <input type="checkbox" aria-label="Mark 790 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/790">#790</a></div>
           <div class="body"><div class="t">ops-17 — migrate the companion off KGP-applying plugins</div>
           <div class="n">Waits on <b>Flutter built-in Kotlin / AGP 9</b>.</div></div>
-          <div class="tags"><span class="tag">ops</span><span class="tag age">13 Jun</span></div>
+          <div class="tags"><span class="tag">ops</span></div>
         </li>
         <li class="item" data-id="1477" data-disp="blocked" data-area="ops">
           <input type="checkbox" aria-label="Mark 1477 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1477">#1477</a></div>
-          <div class="body"><div class="t">ops-27 — migrate to TypeScript 7.0 (native Go compiler)</div>
+          <div class="body"><div class="t">ops-27 — migrate to TypeScript 7.0</div>
           <div class="n">"Once the ecosystem catches up." It has not.</div></div>
-          <div class="tags"><span class="tag">ops</span><span class="tag age">09 Jul</span></div>
+          <div class="tags"><span class="tag">ops</span></div>
         </li>
         <li class="item" data-id="1335" data-disp="blocked" data-area="side">
           <input type="checkbox" aria-label="Mark 1335 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1335">#1335</a></div>
           <div class="body"><div class="t">AMD GPU support phase 2 — on-box acceptance</div>
           <div class="n">Needs <b>ROCm hardware that is not owned</b>.</div></div>
-          <div class="tags"><span class="tag">sidecar</span><span class="tag age">05 Jul</span></div>
+          <div class="tags"><span class="tag">sidecar</span></div>
         </li>
         <li class="item" data-id="822" data-disp="blocked" data-area="ops">
           <input type="checkbox" aria-label="Mark 822 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/822">#822</a></div>
           <div class="body"><div class="t">ops-16 — Pinokio installer on-box acceptance (Windows + macOS)</div>
-          <div class="n">Needs a <b>macOS box</b>. The Windows half could split out if that helps.</div></div>
-          <div class="tags"><span class="tag reopened">⟳ reopened</span><span class="tag">ops</span><span class="tag age">15 Jun</span></div>
+          <div class="n">Needs a <b>macOS box</b>.</div></div>
+          <div class="tags"><span class="tag">ops</span></div>
         </li>
         <li class="item" data-id="1001" data-disp="blocked" data-area="side">
           <input type="checkbox" aria-label="Mark 1001 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1001">#1001</a></div>
-          <div class="body"><div class="t">side-22 — explore building FlashAttention-2 from source for Windows cp312 / torch 2.11 / cu128</div>
+          <div class="body"><div class="t">side-22 — FlashAttention-2 from source for Windows cp312/torch2.11/cu128</div>
           <div class="n">No wheel path exists.</div></div>
-          <div class="tags"><span class="tag">sidecar</span><span class="tag age">22 Jun</span></div>
+          <div class="tags"><span class="tag">sidecar</span></div>
         </li>
         <li class="item" data-id="947" data-disp="blocked" data-area="ops">
           <input type="checkbox" aria-label="Mark 947 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/947">#947</a></div>
           <div class="body"><div class="t">ops-18 — catch any large-region visual change, not just the top-bar</div>
           <div class="n">Deferred <b>by its own issue text</b> until a real regression is observed.</div></div>
-          <div class="tags"><span class="tag">ops</span><span class="tag age">20 Jun</span></div>
+          <div class="tags"><span class="tag">ops</span></div>
         </li>
-      </ul>
-    </section>
-
-    <!-- G10 -->
-    <section class="group" data-group="g10">
-      <header>
-        <h3>Gated — not scheduled by this sweep</h3>
-        <span class="disp gated">gated</span>
-        <span class="meta">5 items</span>
-        <span class="acts"><button class="btn" type="button" data-brief="g10">copy brief</button></span>
-        <p class="why">Two sit in <em>live worktrees as of 2026-08-11</em>; three belong to a
-          <em>paused wave</em>. Dispatching into either is how two sessions steal each other's HEAD.</p>
-      </header>
-      <ul class="items">
-        <li class="item shipped" data-id="1984" data-disp="gated" data-area="fs">
-          <input type="checkbox" aria-label="Mark 1984 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1984">#1984</a></div>
-          <div class="body"><div class="t">Attribution collapse is invisible — the dropped-quotes panel shows the last batch only</div>
-          <div class="n">Was live in <span class="mono">wt-1984-spec</span> at baseline, revision 7, rounds 5–7 failing gates and scope growth stalled on sign-off. <b>Closed since</b> — see plan 277 / #2346 / #2427 / #2404 for the colon-rule follow-on chain this fed into.</div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag bug">bug</span><span class="tag">full-stack</span><span class="tag">31 Jul</span></div>
+        <li class="item" data-id="2367" data-disp="gated" data-area="srv">
+          <input type="checkbox" aria-label="Mark 2367 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2367">#2367</a></div>
+          <div class="body"><div class="t">Nothing warns when the analyzer model lands split across GPUs</div>
+          <div class="n"><b>Live PR #2753 open</b> — do not re-brief.</div></div>
+          <div class="tags"><span class="tag gated">⚠ gated</span><span class="tag">server</span></div>
         </li>
-        <li class="item shipped" data-id="2128" data-disp="gated" data-area="ops">
-          <input type="checkbox" aria-label="Mark 2128 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2128">#2128</a></div>
-          <div class="body"><div class="t">The repair pass's re-render list never clears — a re-rendered chapter reappears on every later run</div>
-          <div class="n">Was live in <span class="mono">wt-2128-audio-currency</span> at baseline. <b>Closed since.</b></div></div>
-          <div class="tags"><span class="tag shipped">✓ closed</span><span class="tag bug">bug</span><span class="tag">ops</span><span class="tag">05 Aug</span></div>
+        <li class="item" data-id="2582" data-disp="gated" data-area="side">
+          <input type="checkbox" aria-label="Mark 2582 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2582">#2582</a></div>
+          <div class="body"><div class="t">Sidecar should detect and surface a silent CUDAExecutionProvider→CPU fallback</div>
+          <div class="n"><b>Live PR #2719 open</b> — do not re-brief.</div></div>
+          <div class="tags"><span class="tag gated">⚠ gated</span><span class="tag">sidecar</span></div>
         </li>
-        <li class="item" data-id="2068" data-disp="gated" data-area="fs">
-          <input type="checkbox" aria-label="Mark 2068 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2068">#2068</a></div>
-          <div class="body"><div class="t">fs-38 — four residual gaps in the cast-time clone-readiness gate</div>
-          <div class="n">fs-38 Wave 3 is <b>paused</b> with E-04 failing and on-box at 16/60.</div></div>
-          <div class="tags"><span class="tag">full-stack</span><span class="tag">01 Aug</span></div>
+        <li class="item" data-id="2641" data-disp="gated" data-area="side">
+          <input type="checkbox" aria-label="Mark 2641 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2641">#2641</a></div>
+          <div class="body"><div class="t">Sidecar owner note is not port-scoped, clobbers across instances</div>
+          <div class="n"><b>Live PR #2754 open</b> — do not re-brief.</div></div>
+          <div class="tags"><span class="tag gated">⚠ gated</span><span class="tag">sidecar</span></div>
         </li>
         <li class="item" data-id="2054" data-disp="gated" data-area="fs">
           <input type="checkbox" aria-label="Mark 2054 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2054">#2054</a></div>
           <div class="body"><div class="t">fs-38 — cast-time clone gate is silent when a cloned slot has no resolvable <span class="mono">libraryUuid</span></div>
-          <div class="n">The render hard-fails <span class="mono">misconfigured</span>. Same paused wave.</div></div>
-          <div class="tags"><span class="tag">full-stack</span><span class="tag">01 Aug</span></div>
+          <div class="n">fs-38 Wave 3 stays paused.</div></div>
+          <div class="tags"><span class="tag">full-stack</span></div>
         </li>
         <li class="item" data-id="1600" data-disp="gated" data-area="fs">
           <input type="checkbox" aria-label="Mark 1600 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/1600">#1600</a></div>
           <div class="body"><div class="t">fs-61 — backfill designed voices + covers onto the zh / ja Coalfall placeholder samples</div>
           <div class="n">Needs the Qwen VoiceDesign pipeline on a GPU box, and the wave unpaused.</div></div>
-          <div class="tags"><span class="tag">full-stack</span><span class="tag age">14 Jul</span></div>
+          <div class="tags"><span class="tag">full-stack</span></div>
         </li>
       </ul>
     </section>
@@ -803,31 +851,34 @@
 
   <div class="cols">
     <section class="panel">
-      <h3>Sequencing</h3>
+      <h3>What's left</h3>
       <ol class="seq">
-        <li><b>Round 0</b> — premise pass. Read-only, no branch.</li>
-        <li><b>Group 1</b> — bookkeeping, one docs PR.</li>
-        <li><b>#898 phase 2</b> in its own thread, <b>in parallel with Lanes A–D</b>: four worktrees, file-disjoint, Lane A internally sequential.</li>
-        <li><b>Group 7</b> — phase-1 threads for #1996, #2015, #1932, #2131.</li>
-        <li><b>Group 8</b> — at the next GPU sitting.</li>
-        <li><b>Group 9</b> — on the owner's call.</li>
+        <li><b>Wave 1 (#898)</b> and <b>Wave 0</b> — dispatch in parallel, file-disjoint.</li>
+        <li><b>Wave 2</b> — five same-day owner picks, then brief the implementations.</li>
+        <li><b>Wave 4</b> — decide #2708, then the register lane.</li>
+        <li><b>Wave 3</b> lane.</li>
+        <li><b>Wave 5</b> — the fourth round asking for a GPU sitting.</li>
+        <li><b>Wave 6</b> — premise pass first (19 items, none verified), phase-1 for survivors.</li>
+        <li><b>Wave 2b</b> and <b>Wave 7</b>'s two owner decisions — on their own schedule.</li>
       </ol>
     </section>
 
     <section class="panel">
-      <h3>Decisions this round is waiting on</h3>
+      <h3>Decisions still waiting on the owner</h3>
       <ol class="decisions">
-        <li><span><b>The blocked ten</b>Park with a label, or collapse into one upstream-watch tracker? Parking is recommended.</span></li>
-        <li><span><b>A GPU sitting</b>Six items and a large slice of the owed acceptance debt clear in one session.</span></li>
-        <li><span><b>fs-38 Wave 3</b>Stay paused, or unpause — which adds 3 items and unblocks four stale worktrees.</span></li>
-        <li><span><b>#1984 scope growth</b>Stalled on sign-off, independently of this sweep.</span></li>
+        <li><span><b>Wave 2's five picks</b>Each already has 2–3 options laid out — a same-day decision unblocks same-round implementation.</span></li>
+        <li><span><b>Wave 2b (#2596)</b>Premium-tier review before implementation, given the stated blast radius.</span></li>
+        <li><span><b>Wave 4 (#2708)</b>Changelog or not, before the rest of the register lane proceeds.</span></li>
+        <li><span><b>Wave 7 blocked</b>Park with a label, or collapse into one tracking issue? Carried, unanswered, from Round 4.</span></li>
+        <li><span><b>Wave 5</b>Is a GPU sitting available? Fourth round asking.</span></li>
+        <li><span><b>fs-38 Wave 3</b>Stays paused, or unpauses (#2054, #1600)?</span></li>
       </ol>
     </section>
   </div>
 
   <footer class="foot">
     <span>Plan of record: <span class="mono">docs/features/277-v115-bug-chore-sweep.md</span> · tracker <a href="https://github.com/dudarenok-maker/Castwright/issues/2042">#2042</a></span>
-    <span class="mono">Rounds 1–3 closed ~31 items · Round 4 (unrecorded) closed 13 more, 08-11→08-18 · queue net +27 from Open-Engine side streams, not the sweep itself</span>
+    <span class="mono">31 closed since the 08-11 Round-4 baseline · 58 open &amp; tracked · 3 live PRs excluded from re-brief · updated 2026-08-28</span>
   </footer>
 </div>
 
@@ -836,8 +887,8 @@
 <script>
 (function () {
   "use strict";
-  var KEY = "castwright-sweep-r4-cleared";
-  var THEME = "castwright-sweep-r4-theme";
+  var KEY = "castwright-sweep-r5-cleared";
+  var THEME = "castwright-sweep-r5-theme";
   var root = document.documentElement;
 
   /* ---- theme ---- */
@@ -941,26 +992,24 @@
 
   /* ---- dispatch briefs ---- */
   var BRIEFS = {
-    g1: { branch: "docs/docs-sweep-r4-bookkeeping",
-          note: "Docs-only PR — exempt from the pr-review-gate. Bundle the outstanding register-publish debts. Republish the register live view with its recorded url, never the .md." },
-    g2: { branch: "chore/server-sweep-r4-cast-store",
-          note: "SEQUENTIAL — all four touch analysis.ts / the cast store. One worktree, one item at a time. cast.json writes go through withCastLock; the guard test fails the build on a new unlocked site." },
-    g3: { branch: "fix/server-sweep-r4-process-and-voice",
-          note: "Premise-check #1826 and #1691 before briefing — both are 14+ days old. #1685 settles the same ceiling as #1691." },
-    g4: { branch: "fix/frontend-sweep-r4-409-and-flake",
-          note: "Do #2235 first: a flake in the gate corrupts every red-phase verification after it. #2230 crosses a redux/router seam, so it wants a Playwright spec." },
-    g5: { branch: "chore/ops-sweep-r4-config-and-ci",
-          note: "#1966's date gate expires 2026-08-14. Any new knob needs a config:sync run and a Settings row." },
-    g6: { branch: "feat/server-898-device-token-scope",
-          note: "EXECUTE ONLY — phase 1 is complete. Brief a fresh implementation thread from issue #898 plus plan #2151 and nothing else; do NOT fork this session. Two PRs, load-bearing order. Serves a LAN browser running the full desktop UI, so scoping every token to `companion` would 403 the web app." },
-    g7: { branch: "(design threads — no code branch)",
-          note: "Phase 1 only: spec + plan doc + handover brief. Mandatory Premium-tier assumption-checker pass before approval, then a cold-brief handoff. Take #1996, #2015, #1932, #2131 this round; defer #1309, #485, #1393." },
-    g8: { branch: "(on-box session — measurement, not a diff)",
-          note: "Record every outcome in docs/testing/onbox-acceptance-register.md, the per-feature run sheet, AND the live view HTML. For #2187 force fresh:true and do NOT re-measure alignment." },
-    g9: { branch: "(disposition decision — no code)",
-          note: "Recommended: park each with a `blocked` label plus a review date, rather than closing — closing loses the per-item context and several already carry `tracking`." },
-    g10:{ branch: "(do not dispatch)",
-          note: "#1984 and #2128 are live worktrees; #2068/#2054/#1600 belong to the paused fs-38 Wave 3." }
+    w0: { branch: "docs/docs-sweep-r5-bookkeeping",
+          note: "Docs-only PR — exempt from the pr-review-gate. #1966's date gate expired 2026-08-14, two weeks overdue." },
+    w1: { branch: "feat/server-898-device-token-scope",
+          note: "EXECUTE ONLY — phase 1 is complete. Brief a fresh implementation thread from issue #898 plus plan #2151 and nothing else; do NOT fork this session. Two PRs, load-bearing order." },
+    w2: { branch: "(same-day owner picks, then per-item fix branches)",
+          note: "Each issue already lists 2-3 options. Get the pick from the repo owner first, then dispatch a narrowly-scoped fix agent per item (Cheap tier on the model-routing table). #2516 is explicitly 'not urgent' and can slip a round." },
+    w2b:{ branch: "(Premium-tier review before any branch)",
+          note: "The issue itself invokes the model-routing table's Premium tier. Do not fold into a same-day pick with Wave 2 — give it the adversarial-review weight it asks for." },
+    w3: { branch: "fix/sidecar-device-restore-family",
+          note: "Both in server/tts-sidecar/main.py -- one lane, not two, per the Round-1 Lane-4 rule." },
+    w4: { branch: "(design decision first, then chore/ops-register-mechanics)",
+          note: "Decide #2708 before branching the other three -- it plausibly reshapes what they should do. Same family that produced #2629/#2634/#2653/#2721; avoid spawning a sixth ticket about the fifth." },
+    w5: { branch: "(on-box session -- measurement, not a diff)",
+          note: "Record every outcome in docs/testing/onbox-acceptance-register.md, the per-feature run sheet, AND the live view HTML. Re-scope #2616 before dispatch -- #2288 shipped without it." },
+    w6: { branch: "(premise-check first, then design threads)",
+          note: "Fetch with --comments. Run a real Round-3-style premise pass across all 19 before any phase-1 thread starts -- most of this wave has never been triaged. Take the first 4-6, defer the rest." },
+    w7: { branch: "(disposition decisions / do not dispatch)",
+          note: "Blocked: park with a `blocked` label plus a review date -- recommended, carried from Round 4, still unanswered. Gated: #2367/#2582/#2641 have live open PRs (#2753/#2719/#2754) -- do not re-brief. #2054/#1600 stay paused with fs-38 Wave 3." }
   };
 
   Array.prototype.forEach.call(document.querySelectorAll("button[data-brief]"), function (btn) {
@@ -970,8 +1019,8 @@
       var title = sec.querySelector("h3").textContent.trim();
       var meta = BRIEFS[g] || { branch: "", note: "" };
       var lines = [];
-      lines.push("Round 4 — " + title);
-      lines.push("Plan of record: docs/features/277-v115-bug-chore-sweep.md (Round 4 section)");
+      lines.push("Round 5 — " + title);
+      lines.push("Plan of record: docs/features/277-v115-bug-chore-sweep.md (Round 5 section)");
       if (meta.branch) lines.push("Branch: " + meta.branch);
       lines.push("");
       lines.push("Issues:");

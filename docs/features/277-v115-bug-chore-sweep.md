@@ -7,13 +7,20 @@ owner: null
 # 277 — v1.15 bug & chore sweep: triage and round plan
 
 > Status: active — **Round 1 SHIPPED 2026-08-01** (four lanes, 12 issues),
-> **Round 2 SHIPPED 2026-08-05** (five lanes, 16 issues), and **Round 3 RAN
+> **Round 2 SHIPPED 2026-08-05** (five lanes, 16 issues), **Round 3 RAN
 > 2026-08-05** (design-first; four PRs, four issues closed, five items left
-> needing design). See "Round 1 outcome", "Round 2 outcome" and "Round 3
-> outcome" below. Round 2's carries seven cases of a guard or test reporting
-> green while checking nothing; Round 3's carries the finding that **four of
-> ten issue premises did not survive verification**, and the cold-brief
-> handoff that caught what self-review structurally cannot.
+> needing design), **Round 4 DRAINED INCREMENTALLY 2026-08-11 → 2026-08-28**
+> (17 of 53 tracked items closed since 08-25 alone; #898 phase 2 still not
+> dispatched after three rounds; zero on-box sittings in four rounds), and
+> **Round 5 PLANNED 2026-08-28** (seven waves; 58 real open items after
+> excluding live agent-instruction children). See "Round 1 outcome" through
+> "Round 5 — the recut plan" below. Round 2's carries seven cases of a guard
+> or test reporting green while checking nothing; Round 3's carries the
+> finding that **four of ten issue premises did not survive verification**,
+> and the cold-brief handoff that caught what self-review structurally cannot;
+> Round 4's carries a **self-replicating "register mechanics" ticket family**
+> (a fix's own closure orphaning the next ticket) and the finding that **6 of
+> 8 newly-filed items read as diffs but are filed as decisions**.
 > Key files: this document is a coordination record, not a feature plan. The
 > per-item detail lives in each linked GitHub issue, which stays canonical.
 > URL surface: none
@@ -931,6 +938,269 @@ Canonical URL:
 <https://claude.ai/code/artifact/f3608d3e-0e02-4eaa-9af3-3322b9ce0bb3> — pass it
 as `url` on every republish, or a second competing board is minted.
 
+## Round 4 outcome (dispatched 2026-08-11 → 2026-08-28)
+
+Unlike Rounds 1–3, Round 4 was never dispatched as a single sitting — the board
+above was worked incrementally over roughly two and a half weeks, largely by
+independent PR-review-gate passes surfacing and closing findings as they went
+rather than by lane. **17 of the board's 53 tracked items closed** between the
+08-25 board snapshot and this re-audit (08-28) alone, on top of whatever closed
+between 08-11 and 08-25:
+
+| # | Outcome |
+|---|---|
+| #2006, #1994, #2243, #2015 (see below), #2059, #2068, #1932, #2629, #2634, #2653, #2187, #2026, #2642, #2288, #2574 | Closed `COMPLETED` |
+| #1976, #1996 | Closed `NOT_PLANNED` — consolidated into **#2656**, the successor that asks the one concrete question left ("is there a genuine leak on top of the resident-model floor, or does residency alone explain it") |
+| #1932 | Closed via a **decomposed agent-instruction chain** (#2692 → #2691 → #2690 → #2689, each a self-contained step read by a cold agent) rather than one hand-run design thread — worth reusing as the template for #2656 and other Group-7 carryovers |
+
+**#898 phase 2 did not ship.** Three rounds running it has been named "the
+highest expected value single item in the plan," fully briefed since Round 3,
+and it is still sitting untouched. That is a process failure, not a technical
+one, and Round 5 treats it as the first thing to dispatch, unconditionally.
+
+**On-box Group 8 saw zero GPU sittings across all four rounds.** #1084, #1527,
+#1685, #2583 are untouched; #2616 (a real on-box session, Group C /
+Ночной дозор) never ran even though it was flagged ready. One of its two
+paired code bugs (#2288) shipped without the session — the session's scope
+needs re-checking against what actually still needs measuring before it is
+re-briefed, not copied forward as-is.
+
+**8 new items were filed against work this round surfaced**, all from
+PR-review-gate passes: #2682, #2700, #2708, #2721, #2742, #2747, #2750, #2752.
+**A premise-check on all eight (required — see Round 3's rule, "an issue's age
+is the signal," and this round's own G11 disclaimer that title-only items are
+unverified) found that #2608, #2596, #2496, #2516, #2682 and #2747 are not
+diff-shaped despite reading like small fixes** — every one of them is filed
+with an explicit "decision owed" section and, in most cases, 2–3 pre-enumerated
+options. Reading only the title/one-line summary here would have repeated
+exactly the class of error Round 3 catalogued ("claims about absence from a
+too-narrow grep," title-only triage) — see Round 5's Wave 2 below.
+
+**A self-replicating "register mechanics" family emerged.** #2629 (citation
+rot) shipped, and its own closure immediately orphaned **#2721** ("rehome the
+wrongId-widening deferral that #2629's closure orphans") — a fix creating the
+next ticket about itself, one level up from the citation-rot problem it fixed.
+#2634/#2653 (duplicate row-ID bugs, confirmed the same defect filed twice)
+closed together; #2599/#2603 remain open in the same family, and #2708 (decide
+whether the register carries a changelog at all) is a fresh decision in it.
+Four fixes to this mechanism have now spawned a fifth ticket about the fourth —
+Round 5 treats this as needing a terminal decision (#2708 first), not another
+mechanical patch, or it keeps reproducing.
+
+**Net effect:** the open queue went from 67 (53 tracked + 14 untracked growth,
+08-25) to **58 real trackable items** (60 raw open `bug`+`type:chore`, minus 2
+live `agent-instructions` execution children per the standing exclusion) as of
+08-28. That is real drain — but the composition inverted: Round 4 started
+dominated by diff-shaped lane work (20 of 49) and ends dominated by
+decision-owed and on-box work. There is very little left that a coding agent
+can simply be pointed at without a decision made first.
+
+## Round 5 — the recut plan (planned 2026-08-28)
+
+Round 4's "lanes of independent diffs" shape is drained. What is left is
+dominated by decisions and measurement, not code, so Round 5 is cut
+differently: seven waves, ordered by how soon each can honestly start, not by
+size.
+
+**Baseline, re-taken on `main` @ `67d0e990` (2026-08-28), cross-checked against
+every open PR and branch in the repo (not just issue titles) so nothing below
+gets briefed into a live collision:**
+
+| Wave | Disposition | Count | Items |
+|---|---|---|---|
+| 0 | Bookkeeping — ready, no code | 4 | #2056, #2042, #1966, #2435 |
+| 1 | Execute-only — ready | 1 | #898 |
+| 2 | Decision-owed singles — low/medium stakes, options pre-enumerated | 5 | #2608, #2496, #2516, #2682, #2747 |
+| 2b | Decision-owed — Premium tier, blast radius | 1 | #2596 |
+| 3 | Diff-shaped lane — one file, one lane | 2 | #2750, #2752 |
+| 4 | Register mechanics — decide #2708 first, then lane | 4 | #2708, #2599, #2603, #2721 |
+| 5 | On-box — one GPU sitting | 7 | #1084, #1527, #1685, #2583, #2616, #1998, #2700 |
+| 6 | Design-first — real premise pass owed, none yet verified | 19 | see below |
+| 7 | Blocked (10) + gated (5) — owner decision / do-not-touch | 15 | see below |
+
+0 + 1 + 5 + 1 + 2 + 4 + 7 + 19 + 15 = 58.
+
+### Live collisions checked and excluded
+
+A full sweep of every open PR and every non-`main` remote branch, not just
+issue state, found three items mid-flight right now that must **not** be
+re-briefed:
+
+| # | Live as | Note |
+|---|---|---|
+| #2367 | PR #2753 (open) | Analyzer GPU-split warning chain |
+| #2582 | PR #2719 (open) | CUDA→CPU fallback detection |
+| #2641 | PR #2754 (open) | Sidecar owner-note port-keying |
+
+All three were originally going to land in Wave 2/3/6 respectively based on
+issue state alone — the PR check is what moved them to Wave 7 (gated) instead.
+Two stale local-only branches (`docs/docs-2346-instruments`,
+`fix/server-2687-external-files-floor-glob`) were also found with no PR and no
+recent commits — dead, not live; #2346 stays in Wave 6 rather than being
+treated as in-progress.
+
+### Wave 0 — bookkeeping (ready, no code)
+
+The cheapest reduction available, same shape as Round 4's Group 1.
+
+- **#2056** — resolve against #2026, now that #2026 has shipped. Duplicate, or
+  split the upstream-blocked half cleanly.
+- **#2042** — this sweep's own tracking issue; update its numbers, do not
+  close until Round 5 lands.
+- **#1966** — ops-48 `@nanonets/graft` evaluation. **Date gate expired
+  2026-08-14, now two weeks overdue.** A yes/no, not a design.
+- **#2435** — on-box register campaign tracker; update to reflect Wave 4/5's
+  disposition of its remaining rows.
+
+### Wave 1 — #898 phase 2 (execute-only)
+
+**Dispatch this first, unconditionally.** No further round should pass with
+this sitting fully briefed. Spec (#2147) and plan (#2151: 10 tasks, 65 steps,
+28 mutations, two PRs in a load-bearing order) are both merged; brief a fresh
+implementation thread from the ticket and nothing else — do not fork this
+session for it.
+
+### Wave 2 — decision-owed singles (low/medium stakes)
+
+**Not diff-shaped, despite reading like small fixes on first pass.** Each is
+filed as a decision request with its options already enumerated by whoever
+found it — the design work is largely done; what is owed is a pick, then an
+implementation.
+
+- **#2608** — dash-invariant needle search's fuzzy path: extend the anchor,
+  skip the mid-word-hit short-circuit for fuzzy hits, or something else.
+- **#2496** — quarantine-health: exclude "not quarantined — still gates" rows,
+  relabel their bucket, or leave as-is (three options in the issue, with a
+  named test that would need updating for option 1).
+- **#2516** — should the SSE reconnect skip retrying a `chapter_failed` tick
+  that carries a stable `errorCode`, and how broadly. **Explicitly marked
+  "not urgent"** by its own filer — lowest priority in this wave.
+- **#2682** — `asr.warm`'s footprint key: leave the 128MB seed as a permanent
+  floor, switch measurement instruments, or document it as structurally
+  unfalsifiable for this model class.
+- **#2747** — `blankCommentsAndStrings()`'s regex-literal blind spot: real
+  minimal JS tokenizer, accept-and-document, or a narrower structural
+  mitigation that fails loud instead of silently blanking.
+
+*Recommended handling:* since each already carries pre-weighed options, this
+does not need a full brainstorming→writing-plans cycle — a same-day owner pick
+per item, then a same-round implementation brief, is proportionate. #2516 can
+slip to a later round without cost given its own "not urgent" tag.
+
+### Wave 2b — #2596 (decision-owed, Premium tier)
+
+Named separately from Wave 2 because the issue itself invokes the
+model-routing table's Premium tier ("irreversible/high-blast-radius
+decisions") — it touches the Pinokio release/install path with real blast
+radius to a live user's box, and the CLI half it would change is
+acceptance-tested only, with no unit safety net. Do not fold this into a quick
+same-day pick; give it the adversarial-review weight the issue itself asks for.
+
+### Wave 3 — diff-shaped lane, one file (ready)
+
+- **#2750** — `SpeakerEngine` never restores its device pin after a
+  self-demotion (`server/tts-sidecar/main.py`).
+- **#2752** — `design_voice()`'s 1.7B-Base evict guard is blind to an in-flight
+  load, same file, different site (`:6472` vs `:7942–8093`).
+
+Both are `server/tts-sidecar/main.py` — **one lane, not two**, per the Round-1
+Lane-4 rule (files that overlap share a lane regardless of how unrelated the
+defects look).
+
+### Wave 4 — register mechanics (decide #2708 first, then lane)
+
+- **#2708** — decide whether the on-box register carries a changelog at all.
+  **Take this first** — it plausibly shapes what #2599/#2603/#2721 should even
+  do, and going in without deciding it risks a sixth register ticket the way
+  #2629's closure produced #2721.
+- **#2599** — `--against-published` is blind to row content.
+- **#2603** — no mechanical guard validates `A\d+`/`E\d+` citations against the
+  register's actual headings.
+- **#2721** — rehome the deferral #2629's closure orphaned.
+
+### Wave 5 — on-box, one GPU sitting
+
+The deliverable is a measurement, not a diff, same as every prior round's
+Group 8 — except this time it needs to actually be scheduled.
+
+- **#1084** + **#1527** — ASR content-QA `maxWer` calibration for es/fr/de/ru.
+- **#1685** — verify #1682 cloud request sizing; calibrate stage-2 local input
+  fraction.
+- **#2583** — ops-67: add the missing register row for `ensureOrtMarker`
+  owner==='plain'/'none'.
+- **#2616** — the Ночной дозор Group-C session. **Re-scope before dispatch** —
+  #2288 (one of its two paired code bugs) shipped without the session running;
+  confirm what is actually still unmeasured before re-briefing it as-is.
+- **#1998** — cloned-voice identity loss across languages (0.600 → 0.229).
+- **#2700** — voice-reassignment centroid: confirm a *successfully rebuilt*
+  centroid scores correctly, not just that reassignment discards the stale one
+  (the only prior on-box run hit `too-short` and never reached this case).
+
+### Wave 6 — design-first: a real premise pass owed (19)
+
+**None of these have had the Round-3-style verification pass.** Unlike
+Round 4's Group 7 (which took a premise check before dispatch), most of this
+wave is the "growth" bucket that has sat completely untouched, title-only,
+across all four rounds. Run the premise pass — `--comments` included, per
+Round 3's rule that `gh issue view --json body` silently drops the field where
+scope changes land — before any phase-1 thread starts. Then take the first
+4–6, defer the rest, per the standing rule.
+
+- **Carryover from Round 4 Group 7 (6):** #2131, #1309, #485, #1393 (paused
+  after three rejected designs — restart needs a fresh thread from the
+  `synthesiseChapter` publishing question, not a fourth revision), #2639,
+  #2656 (the #1976/#1996 successor).
+- **Growth "standalone decisions" (10 — #2367 excluded, live PR #2753):**
+  #2303, #2331, #2347, #2352, #2362, #2366, #2369, #2433, #2434, #2449. Every
+  one of these is phrased "decide whether/what" and none has ever been
+  triaged by a round.
+- **Colon-rule / tag-clause chain (2):** #2346 (a real bug, likely resolvable
+  without a full design pass once triaged — the stale
+  `docs/docs-2346-instruments` branch, last touched 08-20 with no PR, suggests
+  someone already started and stalled; check it before re-drafting from
+  scratch), #2404 ("decision owed" per its own title).
+- **#2742 (1):** Qwen duration golden gate's statistical power — single-draw
+  assertion, needs a decision on how many draws is enough.
+
+### Wave 7 — blocked + gated (15, owner decision / do-not-touch)
+
+**Blocked (10, unchanged since Round 4):** #1228, #893, #711, #431, #790,
+#1477, #1335, #822, #1001, #947. The Round 4 park-vs-collapse decision is now
+**two rounds** unanswered — force it this round.
+
+**Gated — live PR, do not re-brief (3):** #2367 (PR #2753), #2582 (PR #2719),
+#2641 (PR #2754).
+
+**Gated — paused wave, unchanged (2):** #2054, #1600 — fs-38 Wave 3 stays
+paused pending its own unpause decision.
+
+### Sequencing
+
+1. **Wave 1** (#898) and **Wave 0** (bookkeeping) in parallel — file-disjoint,
+   no reason to sequence them behind anything.
+2. **Wave 2** owner picks, same day if possible — then brief the
+   implementations in the same round.
+3. **Wave 4**, #2708 first, then the register lane.
+4. **Wave 3** lane.
+5. **Wave 5** at the next GPU sitting — this is the fourth round calling it
+   the best ratio in the plan; do not let it slip a fifth time.
+6. **Wave 6** premise pass first, phase-1 threads for the survivors after.
+7. **Wave 2b** and **Wave 7**'s two owner decisions on their own schedule —
+   not blocking anything else above.
+
+### Decisions this round needs from the repo owner
+
+1. **Wave 2's five picks** — each already has 2–3 options laid out in the
+   issue; a same-day decision unblocks same-round implementation.
+2. **Wave 2b (#2596)** — Premium-tier review before any implementation, given
+   the stated blast radius.
+3. **Wave 4 (#2708)** — changelog or not, before the rest of the register lane
+   proceeds.
+4. **Wave 7 blocked** — park with a label, or collapse into one tracking
+   issue? (Carried, unanswered, from Round 4.)
+5. **Wave 5** — is a GPU sitting available? Fourth round asking.
+6. **fs-38 Wave 3** — stays paused, or unpauses (#2054, #1600)?
+
 ## Invariants to preserve
 
 1. **Lane files must not overlap.** The Round 1 grouping above is the constraint,
@@ -1018,15 +1288,27 @@ by a concurrent session. Two plan docs would otherwise have been written against
 defects that do not exist. Full detail in "Round 3 outcome" above, including the
 `gh issue view` comment-blindness trap and the cold-brief handoff.
 
-**Round 4 — planned 2026-08-11, not yet dispatched.** Baseline re-taken at 49
-open items (14 bug + 35 chore) on `main` @ `f2b2e866`. Scoped as a *drain*
-rather than a dispatch: the full plan, the four-way disposition split, the
-Round 0 premise pass, and the four owner decisions it is waiting on are in
-"Round 4 — the drain plan" above. Driving board:
-`docs/features/277-v115-bug-chore-sweep-board.html`.
+**Round 4 — dispatched incrementally 2026-08-11 → 2026-08-28, not as a single
+sitting.** Baseline re-taken at 49 open items (14 bug + 35 chore) on `main` @
+`f2b2e866`. 17 of the board's 53 tracked items closed between 08-25 and 08-28
+alone; #1976/#1996 consolidated into #2656; #1932 closed via a decomposed
+agent-instruction chain (#2689–2692). **#898 phase 2 did not ship** despite
+three rounds naming it the highest-value item in the plan. Zero on-box GPU
+sittings happened across all four rounds. 8 new items were filed against
+findings this round surfaced, of which a premise-check found 6 are
+decision-owed rather than diff-shaped. Full detail in "Round 4 outcome" above.
 
-**Still open from this sweep:** #1984, #1996, #1932, #1309, #485, #1393 (paused
-after three rejected designs — its own verified facts rule out the shape it was
-filed as), and #898's phase 2, which is fully briefed and needs only execution.
-#1950 shipped inside another session's PR and stays open only for want of an
-issue linkage.
+**Round 5 — planned 2026-08-28.** Cut into seven waves by what unblocks each,
+not by size — bookkeeping, #898 execute-only, decision-owed singles (split
+into a Premium-tier item and five lower-stakes ones), a diff-shaped
+one-file lane, register mechanics (one decision gating a three-item lane), an
+on-box sitting (now 7 items), a design-first premise pass (19 items, none
+verified yet), and blocked/gated (15). A full open-PR and open-branch sweep
+(not just issue state) found three items — #2367, #2582, #2641 — mid-flight
+right now and moved them to gated rather than re-briefing into a live
+collision. Full plan, wave-by-wave, in "Round 5 — the recut plan" above.
+Driving board: `docs/features/277-v115-bug-chore-sweep-board.html`.
+
+**Still open from this sweep:** #1984, #1393 (paused after three rejected
+designs), and everything catalogued in Round 5 above. #1950 shipped inside
+another session's PR and stays open only for want of an issue linkage.
