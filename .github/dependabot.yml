@@ -1,0 +1,37 @@
+# Dependabot configuration for Castwright.
+# Decision: ops-60 (#2433). Adopt Dependabot version updates for npm
+# (root + server, separate entries) and github-actions. Weekly cadence,
+# open-PR cap 5, grouped per ecosystem so a routine sweep lands as one PR.
+# No pip / gradle / pub entries per the decision (deliberately pinned).
+version: 2
+
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      root-npm:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      server-npm:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
