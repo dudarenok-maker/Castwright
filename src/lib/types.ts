@@ -244,8 +244,8 @@ export interface AppInfo {
   activeEngine?: string;
   /* side-14 child — real-session CUDA self-test result for Kokoro's first
      load. null means "not yet checked" (sidecar down, predates the field, or
-     hasn't run the self-test yet) — not a warning state. false means CUDA
-     reported available but Kokoro actually ran on CPU. */
+     hasn't run the self-test yet) — not a warning state. false means CUDA was
+     configured/requested but did not land in the real Kokoro session. */
   cudaVerified?: boolean | null;
   cudaVerificationDetail?: string | null;
   /* fe-27 — in-app update notifier. Server-sourced (cached GitHub-Releases
