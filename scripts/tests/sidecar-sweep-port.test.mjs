@@ -3,7 +3,7 @@
 // on a different LOCAL_TTS_PORT: the sweep (a force-kill in stop-app.ps1, a
 // warn in stop-app.mjs) targeted the PRIMARY checkout's sidecar instead of
 // this checkout's own. Fix: read the actual owned port from
-// .run/tts.owner.json (server/src/tts/sidecar-owner.ts's SidecarOwnerNote).
+// .run/tts.owner.<port>.json (server/src/tts/sidecar-owner.ts's SidecarOwnerNote).
 //
 // N29: the note is absent in three routine states (after a clean shutdown,
 // with autoStartSidecar off, or before a sidecar has ever claimed ownership
@@ -51,10 +51,10 @@ function withTempServerEnv(contents, fn) {
   }
 }
 
-test('resolveSidecarSweepPort returns the per-checkout port recorded in tts.owner.json', () => {
+test('resolveSidecarSweepPort returns the per-checkout port recorded in tts.owner.<port>.json', () => {
   withTempRunDir((dir) => {
     writeFileSync(
-      join(dir, 'tts.owner.json'),
+      join(dir, 'tts.owner.9010.json'),
       JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
     withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
@@ -64,7 +64,7 @@ test('resolveSidecarSweepPort returns the per-checkout port recorded in tts.owne
   });
 });
 
-test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when tts.owner.json is absent', () => {
+test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when no tts.owner.<port>.json note exists', () => {
   withTempRunDir((dir) => {
     withTempServerEnv('PORT=8080\nLOCAL_TTS_PORT=9030\n', (envPath) => {
       assert.equal(resolveSidecarSweepPort(dir, envPath), 9030);
@@ -72,9 +72,9 @@ test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when tts.
   });
 });
 
-test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when tts.owner.json is corrupt JSON', () => {
+test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when tts.owner.<port>.json is corrupt JSON', () => {
   withTempRunDir((dir) => {
-    writeFileSync(join(dir, 'tts.owner.json'), 'not valid json {{{');
+    writeFileSync(join(dir, 'tts.owner.9040.json'), 'not valid json {{{');
     withTempServerEnv('LOCAL_TTS_PORT=9040\n', (envPath) => {
       assert.equal(resolveSidecarSweepPort(dir, envPath), 9040);
     });
@@ -84,11 +84,29 @@ test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when tts.
 test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when the recorded port is out of range', () => {
   withTempRunDir((dir) => {
     writeFileSync(
-      join(dir, 'tts.owner.json'),
+      join(dir, 'tts.owner.99999.json'),
       JSON.stringify({ pid: 1234, ppid: 1, port: 99999, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
     withTempServerEnv('LOCAL_TTS_PORT=9050\n', (envPath) => {
       assert.equal(resolveSidecarSweepPort(dir, envPath), 9050);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when two note files exist in the same run dir (#2641 shared-APP_RUN_DIR scenario)', () => {
+  withTempRunDir((dir) => {
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    writeFileSync(
+      join(dir, 'tts.owner.9011.json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 9011, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9060\n', (envPath) => {
+      // Two candidate notes, no way to tell which is current — must not
+      // guess between them; fall back exactly as the zero-match case does.
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9060);
     });
   });
 });
@@ -129,10 +147,10 @@ test('resolveSidecarSweepPort never returns the factory-default 9000 as a guess'
 // (resolve + assemble), so testing it end-to-end via real temp files proves
 // the resolved port actually reaches the swept list — there's no separate
 // "call site" left to independently mutate away from the tested behaviour.
-test('buildPortsToSweep includes the resolved sidecar port from tts.owner.json', () => {
+test('buildPortsToSweep includes the resolved sidecar port from tts.owner.<port>.json', () => {
   withTempRunDir((dir) => {
     writeFileSync(
-      join(dir, 'tts.owner.json'),
+      join(dir, 'tts.owner.9010.json'),
       JSON.stringify({ pid: 1, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
     withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {

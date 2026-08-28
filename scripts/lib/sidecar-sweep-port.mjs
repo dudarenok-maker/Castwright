@@ -5,10 +5,14 @@
 // worktree whose own sidecar lives on a different port — typically the
 // PRIMARY checkout's sidecar, mid-generation.
 //
-// The Node server already records the port it actually owns in
-// .run/tts.owner.json (SidecarOwnerNote, server/src/tts/sidecar-owner.ts) the
-// moment it claims ownership, so read THAT first. But the note is absent in
-// three routine states (N29): after a clean shutdown (releaseSidecarOwnership
+// The Node server already records the port it actually owns in a
+// port-keyed .run/tts.owner.<port>.json (SidecarOwnerNote,
+// server/src/tts/sidecar-owner.ts) the moment it claims ownership, so read
+// THAT first — glob the run dir for tts.owner.*.json and trust it only when
+// exactly one such file exists (two or more means this run dir is shared
+// across ports, #2641, and neither can be trusted over the other; zero means
+// no sidecar has claimed a note here). But the note is absent in three
+// routine states (N29): after a clean shutdown (releaseSidecarOwnership
 // unlinks it), with autoStartSidecar off (the note is never written), or when
 // this checkout's own server/.env sets LOCAL_TTS_PORT to something a stale
 // note doesn't reflect yet. Falling back to the factory default 9000 there
@@ -24,7 +28,7 @@
 // Pure + side-effect-free (only reads files) so it's directly unit-testable
 // without executing stop-app.mjs's real taskkill/probe flow.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 /** Single validity rule for a LOCAL_TTS_PORT spelling, shared with the
@@ -139,22 +143,41 @@ export function resolveConfiguredVitePort(envLocalPath) {
 
 /** Resolve the sidecar port to sweep: the port this checkout's `.run/`
     directory recorded ownership of, or — when that note is absent,
-    unreadable, corrupt, or out-of-range — the LOCAL_TTS_PORT this checkout's
-    own `server/.env` is configured for. Returns `null` (meaning: sweep
-    nothing for TTS) only when neither source yields a usable port; it never
-    falls back to the factory default 9000, which risks sweeping a different
-    checkout's sidecar (#2632 N29). */
+    unreadable, corrupt, out-of-range, or ambiguous (more than one note file
+    in the run dir) — the LOCAL_TTS_PORT this checkout's own `server/.env` is
+    configured for. Returns `null` (meaning: sweep nothing for TTS) only when
+    neither source yields a usable port; it never falls back to the factory
+    default 9000, which risks sweeping a different checkout's sidecar (#2632
+    N29).
+
+    The note is now written per-port (tts.owner.<port>.json,
+    server/src/tts/sidecar-owner.ts's sidecarOwnerPath) rather than under one
+    fixed name, so this can no longer read a single known filename to
+    *discover* an unknown port — it globs the run dir instead. Trusting the
+    note requires EXACTLY one match: zero means no sidecar has claimed
+    ownership here, and more than one means this run dir is shared across
+    ports (#2641) with no way to tell which note is current, so both degrade
+    to the same safe server/.env fallback the absent/corrupt cases already
+    use. */
 export function resolveSidecarSweepPort(runDir, serverEnvPath) {
-  const notePath = resolve(runDir, 'tts.owner.json');
+  let entries;
   try {
-    const raw = readFileSync(notePath, 'utf8');
-    const note = JSON.parse(raw);
-    const port = Number(note?.port);
-    if (Number.isInteger(port) && port > 0 && port < 65536) {
-      return port;
-    }
+    entries = readdirSync(runDir);
   } catch {
-    // Absent, unreadable, or corrupt — fall through to the server/.env fallback.
+    entries = [];
+  }
+  const noteFiles = entries.filter((name) => /^tts\.owner\.\d+\.json$/.test(name));
+  if (noteFiles.length === 1) {
+    try {
+      const raw = readFileSync(resolve(runDir, noteFiles[0]), 'utf8');
+      const note = JSON.parse(raw);
+      const port = Number(note?.port);
+      if (Number.isInteger(port) && port > 0 && port < 65536) {
+        return port;
+      }
+    } catch {
+      // Unreadable or corrupt — fall through to the server/.env fallback.
+    }
   }
   return serverEnvPath ? parseLocalTtsPortFromServerEnv(serverEnvPath) : null;
 }
