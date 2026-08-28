@@ -129,9 +129,9 @@ export function EmotionVariantDesigner({
   if (cloned) {
     return (
       <p data-testid="variant-cloned-hint" className="text-xs text-ink/50 mt-2">
-        {character.name} is linked to a cloned voice somewhere in this series, so emotion
-        variants are unavailable — they are only offered for a designed voice. Remove the clone
-        from every linked book to add them.
+        {character.name} is linked to a cloned voice — on this character, or a linked one
+        elsewhere in the series — so emotion variants are unavailable — they are only offered for
+        a designed voice. Remove the clone from every linked book to add them.
       </p>
     );
   }

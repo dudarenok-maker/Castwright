@@ -186,7 +186,7 @@ async function runSingleDesign(
       endJob(job, {
         type: 'error',
         code: 'clone_protected',
-        message: `"${job.characterName}" has a consented cloned voice on a linked character somewhere in this series — the design was not persisted.`,
+        message: `"${job.characterName}" has a consented cloned voice on this character, or a linked one elsewhere in the series — the design was not persisted.`,
       });
       return;
     }
@@ -291,7 +291,7 @@ singleDesignRouter.post(
         (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesInfo ?? undefined, undefined, bookDir)))
     ) {
       return res.status(409).json({
-        error: `"${character.name ?? characterId}" has a consented cloned voice on a linked character somewhere in this series and cannot be designed on Qwen without silently retargeting it off that clone.`,
+        error: `"${character.name ?? characterId}" has a consented cloned voice on this character, or a linked one elsewhere in the series, and cannot be designed on Qwen without silently retargeting it off that clone.`,
         code: 'clone_protected',
       });
     }

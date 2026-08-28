@@ -98,7 +98,8 @@ export const VARIANT_EMOTIONS = EMOTIONS.filter((e) => e !== 'neutral') as Exclu
    a bare "not supported" leaves the user with no next step. */
 export function clonedVariantRefusal(name: string): string {
   return (
-    `"${name}" is linked to a cloned voice somewhere in this series, so emotion variants are unavailable — ` +
+    `"${name}" is linked to a cloned voice — on this character, or a linked one elsewhere in ` +
+    `the series — so emotion variants are unavailable — ` +
     `they are only offered for a designed voice. Minting one would re-derive a ` +
     `new performance of a real person's voice under a key their consent record ` +
     `does not cover and revoking consent does not erase. Remove the clone from ` +
@@ -210,7 +211,14 @@ export async function persistEmotionVariant(
         `[persistEmotionVariant] residual-window skip: a clone appeared on a linked book for ${characterId} between the series-wide scan and this walk reaching it (${updated} book(s) still received the variant).`,
       );
     }
-    return updated > 0 ? 'applied' : 'notFound';
+    if (updated > 0) return 'applied';
+    /* `updated === 0` is ambiguous on its own: it means either "nothing in
+       scope matched this character at all" (the pre-existing 'notFound'
+       fallthrough the caller documents as a benign empty write) or "every
+       match was declined by the residual-window clone check" (a genuine
+       refusal that must reach the caller's 409, same as the upfront
+       `stillCloned` check above). `residualSkip` disambiguates the two. */
+    return residualSkip ? 'skippedClone' : 'notFound';
   }
 
   /* Book-scoped write — this function carries no other lock, so the read

@@ -415,8 +415,20 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        is cloned locally — that's already surfaced via overrideTtsVoices. */
     const isStandalone = state.isStandalone === true;
     const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(req.params.bookId);
+    /* #2718 review round 1 — this scan walks every OTHER linked book's own
+       cast.json too; a corrupt sibling must not 500 an otherwise-healthy GET
+       of THIS book's state. Advisory-only (never write-gating — the field is
+       stripped again on PUT), so failing open to "nothing found" is the
+       correct degrade: the badge just doesn't show until the sibling is
+       fixed, same as any other book briefly missing from the scan. */
     const clonedVoiceIds = seriesInfo
-      ? await findClonedVoiceIdsAmongMatches(seriesInfo, bookDir)
+      ? await findClonedVoiceIdsAmongMatches(seriesInfo, bookDir).catch((err) => {
+          console.warn(
+            `[book-state] clonedElsewhereInSeries scan failed for ${req.params.bookId}:`,
+            (err as Error).message,
+          );
+          return new Set<string>();
+        })
       : new Set<string>();
     if (cast?.characters && Array.isArray(cast.characters)) {
       for (const c of cast.characters as Array<{ id?: unknown; voiceId?: unknown } & Record<string, unknown>>) {

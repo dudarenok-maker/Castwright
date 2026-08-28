@@ -1106,7 +1106,7 @@ export function ProfileDrawer({
         character.clonedElsewhereInSeries === true)
     ) {
       setEngineError(
-        `"${character.name}" is linked to a cloned voice somewhere in this series and cannot be designed on Qwen without silently retargeting it off that clone.`,
+        `"${character.name}" is linked to a cloned voice — on this character, or a linked one elsewhere in the series — and cannot be designed on Qwen without silently retargeting it off that clone.`,
       );
       return;
     }

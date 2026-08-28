@@ -2287,6 +2287,7 @@ describe('applyOverrideToCastFiles — series-wide veto (v2)', () => {
   const VETO_SERIES = 'The Amber Coast';
   const VETO_BOOK_ONE = 'First Light';
   const VETO_BOOK_TWO = 'Second Light';
+  let bookOneDir: string;
   let bookTwoDir: string;
 
   function seedVetoBooks(bookOneCloned: boolean, bookTwoCloned: boolean) {
@@ -2299,7 +2300,7 @@ describe('applyOverrideToCastFiles — series-wide veto (v2)', () => {
       },
       { id: 'uncloned', name: 'Uncloned', voiceId: 'uncloned-voice-id' },
     ];
-    writeBookOnDisk(
+    bookOneDir = writeBookOnDisk(
       workspaceRoot, VETO_AUTHOR, VETO_SERIES, VETO_BOOK_ONE, 'book-veto-one',
       charFor(bookOneCloned),
     );
@@ -2362,30 +2363,37 @@ describe('applyOverrideToCastFiles — series-wide veto (v2)', () => {
   });
 
   it('catches a clone injected during the walk (residual-window backstop)', async () => {
-    /* Seeds NEITHER book cloned. Injects a clone into book two's cast
-       DURING the walk's own read of book one — so the fresh upfront scan
-       passes (nothing cloned yet) but the per-book residual backstop
-       inside the mutate closure sees the injection. */
+    /* Seeds NEITHER book cloned. `hasClonedSlotAmongMatches` (the upfront
+       scan) and forEachMatchingCastCharacter (the walk) each read book two's
+       cast.json ONCE, in that order — the upfront scan first, the walk
+       second. Injecting on any earlier read (e.g. book one's state, as an
+       earlier version of this test did) races the UPFRONT scan itself: if
+       the clone lands before that scan reaches book two, the whole request
+       is refused upfront and the walk never runs at all, which is a
+       different code path than the one this test claims to exercise.
+       Keying strictly on book two's SECOND cast.json read pins the
+       injection to the walk's own read, after the upfront scan has already
+       passed cleanly on the pre-injection state. */
     seedVetoBooks(false, false);
 
     const stateIo = await import('../workspace/state-io.js');
     const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
       '../workspace/state-io.js',
     );
-    let intercepted = false;
+    const bookTwoCastPath = join(bookTwoDir, '.audiobook', 'cast.json');
+    let bookTwoCastReads = 0;
     const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
-      const value = await actual.readJson(path);
-      if (!intercepted && path.includes(VETO_BOOK_ONE)) {
-        intercepted = true;
-        // Inject a clone into book two WHILE the walk is reading book one
-        const castPath = join(bookTwoDir, '.audiobook', 'cast.json');
-        const cast = JSON.parse(readFileSync(castPath, 'utf8'));
-        cast.characters[0].overrideTtsVoices = {
-          coqui: { name: 'clone-x', provenance: 'cloned' },
-        };
-        writeFileSync(castPath, JSON.stringify(cast));
+      if (path === bookTwoCastPath) {
+        bookTwoCastReads += 1;
+        if (bookTwoCastReads === 2) {
+          const cast = JSON.parse(readFileSync(bookTwoCastPath, 'utf8'));
+          cast.characters[0].overrideTtsVoices = {
+            coqui: { name: 'clone-x', provenance: 'cloned' },
+          };
+          writeFileSync(bookTwoCastPath, JSON.stringify(cast));
+        }
       }
-      return value;
+      return actual.readJson(path);
     });
 
     try {
@@ -2394,9 +2402,65 @@ describe('applyOverrideToCastFiles — series-wide veto (v2)', () => {
         { engine: 'qwen', name: 'qwen-shared' },
         { author: VETO_AUTHOR, series: VETO_SERIES },
       );
-      expect(intercepted).toBe(true);
+      expect(bookTwoCastReads).toBe(2);
       // The upfront scan passed (nothing cloned yet), but the residual
       // backstop inside the walk caught the injection on book two
+      expect(result.skipped.length).toBeGreaterThanOrEqual(1);
+      /* Book one still had no clone at write time, so it IS a genuine
+         update — only book two was declined. A `mutate` that declines a
+         match returns the SAME object by reference (see
+         forEachMatchingCastCharacter's contract); `updated` must reflect
+         only the genuine write, not every character the walk merely
+         visited. Before that reference-equality fix, this returned 2
+         (both "touched" books counted, including the declined one). */
+      expect(result.updated).toBe(1);
+    } finally {
+      spy.mockImplementation(actual.readJson);
+    }
+  });
+
+  it('refuses the entire propagation when EVERY matched character is residual-clone-skipped', async () => {
+    /* Both books' cast.json is read twice each (upfront scan, then walk) —
+       same reasoning as the test above. Injecting on each book's SECOND cast
+       read means the upfront scan still passes cleanly on both (so this
+       exercises the residual backstop declining every book, not the upfront
+       refusal — a materially different path already covered by 'reports the
+       refusal with a workspace-wide sentinel...' above). `updated` must land
+       at exactly 0 so the two callers gating on `updated === 0 &&
+       skipped.length > 0` (single-design.ts, cast-design.ts) see a genuine
+       full refusal instead of a false "designed". */
+    seedVetoBooks(false, false);
+
+    const stateIo = await import('../workspace/state-io.js');
+    const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+      '../workspace/state-io.js',
+    );
+    const bookOneCastPath = join(bookOneDir, '.audiobook', 'cast.json');
+    const bookTwoCastPath = join(bookTwoDir, '.audiobook', 'cast.json');
+    const castReads: Record<string, number> = { [bookOneCastPath]: 0, [bookTwoCastPath]: 0 };
+    const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+      if (path in castReads) {
+        castReads[path] += 1;
+        if (castReads[path] === 2) {
+          const cast = JSON.parse(readFileSync(path, 'utf8'));
+          cast.characters[0].overrideTtsVoices = {
+            coqui: { name: 'clone-x', provenance: 'cloned' },
+          };
+          writeFileSync(path, JSON.stringify(cast));
+        }
+      }
+      return actual.readJson(path);
+    });
+
+    try {
+      const result = await applyOverrideToCastFiles(
+        'shared-voice-id',
+        { engine: 'qwen', name: 'qwen-shared' },
+        { author: VETO_AUTHOR, series: VETO_SERIES },
+      );
+      expect(castReads[bookOneCastPath]).toBe(2);
+      expect(castReads[bookTwoCastPath]).toBe(2);
+      expect(result.updated).toBe(0);
       expect(result.skipped.length).toBeGreaterThanOrEqual(1);
     } finally {
       spy.mockImplementation(actual.readJson);

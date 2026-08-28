@@ -2003,18 +2003,22 @@ async function realGetBaseVoices(): Promise<{ voices: BaseVoice[] }> {
 }
 
 /* Shape of the 409 Conflict body returned by PUT /api/voices/:voiceId/override
-   when a cloned slot blocks propagation. Exported so the UI can render the
-   refusal (e.g. a toast listing the affected books). */
+   when a cloned slot blocks propagation — matches openapi.yaml's 409 schema
+   for this route exactly: `error` is the server's own human-readable sentence
+   (never a fixed code string), and `skipped` is present only for the
+   write-time residual-window refusal, absent for the two upfront refusals.
+   Exported so the UI can render the refusal (e.g. a toast listing the
+   affected books). */
 export interface VoiceOverrideRefusedError {
-  error: 'already_cloned';
-  skipped: Array<{ bookDir: string; characterId: string; reason: string }>;
+  error: string;
+  skipped?: Array<{ bookDir: string; characterId: string; reason: string }>;
 }
 
 export class VoiceOverrideRefused extends Error {
   readonly status = 409;
   readonly body: VoiceOverrideRefusedError;
   constructor(body: VoiceOverrideRefusedError) {
-    super('Voice override refused: a cloned slot already occupies this voice.');
+    super(body.error);
     this.name = 'VoiceOverrideRefused';
     this.body = body;
   }

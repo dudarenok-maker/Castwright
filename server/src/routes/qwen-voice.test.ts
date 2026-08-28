@@ -2000,6 +2000,77 @@ describe('persistEmotionVariant', () => {
         warnSpy.mockRestore();
       }
     });
+
+    it('residual-window skip on EVERY linked book returns skippedClone, not notFound', async () => {
+      /* Same shape as the partial case above, but the injected clone hits
+         BOTH matched books' second (walk-time) cast read — nothing is ever
+         written, and the caller (qwen-voice.ts's design route) must see
+         'skippedClone' (→ 409) rather than 'notFound' (→ 200 fallthrough,
+         the pre-existing "genuinely no match" disposition). Before the fix,
+         `updated > 0 ? 'applied' : 'notFound'` couldn't tell "nothing
+         matched" apart from "everything matched but was declined". */
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const wrenChar = { id: 'wren', voiceId: 'wren', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } };
+      const book1 = makeSeriesBook('Series Residual All One', [wrenChar]);
+      const book2 = makeSeriesBook('Series Residual All Two', [wrenChar]);
+
+      const stateIo = await import('../workspace/state-io.js');
+      const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+        '../workspace/state-io.js',
+      );
+      const { castJsonPath } = await import('../workspace/paths.js');
+      const clonedRead = () => ({
+        characters: [
+          {
+            id: 'wren',
+            voiceId: 'wren',
+            overrideTtsVoices: { coqui: { name: 'clone-x', provenance: 'cloned' } },
+          },
+        ],
+      });
+      /* persistEmotionVariant reads its OWN `bookDir` (book1) once, up front,
+         before the upfront scan even starts — so book1's cast.json is read
+         THREE times total (own check, upfront scan, walk) where book2's is
+         read only TWICE (upfront scan, walk). The walk is always the LAST
+         read of each, so triggering on each path's own final expected count
+         (not a shared constant) is what actually targets the walk. */
+      const castReads: Record<string, number> = {
+        [castJsonPath(book1)]: 0,
+        [castJsonPath(book2)]: 0,
+      };
+      const walkReadIndex: Record<string, number> = {
+        [castJsonPath(book1)]: 3,
+        [castJsonPath(book2)]: 2,
+      };
+      const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
+        if (!(path in castReads)) return actual.readJson(path);
+        castReads[path] += 1;
+        if (castReads[path] === walkReadIndex[path]) return clonedRead();
+        return actual.readJson(path);
+      });
+
+      try {
+        const outcome = await persistEmotionVariantFn(
+          book1,
+          'wren',
+          'angry',
+          'qwen-wren__angry',
+          seriesFilter,
+        );
+        expect(castReads[castJsonPath(book1)]).toBe(3);
+        expect(castReads[castJsonPath(book2)]).toBe(2);
+        expect(outcome).toBe('skippedClone');
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('residual-window skip'));
+
+        const cast1 = JSON.parse(readFileSync(join(book1, '.audiobook', 'cast.json'), 'utf8'));
+        const cast2 = JSON.parse(readFileSync(join(book2, '.audiobook', 'cast.json'), 'utf8'));
+        expect(cast1.characters[0].overrideTtsVoices?.qwen?.variants).toBeUndefined();
+        expect(cast2.characters[0].overrideTtsVoices?.qwen?.variants).toBeUndefined();
+      } finally {
+        spy.mockImplementation(actual.readJson);
+        warnSpy.mockRestore();
+      }
+    });
   });
 });
 

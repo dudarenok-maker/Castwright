@@ -2583,6 +2583,30 @@ describe('book-state router — clonedElsewhereInSeries (#2006 Task 9)', () => {
     expect(sharedOnBookTwo.clonedElsewhereInSeries).toBe(false);
   });
 
+  it('#2718 review round 1 — a corrupt SIBLING cast.json does not 500 this book\'s own GET', async () => {
+    /* findClonedVoiceIdsAmongMatches walks every OTHER linked book's own
+       cast.json too. Before the fix, a JSON.parse failure on a sibling
+       propagated straight through this advisory-only scan and 500'd the
+       whole request for an otherwise perfectly healthy book. */
+    const { makeBookId } = await import('../workspace/paths.js');
+    const healthyId = makeBookId(CES_AUTHOR, CES_SERIES, 'Healthy Book');
+    const corruptId = makeBookId(CES_AUTHOR, CES_SERIES, 'Corrupt Sibling');
+    writeSeriesBookOnDisk('Healthy Book', healthyId, [
+      { id: 'shared', name: 'Shared', voiceId: 'ces-corrupt-shared-voice-id' },
+    ]);
+    const corruptDir = writeSeriesBookOnDisk('Corrupt Sibling', corruptId, [
+      { id: 'shared', name: 'Shared', voiceId: 'ces-corrupt-shared-voice-id' },
+    ]);
+    writeFileSync(join(corruptDir, '.audiobook', 'cast.json'), '{not valid json');
+
+    const res = await request(app).get(`/api/books/${healthyId}/state`);
+    expect(res.status).toBe(200);
+    const shared = res.body.cast.characters.find((c: { id: string }) => c.id === 'shared');
+    // Fails open: the corrupt sibling can't be scanned, so this reads false
+    // rather than blocking the response.
+    expect(shared.clonedElsewhereInSeries).toBe(false);
+  });
+
   it('PUT slice=cast strips clonedElsewhereInSeries so it never freezes into cast.json', async () => {
     const { makeBookId } = await import('../workspace/paths.js');
     const stripBookId = makeBookId(CES_AUTHOR, CES_SERIES, 'Strip Test Book');

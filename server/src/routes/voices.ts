@@ -837,7 +837,11 @@ function parseOverrideField(
    isn't series continuity). Shared by the base-voice override propagation and
    the emotion-variant propagation so a designed voice — base OR variant —
    travels identically across every linked character in the series. Returns the
-   number of characters touched. */
+   number of characters genuinely CHANGED — a `mutate` that declines a match
+   (e.g. a clone-consent skip) signals that by returning the SAME object it
+   was given (reference equality), which this walker excludes from the count;
+   any other returned object — including a same-content copy — counts as an
+   update. */
 export async function forEachMatchingCastCharacter(
   voiceId: string,
   seriesFilter: { author: string; series: string } | undefined,
@@ -878,9 +882,16 @@ export async function forEachMatchingCastCharacter(
         const original = cast.characters[i];
         const id = original.voiceId ?? original.id;
         if (id !== voiceId) continue;
-        cast.characters[i] = mutate(original);
+        const next = mutate(original);
+        cast.characters[i] = next;
         dirty = true;
-        updated += 1;
+        /* A `mutate` that deliberately declines a character (a clone-consent
+           skip, e.g.) returns the SAME object by reference — that must NOT
+           count as an update, or a caller reading `updated === 0` to detect
+           "every match was skipped" never sees it fire. `dirty` still tracks
+           whether ANY character was touched (an unchanged rewrite is a
+           harmless idempotent write, not worth a second flag). */
+        if (next !== original) updated += 1;
       }
       if (dirty) await writeJsonAtomic(castJsonPath(onlyBookDir), cast);
       return updated;
@@ -907,9 +918,12 @@ export async function forEachMatchingCastCharacter(
             const original = cast.characters[i];
             const id = original.voiceId ?? original.id;
             if (id !== voiceId) continue;
-            cast.characters[i] = mutate(original);
+            const next = mutate(original);
+            cast.characters[i] = next;
             dirty = true;
-            bookUpdated += 1;
+            /* See the onlyBookDir branch above — a declined (same-reference)
+               mutate must not count as an update. */
+            if (next !== original) bookUpdated += 1;
           }
           if (dirty) {
             await writeJsonAtomic(castJsonPath(bookDir), cast);

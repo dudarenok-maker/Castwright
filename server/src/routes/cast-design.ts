@@ -47,7 +47,11 @@ import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
 import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
-import { applyOverrideToCastFiles, hasClonedSlotAmongMatches } from './voices.js';
+import {
+  applyOverrideToCastFiles,
+  findClonedVoiceIdsAmongMatches,
+  hasClonedSlotAmongMatches,
+} from './voices.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { resolvePersonaEngine, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
@@ -359,6 +363,28 @@ async function runDesignJob(
     return;
   }
 
+  /* #2718 review round 1 — the per-character `hasClonedSlotAmongMatches`
+     calls below each re-walk the WHOLE series when `seriesFilter` is set,
+     even though `findClonedVoiceIdsAmongMatches` exists specifically to
+     answer this in ONE batched walk instead of O(characters × books)
+     (see that function's own header). Precomputed once, up front, so both
+     branches below do an O(1) Set lookup per character instead. Same
+     staleness tradeoff this PR already accepts everywhere else: a clone
+     appearing on a later book mid-sweep is still caught by the write-time
+     residual-window backstop inside applyOverrideToCastFiles /
+     persistEmotionVariant, so a stale upfront scan here costs at most one
+     wasted GPU design call, never a silently-persisted clobber. Left as a
+     per-book `hasClonedSlotAmongMatches` call below when `seriesFilter` is
+     absent — that scan is already onlyBookDir-restricted (fs-61) and cheap
+     regardless of how many characters this loop visits. */
+  const seriesClonedVoiceIds = seriesFilter
+    ? await findClonedVoiceIdsAmongMatches(seriesFilter)
+    : null;
+  const clonedOnLinkedBook = (character: CastCharacter): Promise<boolean> | boolean =>
+    seriesClonedVoiceIds
+      ? seriesClonedVoiceIds.has(character.voiceId ?? character.id)
+      : hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir);
+
   for (const task of tasks) {
     if (job.controller.signal.aborted) break;
     const { characterId, emotion } = task;
@@ -399,10 +425,7 @@ async function runDesignJob(
          character and report it — refusing the whole sweep would let one
          cloned character block designing the rest; retargeting is the
          defect itself. */
-      if (
-        characterHasClonedSlot(character) ||
-        (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir))
-      ) {
+      if (characterHasClonedSlot(character) || (await clonedOnLinkedBook(character))) {
         job.skipped += 1;
         job.clonedSkips.push({ characterId, name: character.name ?? characterId });
         broadcast(job, {
@@ -433,10 +456,7 @@ async function runDesignJob(
       /* #2006 Task 8 — upgraded to the same series-wide fresh check the base
          branch above uses (GATE 2 fix-lane-1b): a clone on a linked sibling
          book must refuse this character too, not just a clone on this book. */
-      if (
-        characterHasClonedSlot(character) ||
-        (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir))
-      ) {
+      if (characterHasClonedSlot(character) || (await clonedOnLinkedBook(character))) {
         job.skipped += 1;
         job.clonedSkips.push({ characterId, name: character.name ?? characterId });
         broadcast(job, {
