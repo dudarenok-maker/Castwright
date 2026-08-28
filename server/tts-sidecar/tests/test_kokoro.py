@@ -799,6 +799,136 @@ def test_cuda_selftest_exception_reading_providers_does_not_leak_raw_exception(
         ), f"Expected exception log, got: {[r.message for r in caplog.records]}"
 
 
+def test_cuda_selftest_empty_providers_list_verified_false(
+    fake_weight_files, monkeypatch, caplog
+) -> None:
+    """Castwright#2709 regression: when session.get_providers() returns an
+    empty list (API drift or unusual edge case), the self-test must record
+    verified=False, not verified=True. Before the fix, the buggy check
+    `actual_providers[:1] == ["CPUExecutionProvider"]` would evaluate to
+    `[] == ["CPUExecutionProvider"]` (False), and the `else` branch would
+    wrongly report verified=True."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    class _EmptyProvidersKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _EmptyProvidersSession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    class _EmptyProvidersSession:
+        """Simulates API drift or unusual case: get_providers() returns empty."""
+        def get_providers(self):
+            return []
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _EmptyProvidersKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = []
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        # Empty provider list means CUDA did not land
+        assert main._cuda_verification_state["checked"] is True
+        assert main._cuda_verification_state["verified"] is False
+        assert main._cuda_verification_state["detail"] is not None
+        # Verify a warning was logged
+        assert any(
+            "CUDA" in rec.message for rec in caplog.records
+        ), "Expected a CUDA self-test warning"
+
+
+def test_cuda_selftest_directml_without_cuda_verified_false(
+    fake_weight_files, monkeypatch, caplog
+) -> None:
+    """Castwright#2709 regression: when session.get_providers() reports
+    DirectML and CPU (CUDA absent), the self-test must record verified=False.
+    Before the fix, the buggy check `actual_providers[:1] == ["CPUExecutionProvider"]`
+    would evaluate to `["DmlExecutionProvider", "CPUExecutionProvider"][:1] ==
+    ["CPUExecutionProvider"]` (False), and the `else` branch would wrongly
+    report verified=True even though CUDA never landed."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    class _DirectmlOnlyKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _DirectmlSession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    class _DirectmlSession:
+        """ORT session that landed on DirectML (e.g. AMD Windows), not CUDA."""
+        def get_providers(self):
+            return ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _DirectmlOnlyKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["DmlExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        # DirectML without CUDA means CUDA did not land
+        assert main._cuda_verification_state["checked"] is True
+        assert main._cuda_verification_state["verified"] is False
+        assert main._cuda_verification_state["detail"] is not None
+        # Verify a warning was logged
+        assert any(
+            "CUDA" in rec.message for rec in caplog.records
+        ), "Expected a CUDA self-test warning"
+
+
 def test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back(
     fake_weight_files, monkeypatch
 ) -> None:

@@ -3272,27 +3272,30 @@ class KokoroEngine(Engine):
                 "detail": "Could not read the real session's providers (API error or kokoro-onnx drift).",
             }
             return
-        landed_on_cpu = (
-            actual_providers[:1] == ["CPUExecutionProvider"]
-        )
-        if landed_on_cpu:
+        # Correctly check if CUDA actually landed (not just that CPU wasn't first).
+        # Empty provider list or non-CUDA providers (DirectML, etc.) mean CUDA
+        # did not land, even though it was requested above.
+        cuda_landed = "CUDAExecutionProvider" in actual_providers
+        if cuda_landed:
+            _cuda_verification_state = {
+                "checked": True,
+                "verified": True,
+                "detail": None,
+            }
+        else:
+            # CUDA was requested (guarded by the early return above) but did not
+            # land in the real session. Log and record the failure.
             detail = (
                 "Kokoro CUDA self-test: CUDAExecutionProvider was requested "
-                "and reported available, but the real session landed on "
-                "CPUExecutionProvider -- Kokoro is running on CPU. "
-                "See Castwright#2582."
+                "and reported available, but the real session did not land on "
+                "CUDA -- Kokoro is running on CPU or another accelerator. "
+                "See Castwright#2709."
             )
             log.warning(detail)
             _cuda_verification_state = {
                 "checked": True,
                 "verified": False,
                 "detail": detail,
-            }
-        else:
-            _cuda_verification_state = {
-                "checked": True,
-                "verified": True,
-                "detail": None,
             }
 
     def _ensure_loaded(self, model: str, device: Optional[str] = None) -> None:
