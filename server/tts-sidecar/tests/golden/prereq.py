@@ -93,3 +93,15 @@ def synthesise_or_skip(engine: Any, model: str, voice: str, text: str) -> Any:
         if reason is None:
             raise
         pytest.skip(reason)
+
+
+def pick_designed_voice(voices: list[str], override: Optional[str]) -> Optional[str]:
+    """Select which designed voice a golden run drives against. An explicit
+    override (e.g. GOLDEN_QWEN_VOICE) always wins; otherwise the first of
+    `voices` (caller passes them pre-sorted, e.g. QwenEngine.list_voices())
+    is used, so the golden gate fires with NO opt-in env var required on any
+    box that already has at least one designed voice (#1994). Returns None
+    when neither is available, so the caller can skip cleanly."""
+    if override:
+        return override
+    return voices[0] if voices else None
