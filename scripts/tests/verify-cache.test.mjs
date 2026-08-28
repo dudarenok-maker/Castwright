@@ -820,6 +820,31 @@ test('stepTouchedByDiff: a brand-new pinokio-scripts/lib/ file is in scope for t
   );
 });
 
+// #2716 PR review, pass 3: naming only the two currently-known root spawners
+// (launch.mjs, vite.config.ts) in extraFiles left every OTHER root-level
+// .mjs/.ts file uncovered — externalFilesFloor()'s own root scan is
+// extension-based with no filename allowlist, so a brand-new root config file
+// with an unguarded spawn (or an existing one like vitest.config.ts gaining
+// one) would be invisible to test:server's CI scope. Measured false before
+// this fix for vitest.config.ts, playwright.config.ts, and eslint.config.mjs.
+test('stepTouchedByDiff: any root-level .mjs/.ts file is in scope for test:server (not just launch.mjs/vite.config.ts)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['vitest.config.ts']), true);
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['playwright.config.ts']), true);
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['eslint.config.mjs']), true);
+});
+
+// The root glob must stay non-recursive — a nested .mjs/.ts file has its own
+// dedicated coverage (server/src/**, scripts/**, etc.) and must not be
+// double-matched by a root glob that accidentally spans directories.
+test('stepTouchedByDiff: the root .mjs/.ts glob does not reach into nested directories', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['scripts/gh.mjs']), true); // covered by scripts/** instead
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:server'], ['README.md']),
+    false,
+    'a root-level non-.mjs/.ts file must not be swept in',
+  );
+});
+
 // --- test:server EXTERNAL_FILES_FLOOR entries outside all three globs
 // (#2567 PR review, pass 2 finding 3) ----------------------------------------
 // launch.mjs, vite.config.ts (both bare root files), and e2e/global-teardown.ts

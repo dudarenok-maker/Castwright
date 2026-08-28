@@ -26,7 +26,7 @@
 import { readdirSync, readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 
 const SRC_ROOT = import.meta.dirname;
 
@@ -347,8 +347,14 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
        scanFile() directly with explicit candidate lists, so real directory
        enumeration order (which a test must never depend on for determinism)
        never enters the picture. Created fresh per test file run, removed in
-       an afterAll below. */
+       the afterAll below — a real afterAll, not an assertion-free `it()`
+       (pass-3 review, #2716: an `it()` doesn't run under `it.only` or after
+       an earlier failing assertion with --bail, so the scratch dir leaked
+       in both cases; afterAll always runs). */
     const scratchDir = mkdtempSync(join(tmpdir(), 'spawn-windows-hide-test-'));
+    afterAll(() => {
+      rmSync(scratchDir, { recursive: true, force: true });
+    });
 
     it('scanFile resets lastIndex, so a leaked offset does not hide an early real offender', () => {
       /* Round-2 review found the original version of this test asserted
@@ -402,10 +408,6 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
       const missing = join(scratchDir, 'does-not-exist.mjs');
       expect(() => filterSpawningFiles([missing])).toThrow();
     });
-
-    it('cleans up its scratch fixtures', () => {
-      rmSync(scratchDir, { recursive: true, force: true });
-    });
   });
 
   /* Acceptance #4 (issue #2687): pinokio-scripts/lib/resolve-release.js
@@ -423,11 +425,13 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
     ).toHaveLength(1);
   });
 
-  /* Acceptance #5 (issue #2687): vite.config.ts is a root-level file that
-     spawns (execSync for git commands). Although it already carries
-     windowsHide: true in source, the PR's purpose is to catch spawns via
-     content filtering, not to rely on source-level flags. The root-level
-     scan must be widened to include .ts files, not just .mjs. */
+  /* #2716 PR review, pass 1: vite.config.ts is a root-level file that spawns
+     (execSync for git commands). #2687's original spec scoped the root scan
+     to .mjs only (it did not name vite.config.ts) — this widening to .ts was
+     added afterward, in review, once vite.config.ts's own unguarded spawn was
+     found. Although it already carries windowsHide: true in source, the
+     guard's purpose is to catch spawns via content filtering, not to rely on
+     source-level flags staying correct. */
   it('vite.config.ts appears in the external-files floor (root scan catches .ts)', () => {
     const viteConfig = EXTERNAL_FILES_FLOOR.filter((f) =>
       f.endsWith('vite.config.ts'),

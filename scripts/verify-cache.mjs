@@ -357,22 +357,31 @@ export const STEPS = [
   {
     name: 'test:server',
     inputs: {
-      /* server/src/**: the primary surface. scripts/**\/*.{mjs,cjs,js},
-         server/tts-sidecar/scripts/**\/*.mjs, and pinokio-scripts/lib/**
-         (#2716 / #2687 / #2567): spawn-windows-hide.test.ts (a server/src
-         test) builds an EXTERNAL_FILES_FLOOR by auto-detecting files with
-         spawn calls in these three directory trees, rather than relying on a
-         hand-maintained list that could go stale. These globs cover the scan
-         surface so a diff touching any candidate file is recognized as
-         in-scope for this step — including a brand-new file dropped into
-         pinokio-scripts/lib/ (not just the one specific file, resolve-
-         release.js, that used to be named via extraFiles below; a directory-
-         wide glob is what actually matches how externalFilesFloor() scans it
-         now). A glob here is safe: it's a superset of scripts/tests/**, which
-         is harmless — those files are already covered by test:hooks/
+      /* server/src/**: the primary surface. *.{mjs,ts} (root, non-recursive),
+         scripts/**\/*.{mjs,cjs,js}, server/tts-sidecar/scripts/**\/*.mjs, and
+         pinokio-scripts/lib/** (#2716 / #2687 / #2567): spawn-windows-
+         hide.test.ts (a server/src test) builds an EXTERNAL_FILES_FLOOR by
+         auto-detecting files with spawn calls in these four surfaces, rather
+         than relying on a hand-maintained list that could go stale. These
+         globs cover the scan surface so a diff touching any candidate file is
+         recognized as in-scope for this step — including a brand-new file
+         dropped into pinokio-scripts/lib/ (not just the one specific file,
+         resolve-release.js, that used to be named via extraFiles below), and
+         a brand-new root-level .mjs/.ts file (not just launch.mjs/
+         vite.config.ts, the two that used to be named there — #2716 PR
+         review, pass 3, found that naming only the two currently-known root
+         spawners left every OTHER root config file, e.g. vitest.config.ts,
+         playwright.config.ts, eslint.config.mjs, uncovered: the floor's own
+         root scan is extension-based with no filename allowlist, so this
+         step's scope must match that shape, not enumerate today's floor
+         membership). *.{mjs,ts} is root-only (no recursive wildcard), same
+         non-recursive scope externalFilesFloor()'s root scan itself uses. A
+         glob here is safe: it's a superset of scripts/tests/**, which is
+         harmless — those files are already covered by test:hooks/
          test:scripts, this just adds a redundant, safe extra invalidation. */
       globs: [
         'server/src/**',
+        '*.{mjs,ts}',
         'scripts/**/*.{mjs,cjs,js}',
         'server/tts-sidecar/scripts/**/*.mjs',
         'pinokio-scripts/lib/**',
@@ -398,17 +407,13 @@ export const STEPS = [
          above — includeLockfiles below only special-cases the literal
          server/package-lock.json path, so a manifest-only server dependency
          edit invalidated nothing (verified against the live module).
-         launch.mjs, vite.config.ts, e2e/global-teardown.ts (#2716 / #2567
-         review): the rest of spawn-windows-hide.test.ts's EXTERNAL_FILES_FLOOR
-         that sit outside the three globs above — both are bare root files (the
-         pinokio-scripts/lib/** glob above now covers resolve-release.js
-         directly, so it no longer needs its own extraFiles line), the third
-         lives in a tree this step has no other reason to watch. vite.config.ts
-         matters here specifically because externalFilesFloor()'s root-level
-         scan widened to include .ts (not just .mjs) to catch it — without this
-         line, a diff that strips vite.config.ts's own windowsHide: true would
-         report [cached] and the regression test this PR added for exactly that
-         file would never run against the change that breaks it.
+         e2e/global-teardown.ts (#2716 / #2567 review): the one remaining
+         spawn-windows-hide.test.ts EXTERNAL_FILES_FLOOR entry that sits
+         outside the four globs above — it lives in a tree this step has no
+         other reason to watch (launch.mjs and vite.config.ts used to be
+         named here too, but the *.{mjs,ts} root glob above now covers both,
+         plus every other root config file the floor's own extension-based
+         scan would catch).
          .gitattributes (#2588 pass-2 review): venv-migration.test.ts reads it at
          RUNTIME to assert the requirements/*.txt LF pin is actually declared — a
          .gitattributes-only diff (the file the pin itself lives in) touches no
@@ -421,8 +426,6 @@ export const STEPS = [
         'scripts/tests/fixtures/ffmpeg-version-cases.json',
         'scripts/repair-cast-id-drift.mjs',
         'server/package.json',
-        'launch.mjs',
-        'vite.config.ts',
         'e2e/global-teardown.ts',
         '.gitattributes',
       ],
