@@ -158,4 +158,59 @@ test.describe('Advanced Settings — plan 199 golden path', () => {
     /* The "Restart sidecar" CTA button should also be visible. */
     await expect(page.getByRole('button', { name: /Restart sidecar/i })).toBeVisible();
   });
+
+  test('analyzer-models section shows the analyzer device row', async ({ page }) => {
+    await page.goto('/#/advanced');
+    await waitForRouteReady(page);
+
+    /* The analyzer-models section is open by default. The analyzer device
+       row should be visible with the read-only label. */
+    await expect(page.getByText('Analyzer (Ollama) device')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('read-only')).toBeVisible();
+  });
+
+  test('analyzer-models section shows GPU-split warning when model spans multiple devices', async ({
+    page,
+  }) => {
+    /* Navigate with query param override for split state. The query param must
+       come BEFORE the hash in the URL for window.location.search to read it.  */
+    await page.goto('/?e2eAnalyzerGpuSplit=split#/advanced');
+
+    /* Wait for the route to be ready AND for the async API calls to settle.
+       The getAnalyzerGpuSplit mock has a 20ms wait, so this extra delay
+       ensures it's resolved and re-rendering has occurred. */
+    await waitForRouteReady(page);
+    await page.waitForTimeout(100);
+
+    /* The analyzer-models section is open by default. Look for the
+       GPU-split warning text. The warning should mention the devices
+       and the fact that it could fit on one device. */
+    await expect(
+      page.getByText(/Model split across GPUs/i),
+    ).toBeVisible({ timeout: 10_000 });
+
+    /* Verify the link to docs is present in the warning. */
+    await expect(page.getByRole('link', { name: /docs\/local-llm.md/i })).toBeVisible();
+  });
+
+  test('analyzer-models section shows data-unavailable note when GPU stats unavailable', async ({
+    page,
+  }) => {
+    /* Use e2e query param override to force dataUnavailable: true, which
+       means the driver doesn't expose per-process GPU memory. This
+       should show a neutral note instead of a warning. The query param must
+       come BEFORE the hash for window.location.search to read it. */
+    await page.goto('/?e2eAnalyzerGpuSplit=unavailable#/advanced');
+    await waitForRouteReady(page);
+    await page.waitForTimeout(100);
+
+    /* The analyzer-models section is open by default. Look for the
+       "Can't determine GPU split status" note. */
+    await expect(
+      page.getByText(/Can't determine GPU split status.*driver doesn't expose/i),
+    ).toBeVisible({ timeout: 10_000 });
+
+    /* Verify the nvidia-smi command example is present. */
+    await expect(page.getByText(/nvidia-smi.*query-compute-apps/i)).toBeVisible();
+  });
 });
