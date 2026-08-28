@@ -520,19 +520,25 @@
         <p class="why">Both in <span class="mono">server/tts-sidecar/main.py</span> — <b>one
           lane, not two</b>, per the Round-1 Lane-4 rule (files that overlap share a lane
           regardless of how unrelated the defects look).</p>
+        <p class="why"><b>IN DECOMPOSITION 2026-08-29</b> — both decisions have been taken by
+          the operator and both items are now <b>In Progress</b> on the board, labelled
+          <span class="mono">area:side</span>. <b>The chosen options are not yet written back to
+          the issue bodies</b>, which still end with their original <em>Decision owed</em> line —
+          so a cold implementation brief must not be derived from those bodies alone, or it will
+          re-open a settled question. Child issue numbers are not yet assigned.</p>
       </header>
       <ul class="items">
         <li class="item" data-id="2750" data-disp="ready" data-area="side">
           <input type="checkbox" aria-label="Mark 2750 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2750">#2750</a></div>
           <div class="body"><div class="t">SpeakerEngine never restores its device pin after a cuda→cpu self-demotion</div>
-          <div class="n">Same class as #2642 (Whisper, already fixed) and #1730 gap-3 (Coqui) — #2642's audit enumerated all four engines and missed this one.</div></div>
-          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
+          <div class="n">Same class as #2642 (Whisper, already fixed) and #1730 gap-3 (Coqui) — #2642's audit enumerated all four engines and missed this one. <b>Decision taken 2026-08-29; in decomposition.</b> The three options differ materially in code — the teardown-gate shape also touches <span class="mono">maybe_free_idle</span>'s <span class="mono">!= "cuda"</span> gate, the demotion-point shape does not, and the third changes whether plan 264's teardown contract applies to SPK at all.</div></div>
+          <div class="tags"><span class="tag queued">in decomposition</span><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
         </li>
         <li class="item" data-id="2752" data-disp="ready" data-area="side">
           <input type="checkbox" aria-label="Mark 2752 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2752">#2752</a></div>
           <div class="body"><div class="t"><span class="mono">design_voice()</span>'s 1.7B-Base evict guard blind to an in-flight base17 load</div>
-          <div class="n">Same blind-spot shape PR #2745 just fixed on the design side, in the opposite direction (<span class="mono">main.py:6472</span>).</div></div>
-          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
+          <div class="n">Same blind-spot shape PR #2745 just fixed on the design side, in the opposite direction (<span class="mono">main.py:6472</span>). <b>Decision taken 2026-08-29; in decomposition.</b> The two options move the wait to opposite sides — a wait-then-evict path inside <span class="mono">unload_base17()</span> mirroring #2070's "design wins" policy, or refusing admission in <span class="mono">design_voice()</span> until the in-flight load finishes — and they differ in which operation blocks, and for how long.</div></div>
+          <div class="tags"><span class="tag queued">in decomposition</span><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
         </li>
       </ul>
     </section>
