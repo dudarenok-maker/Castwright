@@ -189,18 +189,19 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">60</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">61</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">5</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
-    <div class="stat"><div class="n">40</div><div class="l">Still owed in A1 (of 60)</div></div>
+    <div class="stat"><div class="n">40</div><div class="l">Still owed in A1 (of 61)</div></div>
     <div class="stat"><div class="n">06-01</div><div class="l">Oldest debt</div></div>
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-27, 59 → 60 via PR #2688</b>, adding row A37 (#2059's
+    <b>Last change: 2026-08-28, 60 → 61 via PR #2719</b>, adding row A38 (CUDA fallback self-test #2582).
+    <br><b>Previous change: 2026-08-27, 59 → 60 via PR #2688</b>, adding row A37 (#2059's
     audible effect, not yet run).
-    <br><b>Previous change: 2026-08-27 (on-box wave 9c, branch <code>chore/ops-onbox-wave9</code>), 58 → 59.</b>
+    <br><b>Prior change: 2026-08-27 (on-box wave 9c, branch <code>chore/ops-onbox-wave9</code>), 58 → 59.</b>
     Old A34 (voice reassignment vs. persisted audition centroid, #1969/PR
     #2402) had two criteria; the on-box run proved only the first (stale
     reference discarded on reassignment, not silently reused). The second
@@ -289,7 +290,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>37</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>38</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>2</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>4</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>3</td></tr>
@@ -305,7 +306,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">37 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">38 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -853,6 +854,19 @@
           <li><b>Doubled-comma collapse pause, by ear.</b> Render a dash-attributed line (e.g. <code>"— Привет, — сказал Антон."</code>) and confirm collapsing the doubled comma to one doesn't shorten or eliminate an audible pause the doubled comma was incidentally providing, and doesn't introduce a new artifact.</li>
         </ul>
         <p class="src">A Coqui-capable sidecar with XTTS resident, a Russian line (no clone needed — the stock catalogue voice <code>Damien Black</code> reproduces this shape) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2059">#2059</a> · criteria: the bullet above — #2059 itself has only this one dialogue shape and no separate run sheet (unlike A31's) · short — one or two renders of a Russian test sentence</p>
+      </div>
+    </details>
+
+    <details class="item">
+      <summary><span class="num">A38</span><span class="iname">CUDA self-test on real ORT session detects Kokoro CPU fallback</span><span class="risk">single 8 GB card, live Kokoro sidecar with real ORT session</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>PR #2719's <code>_cuda_selftest_or_warn</code> method (<code>server/tts-sidecar/main.py</code>) inspects the real ORT <code>InferenceSession</code> returned by Kokoro's first load and checks whether CUDA was requested but the session landed on CPU instead. The verification result (<code>cuda_verified</code>, <code>cuda_verification_detail</code>) rides the existing <code>_ensure_loaded</code> load at the <code>from_session</code> code path and is surfaced through <code>/health</code> → <code>/api/info</code> → the device-panel amber warning in the UI. Unit tests mock <code>InferenceSession</code> and cannot prove the mechanism against a genuine CUDA→CPU degradation on real hardware.</p>
+        <ul>
+          <li><b>Self-test fires at the real load boundary.</b> On first Kokoro load via the real <code>_ensure_loaded</code>/<code>from_session</code> path (during a chapter render or <code>PRELOAD_KOKORO</code> warm-up), confirm the log shows the CUDA self-test message and <code>/health</code>'s <code>sidecar_health.cuda_verified</code> field is populated (not <code>null</code>).</li>
+          <li><b>CUDA fallback detection on real CUDA unavailability.</b> Force a real CUDA→CPU fallback using the same missing-<code>nvidia-cudnn-cu12</code> gap A33 and A28 already use to force CPU-only providers. Load Kokoro and confirm <code>/health</code>'s <code>sidecar_health.cuda_verified === false</code> and <code>/api/info</code>'s <code>cudaVerified</code> field reads <code>false</code>. Confirm the device-panel UI renders the amber warning <em>"GPU reported available, but Kokoro is running on CPU."</em></li>
+          <li><b>Silent verification when CUDA genuinely succeeds.</b> On a box with working CUDA support, load Kokoro and confirm <code>/health</code>'s <code>cuda_verified === true</code> (or <code>true</code> when CUDA was actually not requested and the field is <code>null</code>), and the device-panel warning stays absent.</li>
+        </ul>
+        <p class="src">a single 8 GB GPU, a live Kokoro-capable sidecar, and a real ORT session accessible during <code>_ensure_loaded</code> · <a href="https://github.com/dudarenok-maker/Castwright/issues/2582">#2582</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/2719">PR #2719</a> · no separate run sheet; mechanism is integrated into Kokoro's existing health reporting · short — one Kokoro load with CPU-forced providers, one with CUDA working (or default unforced), and UI verification</p>
       </div>
     </details>
 

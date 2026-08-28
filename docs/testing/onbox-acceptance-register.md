@@ -339,7 +339,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -349,11 +349,14 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**60 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-27, 60 → 60 (no count change).** The **Blocked** section's
+> **Last change: 2026-08-28, 60 → 61 via PR #2719**, adding row **A38** (CUDA fallback self-test #2582).
+> ([#2719](https://github.com/dudarenok-maker/Castwright/pull/2719))
+
+> **Prior change: 2026-08-27, 60 → 60 (no count change).** The **Blocked** section's
 > two ffmpeg rows no longer carry row IDs. They had borrowed **E6** and **E8** from
 > the live Group E sequence, so each of those IDs named *two* rows — one live Group
 > E row and one Blocked row — and Group E renumbers underneath the Blocked section
@@ -553,7 +556,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
      this yet — until the contiguity check is removed from
      scripts/check-onbox-register.mjs, an ID from this range fails the build.
      Until then, keep following the existing numbering. -->
-<!-- next-id: A101 -->
+<!-- next-id: A102 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -2957,6 +2960,40 @@ clone needed — the stock catalogue voice `Damien Black` reproduces this
 shape). *Criteria:* the bullet above — [#2059](https://github.com/dudarenok-maker/Castwright/issues/2059)
 itself has only this one dialogue shape and no separate run sheet (unlike
 A31's). *Cost:* short — one or two renders of a Russian test sentence.
+
+---
+
+### A38 · CUDA self-test on real ORT session detects Kokoro CPU fallback ([#2582](https://github.com/dudarenok-maker/Castwright/issues/2582), PR [#2719](https://github.com/dudarenok-maker/Castwright/pull/2719)) · **single 8 GB card, live Kokoro sidecar with real ORT session**
+
+PR #2719's `_cuda_selftest_or_warn` method (`server/tts-sidecar/main.py`) inspects
+the real ORT `InferenceSession` returned by Kokoro's first load and checks whether
+CUDA was requested but the session landed on CPU instead. The verification result
+(`cuda_verified`, `cuda_verification_detail`) rides the existing `_ensure_loaded`
+load at the `from_session` code path and is surfaced through `/health` →
+`/api/info` → the device-panel amber warning in the UI. Unit tests mock
+`InferenceSession` and cannot prove the mechanism against a genuine CUDA→CPU
+degradation on real hardware.
+
+- **Self-test fires at the real load boundary.** On first Kokoro load via the
+  real `_ensure_loaded`/`from_session` path (during a chapter render or
+  `PRELOAD_KOKORO` warm-up), confirm the log shows the CUDA self-test message
+  and `/health`'s `sidecar_health.cuda_verified` field is populated (not `null`).
+- **CUDA fallback detection on real CUDA unavailability.** Force a real CUDA→CPU
+  fallback using the same missing-`nvidia-cudnn-cu12` gap A33 and A28 already use
+  to force CPU-only providers. Load Kokoro and confirm `/health`'s
+  `sidecar_health.cuda_verified === false` and `/api/info`'s `cudaVerified`
+  field reads `false`. Confirm the device-panel UI renders the amber warning
+  *"GPU reported available, but Kokoro is running on CPU."*
+- **Silent verification when CUDA genuinely succeeds.** On a box with working
+  CUDA support, load Kokoro and confirm `/health`'s `cuda_verified === true` (or
+  `true` when CUDA was actually not requested and the field is `null`), and the
+  device-panel warning stays absent.
+
+*Needs:* a single 8 GB GPU, a live Kokoro-capable sidecar, and a real ORT
+session accessible during `_ensure_loaded`. *Criteria:* the three bullets above —
+no separate run sheet; mechanism is integrated into Kokoro's existing health
+reporting. *Cost:* short — one Kokoro load with CPU-forced providers, one with
+CUDA working (or default unforced), and UI verification.
 
 ## Group B — local Ollama analyzer only
 
