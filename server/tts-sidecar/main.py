@@ -3283,8 +3283,7 @@ class KokoroEngine(Engine):
             # CUDA was requested (guarded by the early return above) but did not
             # land in the real session. Log and record the failure.
             detail = (
-                "CUDAExecutionProvider was requested but did not land in the real session "
-                "(may be running on CPU or another accelerator)."
+                "CUDAExecutionProvider was requested but did not land in the real session."
             )
             log.warning("Kokoro CUDA self-test: %s (Castwright#2709)", detail)
             _cuda_verification_state = {
@@ -3452,6 +3451,13 @@ class KokoroEngine(Engine):
             session = rt.InferenceSession(self._model_path, **session_kwargs)
             kokoro = Kokoro.from_session(session, self._voices_path)
             self._cuda_selftest_or_warn(session, build_providers)
+            # NOTE: _cuda_verification_state is published here, but self._kokoro
+            # is not set until line 3530, creating a narrow window where the state
+            # reflects a verdict for a load that hasn't fully completed yet. A
+            # concurrent unload() racing this exact window is a known, unaddressed
+            # edge case with low real-world reachability (requires hand-set
+            # CUDA+DirectML provider lists to matter; unload's #12 fix already
+            # ensures stale state is cleared going forward).
             if provider_options is not None:
                 log.info(
                     "Kokoro pinned to %s via provider device_id (session built once).",
@@ -3473,15 +3479,16 @@ class KokoroEngine(Engine):
                 # so detail text must be distinguishable.
                 if "CUDAExecutionProvider" in build_providers:
                     detail = (
-                        "Kokoro's from_session API is unavailable (kokoro-onnx API drift) -- "
-                        "CUDA was requested but Kokoro(...) always forces CPU on this path."
+                        "An internal API drift issue in Kokoro (from_session method unavailable) "
+                        "always forces CPU, despite CUDA being requested."
                     )
                     _cuda_verification_state = {
                         "verified": False,
                         "detail": detail,
                     }
             else:
-                # CUDA was not requested, do not touch _cuda_verification_state
+                # No providers were requested (build_providers is empty);
+                # _cuda_verification_state stays at its default (not applicable).
                 pass
             kokoro = Kokoro(self._model_path, self._voices_path)
 
