@@ -112,7 +112,7 @@ describe('DevicePanel', () => {
     render(<DevicePanel />);
     const warning = screen.getByTestId('cuda-fallback-warning');
     expect(warning).toBeInTheDocument();
-    expect(warning.textContent).toContain('GPU reported available, but Kokoro is running on CPU.');
+    expect(warning.textContent).toContain('GPU acceleration was configured for Kokoro, but it\'s running on CPU instead.');
     expect(warning.textContent).toContain('CUDA build reports available, self-test forced CPU.');
   });
 

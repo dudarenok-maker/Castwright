@@ -69,7 +69,7 @@ export function DevicePanel() {
         >
           <span className="w-1.5 h-1.5 mt-1 rounded-full bg-amber-500 shrink-0" />
           <span>
-            GPU reported available, but Kokoro is running on CPU.
+            GPU acceleration was configured for Kokoro, but it's running on CPU instead.
             {info.cudaVerificationDetail ? ` ${info.cudaVerificationDetail}` : ''}
           </span>
         </p>

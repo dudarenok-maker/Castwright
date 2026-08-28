@@ -3036,7 +3036,7 @@ degradation on real hardware.
   to force CPU-only providers. Load Kokoro and confirm `/health`'s
   `sidecar_health.cuda_verified === false` and `/api/info`'s `cudaVerified`
   field reads `false`. Confirm the device-panel UI renders the amber warning
-  *"GPU reported available, but Kokoro is running on CPU."*
+  *"GPU acceleration was configured for Kokoro, but it's running on CPU instead."*
 - **Silent verification when CUDA genuinely succeeds.** On a box with working
   CUDA support, load Kokoro and confirm `/health`'s `cuda_verified === true` (or
   `true` when CUDA was actually not requested and the field is `null`), and the
