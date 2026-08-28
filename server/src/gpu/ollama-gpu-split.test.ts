@@ -306,5 +306,81 @@ describe('detectOllamaGpuSplit', () => {
       expect(result2).toEqual(result1);
       expect(execFileMock.mock.calls.length).toBe(callCount1);
     });
+
+    it('coalesces calls 3-5 seconds apart within the 60-second TTL (realistic multi-stage scenario)', async () => {
+      let fakeNow = 1000;
+      vi.spyOn(Date, 'now').mockImplementation(() => fakeNow);
+
+      try {
+        mockNvidiaSmi({
+          computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
+          indexUuid: '0, GPU-aaa\n',
+          free: '0, 3000\n',
+        });
+
+        // First call at t=1000 — invokes nvidia-smi
+        const result1 = await detectOllamaGpuSplit();
+        expect(result1.split).toBe(false);
+        const callCount1 = execFileMock.mock.calls.length;
+
+        // Simulate 4 seconds passing (typical gap between chapter processing in stage 1/2)
+        fakeNow += 4_000;
+
+        // Second call at t=5000 — should hit cache because 4000ms < 60000ms TTL
+        const result2 = await detectOllamaGpuSplit();
+        expect(result2).toEqual(result1);
+        expect(execFileMock.mock.calls.length).toBe(callCount1);
+        // Verify: no additional nvidia-smi calls were made
+
+        // Simulate another 50 seconds (total 54 seconds elapsed, still within TTL)
+        fakeNow += 50_000;
+
+        // Third call at t=55000 — still within 60-second TTL, should still hit cache
+        const result3 = await detectOllamaGpuSplit();
+        expect(result3).toEqual(result1);
+        expect(execFileMock.mock.calls.length).toBe(callCount1);
+        // Verify: still no additional nvidia-smi calls
+
+        // Simulate 10 more seconds (total 64 seconds elapsed, past TTL)
+        fakeNow += 10_000;
+
+        // Fourth call at t=65000 — now past 60-second TTL, should re-probe
+        await detectOllamaGpuSplit();
+        expect(execFileMock.mock.calls.length).toBeGreaterThan(callCount1);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    });
+
+    it('respects CASTWRIGHT_GPU_SPLIT_PROBE=0 env var to disable probe', async () => {
+      mockNvidiaSmi({
+        computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
+        indexUuid: '0, GPU-aaa\n',
+        free: '0, 3000\n',
+      });
+
+      const originalEnv = process.env.CASTWRIGHT_GPU_SPLIT_PROBE;
+      process.env.CASTWRIGHT_GPU_SPLIT_PROBE = '0';
+
+      try {
+        const result = await detectOllamaGpuSplit();
+        // When disabled, should return empty result without invoking nvidia-smi
+        expect(result).toEqual({
+          reachable: false,
+          split: false,
+          deviceIndices: [],
+          totalUsedMb: 0,
+          wouldFitSingleDevice: false,
+          dataUnavailable: false,
+        });
+        expect(execFileMock.mock.calls.length).toBe(0);
+      } finally {
+        if (originalEnv === undefined) {
+          delete process.env.CASTWRIGHT_GPU_SPLIT_PROBE;
+        } else {
+          process.env.CASTWRIGHT_GPU_SPLIT_PROBE = originalEnv;
+        }
+      }
+    });
   });
 });

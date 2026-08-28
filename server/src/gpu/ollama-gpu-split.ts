@@ -13,14 +13,17 @@ import { execFile } from 'node:child_process';
 const EXEC_TIMEOUT_MS = 4_000;
 /* TTL-based cache for the GPU-split probe result. The detector shells out to
    three separate nvidia-smi queries, each with a 4-second timeout, during
-   every chat() call on the analyzer's hot path. A ~1500ms cache matches the
-   precedent in capacity-probe.ts for exactly this class of inexpensive-but-
-   not-free system probe that gets called multiple times per analysis — VRAM
-   placement doesn't change every few hundred ms, so the cache is safe and
-   necessary for performance (srv-2367). Mirrors capacity-probe.ts's caching
-   idiom: module-level cache variable, TTL check on every call, fresh-override
-   for callers that need a re-probe. */
-const CACHE_TTL_MS = 1_500;
+   every chat() call on the analyzer's hot path. Unlike capacity-probe.ts's
+   1500ms cache (which coalesces "repeated admission checks in quick succession"
+   within a single request-handling burst), chat() calls are seconds apart
+   (once per chapter per analysis stage), so a much longer TTL is safe and
+   necessary (srv-2367). GPU placement essentially never changes mid-generation,
+   so a 60-second window coalesces all redundant probes within a typical
+   analysis run without stale-cache risk. Env-gated by CASTWRIGHT_GPU_SPLIT_PROBE
+   (default on; set to '0' to disable if the operator doesn't need this diagnostic).
+   Mirrors capacity-probe.ts's caching idiom: module-level cache variable, TTL
+   check on every call, fresh-override for callers that need a re-probe. */
+const CACHE_TTL_MS = 60_000;
 
 let cache: { at: number; result: OllamaGpuSplitResult } | null = null;
 
@@ -146,10 +149,17 @@ export function parseGpuFreeCsv(raw: string): GpuFreeRow[] {
     daemon binary and its per-model runner subprocess names can differ across
     platforms/installs, so an exact-name match would miss real installs; the
     verify child confirms this against a real box.
-    Result is cached for ~1500ms to avoid redundant nvidia-smi spawns on the
-    analyzer's hot path (chat() calls this on every inference). Pass
-    `fresh: true` to force a re-probe (for testing). */
+    Result is cached for 60 seconds to avoid redundant nvidia-smi spawns on the
+    analyzer's hot path (chat() calls this on every inference, seconds apart).
+    Env-gated by CASTWRIGHT_GPU_SPLIT_PROBE (default on; set to '0' to disable).
+    Pass `fresh: true` to force a re-probe (for testing). */
 export async function detectOllamaGpuSplit(opts?: { fresh?: boolean }): Promise<OllamaGpuSplitResult> {
+  /* Permit operators to disable the probe entirely via env var, matching the
+     pattern in sampleAndRecordVram (analyzer/ollama.ts). */
+  if (process.env.CASTWRIGHT_GPU_SPLIT_PROBE === '0') {
+    return emptyResult();
+  }
+
   const now = Date.now();
   if (!opts?.fresh && cache && now - cache.at < CACHE_TTL_MS) {
     return cache.result;
