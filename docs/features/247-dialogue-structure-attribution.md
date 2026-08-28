@@ -458,9 +458,10 @@ weighted average. Deliberately not re-run — the diagnostic is conclusive witho
 and #2187 is the deliverable either way.
 
 This discharged register row **C2 _as numbered before 2026-08-06_**. Note that "C2" was reused: a
-*different* row now carries that ID (the flagged-count re-run described below). Register row IDs are
-positional and contiguous, so they renumber as rows are discharged — the register's own sync log
-records that reuse.
+*different* row now carries that ID (the flagged-count re-run described below). Register row IDs
+were positional and contiguous at the time, so they renumbered as rows were discharged — the
+register's own sync log records that reuse. (Under the pre-#2599 positional-ID rule; IDs are stable
+and never reused from 2026-08-27.)
 
 ### #2187 RESOLVED — alignment fixed, every chapter now clears the floor
 

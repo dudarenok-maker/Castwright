@@ -2288,6 +2288,15 @@ class CoquiEngine(Engine):
         The reclaim runs AFTER the lock is released, and this method is called
         synchronously on the event loop by `_idle_evict_steps` — see
         `_reclaim_after_drop`.
+
+        COQUI-RESIDENCY-POLICY — this is mechanism B (sidecar, demand-driven,
+        reactive): one step in the generic `_idle_evict_steps` admission
+        ladder. Node also evicts Coqui proactively at generation-plan phase
+        boundaries via `evictCoquiForQwenPhase` / `evictQwenForCoquiPhase`
+        in `server/src/tts/synthesise-chapter.ts` — this method is therefore
+        not the only path that drops the model. The keep-both ruling and the
+        full cross-reference are in
+        `docs/features/264-vram-aware-gpu-placement.md`.
         """
         # Cheap, lock-free fast-outs first: nothing loaded, mid-forward, or
         # used recently. Skipping the lock here matters — a forward can run
@@ -5044,6 +5053,13 @@ def _idle_evict_steps(device_key: str, engine: str) -> list["EvictStep"]:
     if engine != "coqui":
         coqui = ENGINES.get("coqui")
         if isinstance(coqui, CoquiEngine) and _same_card(getattr(coqui, "_device", None), device_key):
+            # COQUI-RESIDENCY-POLICY — this step is one entry in the generic
+            # cross-engine admission ladder above; it is not a Coqui-specific
+            # idle evict. Node also evicts Coqui proactively at generation-plan
+            # phase boundaries (`evictCoquiForQwenPhase` in
+            # `server/src/tts/synthesise-chapter.ts`). The keep-both ruling
+            # and the full cross-reference are in
+            # `docs/features/264-vram-aware-gpu-placement.md`.
             steps.append(EvictStep("coqui", "coqui", lambda: coqui.maybe_free_idle(_coqui_idle_ttl())))
     return steps
 

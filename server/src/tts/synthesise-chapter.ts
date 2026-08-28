@@ -1033,11 +1033,20 @@ async function evictQwenForCoquiPhase(signal?: AbortSignal): Promise<void> {
 /* fs-38 Wave 3c, Task 22 [FAB-I2] — the mirror of `evictQwenForCoquiPhase`
    above: evicts Coqui so a subsequent Qwen derive/render doesn't run with
    XTTS (~3.5 GB) still resident, the same co-residency hazard mirrored the
-   other direction. Used ONLY by the cloned/designed-voice resolver pre-pass
-   (below) to hand off from "coqui derive phase" back to "qwen phase" — see
-   the pre-pass's own Task 22 comment for why this fires only when a qwen
-   load is about to happen afterward (evicting XTTS unconditionally would
-   unload it right before every Coqui-only chapter's groups reload it). */
+   other direction. Used by the cloned/designed-voice resolver pre-pass (below)
+   to hand off from "coqui derive phase" back to "qwen phase", and also by the
+   render-phase trailing evict (line ~2988) to reclaim VRAM after all groups
+   have been synthesised. See the pre-pass's own Task 22 comment for the
+   pre-pass semantics (evicting XTTS unconditionally would unload it right
+   before every Coqui-only chapter's groups reload it).
+
+   COQUI-RESIDENCY-POLICY — this is mechanism A (Node, plan-driven,
+   proactive). A second, independent mechanism can also free XTTS VRAM:
+   the sidecar's admission ladder (`_idle_evict_steps` in
+   `server/tts-sidecar/main.py`), which reclaims idle Coqui when an
+   unrelated op is VRAM-starved. Neither mechanism knows the other exists;
+   the keep-both ruling and the full cross-reference are in
+   `docs/features/264-vram-aware-gpu-placement.md`. */
 async function evictCoquiForQwenPhase(signal?: AbortSignal): Promise<void> {
   return evictEngineForPhase('coqui', signal);
 }
@@ -2959,13 +2968,17 @@ export async function synthesiseChapter(
        Task 11 clears on unload) once per mixed dispatch — and is accepted
        deliberately: 3.5 GB held across an entire book is the worse trade.
 
-       Fail-SOFT, deliberately and unlike the leading evict: every group is
-       already synthesised by the time this runs, so letting a sidecar
-       recycle window (502/ECONNREFUSED on `/unload`) throw here would
-       destroy a chapter's completed work purely to free VRAM — the exact
-       §2.3 shape #1893 and Task 22 fix round 2 each closed elsewhere. The
-       leading evict's own bare `await` is untouched here; it is a separate
-       finding with its own reconciliation against main. */
+       Fail-SOFT on ALL errors (including aborts), unlike the leading evict:
+       every group is already synthesised by the time this runs, so letting any
+       error throw would destroy a chapter's completed work purely to free VRAM — the exact
+       §2.3 shape #1893 and Task 22 fix round 2 each closed elsewhere. This
+       asymmetry is correct: the leading evict rethrows AbortError for pause
+       detection (routes/generation.ts), but at this point (end of synthesis
+       work), swallowing the abort doesn't lose audio, and the chapter must not
+       fail on VRAM-cleanup housekeeping. The main addition this trailing evict
+       brings is the `withCallTimeout` bounded ceiling that matches the leading
+       one: previously unbounded, it could stall a chapter whose groups are
+       all already synthesised. */
     try {
       /* #1893 reconciliation (main merge) — bounded + cancellable, matching
          the leading `qwen-evict-for-coqui` call above. The fail-soft policy

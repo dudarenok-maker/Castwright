@@ -15,6 +15,8 @@ import {
   CANNOT_VERIFY_BASELINE_ERROR,
   stripHtmlComments,
   htmlCellText,
+  ALLOCATION_FLOOR,
+  parseNextIdMarker,
 } from '../check-onbox-register.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
@@ -46,6 +48,8 @@ function buildRegister({
   total = 3,
   bodyARows = [1, 2],
   bodyBRows = [1],
+  nextIdA = 101,
+  nextIdB = 101,
 } = {}) {
   const bodyASection = bodyARows
     .map((n) => `### A${n} · thing ${n}\n\nSome body text.\n`)
@@ -53,6 +57,8 @@ function buildRegister({
   const bodyBSection = bodyBRows
     .map((n) => `### B${n} · thing ${n}\n\nSome body text.\n`)
     .join('\n');
+  const markerA = nextIdA === null ? '' : `\n<!-- next-id: A${nextIdA} -->\n`;
+  const markerB = nextIdB === null ? '' : `\n<!-- next-id: B${nextIdB} -->\n`;
   return `# On-box acceptance register
 
 ## At a glance
@@ -68,12 +74,12 @@ function buildRegister({
 ---
 
 ## Group A — setup a
-
+${markerA}
 ${bodyASection}
 ---
 
 ## Group B — setup b
-
+${markerB}
 ${bodyBSection}
 ---
 
@@ -83,6 +89,41 @@ ${bodyBSection}
 
 Text.
 `;
+}
+
+// A fixture builder for the uniqueness/allocation-floor tests (4, 4a, 4b):
+// an arbitrary set of glance-table groups, each with its own optional
+// next-id marker and row list, plus arbitrary extra sections (e.g. a
+// Blocked section reusing a live group's row ID). Unlike buildRegister(),
+// which fixes the group letters at A/B, this lets a test build exactly the
+// groups and marker values it needs.
+function registerFixture({ glance, groups, extraSections = [] } = {}) {
+  const glanceRows = glance
+    .map(([letter, count]) => `| **${letter}** | Setup ${letter} | ${count} |`)
+    .join('\n');
+  const total = glance.reduce((sum, [, count]) => sum + count, 0);
+  const bodySections = groups
+    .map(({ letter, nextId, rows }) => {
+      const marker = nextId === null || nextId === undefined ? '' : `\n<!-- next-id: ${letter}${nextId} -->\n`;
+      const rowsText = rows.map((n) => `### ${letter}${n} · thing ${n}\n\nBody text.\n`).join('\n');
+      return `## Group ${letter} — setup ${letter.toLowerCase()}\n${marker}\n${rowsText}\n---\n`;
+    })
+    .join('\n');
+  const extra = extraSections.join('\n');
+  return `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+${glanceRows}
+
+**${total} owed.** Oldest: **2026-01-01**.
+
+---
+
+${bodySections}
+${extra}`;
 }
 
 test('a coherent register passes with no errors', () => {
@@ -108,6 +149,28 @@ test('check 1: per-group count mismatch is reported with a fix-naming message', 
         'Group A: glance table says 3, body has 2 rows (A1–A2). Update the table or the body.',
     ),
     `expected a Group A count-mismatch error, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// Every OTHER formatRowList-exercising assertion in this file (the two-row
+// A1-A2 case above, the seven-row E1-E7 regression below) happens to use a
+// run starting at 1 — the exact shape formatRowList's OLD `n === i + 1` form
+// also handled. Under stable row IDs a contiguous run no longer has to start
+// at 1 (e.g. after A1-A4 are discharged, A5-A7 is still "contiguous" for
+// display purposes even though it doesn't start at 1), so this pins that
+// general case specifically.
+test('check 1: a contiguous run NOT starting at 1 still collapses to a range in the mismatch message', () => {
+  const text = registerFixture({
+    glance: [['E', 2]],
+    groups: [{ letter: 'E', nextId: 101, rows: [5, 6, 7] }],
+  });
+  const errors = checkRegister(text);
+  assert.ok(
+    errors.some(
+      (e) =>
+        e === 'Group E: glance table says 2, body has 3 rows (E5–E7). Update the table or the body.',
+    ),
+    `expected the range to collapse to E5–E7, got: ${JSON.stringify(errors)}`,
   );
 });
 
@@ -163,26 +226,149 @@ Some body text.
   );
 });
 
-test('check 4: non-contiguous row numbers (a duplicate) are reported independently of check 1', () => {
-  // Table says 2 for A, and the body has exactly 2 headings — so check 1
-  // (count) is satisfied — but they are both numbered A1, a duplicate
-  // rather than A1/A2.
-  const errors = checkRegister(buildRegister({ bodyARows: [1, 1] }));
+test('4: a group with gaps passes — IDs are allocated once, never reused', () => {
+  const text = registerFixture({
+    glance: [['A', 2]],
+    groups: [{ letter: 'A', nextId: 101, rows: [1, 7] }],
+  });
+  assert.deepEqual(checkRegister(text), []);
+});
+
+test('4a: the same row ID in two sections is reported', () => {
+  // The #2634/#2653 repro: a Blocked-section heading reusing a live Group E ID.
+  const text = registerFixture({
+    glance: [['E', 1]],
+    groups: [{ letter: 'E', nextId: 101, rows: [6] }],
+    extraSections: ['## Blocked — hardware not available\n\n### E6 · a blocked thing\n'],
+  });
   assert.ok(
-    errors.some((e) => e.includes('Group A row numbers are not contiguous from 1: found A1, A1')),
-    `expected a contiguity error, got: ${JSON.stringify(errors)}`,
-  );
-  assert.ok(
-    !errors.some((e) => e.includes('glance table says')),
-    `did not expect a count-mismatch error alongside the contiguity one, got: ${JSON.stringify(errors)}`,
+    checkRegister(text).some((e) => e.includes('Row ID E6 appears more than once')),
+    'a duplicate row ID across sections must be reported',
   );
 });
 
-test('check 4: a gap in row numbers is reported', () => {
-  const errors = checkRegister(buildRegister({ tableA: 2, bodyARows: [1, 3] }));
+// The migration to stable IDs deleted the pre-existing within-group duplicate
+// test with no replacement — the case above only covers two IDs colliding
+// ACROSS sections. This pins the narrower, same-section case: two identical
+// `### E6` headings inside one Group E section.
+test('4a: the same row ID twice in the SAME section is reported', () => {
+  // The glance count is fixtured to agree with the body's physical row count
+  // (2 headings, even though both are E6) so check 1 stays satisfied and
+  // this test can assert 4a's duplicate-ID error fires ALONE.
+  const text = registerFixture({
+    glance: [['E', 2]],
+    groups: [{ letter: 'E', nextId: 101, rows: [6, 6] }],
+  });
+  assert.deepEqual(
+    checkRegister(text),
+    [
+      'Row ID E6 appears more than once (2 headings). Row IDs are allocated once and never ' +
+        "reused — give the newer row its group's next-id instead.",
+    ],
+    '4a must fire alone, with check 1 satisfied by the matching glance count',
+  );
+});
+
+test('4b: a row ID at or above its group next-id is reported', () => {
+  const text = registerFixture({
+    glance: [['A', 1]],
+    groups: [{ letter: 'A', nextId: 101, rows: [101] }],
+  });
+  assert.ok(checkRegister(text).some((e) => e.includes('is at or above')));
+});
+
+test('4b: a group with no next-id marker is an error, not a skip', () => {
+  const text = registerFixture({
+    glance: [['A', 1]],
+    groups: [{ letter: 'A', nextId: null, rows: [1] }],
+  });
   assert.ok(
-    errors.some((e) => e.includes('Group A row numbers are not contiguous from 1: found A1, A3')),
-    `expected a contiguity error, got: ${JSON.stringify(errors)}`,
+    checkRegister(text).some((e) => e.includes('has no "<!-- next-id:')),
+    'a missing marker must not silently disable the allocation-floor check',
+  );
+});
+
+test('4b: a next-id below the allocation floor is reported', () => {
+  const text = registerFixture({
+    glance: [['A', 1]],
+    groups: [{ letter: 'A', nextId: ALLOCATION_FLOOR - 1, rows: [1] }],
+  });
+  assert.ok(checkRegister(text).some((e) => e.includes('below the allocation floor')));
+});
+
+// The test above builds its fixture from `ALLOCATION_FLOOR - 1`, so it moves
+// with the constant and can never catch the constant itself being lowered.
+// This pins the LITERAL value: `ALLOCATION_FLOOR` must never drop below 101
+// (see its own comment — allocation counts upward, and A99 is
+// check-register-citations.mjs's own nonexistent-ID sentinel).
+test('ALLOCATION_FLOOR is pinned at 101 and must never be lowered', () => {
+  assert.equal(
+    ALLOCATION_FLOOR,
+    101,
+    'ALLOCATION_FLOOR must never be lowered — a floor at or below 99 would ' +
+      "eventually walk allocation through A99, check-register-citations.mjs's " +
+      'own nonexistent-ID sentinel. If a fixture breaks against 101, the ' +
+      'fixture is what is wrong, not this constant.',
+  );
+});
+
+test('4b: an invalid row heading suppresses the per-row next-id comparison but not the sub-lettering rejection or the marker/floor checks', () => {
+  // The "review fix 3" fixture above (A2a/A2b, no marker) can't reach the 4b
+  // suppression line: it carries no next-id marker at all, so 4b `continue`s
+  // at the nextId === null branch before the per-row loop runs. This fixture
+  // adds a next-id marker AND a valid row at-or-above it (A101 against
+  // next-id A101), so the per-row "is at or above" comparison would fire if
+  // the suppression were removed.
+  const text = `# On-box acceptance register
+
+## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| **A** | Setup A | 2 |
+
+**2 owed.** Oldest: **2026-01-01**.
+
+---
+
+## Group A — setup a
+
+<!-- next-id: A101 -->
+
+### A2a · thing 2 part a
+
+Body text.
+
+### A101 · thing 101
+
+Body text.
+
+---
+`;
+  const errors = checkRegister(text);
+  assert.ok(
+    errors.some((e) => e.includes('is not a valid row number')),
+    `expected the sub-lettering rejection to still fire, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.includes('is at or above')),
+    `the per-row next-id comparison must be suppressed for a letter with an invalid row heading, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('parseNextIdMarker does not match a marker for a different group letter', () => {
+  assert.equal(parseNextIdMarker('<!-- next-id: G101 -->\n', 'H'), null);
+});
+
+// Pins the regex's trailing `\s*\r?$` anchor: a line that merely STARTS like
+// a valid marker but has non-whitespace trailing content after the closing
+// `-->` is not a marker at all and must not match. Without the anchor the
+// regex has nothing requiring it to reach end-of-line, so it would happily
+// match the `A101` prefix and silently ignore everything after it.
+test('parseNextIdMarker rejects a line with trailing content after the closing `-->`', () => {
+  assert.equal(
+    parseNextIdMarker('<!-- next-id: A101 --> this is not a valid marker line\n', 'A'),
+    null,
   );
 });
 
@@ -368,7 +554,7 @@ Body text.
     errors.some(
       (e) =>
         e ===
-        'Row heading "### A19b" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+        'Row heading "### A19b" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
     ),
     `expected the sub-lettered-row error, got: ${JSON.stringify(errors)}`,
   );
@@ -397,6 +583,8 @@ test('ops-44: a fenced code block containing "### F2 · ..." does not inflate gr
 
 ## Group F — setup f
 
+<!-- next-id: F101 -->
+
 ### F1 · thing 1
 
 Body text.
@@ -424,6 +612,8 @@ test('ops-44: a fenced code block containing "## Group Z — ..." does not creat
 ---
 
 ## Group A — setup a
+
+<!-- next-id: A101 -->
 
 ### A1 · thing 1
 
@@ -454,6 +644,8 @@ test('ops-44: "~~~" fences behave the same as ``` fences for both the section sp
 ---
 
 ## Group A — setup a
+
+<!-- next-id: A101 -->
 
 ### A1 · thing 1
 
@@ -665,7 +857,7 @@ Body text.
     errors.some(
       (e) =>
         e ===
-        'Row heading "### A2.1 · thing 2 part 1" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+        'Row heading "### A2.1 · thing 2 part 1" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
     ),
     `expected the A2.1 rejection, got: ${JSON.stringify(errors)}`,
   );
@@ -673,7 +865,7 @@ Body text.
     errors.some(
       (e) =>
         e ===
-        'Row heading "### A2.2 · thing 2 part 2" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+        'Row heading "### A2.2 · thing 2 part 2" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
     ),
     `expected the A2.2 rejection, got: ${JSON.stringify(errors)}`,
   );
@@ -683,7 +875,7 @@ Body text.
   );
 });
 
-test('review fix 3: an invalid row heading suppresses checks 1 and 4 for that letter, leaving only the rejection messages', () => {
+test('review fix 3: an invalid row heading suppresses the per-row 4b check for that letter, but NOT the marker-presence/floor checks', () => {
   // The decision comment's own motivating case: A2 split into A2a/A2b (table
   // bumped to 3 to "absorb" the split) instead of annotating a single row's
   // title. Table (3) vs. the one still-valid body row (A1) would otherwise
@@ -691,6 +883,13 @@ test('review fix 3: an invalid row heading suppresses checks 1 and 4 for that le
   // NOT sized so the counts happen to reconcile (unlike the pre-existing
   // A19b fixture, which dodges this case) — this test fails if fix 3 is
   // reverted.
+  //
+  // No `<!-- next-id: A101 -->` marker on this fixture, deliberately: per
+  // Task 8's checkRegister, marker-presence and the allocation floor are NOT
+  // suppressed by an invalid row heading in the same group — only the
+  // per-row "is at or above next-id" comparison is. Asserting the
+  // marker-missing error's ABSENCE here would pin exactly the hole this
+  // check exists to close, so this asserts its PRESENCE instead.
   const text = `# On-box acceptance register
 
 ## At a glance
@@ -721,8 +920,9 @@ Body text.
 `;
   const errors = checkRegister(text);
   assert.deepEqual(errors, [
-    'Row heading "### A2a · thing 2 part a" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
-    'Row heading "### A2b · thing 2 part b" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+    'Row heading "### A2a · thing 2 part a" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+    'Row heading "### A2b · thing 2 part b" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+    'Group A has no "<!-- next-id: AN -->" allocation marker. Add one directly under the group heading — without it there is nothing to allocate new row IDs from.',
   ]);
 });
 
@@ -758,7 +958,7 @@ test('review fix 4: CRLF line endings do not leak a raw \\r into the invalid-row
     errors.some(
       (e) =>
         e ===
-        'Row heading "### A19b · sub" is not a valid row number. Rows are numbered contiguously (A1, A2, …) — for a row covering more than one debt, annotate its title instead of sub-lettering.',
+        'Row heading "### A19b · sub" is not a valid row number. Row numbers are plain integers (A1, A2, …), allocated once from the group\'s next-id — for a row covering more than one debt, annotate its title instead of sub-lettering.',
     ),
     `expected the sub-lettered-row error with no trailing \\r, got: ${JSON.stringify(errors)}`,
   );
@@ -1237,8 +1437,9 @@ test('a markdown with no "At a glance" section reports that, and nothing else', 
 // row numbers — reused for all four #2199 scenarios below so each test only
 // states the one thing that differs (working rows vs. baseline rows vs.
 // live-page rows).
-function buildSingleGroupRegister(letter, rowNumbers) {
+function buildSingleGroupRegister(letter, rowNumbers, nextId = 101) {
   const body = rowNumbers.map((n) => `### ${letter}${n} · thing ${n}\n\nBody text.\n`).join('\n');
+  const marker = nextId === null ? '' : `\n<!-- next-id: ${letter}${nextId} -->\n`;
   return `# On-box acceptance register
 
 ## At a glance
@@ -1252,7 +1453,7 @@ function buildSingleGroupRegister(letter, rowNumbers) {
 ---
 
 ## Group ${letter} — setup ${letter.toLowerCase()}
-
+${marker}
 ${body}
 ---
 `;
@@ -1285,15 +1486,17 @@ ${rowSpans}
 `;
 }
 
-// The exact 2026-08-06 shape from #2199: Group C's C1/C2 were discharged and
-// C3 renumbered to C1. The live page (fetched before the publish that will
-// fix it) still shows all three original IDs; the working register has only
-// the renumbered survivor; origin/main already carries the same discharge
-// (this change, or an already-merged one) so its baseline copy agrees with
-// the working register, not the stale live page.
+// The exact 2026-08-06 shape from #2199, updated for stable row IDs: Group
+// C's C1/C2 were discharged and C3 — never renumbered, IDs are allocated
+// once and never reused — stays C3, leaving a gap rather than a renumbered
+// survivor. The live page (fetched before the publish that will fix it)
+// still shows all three original IDs; the working register has only the
+// surviving C3; origin/main already carries the same discharge (this
+// change, or an already-merged one) so its baseline copy agrees with the
+// working register, not the stale live page.
 test('#2199: a discharge + renumber passes when origin/main also lacks the discharged IDs', () => {
-  const workingRegister = buildSingleGroupRegister('C', [1]);
-  const baselineRegister = buildSingleGroupRegister('C', [1]);
+  const workingRegister = buildSingleGroupRegister('C', [3]);
+  const baselineRegister = buildSingleGroupRegister('C', [3]);
   const liveView = buildSingleGroupLiveView('C', {
     owed: 3,
     glanceCount: 3,
@@ -1608,7 +1811,7 @@ function buildMultiGroupRegister(groups) {
       const body = rowNumbers
         .map((n) => `### ${letter}${n} · thing ${n}\n\nBody text.\n`)
         .join('\n');
-      return `## Group ${letter} — setup ${letter.toLowerCase()}\n\n${body}---\n`;
+      return `## Group ${letter} — setup ${letter.toLowerCase()}\n\n<!-- next-id: ${letter}101 -->\n\n${body}---\n`;
     })
     .join('\n');
   return `# On-box acceptance register
@@ -2067,7 +2270,23 @@ function computeMaxRowNumber(registerText, letter) {
     numbers.length > 0,
     `fixture setup: Group ${letter} must have at least one row in the register`,
   );
-  return Math.max(...numbers);
+  const max = Math.max(...numbers);
+  // Callers use `max + 1` as "an ID that does not exist yet". Under the
+  // allocation-floor check (4b) that candidate must sit STRICTLY BELOW the
+  // group's own next-id marker — it does today by a wide margin, but assert
+  // it anyway. When this eventually breaks, the tempting repair is to loosen
+  // the fixture, and that is exactly how the allocation floor gets quietly
+  // weakened.
+  const nextId = parseNextIdMarker(registerText, letter);
+  assert.ok(
+    nextId !== null,
+    `fixture setup: Group ${letter} must have a "<!-- next-id: ${letter}N -->" marker`,
+  );
+  assert.ok(
+    max + 1 < nextId,
+    `fixture ID ${letter}${max + 1} must be below next-id (${letter}${nextId})`,
+  );
+  return max;
 }
 
 // Renames one live-view row span from `<letter><oldNumber>` to

@@ -47,10 +47,12 @@ was **retired** by the repo owner: #1909 closed COMPLETED on 2026-07-31
 without the evidence this row was meant to feed, and the row's own text
 already said it was never a pass/fail gate on its own. The former Step 7
 below (which captured this row, marked AMBIGUOUS/blocked-on-a-decision) is
-**removed from this pack** — there is no decision left to make. Rows renumber
-contiguously in Group A: the old **A23** (measurement-failure path renders as
-untrusted) is now **A22**, and every reference to "A23" below has been
-updated to "A22" to match. Durable record of the retirement:
+**removed from this pack** — there is no decision left to make. Under the
+pre-#2599 positional-ID rule, rows renumbered contiguously in Group A: the
+old **A23** (measurement-failure path renders as untrusted) became **A22**,
+and every reference to "A23" below was updated to "A22" to match. (Row IDs
+are stable and never renumber as of 2026-08-27 — see the allocation
+guidance in `onbox-acceptance-register.md`.) Durable record of the retirement:
 [`archive/274-loudness-measurement-provenance.md`](../features/archive/274-loudness-measurement-provenance.md)'s
 Ship notes.
 

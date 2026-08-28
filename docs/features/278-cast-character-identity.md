@@ -591,7 +591,9 @@ and the run sheet
   keeps the cast's existing id (or correctly records a genuine change) instead of
   drifting it further. **DISCHARGED 2026-08-21 and removed from the register**;
   §7 of the run sheet is its record. Do not follow `B3` to whatever now sits at
-  that position — Group B renumbered and today's `B2` is an unrelated #2246 row.
+  that position — Group B renumbered and today's `B2` is an unrelated #2246 row
+  (under the pre-#2599 positional-ID rule; IDs are stable and never reused from
+  2026-08-27).
 - **A30** (Wave 3) — the repair pass's `--apply` run against the real workspace.
   **PARTIALLY DISCHARGED 2026-08-05** — `--apply` was run for real (against
   `main` @ `f3d6ae0f`) and wrote exactly the 3 predicted aliases across 2
