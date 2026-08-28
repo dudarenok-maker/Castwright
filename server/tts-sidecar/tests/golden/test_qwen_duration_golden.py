@@ -190,7 +190,7 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
     data point, not an N-run measurement — see #2696's commit message),
     with headroom for whatever a real N-repeat spread turns out to be. Real
     tolerance derivation from an actual N-repeat on-box measurement remains
-    register row A38's owed acceptance work.
+    register row A101's owed acceptance work.
     """
     baseline = _load_json(BASELINE_PATH)
     entries: dict = {}
@@ -213,7 +213,7 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
 
     # Record entries only — preserve whatever tolerance is already in baseline
     # (whether the committed placeholder 0.10 or a hand-set measured value from
-    # on-box acceptance work). Real tolerance derivation remains register row A38.
+    # on-box acceptance work). Real tolerance derivation remains register row A101.
     baseline["entries"] = entries
     # #2004 precedent: kokoro-baseline.json stamps its engine/ASR package
     # versions "so a model bump is legible" — mirrored here for Qwen so a
@@ -226,10 +226,6 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
         # harness has no clock and must stay reproducible.
         "blessed_at": baseline.get("metadata", {}).get("blessed_at"),
     }
-    # #2004 precedent: kokoro-baseline.json stamps its engine/ASR package
-    # versions "so a model bump is legible" — mirrored here for Qwen so a
-    # `qwen-tts`/torch bump that shifts synthesis timing shows up as a
-    # version change next to the baseline, not a silent mystery.
     with open(BASELINE_PATH, "w", encoding="utf-8") as f:
         json.dump(baseline, f, indent=2)
         f.write("\n")

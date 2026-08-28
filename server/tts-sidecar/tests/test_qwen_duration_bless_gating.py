@@ -47,10 +47,33 @@ def _write_baseline(tmp_path: Path) -> Path:
 
 
 def _make_mock_synthesize_result(sample_count: int) -> MagicMock:
-    """Mock a synthesis result with the given sample count."""
+    """Mock a synthesis result with the given sample count. PCM is all-zero
+    (silent) -- fine for tests that only care about sample_count/sample_rate
+    comparisons, but a real RMS check (rms() on all-zero bytes returns 0.0)
+    will trip a near-silence failure. Use
+    `_make_mock_synthesize_result_audible` when the test needs to actually
+    pass the RMS floor."""
     result = MagicMock()
     # PCM is (sample_count * 2) bytes (16-bit samples)
     result.pcm = bytes(sample_count * 2)
+    result.sample_rate = 24000
+    result.substituted_from = None
+    return result
+
+
+def _make_mock_synthesize_result_audible(sample_count: int) -> MagicMock:
+    """Like `_make_mock_synthesize_result`, but with real (non-silent) 16-bit
+    PCM content, so `rms()` clears `MIN_RMS` -- for tests that must pass a
+    real synthesis end to end without near-silence tripping first."""
+    import struct
+
+    # A constant mid-scale amplitude is well above MIN_RMS (0.01) without
+    # needing an actual waveform -- this test cares about RMS clearing the
+    # floor, not about the audio being realistic.
+    amplitude = 8000
+    pcm = struct.pack(f"<{sample_count}h", *([amplitude] * sample_count))
+    result = MagicMock()
+    result.pcm = pcm
     result.sample_rate = 24000
     result.substituted_from = None
     return result
@@ -108,7 +131,7 @@ def test_bless_tolerance_never_touched(monkeypatch, tmp_path) -> None:
     in the baseline file.
 
     Real tolerance derivation from an actual N-repeat on-box measurement
-    remains register row A38's owed acceptance work, not this scaffold's job.
+    remains register row A101's owed acceptance work, not this scaffold's job.
 
     When an operator hand-sets a real tolerance (e.g., 0.15 from on-box
     measurement), a subsequent `--bless` (e.g., to refresh entries after a
@@ -214,6 +237,43 @@ def test_assertion_loop_flags_voice_mismatch_against_baseline(monkeypatch) -> No
     with patch.object(qwen, "synthesise_or_skip", return_value=result):
         with pytest.raises(AssertionError, match="voice_a.*voice_b|voice mismatch|re-bless after a voice change"):
             qwen.test_qwen_golden_lengths_match_baseline()
+
+
+def test_assertion_loop_tolerates_missing_voice_key_in_baseline_entry(monkeypatch) -> None:
+    """A baseline entry with NO recorded `voice` key must NOT be treated as a
+    mismatch — this is the `is not None` half of the voice-mismatch check's
+    guard, deliberately untested by the sibling mismatch test above (which
+    always seeds a recorded voice). Passes cleanly end to end (no
+    AssertionError) with matching audio, proving the check is a no-op rather
+    than a false positive when `voice` is absent. Kills the mutation where
+    `if recorded_voice is not None and recorded_voice != voice:` loses its
+    `is not None` guard, which would make ANY recorded-voice-absent entry
+    compare `None != voice` (always true) and fail every such line."""
+    fixture = {"lines": [{"id": "line1", "text": "Test one."}]}
+    baseline = {
+        "tolerance": 0.10,
+        "entries": {
+            # No "voice" key at all -- the shape a pre-#1994-review baseline
+            # (or any hand-edited one) would have.
+            "line1": {"sample_rate": 24000, "sample_count": 24000, "duration_sec": 1.0},
+        },
+    }
+
+    def mock_load(p):
+        return fixture if p == qwen.FIXTURE_PATH else baseline
+
+    monkeypatch.setattr(qwen, "_load_json", mock_load)
+    monkeypatch.setattr(qwen, "_resolve_voice", lambda engine: "whichever_voice")
+    monkeypatch.delenv("GOLDEN_BLESS", raising=False)
+
+    # Sample count/rate match the baseline entry exactly and RMS is well
+    # above MIN_RMS, so every OTHER check in the loop passes too -- the only
+    # thing that could raise is a voice-mismatch false positive.
+    result = _make_mock_synthesize_result_audible(24000)
+    monkeypatch.setattr(qwen, "_make_qwen", lambda: MagicMock())
+
+    with patch.object(qwen, "synthesise_or_skip", return_value=result):
+        qwen.test_qwen_golden_lengths_match_baseline()  # must not raise
 
 
 def test_assertion_loop_warms_up_before_missing_entry_check(monkeypatch) -> None:
