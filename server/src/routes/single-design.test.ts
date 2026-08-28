@@ -28,7 +28,12 @@ vi.mock('./qwen-voice.js', async (orig) => ({
   }),
 }));
 
-const applyOverrideStub = vi.fn(async () => 1);
+const applyOverrideStub = vi.fn(
+  async (): Promise<{ updated: number; skipped: Array<{ bookDir: string; characterId: string; reason: string }> }> => ({
+    updated: 1,
+    skipped: [],
+  }),
+);
 vi.mock('./voices.js', async (orig) => {
   const real = await orig<typeof import('./voices.js')>();
   return {
@@ -126,7 +131,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   applyOverrideStub.mockReset();
-  applyOverrideStub.mockResolvedValue(1);
+  applyOverrideStub.mockResolvedValue({ updated: 1, skipped: [] });
   writeBookOnDisk(bookDir, BOOK_ID);
 });
 
@@ -244,6 +249,97 @@ describe('single-design job — clone protection (GATE 2 fix-lane-1b)', () => {
     const events = collectSse(res);
     expect(events.some((e) => e.type === 'preview_ready')).toBe(true);
     expect(applyOverrideStub).not.toHaveBeenCalled();
+  });
+});
+
+describe('single-design job — series-wide clone veto (#2006)', () => {
+  /* This file's own writeBookOnDisk(dir, id) (above) is a fixed-shape helper
+     for THIS ONE book (bookDir/BOOK_ID, characters c1/c2) — it takes no
+     characters param and can't mint a sibling book, so don't try to reuse it
+     for this. Write the sibling book directly, mirroring its exact on-disk
+     shape (state.json + manuscript.txt + cast.json), in the SAME series
+     (AUTHOR/SERIES) so findAuthorSeriesForBookId's real (unmocked) scan
+     finds it. c1 (this file's existing fixture character, no voiceId of its
+     own — so its link key is the bare id 'c1') is the target; the sibling's
+     character shares that same link key via its OWN voiceId: 'c1' and
+     carries the clone. */
+  let siblingDir: string;
+
+  /* Mints the sibling book only when a test actually needs the REAL upfront
+     scan to find a clone. The write-time test below must NOT seed a real
+     clone here — with the upfront check now series-wide, a real sibling
+     clone would refuse the request at the upfront gate before it ever
+     reaches the mocked applyOverrideToCastFiles this test is exercising,
+     which is a different code path than the one under test (found while
+     verifying this test against the actual implementation: an earlier
+     version of this fixture seeded the clone unconditionally in a shared
+     beforeEach and the write-time test never reached applyOverrideStub). */
+  function writeSiblingBook(cloned: boolean) {
+    siblingDir = join(workspaceRoot, 'books', AUTHOR, SERIES, 'Sibling Book');
+    mkdirSync(join(siblingDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(siblingDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'sibling-book-id',
+        manuscriptId: 'm_sibling-book-id',
+        title: 'Sibling Book',
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: 2,
+        isStandalone: false,
+        language: 'en',
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(siblingDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(siblingDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'sibling-c1', name: 'Aria (sibling)', voiceId: 'c1',
+            ...(cloned ? { overrideTtsVoices: { coqui: { name: 'clone-y', provenance: 'cloned' } } } : {}),
+          },
+        ],
+      }),
+    );
+  }
+
+  afterEach(() => {
+    if (siblingDir) rmSync(siblingDir, { recursive: true, force: true });
+  });
+
+  it('refuses (409) up front when the character is cloned on a SIBLING book, not this one', async () => {
+    writeSiblingBook(true);
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('clone_protected');
+    expect(applyOverrideStub).not.toHaveBeenCalled();
+  });
+
+  it('write-time: when applyOverrideToCastFiles reports a series-wide skip, the job ends with a clone_protected error event instead of "designed"', async () => {
+    writeSiblingBook(false); // no real clone — upfront gate must pass so the write-time mock is actually reached
+    applyOverrideStub.mockResolvedValueOnce({
+      updated: 0,
+      skipped: [{ bookDir, characterId: 'c1', reason: 'already_cloned' }],
+    });
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+
+    expect(res.status).toBe(200); // SSE stream itself opens fine
+    const events = collectSse(res);
+    const err = events.find((e) => e.type === 'error');
+    expect(err).toMatchObject({ code: 'clone_protected' });
+    expect(events.some((e) => e.type === 'designed')).toBe(false);
   });
 });
 

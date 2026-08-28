@@ -268,8 +268,10 @@ function countRawStateWrites(
 
 /* Per-file expected sites of `stateJsonPath(` — re-measured from current source
    at implementation time (NOT the plan's floor numbers, which have drifted once
-   already): 45 sites across 23 non-test files. Asserted BOTH ways; aliasing one
-   file's import reddens that exact file (M5). */
+   already): 46 sites across 23 non-test files (voices.ts gained a 4th site in
+   #2006's series-wide clone-consent veto — a per-book state.json read added to
+   the workspace scan). Asserted BOTH ways; aliasing one file's import reddens
+   that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
@@ -283,7 +285,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'routes/import.ts': 1,
   'routes/library-sync-manifest.ts': 1,
   'routes/samples.ts': 2,
-  'routes/voices.ts': 3,
+  'routes/voices.ts': 4,
   'store/attribution-health-io.ts': 2,
   'workspace/active-analyses.ts': 1,
   'workspace/auto-backup.ts': 3,
