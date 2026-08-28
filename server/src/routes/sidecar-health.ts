@@ -413,7 +413,11 @@ export interface SidecarHealthResult {
   devices?: SidecarDeviceMap | null;
   devicesState?: SidecarDevicesState | null;
   /* Castwright#2709/#2710 — forwarded verbatim from the sidecar body's
-     cuda_verified/cuda_verification_detail (see SidecarHealthBody above). */
+     cuda_verified/cuda_verification_detail (see SidecarHealthBody above).
+     KOKORO-ONLY: measures whether Kokoro's ORT session landed on CUDA.
+     Does NOT indicate CUDA placement for other engines (Qwen, Coqui, Whisper).
+     A caller verifying overall box GPU health should NOT treat cudaVerified: true
+     as proof every engine is on GPU. */
   cudaVerified?: boolean | null;
   cudaVerificationDetail?: string | null;
   error?: string;

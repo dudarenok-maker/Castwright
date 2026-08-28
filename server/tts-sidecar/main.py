@@ -9673,13 +9673,18 @@ def _qwen_install_state(qwen_loaded: bool) -> str:
 _device_probe: dict[str, Optional[str]] = {"kokoro": None, "coqui": None, "qwen": None}
 _device_probe_state: str = "pending"  # 'pending' | 'ready' | 'error'
 
-# Castwright#2709: real-session CUDA self-test result, distinct from
+# Castwright#2709: real-session CUDA self-test result, KOKORO-ONLY. Measures
+# whether Kokoro's ORT session successfully landed on CUDA, distinct from
 # `_device_probe` (an availability-only prediction made at startup, before
-# any real session exists). Populated the first time `_ensure_loaded`
-# actually constructs a Kokoro session that requested CUDA (first real synth
-# call, or PRELOAD_KOKORO=1's eager preload) -- never by the background
-# device probe, which must not force an eager load. `verified=None` is the
-# expected, honest steady-state on a box that never triggers a Kokoro load.
+# any real session exists) and distinct from other engines (Qwen, Coqui,
+# Whisper) which may have different CUDA outcomes. Populated the first time
+# `_ensure_loaded` actually constructs a Kokoro session that requested CUDA
+# (first real synth call, or PRELOAD_KOKORO=1's eager preload) -- never by
+# the background device probe, which must not force an eager load.
+# `verified=None` is the expected, honest steady-state on a box that never
+# triggers a Kokoro load. A caller checking overall box GPU health should NOT
+# treat `cuda_verified: true` as proof every engine is on GPU — only Kokoro's
+# placement is certified here.
 _cuda_verification_state: dict[str, Any] = {
     "verified": None,
     "detail": None,
@@ -10117,10 +10122,11 @@ def health() -> dict[str, Any]:
         "devices_state": _device_probe_state,
         "device": device,
         "poisoned": poisoned,
-        # Castwright#2709: real-session CUDA self-test result (distinct from
-        # `devices`/`gpus`, which are availability predictions or per-request
-        # `stale_reason` badges) -- None/None until the first real Kokoro
-        # load actually requests CUDA.
+        # Castwright#2709: real-session CUDA self-test result, KOKORO-ONLY
+        # (distinct from `devices`/`gpus`, which are availability predictions
+        # or per-request `stale_reason` badges). Measures Kokoro's ORT session
+        # only; other engines (Qwen, Coqui) may have different CUDA outcomes.
+        # None/None until the first real Kokoro load actually requests CUDA.
         "cuda_verified": _cuda_verification_state["verified"],
         "cuda_verification_detail": _cuda_verification_state["detail"],
         # `poison_reason` (raw exception text) is deliberately NOT surfaced here —

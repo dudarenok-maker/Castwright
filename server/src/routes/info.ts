@@ -94,8 +94,11 @@ interface SidecarInfoProbe {
   devices: SidecarDeviceMap | null;
   devicesState: SidecarDevicesState | null;
   /* Castwright#2709/#2710 — real-session CUDA self-test result, lifted off
-     the SAME single /health fetch as devices/devicesState above. Null when
-     the sidecar is down, predates the field, or hasn't run the self-test yet. */
+     the SAME single /health fetch as devices/devicesState above. KOKORO-ONLY:
+     measures whether Kokoro's ORT session landed on CUDA, not other engines.
+     Null when the sidecar is down, predates the field, or hasn't run the
+     self-test yet. A caller verifying overall box GPU health should NOT treat
+     cudaVerified: true as proof every engine is on GPU. */
   cudaVerified: boolean | null;
   cudaVerificationDetail: string | null;
 }
