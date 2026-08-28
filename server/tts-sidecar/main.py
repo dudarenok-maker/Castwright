@@ -3283,10 +3283,9 @@ class KokoroEngine(Engine):
             # CUDA was requested (guarded by the early return above) but did not
             # land in the real session. Log and record the failure.
             detail = (
-                "Kokoro CUDA self-test: CUDAExecutionProvider was requested "
-                "and reported available, but the real session did not land on "
-                "CUDA -- Kokoro is running on CPU or another accelerator. "
-                "See Castwright#2709."
+                "Kokoro CUDA self-test: CUDAExecutionProvider was requested, "
+                "but the real session did not land on CUDA -- Kokoro is running on "
+                "CPU or another accelerator. See Castwright#2709."
             )
             log.warning(detail)
             _cuda_verification_state = {
