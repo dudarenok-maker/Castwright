@@ -94,7 +94,7 @@ _Empty — no tests are currently quarantined._
 test('parseRegister expands a multi-test row into one entry per backtick-quoted test name', () => {
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| \`engages on the one in-flight chapter\`, \`stays engaged while a second chapter is still in flight\` | \`server/src/routes/generation.test.ts\` | fs contention | it hangs | #399 (side-11) | 2026-07-06 |
+| \`engages on the one in-flight chapter\`, \`stays engaged while a second chapter is still in flight\` | \`server/src/routes/generation.test.ts\` | fs contention | it hangs | #399 (side-11) | Quarantined (2026-07-06) |
 `;
   const entries = parseRegister(markdown);
   assert.equal(entries.length, 2);
@@ -118,6 +118,34 @@ test('parseRegister extracts the test name from the real register prose format (
   assert.deepEqual(entries[0].issueNumbers, [2235]);
 });
 
+// #2496: a row whose Quarantined cell does not literally start with
+// "Quarantined" — e.g. the real register's #1981 row, "Not quarantined —
+// still gates" — must be excluded entirely, alongside a genuinely
+// quarantined row that must still come through.
+test('parseRegister excludes a row whose Quarantined cell reads "Not quarantined" (#2496)', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — a stale cast PUT does not erase a concurrently planted voice | \`server/src/routes/book-state-preserve-voices.test.ts\` | intermittent under full-suite box contention | Fails intermittently | #2226 | Not quarantined — still gates |
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | intermittent under full-suite box contention | Fails on retry | #2235 | Quarantined — routes through \`quarantinedIt\` |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1, 'only the quarantined row should produce an entry');
+  assert.equal(entries[0].file, 'server/src/routes/export.test.ts');
+  const files = entries.map((e) => e.file);
+  assert.ok(
+    !files.includes('server/src/routes/book-state-preserve-voices.test.ts'),
+    'a "Not quarantined" row must never produce an entry',
+  );
+});
+
+test('parseRegister excludes a row with fewer than 6 cells (no Quarantined cell) the same as "not quarantined"', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1234 — a test with no Quarantined cell | \`server/src/routes/foo.test.ts\` | timing | races | #1234 |
+`;
+  assert.deepEqual(parseRegister(markdown), []);
+});
+
 // Regression test: drives the parser against the REAL register file,
 // docs/testing/flaky-register.md. The old parser extracted test names only
 // from backtick-quoted spans in the Test cell, but the real register's Test
@@ -127,25 +155,31 @@ test('parseRegister extracts the test name from the real register prose format (
 // Also asserts that the real register parses cleanly with zero unparsed rows
 // (finding 6: the >= 2 assertion alone cannot catch a regression where a new
 // row starts failing while the old ones keep passing).
-test('parseRegister returns one entry per data row of the real flaky-register.md (regression)', () => {
+//
+// #2496: the real register's #1981 row is NOT quarantined — its Quarantined
+// cell reads "Not quarantined — still gates" — so it must be excluded from
+// parseRegister's entries entirely, unlike #2235 which IS quarantined. Only
+// #2235 is asserted present below; #1981 is asserted absent.
+test('parseRegister returns one entry per quarantined data row of the real flaky-register.md (regression)', () => {
   const testDir = dirname(fileURLToPath(import.meta.url));
   const registerPath = resolve(testDir, '..', '..', 'docs', 'testing', 'flaky-register.md');
   const markdown = readFileSync(registerPath, 'utf8');
   const entries = parseRegister(markdown);
-  // The real register currently has 2 data rows (#1981 and #2235).
-  assert.ok(entries.length >= 2, `expected at least 2 entries from the real register, got ${entries.length}`);
-  // Both quarantined rows must be present.
+  // The real register currently has 2 data rows (#1981, not quarantined, and
+  // #2235, quarantined) but only the quarantined one becomes an entry.
+  assert.equal(entries.length, 1, `expected exactly 1 entry from the real register, got ${entries.length}`);
   const files = entries.map((e) => e.file);
-  assert.ok(files.includes('server/src/routes/book-state-preserve-voices.test.ts'), 'missing #1981 row');
+  assert.ok(
+    !files.includes('server/src/routes/book-state-preserve-voices.test.ts'),
+    '#1981 is not quarantined and must be excluded',
+  );
   assert.ok(files.includes('server/src/routes/export.test.ts'), 'missing #2235 row');
   // Issue numbers must be extracted from the Issue cell, not the Test cell.
-  const by1981 = entries.find((e) => e.issueNumbers.includes(2226));
-  assert.ok(by1981, '#1981 row must carry tracking issue #2226');
   const by2235 = entries.find((e) => e.issueNumbers.includes(2235));
   assert.ok(by2235, '#2235 row must carry tracking issue #2235');
   // The real register must parse cleanly with zero unparsed rows (finding 6).
-  // This assertion strengthens the >= 2 check above and would catch a new row
-  // silently starting to fail while the old ones keep passing.
+  // Excluding a non-quarantined row is not a parse failure, so this must
+  // still be 0 even though #1981 is no longer in `entries`.
   const unparsed = countUnparsedDataRows(markdown);
   assert.equal(unparsed, 0, 'the real register must parse cleanly with zero unparsed/malformed rows');
 });
@@ -185,9 +219,9 @@ test('countRegisterDataRows and countUnparsedDataRows handle empty File cells co
   // "structurally well-formed data row" — enabling the guard.
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| #1981 — valid test | \`server/src/routes/foo.test.ts\` | timing | races | #1981 | 2026-08-01 |
-| #1982 — empty file cell | | timing | races | #1982 | 2026-08-02 |
-| #1983 — whitespace-only file | \`   \` | timing | races | #1983 | 2026-08-03 |
+| #1981 — valid test | \`server/src/routes/foo.test.ts\` | timing | races | #1981 | Quarantined (2026-08-01) |
+| #1982 — empty file cell | | timing | races | #1982 | Quarantined (2026-08-02) |
+| #1983 — whitespace-only file | \`   \` | timing | races | #1983 | Quarantined (2026-08-03) |
 `;
   // parseRegister skips the last two rows (empty file cells), so entries.length === 1
   const entries = parseRegister(markdown);
@@ -227,7 +261,7 @@ test('parseRegister ignores prose lines, the header row and the separator row', 
 
 | Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| \`a flaky test\` | \`src/foo.test.ts\` | timing | races | — | 2026-07-01 |
+| \`a flaky test\` | \`src/foo.test.ts\` | timing | races | — | Quarantined (2026-07-01) |
 
 See the rewrite playbook.
 `;
@@ -306,7 +340,7 @@ No longer relevant. -->
 test('parseRegister resumes parsing live rows AFTER a comment block closes', () => {
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| \`a live test\` | \`f.ts\` | timing | races | #2 | 2026-02-01 |
+| \`a live test\` | \`f.ts\` | timing | races | #2 | Quarantined (2026-02-01) |
 
 <!-- Graduated: | \`retired test\` | \`g.ts\` | timing | races | #1 | 2026-01-01 | -->
 `;
@@ -318,7 +352,7 @@ test('parseRegister resumes parsing live rows AFTER a comment block closes', () 
 test('parseRegister handles a comment that opens and closes on the SAME line as a live row, without eating the row', () => {
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| \`a live test\` | \`f.ts\` | timing <!-- inline note --> | races | #2 | 2026-02-01 |
+| \`a live test\` | \`f.ts\` | timing <!-- inline note --> | races | #2 | Quarantined (2026-02-01) |
 `;
   const entries = parseRegister(markdown);
   assert.equal(entries.length, 1);
@@ -350,7 +384,7 @@ test('parseRegisterRun returns parse-failure for a row with empty File cell but 
 test('parseRegister extracts the full prose test name when it contains incidental backticks (Bug C)', () => {
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| #2301 — retries the \`POST /api/x\` call once | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+| #2301 — retries the \`POST /api/x\` call once | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | Quarantined (2026-08-01) |
 `;
   const entries = parseRegister(markdown);
   assert.equal(entries.length, 1, 'should parse 1 entry');
@@ -365,7 +399,7 @@ test('parseRegister with prose prefix treats all backtick-quoted text as part of
   // The WHOLE remainder (including all backticks) becomes a single test name.
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| #2301 — retries \`test A\`, \`test B\` | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+| #2301 — retries \`test A\`, \`test B\` | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | Quarantined (2026-08-01) |
 `;
   const entries = parseRegister(markdown);
   assert.equal(entries.length, 1, 'should parse 1 entry (not expand the prose remainder)');
@@ -376,7 +410,7 @@ test('parseRegister keeps single incidental backtick-quoted text as part of pros
   // Bug 2: a Test cell with prose prefix and exactly 1 backtick pair should keep whole remainder as testName
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| #2301 — retries the \`POST /api/x\` call once | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+| #2301 — retries the \`POST /api/x\` call once | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | Quarantined (2026-08-01) |
 `;
   const entries = parseRegister(markdown);
   assert.equal(entries.length, 1, 'should parse 1 entry (not expand the single backtick pair)');
@@ -388,7 +422,7 @@ test('parseRegister regression: prose description with multiple distinct backtic
   // Fix 1: prose format takes precedence, the whole remainder (including all backticks) is one test name.
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| #2301 — fails when \`POST /api/x\` follows \`GET /api/y\` | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | 2026-08-01 |
+| #2301 — fails when \`POST /api/x\` follows \`GET /api/y\` | \`server/src/routes/foo.test.ts\` | timing | races | #2301 | Quarantined (2026-08-01) |
 `;
   const entries = parseRegister(markdown);
   assert.equal(entries.length, 1, 'should parse 1 entry (not split into 2 on the backtick boundaries)');
@@ -410,7 +444,7 @@ test('splitTableRow does not split on an escaped `\\|`, and unescapes it in the 
 test('parseRegister keeps issueNumbers intact when the Symptom cell contains an escaped pipe', () => {
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| \`a test\` | \`f.ts\` | timing | uses a \\| character | #5 | 2026-01-01 |
+| \`a test\` | \`f.ts\` | timing | uses a \\| character | #5 | Quarantined (2026-01-01) |
 `;
   const entries = parseRegister(markdown);
   assert.equal(entries.length, 1);
@@ -1231,8 +1265,8 @@ test('buildParseFailureMessage and reportParseFailure reach $GITHUB_STEP_SUMMARY
 test('planRegisterRun returns ok when all data rows parse successfully', () => {
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
-| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | timing | races | #2235 | 2026-08-01 |
-| #1981 — another valid test | \`server/src/routes/bar.test.ts\` | timing | races | #1981 | 2026-08-02 |
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | timing | races | #2235 | Quarantined (2026-08-01) |
+| #1981 — another valid test | \`server/src/routes/bar.test.ts\` | timing | races | #1981 | Quarantined (2026-08-02) |
 `;
   const result = planRegisterRun(markdown);
   assert.equal(result.outcome, 'ok', 'should return ok for valid rows');

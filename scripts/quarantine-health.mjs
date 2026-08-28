@@ -320,15 +320,32 @@ function* yieldAllCandidateRows(markdown) {
 // A row with an empty File cell (Bug A) is structurally a data row but cannot
 // produce an entry (no file to test), so it's skipped here but counted as
 // unparsed by countUnparsedDataRows so the loud-failure guard catches it.
+//
+// A row whose Quarantined cell does not start with "Quarantined" (#2496) is
+// also skipped here — e.g. #1981, which reads "Not quarantined — still
+// gates". That row is not quarantined at all, so it must never be re-run by
+// or reported on by this tool. Unlike the empty-File-cell case, this is not
+// a parse failure — the row parsed fine, it's just out of scope — so it is
+// NOT counted by countUnparsedDataRows.
 export function parseRegister(markdown) {
   const entries = [];
   for (const cells of yieldDataRowCells(markdown)) {
-    const [testCell, fileCell, , , issueCell] = cells;
+    const [testCell, fileCell, , , issueCell, quarantinedCell] = cells;
     const file = fileCell.replace(/`/g, '').trim();
 
     // Skip rows with empty File cells — they can't become entries but must
     // still be counted as unparsed data rows by the guard (Bug A).
     if (!file) continue;
+
+    // Skip rows that aren't actually quarantined (#2496): the register also
+    // carries rows like #1981 whose "Quarantined" cell reads "Not quarantined
+    // — still gates" — these still gate the normal suite and must never be
+    // re-run by the quarantine lane or appear in its report. Only a cell that
+    // literally starts with "Quarantined" opts a row into this tool; a row
+    // with fewer than 6 cells (no Quarantined cell at all) is treated the
+    // same as "not quarantined", not as a parse failure — that guard is
+    // countUnparsedDataRows' job, not this one's.
+    if (!(quarantinedCell ?? '').trim().startsWith('Quarantined')) continue;
 
     // Check for prose format prefix first (Bug C fix: prose prefix takes
     // priority over incidental backticks). Once a #NNNN — prefix is detected,
