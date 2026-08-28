@@ -208,7 +208,7 @@ export async function persistEmotionVariant(
     });
     if (residualSkip) {
       console.warn(
-        `[persistEmotionVariant] residual-window skip: a clone appeared on a linked book for ${characterId} between the series-wide scan and this walk reaching it (${updated} book(s) still received the variant).`,
+        `[persistEmotionVariant] residual-window skip: a clone appeared on a linked book for ${characterId} between the series-wide scan and this walk reaching it (${updated} linked character(s) still received the variant).`,
       );
     }
     if (updated > 0) return 'applied';

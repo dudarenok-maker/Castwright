@@ -979,13 +979,18 @@ export async function applyOverrideToCastFiles(
      own condition exactly. */
   const singleBookDir = !seriesFilter ? onlyBookDir : undefined;
   /* v2 — fresh, series-wide re-check immediately before any write, replacing
-     the caller's stale pre-scan. Refuses the WHOLE propagation on a hit —
-     no book is written — rather than the v1 per-book-independent contract.
-     See docs/superpowers/specs/2026-08-22-clone-consent-voices-override-
-     refusal-design.md "The decision this spec finalizes". This IS a
-     genuinely series-wide (or workspace-wide) verdict, not a per-book one —
-     labelled accordingly rather than with the residual backstop's
-     "(unknown)" sentinel below. */
+     the caller's stale pre-scan. A HIT ON THIS UPFRONT CHECK refuses the
+     WHOLE propagation — no book is written — rather than the v1
+     per-book-independent contract. This "no book written" guarantee is
+     specific to THIS branch: the residual-window backstop inside the walk
+     below can decline SOME matched characters while still writing the
+     others (a genuine partial result, `updated >= 1 && skipped.length >=
+     1`), which is a materially different outcome from this one — see that
+     block's own comment. See docs/superpowers/specs/2026-08-22-clone-
+     consent-voices-override-refusal-design.md "The decision this spec
+     finalizes". This IS a genuinely series-wide (or workspace-wide)
+     verdict, not a per-book one — labelled accordingly rather than with
+     the residual backstop's "(unknown)" sentinel below. */
   if (await hasClonedSlotAmongMatches(voiceId, seriesFilter, otherThanEngine, onlyBookDir)) {
     return {
       updated: 0,
