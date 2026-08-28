@@ -8153,6 +8153,11 @@ class SpeakerEngine:
         if self._model is None:
             return False
         self._model = None
+        # Restore the env pref (mirrors WhisperEngine._drop_model_locked, #2642):
+        # a cuda->cpu self-demotion in ensure_loaded() overwrote self.device with
+        # the fallback card, so a later reload must re-resolve from the ORIGINAL
+        # request, not stick on cpu forever.
+        self.device = self._requested_device
         return True
 
     def _reclaim_after_drop(self) -> None:
@@ -8196,14 +8201,20 @@ class SpeakerEngine:
         `_drop_model_locked()` directly rather than `unload()` — re-entering
         `_infer_lock` here would self-deadlock.
         """
-        if _parse_device(self.device)[0] != "cuda" or self._model is None:
+        if self._model is None:
+            return False
+        demoted = self.device != self._requested_device
+        if not demoted and _parse_device(self.device)[0] != "cuda":
             return False
         if self._in_flight.busy:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
         with self._infer_lock:
-            if _parse_device(self.device)[0] != "cuda" or self._model is None:
+            if self._model is None:
+                return False
+            demoted = self.device != self._requested_device
+            if not demoted and _parse_device(self.device)[0] != "cuda":
                 return False
             if self._in_flight.busy:
                 return False

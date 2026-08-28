@@ -130,6 +130,37 @@ def test_poison_load_failure_is_reraised(monkeypatch: pytest.MonkeyPatch):
     assert eng._model is None  # nothing loaded
 
 
+def test_spk_drop_model_locked_restores_device_pin_after_cpu_demotion():
+    """#2750: a cuda->cpu self-demotion in `ensure_loaded` must NOT
+    permanently overwrite an SPK_DEVICE=cuda pin. Before this fix,
+    `_drop_model_locked` left `self.device` at "cpu" forever — the same
+    defect class fixed for WhisperEngine (#2642), CoquiEngine (#1730 gap-3)
+    and KokoroEngine (#2631 review S4)."""
+    eng = main.SpeakerEngine()
+    eng._requested_device = "cuda"
+    eng.device = "cpu"  # simulates the post-demotion state from ensure_loaded
+    eng._model = _FakeModel()
+
+    with eng._infer_lock:
+        dropped = eng._drop_model_locked()
+    assert dropped is True
+    assert eng.device == "cuda"
+
+
+def test_maybe_free_idle_frees_and_restores_pin_on_demoted_engine(monkeypatch: pytest.MonkeyPatch):
+    """#2750: once self-demoted, `self.device` reads "cpu" forever unless
+    `maybe_free_idle`'s device-family gate also admits a demoted engine —
+    otherwise teardown (and the pin restore inside it) can never run."""
+    eng = main.SpeakerEngine()
+    eng._requested_device = "cuda"
+    eng.device = "cpu"  # demoted: device != _requested_device
+    eng._model = _FakeModel()
+    eng._last_used = time.monotonic() - 10_000  # very idle
+    assert eng.maybe_free_idle(120.0) is True
+    assert eng._model is None
+    assert eng.device == "cuda"  # pin restored
+
+
 def test_maybe_free_idle_noop_on_cpu(monkeypatch: pytest.MonkeyPatch):
     eng = main.SpeakerEngine()
     eng.device = "cpu"
