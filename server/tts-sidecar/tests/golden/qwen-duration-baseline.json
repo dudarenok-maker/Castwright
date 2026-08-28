@@ -5,37 +5,38 @@
     "narrator-plain": {
       "voice": "cw_gpu_17b",
       "sample_rate": 24000,
-      "sample_count": 74881,
-      "duration_sec": 3.12
+      "sample_count": 77952,
+      "duration_sec": 3.248
     },
     "numbers-and-year": {
       "voice": "cw_gpu_17b",
       "sample_rate": 24000,
-      "sample_count": 122880,
-      "duration_sec": 5.12
+      "sample_count": 125184,
+      "duration_sec": 5.216
     },
     "abbreviations": {
       "voice": "cw_gpu_17b",
       "sample_rate": 24000,
-      "sample_count": 111360,
-      "duration_sec": 4.64
+      "sample_count": 109056,
+      "duration_sec": 4.544
     },
     "quotes-and-punctuation": {
       "voice": "cw_gpu_17b",
       "sample_rate": 24000,
-      "sample_count": 101760,
-      "duration_sec": 4.24
+      "sample_count": 104832,
+      "duration_sec": 4.368
     },
     "multi-sentence-group": {
       "voice": "cw_gpu_17b",
       "sample_rate": 24000,
-      "sample_count": 115200,
-      "duration_sec": 4.8
+      "sample_count": 124800,
+      "duration_sec": 5.2
     }
   },
   "metadata": {
     "qwen_tts_version": "0.1.1",
     "torch_version": "2.11.0+cu128",
+    "bless_reps": 5,
     "blessed_at": "2026-08-28"
   }
 }

@@ -15,11 +15,13 @@ Qwen 0.6B-Base weights AND a designed Qwen voice (Qwen voices are per-workspace
 bespoke — no fixed catalog like Kokoro's — so `list_voices()` discovers whichever
 voices already exist on the box).
 
-The baseline ships UNBLESSED (empty `entries`, placeholder `tolerance`) — the
-real N-run stochastic-spread measurement and tolerance derivation are an
-on-box acceptance register row, not this file's job. An unblessed baseline
-SKIPS (never fails), exactly like `kokoro-baseline.json` before its first
-bless.
+The baseline is blessed: `entries` holds each line's MEAN duration across
+`BLESS_REPS` repeated real syntheses (see `_bless`'s docstring for why a
+single draw is not enough), and `tolerance` was derived from an on-box
+N-repeat spread measurement (register row A101, now discharged). An
+unblessed baseline (empty `entries`) still SKIPS rather than fails, exactly
+like `kokoro-baseline.json` before its first bless — this only matters again
+if the fixture or the designed voice changes and a re-bless hasn't landed yet.
 """
 from __future__ import annotations
 
@@ -91,12 +93,31 @@ def test_qwen_golden_lengths_match_baseline():
     entries = baseline.get("entries") or {}
     if not entries:
         pytest.skip(
-            "qwen-duration-baseline.json is unblessed (no entries). Its "
-            "tolerance is a placeholder — bless on a real GPU box with a "
-            "designed Qwen voice after measuring the per-line duration spread "
-            "across N repeated syntheses (see the Group A on-box register row "
-            "for the required measurement): `npm run test:golden-audio -- "
-            "--sidecar-only --engine=qwen --bless`."
+            "qwen-duration-baseline.json is unblessed (no entries). Bless on "
+            "a real GPU box with a designed Qwen voice, after measuring the "
+            "per-line duration spread across N repeated syntheses and "
+            "hand-setting `tolerance` from that measurement: "
+            "`npm run test:golden-audio -- --sidecar-only --engine=qwen --bless`."
+        )
+
+    # The baseline is inapplicable to THIS box's resolved voice: Qwen voices
+    # are runtime-resolved (`pick_designed_voice`: sorted, first wins), not a
+    # fixed per-line catalog like Kokoro's, so a box whose first designed
+    # voice differs from the one `entries` were blessed against has no
+    # baseline to compare against — SKIP (an unmeasured box), not FAIL (a
+    # detected regression), mirroring the empty-`entries` skip above. Checked
+    # up front, before any synthesis: a per-line mid-loop check used to treat
+    # this as a failure instead, which hard-fails every box whose first
+    # designed voice happens to sort before the blessed one even though
+    # nothing regressed (#1994 review finding C3).
+    recorded_voices = {e.get("voice") for e in entries.values() if e.get("voice") is not None}
+    if recorded_voices and voice not in recorded_voices:
+        pytest.skip(
+            f"qwen-duration-baseline.json's entries were blessed against "
+            f"voice(s) {sorted(recorded_voices)!r}, this box resolved "
+            f"'{voice}' — re-bless on a box with the same designed voice, or "
+            "here: `npm run test:golden-audio -- --sidecar-only --engine=qwen "
+            "--bless`. Comparing across voices is meaningless."
         )
 
     failures: list[str] = []
@@ -118,31 +139,14 @@ def test_qwen_golden_lengths_match_baseline():
             failures.append(f"{line['id']}: no baseline entry (re-bless after editing the fixture).")
             continue
 
-        # The baseline must have been recorded against the SAME voice this run
-        # is using. Unlike Kokoro's fixed, per-line-pinned voice catalog, a
-        # Qwen voice is `pick_designed_voice`'s runtime choice among whatever
-        # designed voices exist on this box (sorted, first wins, absent an
-        # override) — so a comparison across a voice change is silently
-        # comparing two different speakers' timing, not detecting a real
-        # regression. `_bless` records the voice it used per entry; check it
-        # here instead of trusting it stayed the same.
-        recorded_voice = base.get("voice")
-        if recorded_voice is not None and recorded_voice != voice:
-            failures.append(
-                f"{line['id']}: baseline was recorded against voice "
-                f"'{recorded_voice}', this run resolved '{voice}' — re-bless "
-                "after a voice change; comparing across voices is meaningless."
-            )
-            continue
-
         # No `substituted_from` check here (unlike Kokoro's mirror): that
         # field only ever gets set by CoquiEngine/KokoroEngine's own
         # fallback-substitution paths (main.py) — QwenEngine.synthesize never
         # constructs a SynthResult with it, so the check could never fire for
-        # this engine. The voice-mismatch check above is this file's actual
-        # equivalent safeguard, catching the failure mode Qwen can have
-        # instead (a runtime-resolved voice that drifted from the one the
-        # baseline was recorded against).
+        # this engine. The voice-mismatch skip earlier in this function is
+        # this file's actual equivalent safeguard, catching the failure mode
+        # Qwen can have instead (a runtime-resolved voice that drifted from
+        # the one the baseline was blessed against).
 
         # Not silent.
         line_rms = rms(res.pcm)
@@ -175,39 +179,68 @@ def _torch_version() -> Optional[str]:
         return None
 
 
+# Real repeated syntheses per line at bless time, averaged into the blessed
+# reference. NOT the same N as an on-box acceptance measurement's N (that
+# characterises the population spread across many draws for deriving
+# `tolerance`; this one stabilises the single reference value `_bless`
+# writes). #1994 review finding C1: `tolerance` is derived from how far a
+# SINGLE fresh draw can land from the population's TRUE mean — bounding
+# that requires the blessed reference to itself approximate the true mean,
+# not be an arbitrary single draw that could sit anywhere in the
+# distribution (a draw from the tail of a ~10% population spread can be
+# >40% away from another draw from the opposite tail). Averaging
+# BLESS_REPS repeats keeps the blessed reference's own sampling error small
+# relative to `tolerance`'s headroom without paying an on-box N-repeat
+# measurement's full cost on every routine `--bless`.
+BLESS_REPS = 5
+
+
 def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
-    """Record each fixture line's fresh duration into qwen-duration-baseline.json.
+    """Record each fixture line's MEAN duration, across `BLESS_REPS` repeated
+    real syntheses, into qwen-duration-baseline.json — see the module-level
+    `BLESS_REPS` comment for why a single draw is not enough (#1994 review
+    finding C1).
 
     No `bless_guard` here — that guard is specific to the transcript-content
     check Kokoro's `_bless` also does, which this file does not have. Qwen
     decoding is stochastic with no seed, so a repeated-synthesis spread exists;
-    the on-box register row is where N and the observed spread get recorded so
-    `tolerance` can be derived from measurement rather than blessed as a guess.
+    an on-box acceptance measurement is where N and the observed spread get
+    recorded so `tolerance` can be derived from measurement rather than
+    blessed as a guess.
 
     `tolerance` is no longer a placeholder: register row A101 (now discharged
     — the ID stays retired, never reused) measured the real per-line spread
     on an RTX 5070 Ti via `measure_qwen_duration_spread.py` (N=10 reps/line,
-    voice `cw_gpu_17b`), observed a 22.4% max fractional deviation, and
-    hand-set `tolerance` to 0.30 (measured max plus ~34% headroom). See
-    `qwen-duration-baseline.json`'s own `_comment` for the full measurement.
+    voice `cw_gpu_17b`), observed a 22.4% max fractional deviation of a
+    single draw from its line's mean, and hand-set `tolerance` to 0.30
+    (measured max plus ~34% headroom). See `qwen-duration-baseline.json`'s
+    own `_comment` for the full measurement.
     """
     baseline = _load_json(BASELINE_PATH)
     entries: dict = {}
 
-    # Use synthesise_or_skip only for the first line (warm-up) — if that fails,
-    # the engine is absent and we skip. Any later failure is a real regression.
+    # Use synthesise_or_skip only for the very first synthesis of the whole
+    # bless (line 0's first rep) — if that fails, the engine is absent and we
+    # skip. Any later failure is a real regression.
     for i, line in enumerate(fixture["lines"]):
-        if i == 0:
-            res = synthesise_or_skip(engine, QWEN_MODEL, voice, line["text"])
-        else:
-            res = engine.synthesize(QWEN_MODEL, voice, line["text"])
+        durations: list[float] = []
+        sample_counts: list[int] = []
+        sample_rate: Optional[int] = None
+        for rep in range(BLESS_REPS):
+            if i == 0 and rep == 0:
+                res = synthesise_or_skip(engine, QWEN_MODEL, voice, line["text"])
+            else:
+                res = engine.synthesize(QWEN_MODEL, voice, line["text"])
+            m = measure_pcm(res.pcm, res.sample_rate)
+            durations.append(m["duration_sec"])
+            sample_counts.append(m["sample_count"])
+            sample_rate = m["sample_rate"]
 
-        m = measure_pcm(res.pcm, res.sample_rate)
         entries[line["id"]] = {
             "voice": voice,
-            "sample_rate": m["sample_rate"],
-            "sample_count": m["sample_count"],
-            "duration_sec": round(m["duration_sec"], 4),
+            "sample_rate": sample_rate,
+            "sample_count": round(sum(sample_counts) / len(sample_counts)),
+            "duration_sec": round(sum(durations) / len(durations), 4),
         }
 
     # Record entries only — preserve whatever tolerance is already in baseline.
@@ -221,6 +254,7 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
     baseline["metadata"] = {
         "qwen_tts_version": _qwen_tts_version(),
         "torch_version": _torch_version(),
+        "bless_reps": BLESS_REPS,
         # blessed_at intentionally left for the committer to stamp — the
         # harness has no clock and must stay reproducible.
         "blessed_at": baseline.get("metadata", {}).get("blessed_at"),
@@ -243,15 +277,16 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
 # 0.10 (comfortable headroom above the observed 6.7%) specifically so a bless
 # doesn't immediately fail its own next run -- see `_bless`'s docstring. That
 # widening is a safe INTERIM value, not a measurement: it does not make the
-# dropped exact-equality check any more honest to reintroduce. There is no
-# blessed baseline yet to derive a real bound from (`qwen-duration-baseline.json`
-# ships with empty `entries` -- see its own `_comment`), so a bounded
-# same-line check has no measured spread to bound against. The right per-line
-# length regression coverage is `test_qwen_golden_lengths_match_baseline`
-# above once that on-box acceptance bless (Group A register row) records a
-# real N-run spread and tolerance; this file no longer asserts determinism it
-# cannot honestly demonstrate. Do not reintroduce an exact-equality
-# determinism check on Qwen output.
+# dropped exact-equality check any more honest to reintroduce. At the time
+# this was written there was no blessed baseline yet to derive a real bound
+# from -- there is now (register row A101, since discharged): `tolerance` is
+# 0.30, derived from an on-box N=10 spread measurement, not picked. The right
+# per-line length regression coverage is `test_qwen_golden_lengths_match_baseline`
+# above, which uses that real measured bound; this file still does not assert
+# same-line determinism, because Qwen's decoding genuinely has none -- an
+# exact-equality check would still be dishonest regardless of what baseline
+# exists. Do not reintroduce an exact-equality determinism check on Qwen
+# output.
 
 
 def _resolve_voice(engine: "main.QwenEngine") -> str:

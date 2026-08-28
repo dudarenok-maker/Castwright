@@ -381,7 +381,7 @@ setup rather than repeatedly loading and evicting models.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-28, 61 → 60.** Row **A101** (Qwen duration golden baseline
+> **Last change: 2026-08-28 (PR #2739), 61 → 60.** Row **A101** (Qwen duration golden baseline
 > bless, #1994) fully discharged and dropped: measured the real per-line duration
 > spread on this box (RTX 5070 Ti, `QWEN_DEVICE=cuda:1`) via a new ad-hoc script
 > (`server/tts-sidecar/tests/golden/measure_qwen_duration_spread.py`), voice

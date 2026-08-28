@@ -10,19 +10,27 @@ ordinary Python call, not a pytest collection, so the module-level `pytestmark`
 never attaches to these test items.
 
 This file tests:
-- `_bless` uses `synthesise_or_skip` only for line 1 (warm-up); every later
-  line calls the engine directly — an ORDERED call log, not a count, so an
-  `i == 0` -> `i == 1` swap can't survive with matching counts
+- `_bless` uses `synthesise_or_skip` only for the very first synthesis of
+  the whole bless (line 1's first rep); every other call goes straight to
+  the engine — an ORDERED call log, not a count, so an `i == 0` -> `i == 1`
+  swap can't survive with matching counts
   (`test_bless_uses_synthesise_or_skip_only_for_first_line`)
+- `_bless` blesses the MEAN duration/sample_count across `BLESS_REPS`
+  repeated real syntheses per line, not a single draw — #1994 review
+  finding C1: `tolerance` bounds how far a single fresh draw can land from
+  the population's TRUE mean, so the blessed reference must itself
+  approximate that mean (`test_bless_averages_across_reps`)
 - `_bless` never touches `tolerance` — it preserves whatever's already in
   the baseline file (placeholder or a hand-set real value), and stamps
   `entries[*]["voice"]` + a `metadata` block on every bless
   (`test_bless_tolerance_never_touched`)
-- The assertion loop flags a baseline entry recorded against a DIFFERENT
-  Qwen voice than this run resolved — Qwen voices are runtime-resolved, not
-  a fixed per-line catalog like Kokoro's
-  (`test_assertion_loop_flags_voice_mismatch_against_baseline`)
-- …but does NOT flag a baseline entry with no recorded `voice` key at all
+- The assertion loop SKIPS (not fails) when the baseline's entries were
+  blessed against a DIFFERENT Qwen voice than this run resolved — #1994
+  review finding C3: Qwen voices are runtime-resolved, not a fixed per-line
+  catalog like Kokoro's, so a voice mismatch means "this box hasn't been
+  measured", not "a regression was detected"
+  (`test_assertion_loop_skips_on_voice_mismatch_against_baseline`)
+- …but does NOT skip on a baseline entry with no recorded `voice` key at all
   (backward-compatible with a pre-#1994-review baseline shape) — the
   guard's `is not None` half, deliberately untested by the mismatch case
   above (`test_assertion_loop_tolerates_missing_voice_key_in_baseline_entry`)
@@ -52,7 +60,7 @@ def _write_baseline(tmp_path: Path) -> Path:
     path = tmp_path / "qwen-duration-baseline.json"
     data = {
         "_comment": "#1994. tolerance is a PLACEHOLDER until an operator hand-sets a real measured value.",
-        "tolerance": 0.10,  # placeholder, matches the real committed baseline's current value
+        "tolerance": 0.10,  # placeholder for these unit tests; independent of the real committed baseline
         "entries": {},
     }
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -93,11 +101,14 @@ def _make_mock_synthesize_result_audible(sample_count: int) -> MagicMock:
 
 
 def test_bless_uses_synthesise_or_skip_only_for_first_line(monkeypatch, tmp_path) -> None:
-    """Fix 3: `synthesise_or_skip` is used only for warm-up (first line); later
-    lines call `engine.synthesize` directly so a real failure surfaces as FAIL."""
+    """Fix 3: `synthesise_or_skip` is used only for the very first synthesis
+    of the whole bless (line 1's first rep); every other call — including
+    line 1's remaining reps — goes straight to `engine.synthesize` so a real
+    failure surfaces as FAIL, not a swallowed SKIP."""
     path = _write_baseline(tmp_path)
     monkeypatch.setattr(qwen, "BASELINE_PATH", path)
     monkeypatch.setattr(qwen, "FIXTURE_PATH", tmp_path / "fixture.json")
+    monkeypatch.setattr(qwen, "BLESS_REPS", 2)
 
     fixture = {
         "lines": [
@@ -108,13 +119,13 @@ def test_bless_uses_synthesise_or_skip_only_for_first_line(monkeypatch, tmp_path
     }
     monkeypatch.setattr(qwen, "_load_json", lambda p: fixture if p == qwen.FIXTURE_PATH else {})
 
-    results = [_make_mock_synthesize_result(24000) for _ in range(3)]
+    results = [_make_mock_synthesize_result(24000) for _ in range(6)]
 
     # A single ORDERED call log, tagged by which path was used — not two
     # separate counters. Two counters can't tell "warm-up first, direct
     # after" from "direct first, warm-up in the middle": swap which index
-    # uses which path and the counts (1 skip, 2 direct) stay identical, so a
-    # count-only assertion can't catch an `i == 0` -> `i == 1` mutation. The
+    # uses which path and the counts (1 skip, 5 direct) stay identical, so a
+    # count-only assertion can't catch an `i == 0 and rep == 0` mutation. The
     # order captured here can.
     call_log = []
 
@@ -133,10 +144,49 @@ def test_bless_uses_synthesise_or_skip_only_for_first_line(monkeypatch, tmp_path
         mock_skip.side_effect = mock_skip_impl
         qwen._bless(mock_engine, "test_voice", fixture)
 
-    assert call_log == ["skip", "direct", "direct"], (
-        f"expected warm-up (skip) for line 1 only, then direct calls for "
-        f"lines 2-3, got {call_log}"
+    assert call_log == ["skip", "direct", "direct", "direct", "direct", "direct"], (
+        f"expected warm-up (skip) for line 1's first rep only, then direct "
+        f"calls for every other rep across all 3 lines (2 reps each), got {call_log}"
     )
+
+
+def test_bless_averages_across_reps(monkeypatch, tmp_path) -> None:
+    """_bless's blessed duration/sample_count is the MEAN across `BLESS_REPS`
+    repeated real syntheses, not a single draw (#1994 review finding C1):
+    `tolerance` bounds how far a single fresh draw at ASSERT time can land
+    from the population's TRUE mean, so the reference `_bless` writes must
+    itself approximate that mean — an arbitrary single draw could sit
+    anywhere in the distribution. Kills a mutant that blesses only the
+    first/last rep instead of averaging across all `BLESS_REPS`."""
+    path = _write_baseline(tmp_path)
+    monkeypatch.setattr(qwen, "BASELINE_PATH", path)
+    monkeypatch.setattr(qwen, "FIXTURE_PATH", tmp_path / "fixture.json")
+    monkeypatch.setattr(qwen, "BLESS_REPS", 3)
+
+    fixture = {"lines": [{"id": "line1", "text": "Test one."}]}
+    monkeypatch.setattr(qwen, "_load_json", lambda p: fixture if p == qwen.FIXTURE_PATH else {})
+
+    # Three distinct sample counts (at 24000 Hz: 1.0s, 1.1s, 0.9s) whose mean
+    # duration (1.0s) and mean sample_count (24000) are exact round numbers,
+    # so the assertion below can't be confused by rounding.
+    sample_counts = [24000, 26400, 21600]
+    results = [_make_mock_synthesize_result(c) for c in sample_counts]
+
+    direct_results = iter(results[1:])
+
+    def mock_synthesize(model, voice, text):
+        return next(direct_results)
+
+    mock_engine = MagicMock()
+    mock_engine.synthesize = mock_synthesize
+
+    with patch.object(qwen, "synthesise_or_skip", return_value=results[0]):
+        qwen._bless(mock_engine, "test_voice", fixture)
+
+    written = json.loads(path.read_text(encoding="utf-8"))
+    entry = written["entries"]["line1"]
+    assert entry["sample_count"] == 24000, f"expected mean sample_count 24000, got {entry['sample_count']}"
+    assert abs(entry["duration_sec"] - 1.0) < 1e-6, f"expected mean duration_sec 1.0, got {entry['duration_sec']}"
 
 
 def test_bless_tolerance_never_touched(monkeypatch, tmp_path) -> None:
@@ -154,6 +204,9 @@ def test_bless_tolerance_never_touched(monkeypatch, tmp_path) -> None:
     path = _write_baseline(tmp_path)
     monkeypatch.setattr(qwen, "BASELINE_PATH", path)
     monkeypatch.setattr(qwen, "FIXTURE_PATH", tmp_path / "fixture.json")
+    # Not testing averaging here (see test_bless_averages_across_reps) — one
+    # rep per line keeps this test's call-count bookkeeping simple.
+    monkeypatch.setattr(qwen, "BLESS_REPS", 1)
 
     fixture = {
         "lines": [
@@ -213,18 +266,23 @@ def test_bless_tolerance_never_touched(monkeypatch, tmp_path) -> None:
     # version metadata "so a model bump is legible" -- pin that Qwen's bless
     # does too, and doesn't quietly stop.
     assert "metadata" in written, "bless must stamp a metadata block (qwen_tts_version/torch_version/blessed_at)"
-    assert set(written["metadata"].keys()) >= {"qwen_tts_version", "torch_version", "blessed_at"}
+    assert set(written["metadata"].keys()) >= {"qwen_tts_version", "torch_version", "blessed_at", "bless_reps"}
+    assert written["metadata"]["bless_reps"] == 1
 
 
-def test_assertion_loop_flags_voice_mismatch_against_baseline(monkeypatch) -> None:
-    """A baseline entry recorded against a different Qwen voice must not be
-    silently compared against — Qwen voices are runtime-resolved
-    (`pick_designed_voice`: sorted, first wins, absent an override), unlike
-    Kokoro's fixed per-line-pinned catalog, so a voice change between bless
-    and this run means the recorded duration belongs to a different speaker
-    entirely. This is this file's substitute for Kokoro's `substituted_from`
-    check, which can never fire on Qwen (QwenEngine.synthesize never sets
-    that field — see the comment in the assertion loop)."""
+def test_assertion_loop_skips_on_voice_mismatch_against_baseline(monkeypatch) -> None:
+    """A baseline whose entries were blessed against a DIFFERENT Qwen voice
+    than this run resolved is SKIPPED, not failed. Qwen voices are
+    runtime-resolved (`pick_designed_voice`: sorted, first wins, absent an
+    override), unlike Kokoro's fixed per-line-pinned catalog, so a box with
+    a different designed voice has no applicable baseline — exactly like an
+    empty-`entries` baseline, which also skips. Treating a voice mismatch as
+    a FAILURE (the pre-fix behaviour) hard-fails every box whose first
+    designed voice happens to sort before the blessed one even though
+    nothing regressed — #1994 review finding C3. This is this file's
+    substitute for Kokoro's `substituted_from` check, which can never fire
+    on Qwen (QwenEngine.synthesize never sets that field — see the comment
+    in the assertion loop)."""
     fixture = {"lines": [{"id": "line1", "text": "Test one."}]}
     baseline = {
         "tolerance": 0.10,
@@ -242,16 +300,15 @@ def test_assertion_loop_flags_voice_mismatch_against_baseline(monkeypatch) -> No
         return fixture if p == qwen.FIXTURE_PATH else baseline
 
     monkeypatch.setattr(qwen, "_load_json", mock_load)
-    # Runtime resolves a DIFFERENT voice than the baseline was recorded against.
+    # Runtime resolves a DIFFERENT voice than the baseline was blessed against.
     monkeypatch.setattr(qwen, "_resolve_voice", lambda engine: "voice_b")
     monkeypatch.delenv("GOLDEN_BLESS", raising=False)
-
-    result = _make_mock_synthesize_result(24000)
     monkeypatch.setattr(qwen, "_make_qwen", lambda: MagicMock())
 
-    with patch.object(qwen, "synthesise_or_skip", return_value=result):
-        with pytest.raises(AssertionError, match="voice_a.*voice_b|voice mismatch|re-bless after a voice change"):
-            qwen.test_qwen_golden_lengths_match_baseline()
+    # The mismatch is checked up front, before any synthesis, so
+    # synthesise_or_skip is never actually invoked here — nothing to mock.
+    with pytest.raises(pytest.skip.Exception, match="voice_a.*voice_b|voice"):
+        qwen.test_qwen_golden_lengths_match_baseline()
 
 
 def test_assertion_loop_tolerates_missing_voice_key_in_baseline_entry(monkeypatch) -> None:
