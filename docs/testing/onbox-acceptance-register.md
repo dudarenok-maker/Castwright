@@ -3958,7 +3958,7 @@ where dev mode never rebinds — a losing checkout's server exits with an
 actionable `EADDRINUSE` instead), "my config says `LAN_HTTPS=1`" only means
 *this checkout would hold `:8443` if it won the race*, not that it currently
 does. There is no owner-note file for the main server's bound port the way
-`.run/tts.owner.json` exists for the sidecar, so neither script has an
+`.run/tts.owner.<port>.json` exists for the sidecar, so neither script has an
 authoritative source to settle it — the sweep now sweeps nothing for
 `:8443` rather than guess. This is a **coverage tradeoff, not a defect**: an
 orphaned LAN-HTTPS listener with no surviving PID file is no longer
@@ -3980,14 +3980,14 @@ running a live stack is "a real sidecar" in this register's own vocabulary
 worktree, e.g. slot 1: `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`,
 `LOCAL_TTS_PORT=9010`), each with **all three** of Vite, the server, and the
 sidecar live (`npm start` / `npm run dev`) so each checkout owns a
-`tts.owner.json` note. From the worktree, run `npm run stop` and observe
+`tts.owner.<port>.json` note. From the worktree, run `npm run stop` and observe
 **four** things, not just the sidecar pair: (1) the worktree's own sidecar
 (`:9010`) dies; (2) the primary's sidecar (`:9000`) survives; (3) the
 worktree's own Vite (`:5183`) and server (`:8090`) die; (4) the **primary's**
 Vite (`:5173`) and server (`:8080`) survive — this last pair is the one pass
 8 found broken and is the one an operator must not skip. Then repeat after a
-clean shutdown of the worktree's sidecar (so `tts.owner.json` is absent and
-the sweep falls back to `server/.env`/`.env.local`) and confirm the same
+clean shutdown of the worktree's sidecar (so `tts.owner.<port>.json` is absent
+and the sweep falls back to `server/.env`/`.env.local`) and confirm the same
 four-way discrimination holds. **Optionally**, if exercising the LAN-HTTPS
 path too: start the primary with `LAN_HTTPS=1` (so it's listening on
 `:8443`), then from the worktree run `npm run stop` and confirm the

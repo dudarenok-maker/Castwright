@@ -57,22 +57,22 @@ Describe 'Get-SidecarSweepPort' {
         }
     }
 
-    It 'returns the per-checkout port recorded in tts.owner.json over server\.env (#2632 N27 fix)' {
-        $notePath = Join-Path $script:tempDir "tts.owner.json"
+    It 'returns the per-checkout port recorded in tts.owner.<port>.json over server\.env (#2632 N27 fix)' {
+        $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
         Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9020"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
     }
 
-    It 'falls back to server\.env LOCAL_TTS_PORT when tts.owner.json is absent (#2632 N29)' {
+    It 'falls back to server\.env LOCAL_TTS_PORT when no tts.owner.<port>.json note exists (#2632 N29)' {
         Set-EnvFixture -Path $script:envPath -Content "PORT=8080`nLOCAL_TTS_PORT=9030"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9030
     }
 
-    It 'falls back to server\.env LOCAL_TTS_PORT when tts.owner.json is corrupt JSON' {
-        $notePath = Join-Path $script:tempDir "tts.owner.json"
+    It 'falls back to server\.env LOCAL_TTS_PORT when tts.owner.<port>.json is corrupt JSON' {
+        $notePath = Join-Path $script:tempDir "tts.owner.9040.json"
         Set-Content -Path $notePath -Value 'not valid json {{{' -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9040"
 
@@ -80,7 +80,7 @@ Describe 'Get-SidecarSweepPort' {
     }
 
     It 'falls back to server\.env LOCAL_TTS_PORT when the recorded port is out of range' {
-        $notePath = Join-Path $script:tempDir "tts.owner.json"
+        $notePath = Join-Path $script:tempDir "tts.owner.99999.json"
         Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":99999,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9050"
 
@@ -89,6 +89,18 @@ Describe 'Get-SidecarSweepPort' {
 
     It 'returns $null (sweep nothing) when neither the note nor server\.env yield a port (#2632 N29)' {
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be $null
+    }
+
+    It 'falls back to server\.env LOCAL_TTS_PORT when two note files exist in the same run dir (#2641 shared-run-dir scenario)' {
+        $notePathA = Join-Path $script:tempDir "tts.owner.9010.json"
+        $notePathB = Join-Path $script:tempDir "tts.owner.9011.json"
+        Set-Content -Path $notePathA -Value '{"pid":1234,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-Content -Path $notePathB -Value '{"pid":5678,"ppid":1,"port":9011,"startedAt":"2026-08-25T00:00:01.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9060"
+
+        # Two candidate notes, no way to tell which is current — must not
+        # guess between them; fall back exactly as the zero-match case does.
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9060
     }
 
     It 'returns $null when server\.env has no LOCAL_TTS_PORT line' {
@@ -274,8 +286,8 @@ Describe 'Get-PortsToSweep (#2632 N34)' {
     # port (pass 7's mutant G: `$ports = @(5173, 8080, 8443, 9000)`, resolver
     # still called) has nowhere to hide — there's no logic left at the call
     # site to independently mutate away from what's tested here.
-    It 'includes the resolved sidecar port from tts.owner.json' {
-        $notePath = Join-Path $script:tempDir "tts.owner.json"
+    It 'includes the resolved sidecar port from tts.owner.<port>.json' {
+        $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
         Set-Content -Path $notePath -Value '{"pid":1,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
 
         $ports = Get-PortsToSweep -BasePorts @(5173, 8080, 8443) -RunDir $script:tempDir -ServerEnvPath $script:envPath
