@@ -3029,18 +3029,24 @@ degradation on real hardware.
 
 - **Self-test fires at the real load boundary.** On first Kokoro load via the
   real `_ensure_loaded`/`from_session` path (during a chapter render or
-  `PRELOAD_KOKORO` warm-up), confirm the log shows the CUDA self-test message
-  and `/health`'s `sidecar_health.cuda_verified` field is populated (not `null`).
+  `PRELOAD_KOKORO` warm-up), confirm `/health`'s top-level `cuda_verified`
+  field is populated with one of three values: `true` (CUDA was requested and
+  landed), `false` (CUDA was requested but landed on CPU), or `null` (CUDA was
+  not requested for this load).
 - **CUDA fallback detection on real CUDA unavailability.** Force a real CUDA→CPU
   fallback using the same missing-`nvidia-cudnn-cu12` gap A33 and A28 already use
   to force CPU-only providers. Load Kokoro and confirm `/health`'s
-  `sidecar_health.cuda_verified === false` and `/api/info`'s `cudaVerified`
-  field reads `false`. Confirm the device-panel UI renders the amber warning
-  *"GPU acceleration was configured for Kokoro, but it's running on CPU instead."*
+  `cuda_verified === false` (CUDA was requested but did not land), the log shows
+  the warning *"Kokoro CUDA self-test: CUDAExecutionProvider was requested but did
+  not land …"* (Castwright#2709), and `/api/info`'s `cudaVerified` field reads
+  `false`. Confirm the device-panel UI renders the amber warning *"GPU
+  acceleration was configured for Kokoro, but it's running on CPU instead."*
 - **Silent verification when CUDA genuinely succeeds.** On a box with working
-  CUDA support, load Kokoro and confirm `/health`'s `cuda_verified === true` (or
-  `true` when CUDA was actually not requested and the field is `null`), and the
-  device-panel warning stays absent.
+  CUDA support, load Kokoro and confirm `/health`'s `cuda_verified === true`
+  (CUDA was requested and landed), that the log contains NO CUDA self-test
+  warning message, and the device-panel warning stays absent. When CUDA was not
+  requested for the load, `/health`'s `cuda_verified === null`; this is not a
+  failure state and no warning should appear.
 
 *Needs:* a single 8 GB GPU, a live Kokoro-capable sidecar, and a real ORT
 session accessible during `_ensure_loaded`. *Criteria:* the three bullets above —
