@@ -171,6 +171,37 @@ vi.mock('undici', async (importOriginal) => {
 const { detectOllamaGpuSplitMock } = vi.hoisted(() => ({ detectOllamaGpuSplitMock: vi.fn() }));
 vi.mock('../gpu/ollama-gpu-split.js', () => ({ detectOllamaGpuSplit: detectOllamaGpuSplitMock }));
 
+/* srv-2367 Task 1 — configValue mocked for expectedDevice testing. Must
+   return real config values for keys other than expectedDevice so non-mismatch
+   tests don't break. */
+const { configValueMock } = vi.hoisted(() => ({
+  configValueMock: vi.fn((key: string) => {
+    // Only mock analyzer.ollama.expectedDevice; defer everything else
+    // to the real implementation so tests using other config keys work.
+    if (key === 'analyzer.ollama.expectedDevice') return '';
+    // For everything else, return appropriate defaults to avoid breaking
+    // existing tests that depend on config values
+    switch (key) {
+      case 'analyzer.ollama.temperature':
+        return 0.2;
+      case 'analyzer.ollama.retryTemperature':
+        return 0.6;
+      case 'analyzer.ollama.numCtx':
+        return 32768;
+      case 'analyzer.ollama.numGpu':
+        return 999;
+      case 'analyzer.ollama.numPredict':
+        return -1;
+      case 'analyzer.evalStats.enabled':
+        // Check the env var that backs this config key
+        return process.env.CASTWRIGHT_EVAL_SAMPLE !== '0';
+      default:
+        return '';
+    }
+  }),
+}));
+vi.mock('../config/resolver.js', () => ({ configValue: configValueMock }));
+
 beforeEach(async () => {
   fetchMock.mockReset();
   detectOllamaGpuSplitMock.mockReset();
@@ -181,6 +212,7 @@ beforeEach(async () => {
     totalUsedMb: 0,
     wouldFitSingleDevice: false,
   });
+  configValueMock.mockClear();
   await mkdir(resolve(HANDOFF_ROOT, 'inbox'), { recursive: true });
   await mkdir(resolve(HANDOFF_ROOT, 'outbox'), { recursive: true });
 });
@@ -1004,6 +1036,132 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
     const result = await analyzer.runStage1Chapter('m_gpu_split_throws', 1, '# prompt', {});
     expect(result.characters).toBeDefined();
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('warns when expectedDevice is set and detected on a different single device', async () => {
+    fetchMock.mockImplementation(async () => okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [1],
+      totalUsedMb: 5000,
+      wouldFitSingleDevice: false,
+    });
+    (configValueMock as any).mockReturnValue('0');
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_expecteddevice_mismatch_1', 1, '# prompt', {});
+    const mismatchWarnings = () =>
+      warnSpy.mock.calls.filter(
+        ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('GPU device mismatch'),
+      );
+    expect(mismatchWarnings()).toHaveLength(1);
+    expect(mismatchWarnings()[0][0]).toContain('expected GPU 0');
+    expect(mismatchWarnings()[0][0]).toContain('detected on GPU 1');
+
+    // Same mismatch state again — rate-limited, no additional warning.
+    await analyzer.runStage1Chapter('m_gpu_expecteddevice_mismatch_2', 2, '# prompt', {});
+    expect(mismatchWarnings()).toHaveLength(1);
+
+    // Different device detected — new signature, warns again.
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [2],
+      totalUsedMb: 5000,
+      wouldFitSingleDevice: false,
+    });
+    await analyzer.runStage1Chapter('m_gpu_expecteddevice_mismatch_3', 3, '# prompt', {});
+    expect(mismatchWarnings()).toHaveLength(2);
+    expect(mismatchWarnings()[1][0]).toContain('expected GPU 0');
+    expect(mismatchWarnings()[1][0]).toContain('detected on GPU 2');
+  });
+
+  it('warns when expectedDevice is set and split touches an unexpected device', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [1, 2],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+    });
+    (configValueMock as any).mockReturnValue('0');
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_expecteddevice_split_mismatch', 1, '# prompt', {});
+    const warnings = () =>
+      warnSpy.mock.calls.filter(
+        ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('GPU device mismatch'),
+      );
+    expect(warnings()).toHaveLength(1);
+    expect(warnings()[0][0]).toContain('expected GPU 0');
+    expect(warnings()[0][0]).toContain('detected on GPU 1,2');
+  });
+
+  it('does not warn when expectedDevice is not set', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [1],
+      totalUsedMb: 5000,
+      wouldFitSingleDevice: false,
+    });
+    (configValueMock as any).mockReturnValue('');
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_no_expecteddevice', 1, '# prompt', {});
+    const mismatchWarnings = () =>
+      warnSpy.mock.calls.filter(
+        ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('GPU device mismatch'),
+      );
+    expect(mismatchWarnings()).toHaveLength(0);
+  });
+
+  it('does not warn when expectedDevice matches the detected single device', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [1],
+      totalUsedMb: 5000,
+      wouldFitSingleDevice: false,
+    });
+    (configValueMock as any).mockReturnValue('1');
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_expecteddevice_match', 1, '# prompt', {});
+    const mismatchWarnings = () =>
+      warnSpy.mock.calls.filter(
+        ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('GPU device mismatch'),
+      );
+    expect(mismatchWarnings()).toHaveLength(0);
+  });
+
+  it('does not warn when expectedDevice matches one of the split devices', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+    });
+    (configValueMock as any).mockReturnValue('0');
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_expecteddevice_split_match', 1, '# prompt', {});
+    const mismatchWarnings = () =>
+      warnSpy.mock.calls.filter(
+        ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('GPU device mismatch'),
+      );
+    expect(mismatchWarnings()).toHaveLength(0);
   });
 });
 

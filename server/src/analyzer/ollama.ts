@@ -849,9 +849,13 @@ export class OllamaAnalyzer implements Analyzer {
       /* srv-2367: warn once per distinct GPU split that would have fit on a
          single device — independently best-effort of the VRAM sample above,
          and never trusting detectOllamaGpuSplit's own never-throws contract
-         blindly from this call site (belt and suspenders). */
+         blindly from this call site (belt and suspenders). Also warns when
+         expectedDevice is set and the detected placement disagrees. */
       try {
         const splitResult = await detectOllamaGpuSplit();
+        const expectedDevice = configValue<string>('analyzer.ollama.expectedDevice');
+
+        /* Check for multi-GPU split that would fit on a single device. */
         if (splitResult.split && splitResult.wouldFitSingleDevice) {
           const signature = splitResult.deviceIndices.join(',');
           if (!warnedGpuSplitSignatures.has(signature)) {
@@ -859,6 +863,29 @@ export class OllamaAnalyzer implements Analyzer {
             console.warn(
               `[ollama] analyzer model split across GPUs ${signature} (would fit on a single device) — see docs/local-llm.md "Pinning the analyzer to 100% GPU"`,
             );
+          }
+        }
+
+        /* Check for expectedDevice mismatch: either a split touching an
+           unexpected device, or a single device that isn't the expected one. */
+        if (expectedDevice && splitResult.reachable) {
+          const expectedIndex = Number(expectedDevice);
+          const isMismatch =
+            (splitResult.split && !splitResult.deviceIndices.includes(expectedIndex)) ||
+            (!splitResult.split && splitResult.deviceIndices.length === 1 && splitResult.deviceIndices[0] !== expectedIndex);
+
+          if (isMismatch) {
+            /* Include both the device list and expectedDevice in the signature so
+               each distinct mismatch state is warned once (rate-limited per
+               device signature + expected state pair). */
+            const mismatchSignature = `${splitResult.deviceIndices.join(',')}-expected:${expectedDevice}`;
+            if (!warnedGpuSplitSignatures.has(mismatchSignature)) {
+              warnedGpuSplitSignatures.add(mismatchSignature);
+              const deviceDesc = splitResult.deviceIndices.length === 0 ? 'unknown' : splitResult.deviceIndices.join(',');
+              console.warn(
+                `[ollama] analyzer GPU device mismatch: expected GPU ${expectedDevice}, detected on GPU ${deviceDesc}`,
+              );
+            }
           }
         }
       } catch {
