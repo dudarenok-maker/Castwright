@@ -4,12 +4,13 @@ status: draft
 
 # On-box register: generated derived figures, reconciled row shells, and the end of the drift-detector family
 
-**Issues:** closes [#2362](https://github.com/dudarenok-maker/Castwright/issues/2362),
-[#2708](https://github.com/dudarenok-maker/Castwright/issues/2708),
+**Issues:** closes [#2362](https://github.com/dudarenok-maker/Castwright/issues/2362) and
 [#2721](https://github.com/dudarenok-maker/Castwright/issues/2721); completes
 [#2599](https://github.com/dudarenok-maker/Castwright/issues/2599) and
 [#2603](https://github.com/dudarenok-maker/Castwright/issues/2603) via the held
-tasks of the preceding plan.
+tasks of the preceding plan. **[#2708](https://github.com/dudarenok-maker/Castwright/issues/2708)
+is explicitly NOT closed by this spec** — see the pass-4 revision note and its own
+disposition-table row below.
 
 **Predecessor:** [`2026-08-27-onbox-register-stable-row-ids-design.md`](2026-08-27-onbox-register-stable-row-ids-design.md).
 That spec fixed row-ID *renumbering*. This one fixes the surface duplication that
@@ -56,11 +57,36 @@ renumbering was only one symptom of.
 > exclusion list unnecessary; two further stale citations (A40, A41) invisible
 > to both existing checks; an unstated no-`npm ci` constraint on the generator's
 > dependencies; and several smaller citation and count corrections. All
-> corrected in place below. **The governing lesson holds and sharpens further:
-> generate figures, never prose — verify every generated target against the
-> *other* file before trusting either as the source — and when a fix depends on
-> an ID or a citation being either "present" or "departed," measure which,
-> because pre-floor IDs can be both at different times.**
+> corrected in place below.
+>
+> **Revision note (pass 4).** A fourth pass found that pass 3's own fix reproduced
+> the exact defect class this spec exists to eliminate, **inside the spec
+> document itself**: naming a stale citation in prose (`"cites register row
+> A40"`) matched `check-register-citations.mjs`'s own citation pattern, so the
+> spec was failing the checker it describes. It also found the `changelog`
+> target's design was never actually complete: the `.md` blockquote's markdown
+> (bold, backticks, links) has no specified conversion to the `.html`'s
+> rendered markup, at least three `.html`-only framing passages have no `.md`
+> source (not the one this spec's PR 1 recovers), the boundary-split parser
+> still can't cleanly isolate an entry without corrupting its markup, and the
+> footer-sentence trim doesn't match the register's actual line wrapping.
+> **Decision, confirmed 2026-08-29: the `changelog` target is dropped from
+> this spec entirely.** #2708 is not closed here; it is deferred to its own
+> follow-up once the markdown→HTML conversion question has a real answer. The
+> `strip`, `glance`, `groups` targets and the row-shell reconciler are
+> unaffected and are, independently, where the four review passes converged —
+> §5's `changelog`-shaped deletions never existed since
+> `check-onbox-register.mjs` never checked the changelog to begin with. Pass 4
+> also found the branch had drifted 36 commits behind `origin/main`, which the
+> plan rebases onto before further numbers are trusted, and a real defect in
+> the Blocked/Unconfirmed title-matching rule (prefix-match is false for at
+> least one of today's seven pairs), fixed below. **The governing lesson holds
+> and sharpens further: generate figures, never prose — verify every generated
+> target against the *other* file before trusting either as the source — and
+> when a fix depends on an ID or a citation being either "present" or
+> "departed," measure which, because pre-floor IDs can be both at different
+> times. And: a spec that discusses a checker's failure modes is itself
+> subject to that checker.**
 
 ---
 
@@ -122,7 +148,7 @@ Every one of these is a **figure**, and every figure is derivable from the `.md`
 | A1 still-owed, and A1's own sub-total | A1 heading `:691` | strip tile `:202` | yes — `strip`, from two declared markers |
 | Per-group counts (glance) | glance table `:419-430` | glance count column `:345-351` | yes — `glance`, **count column only** |
 | Per-group counts (headers) | glance table `:419-430` | nine `gcount` spans | yes — `groups` |
-| Row ID set and order | 65 `###` row headings | 67 `details.item` shells | yes — shell reconciliation |
+| Row ID set and order | 61 `###` row headings | 68 `details.item` shells | yes — shell reconciliation |
 | **Changelog** | `:435-678`, **14 entries** | **7** callouts | yes — `changelog` |
 
 The changelog row is the live failure. The page admits it at `:265-269`: those
@@ -160,8 +186,10 @@ what forces "figures, never prose":
   `20 of 60 run · ~40 owed · 3 retracted`);
 - the `iname` span — a shortened title with markdown links stripped;
 - **the group header titles**: `.html:361` reads `The GPU box` where `.md:421`
-  reads `The GPU box (single 8 GB for most; the 2-card boot for a few)`. Five of
-  seven differ this way;
+  reads `The GPU box (single 8 GB for most; the 2-card boot for a few)`. **All
+  seven** `gtitle` texts differ from their `.md` source this way — a separate
+  comparison from the glance Setup cells below, where the split is five-differ,
+  two byte-identical (see "Designs this spec rejects" for that count);
 - **`lang="ru"` accessibility spans** wrapping `Ночной дозор` at `.html:958` and
   `:347`, with no markdown counterpart. The first draft's instruction to copy the
   glance cells "verbatim" would have **deleted this attribute** — a real
@@ -242,7 +270,15 @@ replacement* (`stamp-publish-token.mjs` is 188 lines rewriting one hidden div); 
 does **not** cover reordering elements or byte-exact idempotence, which are new
 and are why §"Testing" leads with them.
 
-### 2. Four generated targets — figures only
+### 2. Three generated targets — figures only
+
+**A fourth candidate, `changelog`, was designed across passes 2-3 and dropped in
+pass 4** — see the pass-4 revision note above. Its output-format question
+(reproduce `.md` markdown verbatim, or convert to the `.html`'s rendered markup)
+was never actually answered, at least three `.html`-only framing passages have
+no `.md` source at all, and the boundary-split entry parser still corrupts
+markup at every entry boundary. #2708 is not closed by this spec; it is a named
+follow-up once that conversion question has a real design.
 
 Region-style targets are delimited by `BEGIN GENERATED:<name>` / `END GENERATED:<name>`
 HTML comments. Two targets are too scattered for regions and are located
@@ -260,13 +296,18 @@ labels included. Sources: the `.md` glance table (`:419-430`), the owed line
 > `06-01` — three transforms, not one; the year-strip is the one the first two
 > drafts of this rule both missed).
 
-> **The A1 tile carries two facts, not one.** `.html:202` reads
-> `Still owed in A1 (of 60)` with value `40`. A1's heading (`.md:691`) reads
-> `20 of 60 run … · ~40 still owed`: the `40` is A1's still-owed count and the
-> `60` is **A1's own sub-item total** — which merely *coincides* with the
-> register's 60 owed rows today. The changelog's 16 entries show the owed total
-> moving through nine distinct values in two weeks, so a generator templating
-> `(of {owedTotal})` is
+> **The A1 tile carries two facts, not one — and the coincidence trap is
+> already live.** `.html:202` reads `Still owed in A1 (of 60)` with value `40`.
+> A1's heading reads `20 of 60 run … · ~40 still owed`: the `40` is A1's
+> still-owed count and the `60` is **A1's own sub-item total**, which merely
+> *coincided* with the register's owed total when the tile was last hand-
+> written. **It no longer does**: the register now reads 61 owed while the
+> tile still says `(of 60)` — the trap this paragraph warns about is not
+> hypothetical, it is the current committed state. The register's own
+> changelog record (untouched
+> by this spec — see the dropped `changelog` target above) shows the owed
+> total moving through nine distinct values in two weeks, so a generator
+> templating `(of {owedTotal})` is
 > right now and wrong at the next discharge. Two markers are declared beside the
 > heading: `stat:a1-still-owed` and `stat:a1-subtotal`.
 
@@ -280,93 +321,6 @@ draft's claim that this region includes them was wrong.
 its enclosing `section[id]`. Nine targets, one per section, including `blocked`
 (5 rows) and `unconfirmed` (2 rows). **The surrounding `h3.gtitle` prose and the
 `gtag` badge are not touched.**
-
-**`changelog` (region)** — the callouts inside the `.html`'s changelog box, from
-the `.md` blockquote at `:435-678`. **Every entry in the `.md` renders, verbatim,
-most-recent first — the generator reproduces `.md` text, it does not re-label or
-re-word it.** The general "How this register goes stale" callout at `.html:188`
-is not a changelog entry and stays outside the markers; neither is the closing
-sentence "Full change-by-change history is in this file's git log, not here"
-(`:676`), which is static footer text the generator always appends after the
-last entry rather than sources per run.
-
-> **The `.md` changelog has 16 entries, not 14, and line-anchored detection
-> cannot find all of them — this is the third draft of this rule.** Fourteen
-> are `> **Last change:` / `> **Prior change:` paragraphs, each starting its own
-> blockquote line. A 15th, `> Before that: 2026-08-23 (fold step, #2625), 66 →
-> 65.` (`:670`), also starts its own line and a line-anchored pattern finds it
-> fine. The 16th does not: it begins **mid-sentence** at `:675` (`` `…/step-ort-
-> b-a39.md`. Before that: wave 5, ``) and its own count transition is on the
-> **next physical line** (`:676`, `#2606 step 6, 69 → 66 …`) — no single line
-> contains both the marker and its numbers, so a line-scoped regex, however its
-> alternation is written, cannot match it and (per the error-not-skip rule)
-> would throw on the committed file.
->
-> **The parser therefore does not operate line-by-line.** It strips the leading
-> `> ` from every blockquote line, joins the result into one continuous text
-> stream (paragraph breaks preserved as `\n\n`), then finds entry boundaries
-> with a **global** match of `(?:Last change|Prior change|Before that):\s*` over
-> that joined stream — start-of-line or mid-sentence, both. Each boundary starts
-> a new entry; each entry's text runs to the next boundary or to the fixed
-> footer sentence, whichever comes first. The footer sentence — "Full change-
-> by-change history is in this file's git log, not here — this section tracks
-> the current count, not how it got here." (`:677-678`) — is trimmed from the
-> tail of the last entry and never treated as its own entry; it is static text
-> the generator always appends after the last real entry, not something it
-> sources per run. **A joined stream containing zero boundary matches, or text
-> after the last matched entry that isn't the exact footer sentence, is an
-> error, not a skip.**
->
-> **Independently, the `.html` today is not a rendering of the `.md` at all —
-> it has drifted on its own.** Measured: it omits the `.md`'s two oldest
-> entries (`:670`, `:675`); it relabels one surviving entry's prefix (`.md:664`'s
-> `Prior change:` renders as `.html:332`'s `Before that:`); and it carries one
-> entry, `.html:273` — *"Historical, predates wave 7: 2026-08-26 (PR #2665,
-> following an independent review of #2655), 69 → 69 (no count change)"* — whose
-> **changelog entry** (the PR #2665 reference and the "no count change" framing)
-> has **no `.md` counterpart** (`grep -c 2665` / `grep -c '69 → 69'` against the
-> `.md` both return zero), though the underlying *fact* is independently recorded
-> in prose elsewhere in the register (`:2972`, `:2983`) — so this is a changelog
-> **entry** the mirror would delete, not the sole surviving record of the fact
-> itself. Regenerating naively from `.md` alone still silently drops that entry
-> — the regression class this spec exists to prevent, reproduced in the one
-> target it calls "the live failure." **PR 1 recovers it**: insert `.html:273`'s
-> text as a `.md` changelog entry before the generator is allowed to treat `.md`
-> as authoritative.
->
-> **Its placement in the chain is not determinable from the text alone, and
-> this spec does not guess.** The recovered entry's own transition, `69 → 69`,
-> doesn't bridge either neighbouring entry's counts (`:586`'s `69 → 61` before
-> it, `:624`'s `68 → 69` after) — a no-change entry can't be chain-ordered by
-> count the way every other entry is. Four `.md` entries share its date
-> (2026-08-26: `:586, :624, :633, :642`), so date alone doesn't fix a slot
-> either. **PR 1 resolves this by consulting `git log -p` / `git blame` on
-> `onbox-acceptance-register-live-view.html` around `:273`** to find when that
-> callout was actually added relative to the neighbouring entries' own commits,
-> and places the recovered `.md` entry in that commit-order slot. If history is
-> ambiguous, PR 1 states the ambiguity in its body and asks rather than guesses
-> — a wrong slot is invisible to every check this spec ships, since none of them
-> assert chain order (see the chain-continuity note below).
-
-This is what settles **#2708**: the choice between "keep and curate" and "drop and
-point at git" dissolves, because the curated copy stops being a copy.
-
-> **#2708 is only closed if the source is checked too.** Generation makes the
-> mirror *faithful*, not the source *true* — and today **nothing validates the
-> `.md` changelog at all** (`check-onbox-register.mjs` contains no reference to
-> it). So one check ships with the generator: **the newest changelog entry's
-> terminal count must equal the owed total** at `:431`. Without it, #2708's stated
-> requirement — *needs a mechanical check, or the staleness recurs* — is met one
-> level up and left open one level down.
->
-> **This is the weaker of two available checks, chosen deliberately, not by
-> default.** The changelog's entries form a fully continuous count chain — each
-> entry's starting count equals the previous entry's terminal count — which a
-> chain-continuity assertion would verify for free and would also catch a
-> mis-inserted or out-of-order entry that the newest-vs-owed-total check alone
-> would not. Ship the weaker check now (it directly answers what #2708 asked
-> for); a chain-continuity assertion is a cheap, explicitly named follow-up,
-> not an oversight.
 
 ### 3. Row shells are reconciled; bodies and summaries are never touched
 
@@ -383,30 +337,67 @@ body div, `iname` span and `risk` span.
 
 **The seven ID'd sections are located by pattern, not by an exclusion list — an
 enumerated exclusion is the wrong tool and the second draft of this paragraph
-still reached for it.** `.md` has 66 `###` headings in total, not 60: the 60
+still reached for it.** `.md` has 67 `###` headings in total, not 61: the 61
 row headings, the publish-token heading (`:51`), and the **Blocked** section's
 own 5 headings — which are title-only (`### <ID> · <title>`'s `<ID> · ` is
 absent; e.g. `` ### CPU-only `RAM_HEAVY_MODELS` clamp ``), so they don't match
 the row shape to begin with. **Matching `^### ([A-Z]\d+) · ` against every
-`###` heading finds exactly the 60 row headings and nothing else** — the
+`###` heading finds exactly the 61 row headings and nothing else** — the
 publish-token heading and all five Blocked headings fail that pattern on their
 own shape, with no enumeration needed. The Blocked headings are still matched
 by **title** for their own shell reconciliation (below); they are simply never
-candidates for the seven ID'd sections' heading-order pass. (Full accounting:
-60 ID'd-section headings + 5 Blocked headings + 1 publish-token heading = 66
-total `###` headings; the 60 row headings + 5 Blocked headings + 2 Unconfirmed
-bullets = 67 shells.)
+candidates for the seven ID'd sections' heading-order pass. (Full accounting,
+current as of this rebase — re-derive at implementation time, this file moves
+on nearly every merge: 61 ID'd-section headings + 5 Blocked headings + 1
+publish-token heading = 67 total `###` headings; the 61 row headings + 5
+Blocked headings + 2 Unconfirmed bullets = 68 shells.)
 
 **Blocked and Unconfirmed are matched by title, not by position.** Both render
 as `details.item` with `<span class="num">—</span>` (seven such spans in the
 `.html` today, not four — five Blocked, two Unconfirmed), so the element gives
-no identity, and Unconfirmed's source is plain bullets (`.md:4514, 4519`), not
-headings. Positional matching has no identity at all:
-reorder two entries and the reconciler silently re-attaches each body to the other,
-which is unobservable in review and untestable by any assertion about counts.
-Title matching is also **the register's own recorded rule** — `.md:494` instructs
-readers to *"cite them by title from now on"* — and today's titles prefix-match
-their `iname`s. A title that matches zero or more than one shell is an **error**.
+no identity, and Unconfirmed's source is plain bullets, not headings. Positional
+matching has no identity at all: reorder two entries and the reconciler silently
+re-attaches each body to the other, which is unobservable in review and
+untestable by any assertion about counts. Title matching is also **the
+register's own recorded rule** — its Live-view section instructs readers to
+*"cite them by title from now on."*
+
+> **Bare "prefix-match" is false, measured against today's real titles — a
+> third draft of this rule, not a restatement, and the second draft's own
+> claim of exact matches everywhere is also false on direct measurement of
+> the Unconfirmed pair, not just asserted here.** Two independent failure
+> shapes, needing two different normalisations:
+>
+> 1. **Blocked headings diverge mid-string.** `` .md`'s `### CPU-only
+>    `RAM_HEAVY_MODELS` clamp (plan 263, B2 step 7)` `` vs `.html`'s iname
+>    `CPU-only RAM_HEAVY_MODELS clamp (B2 step 7)` — `plan 263, ` was edited
+>    out of the middle, so neither is a prefix of the other as written. Fix:
+>    strip backtick/code-span markup, then strip the **last** trailing
+>    ` (...)` parenthetical, from both the `.md` heading and the
+>    entity-decoded `.html` iname. Verified against all five real Blocked
+>    pairs (AMD GPU support Phase 2; ORT pip-consistency marker — AMD box;
+>    the `RAM_HEAVY_MODELS` case; ops-36 golden-assembly; ops-35 ffmpeg
+>    floor): all five normalise to **exact** matches.
+> 2. **Unconfirmed titles are edited by extension, not by internal deletion.**
+>    The `.md` source is a bullet's leading `**bold**` span, not a heading;
+>    the trailing prose after the bold close is bullet body, not title. For
+>    the "Ollama concurrency" bullet the bold span already equals the
+>    `.html` iname exactly (after entity-decoding `K&gt;1` → `K>1`). But the
+>    "fs-38 Wave 1" bullet's bold span is just `fs-38 Wave 1`, while its
+>    `.html` iname is the editorially extended `fs-38 Wave 1 — designed-voice
+>    authoring` — a genuine content addition, not recoverable by stripping
+>    anything from either side. Fix: take **only the bullet's bold-span text**
+>    as the `.md` title (never the trailing bullet body), then require it to
+>    be a **prefix** of the entity-decoded `.html` iname — not an exact match.
+>    Verified against both real Unconfirmed pairs: both pass under
+>    prefix-match, `Ollama concurrency…` trivially (identical strings are
+>    each other's prefix) and `fs-38 Wave 1` genuinely (it is a strict prefix
+>    of the extended iname).
+>
+> **So the two title classes need two different match modes** — Blocked
+> normalises-then-exact-matches; Unconfirmed normalises-then-prefix-matches —
+> and a title that fails its class's match against zero or more than one
+> shell is an **error**.
 
 **A committed placeholder fails `--check`.** A newly inserted shell carries
 `<p class="body-placeholder">`. `--check` fails if that class appears anywhere in
@@ -590,15 +581,27 @@ final word:**
    incidental-findings rule.
 4. **Two further stale citations, found on the same read, are structurally
    invisible to both existing checks and are also fixed directly in PR 4:**
-   `onbox-sitting-cloning-identity.md:239` cites register row `A40` and `:310`
-   cites `A41` — neither exists (Group A currently tops out at A37). Check A's
-   scanner doesn't treat a bare ID on a `Criteria source:`-shaped line as a
-   citation surface, and Check C's fatal path needs a subject number on the
-   same physical line, which neither of these has. Fixing the two citations is
-   this round's job; **teaching either checker to see this citation shape is
-   its own decision** (does the citation-surface grammar expand to cover
-   `Criteria source:` lines generally, and if so what else does that newly
-   catch) and is filed as a follow-up issue, not attempted here.
+   `onbox-sitting-cloning-identity.md:239`'s `Criteria source:` line names the
+   token `A40`, and `:310`'s names `A41`. Neither is a currently-minted row ID
+   (the sequential Group A ceiling is A37; a later allocate-once ID, A102,
+   exists but is unrelated). Check A's scanner doesn't treat a bare ID on a
+   `Criteria source:`-shaped line as a citation surface, and Check C's fatal
+   path needs a subject number on the same physical line, which neither of
+   these has. Fixing the two citations is this round's job; **teaching either
+   checker to see this citation shape is its own decision** (does the
+   citation-surface grammar expand to cover `Criteria source:` lines generally,
+   and if so what else does that newly catch) and is filed as a follow-up
+   issue, not attempted here.
+   > **Caution for whoever edits this spec next:** `check-register-citations.mjs`'s
+   > `ROW_CITATION_REGEX` matches the word "row" or "rows" immediately followed
+   > by a bare register-ID-shaped token, **anywhere in a tracked file — including
+   > this spec document itself** — and will fail `test:hooks` on the prose, not
+   > just on a real citation elsewhere. Pass 3 shipped exactly this mistake
+   > describing these two findings. Do not repeat it here: never write the word
+   > "row" or "rows" directly adjacent to a bare register-ID-shaped token
+   > (letter immediately followed by digits) anywhere in this document, this
+   > paragraph included — describe such tokens as "the token", "the ID", or
+   > similar instead.
 5. **Then widen** `wrongId` to the discharge class, and rewrite the three
    deferral sites to state the shipped behaviour.
 
