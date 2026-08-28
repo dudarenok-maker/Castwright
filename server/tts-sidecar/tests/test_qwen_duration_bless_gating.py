@@ -143,8 +143,10 @@ def test_bless_tolerance_never_touched(monkeypatch, tmp_path) -> None:
     """_bless does NOT overwrite tolerance — it preserves whatever is already
     in the baseline file.
 
-    Real tolerance derivation from an actual N-repeat on-box measurement
-    remains register row A101's owed acceptance work, not this scaffold's job.
+    Real tolerance derivation from an actual N-repeat on-box measurement was
+    register row A101's owed acceptance work — now discharged (hand-set to
+    0.30 in the committed baseline), but this scaffold-level guarantee
+    (never clobbered by a routine `--bless`) still needs its own coverage.
 
     When an operator hand-sets a real tolerance (e.g., 0.15 from on-box
     measurement), a subsequent `--bless` (e.g., to refresh entries after a

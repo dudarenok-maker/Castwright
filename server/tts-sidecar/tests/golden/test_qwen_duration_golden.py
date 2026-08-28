@@ -184,13 +184,12 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
     the on-box register row is where N and the observed spread get recorded so
     `tolerance` can be derived from measurement rather than blessed as a guess.
 
-    The placeholder `tolerance` in the committed baseline (0.10) is a safe
-    interim, not a measurement: it's widened to sit comfortably above the
-    ~6.7% spread seen across a single pair of consecutive syntheses (one
-    data point, not an N-run measurement — see #2696's commit message),
-    with headroom for whatever a real N-repeat spread turns out to be. Real
-    tolerance derivation from an actual N-repeat on-box measurement remains
-    register row A101's owed acceptance work.
+    `tolerance` is no longer a placeholder: register row A101 (now discharged
+    — the ID stays retired, never reused) measured the real per-line spread
+    on an RTX 5070 Ti via `measure_qwen_duration_spread.py` (N=10 reps/line,
+    voice `cw_gpu_17b`), observed a 22.4% max fractional deviation, and
+    hand-set `tolerance` to 0.30 (measured max plus ~34% headroom). See
+    `qwen-duration-baseline.json`'s own `_comment` for the full measurement.
     """
     baseline = _load_json(BASELINE_PATH)
     entries: dict = {}
@@ -211,9 +210,9 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
             "duration_sec": round(m["duration_sec"], 4),
         }
 
-    # Record entries only — preserve whatever tolerance is already in baseline
-    # (whether the committed placeholder 0.10 or a hand-set measured value from
-    # on-box acceptance work). Real tolerance derivation remains register row A101.
+    # Record entries only — preserve whatever tolerance is already in baseline.
+    # Real tolerance derivation was register row A101's owed work, now
+    # discharged (hand-set to 0.30 from an on-box N-repeat measurement).
     baseline["entries"] = entries
     # #2004 precedent: kokoro-baseline.json stamps its engine/ASR package
     # versions "so a model bump is legible" — mirrored here for Qwen so a

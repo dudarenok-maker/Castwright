@@ -1,5 +1,41 @@
 {
-  "_comment": "#1994. `entries` gets populated by a normal `--bless` run (see below), but `tolerance` does NOT -- `_bless` deliberately never touches it, so it stays whatever this file already has: still the PLACEHOLDER below until an operator hand-sets a real value. `entries` being non-empty does NOT mean `tolerance` has been validated -- check this field, not just whether `entries` looks populated. Qwen decoding is stochastic with no seed, so before trusting `tolerance`: measure the per-line duration spread across N repeated syntheses of each qwen-duration-fixture.json line on a real GPU box with a designed voice, record N and the observed spread in docs/testing/onbox-acceptance-register.md (Group A), then hand-edit `tolerance` from that measurement. Bless (refreshes `entries` only) via: npm run test:golden-audio -- --sidecar-only --engine=qwen --bless",
-  "tolerance": 0.10,
-  "entries": {}
+  "_comment": "#1994. `entries` gets populated by a normal `--bless` run, but `tolerance` does NOT -- `_bless` deliberately never touches it, so it stays whatever this file already has. `tolerance` is now a MEASURED value, not a placeholder: on-box register row A101 (now discharged and removed from docs/testing/onbox-acceptance-register.md -- the ID stays retired, never reused), 2026-08-28, RTX 5070 Ti (`QWEN_DEVICE=cuda:1`), voice `cw_gpu_17b`, N=10 repeated syntheses per qwen-duration-fixture.json line via server/tts-sidecar/tests/golden/measure_qwen_duration_spread.py. Observed per-line max fractional deviation from its own mean: narrator-plain 9.0%, numbers-and-year 12.2%, abbreviations 22.4% (max), quotes-and-punctuation 13.0%, multi-sentence-group 19.9%. tolerance=0.30 is the measured max (22.4%) plus ~34% headroom. Raw measurement retained at server/tts-sidecar/tests/golden/spread-report.json. Re-measure (and re-derive tolerance) if the fixture lines, the model, or the designed voice change -- this value is specific to voice cw_gpu_17b on Qwen/Qwen3-TTS-12Hz-0.6B-Base. Bless (refreshes `entries` only) via: npm run test:golden-audio -- --sidecar-only --engine=qwen --bless",
+  "tolerance": 0.3,
+  "entries": {
+    "narrator-plain": {
+      "voice": "cw_gpu_17b",
+      "sample_rate": 24000,
+      "sample_count": 74881,
+      "duration_sec": 3.12
+    },
+    "numbers-and-year": {
+      "voice": "cw_gpu_17b",
+      "sample_rate": 24000,
+      "sample_count": 122880,
+      "duration_sec": 5.12
+    },
+    "abbreviations": {
+      "voice": "cw_gpu_17b",
+      "sample_rate": 24000,
+      "sample_count": 111360,
+      "duration_sec": 4.64
+    },
+    "quotes-and-punctuation": {
+      "voice": "cw_gpu_17b",
+      "sample_rate": 24000,
+      "sample_count": 101760,
+      "duration_sec": 4.24
+    },
+    "multi-sentence-group": {
+      "voice": "cw_gpu_17b",
+      "sample_rate": 24000,
+      "sample_count": 115200,
+      "duration_sec": 4.8
+    }
+  },
+  "metadata": {
+    "qwen_tts_version": "0.1.1",
+    "torch_version": "2.11.0+cu128",
+    "blessed_at": "2026-08-28"
+  }
 }
