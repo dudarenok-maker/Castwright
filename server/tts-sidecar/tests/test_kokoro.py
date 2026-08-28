@@ -2509,26 +2509,58 @@ def test_cuda_fallback_recorded_when_api_drift_forces_cpu(
 
 # ── Test isolation verification ──────────────────────────────────────────
 
+@pytest.fixture
+def cuda_state_with_sentinel():
+	"""Fixture that sets _cuda_verification_state to a non-standard sentinel
+	value and verifies the isolation fixture restores it. This fixture MUST be
+	listed before isolated_cuda_verification_state in test parameters so its
+	cleanup runs AFTER the isolation fixture's cleanup (pytest uses LIFO for
+	fixture teardown).
+
+	This proves isolation actually works by requiring the isolated_cuda_verification_state
+	fixture to restore a value that production code would never naturally produce.
+	Without proper isolation, the sentinel won't be restored and the assertion
+	in this fixture's cleanup will fail."""
+	sentinel_state = {"verified": "SENTINEL_RESTORED", "detail": "ISOLATION_VERIFIED"}
+	main._cuda_verification_state.clear()
+	main._cuda_verification_state.update(sentinel_state)
+	yield
+	# After the test AND the isolated_cuda_verification_state cleanup,
+	# assert the sentinel was restored. This assertion runs AFTER the
+	# isolation fixture's restore, proving it actually restored this state.
+	restored_state = dict(main._cuda_verification_state)
+	assert restored_state == sentinel_state, \
+		f"Isolation fixture failed to restore state. Expected {sentinel_state}, got {restored_state}"
+
+
 def test_cuda_verification_state_isolation_across_tests(
-    fake_weight_files, monkeypatch, caplog, isolated_cuda_verification_state
+    fake_weight_files, monkeypatch, caplog,
+    cuda_state_with_sentinel,
+    isolated_cuda_verification_state
 ) -> None:
 	"""Regression test proving the isolated_cuda_verification_state fixture
-	actually isolates mutations. This test mutates _cuda_verification_state
-	to verified=True and detail='test-specific', then the fixture restores it
-	to the clean state ({verified: None, detail: None}) before the next test
-	runs. Without proper isolation, a test that runs after this one would
-	observe the leaked state instead of starting fresh.
+	actually restores the pre-test state, even when the state is set to a
+	non-standard value that production code would never naturally produce.
 
-	To verify isolation works, run this test alongside
-	test_cuda_selftest_flags_silent_fallback_and_warns in both orders:
-	  pytest tests/test_kokoro.py::test_cuda_verification_state_isolation_across_tests tests/test_kokoro.py::test_cuda_selftest_flags_silent_fallback_and_warns -v
-	  pytest tests/test_kokoro.py::test_cuda_selftest_flags_silent_fallback_and_warns tests/test_kokoro.py::test_cuda_verification_state_isolation_across_tests -v
+	This test:
+	1. Starts with a sentinel state set by cuda_state_with_sentinel
+	2. Runs _ensure_loaded, which mutates _cuda_verification_state to a
+	   production-standard value
+	3. Lets the isolation fixture restore the sentinel
+	4. Verifies in cuda_state_with_sentinel's cleanup that the sentinel
+	   was actually restored
 
-	Both orders must pass — if isolation is broken, the second run fails
-	because the state from the first test leaks in."""
+	If the isolated_cuda_verification_state fixture is gutted (reduced to
+	a bare yield), this test will fail because the sentinel won't be restored
+	and cuda_state_with_sentinel's cleanup assertion will catch it."""
 	from unittest.mock import MagicMock, patch
 
 	monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+	# Verify we start with the sentinel, not a production-standard value
+	initial_state = dict(main._cuda_verification_state)
+	assert initial_state == {"verified": "SENTINEL_RESTORED", "detail": "ISOLATION_VERIFIED"}, \
+		f"Expected to start with sentinel state, got {initial_state}"
 
 	class _TestKokoro:
 		def __init__(self, model_path: str, voices_path: str) -> None:
@@ -2563,26 +2595,15 @@ def test_cuda_verification_state_isolation_across_tests(
 		engine = main.KokoroEngine()
 		engine._ensure_loaded("v1", device="cuda:0")
 
-		# At this point in the test, the global is mutated
-		assert main._cuda_verification_state["verified"] is True
-		assert main._cuda_verification_state["detail"] is None
+		# After _ensure_loaded, the state is mutated to a production-standard value
+		mutated_state = dict(main._cuda_verification_state)
+		assert mutated_state != initial_state, \
+			f"_ensure_loaded should mutate the state from the sentinel"
+		# Verify production code set it to a standard value, not our sentinel
+		assert mutated_state["verified"] in (True, False), \
+			f"Production code should set 'verified' to bool, got {mutated_state['verified']}"
 
-	# After the test completes, the isolation fixture will restore
-	# the state to {"verified": None, "detail": None}. This assertion
-	# would normally be in a NEXT test, but we can't do that in pytest.
-	# Instead, manually verify the fixture pattern works by checking
-	# that yield-based cleanup would work (a pattern test: if a test
-	# manually saves/restores, the pattern is sound).
-	#
-	# What we CAN verify here is that the INITIAL state was clean,
-	# proving any test that ran before us either uses the fixture or
-	# never touched this global. In a real multi-test run, the next
-	# test after this one will receive the clean state IF the fixture
-	# worked correctly.
-	initial_state = {"verified": None, "detail": None}
-	# When this test STARTED (before the isolated_cuda_verification_state
-	# fixture yielded to it), the state WAS clean because pytest fixtures
-	# run their setup BEFORE the test. If a prior test leaked, the initial
-	# state would have been dirty -- but it wasn't, so the fixture worked.
-	# After this test runs, the fixture's cleanup will run and restore
-	# that same clean state for the next test.
+	# At this point, the isolation fixture's cleanup runs and restores
+	# the sentinel. Then cuda_state_with_sentinel's cleanup runs and
+	# asserts the sentinel was restored. If isolation is broken, that
+	# assertion will fail.
