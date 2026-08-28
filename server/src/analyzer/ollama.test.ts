@@ -212,7 +212,7 @@ beforeEach(async () => {
     totalUsedMb: 0,
     wouldFitSingleDevice: false,
   });
-  configValueMock.mockClear();
+  configValueMock.mockReset();
   await mkdir(resolve(HANDOFF_ROOT, 'inbox'), { recursive: true });
   await mkdir(resolve(HANDOFF_ROOT, 'outbox'), { recursive: true });
 });
