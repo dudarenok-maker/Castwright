@@ -3065,11 +3065,13 @@ export interface components {
              *     fires. `error` is the terminal event for a failed run: `code`
              *     `not_found` (character deleted mid-run), `design_failed` (the
              *     design call itself threw), `unsupported_language`,
-             *     `lock-contention` (a cast-lock acquisition on this route's own
-             *     path timed out — #2260), or `clone_protected` (the write-time
-             *     series-wide clone-consent veto refused the persist — #2006; a
-             *     distinct occurrence from the plain-JSON 409 upfront refusal
-             *     below, which shares the same code string for the same reason).
+             *     `language_unset` (Task 6, #2246 — the book never stated a
+             *     language), `lock-contention` (a cast-lock acquisition on this
+             *     route's own path timed out — #2260), or `clone_protected` (the
+             *     write-time series-wide clone-consent veto refused the persist —
+             *     #2006; a distinct occurrence from the plain-JSON 409 upfront
+             *     refusal below, which shares the same code string for the same
+             *     reason).
              * @enum {string}
              */
             type: "resume_from" | "idle" | "heartbeat" | "phase" | "preview_ready" | "designed" | "error";
