@@ -180,7 +180,7 @@ def test_health_cuda_verified_fields_additive(monkeypatch):
     monkeypatch.setattr(main, "_build_gpus_payload", lambda torch_module=None: [])
     monkeypatch.setattr(
         main, "_cuda_verification_state",
-        {"checked": False, "verified": None, "detail": None},
+        {"verified": None, "detail": None},
     )
     client = TestClient(main.app)
     body = client.get("/health").json()

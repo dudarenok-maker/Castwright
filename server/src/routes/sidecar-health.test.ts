@@ -1094,6 +1094,29 @@ describe('GET /api/sidecar/health — side-14 device fields', () => {
     expect(res.body.cudaVerificationDetail).toBeNull();
   });
 
+  it('normalises malformed cudaVerified/cudaVerificationDetail to null rather than forwarding junk', async () => {
+    /* A body with cuda_verified: "yes" (string instead of boolean) and
+       cuda_verification_detail: 123 (number instead of string) must be
+       coerced to null rather than blindly forwarded — the frontend expects
+       well-typed fields. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['kokoro'],
+          cuda_verified: 'yes',
+          cuda_verification_detail: 123,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.status).toBe(200);
+    expect(res.body.cudaVerified).toBeNull();
+    expect(res.body.cudaVerificationDetail).toBeNull();
+  });
+
   it('ignores a malformed devices field (non-object) rather than forwarding junk', async () => {
     /* A body with devices: "cuda" (or any non-object) must be coerced to null
        rather than blindly forwarded — the frontend only knows how to render a

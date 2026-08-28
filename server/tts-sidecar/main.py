@@ -3257,7 +3257,6 @@ class KokoroEngine(Engine):
             # failure. Leave verified=None rather than manufacturing a
             # confident answer to a question that wasn't asked.
             _cuda_verification_state = {
-                "checked": True,
                 "verified": None,
                 "detail": "CUDA was not requested for this load.",
             }
@@ -3267,7 +3266,6 @@ class KokoroEngine(Engine):
         except Exception as e:
             log.exception("Failed to read the real session's providers")
             _cuda_verification_state = {
-                "checked": True,
                 "verified": None,
                 "detail": "Could not read the real session's providers (API error or kokoro-onnx drift).",
             }
@@ -3278,7 +3276,6 @@ class KokoroEngine(Engine):
         cuda_landed = "CUDAExecutionProvider" in actual_providers
         if cuda_landed:
             _cuda_verification_state = {
-                "checked": True,
                 "verified": True,
                 "detail": None,
             }
@@ -3293,7 +3290,6 @@ class KokoroEngine(Engine):
             )
             log.warning(detail)
             _cuda_verification_state = {
-                "checked": True,
                 "verified": False,
                 "detail": detail,
             }
@@ -3483,7 +3479,6 @@ class KokoroEngine(Engine):
                         "CUDA was requested but Kokoro(...) always forces CPU on this path."
                     )
                     _cuda_verification_state = {
-                        "checked": True,
                         "verified": False,
                         "detail": detail,
                     }
@@ -9674,11 +9669,9 @@ _device_probe_state: str = "pending"  # 'pending' | 'ready' | 'error'
 # any real session exists). Populated the first time `_ensure_loaded`
 # actually constructs a Kokoro session that requested CUDA (first real synth
 # call, or PRELOAD_KOKORO=1's eager preload) -- never by the background
-# device probe, which must not force an eager load. `checked=False`/
-# `verified=None` is the expected, honest steady-state on a box that never
-# triggers a Kokoro load.
+# device probe, which must not force an eager load. `verified=None` is the
+# expected, honest steady-state on a box that never triggers a Kokoro load.
 _cuda_verification_state: dict[str, Any] = {
-    "checked": False,
     "verified": None,
     "detail": None,
 }

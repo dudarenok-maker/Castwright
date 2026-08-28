@@ -21,7 +21,12 @@ import { SYNC_MANIFEST_SCHEMA } from '../workspace/sync-manifest.js';
 import { readUserSettings, writeUpgradeMeta, getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
 import { engineForModelKey } from '../tts/model-keys.js';
 import type { SidecarDeviceMap, SidecarDevicesState } from './sidecar-health.js';
-import { normaliseDevices, normaliseDevicesState } from './sidecar-health.js';
+import {
+  normaliseDevices,
+  normaliseDevicesState,
+  normaliseCudaVerified,
+  normaliseCudaVerificationDetail,
+} from './sidecar-health.js';
 import { getCachedUpdateStatus, refreshUpdateStatusInBackground } from './updates.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -115,8 +120,8 @@ async function fetchSidecarInfo(): Promise<SidecarInfoProbe> {
       version: typeof body.__version__ === 'string' ? body.__version__ : null,
       devices: normaliseDevices(body.devices),
       devicesState: normaliseDevicesState(body.devices_state),
-      cudaVerified: body.cuda_verified ?? null,
-      cudaVerificationDetail: body.cuda_verification_detail ?? null,
+      cudaVerified: normaliseCudaVerified(body.cuda_verified),
+      cudaVerificationDetail: normaliseCudaVerificationDetail(body.cuda_verification_detail),
     };
   } catch {
     return { version: null, devices: null, devicesState: null, cudaVerified: null, cudaVerificationDetail: null };

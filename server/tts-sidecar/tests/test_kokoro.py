@@ -653,7 +653,6 @@ def test_cuda_selftest_flags_silent_fallback_and_warns(
         with caplog.at_level(logging.WARNING, logger="sidecar"):
             engine._ensure_loaded("v1", device="cuda:0")
 
-        assert main._cuda_verification_state["checked"] is True
         assert main._cuda_verification_state["verified"] is False
         assert "CUDAExecutionProvider was requested" in main._cuda_verification_state["detail"]
         assert any(
@@ -713,7 +712,6 @@ def test_cuda_selftest_verified_true_when_cuda_actually_lands_no_warning(
         with caplog.at_level(logging.WARNING, logger="sidecar"):
             engine._ensure_loaded("v1", device="cuda:0")
 
-        assert main._cuda_verification_state["checked"] is True
         assert main._cuda_verification_state["verified"] is True
         assert main._cuda_verification_state["detail"] is None
         assert not any(
@@ -772,7 +770,6 @@ def test_cuda_selftest_exception_reading_providers_does_not_leak_raw_exception(
             engine._ensure_loaded("v1", device="cuda:0")
 
         # Verify the state is recorded
-        assert main._cuda_verification_state["checked"] is True
         assert main._cuda_verification_state["verified"] is None
         detail = main._cuda_verification_state["detail"]
         assert detail is not None
@@ -855,7 +852,6 @@ def test_cuda_selftest_empty_providers_list_verified_false(
             engine._ensure_loaded("v1", device="cuda:0")
 
         # Empty provider list means CUDA did not land
-        assert main._cuda_verification_state["checked"] is True
         assert main._cuda_verification_state["verified"] is False
         assert main._cuda_verification_state["detail"] is not None
         # Verify a warning was logged
@@ -920,7 +916,6 @@ def test_cuda_selftest_directml_without_cuda_verified_false(
             engine._ensure_loaded("v1", device="cuda:0")
 
         # DirectML without CUDA means CUDA did not land
-        assert main._cuda_verification_state["checked"] is True
         assert main._cuda_verification_state["verified"] is False
         assert main._cuda_verification_state["detail"] is not None
         # Verify a warning was logged
@@ -996,7 +991,6 @@ def test_cuda_selftest_fires_on_shipped_auto_path_not_just_explicit_device_pin(
             engine._ensure_loaded("v1")
 
         # Self-test must have run and detected the fallback
-        assert main._cuda_verification_state["checked"] is True
         assert main._cuda_verification_state["verified"] is False
         assert "CUDAExecutionProvider was requested" in main._cuda_verification_state["detail"]
         # Verify a warning was logged
@@ -2411,7 +2405,6 @@ def test_cuda_fallback_recorded_when_api_drift_forces_cpu(
         assert engine._kokoro is not None
 
         # _cuda_verification_state must record the confirmed fallback
-        assert main._cuda_verification_state["checked"] is True
         assert main._cuda_verification_state["verified"] is False
         detail = main._cuda_verification_state["detail"]
         assert detail is not None

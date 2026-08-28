@@ -236,6 +236,18 @@ export function normaliseDevicesState(raw: unknown): SidecarDevicesState | null 
     : null;
 }
 
+/* Normalise cudaVerified field from sidecar /health response. Should be a
+   boolean or null/undefined; any other shape is coerced to null. */
+export function normaliseCudaVerified(raw: unknown): boolean | null {
+  return typeof raw === 'boolean' ? raw : null;
+}
+
+/* Normalise cudaVerificationDetail field from sidecar /health response. Should
+   be a string or null/undefined; any other shape is coerced to null. */
+export function normaliseCudaVerificationDetail(raw: unknown): string | null {
+  return typeof raw === 'string' ? raw : null;
+}
+
 const QWEN_INSTALL_STATES: readonly QwenInstallState[] = [
   'not-installed',
   'weights-missing',
@@ -513,8 +525,8 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
           : undefined,
       devices,
       devicesState: normaliseDevicesState(body.devices_state),
-      cudaVerified: body.cuda_verified ?? null,
-      cudaVerificationDetail: body.cuda_verification_detail ?? null,
+      cudaVerified: normaliseCudaVerified(body.cuda_verified),
+      cudaVerificationDetail: normaliseCudaVerificationDetail(body.cuda_verification_detail),
     };
   } catch (e) {
     clearTimeout(timer);

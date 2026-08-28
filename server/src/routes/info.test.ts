@@ -139,6 +139,29 @@ describe('GET /api/info', () => {
     expect(res.body.cudaVerificationDetail).toBeNull();
   });
 
+  it('normalises malformed cudaVerified/cudaVerificationDetail from sidecar to null', async () => {
+    /* A malformed sidecar response with cuda_verified: "yes" (string instead of
+       boolean) and cuda_verification_detail: 123 (number instead of string)
+       must be coerced to null rather than blindly forwarded. */
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          __version__: '1.6.0',
+          devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
+          devices_state: 'ready',
+          cuda_verified: 'yes',
+          cuda_verification_detail: 123,
+        }),
+      })),
+    );
+    const res = await request(app).get('/api/info');
+    expect(res.status).toBe(200);
+    expect(res.body.cudaVerified).toBeNull();
+    expect(res.body.cudaVerificationDetail).toBeNull();
+  });
+
   it('reflects a post-upgrade banner + lastSeenAppVersion, then clears on dismiss', async () => {
     await writeUpgradeMeta({ lastSeenAppVersion: '1.5.1', showWhatsNew: true });
     let res = await request(app).get('/api/info');
