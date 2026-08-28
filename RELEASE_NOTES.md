@@ -409,6 +409,7 @@
 - **Pick up where you left off.** Your shelf remembers what you were in the middle of and puts it back within reach, and a reading dashboard keeps your streak and your hours.
 - **Take your library with you.** Pair your phone in one scan and listen offline, with chapters, progress and speed that follow you.
 - **Smaller things that add up.** Smarter cover search, cleaner exports, and a new place to tune the finer settings.
+- **Audio transcription now resets properly after a GPU load failure.** The transcription engine used to stay stuck running on your processor after a failed attempt to use your graphics card, slowing down future transcription work even once your GPU became available again. It now clears that state so it can try using your GPU the next time.
 
 # Castwright 1.6.0
 
