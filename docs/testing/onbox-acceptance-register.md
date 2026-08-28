@@ -83,6 +83,16 @@ checker validates `origin/main`'s copy, so the data has to be on `main` already
 or the guard's first run fails on its own delivery. That is the same
 data-then-guard split the stable row IDs needed (#2629).
 
+**One more thing has to happen before that check can pass, and it is easy to
+miss because it is not a code change: the live view must be PUBLISHED at least
+once with a token on it.** The comparator reads three copies — the tracked file,
+`origin/main`'s, and the *saved live page* — and the live page only acquires a
+token when someone publishes after this change merged. Until then the check
+reports that the published page carries none while `origin/main` does, and
+names the transition explicitly rather than guessing. So the first publish after
+this merges clears it, and the wording of that error is written for exactly that
+window.
+
 The live view carries derived figures — owed count, per-group counts, oldest
 debt — that must be **recomputed** on every edit. Rows can be right while the
 summary strip lies. `npm run check:onbox-register` verifies the owed total, the
@@ -129,6 +139,12 @@ CI check — the same call this design already made for the tracked-pair
 comparison, see the edge list above). The merge step that closes this, run
 **immediately before every publish**, not only after a suspected race:
 
+0. **If your change touched the live view, stamp it and commit the stamp** —
+   `npm run stamp:publish-token`, then commit. It goes *before* step 2, not
+   after step 4, for two reasons: the check reads the token, and an
+   **uncommitted** stamp cannot be found in git history, which is where its
+   freshness is verified. See "The publish token" above for why this is a
+   command rather than an instruction to edit a number.
 1. Fetch the page currently live at the canonical URL above and save it to a
    local file — this is the CURRENTLY-published register, which may be ahead
    of what you are about to publish.

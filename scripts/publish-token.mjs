@@ -320,6 +320,16 @@ export function bumpToken(html, mintNonce) {
   if (parsed === null) throw new Error('stamp-publish-token: no publish token found in the live view.');
   if (parsed.malformed) throw new Error(`stamp-publish-token: ${parsed.malformed}`);
   const n = parsed.n + 1;
+  // The counter is capped at 15 digits by the parser, so a bump AT the cap
+  // would write a 16-digit token that this module's own reader then rejects —
+  // wedging the check permanently, because stamping again needs a parseable
+  // token to bump. Refuse instead, while the file is still valid. Unreachable
+  // with an honest counter; reachable via a typo'd counter that merged.
+  if (!/^\d{1,15}$/.test(String(n))) {
+    throw new Error(
+      `stamp-publish-token: bumping ${parsed.n} would exceed the 15-digit counter cap. Fix the counter in the file first.`,
+    );
+  }
   const nonce = mintNonce();
   // Validate the MINTED value against the same rule the parser enforces, or a
   // stamper can write a token its own reader rejects — and `mintNonce` is

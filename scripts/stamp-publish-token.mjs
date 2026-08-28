@@ -16,6 +16,9 @@
 //   node scripts/stamp-publish-token.mjs            # stamp the live view
 //   node scripts/stamp-publish-token.mjs --check    # report, change nothing
 //   node scripts/stamp-publish-token.mjs --file X   # stamp some other file
+//   node scripts/stamp-publish-token.mjs --file=X   # same, = form
+// Any other argument is REFUSED rather than ignored -- the default action is a
+// write, so a typo must not fall through to it.
 //
 // Exit codes: 0 stamped (or --check found a token), 1 refused.
 
@@ -27,7 +30,7 @@ import { bumpToken, parsePublishToken } from './publish-token.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const DEFAULT_FILE = 'docs/testing/onbox-acceptance-register-live-view.html';
+export const DEFAULT_FILE = 'docs/testing/onbox-acceptance-register-live-view.html';
 
 // 12 lowercase hex. The parser admits [A-Za-z0-9_-]{6,64}; 12 is chosen well
 // above the floor so a nonce is not plausibly confusable with the abbreviated
@@ -51,6 +54,17 @@ export function seedToken(html, mint = mintNonce) {
     throw new Error('stamp-publish-token: no <h1> found to anchor the seed token to.');
   }
   const nonce = mint();
+  // The same two hardenings bumpToken applies at the identical seam. They were
+  // missing here, which is the shape where a divergence hides: the seed path
+  // runs once per file and so is the one least likely to be exercised again.
+  // A seed the parser rejects would wedge the check permanently — and unlike a
+  // bad bump it cannot be re-stamped away, because stamping needs a parseable
+  // token to bump.
+  if (typeof nonce !== 'string' || !/^[A-Za-z0-9_-]{6,64}$/.test(nonce) || /^-/.test(nonce)) {
+    throw new Error(
+      `stamp-publish-token: minted nonce ${JSON.stringify(nonce)} is not 6-64 chars of [A-Za-z0-9_-].`,
+    );
+  }
   // A hidden <div>, not a <meta>: this file is a body fragment (the publisher
   // supplies <html>/<head>), and <meta> is not valid outside <head>. And an
   // ATTRIBUTE pair rather than an HTML comment, because checkLiveView's first
@@ -60,18 +74,50 @@ export function seedToken(html, mint = mintNonce) {
   const marker =
     `\n  <!-- Publish token. NEVER hand-edit: run \`npm run stamp:publish-token\`.\n` +
     `       The counter orders publishes; the id proves which branch produced one.\n` +
-    `       Attributes, not a comment: checkLiveView blanks comments before reading. -->\n` +
+    `       Attributes, not a comment: checkLiveView removes comments before reading. -->\n` +
     `  <div hidden data-published-as="1" data-publish-id="${nonce}"></div>\n`;
-  return { html: html.replace(SEED_AFTER, `$1\n${marker}`), n: 1, nonce };
+  // A function replacement, like bumpToken's. This one legitimately needs the
+  // captured heading, so it uses `match` rather than a `$1` in a template
+  // string — which also means a `$` pattern in the minted nonce cannot splice
+  // surrounding markup into the attribute. The charset check above already
+  // excludes `$`; the two constraints are independent on purpose.
+  return { html: html.replace(SEED_AFTER, (match) => `${match}\n${marker}`), n: 1, nonce };
+}
+
+// Parse strictly, and REFUSE anything unrecognised. The default action of this
+// script is a WRITE to a tracked file, so a permissive parser turns a typo into
+// a silent mutation: `--chek` (for `--check`) used to stamp the live view and
+// exit 0, and `--file=other.html` used to stamp the DEFAULT file while leaving
+// `other.html` untouched. A stray bump that then gets committed manufactures
+// the "live page is BEHIND main" state the comparator keeps a manual escape
+// hatch for. Refusing is what scripts/wt-new.mjs does, for the same reason.
+export function parseArgs(argv) {
+  let check = false;
+  let file = null;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--check') {
+      check = true;
+    } else if (arg === '--file') {
+      file = argv[++i];
+      if (file === undefined) return { error: '--file needs a path.' };
+    } else if (arg.startsWith('--file=')) {
+      file = arg.slice('--file='.length);
+      if (file === '') return { error: '--file= needs a path.' };
+    } else {
+      return { error: `unknown argument ${JSON.stringify(arg)}. Use --check and/or --file <path>.` };
+    }
+  }
+  return { check, file: file ?? DEFAULT_FILE };
 }
 
 function main(argv) {
-  const fileArg = argv.indexOf('--file');
-  const rel = fileArg !== -1 ? argv[fileArg + 1] : DEFAULT_FILE;
-  if (fileArg !== -1 && !rel) {
-    process.stderr.write('stamp-publish-token: --file needs a path.\n');
+  const parsed = parseArgs(argv);
+  if (parsed.error) {
+    process.stderr.write(`stamp-publish-token: ${parsed.error}\n`);
     return 1;
   }
+  const rel = parsed.file;
   const abs = resolve(REPO_ROOT, rel);
 
   let html;
@@ -84,7 +130,7 @@ function main(argv) {
 
   const existing = parsePublishToken(html);
 
-  if (argv.includes('--check')) {
+  if (parsed.check) {
     if (existing === null) {
       process.stdout.write(`stamp-publish-token: ${rel} has NO publish token (needs seeding).\n`);
       return 1;

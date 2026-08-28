@@ -16,30 +16,55 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nonceInHistory } from '../publish-token.mjs';
+import { scrubGitEnv } from '../git-env.mjs';
 
 const LIVE = 'docs/live.html';
 
-// EVERY git spawn in this file MUST use this env. Passing `cwd` is NOT enough.
+// EVERY git spawn in this file MUST use this env. Passing `cwd` is NOT enough:
+// git resolves the repository from the environment BEFORE falling back to
+// discovery from `cwd`, so `git -C <tmp>` does not protect you.
 //
-// git exports GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE and friends to processes
-// it runs — hooks above all. A child `git` that inherits them ignores its own
-// cwd and operates on the EXPORTED repository instead. These tests run under
-// `npm run test:hooks`, which runs from pre-commit, so without this scrub the
-// throwaway repositories' init/add/commit land on the REAL repo: they replace
-// its index with a one-entry index holding this file's fixture path, and
-// commit a fixture commit onto the checked-out branch. That is not
-// theoretical — it happened twice while this file was being written, taking
-// 3,979 tracked files down to 1 and moving the branch to a commit called
-// "base". `git -C <path>` does NOT override GIT_DIR; only the environment does.
+// Without it, these throwaway repositories' init/add/commit reach the REAL
+// repository. Not theoretical — it happened twice while this file was being
+// written, replacing a 3,979-entry index with a one-entry index holding this
+// file's fixture path, and leaving a fixture commit named "base" as HEAD.
 //
-// It is a FUNCTION, evaluated per spawn, not a constant snapshot taken at
-// import. As a constant it was computed before any test could inject a GIT_*
-// variable, so the self-check below PASSED with the scrub deleted — the
-// snapshot never contained the variable it was meant to strip, and the
-// instrument could not fail. Read the environment at call time.
+// TWO groups of keys, and they are scrubbed for different reasons:
+//
+//   1. REPOSITORY REDIRECTION — GIT_DIR, GIT_WORK_TREE, GIT_OBJECT_DIRECTORY,
+//      GIT_COMMON_DIR. Delegated to `scrubGitEnv` (scripts/git-env.mjs, #2169
+//      / #2216) rather than re-listed here, so this file inherits any later
+//      addition instead of becoming a third divergent copy. That helper also
+//      matches case-INSENSITIVELY, which matters and is easy to get wrong:
+//      Windows preserves whatever casing a variable was stored under, env
+//      lookup there is case-insensitive, and git honours a lowercase `git_dir`
+//      exactly as it honours `GIT_DIR` (measured on git 2.54.0.windows.1 —
+//      `git rev-parse --absolute-git-dir` from an unrelated cwd resolved to
+//      the `git_dir` target). A `startsWith('GIT_')` filter leaves that
+//      survivor in place, which is a no-op fix for the one case the scrub
+//      exists to close.
+//
+//   2. GIT_INDEX_FILE — deliberately NOT in that helper's list, and
+//      deliberately scrubbed HERE. Its exclusion there is correct and
+//      measured: a hook exports it (an ordinary hook does NOT export GIT_DIR —
+//      that is the header's own #2216 correction), git re-anchors it to the
+//      discovered toplevel, and a command whose job is to read the in-flight
+//      staged set must honour whichever index git is actually using. This file
+//      is the opposite case: nothing here reads the staged set, every spawn
+//      builds a disposable repository, and an inherited index is precisely
+//      what turned the real one into a one-entry file. So the general rule is
+//      right and this site is its exception — stated rather than assumed,
+//      because deleting this line looks like tidying.
+//
+// A FUNCTION, evaluated per spawn, not a constant snapshot taken at import. As
+// a constant it was computed before any test could inject a variable, so the
+// self-check below PASSED with the scrub deleted — the snapshot never held the
+// variable it was meant to strip, and the instrument could not fail.
 const cleanEnv = () => {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
+  const env = scrubGitEnv(process.env);
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === 'GIT_INDEX_FILE') delete env[key];
+  }
   return env;
 };
 
@@ -84,34 +109,43 @@ test('git: the env scrub actually isolates the throwaway repo (self-check)', () 
   // repository and destroy it, which is far worse than a red test. So assert
   // the isolation directly, with GIT_DIR/GIT_INDEX_FILE deliberately set to
   // the values a hook would export.
-  const decoy = newRepo();
-  const repo = newRepo();
-  try {
-    const saved = { dir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE };
-    process.env.GIT_DIR = join(decoy, '.git');
-    process.env.GIT_INDEX_FILE = join(decoy, '.git', 'index');
+  // BOTH casings. git honours a lowercase `git_dir` exactly as it honours
+  // `GIT_DIR`, and Windows preserves whatever casing a variable was stored
+  // under — so an uppercase-only injection leaves a case-sensitive scrub
+  // looking correct while the survivor it misses is the live hazard.
+  for (const [dirKey, indexKey] of [
+    ['GIT_DIR', 'GIT_INDEX_FILE'],
+    ['git_dir', 'git_index_file'],
+  ]) {
+    const decoy = newRepo();
+    const repo = newRepo();
     try {
-      writeToken(repo, 1, 'nISOLATE');
-      git(repo, 'add', '-A');
-      git(repo, 'commit', '-qm', 'isolated');
-      // The work landed in `repo`...
-      assert.equal(ask(repo, 'nISOLATE'), true);
-      // ...and the decoy that GIT_DIR pointed at is untouched.
-      const decoyFiles = execFileSync('git', ['ls-files'], {
-        cwd: decoy,
-        encoding: 'utf8',
-        env: cleanEnv(),
-      });
-      assert.equal(decoyFiles.trim(), '', 'GIT_DIR leaked: the decoy repo was written to');
+      const saved = { dir: process.env[dirKey], index: process.env[indexKey] };
+      process.env[dirKey] = join(decoy, '.git');
+      process.env[indexKey] = join(decoy, '.git', 'index');
+      try {
+        writeToken(repo, 1, 'nISOLATE');
+        git(repo, 'add', '-A');
+        git(repo, 'commit', '-qm', 'isolated');
+        // The work landed in `repo`...
+        assert.equal(ask(repo, 'nISOLATE'), true, `${dirKey}: work did not land in the temp repo`);
+        // ...and the decoy the env pointed at is untouched.
+        const decoyFiles = execFileSync('git', ['ls-files'], {
+          cwd: decoy,
+          encoding: 'utf8',
+          env: cleanEnv(),
+        });
+        assert.equal(decoyFiles.trim(), '', `${dirKey} leaked: the decoy repo was written to`);
+      } finally {
+        for (const [k, v] of [[dirKey, saved.dir], [indexKey, saved.index]]) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
     } finally {
-      if (saved.dir === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = saved.dir;
-      if (saved.index === undefined) delete process.env.GIT_INDEX_FILE;
-      else process.env.GIT_INDEX_FILE = saved.index;
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(decoy, { recursive: true, force: true });
     }
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-    rmSync(decoy, { recursive: true, force: true });
   }
 });
 

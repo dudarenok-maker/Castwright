@@ -5,14 +5,19 @@
 // wrong, the comparator's guarantees rest on nothing.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { seedToken, mintNonce } from '../stamp-publish-token.mjs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { seedToken, mintNonce, parseArgs, DEFAULT_FILE } from '../stamp-publish-token.mjs';
 import { parsePublishToken, bumpToken } from '../publish-token.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const LIVE_VIEW = resolve(REPO_ROOT, 'docs/testing/onbox-acceptance-register-live-view.html');
+// Imported rather than re-typed: a copy here would let the test keep passing
+// while the script targeted a different file.
+const LIVE_VIEW_REL = DEFAULT_FILE;
+const LIVE_VIEW = resolve(REPO_ROOT, LIVE_VIEW_REL);
 
 test('the tracked live view carries exactly one well-formed publish token', () => {
   // The bootstrap invariant. `comparePublishTokens` returns a hard error when
@@ -88,4 +93,93 @@ test('seed then bump produces a strictly increasing counter and a fresh id', () 
     html = out.html;
   }
   assert.deepEqual(parsePublishToken(html), { n: 4, nonce: 'dddddd' });
+});
+
+// --- The CLI. Previously untested end-to-end, which is exactly why a typo'd
+// flag silently performed the WRITE: `--chek` stamped the live view and exited
+// 0, and `--file=x` stamped the DEFAULT file. This script's default action is a
+// write to a tracked file, so its argument parser is a safety boundary.
+const SCRIPT = resolve(REPO_ROOT, 'scripts/stamp-publish-token.mjs');
+
+function runCli(args, cwd) {
+  try {
+    const stdout = execFileSync(process.execPath, [SCRIPT, ...args], {
+      cwd,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    return { code: 0, stdout, stderr: '' };
+  } catch (err) {
+    return { code: err.status ?? 1, stdout: err.stdout ?? '', stderr: err.stderr ?? '' };
+  }
+}
+
+test('parseArgs REFUSES anything it does not recognise', () => {
+  for (const argv of [['--chek'], ['--Check'], ['-c'], ['stamp'], ['--file'], ['--file=']]) {
+    const out = parseArgs(argv);
+    assert.ok(out.error, `${JSON.stringify(argv)} must be refused, got ${JSON.stringify(out)}`);
+  }
+});
+
+test('parseArgs accepts the documented forms, including --file=', () => {
+  assert.deepEqual(parseArgs([]), { check: false, file: LIVE_VIEW_REL });
+  assert.deepEqual(parseArgs(['--check']), { check: true, file: LIVE_VIEW_REL });
+  assert.deepEqual(parseArgs(['--file', 'a.html']), { check: false, file: 'a.html' });
+  // `--file=x` used to be swallowed as unknown, leaving the DEFAULT file targeted.
+  assert.deepEqual(parseArgs(['--file=a.html']), { check: false, file: 'a.html' });
+  assert.deepEqual(parseArgs(['--check', '--file=a.html']), { check: true, file: 'a.html' });
+});
+
+test('CLI: a typo\'d flag exits non-zero and writes NOTHING', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stamp-cli-'));
+  try {
+    const target = join(dir, 'page.html');
+    const before = '<h1>T</h1>\n<div hidden data-published-as="7" data-publish-id="abc123"></div>';
+    writeFileSync(target, before);
+    const r = runCli(['--chek', '--file', target], dir);
+    assert.notEqual(r.code, 0, 'a typo must not exit 0');
+    assert.match(r.stderr, /unknown argument/);
+    assert.equal(readFileSync(target, 'utf8'), before, 'a refused invocation must not write');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: --check reports without writing; a bare run stamps', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stamp-cli-'));
+  try {
+    const target = join(dir, 'page.html');
+    const before = '<h1>T</h1>\n<div hidden data-published-as="7" data-publish-id="abc123"></div>';
+    writeFileSync(target, before);
+
+    const checked = runCli(['--check', '--file', target], dir);
+    assert.equal(checked.code, 0);
+    assert.match(checked.stdout, /is at 7/);
+    assert.equal(readFileSync(target, 'utf8'), before, '--check must never write');
+
+    const stamped = runCli(['--file', target], dir);
+    assert.equal(stamped.code, 0, stamped.stderr);
+    const after = parsePublishToken(readFileSync(target, 'utf8'));
+    assert.equal(after.n, 8);
+    assert.notEqual(after.nonce, 'abc123', 'a stamp must mint a new id, not only bump');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: an unreadable file is an error, not a silent seed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stamp-cli-'));
+  try {
+    const r = runCli(['--file', join(dir, 'does-not-exist.html')], dir);
+    assert.notEqual(r.code, 0);
+    assert.match(r.stderr, /cannot read/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bumpToken refuses to exceed the parser\'s 15-digit counter cap', () => {
+  const atCap = `<div data-published-as="999999999999999" data-publish-id="abc123"></div>`;
+  assert.equal(parsePublishToken(atCap).n, 999999999999999, 'precondition: the cap parses');
+  assert.throws(() => bumpToken(atCap, () => 'abc124'), /15-digit counter cap/);
 });
