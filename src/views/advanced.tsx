@@ -37,6 +37,7 @@ import type {
   PromptState,
   StaleReason,
   AnalyzerDeviceResponse,
+  AnalyzerGpuSplitResponse,
 } from '../lib/types';
 
 /* #2221 — extracts a displayable message from a rejected restartSidecar
@@ -249,6 +250,7 @@ export function AdvancedView() {
   const [analyzerDevice, setAnalyzerDevice] = useState<AnalyzerDeviceResponse['device'] | null>(
     null,
   );
+  const [gpuSplit, setGpuSplit] = useState<AnalyzerGpuSplitResponse | null>(null);
 
   useEffect(() => {
     dispatch(fetchConfig());
@@ -264,6 +266,21 @@ export function AdvancedView() {
       .getAnalyzerDevice()
       .then((res) => setAnalyzerDevice(res.device))
       .catch(() => setAnalyzerDevice('unreachable'));
+    // #2367 Task 3 — same best-effort contract as the device probe above:
+    // degrade to a "reachable: false" shape rather than throwing into the
+    // view, since a failed split probe must not sink the whole row.
+    api
+      .getAnalyzerGpuSplit()
+      .then((res) => setGpuSplit(res))
+      .catch(() =>
+        setGpuSplit({
+          reachable: false,
+          split: false,
+          deviceIndices: [],
+          totalUsedMb: 0,
+          wouldFitSingleDevice: false,
+        }),
+      );
   }, [dispatch]);
 
   /* Plan 2 §2.4 — the analyzer-device row is only meaningful when the
@@ -521,6 +538,16 @@ export function AdvancedView() {
                         — not app-pinnable; the analyzer connects to a user/OS-managed Ollama
                         daemon.
                       </p>
+                      {gpuSplit?.split && gpuSplit.wouldFitSingleDevice && (
+                        <p className="text-xs text-amber-800 mb-1">
+                          Model split across GPUs {gpuSplit.deviceIndices.join(', ')} despite
+                          fitting on one device — see{' '}
+                          <a href="/docs/local-llm.md" className="underline">
+                            docs/local-llm.md
+                          </a>
+                          .
+                        </p>
+                      )}
                       <a
                         href="/docs/local-llm.md"
                         className="text-xs text-magenta hover:underline"

@@ -978,6 +978,18 @@ export interface AnalyzerDeviceResponse {
   device: 'cuda' | 'cpu' | 'idle' | 'unreachable';
 }
 
+/** Response from GET /api/ollama/gpu-split (#2367 Task 3) — mirrors the
+    server's OllamaGpuSplitResult verbatim. Feeds the Advanced Configuration
+    warning line for an avoidable multi-GPU split; the config-knob
+    comparison (declared vs. detected) is Task 4's job, not this response's. */
+export interface AnalyzerGpuSplitResponse {
+  reachable: boolean;
+  split: boolean;
+  deviceIndices: number[];
+  totalUsedMb: number;
+  wouldFitSingleDevice: boolean;
+}
+
 /** Prompt state from GET/PUT /api/config/prompts/:id. */
 export interface PromptState {
   id: string;

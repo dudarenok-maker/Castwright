@@ -25,6 +25,7 @@ vi.mock('../lib/api', () => ({
     cleanupEnvKnobs: vi.fn(),
     getGpuDevices: vi.fn(),
     getAnalyzerDevice: vi.fn(),
+    getAnalyzerGpuSplit: vi.fn(),
   },
 }));
 
@@ -34,6 +35,7 @@ const mockResetConfig = vi.mocked(api.resetConfig);
 const mockCleanupEnvKnobs = vi.mocked(api.cleanupEnvKnobs);
 const mockGetGpuDevices = vi.mocked(api.getGpuDevices);
 const mockGetAnalyzerDevice = vi.mocked(api.getAnalyzerDevice);
+const mockGetAnalyzerGpuSplit = vi.mocked(api.getAnalyzerGpuSplit);
 
 const FIXTURE_GPU_DEVICES: GpuDevicesResponse = {
   devices: [
@@ -181,6 +183,13 @@ beforeEach(() => {
   mockCleanupEnvKnobs.mockResolvedValue({ cleaned: [] });
   mockGetGpuDevices.mockResolvedValue(FIXTURE_GPU_DEVICES);
   mockGetAnalyzerDevice.mockResolvedValue({ device: 'idle' });
+  mockGetAnalyzerGpuSplit.mockResolvedValue({
+    reachable: true,
+    split: false,
+    deviceIndices: [0],
+    totalUsedMb: 4200,
+    wouldFitSingleDevice: false,
+  });
 });
 
 /* ── Group headers ────────────────────────────────────────────────────────── */
@@ -561,6 +570,86 @@ describe('AdvancedView — analyzer read-only row (Plan 2 §2.4, issue #1225)', 
     renderView();
     await openVoiceEngineSection();
     expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
+  });
+});
+
+/* ── Analyzer GPU-split warning (#2367 Task 3) ───────────────────────────── */
+
+describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
+  it('renders the warning, including both device indices, when split and avoidable', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+    });
+
+    renderView();
+    await openVoiceEngineSection();
+    const warning = await screen.findByText(/Model split across GPUs 0, 1/);
+    expect(warning).toBeInTheDocument();
+  });
+
+  it('shows no warning when the split genuinely does not fit on one device', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 20000,
+      wouldFitSingleDevice: false,
+    });
+
+    renderView();
+    await openVoiceEngineSection();
+    await screen.findByText(/Analyzer \(Ollama\) device/i);
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+  });
+
+  it('shows no warning when there is no split', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [0],
+      totalUsedMb: 4200,
+      wouldFitSingleDevice: false,
+    });
+
+    renderView();
+    await openVoiceEngineSection();
+    await screen.findByText(/Analyzer \(Ollama\) device/i);
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+  });
+
+  it('hides the whole block, including the split warning, when the analyzer engine is not local', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...CONFIG_WITH_TTS_ENGINE_GROUP,
+      values: {
+        ...CONFIG_WITH_TTS_ENGINE_GROUP.values,
+        'analyzer.engine': {
+          key: 'analyzer.engine',
+          effective: 'gemini',
+          source: 'default',
+          locked: false,
+          overridden: false,
+        },
+      },
+    });
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+    });
+
+    renderView();
+    await openVoiceEngineSection();
+    expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
   });
 });
 

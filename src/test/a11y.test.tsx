@@ -118,6 +118,14 @@ vi.mock('../lib/api', () => ({
         cpu: true,
       }),
     getAnalyzerDevice: () => Promise.resolve({ device: 'idle' as const }),
+    getAnalyzerGpuSplit: () =>
+      Promise.resolve({
+        reachable: true,
+        split: false,
+        deviceIndices: [0],
+        totalUsedMb: 4200,
+        wouldFitSingleDevice: false,
+      }),
   },
 }));
 
