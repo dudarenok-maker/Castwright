@@ -2284,3 +2284,71 @@ def test_real_kokoro_create_keeps_the_positional_signature_we_call() -> None:
             "positionally and would raise TypeError (latent on the disabled "
             "DirectML path, but still shipped code)"
         )
+
+
+def test_cuda_fallback_recorded_when_api_drift_forces_cpu(
+    fake_weight_files, monkeypatch, caplog
+) -> None:
+    """#2582 regression: when kokoro-onnx lacks Kokoro.from_session (API drift),
+    the `else` branch falls back to Kokoro(...), which ALWAYS forces CPU
+    regardless of the resolved providers. When CUDA was requested
+    (build_providers contains CUDAExecutionProvider), this is a confirmed
+    fallback that must be recorded in _cuda_verification_state, not left
+    silent. The detail message must distinguish this cause (API drift) from
+    the self-test's own "session inspection revealed CPU" cause."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    # Kokoro stub WITHOUT from_session classmethod -- simulates API drift
+    class _ApiDriftKokoro:
+        """kokoro-onnx without from_session: the else branch path."""
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _ApiDriftKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            engine._ensure_loaded("v1", device="cuda:0")
+
+        # The load succeeded (Kokoro is resident) despite the API drift
+        assert engine._kokoro is not None
+
+        # _cuda_verification_state must record the confirmed fallback
+        assert main._cuda_verification_state["checked"] is True
+        assert main._cuda_verification_state["verified"] is False
+        detail = main._cuda_verification_state["detail"]
+        assert detail is not None
+
+        # Detail must mention API drift as the reason for the fallback
+        assert "API drift" in detail, \
+            f"Detail must mention API drift, got: {detail}"
+        assert "from_session" in detail, \
+            f"Detail must mention from_session, got: {detail}"
+        assert "always forces CPU" in detail, \
+            f"Detail must explain why it forces CPU, got: {detail}"
+
+        # A warning about the API drift must be logged
+        assert any(
+            "kokoro-onnx has no Kokoro.from_session" in rec.message
+            for rec in caplog.records
+        ), f"Expected API drift warning, got: {[r.message for r in caplog.records]}"

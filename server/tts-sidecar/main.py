@@ -3299,6 +3299,7 @@ class KokoroEngine(Engine):
             }
 
     def _ensure_loaded(self, model: str, device: Optional[str] = None) -> None:
+        global _cuda_verification_state
         if self._kokoro is not None:
             return
         # Capacity-aware placement (task 2, vram-aware-placement plan): a
@@ -3471,6 +3472,24 @@ class KokoroEngine(Engine):
                     "resolved providers=%s.",
                     build_providers,
                 )
+                # Record CUDA fallback if CUDA was requested but the API-drift
+                # path forces CPU regardless (#2582: confirmed fallback, not just
+                # silent one). This is a different cause than
+                # `_cuda_selftest_or_warn`'s "session inspection revealed CPU",
+                # so detail text must be distinguishable.
+                if "CUDAExecutionProvider" in build_providers:
+                    detail = (
+                        "Kokoro's from_session API is unavailable (kokoro-onnx API drift) -- "
+                        "CUDA was requested but Kokoro(...) always forces CPU on this path."
+                    )
+                    _cuda_verification_state = {
+                        "checked": True,
+                        "verified": False,
+                        "detail": detail,
+                    }
+            else:
+                # CUDA was not requested, do not touch _cuda_verification_state
+                pass
             kokoro = Kokoro(self._model_path, self._voices_path)
 
         # Enumerate the voice manifest. The API has drifted across kokoro-
