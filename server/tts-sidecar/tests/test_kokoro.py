@@ -1959,6 +1959,68 @@ def test_kokoro_unload_drops_state(fake_kokoro_module, fake_weight_files) -> Non
     assert "af_heart" in engine._voices
 
 
+def test_kokoro_unload_clears_cuda_verification_state(
+    fake_weight_files, monkeypatch, isolated_cuda_verification_state
+) -> None:
+    """unload() must reset _cuda_verification_state to clean defaults to avoid
+    stale CUDA verification results leaking across unload/reload cycles
+    (issue #2719). After unload, /health should not report a prior load's
+    verification result until a fresh load's self-test runs."""
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+
+    class _CudaLandingKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = session
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    class _CudaSession:
+        def get_providers(self):
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _CudaLandingKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+
+        engine = main.KokoroEngine()
+        # Load with CUDA, which runs the self-test and sets _cuda_verification_state.
+        engine._ensure_loaded("v1", device="cuda:0")
+        assert engine._kokoro is not None
+        # Verify self-test ran and set the state to verified=True.
+        assert main._cuda_verification_state["verified"] is True
+        assert main._cuda_verification_state["detail"] is None
+
+        # Unload and verify the state is reset to clean defaults.
+        engine.unload()
+        assert main._cuda_verification_state["verified"] is None
+        assert main._cuda_verification_state["detail"] is None
+
+
 # ── HTTP integration ─────────────────────────────────────────────────────
 
 @pytest.fixture

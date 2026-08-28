@@ -3596,6 +3596,16 @@ class KokoroEngine(Engine):
         # __init__ avoids reintroducing a value that reads as a real
         # placement if that gate is ever loosened.
         self._resolved_device = None
+        global _cuda_verification_state
+        # Clear CUDA verification state to avoid stale reads across unload/reload
+        # cycles (#2719). The next load's _ensure_loaded will re-run the self-test
+        # and repopulate with the current load's actual state, so a stale verified=True
+        # or verified=False from a previous load does not leak into /health or other
+        # callers until the new load's verification is fresh.
+        _cuda_verification_state = {
+            "verified": None,
+            "detail": None,
+        }
         log.info("Kokoro model unloaded.")
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
