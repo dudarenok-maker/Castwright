@@ -1143,7 +1143,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
     expect(mismatchWarnings()).toHaveLength(0);
   });
 
-  it('does not warn when expectedDevice matches one of the split devices', async () => {
+  it('warns when split touches ANY device outside the expected one (.every() semantics)', async () => {
     fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
     detectOllamaGpuSplitMock.mockResolvedValue({
       reachable: true,
@@ -1156,12 +1156,14 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
     const { OllamaAnalyzer } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
 
-    await analyzer.runStage1Chapter('m_gpu_expecteddevice_split_match', 1, '# prompt', {});
+    await analyzer.runStage1Chapter('m_gpu_expecteddevice_split_mismatch_any', 1, '# prompt', {});
     const mismatchWarnings = () =>
       warnSpy.mock.calls.filter(
         ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('GPU device mismatch'),
       );
-    expect(mismatchWarnings()).toHaveLength(0);
+    expect(mismatchWarnings()).toHaveLength(1);
+    expect(mismatchWarnings()[0][0]).toContain('expected GPU 0');
+    expect(mismatchWarnings()[0][0]).toContain('detected on GPU 0,1');
   });
 });
 

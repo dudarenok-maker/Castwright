@@ -1,7 +1,7 @@
-/* Detects whether the resident Ollama analyzer model's VRAM is currently
-   split across more than one physical GPU, and whether it would have fit on
-   a single device. Ollama's own /api/ps reports one aggregate VRAM number
-   per resident model (see analyzer/ollama-residency.ts) and cannot see
+/* Detects whether resident Ollama model(s) VRAM is currently split across
+   more than one physical GPU, and whether it would have fit on a single
+   device. Ollama's own /api/ps reports one aggregate VRAM number per
+   resident model (see analyzer/ollama-residency.ts) and cannot see
    per-device placement, so this shells out to nvidia-smi's
    --query-compute-apps view instead, which lists (GPU, process) pairs.
    Same never-throw, best-effort contract as gpu/capacity-probe.ts and
@@ -37,10 +37,10 @@ export interface OllamaGpuSplitResult {
   totalUsedMb: number;
   wouldFitSingleDevice: boolean;
   /** Ollama processes exist but their per-process used_memory was unreadable
-      (e.g. [N/A] under WDDM driver model) — probe is inconclusive. Split between
-      `false` (no split found) is crucial: dataUnavailable: true + deviceIndices: []
-      means "can't determine", while split: false + dataUnavailable: false means
-      "genuinely no split". */
+      (e.g. [N/A] under WDDM driver model) — probe is inconclusive. The distinction
+      between split: true and split: false (no split found) is crucial:
+      dataUnavailable: true + split: false means "can't determine", while
+      split: false + dataUnavailable: false means "genuinely no split". */
   dataUnavailable: boolean;
 }
 
@@ -225,13 +225,42 @@ export async function detectOllamaGpuSplit(opts?: { fresh?: boolean }): Promise<
   // Collect all GPUs and VRAM from split PIDs (PIDs that span 2+ GPUs)
   const splitPids = Array.from(byPid.entries()).filter(([, entry]) => entry.indices.size >= 2);
   if (splitPids.length === 0) {
+    // No split found. If Ollama processes are resident (each on a single GPU),
+    // report which GPU(s) they're on so mismatch checks can fire.
+    const nonSplitPids = Array.from(byPid.entries()).filter(([, entry]) => entry.indices.size === 1);
+    if (nonSplitPids.length === 0) {
+      // No resident Ollama processes found (shouldn't reach here given ollamaRows.length > 0,
+      // but defend against edge cases).
+      const result = {
+        reachable: true,
+        split: false,
+        deviceIndices: [],
+        totalUsedMb: 0,
+        wouldFitSingleDevice: false,
+        dataUnavailable,
+      };
+      cache = { at: now, result };
+      return result;
+    }
+
+    // Collect all unique device indices from non-split PIDs
+    const allIndicesSet = new Set<number>();
+    let totalUsedMb = 0;
+    for (const [, entry] of nonSplitPids) {
+      for (const idx of entry.indices) {
+        allIndicesSet.add(idx);
+      }
+      totalUsedMb += entry.totalMb;
+    }
+
+    const deviceIndices = [...allIndicesSet].sort((a, b) => a - b);
     const result = {
       reachable: true,
       split: false,
-      deviceIndices: [],
-      totalUsedMb: 0,
+      deviceIndices,
+      totalUsedMb,
       wouldFitSingleDevice: false,
-      dataUnavailable: false,
+      dataUnavailable,
     };
     cache = { at: now, result };
     return result;

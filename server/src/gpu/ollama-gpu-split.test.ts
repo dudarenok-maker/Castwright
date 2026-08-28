@@ -85,7 +85,7 @@ describe('parseGpuFreeCsv', () => {
 });
 
 describe('detectOllamaGpuSplit', () => {
-  it('single GPU, all Ollama usage on index 0 -> split: false, no split data to report', async () => {
+  it('single GPU, all Ollama usage on index 0 -> split: false, device index reported', async () => {
     mockNvidiaSmi({
       computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
       indexUuid: '0, GPU-aaa\n',
@@ -96,8 +96,8 @@ describe('detectOllamaGpuSplit', () => {
     expect(result).toEqual({
       reachable: true,
       split: false,
-      deviceIndices: [],
-      totalUsedMb: 0,
+      deviceIndices: [0], // Single non-split PID on GPU 0
+      totalUsedMb: 5000,
       wouldFitSingleDevice: false,
       dataUnavailable: false,
     });
@@ -107,6 +107,7 @@ describe('detectOllamaGpuSplit', () => {
     mockNvidiaSmi({
       // GPU 0 holds PID 1 (5000MB), GPU 1 holds PID 2 (3000MB).
       // These are two different Ollama processes/models, not one model split.
+      // When there's no split but multiple resident PIDs, deviceIndices should list all resident GPUs.
       computeApps: 'GPU-aaa, 1, ollama.exe, 5000\nGPU-bbb, 2, ollama_llama_server, 3000\n',
       indexUuid: '0, GPU-aaa\n1, GPU-bbb\n',
       free: '0, 3000\n1, 500\n',
@@ -116,8 +117,29 @@ describe('detectOllamaGpuSplit', () => {
     expect(result).toEqual({
       reachable: true,
       split: false,
-      deviceIndices: [],
-      totalUsedMb: 0,
+      deviceIndices: [0, 1], // Both resident GPUs listed
+      totalUsedMb: 8000,      // Sum of both PIDs
+      wouldFitSingleDevice: false,
+      dataUnavailable: false,
+    });
+  });
+
+  it('single Ollama PID on a non-expected GPU (not split, wrong device) -> split: false, deviceIndices populated', async () => {
+    mockNvidiaSmi({
+      // One Ollama model on GPU 1 (not the default GPU 0).
+      // This is the REGRESSION TEST for srv-2367: the detector must report
+      // which GPU it's actually on so the mismatch warnings can fire.
+      computeApps: 'GPU-bbb, 1, ollama.exe, 5000\n',
+      indexUuid: '0, GPU-aaa\n1, GPU-bbb\n',
+      free: '0, 3000\n1, 500\n',
+    });
+
+    const result = await detectOllamaGpuSplit();
+    expect(result).toEqual({
+      reachable: true,
+      split: false,
+      deviceIndices: [1], // Must report the actual device, not empty
+      totalUsedMb: 5000,
       wouldFitSingleDevice: false,
       dataUnavailable: false,
     });
@@ -198,7 +220,10 @@ describe('detectOllamaGpuSplit', () => {
 
   it('Ollama processes detected but used_memory unreadable ([N/A] under WDDM) -> dataUnavailable: true', async () => {
     mockNvidiaSmi({
-      // Ollama rows present but used_memory is [N/A] (WDDM driver limitation)
+      // Ollama rows present but used_memory is [N/A] (WDDM driver limitation).
+      // The raw "GPU-aaa, 1, ollama.exe, [N/A]" line is structurally valid but
+      // VRAM is unparseable, so all such rows are skipped and ollamaRows ends up empty.
+      // This triggers the "no Ollama rows found" path, returning empty indices.
       computeApps: 'GPU-aaa, 1, ollama.exe, [N/A]\nGPU-bbb, 1, ollama_llama_server, [Not Supported]\n',
       indexUuid: '0, GPU-aaa\n1, GPU-bbb\n',
       free: '0, 3000\n1, 500\n',

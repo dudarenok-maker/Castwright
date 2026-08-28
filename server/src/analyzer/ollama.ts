@@ -866,12 +866,14 @@ export class OllamaAnalyzer implements Analyzer {
           }
         }
 
-        /* Check for expectedDevice mismatch: either a split touching an
-           unexpected device, or a single device that isn't the expected one. */
+        /* Check for expectedDevice mismatch: either a split touching ANY device
+           outside the expected one, or a single device that isn't the expected one.
+           Use .every() semantics (not .includes()): a split that touches ANY
+           device outside expected counts as a mismatch, just like on the frontend. */
         if (expectedDevice && splitResult.reachable) {
           const expectedIndex = Number(expectedDevice);
           const isMismatch =
-            (splitResult.split && !splitResult.deviceIndices.includes(expectedIndex)) ||
+            (splitResult.split && !splitResult.deviceIndices.every((idx) => idx === expectedIndex)) ||
             (!splitResult.split && splitResult.deviceIndices.length === 1 && splitResult.deviceIndices[0] !== expectedIndex);
 
           if (isMismatch) {
