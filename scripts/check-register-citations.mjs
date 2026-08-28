@@ -1637,6 +1637,7 @@ function gitLsFiles() {
     cwd: fileURLToPathSafe(REPO_ROOT),
     env: scrubGitEnv(),
     encoding: 'utf8',
+    windowsHide: true,
   });
   return out.split('\n').filter(Boolean);
 }
