@@ -1057,8 +1057,9 @@ Already shipped, consumed as-is (do not re-declare or re-implement):
     lookups: { inBaseline, inMine, baselineInMine, workingInBaseline }
   PUBLISH_TOKEN_BASELINE_ERROR / _PUBLISHED_ERROR / _WORKING_ERROR   (three, not two)
 
-**Nine facts this task must not get wrong** *(1-7 as originally written, with 2
-corrected; 8 and 9 added after the code was executed and reviewed):*
+**Ten facts this task must not get wrong** *(1-7 as originally written, with 2
+corrected; 8 and 9 added after the code was executed and reviewed; 10 after it
+merged):*
 
 1. **Three designs have died on a hand-maintained identity field** — a bare
    counter, a branch name, and a nonce that the operator had to remember to
@@ -1108,6 +1109,22 @@ corrected; 8 and 9 added after the code was executed and reviewed):*
    writes to the real repository — observed twice, taking 3,979 tracked files
    down to 1. Its first test asserts the scrub works; that assertion is the only
    thing that would catch a regression, because the failure is silent.
+
+   Two corrections to that account, both from the PR #2740 review. The scrub is
+   delegated to `scrubGitEnv` (`scripts/git-env.mjs`) and matches
+   **case-insensitively** — git honours a lowercase `git_dir` identically, and
+   a `startsWith('GIT_')` filter leaves that survivor in place. And an ordinary
+   hook does **not** export `GIT_DIR`; it exports `GIT_INDEX_FILE` (that
+   helper's own measured #2216 note), which is what actually did the damage.
+
+10. **This task carries a review debt it did not incur.** `publish-token.mjs`
+    merged in PR #2740 with **no caller** — only `bumpToken`/`parsePublishToken`
+    are used, by the stamper. Its comparator was reviewed as *code*, hard, but
+    never as *wiring*, and the reviewer named that gap: the module's own riskiest
+    property is the four-lookup contract in fact 8, and no PR has yet exercised
+    it against a real caller. **So this task's review is not "did the wiring
+    land" — it is the first review of the module in use.** Budget for that
+    rather than treating the module as settled because it is on `main`.
 
 - [ ] **Step 1: Write the failing tests**
 

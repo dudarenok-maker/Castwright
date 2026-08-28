@@ -307,6 +307,26 @@ test('18g STALE LANE: told to bump, obeys, and must NOT go green', () => {
   assert.notDeepEqual(step2, [], 'bumping must not clear a staleness STOP');
 });
 
+test('18g2 the staleness STOP outranks the both-absent one, not just the counters', () => {
+  // The OTHER half of the ordering claim beside the !baselineInMine guard. 18g
+  // pins that it precedes the COUNTER gates; nothing pinned that it precedes
+  // the both-absent gate, so moving it below that one survived mutation. Both
+  // messages say "rebase", so this is message SELECTION rather than a
+  // correctness hole — but an unpinned ordering claim is one edit from being
+  // false, and the comment asserts it.
+  const e = cmp({
+    working: T(49, 'mine'),
+    published: T(48, 'other'),
+    baseline: T(47, 'mainn'),
+    ...L({ inBaseline: false, inMine: false, baselineInMine: false }),
+  });
+  assert.ok(
+    e.some((x) => x.includes("origin/main's live-view nonce")),
+    `staleness must be diagnosed ahead of "another lane published": ${e.join('|')}`,
+  );
+  assert.ok(!e.some((x) => x.includes('another lane published')), e.join('|'));
+});
+
 test('18h green REQUIRES the baseline nonce to be in my history', () => {
   const base = { working: T(49, 'ccc'), published: T(48, 'bbb'), baseline: T(47, 'aaa') };
   assert.deepEqual(cmp({ ...base, ...L({ inBaseline: false, inMine: true }) }), []);
@@ -403,6 +423,24 @@ test('18l bumpToken REFUSES a nonce its own parser would reject', () => {
   // permanently, so the round trip is the real assertion.
   const { html } = bumpToken(src, () => 'abc123');
   assert.deepEqual(parsePublishToken(html), { n: 48, nonce: 'abc123' });
+});
+
+test('18o a non-string copy names the CALLER\'s fault, not a missing token', () => {
+  // `readFileSync` without an encoding returns a Buffer. That used to parse as
+  // null, i.e. "this file has no token", and the comparator then told the
+  // operator to restore a file that was perfectly fine.
+  const asBuffer = Buffer.from(T(48, 'aaa'), 'utf8');
+  const parsed = parsePublishToken(asBuffer);
+  assert.ok(parsed && parsed.malformed, 'a Buffer must not read as "no token"');
+  assert.match(parsed.malformed, /Buffer/);
+
+  const e = cmp({ working: asBuffer, published: T(47, 'zzz'), baseline: T(47, 'zzz') });
+  assert.ok(e.some((x) => x.includes('encoding')), e.join('|'));
+  assert.ok(!e.some((x) => x.includes('Restore it')), `must not blame the file: ${e.join('|')}`);
+
+  // ...while a genuinely absent copy keeps its own distinct diagnosis.
+  assert.deepEqual(parsePublishToken(null), null);
+  assert.deepEqual(parsePublishToken(undefined), null);
 });
 
 test('19 malformed tokens are errors, not skips', () => {
