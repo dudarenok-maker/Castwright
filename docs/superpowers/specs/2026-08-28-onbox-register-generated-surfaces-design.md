@@ -149,12 +149,16 @@ Every one of these is a **figure**, and every figure is derivable from the `.md`
 | Per-group counts (glance) | glance table `:419-430` | glance count column `:345-351` | yes — `glance`, **count column only** |
 | Per-group counts (headers) | glance table `:419-430` | nine `gcount` spans | yes — `groups` |
 | Row ID set and order | 61 `###` row headings | 68 `details.item` shells | yes — shell reconciliation |
-| **Changelog** | `:435-678`, **14 entries** | **7** callouts | yes — `changelog` |
+| **Changelog** | ~18 entries | 7 callouts, one with no `.md` source | **no — dropped, see pass-4 revision note; deferred to #2708's own follow-up** |
 
-The changelog row is the live failure. The page admits it at `:265-269`: those
-entries *"predate wave 7 and are historical only"* because the callout box *"was
-not kept current across those waves"*. Six of the other seven agree **because
-people keep checking them by hand**.
+The changelog row is the worst-drifted of the eight and was the original design's
+target, dropped in pass 4 for the reasons in the revision note above — its
+markdown→HTML conversion question was never actually answered. The page admits
+its own staleness at `:265-269`: entries *"predate wave 7 and are historical
+only"* because the callout box *"was not kept current across those waves."* The
+other seven figures in this table agree **because people keep checking them by
+hand** — precisely the failure mode this spec's three shipped targets replace
+with a generator.
 
 **The nine `gcount` spans are the finding that reshaped this spec.** They live at
 `.html:361, 917, 958, 1251, 1283, 1410, 1451, 1485, 1530`, inside each group's
@@ -647,12 +651,17 @@ four-step runbook, the canonical artifact URL and the pinned favicon are untouch
 **`--check`'s reach is exactly {generated targets} ∪ {row-shell structure} —
 everything else round-trips byte-identically and is uncheckable by
 construction.** Stated once already in §1; repeated here because this is where
-a reader looks for the coverage boundary. The `changelog` target in particular
-now **owns** content a generator can destroy that nothing else safeguards —
-PR 1's data recovery removes today's specific instance, but any future
-`.html`-only changelog edit (someone hand-fixing a typo in a callout, say)
-becomes silently unrecoverable the next time `register:build` runs, because the
-generator treats `.md` as sole source of truth for this target by design.
+a reader looks for the coverage boundary.
+
+**The changelog stays entirely hand-maintained, on both surfaces, drifting
+exactly as it does today.** Dropping the `changelog` target (pass 4) doesn't
+reduce today's drift — the `.md` and `.html` changelogs already disagree on
+entry count, wording, and at least one entry that exists on only one side —
+it just means this spec ships no mechanism that could make it worse by
+corrupting markup or silently deleting a hand-fixed typo. #2708 is unresolved,
+not neutralised; whoever designs its follow-up starts from the same
+measurements this spec made (see the pass-2/3/4 revision notes) rather than
+re-deriving them.
 
 ---
 
@@ -661,7 +670,7 @@ generator treats `.md` as sole source of truth for this target by design.
 | Issue | Outcome |
 |---|---|
 | **#2362** | **Narrowed and closed, not closed outright.** Designs 1–2 close it for the mechanism its own Problem section blames — the two hand-maintained derived-figure copies — via **option 3's intent**, not its letter. They do **not** close it for the incident that defines it: the "five vs seven" text lived in a **row body** (`.md:3889`/`.html:1383`, currently consistent — verified both read "seven" as of this writing), which designs 1–3 explicitly never touch. The close comment must say this plainly: the figure-duplication mechanism is gone, the specific historical instance is currently fine, and **the general class — row-body prose drift — is not detected by anything this spec ships**, exactly as "What this does NOT cover" already discloses. That disclosure is the honest closure standard; claiming closure without it is how this family gets its eighth ticket. |
-| **#2708** | Closed by the `changelog` target **plus** the newest-entry-vs-owed-total check. Neither stated option wins outright: "keep and curate" holds for the `.md`, "drop the duplicate" for the page, and option 1's demand for a mechanical check is met at both levels. |
+| **#2708** | **NOT closed by this spec** — the `changelog` target was dropped in pass 4 (see revision note). Left open, with a comment recording the measurements this spec made (the entry-count/label/markup drift, the `.html`-only entry with no `.md` source, the markdown→HTML conversion question) so its eventual follow-up doesn't re-derive them from scratch. |
 | **#2721** | Closed by design 6, including both prerequisites. The close comment records that the rehome half was already done; that the body's "two residuals" is six, of which two are subject-map artefacts, one is an artefact riding a genuinely-fatal line, and **three are live IDs reused for a different subject** — a case the issue's own premise didn't anticipate — fixed directly rather than annotated; that two further stale citations, structurally invisible to both checks, were found and fixed in the same round with checker-coverage expansion filed separately; and which three deferral sites were rewritten. |
 | **#2599** | Closed by Task 10 — the ancestry comparator, **not** the row-content diff the issue asked for, which the predecessor spec declined with six recorded rejections. |
 | **#2603** | Closed by Task 12 — without title matching and without self-reference detection, both named above. |
@@ -675,13 +684,13 @@ Four PRs. The split is forced by the rule the predecessor spec learned the hard 
 — **anything a checker requires of `origin/main` must be on `main` before the code
 that requires it** — and by the fact that PR 3 changes published content.
 
-**PR 1 — data and pins.** Insert the marker pairs, add the two A1 markers to the
-`.md`, pin `*.md` / `*.html` to `eol=lf` in `.gitattributes`, and recover the
-`.html:273`-only changelog entry into the `.md` blockquote (placement per
-`git log -p`/`git blame` on the `.html`, above). No generator, no checker change.
-The generator itself may import only node builtins and `scripts/lib/*` —
-`onbox-register-check.yml` runs `node scripts/*.mjs` directly with no `npm ci`
-step, so any external dependency would fail there silently until CI is run.
+**PR 1 — data and pins.** Insert the marker pairs (`strip`/`glance`/`groups`
+only — no `changelog` marker, since that target was dropped), add the two A1
+markers to the `.md`, pin `*.md` / `*.html` to `eol=lf` in `.gitattributes`. No
+generator, no checker change. The generator itself may import only node
+builtins and `scripts/lib/*` — `onbox-register-check.yml` runs
+`node scripts/*.mjs` directly with no `npm ci` step, so any external
+dependency would fail there silently until CI is run.
 
 **PR 2 — the subject map.** Fix `buildLegitimateSubjectMap` to read bodies and
 distinguish PR from issue numbers; re-measure the residuals against the fixed
@@ -695,13 +704,16 @@ generator and small enough to review on its own.
 and §5's deletions with `:1181`'s coverage transferred. `refactor` scope, so `high`
 review depth.
 
-> **PR 3 changes the published page and must say so.** The `.md` changelog has
-> 16 entries today, 17 once PR 1 recovers `.html:273`'s; the `.html` currently
-> shows 7. The first `register:build` therefore grows the changelog box from 7
-> callouts to 17 — the PR body must state the actual measured delta on that
-> branch, not an estimate computed from an earlier, wrong entry count. That is
-> a visible content change to a page an operator reads — it is declared in the
-> PR body, reviewed as content, and published in that PR.
+> **PR 3 changes the published page and must say so.** The first `register:build`
+> rewrites the six strip tiles (the owed total moves from whatever the tile
+> currently says to the real count — already a real, live discrepancy, per the
+> A1-tile note above), the glance count column, and the nine `gcount` spans, plus
+> whatever row shells have drifted out of sync. The PR body must state the actual
+> measured diff on that branch (run `register:build` and read the resulting
+> `git diff --stat`), not an estimate. That is a visible content change to a page
+> an operator reads — it is declared in the PR body, reviewed as content, and
+> published in that PR. The changelog box is untouched by this PR (target dropped,
+> see pass-4 revision note).
 
 **PR 4 — `wrongId`, the held tasks, and every correction PR 2 only measured.**
 In order: the reuse-detection rule (§6 step 2) and the ID-reuse-vs-departed
@@ -747,9 +759,6 @@ that inherits `:1181`'s role:
   re-pair their bodies** — the test that positional matching cannot pass;
 - Group H resolves via `id="gh"` despite sharing `is-soft` with Unconfirmed;
 - the `.md:51` publish-token heading is **not** treated as a row;
-- a changelog entry in the inline `Before that:` shape parses; a line matching
-  neither shape is an error;
-- the newest changelog entry's terminal count disagreeing with the owed total fails;
 - a missing marker pair is an **explicit error**, never a silent skip;
 - a CRLF-normalised input passes `--check` rather than failing on every line.
 
@@ -773,9 +782,8 @@ reused-ID branch above — both must be tested, since they resolve oppositely).
 `npm run check:onbox-register` and `npm run check:register-citations` all green with
 zero fatal findings.
 
-**Mutation, required by acceptance:** break the changelog target so it drops an
-entry (re-count against the `.md`'s actual entry total at plan time — 16 today,
-17 after PR 1's recovery — not a hardcoded "14"), and separately break one
+**Mutation, required by acceptance:** break one `strip` tile (e.g. hand-edit the
+owed total in the `.html` without touching the `.md`) and separately break one
 `gcount` span, confirming `--check` goes red for each and reporting the observed
 output. A drift guard that cannot be shown failing is not a guard.
 
@@ -805,7 +813,7 @@ output. A drift guard that cannot be shown failing is not a guard.
 - **Marker insertion (PR 1) has a validation gap until PR 3 lands.** Between PR 1
   merging and PR 3 merging, the six declared markers
   (`stat:a1-still-owed`, `stat:a1-subtotal`, and the `BEGIN/END GENERATED:<name>`
-  pairs for `strip`/`glance`/`groups`/`changelog`) sit in both files with nothing
+  pairs for `strip`/`glance`/`groups`) sit in both files with nothing
   asserting their presence, position, or well-formedness — no generator and no
   checker references them yet. State this explicitly in PR 1's body so a reviewer
   doesn't assume the markers are inert exactly because a generator doesn't exist
