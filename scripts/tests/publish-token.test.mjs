@@ -24,21 +24,28 @@ const TRAW = (n, nonce) => `<p data-published-as="${n}" data-publish-id="${nonce
 // absent — and two of those asserted GREEN, through the very fail-open this
 // suite now pins. A test that omits a lookup is not testing the healthy path;
 // it is testing whatever the missing key happens to coerce to.
-// TWO KNOWN-EQUIVALENT MUTANTS. Both were survivors in the pass-5 fix round,
-// and both are unkillable because a stronger check now runs AHEAD of them —
-// defence in depth, where the outer guard subsumes the inner. Do not "fix" the
-// suite to kill these; the reachability argument is the artifact:
+// THREE KNOWN-EQUIVALENT MUTANTS. Each is unkillable because a stronger check
+// runs AHEAD of it — defence in depth, where the outer guard subsumes the
+// inner. A deletion sweep reports them as survivors on every run, so they are
+// listed here with their reachability arguments to stop the next reviewer
+// re-investigating a settled case. Do NOT "fix" the suite to kill them; that
+// would mean weakening the guard that makes each unreachable.
 //
 //   A6  `!inBaseline && !inMine`  ->  `!inMine`
 //       Distinguishable only at inBaseline=true, inMine=false. Reaching that
-//       line requires baselineInMine=true (else the C1 STOP returned), and the
-//       consistency guard rejects `inBaseline && baselineInMine && !inMine`.
-//       So inBaseline implies inMine there, and the two forms agree.
+//       line requires baselineInMine=true (else the staleness STOP returned),
+//       and the consistency guard rejects
+//       `inBaseline && baselineInMine && !inMine`. So inBaseline implies
+//       inMine there, and the two forms agree.
 //
 //   B1  function replacement  ->  string replacement (re-opens $& expansion)
 //       Distinguishable only for a nonce containing a `$` pattern, which the
 //       minted-nonce charset check ([A-Za-z0-9_-]) refuses first. Killing B1
-//       would mean weakening B2.
+//       would mean weakening that check.
+//
+//   D1  `w.n === b.n`  ->  `w.n <= b.n`   (the un-bumped gate)
+//       Distinguishable only at w.n < b.n, and the REBASE gate immediately
+//       above returns first for exactly that state.
 const HEALTHY = {
   inBaseline: true,
   inMine: true,
@@ -276,11 +283,18 @@ test('18e workingInBaseline false is genuinely green (the guard is not always-on
 test('18f the working-nonce lookup is only consulted when w.n > b.n', () => {
   // At w.n === b.n the un-bumped verdict must win, WITHOUT demanding the third
   // lookup — otherwise every caller pays a git call on a state that cannot use it.
+  //
+  // `workingInBaseline: null` is what gives this test teeth. Inheriting the
+  // healthy `false` made the second assertion unfalsifiable: a `w.n >= b.n`
+  // mutant would consult the lookup, find `false`, decline to STOP, and fall
+  // through to the same verdict — so the test passed while the boundary it is
+  // named for could be moved. `null` is the one value whose consultation is
+  // VISIBLE, because reading it is required to fail closed.
   const e = comparePublishTokens({
     working: T(47, 'zzz'),
     published: T(47, 'zzz'),
     baseline: T(47, 'zzz'),
-    ...L({ inBaseline: true, inMine: true }),
+    ...L({ inBaseline: true, inMine: true, workingInBaseline: null }),
   });
   assert.ok(e.some((x) => x.includes('same as origin/main')), e.join('|'));
   assert.ok(!e.some((x) => x.includes('could not search history')), e.join('|'));
@@ -305,6 +319,26 @@ test('18g STALE LANE: told to bump, obeys, and must NOT go green', () => {
 
   const step2 = cmp({ working: T(49, 'nonceA2'), ...asA, ...lanes });
   assert.notDeepEqual(step2, [], 'bumping must not clear a staleness STOP');
+});
+
+test('18g2 the staleness STOP outranks the both-absent one, not just the counters', () => {
+  // The OTHER half of the ordering claim beside the !baselineInMine guard. 18g
+  // pins that it precedes the COUNTER gates; nothing pinned that it precedes
+  // the both-absent gate, so moving it below that one survived mutation. Both
+  // messages say "rebase", so this is message SELECTION rather than a
+  // correctness hole — but an unpinned ordering claim is one edit from being
+  // false, and the comment asserts it.
+  const e = cmp({
+    working: T(49, 'mine'),
+    published: T(48, 'other'),
+    baseline: T(47, 'mainn'),
+    ...L({ inBaseline: false, inMine: false, baselineInMine: false }),
+  });
+  assert.ok(
+    e.some((x) => x.includes("origin/main's live-view nonce")),
+    `staleness must be diagnosed ahead of "another lane published": ${e.join('|')}`,
+  );
+  assert.ok(!e.some((x) => x.includes('another lane published')), e.join('|'));
 });
 
 test('18h green REQUIRES the baseline nonce to be in my history', () => {
@@ -361,8 +395,37 @@ test('18j the ENTIRE green region requires baselineInMine (enumeration)', () => 
 });
 
 test('18m a counter bumped WITHOUT minting is caught with no history lookup', () => {
-  const e = cmp({ working: T(49, 'same'), published: T(48, 'same'), baseline: T(47, 'aaa') });
-  assert.ok(e.some((x) => x.includes('without minting')), e.join('|'));
+  // The default lookups put inBaseline=true, which makes the HISTORY-backed
+  // guard fire first — and its message also contains "without minting", so an
+  // earlier version of this test passed while the guard it is named for could
+  // be deleted outright. inBaseline=false is what actually reaches it.
+  const e = cmp({
+    working: T(48, 'same'),
+    published: T(47, 'same'),
+    baseline: T(47, 'aaa'),
+    ...L({ inBaseline: false }),
+  });
+  // Assert on the half of the message that is UNIQUE to this guard, not on the
+  // phrase both guards share.
+  assert.ok(
+    e.some((x) => x.includes("kept the published page's nonce")),
+    e.join('|'),
+  );
+  assert.ok(!e.some((x) => x.includes("already in origin/main's history")), e.join('|'));
+});
+
+test('18m2 the two un-minted guards are distinguishable, not interchangeable', () => {
+  // 170 is history-backed and speaks about the LIVE PAGE vs origin/main; 243
+  // needs no lookup and speaks about the WORKING file vs the live page. Both
+  // say "without minting", which is why one could stand in for the other.
+  const historyBacked = cmp({
+    working: T(49, 'mine'),
+    published: T(48, 'same'),
+    baseline: T(47, 'same'),
+    ...L({ inBaseline: true }),
+  });
+  assert.ok(historyBacked.some((x) => x.includes("already in origin/main's history")));
+  assert.ok(!historyBacked.some((x) => x.includes("kept the published page's nonce")));
 });
 
 test('18n lookups: null fails closed instead of throwing', () => {
@@ -403,6 +466,32 @@ test('18l bumpToken REFUSES a nonce its own parser would reject', () => {
   // permanently, so the round trip is the real assertion.
   const { html } = bumpToken(src, () => 'abc123');
   assert.deepEqual(parsePublishToken(html), { n: 48, nonce: 'abc123' });
+});
+
+test('18p a tokenless WORKING file is reported (the guard-sweep survivor)', () => {
+  // The other guard a deletion sweep found unprotected: nothing asserted the
+  // tokenless-working STOP positively, so it could be removed with the suite
+  // still green. Distinct from 18o, which is about a non-string value.
+  const e = cmp({ working: '<p>no token here</p>', published: T(48, 'bbb'), baseline: T(47, 'aaa') });
+  assert.ok(e.some((x) => x.includes('the tracked live view has none')), e.join('|'));
+});
+
+test('18o a non-string copy names the CALLER\'s fault, not a missing token', () => {
+  // `readFileSync` without an encoding returns a Buffer. That used to parse as
+  // null, i.e. "this file has no token", and the comparator then told the
+  // operator to restore a file that was perfectly fine.
+  const asBuffer = Buffer.from(T(48, 'aaa'), 'utf8');
+  const parsed = parsePublishToken(asBuffer);
+  assert.ok(parsed && parsed.malformed, 'a Buffer must not read as "no token"');
+  assert.match(parsed.malformed, /Buffer/);
+
+  const e = cmp({ working: asBuffer, published: T(47, 'zzz'), baseline: T(47, 'zzz') });
+  assert.ok(e.some((x) => x.includes('encoding')), e.join('|'));
+  assert.ok(!e.some((x) => x.includes('Restore it')), `must not blame the file: ${e.join('|')}`);
+
+  // ...while a genuinely absent copy keeps its own distinct diagnosis.
+  assert.deepEqual(parsePublishToken(null), null);
+  assert.deepEqual(parsePublishToken(undefined), null);
 });
 
 test('19 malformed tokens are errors, not skips', () => {

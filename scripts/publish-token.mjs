@@ -29,7 +29,20 @@ export const publishTokenRegex = () =>
   /data-published-as="([^"]*)"\s+data-publish-id="([^"]*)"/g;
 
 export function parsePublishToken(rawHtml) {
-  if (typeof rawHtml !== 'string') return null;
+  // `null`/`undefined` mean "no copy" and are the caller's to diagnose — the
+  // comparator answers each with its own named constant before parsing.
+  if (rawHtml === null || rawHtml === undefined) return null;
+  // Anything else non-string is NOT "this file has no token": it is a caller
+  // that handed us the wrong kind of value, and `readFileSync` without an
+  // encoding — which returns a Buffer — is the realistic way to get here.
+  // Returning null routed that into "the tracked live view has none. Restore
+  // it before publishing", sending an operator to repair a file that is
+  // perfectly fine. Report it as malformed so the message names the real fault.
+  if (typeof rawHtml !== 'string') {
+    return {
+      malformed: `expected HTML text but got ${rawHtml instanceof Uint8Array ? 'a Buffer — read the file with an encoding' : typeof rawHtml}`,
+    };
+  }
   const matches = [...rawHtml.matchAll(publishTokenRegex())];
   if (matches.length === 0) return null;
   if (matches.length > 1) {
