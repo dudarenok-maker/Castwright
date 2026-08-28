@@ -929,6 +929,83 @@ def test_cuda_selftest_directml_without_cuda_verified_false(
         ), "Expected a CUDA self-test warning"
 
 
+def test_cuda_selftest_fires_on_shipped_auto_path_not_just_explicit_device_pin(
+    fake_weight_files, monkeypatch, caplog
+) -> None:
+    """#2719 regression: the CUDA self-test must fire on the shipped default
+    `auto` path, not just when device= is explicitly pinned. The existing
+    `test_cuda_selftest_flags_silent_fallback_and_warns` and
+    `test_cuda_selftest_verified_true_when_cuda_actually_lands_no_warning` both
+    pass device="cuda:0" explicitly, bypassing the auto-resolution path that
+    EVERY real generation uses (KokoroEngine.synthesize, PRELOAD_KOKORO warm-up,
+    admission-off /load all use _ensure_loaded("v1") without device=).
+
+    This test exercises the real shipped path: KOKORO_DEVICE unset, device=
+    argument absent, CUDA available per onnxruntime but session lands on CPU
+    only (silent fallback). The self-test must detect this and set
+    verified=False with a warning, not silently pass because the explicit
+    device= override was missing."""
+    import logging
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)  # the shipped default
+    monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
+
+    class _CpuOnlySession:
+        """Silent fallback shape: session built with CUDA in the provider list
+        but actually only carries CPU providers."""
+        def get_providers(self):
+            return ["CPUExecutionProvider"]
+
+    class _AutoPathKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = list(_FAKE_VOICE_MANIFEST)
+            self.sess = None
+
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = list(_FAKE_VOICE_MANIFEST)
+            instance.sess = _CpuOnlySession()
+            return instance
+
+        def get_voices(self):
+            return list(self._voices)
+
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
+
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _AutoPathKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["CPUExecutionProvider"]
+
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        with caplog.at_level(logging.WARNING, logger="sidecar"):
+            # The shipped default path: no device= argument, auto-resolution
+            # resolves to "cuda" (CUDA available) but session lands on CPU only.
+            engine._ensure_loaded("v1")
+
+        # Self-test must have run and detected the fallback
+        assert main._cuda_verification_state["checked"] is True
+        assert main._cuda_verification_state["verified"] is False
+        assert "CUDAExecutionProvider was requested" in main._cuda_verification_state["detail"]
+        # Verify a warning was logged
+        assert any(
+            "CUDAExecutionProvider was requested" in rec.message
+            for rec in caplog.records
+        ), f"expected a CUDA self-test warning on the auto path, got: {[r.message for r in caplog.records]}"
+
+
 def test_engine_actual_card_kokoro_auto_intent_cpu_result_is_not_fell_back(
     fake_weight_files, monkeypatch
 ) -> None:
