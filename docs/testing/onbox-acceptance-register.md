@@ -48,6 +48,41 @@ and concluded they had complied. The live view is tracked in this repo — rathe
 than living in whichever session scratchpad last built it — precisely so the
 right file is always to hand.
 
+### The publish token — never hand-edit it
+
+The live view carries a **publish token** just under its `<h1>`:
+
+```html
+<div hidden data-published-as="<counter>" data-publish-id="<nonce>"></div>
+```
+
+The counter orders publishes; the id says *which branch produced this one*. Both
+are machine-written. **Do not type either value.** Run:
+
+```
+npm run stamp:publish-token              # bumps the counter AND mints a fresh id
+npm run stamp:publish-token -- --check   # report only, changes nothing
+```
+
+**Stamp, then commit, then publish** — in that order. An uncommitted stamp
+cannot be found in git history, which is where its freshness is verified.
+
+Why a command rather than an instruction to bump the number: a token that a
+human maintains goes stale, and a stale one fails in the **green** direction —
+a competing lane whose value happens to match yours reads as your *own* earlier
+publish, so the check waves through exactly the overwrite it exists to stop.
+Bumping the counter without minting a new id is that same failure with an extra
+step. Two of the eight designs considered for this token died on precisely that,
+which is why the stamper does both halves or neither.
+
+The token is inert today: nothing reads it yet. The check that does — a
+comparison against the live page's own token, to catch a lane publishing over
+work it never saw — lands separately (#2599). It is seeded first and on its own
+because a guard cannot ship in the same change as the data it requires: the
+checker validates `origin/main`'s copy, so the data has to be on `main` already
+or the guard's first run fails on its own delivery. That is the same
+data-then-guard split the stable row IDs needed (#2629).
+
 The live view carries derived figures — owed count, per-group counts, oldest
 debt — that must be **recomputed** on every edit. Rows can be right while the
 summary strip lies. `npm run check:onbox-register` verifies the owed total, the
