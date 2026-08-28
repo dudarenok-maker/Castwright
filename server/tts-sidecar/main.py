@@ -7814,6 +7814,11 @@ class WhisperEngine:
         if self._model is None:
             return False
         self._model = None
+        # Restore the env pref (mirrors CoquiEngine/#1730 gap-3, KokoroEngine/#2631
+        # S4): `_ensure_loaded` overwrote `self._device` with the resolved card
+        # on a CPU admission, so a later reload must re-resolve from the
+        # ORIGINAL request, not stick on the last admitted card.
+        self._device = self._requested_device
         return True
 
     def _reclaim_after_drop(self) -> None:
