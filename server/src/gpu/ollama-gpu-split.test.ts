@@ -43,8 +43,8 @@ describe('parseComputeAppsCsv', () => {
   it('parses gpu_uuid,pid,process_name,used_memory rows', () => {
     const rows = parseComputeAppsCsv('GPU-aaa, 123, ollama.exe, 5000\nGPU-bbb, 456, chrome.exe, 200\n');
     expect(rows).toEqual([
-      { gpuUuid: 'GPU-aaa', processName: 'ollama.exe', usedMemoryMb: 5000 },
-      { gpuUuid: 'GPU-bbb', processName: 'chrome.exe', usedMemoryMb: 200 },
+      { gpuUuid: 'GPU-aaa', pid: '123', processName: 'ollama.exe', usedMemoryMb: 5000 },
+      { gpuUuid: 'GPU-bbb', pid: '456', processName: 'chrome.exe', usedMemoryMb: 200 },
     ]);
   });
 
@@ -72,7 +72,7 @@ describe('parseGpuFreeCsv', () => {
 });
 
 describe('detectOllamaGpuSplit', () => {
-  it('single GPU, all Ollama usage on index 0 -> split: false', async () => {
+  it('single GPU, all Ollama usage on index 0 -> split: false, no split data to report', async () => {
     mockNvidiaSmi({
       computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
       indexUuid: '0, GPU-aaa\n',
@@ -83,20 +83,38 @@ describe('detectOllamaGpuSplit', () => {
     expect(result).toEqual({
       reachable: true,
       split: false,
-      deviceIndices: [0],
-      totalUsedMb: 5000,
-      wouldFitSingleDevice: true,
+      deviceIndices: [],
+      totalUsedMb: 0,
+      wouldFitSingleDevice: false,
     });
   });
 
-  it('two GPUs split, one device free+own-share covers the total -> wouldFitSingleDevice: true', async () => {
+  it('two distinct Ollama PIDs on different GPUs (false positive) -> split: false', async () => {
     mockNvidiaSmi({
-      // GPU 0 holds 5000MB of Ollama, GPU 1 holds 3000MB (total 8000MB).
+      // GPU 0 holds PID 1 (5000MB), GPU 1 holds PID 2 (3000MB).
+      // These are two different Ollama processes/models, not one model split.
       computeApps: 'GPU-aaa, 1, ollama.exe, 5000\nGPU-bbb, 2, ollama_llama_server, 3000\n',
       indexUuid: '0, GPU-aaa\n1, GPU-bbb\n',
-      // GPU 0 has exactly 3000MB free before subtracting anything: 3000 + 5000
-      // own-share == 8000, the >= boundary (deliberately exact, not slack, so
-      // a >= -> > mutation on this comparison flips this test red).
+      free: '0, 3000\n1, 500\n',
+    });
+
+    const result = await detectOllamaGpuSplit();
+    expect(result).toEqual({
+      reachable: true,
+      split: false,
+      deviceIndices: [],
+      totalUsedMb: 0,
+      wouldFitSingleDevice: false,
+    });
+  });
+
+  it('one Ollama PID split across two GPUs -> split: true, wouldFitSingleDevice: true', async () => {
+    mockNvidiaSmi({
+      // PID 1 (ollama model) is split: 5000MB on GPU 0, 3000MB on GPU 1.
+      computeApps: 'GPU-aaa, 1, ollama.exe, 5000\nGPU-bbb, 1, ollama_llama_server, 3000\n',
+      indexUuid: '0, GPU-aaa\n1, GPU-bbb\n',
+      // GPU 0 has exactly 3000MB free: 3000 + 5000 own-share == 8000, the >=
+      // boundary (deliberately exact, not slack, so a >= -> > mutation flips red).
       free: '0, 3000\n1, 500\n',
     });
 
@@ -110,9 +128,10 @@ describe('detectOllamaGpuSplit', () => {
     });
   });
 
-  it('two GPUs split, neither device covers the total -> wouldFitSingleDevice: false', async () => {
+  it('one Ollama PID split across two GPUs, neither device covers total -> wouldFitSingleDevice: false', async () => {
     mockNvidiaSmi({
-      computeApps: 'GPU-aaa, 1, ollama.exe, 5000\nGPU-bbb, 2, ollama_llama_server, 11000\n',
+      // PID 1 (ollama model) is split: 5000MB on GPU 0, 11000MB on GPU 1.
+      computeApps: 'GPU-aaa, 1, ollama.exe, 5000\nGPU-bbb, 1, ollama_llama_server, 11000\n',
       indexUuid: '0, GPU-aaa\n1, GPU-bbb\n',
       // Neither device's free + own-share (0: 500+5000=5500, 1: 200+11000=11200) covers 16000.
       free: '0, 500\n1, 200\n',

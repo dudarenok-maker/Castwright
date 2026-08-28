@@ -22,6 +22,7 @@ export interface OllamaGpuSplitResult {
 
 interface ComputeAppRow {
   gpuUuid: string;
+  pid: string;
   processName: string;
   usedMemoryMb: number;
 }
@@ -62,10 +63,10 @@ export function parseComputeAppsCsv(raw: string): ComputeAppRow[] {
   for (const line of raw.split('\n')) {
     const parts = line.split(',').map((p) => p.trim());
     if (parts.length < 4) continue;
-    const [gpuUuid, , processName, usedMemoryRaw] = parts;
+    const [gpuUuid, pid, processName, usedMemoryRaw] = parts;
     const usedMemoryMb = Number(usedMemoryRaw);
-    if (!gpuUuid || !processName || !Number.isFinite(usedMemoryMb)) continue;
-    rows.push({ gpuUuid, processName, usedMemoryMb });
+    if (!gpuUuid || !pid || !processName || !Number.isFinite(usedMemoryMb)) continue;
+    rows.push({ gpuUuid, pid, processName, usedMemoryMb });
   }
   return rows;
 }
@@ -133,20 +134,52 @@ export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
     return { reachable: true, split: false, deviceIndices: [], totalUsedMb: 0, wouldFitSingleDevice: false };
   }
 
-  const usedByIndex = new Map<number, number>();
+  // Group rows by PID to detect whether any single Ollama model's VRAM is split
+  // across multiple GPUs. Two different PIDs on different GPUs represent
+  // two distinct models and should NOT be reported as a split.
+  interface PidInfo {
+    indices: Set<number>;
+    totalMb: number;
+    mbByIndex: Map<number, number>;
+  }
+  const byPid = new Map<string, PidInfo>();
   for (const row of ollamaRows) {
     const index = uuidToIndex.get(row.gpuUuid);
     if (index === undefined) continue;
-    usedByIndex.set(index, (usedByIndex.get(index) ?? 0) + row.usedMemoryMb);
+    if (!byPid.has(row.pid)) {
+      byPid.set(row.pid, { indices: new Set(), totalMb: 0, mbByIndex: new Map() });
+    }
+    const entry = byPid.get(row.pid)!;
+    entry.indices.add(index);
+    entry.totalMb += row.usedMemoryMb;
+    entry.mbByIndex.set(index, (entry.mbByIndex.get(index) ?? 0) + row.usedMemoryMb);
   }
 
-  const deviceIndices = [...usedByIndex.keys()].sort((a, b) => a - b);
-  const totalUsedMb = [...usedByIndex.values()].reduce((sum, mb) => sum + mb, 0);
-  const split = deviceIndices.length >= 2;
+  // Collect all GPUs and VRAM from split PIDs (PIDs that span 2+ GPUs)
+  const splitPids = Array.from(byPid.entries()).filter(([, entry]) => entry.indices.size >= 2);
+  if (splitPids.length === 0) {
+    return { reachable: true, split: false, deviceIndices: [], totalUsedMb: 0, wouldFitSingleDevice: false };
+  }
+
+  // Aggregate all device indices and VRAM from split PIDs
+  const allIndicesSet = new Set<number>();
+  let totalUsedMb = 0;
+  const totalMbByIndex = new Map<number, number>();
+  for (const [, entry] of splitPids) {
+    for (const idx of entry.indices) {
+      allIndicesSet.add(idx);
+      const mb = entry.mbByIndex.get(idx) ?? 0;
+      totalMbByIndex.set(idx, (totalMbByIndex.get(idx) ?? 0) + mb);
+    }
+    totalUsedMb += entry.totalMb;
+  }
+
+  const deviceIndices = [...allIndicesSet].sort((a, b) => a - b);
+  const split = true; // We only reach here if splitPids.length > 0
 
   const wouldFitSingleDevice = deviceIndices.some((index) => {
     const freeMb = freeByIndex.get(index) ?? 0;
-    const ownShareMb = usedByIndex.get(index) ?? 0;
+    const ownShareMb = totalMbByIndex.get(index) ?? 0;
     return freeMb + ownShareMb >= totalUsedMb;
   });
 
