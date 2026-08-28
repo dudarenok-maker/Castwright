@@ -14,8 +14,8 @@ alignment/floor check, §2's "the actual #2187 claim") already **PASSED** in tha
 aligner fix shipped in `b2be5b7b`. #2187 stays open on GitHub **solely as a bookkeeping
 step**: per §4 "Recording the outcome" below, closing it is bundled into the PR that closes
 out this run sheet's still-owed session, not because it substantively depends on that
-session's result. Group C discharges are positional and renumber (see the register's own
-Group C intro): the surviving row is **today's C2**
+session's result. Group C discharges were positional and renumbered under the pre-#2599
+register rule (IDs are stable and never reused from 2026-08-27): the surviving row is **today's C2**
 ([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253), formerly this file's C3),
 which is what the header line above names. The cloud pass (**C1**,
 [#1685](https://github.com/dudarenok-maker/Castwright/issues/1685)) is a separate, still-owed

@@ -662,7 +662,7 @@ cut **after PR 1 merges**. Verify hooks (`ls -d .husky/_`) before the first comm
 - Consumes: Task 2's marker literal.
 - Produces:
   - `parseNextIdMarker(sectionBody, letter) -> number | null`
-  - `parseAllRowHeadings(strippedText) -> Array<{ id: string, letter: string, number: number }>`
+  - `parseAllRowHeadings(strippedText) -> Array<{ id: string }>`
   - `ALLOCATION_FLOOR = 101` (exported)
   - `checkRegister` no longer reports "not contiguous from 1"; it reports
     duplicate IDs and at-or-above-`next-id` IDs.
@@ -777,7 +777,7 @@ export function parseNextIdMarker(sectionBody, letter) {
 export function parseAllRowHeadings(strippedText) {
   const found = [];
   for (const match of strippedText.matchAll(/^### ([A-Z])(\d+)(?=\s|\r?$)/gm)) {
-    found.push({ id: `${match[1]}${match[2]}`, letter: match[1], number: Number(match[2]) });
+    found.push({ id: `${match[1]}${match[2]}` });
   }
   return found;
 }

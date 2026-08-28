@@ -11,7 +11,8 @@
 > Register rows: [`onbox-acceptance-register.md` A22](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A23](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), and [A34](onbox-acceptance-register.md) (#2584/#2570 wrong-direction retirement fix, §10 below) — **B3 is discharged (2026-08-21)
 and A45 (2026-08-11); neither is in the register any more, and §7 and §9
 below are their records. Do not follow B3 or A45 to whatever now sits at
-those positions — both groups renumbered since.**
+those positions — both groups renumbered since (under the pre-#2599
+positional-ID rule; IDs are stable and never reused from 2026-08-27).**
 > Issue: [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)
 
 ---
@@ -171,8 +172,9 @@ alone; Wave 2 and Wave 3 have their own sections (§7, §8) below.
 > Register row: **B3 — discharged 2026-08-21, row removed from the register.**
 > There is no current ID for it: Group B renumbered and today's B2 is an
 > unrelated #2246 row that reused the position, so do not follow this to
-> whatever now sits at B3. The discharge evidence is the run note in §7.2
-> below.
+> whatever now sits at B3 (under the pre-#2599 positional-ID rule; IDs are
+> stable and never reused from 2026-08-27). The discharge evidence is the
+> run note in §7.2 below.
 
 ### 7.1 Purpose & scope
 
