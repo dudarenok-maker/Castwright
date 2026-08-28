@@ -201,8 +201,8 @@ and a resample alone clears it. On by default; turn it off only to isolate a
 suspected false-positive on unusual text, and switch it back on afterwards.
 See [Troubleshooting](Troubleshooting#a-coqui-line-came-out-silent-or-nearly-empty-coqui-degeneracy-guard).
 
-A read-only **Analyzer (Ollama) device** row appears at the end of this
-group when the local analyzer is active — Ollama's device isn't
+A read-only **Analyzer (Ollama) device** row appears in the "Analyzer models & endpoints"
+group (section 4, above) when the local analyzer is active — Ollama's device isn't
 app-pinnable, so it just reports what the daemon is currently doing.
 
 ## 6. Voice batching & throughput

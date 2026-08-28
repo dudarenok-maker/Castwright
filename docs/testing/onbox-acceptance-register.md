@@ -3023,6 +3023,7 @@ here mocks `execFile`, so none of it has run against a real two-GPU box. Same
 open shape as the rest of this register: the parse/threshold logic is pinned
 in isolation, but never against genuine multi-GPU `nvidia-smi` output.
 
+- **PREREQUISITE:** First confirm on this box whether `nvidia-smi --query-compute-apps=used_memory --format=csv` returns a numeric value or `[N/A]`/`[Not Supported]` under this GPU's driver model (WDDM on Windows). If `[N/A]`, the `dataUnavailable` code path should be exercised separately instead of a real split/no-split result — until the WDDM question is settled, 'no warning fired' is not evidence of anything.
 - Load a model on Ollama that is oversized for one card but fits the combined
   VRAM of both, so Ollama itself splits it across GPUs. Confirm
   `detectOllamaGpuSplit()` reports `split: true` with the correct
