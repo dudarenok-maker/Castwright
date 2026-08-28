@@ -326,6 +326,23 @@ describe('findConflictingOwner', () => {
     });
     expect(conflict?.pid).toBe(100);
   });
+
+  it('treats a live owner on a different port as non-conflicting — port-keying ensures isolation', () => {
+    // PR #2754 review finding: no test was pinning the guarantee that an owner
+    // note for port 9000 (live, foreign lineage) does not block a claim for port
+    // 9010. The port-keyed filename (tts.owner.<port>.json) makes this
+    // structurally sound, but we must verify the actual claim flow works.
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'owner' });
+    // Port 9010 check should find no conflict, even though port 9000 is live and foreign.
+    const conflict = findConflictingOwner({
+      runDir,
+      pid: 200,
+      ppid: 8,
+      port: 9010,
+      aliveFn: (pid) => pid === 100, // port 9000's owner is alive
+    });
+    expect(conflict).toBeNull();
+  });
 });
 
 describe('enforceSingleSidecarOwner', () => {
