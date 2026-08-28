@@ -845,11 +845,14 @@ test('stepTouchedByDiff: the root .mjs/.ts glob does not reach into nested direc
   );
 });
 
-// --- test:server EXTERNAL_FILES_FLOOR entries outside all three globs
-// (#2567 PR review, pass 2 finding 3) ----------------------------------------
-// launch.mjs, vite.config.ts (both bare root files), and e2e/global-teardown.ts
-// sit in trees this step has no other reason to watch. Reverting any one of
-// these three extraFiles entries reddens its own test.
+// --- test:server EXTERNAL_FILES_FLOOR entries (#2567 PR review, pass 2
+// finding 3) ------------------------------------------------------------------
+// launch.mjs and vite.config.ts (both bare root files) are now covered by the
+// *.{mjs,ts} root glob (final-pass review, #2716 — they used to be individual
+// extraFiles entries; that comment is now stale if this one doesn't say so).
+// e2e/global-teardown.ts sits in a tree this step has no other reason to
+// watch and IS still a dedicated extraFiles entry. Reverting the glob, or
+// that one extraFiles entry, reddens the corresponding test below.
 test('stepTouchedByDiff: launch.mjs is in scope for test:server', () => {
   assert.equal(stepTouchedByDiff(stepByName['test:server'], ['launch.mjs']), true);
 });

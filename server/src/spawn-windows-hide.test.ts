@@ -26,7 +26,7 @@
 import { readdirSync, readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
 const SRC_ROOT = import.meta.dirname;
 
@@ -107,6 +107,22 @@ function filterSpawningFiles(candidates: string[]): string[] {
   });
 }
 
+/* Subtract EXTERNAL_FILES_EXCLUSIONS-style entries (repo-relative paths) from
+   an absolute-path file list. Extracted as its own function so the exclusion
+   mechanism itself is exercised by a test — EXTERNAL_FILES_EXCLUSIONS is
+   empty today, which without a dedicated test leaves this whole branch
+   (pass-3/final-pass review, #2716: an "untested disarm lever") dead code
+   that could silently stop excluding, or silently start over-excluding, with
+   nothing to catch either direction. */
+function applyExclusions(files: string[], exclusions: string[]): string[] {
+  if (exclusions.length === 0) return [...new Set(files)];
+  const kept = files.filter(f => {
+    const rel = f.slice(REPO_ROOT.length + 1).replace(/\\/g, '/');
+    return !exclusions.includes(rel);
+  });
+  return [...new Set(kept)];
+}
+
 /* Build the EXTERNAL_FILES_FLOOR by scanning candidate directories for files
    that actually contain spawn calls (content-filtered via CALL_RE), then
    concatenating manual entries and subtracting exclusions.
@@ -152,14 +168,7 @@ function externalFilesFloor(): string[] {
   // Concatenate manual entries
   const withManual = [...filtered, ...EXTERNAL_FILES_MANUAL];
 
-  // Subtract exclusions (match by repo-relative path)
-  if (EXTERNAL_FILES_EXCLUSIONS.length === 0) return [...new Set(withManual)];
-  const excluded = withManual.filter(f => {
-    const rel = f.slice(REPO_ROOT.length + 1).replace(/\\/g, '/');
-    return !EXTERNAL_FILES_EXCLUSIONS.includes(rel);
-  });
-
-  return [...new Set(excluded)];
+  return applyExclusions(withManual, EXTERNAL_FILES_EXCLUSIONS);
 }
 
 const EXTERNAL_FILES_FLOOR = externalFilesFloor();
@@ -346,12 +355,22 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
        externalFilesFloor() scans — these tests call filterSpawningFiles()/
        scanFile() directly with explicit candidate lists, so real directory
        enumeration order (which a test must never depend on for determinism)
-       never enters the picture. Created fresh per test file run, removed in
-       the afterAll below — a real afterAll, not an assertion-free `it()`
-       (pass-3 review, #2716: an `it()` doesn't run under `it.only` or after
-       an earlier failing assertion with --bail, so the scratch dir leaked
-       in both cases; afterAll always runs). */
-    const scratchDir = mkdtempSync(join(tmpdir(), 'spawn-windows-hide-test-'));
+       never enters the picture. Created in a beforeAll, removed in an
+       afterAll — not an assertion-free `it()` (pass-3 review, #2716: an
+       `it()` doesn't run after an earlier failing assertion with --bail,
+       leaking the scratch dir; fixed by using a real afterAll instead).
+       Creation ALSO moved into beforeAll rather than staying a plain
+       describe-body statement (final-pass review, #2716: a plain statement
+       runs at collection time regardless of filtering, so an `it.only`/`-t`
+       filter that skips every test in this describe still created the
+       directory while skipping the afterAll that would have cleaned it up —
+       Vitest skips a suite's hooks entirely when every test in it is
+       filtered out, so keeping creation IN a hook too makes it symmetric
+       with cleanup: both run, or neither does). */
+    let scratchDir: string;
+    beforeAll(() => {
+      scratchDir = mkdtempSync(join(tmpdir(), 'spawn-windows-hide-test-'));
+    });
     afterAll(() => {
       rmSync(scratchDir, { recursive: true, force: true });
     });
@@ -407,6 +426,24 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
          path — never touching externalFilesFloor()'s own code at all). */
       const missing = join(scratchDir, 'does-not-exist.mjs');
       expect(() => filterSpawningFiles([missing])).toThrow();
+    });
+
+    /* Final-pass review, #2716: EXTERNAL_FILES_EXCLUSIONS is empty today,
+       which — without a test exercising the subtraction step itself —
+       leaves that whole branch untested: it could silently stop excluding a
+       named entry, or a future edit could silently start over-excluding,
+       and nothing would catch either direction. */
+    it('applyExclusions actually removes a matching entry and leaves the rest', () => {
+      const kept = join(REPO_ROOT, 'scripts', 'kept-example.mjs');
+      const excluded = join(REPO_ROOT, 'scripts', 'excluded-example.mjs');
+      const result = applyExclusions([kept, excluded], ['scripts/excluded-example.mjs']);
+      expect(result).toContain(kept);
+      expect(result).not.toContain(excluded);
+    });
+
+    it('applyExclusions is a no-op passthrough (deduped) when the exclusion list is empty', () => {
+      const a = join(REPO_ROOT, 'scripts', 'a.mjs');
+      expect(applyExclusions([a, a], [])).toEqual([a]);
     });
   });
 
