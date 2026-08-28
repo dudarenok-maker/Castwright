@@ -8585,10 +8585,10 @@ export async function mockGetAnalyzerGpuSplit(): Promise<AnalyzerGpuSplitRespons
   await wait(20);
   return {
     reachable: true,
-    split: false,
-    deviceIndices: [0],
-    totalUsedMb: 4200,
-    wouldFitSingleDevice: false,
+    split: true,
+    deviceIndices: [0, 1],
+    totalUsedMb: 9000,
+    wouldFitSingleDevice: true,
     dataUnavailable: false,
   };
 }

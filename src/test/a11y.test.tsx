@@ -121,10 +121,11 @@ vi.mock('../lib/api', () => ({
     getAnalyzerGpuSplit: () =>
       Promise.resolve({
         reachable: true,
-        split: false,
-        deviceIndices: [0],
-        totalUsedMb: 4200,
-        wouldFitSingleDevice: false,
+        split: true,
+        deviceIndices: [0, 1],
+        totalUsedMb: 9000,
+        wouldFitSingleDevice: true,
+        dataUnavailable: false,
       }),
   },
 }));
