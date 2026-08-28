@@ -353,7 +353,7 @@ setup rather than repeatedly loading and evicting models.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-28, 60 → 61 via PR #2719**, adding row **A38** (CUDA fallback self-test #2582).
+> **Last change: 2026-08-28, 60 → 61 via PR #2719**, adding row **A102** (CUDA fallback self-test #2582) — minted from the next-id floor; an earlier commit on this branch briefly mis-minted this as A38, a dangling ID reserved by `onbox-sitting-plan.md`, corrected before merge.
 > ([#2719](https://github.com/dudarenok-maker/Castwright/pull/2719))
 
 > **Prior change: 2026-08-27, 60 → 60 (no count change).** The **Blocked** section's
@@ -556,7 +556,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
      this yet — until the contiguity check is removed from
      scripts/check-onbox-register.mjs, an ID from this range fails the build.
      Until then, keep following the existing numbering. -->
-<!-- next-id: A102 -->
+<!-- next-id: A103 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -2963,7 +2963,7 @@ A31's). *Cost:* short — one or two renders of a Russian test sentence.
 
 ---
 
-### A38 · CUDA self-test on real ORT session detects Kokoro CPU fallback ([#2582](https://github.com/dudarenok-maker/Castwright/issues/2582), PR [#2719](https://github.com/dudarenok-maker/Castwright/pull/2719)) · **single 8 GB card, live Kokoro sidecar with real ORT session**
+### A102 · CUDA self-test on real ORT session detects Kokoro CPU fallback ([#2582](https://github.com/dudarenok-maker/Castwright/issues/2582), PR [#2719](https://github.com/dudarenok-maker/Castwright/pull/2719)) · **single 8 GB card, live Kokoro sidecar with real ORT session**
 
 PR #2719's `_cuda_selftest_or_warn` method (`server/tts-sidecar/main.py`) inspects
 the real ORT `InferenceSession` returned by Kokoro's first load and checks whether

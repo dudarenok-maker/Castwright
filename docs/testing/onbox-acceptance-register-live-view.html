@@ -198,7 +198,7 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-28, 60 → 61 via PR #2719</b>, adding row A38 (CUDA fallback self-test #2582).
+    <b>Last change: 2026-08-28, 60 → 61 via PR #2719</b>, adding row A102 (CUDA fallback self-test #2582).
     <br><b>Previous change: 2026-08-27, 59 → 60 via PR #2688</b>, adding row A37 (#2059's
     audible effect, not yet run).
     <br><b>Prior change: 2026-08-27 (on-box wave 9c, branch <code>chore/ops-onbox-wave9</code>), 58 → 59.</b>
@@ -858,7 +858,7 @@
     </details>
 
     <details class="item">
-      <summary><span class="num">A38</span><span class="iname">CUDA self-test on real ORT session detects Kokoro CPU fallback</span><span class="risk">single 8 GB card, live Kokoro sidecar with real ORT session</span><span class="chev">›</span></summary>
+      <summary><span class="num">A102</span><span class="iname">CUDA self-test on real ORT session detects Kokoro CPU fallback</span><span class="risk">single 8 GB card, live Kokoro sidecar with real ORT session</span><span class="chev">›</span></summary>
       <div class="body">
         <p>PR #2719's <code>_cuda_selftest_or_warn</code> method (<code>server/tts-sidecar/main.py</code>) inspects the real ORT <code>InferenceSession</code> returned by Kokoro's first load and checks whether CUDA was requested but the session landed on CPU instead. The verification result (<code>cuda_verified</code>, <code>cuda_verification_detail</code>) rides the existing <code>_ensure_loaded</code> load at the <code>from_session</code> code path and is surfaced through <code>/health</code> → <code>/api/info</code> → the device-panel amber warning in the UI. Unit tests mock <code>InferenceSession</code> and cannot prove the mechanism against a genuine CUDA→CPU degradation on real hardware.</p>
         <ul>
