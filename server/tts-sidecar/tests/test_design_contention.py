@@ -241,11 +241,14 @@ def test_mint_variant_widens_guard_to_design_still_loading() -> None:
     Mutation that must fail this (verified per this ticket's acceptance
     criteria): revert the guard to `self._design is not None`. `_design` is
     still `None` in this test's setup, so the reverted guard is `False` and
-    `unload_design` is never called — `mocked_unload.assert_called_once()`
-    below then fails.
+    `unload_design` is never called. Code then proceeds to `_ensure_base17_for_mint()`,
+    which calls `_ensure_base17_loaded()` → `_load_qwen_model()`. With torch mocked
+    as a MagicMock, the `isinstance(e, getattr(torch.cuda, "OutOfMemoryError", ()))`
+    check at main.py:5811 raises `TypeError: isinstance() arg 2 must be a type`
+    (the mocked torch.cuda returns a MagicMock, not a real type), which proves the
+    guard was skipped (unload_design was never called, so execution reached the
+    problematic code path).
     """
-    import os
-
     engine = main.QwenEngine()
     engine._design = None  # design_voice() has claimed in-flight but not assigned yet
 

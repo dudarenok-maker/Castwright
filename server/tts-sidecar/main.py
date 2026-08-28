@@ -6806,10 +6806,10 @@ class QwenEngine(Engine):
         # function, still inside the block below.
         #
         # #2678 — Tradeoff: the widened guard (below) includes `_design_in_flight.busy`,
-        # so if mint_variant arrives while VoiceDesign is still loading (~150s in-flight),
-        # we wait for the load to finish then immediately evict it. This undoes the
-        # "kept warm across a cast-review session" behavior in favor of preventing
-        # render stalls during heavyweight design runs.
+        # so if mint_variant arrives while VoiceDesign is in flight, `unload_design()` waits
+        # (bounded by 150s) for the design to finish (the full design_voice() call, not just
+        # the model load) before evicting. This undoes the "kept warm across a cast-review
+        # session" behavior in favor of preventing render stalls during heavyweight design runs.
         if self._design is not None or self._design_in_flight.busy:
             log.info("Evicting resident Qwen VoiceDesign to free VRAM for 1.7B-Base mint.")
             self.unload_design()
@@ -7245,11 +7245,12 @@ class QwenEngine(Engine):
         # designing — free the heavy VoiceDesign model so it can't squeeze
         # generation VRAM. Auditions inside design_voice use _base directly
         # (not synthesize), so the design→refine loop stays warm. Also handles
-        # the case where design_voice() is still loading the model (busy): waits
-        # up to ~150s for the load to finish, then immediately evicts. This
-        # tradeoff costs the warm-reuse across a cast-review session for any
-        # render that arrives mid-design-load, but it keeps render from
-        # starving during heavyweight audition runs (#2678). No-op once freed.
+        # the case where design_voice() is in flight: `unload_design()` waits
+        # (bounded by 150s) for `_design_in_flight` to clear (the full
+        # design_voice() call, not just the model load) before evicting. This
+        # tradeoff costs warm-reuse across a cast-review session for any render
+        # arriving mid-design, but it keeps render from starving during
+        # heavyweight audition runs (#2678). No-op once freed.
         # Must precede any _synth_lock acquire (unload_design takes that
         # lock; it is non-reentrant).
         if self._design is not None or self._design_in_flight.busy:
@@ -7364,10 +7365,11 @@ class QwenEngine(Engine):
         # follow-up; the single-synth path is guarded.
         # See synthesize(): a real batch synth means generation, so free the
         # transient VoiceDesign model first. Like synthesize(), also handles
-        # design_voice() still loading the model: waits ~150s for load, then
-        # immediately evicts (trading warm-reuse for generation isolation #2678).
-        # No-op once freed. Before any _synth_lock acquire — the lock is
-        # non-reentrant.
+        # design_voice() in flight: `unload_design()` waits (bounded by 150s)
+        # for `_design_in_flight` to clear (the full design_voice() call, not
+        # just the model load) before evicting (trading warm-reuse for
+        # generation isolation #2678). No-op once freed. Before any _synth_lock
+        # acquire — the lock is non-reentrant.
         if self._design is not None or self._design_in_flight.busy:
             self.unload_design()
         if not items:
