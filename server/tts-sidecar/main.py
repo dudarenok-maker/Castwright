@@ -5339,6 +5339,18 @@ class DesignContentionTimeoutError(RuntimeError):
     wedged, not merely slow — the caller should retry the synth shortly."""
 
 
+class Base17ContentionTimeoutError(RuntimeError):
+    """`design_voice()` needed to evict the resident 1.7B-Base model, but a
+    base17 load/mint stayed in flight past `unload_base17()`'s bounded wait.
+
+    Mirrors `DesignContentionTimeoutError`'s "design wins" policy in the same
+    direction, not the reverse: a VoiceDesign load is user-initiated and
+    interactive (someone watching it render in cast review), so it must not
+    be starved waiting on a batch mint. Reaching this error means the base17
+    load outlived even that bounded wait, i.e. it is genuinely wedged, not
+    merely slow — the caller should retry the design shortly."""
+
+
 class Base17UnavailableError(Exception):
     """The 1.7B-Base model can't be used for an anchored mint for a
     deterministic reason the separate VoiceDesign model won't share. The
@@ -5366,6 +5378,17 @@ class Base17UnavailableError(Exception):
 # fixed conservative bound is simpler and this is the only caller).
 _DESIGN_CONTENTION_WAIT_S_DEFAULT = 150.0
 _DESIGN_CONTENTION_POLL_S_DEFAULT = 0.5
+
+# #2752 — how long `unload_base17()` waits for an in-flight base17 load/mint
+# to clear before giving up and raising `Base17ContentionTimeoutError`
+# instead of silently nulling `_base17` out from under it. Kept below
+# `_DESIGN_CONTENTION_WAIT_S_DEFAULT`: a plain base17 load/mint is lighter
+# than a full VoiceDesign forward+load, so it doesn't need the same headroom.
+# Not exposed as an env knob (deliberately — see CLAUDE.md's "new env var
+# MUST be a knob" rule this avoids triggering; a fixed conservative bound is
+# simpler and this is the only caller).
+_BASE17_CONTENTION_WAIT_S_DEFAULT = 60.0
+_BASE17_CONTENTION_POLL_S_DEFAULT = 0.5
 
 
 class QwenEngine(Engine):
@@ -5904,13 +5927,54 @@ class QwenEngine(Engine):
                 raise  # OOM → generic 500, NEVER a fallback
             raise Base17UnavailableError("corrupt") from e
 
-    def unload_base17(self) -> None:
+    def unload_base17(
+        self,
+        wait_seconds: float = 0.0,
+        poll_seconds: float = _BASE17_CONTENTION_POLL_S_DEFAULT,
+    ) -> None:
         """Drop the 1.7B-Base model and free VRAM. Idempotent.
 
         Mirrors `unload` but targets only the 1.7B-Base. Acquires `_synth_lock`
         before nulling — same rationale as `unload` (prevents a concurrent
-        synth forward from seeing a null mid-generate)."""
+        synth forward from seeing a null mid-generate).
+
+        #2752 — mirrors `unload_design()`'s wait-then-evict shape (#2070): a
+        base17 load/mint can be in flight with `_base17` still `None` for the
+        entire load, so an unconditional null here could kill that load's
+        result out from under whatever's waiting on it. This waits (bounded
+        by `wait_seconds`, polling every `poll_seconds`) for `_base17_in_flight`
+        to clear before nulling, rather than nulling it out from under an
+        active forward. The wait is bounded, never unbounded — a genuinely
+        wedged load must not hang the caller forever — so a load still in
+        flight past `wait_seconds` raises `Base17ContentionTimeoutError`
+        instead.
+
+        `wait_seconds` DEFAULTS TO 0.0, unlike `unload_design`'s 150s default —
+        deliberately, not an oversight. The bare call (the `/unload
+        {model:'1.7b'}` Stop route, and `maybe_free_idle_base17`'s callers)
+        must stay non-blocking: #1975 already established that a Stop must
+        never queue behind a whole batch's `_base17_activity()` span (see
+        `test_unload_base17_is_not_blocked_by_a_cold_load_during_batch_synth`),
+        and `_base17_activity()` brackets the ENTIRE 1.7B batch loop, not just
+        one load — a 60s wait here would stall Stop for the whole remainder of
+        a render, not just a load. At `wait_seconds=0.0` the loop below still
+        never SILENTLY nulls a genuinely in-flight load (it raises instead of
+        looping) — only `design_voice()`'s guard opts into the bounded wait,
+        passing `_BASE17_CONTENTION_WAIT_S_DEFAULT`/`_POLL_S_DEFAULT`
+        explicitly, because that call site's whole purpose is to wait for a
+        wedged-looking-but-still-loading base17 rather than race it."""
+        deadline = time.monotonic() + wait_seconds
+        while self._base17_in_flight.busy:
+            if time.monotonic() >= deadline:
+                raise Base17ContentionTimeoutError(
+                    f"Qwen 1.7B-Base has been in flight for over "
+                    f"{wait_seconds:.0f}s — refusing to evict it out from "
+                    "under an active load. Retry the design shortly."
+                )
+            time.sleep(poll_seconds)
         with self._synth_lock:
+            if self._base17 is None:
+                return
             self._base17 = None
         _reclaim_host_and_vram()
 
@@ -6559,9 +6623,25 @@ class QwenEngine(Engine):
                     # evict above. design_voice never uses _base17, so this is safe;
                     # the idle watchdog would reclaim it eventually, but not within
                     # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
-                    if self._base17 is not None:
+                    #
+                    # #2752 — the widened guard (below) includes
+                    # `_base17_in_flight.busy`: `_base17` stays `None` for the ENTIRE
+                    # duration of a mint/synth load, so an in-flight-but-unassigned
+                    # load was previously invisible here (the #1156 OOM shape) —
+                    # `design_voice()` proceeded straight into the VoiceDesign load
+                    # with both models resident. `unload_base17()` now waits
+                    # (bounded) for that load to clear before evicting, same
+                    # "design wins" direction as `unload_design()`.
+                    if self._base17 is not None or self._base17_in_flight.busy:
                         log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
-                        self.unload_base17()
+                        # Bounded wait, not the 0.0 default — this call's whole
+                        # point is to wait out a still-loading base17 rather
+                        # than race it (see unload_base17's docstring for why
+                        # 0.0 is right everywhere else).
+                        self.unload_base17(
+                            wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT,
+                            poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT,
+                        )
                     _phase("loading-model")
                     # Capacity-aware placement (task 3, vram-aware-placement plan):
                     # a concrete `device` from an admitted reservation overrides the
