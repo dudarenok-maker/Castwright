@@ -385,6 +385,9 @@ const ALLOWLISTED_SITES: Record<string, number> = {
   // `flag('--model') || process.env.ASR_MODEL || 'base'` — matches the
   // registry default. Widened into scope by #2210.
   'server/tts-sidecar/scripts/install-whisper.mjs': 1,
+  // CASTWRIGHT_GPU_SPLIT_PROBE === '0' — no fallback operator, just a
+  // truthiness check; absent/unset is equivalent to truthy (probe on).
+  'server/src/gpu/ollama-gpu-split.ts': 1,
 };
 
 /** (file, name) -> a short, literal-or-identifier snippet that must still

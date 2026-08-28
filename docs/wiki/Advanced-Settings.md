@@ -11,7 +11,7 @@ LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
 memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
-attribution — 116 knobs across 12 groups in total. High-risk groups (marked
+attribution — 117 knobs across 12 groups in total. High-risk groups (marked
 with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
@@ -70,6 +70,7 @@ is disabled.
 | Ollama analyzer concurrency (K) | Max analyzer /api/chat calls in flight at once; also set Ollama-side OLLAMA_NUM_PARALLEL >= K | 2 | integer, min 1 | live | high |
 | Ollama warm timeout (ms) | How long to wait for a cold Ollama model to load into VRAM before reporting unreachable | 120000 | integer, min 1000 | live | low |
 | Analyzer eval-rate telemetry | Record per-pass Ollama decode speed (tok/s) to a JSONL log shown in the Admin analyzer-throughput panel | `true` | boolean | live | low |
+| GPU-split detection probe | Whether resident Ollama model VRAM is currently split across multiple physical GPUs; a costly diagnostic cached for 60s | `true` | boolean | live | low |
 
 ## 2. Analyzer chunking & truncation guards
 
