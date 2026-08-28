@@ -1394,5 +1394,5 @@ PR body must contain `Closes #1894`, a `## Summary` and a `## Test plan` section
 
 - [ ] **Step 7: Run the mandatory independent code review**
 
-Per CLAUDE.md's Before-shipping checklist step 10 and the model-routing skill: dispatch a `code-review` pass at the tier the PR's scope calls for. This PR is multi-scope (`sidecar,server`) → **high** effort, Premium tier. Triage and fold findings before merge. Do not merge on a Critical finding without re-review.
+Per CLAUDE.md's Before-shipping checklist step 10 and the model-routing skill: dispatch a `pr-review-gate` pass at the tier the PR's scope calls for. This PR is multi-scope (`sidecar,server`) → **high** effort, Premium tier. Triage and fold findings before merge. Do not merge on a Critical finding without re-review.
 

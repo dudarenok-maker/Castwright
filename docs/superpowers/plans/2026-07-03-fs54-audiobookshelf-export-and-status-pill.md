@@ -2326,5 +2326,5 @@ git commit -m "docs(docs): fs-54 release notes + BACKLOG row removal"
 
 1. Run `npm run verify` (full battery: typecheck + all tests + e2e + build) — catches anything the per-task runs missed.
 2. Open the PR with `Closes #978` in the body (per `CLAUDE.md`'s PR-gate issue-verification rule).
-3. Per `CLAUDE.md`'s model-routing rules, this PR is multi-scope (`server` + `frontend`) → **`high`** effort for the mandatory `code-review` pass once fully staged.
+3. Per `CLAUDE.md`'s model-routing rules, this PR is multi-scope (`server` + `frontend`) → **`high`** effort for the mandatory `pr-review-gate` pass once fully staged.
 4. Explicitly call out the breaking sync-folder layout change (Task 6) in the PR description, not just in the release notes.

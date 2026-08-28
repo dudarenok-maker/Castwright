@@ -372,7 +372,7 @@ def test_idle_evict_then_place():
 - [ ] **Step 1:** Write the regression plan — invariants (per-call peak reservation held only as ledger bookkeeping, `min(...)` admit formula, up-only ratchet, sidecar-down fallback, eGPU-drop reconcile, analyzer-evict-only-when-it-helps, **analyzer↔heavy-TTS temporal separation per device**, **poll-cap fails with a toast not a hang**, and the **global lock order** ledger→threading-load-lock→`_synth_lock`) + the manual acceptance walkthrough on the 1-card and 2-card boxes (attach eGPU mid-run, drop it mid-run; run an analysis and a render together on the 8 GB card and confirm they take turns with no OOM and no permanent hang).
 - [ ] **Step 2:** Append the technical + brand-voice release-notes lines.
 - [ ] **Step 3:** `npm run verify:fast:branch`; then `npm run test:sidecar` (the new pytest tiers).
-- [ ] **Step 4:** Push the branch, open the PR (`Closes #<issue>`), run the mandatory `code-review` gate (`high` — multi-scope refactor).
+- [ ] **Step 4:** Push the branch, open the PR (`Closes #<issue>`), run the mandatory gate via the `pr-review-gate` skill (`high` — multi-scope refactor).
 - [ ] **Step 5: Commit** — `git commit -m "docs(server): regression plan + release notes for capacity-aware placement"`
 
 ---

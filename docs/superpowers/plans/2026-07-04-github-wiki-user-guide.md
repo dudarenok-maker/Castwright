@@ -16,7 +16,7 @@
 - Every screenshot is captured against the **real running app** (`npm start`, real analyzer/sidecar, no mocks), using **The Coalfall Commission** demo book as the content source — never fabricated/mocked UI states (spec "Screenshot workflow").
 - File convention: `docs/wiki/images/<page-slug>/NN-caption.png`, numbered in on-page order (spec "Screenshot workflow").
 - Desktop-viewport screenshots by default; add phone/tablet only where the mobile layout genuinely differs (spec "Screenshot workflow").
-- Waves 1–4 are pure `docs/**`/root `*.md` changes and get the **docs-only CI fast-path and code-review exemption**. **Wave 0 ships `scripts/sync-wiki.mjs`, a `chore`/`build`-shaped change** — it does NOT qualify for the exemption and gets a real (`low`-effort) `code-review` pass per CLAUDE.md's model-routing table.
+- Waves 1–4 are pure `docs/**`/root `*.md` changes and get the **docs-only CI fast-path and `pr-review-gate` exemption**. **Wave 0 ships `scripts/sync-wiki.mjs`, a `chore`/`build`-shaped change** — it does NOT qualify for the exemption and gets a real (`low`-effort) `pr-review-gate` pass per CLAUDE.md's model-routing table.
 - One integration branch, `docs/docs-github-wiki`, off `main`, **pushed to origin** so every task branch can target it as a PR base. Every task below branches off that integration branch (not off `main` directly) and merges back into it via its own small PR. Rebase onto the latest `docs/docs-github-wiki` before opening each PR.
 - **`fe-46` (issue #1262) is a DEFERRED DRAFT, not in-flight work** — plan `docs/features/240-cast-first-landing-and-voice-readiness-gate.md` is `status: draft`, implementation has not started, and it's explicitly deferred until post-v1.10.0 (already cut). This corrects the spec's "landing in parallel" premise. Tasks 4 and 10 (pages 7, 11, 12) do NOT block or wait on it — both capture the current (pre-fe-46) flow now and file a re-shoot follow-up issue, re-checking fe-46's status at capture time in case it has since shipped.
 - **Image-path convention propagation:** the Wave-0 spike (Task 1) records its outcome in a committed file, `docs/wiki/.image-path-convention` (contents: literal string `relative` or `raw-main`). Every content task (2–10) reads this file before writing any image reference and substitutes the path form it specifies — this is a file check, not reliance on a human re-reading this plan's prose, so it holds even when each task is executed by a fresh subagent with no memory of Task 1.
@@ -410,7 +410,7 @@ EOF
 )"
 ```
 
-This PR is `chore`/`build`-shaped, NOT docs-only — run the mandatory `low`-effort `code-review` pass on it before merge (Global Constraints).
+This PR is `chore`/`build`-shaped, NOT docs-only — run the mandatory `low`-effort `pr-review-gate` pass on it before merge (Global Constraints).
 
 ---
 
@@ -510,7 +510,7 @@ git push -u origin docs/docs-github-wiki-wave1a-getting-started
 gh pr create --base docs/docs-github-wiki --title "docs(docs): Getting Started + Installing Castwright wiki pages" --body "Refs #1276"
 ```
 
-Pure `docs/**` change — docs-only CI fast-path and code-review exemption apply (Global Constraints).
+Pure `docs/**` change — docs-only CI fast-path and `pr-review-gate` exemption apply (Global Constraints).
 
 ---
 
@@ -1225,7 +1225,7 @@ git switch docs/docs-github-wiki && git pull
 gh pr create --base main --title "docs(docs): GitHub wiki user guide (all waves)" --body "Closes #1276"
 ```
 
-This PR's diff includes Wave 0's `scripts/sync-wiki.mjs`/`package.json` change, so by the doc-only file-set test it is technically not a pure-docs PR — but that diff already went through its own mandatory `low`-effort `code-review` pass in Task 1's PR. Don't re-run a full review here; just diff this PR against Task 1's already-reviewed PR to confirm no new non-docs changes crept in during integration, and merge via "Create a merge commit" per the repo's PR convention.
+This PR's diff includes Wave 0's `scripts/sync-wiki.mjs`/`package.json` change, so by the doc-only file-set test it is technically not a pure-docs PR — but that diff already went through its own mandatory `low`-effort `pr-review-gate` pass in Task 1's PR. Don't re-run a full review here; just diff this PR against Task 1's already-reviewed PR to confirm no new non-docs changes crept in during integration, and merge via "Create a merge commit" per the repo's PR convention.
 
 Run `npm run wiki:sync` one final time after this merges to `main`, to publish the final README-linked state.
 

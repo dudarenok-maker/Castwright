@@ -1711,7 +1711,7 @@ Body must contain:
 - Any incidental findings fixed in passing, per CLAUDE.md ("Also fixed, found in
   passing: …").
 
-- [ ] **Step 5: Mandatory `code-review` gate**
+- [ ] **Step 5: Mandatory `pr-review-gate` gate**
 
 Multi-scope (`server` + `frontend` + `api`) → **`high`** effort, Premium tier.
 Triage and fold findings before merge.

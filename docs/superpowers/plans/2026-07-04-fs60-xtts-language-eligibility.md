@@ -2203,6 +2203,6 @@ git commit -m "docs(docs): fs-60 regression plan + release notes"
 ## After all tasks: verify, review, ship
 
 1. Run `npm run verify` (typecheck + all tests + e2e + build) from the repo root.
-2. Run the mandatory adversarial review on THIS plan before implementation starts (per CLAUDE.md's model-routing skill — Opus-tier `assumption-checker` pass), and again the mandatory `code-review` pass (medium effort — single-scope `feat`, per CONTRIBUTING.md's commit-convention-based effort table) once the branch is fully staged, before opening the PR.
+2. Run the mandatory adversarial review on THIS plan before implementation starts (per CLAUDE.md's model-routing skill — Opus-tier `assumption-checker` pass), and again the mandatory `pr-review-gate` pass (medium effort — single-scope `feat`, per CONTRIBUTING.md's commit-convention-based effort table) once the branch is fully staged, before opening the PR.
 3. Open the PR with `Closes #1005` in the body (this plan delivers the XTTS-only slice fs-60 was narrowed to — a full delivery of the narrowed scope, not a partial wave).
 4. Cut the branch as `feat/server-fs60-xtts-eligibility` (multi-scope: server + frontend + sidecar — per CONTRIBUTING.md's multi-scope syntax, consider `feat/server,frontend-fs60-xtts-eligibility` if this repo's convention requires listing every touched scope).

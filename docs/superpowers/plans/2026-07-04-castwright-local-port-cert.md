@@ -1171,11 +1171,11 @@ EOF
 )"
 ```
 
-This is a multi-scope PR (server + frontend + docs) per `CONTRIBUTING.md`'s commit-convention vocabulary — per the model-routing skill, it gets the `high` effort tier for the mandatory independent `code-review` pass (no `--fix`) once fully staged, before merge. File/link a GitHub issue per the PR-gate issue-verification convention if one doesn't already exist for this work.
+This is a multi-scope PR (server + frontend + docs) per `CONTRIBUTING.md`'s commit-convention vocabulary — per the model-routing skill, it gets the `high` effort tier for the mandatory independent `pr-review-gate` pass (no `--fix`) once fully staged, before merge. File/link a GitHub issue per the PR-gate issue-verification convention if one doesn't already exist for this work.
 
-- [ ] **Step 3: Run the mandatory code-review gate**
+- [ ] **Step 3: Run the mandatory `pr-review-gate` gate**
 
-Once pushed, run the `code-review` skill at `high` effort against the full diff (no `--fix`). Triage findings by hand per `CLAUDE.md`: clear-cut bugs get fixed and pushed (which re-triggers one more review pass, capped at 2 re-review rounds); judgment-call findings route through a normal ask-first conversation with the user rather than being auto-applied.
+Once pushed, run the mandatory gate via the `pr-review-gate` skill at `high` effort against the full diff (no `--fix`). Triage findings by hand per `CLAUDE.md`: clear-cut bugs get fixed and pushed (which re-triggers one more review pass, capped at 2 re-review rounds); judgment-call findings route through a normal ask-first conversation with the user rather than being auto-applied.
 
 ---
 

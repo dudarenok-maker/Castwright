@@ -1226,9 +1226,9 @@ EOF
 
 Per CLAUDE.md's "Mandatory review gates": this PR is `refactor(server)`, single-scope — the model-routing skill's effort table puts `refactor` at **`high`** regardless of scope count.
 
-- [ ] Once pushed and the PR is open, run the `code-review` skill at `high` effort (no `--fix`) against this branch.
+- [ ] Once pushed and the PR is open, run the mandatory gate via the `pr-review-gate` skill at `high` effort (findings only, never auto-applied) against this branch.
 - [ ] Triage findings per the skill's Findings handling: fix clear-cut correctness bugs directly, commit, push (re-triggers review per the loop rules); route genuine judgment calls back to the user rather than auto-resolving.
 
 ### Step 5: Merge
 
-- [ ] Once cloud `verify.yml` and the code-review pass are both green and any findings are resolved, merge via `gh pr merge --merge` (repo merges are "Create a merge commit" only — squash/rebase disabled).
+- [ ] Once cloud `verify.yml` and the `pr-review-gate` pass are both green and any findings are resolved, merge via `gh pr merge --merge` (repo merges are "Create a merge commit" only — squash/rebase disabled).

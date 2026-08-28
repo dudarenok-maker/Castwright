@@ -358,7 +358,7 @@ Run from this worktree (corpus present); export `GEMINI_API_KEY` first (it lives
 
 ## After acceptance passes
 
-- **Whole-branch `code-review`** (Premium tier — `feat` multi-file, medium/high effort), fold findings.
+- **Whole-branch `pr-review-gate` pass** (Premium tier — `feat` multi-file, medium/high effort), fold findings.
 - **PR** `feat(server): …` with `Closes #<new issue>` (file a `type:feature`/`area:srv` issue if none exists — the auto-file gate). Fill `## Summary` + `## Test plan` (the three unit tests + the on-box eval numbers).
 - **Docs:** update `docs/features/265-attribution-eval-tuning.md` with the Target C cycle and the captured numbers; append the two release-notes entries (a raw-attribution lift is a user-visible delta).
 - **Tracked follow-up (same round):** file the RU/DE non-English eval fixture issue (hand-label one Russian + one German chapter, re-run the gate) + its thin `docs/BACKLOG.md` row.

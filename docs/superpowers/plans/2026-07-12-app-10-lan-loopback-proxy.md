@@ -1545,7 +1545,7 @@ git commit -m "docs(docs): reconcile app-10 to the loopback proxy + release note
 
 - All of Tasks 1-8 green under `cd apps/android && flutter test` and `flutter analyze` clean (the `app.yml` gate).
 - Docs reconciled (Task 9); the `app-10` row no longer claims a false "closed."
-- PR body carries `Closes #553`; mandatory `code-review` pass (single-scope `feat(app)` → `medium` effort per model-routing) triaged before merge.
+- PR body carries `Closes #553`; mandatory `pr-review-gate` pass (single-scope `feat(app)` → `medium` effort per model-routing) triaged before merge.
 - **On-device Android smoke test is owed to the owner post-merge** (standard app-* "live device acceptance owed"). Reopen #553 only if it fails on a real phone.
 
 ## Self-review (writing-plans)

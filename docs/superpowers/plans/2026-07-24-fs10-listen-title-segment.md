@@ -973,4 +973,4 @@ EOF
 
 - [ ] **Step 7: Run the mandatory review gate**
 
-Per `CLAUDE.md`'s before-shipping checklist step 9 and the model-routing skill: this is a multi-scope PR, so the `code-review` pass runs at `high` effort. Triage and fold findings before merge. Confirm `pr-title-lint`, `pr-issue-link`, and `verify.yml` are all green — including the `e2e-visual` job, which needs the linux baselines from Task 6 Step 7 merged in first.
+Per `CLAUDE.md`'s before-shipping checklist step 9 and the model-routing skill: this is a multi-scope PR, so the `pr-review-gate` pass runs at `high` effort. Triage and fold findings before merge. Confirm `pr-title-lint`, `pr-issue-link`, and `verify.yml` are all green — including the `e2e-visual` job, which needs the linux baselines from Task 6 Step 7 merged in first.
