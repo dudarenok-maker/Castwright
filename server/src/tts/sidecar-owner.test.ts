@@ -26,8 +26,8 @@ afterEach(() => {
   delete process.env.LOCAL_TTS_PORT;
 });
 
-const writeNote = (note: Record<string, unknown>): void =>
-  writeFileSync(sidecarOwnerPath(runDir), JSON.stringify(note), 'utf8');
+const writeNote = (note: Record<string, unknown>, port = 9000): void =>
+  writeFileSync(sidecarOwnerPath(runDir, port), JSON.stringify(note), 'utf8');
 
 describe('resolveSidecarPort', () => {
   it('returns 9000 when LOCAL_TTS_PORT is not set', () => {
@@ -163,12 +163,12 @@ describe('resolveSidecarPort', () => {
 
 describe('readSidecarOwner', () => {
   it('returns null when the note is absent', () => {
-    expect(readSidecarOwner(runDir)).toBeNull();
+    expect(readSidecarOwner(runDir, 9000)).toBeNull();
   });
 
   it('parses a well-formed note', () => {
     writeNote({ pid: 123, ppid: 99, port: 9000, startedAt: '2026-06-23T00:00:00.000Z' });
-    expect(readSidecarOwner(runDir)).toEqual({
+    expect(readSidecarOwner(runDir, 9000)).toEqual({
       pid: 123,
       ppid: 99,
       port: 9000,
@@ -177,20 +177,27 @@ describe('readSidecarOwner', () => {
   });
 
   it('returns null on corrupt JSON', () => {
-    writeFileSync(sidecarOwnerPath(runDir), '{ not json', 'utf8');
-    expect(readSidecarOwner(runDir)).toBeNull();
+    writeFileSync(sidecarOwnerPath(runDir, 9000), '{ not json', 'utf8');
+    expect(readSidecarOwner(runDir, 9000)).toBeNull();
   });
 
   it('returns null when pid is missing or invalid', () => {
     writeNote({ ppid: 99, port: 9000 });
-    expect(readSidecarOwner(runDir)).toBeNull();
+    expect(readSidecarOwner(runDir, 9000)).toBeNull();
     writeNote({ pid: 0, ppid: 99 });
-    expect(readSidecarOwner(runDir)).toBeNull();
+    expect(readSidecarOwner(runDir, 9000)).toBeNull();
   });
 
   it('tolerates a legacy note missing ppid/port (defaults applied)', () => {
     writeNote({ pid: 123 });
-    expect(readSidecarOwner(runDir)).toEqual({ pid: 123, ppid: -1, port: 9000, startedAt: '' });
+    expect(readSidecarOwner(runDir, 9000)).toEqual({ pid: 123, ppid: -1, port: 9000, startedAt: '' });
+  });
+
+  it('keys the note by port — two ports sharing one runDir do not clobber each other', () => {
+    writeNote({ pid: 100, ppid: 7, port: 9000, startedAt: 'a' }, 9000);
+    writeNote({ pid: 200, ppid: 8, port: 9010, startedAt: 'b' }, 9010);
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(100);
+    expect(readSidecarOwner(runDir, 9010)?.pid).toBe(200);
   });
 });
 
@@ -235,7 +242,7 @@ describe('claimSidecarOwnership', () => {
       port: 9000,
       nowIso: () => '2026-06-23T12:00:00.000Z',
     });
-    expect(readSidecarOwner(runDir)).toEqual({
+    expect(readSidecarOwner(runDir, 9000)).toEqual({
       pid: 555,
       ppid: 7,
       port: 9000,
@@ -246,25 +253,32 @@ describe('claimSidecarOwnership', () => {
   it('overwrites a prior note', () => {
     writeNote({ pid: 1, ppid: 1, port: 9000, startedAt: 'old' });
     claimSidecarOwnership({ runDir, pid: 2, ppid: 2, nowIso: () => 'new' });
-    expect(readSidecarOwner(runDir)?.pid).toBe(2);
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(2);
+  });
+
+  it('claims for two different ports on one runDir without clobbering', () => {
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a' });
+    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b' });
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(100);
+    expect(readSidecarOwner(runDir, 9010)?.pid).toBe(200);
   });
 });
 
 describe('releaseSidecarOwnership', () => {
   it('deletes the note when the pid matches', () => {
     claimSidecarOwnership({ runDir, pid: 555, ppid: 7 });
-    releaseSidecarOwnership(runDir, 555);
-    expect(readSidecarOwner(runDir)).toBeNull();
+    releaseSidecarOwnership(runDir, 555, 9000);
+    expect(readSidecarOwner(runDir, 9000)).toBeNull();
   });
 
   it('leaves a note owned by a different pid (lineage took over)', () => {
     claimSidecarOwnership({ runDir, pid: 999, ppid: 7 });
-    releaseSidecarOwnership(runDir, 555); // an older lineage process shutting down
-    expect(readSidecarOwner(runDir)?.pid).toBe(999);
+    releaseSidecarOwnership(runDir, 555, 9000); // an older lineage process shutting down
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(999);
   });
 
   it('is a no-op when no note exists', () => {
-    expect(() => releaseSidecarOwnership(runDir, 555)).not.toThrow();
+    expect(() => releaseSidecarOwnership(runDir, 555, 9000)).not.toThrow();
   });
 });
 
@@ -296,6 +310,22 @@ describe('findConflictingOwner', () => {
     const conflict = findConflictingOwner({ runDir, pid: 200, ppid: 8, aliveFn: alive });
     expect(conflict?.pid).toBe(100);
   });
+
+  it('still detects a live foreign conflict on its own port after a different port has also claimed in the same runDir', () => {
+    // Regression for #2641: both ports used to share one owner file, so a
+    // different-port write could silently overwrite the file a third
+    // claimant's conflict check needed to read.
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a' });
+    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b' });
+    const conflict = findConflictingOwner({
+      runDir,
+      pid: 300,
+      ppid: 9,
+      port: 9000,
+      aliveFn: (pid) => pid === 100,
+    });
+    expect(conflict?.pid).toBe(100);
+  });
 });
 
 describe('enforceSingleSidecarOwner', () => {
@@ -313,7 +343,7 @@ describe('enforceSingleSidecarOwner', () => {
     });
     expect(ok).toBe(true);
     expect(exit).not.toHaveBeenCalled();
-    expect(readSidecarOwner(runDir)).toEqual({ pid: 100, ppid: 7, port: 9000, startedAt: 'now' });
+    expect(readSidecarOwner(runDir, 9000)).toEqual({ pid: 100, ppid: 7, port: 9000, startedAt: 'now' });
   });
 
   it('logs an actionable FATAL line and exits(1) on a live foreign owner, WITHOUT clobbering the note', () => {
@@ -333,7 +363,7 @@ describe('enforceSingleSidecarOwner', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('already owns the TTS'));
     expect(log).toHaveBeenCalledWith(expect.stringContaining('pid 100'));
     // The incumbent owner's note must survive — we refused, we did not take over.
-    expect(readSidecarOwner(runDir)).toEqual({
+    expect(readSidecarOwner(runDir, 9000)).toEqual({
       pid: 100,
       ppid: 7,
       port: 9000,
@@ -355,7 +385,7 @@ describe('enforceSingleSidecarOwner', () => {
     });
     expect(ok).toBe(true);
     expect(exit).not.toHaveBeenCalled();
-    expect(readSidecarOwner(runDir)?.pid).toBe(200);
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(200);
   });
 
   it('takes over on a same-lineage reload (tsx watch)', () => {
@@ -372,6 +402,6 @@ describe('enforceSingleSidecarOwner', () => {
     });
     expect(ok).toBe(true);
     expect(exit).not.toHaveBeenCalled();
-    expect(readSidecarOwner(runDir)?.pid).toBe(200);
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(200);
   });
 });

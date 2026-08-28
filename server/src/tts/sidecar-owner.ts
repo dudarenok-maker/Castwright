@@ -80,7 +80,6 @@ export function resolveSidecarPort(): number {
 function sidecarPort(): number {
   return resolveSidecarPort();
 }
-const OWNER_FILE = 'tts.owner.json';
 
 export interface SidecarOwnerNote {
   /** PID of the server process that owns (supervises) the sidecar. */
@@ -95,16 +94,16 @@ export interface SidecarOwnerNote {
   startedAt: string;
 }
 
-export function sidecarOwnerPath(runDir: string): string {
-  return join(runDir, OWNER_FILE);
+export function sidecarOwnerPath(runDir: string, port: number): string {
+  return join(runDir, `tts.owner.${port}.json`);
 }
 
 /** Read + parse the owner note, or null when absent / unreadable / malformed.
     A note without a valid positive pid is treated as absent. */
-export function readSidecarOwner(runDir: string): SidecarOwnerNote | null {
+export function readSidecarOwner(runDir: string, port: number): SidecarOwnerNote | null {
   let raw: string;
   try {
-    raw = readFileSync(sidecarOwnerPath(runDir), 'utf8');
+    raw = readFileSync(sidecarOwnerPath(runDir, port), 'utf8');
   } catch {
     return null; // absent
   }
@@ -114,7 +113,7 @@ export function readSidecarOwner(runDir: string): SidecarOwnerNote | null {
     return {
       pid: p.pid,
       ppid: typeof p.ppid === 'number' ? p.ppid : -1,
-      port: typeof p.port === 'number' ? p.port : sidecarPort(),
+      port: typeof p.port === 'number' ? p.port : port,
       startedAt: typeof p.startedAt === 'string' ? p.startedAt : '',
     };
   } catch {
@@ -156,17 +155,21 @@ export function claimSidecarOwnership(opts: ClaimOpts): void {
   } = opts;
   mkdirSync(runDir, { recursive: true });
   const note: SidecarOwnerNote = { pid, ppid, port, startedAt: nowIso() };
-  writeFileSync(sidecarOwnerPath(runDir), JSON.stringify(note), 'utf8');
+  writeFileSync(sidecarOwnerPath(runDir, port), JSON.stringify(note), 'utf8');
 }
 
 /** Delete the owner note iff WE still own it (pid matches). A no-op when the
     note is absent or has been taken over by another lineage — safe to call
     unconditionally on shutdown. */
-export function releaseSidecarOwnership(runDir: string, pid: number = process.pid): void {
-  const owner = readSidecarOwner(runDir);
+export function releaseSidecarOwnership(
+  runDir: string,
+  pid: number = process.pid,
+  port: number = sidecarPort(),
+): void {
+  const owner = readSidecarOwner(runDir, port);
   if (owner && owner.pid === pid) {
     try {
-      unlinkSync(sidecarOwnerPath(runDir));
+      unlinkSync(sidecarOwnerPath(runDir, port));
     } catch {
       /* already gone */
     }
@@ -185,13 +188,17 @@ export interface ConflictCheckOpts {
     note is our own pid; the note shares our lineage (a `tsx watch` reload — same
     ppid, new pid); or the recorded owner is dead (stale note). */
 export function findConflictingOwner(opts: ConflictCheckOpts): SidecarOwnerNote | null {
-  const { runDir, pid = process.pid, ppid = process.ppid, port, aliveFn = isProcessAlive } = opts;
-  const owner = readSidecarOwner(runDir);
+  const {
+    runDir,
+    pid = process.pid,
+    ppid = process.ppid,
+    port = sidecarPort(),
+    aliveFn = isProcessAlive,
+  } = opts;
+  const owner = readSidecarOwner(runDir, port);
   if (!owner) return null;
   if (owner.pid === pid) return null; // our own note
   if (owner.ppid > 0 && owner.ppid === ppid) return null; // same stack reloading (tsx watch)
-  // #2632: port must also match — different ports are independent sidecars, not conflicts
-  if (port !== undefined && owner.port !== port) return null;
   return aliveFn(owner.pid) ? owner : null;
 }
 
@@ -229,7 +236,7 @@ export function enforceSingleSidecarOwner(opts: EnforceOwnerOpts): boolean {
       `[server] FATAL: another Castwright server (pid ${conflict.pid}) already owns the TTS ` +
         `sidecar on :${conflict.port}. Two servers managing one sidecar fight over it ` +
         `(recycle storm — generation stalls). Stop the other instance first, then restart. ` +
-        `If you are certain no other server is running, delete ${sidecarOwnerPath(runDir)} and retry.`,
+        `If you are certain no other server is running, delete ${sidecarOwnerPath(runDir, port)} and retry.`,
     );
     exit(1);
     return false; // reached only in tests where `exit` does not terminate
