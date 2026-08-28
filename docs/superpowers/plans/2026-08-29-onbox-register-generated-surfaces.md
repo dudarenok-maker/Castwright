@@ -66,9 +66,9 @@ replaced. Do not resurrect them.
 | File | Responsibility |
 |---|---|
 | `scripts/build-register-live-view.mjs` | New. Parses the `.md`, parses the current `.html`, computes the four generated targets, reconciles row shells, writes (or `--check`s) the result. |
-| `scripts/tests/build-register-live-view.test.mjs` | New. Fixture-based unit tests (own `buildRegister`/`buildLiveView` helpers, mirroring `check-onbox-register.test.mjs`'s pattern) plus the real-file `--check` run that replaces `check-onbox-register.test.mjs:1181`. |
+| `scripts/tests/build-register-live-view.test.mjs` | New. Fixture-based unit tests (own `buildRegister`/`buildLiveView` helpers, mirroring `check-onbox-register.test.mjs`'s pattern) plus a real-file `--check` run — a second, disjoint real-file check alongside `check-onbox-register.test.mjs:1181`'s own, not a replacement for it (Task 8 Step 7). |
 | `scripts/check-onbox-register.mjs` | Modified (Task 8). Loses the owed-total, glance-count, and `gcount` comparisons; keeps `checkRegister`, `--against-published`, and the shell-reconciliation-adjacent `extraOnly`/`staleExtra` machinery. |
-| `scripts/check-register-citations.mjs` | Modified (Task 3, Task 9, Task 11). `buildLegitimateSubjectMap` reads bodies; a new reuse-detection branch in `recordSubjectConflict`; `wrongId` gated behavior changes. |
+| `scripts/check-register-citations.mjs` | Modified (Task 3, Task 9, Task 11). `buildLegitimateSubjectMap` reads bodies and is exported; a new, standalone `checkIdReuse` export (not a change to `recordSubjectConflict`'s existing eligibility rule); the CLI wires both `wrongId` sources together. |
 | `scripts/publish-token.mjs` | Unchanged — `comparePublishTokens`/`nonceInHistory` already exist (PR #2740); Task 12 is the wiring, not new logic here. |
 | `.gitattributes` | Modified (Task 1). Pins `*.md`/`*.html` to `eol=lf`. |
 | `.github/workflows/onbox-register-check.yml` | Modified (Task 8). Runs `register:build -- --check` alongside the existing checker; path filter gains the new script. |
@@ -227,14 +227,26 @@ Body must state the validation gap from this task's header note. `Refs #2721`
 - Test: `scripts/tests/check-register-citations.test.mjs`
 
 **Interfaces:**
-- Consumes: `registerRows` — a `Map<id, { issues: Set<string>, body: string, … }>`
-  already built upstream (re-derive the exact row shape by reading the
-  function that builds `registerRows` before writing this task's code — it is
-  passed into `buildLegitimateSubjectMap` unchanged today).
-- Produces: `buildLegitimateSubjectMap(registerRows): Map<subject, Set<id>>` —
-  same signature, richer population. Consumed downstream by
-  `recordSubjectConflict`/`checkConflictingSubjects` (Task 9 extends the same
-  function further, in place).
+- Consumes: `registerRows` — a `Map<id, { issues: Set<number>, … }>` already
+  built upstream (`parseRegisterRows`, `check-register-citations.mjs:601-608`
+  at review time — re-derive the exact row shape before writing this task's
+  code). **`issues` holds `number`s, not strings** — `extractSubjectNumbers`
+  (`:349-355`) does `nums.add(Number(...))`. `row.body` does **not** exist
+  today; `parseRegisterRows` computes a local `rowBody` and discards it —
+  this task must add it to the stored row shape (Step 1 below), not assume it.
+- Produces: `buildLegitimateSubjectMap(registerRows): Map<number, Set<id>>` —
+  same signature, richer population, **keyed by number throughout, matching
+  the existing map's key type** (a body-scanned subject must be coerced to
+  `Number` before use as a key, or every body-derived entry is invisible to
+  every existing numeric lookup — this was the defect an earlier draft of this
+  task shipped and its own tests could not catch, because both sides of its
+  fixtures used strings). Consumed downstream by `recordSubjectConflict`'s
+  existing `legitimate.get(subject)` call sites (unchanged by this plan) and,
+  new in Task 9, by a standalone `checkIdReuse` function that calls
+  `buildLegitimateSubjectMap` itself rather than extending
+  `recordSubjectConflict`.
+- **`buildLegitimateSubjectMap` is not exported today** — add `export` to its
+  declaration in this task; the test file cannot import it otherwise.
 
 Today `buildLegitimateSubjectMap` (re-derive its exact current line — was
 `:1280` at spec-writing time) populates the map from `row.issues` only, which
@@ -247,18 +259,20 @@ is itself populated from **heading text alone**. Two gaps this task closes:
    an **issue** number — the `A32`/`#2316` case (`#2316` is a PR; A32's real
    subject, an issue, is `#2310`, already in the heading and already handled).
 
-- [ ] **Step 1: Read the current registerRows shape and row-body extraction, if any exists**
+- [ ] **Step 1: Add `body` to the stored row shape in `parseRegisterRows`**
 
-Before writing code, grep the file for where `registerRows` is built (search
-for `registerRows.set` or the function returning it) and confirm whether row
-`body` text is already captured per row. If it is not, this task also needs to
-capture it there — write down the actual current shape before Step 2, since
-this plan cannot assume it unchanged.
+`parseRegisterRows` (`check-register-citations.mjs:601-608` at review time)
+already computes a local `rowBody` variable while building each row, then
+discards it — only `issues` (and whatever else the row object already
+carries) survives into the returned `registerRows` map. Add `body: rowBody`
+to that row object literal so it survives. Re-derive the exact variable name
+and the row object's construction site before editing — do not assume
+`rowBody` is still the name at implementation time.
 
 - [ ] **Step 2: Write the failing tests**
 
 ```javascript
-test('a subject cited only in a row body resolves via buildLegitimateSubjectMap', () => {
+test('a subject cited only in a row body resolves via buildLegitimateSubjectMap, keyed by number like every other entry', () => {
   const registerRows = new Map([
     [
       'A3',
@@ -269,7 +283,8 @@ test('a subject cited only in a row body resolves via buildLegitimateSubjectMap'
     ],
   ]);
   const map = buildLegitimateSubjectMap(registerRows);
-  assert.deepEqual([...(map.get('1230') ?? [])], ['A3']);
+  assert.deepEqual([...(map.get(1230) ?? [])], ['A3']); // number key, not '1230'
+  assert.equal(map.has('1230'), false); // guards against the string-key regression directly
 });
 
 test('a PR number near a subject is not folded into the subject set', () => {
@@ -277,21 +292,23 @@ test('a PR number near a subject is not folded into the subject set', () => {
     [
       'A32',
       {
-        issues: new Set(['2310']),
+        issues: new Set([2310]),
         body: 'Fixed by PR #2316, closing #2310.',
       },
     ],
   ]);
   const map = buildLegitimateSubjectMap(registerRows);
-  assert.deepEqual([...(map.get('2310') ?? [])], ['A32']);
-  assert.equal(map.has('2316'), false);
+  assert.deepEqual([...(map.get(2310) ?? [])], ['A32']);
+  assert.equal(map.has(2316), false);
 });
 ```
 
 - [ ] **Step 3: Run to verify failure**
 
 Run: `node --test scripts/tests/check-register-citations.test.mjs`
-Expected: FAIL — `map.get('1230')` is `undefined` today (body not scanned).
+Expected: FAIL — `map.get(1230)` is `undefined` today (body not scanned; also
+`buildLegitimateSubjectMap` is not exported yet, so this currently fails at
+import time — export it as part of Step 1's shape change before running).
 
 - [ ] **Step 4: Implement the body scan with PR/issue discrimination**
 
@@ -309,13 +326,16 @@ real cases may itself have drifted.
 ```javascript
 // A number preceded by "PR " (case-sensitive — the register's own convention)
 // or linked to /pull/ is a PR reference, never a legitimate subject. Every
-// other #NNNN — bare or linked to /issues/ — is a candidate subject.
+// other #NNNN — bare or linked to /issues/ — is a candidate subject. Both
+// sets are Sets of NUMBER, matching row.issues' own element type throughout
+// — a string here would silently split the map into two parallel, mutually
+// invisible key spaces.
 const PR_NUMBER_REGEX = /\bPR\s+#(\d+)\b|\/pull\/(\d+)\b/g;
 const ANY_NUMBER_REGEX = /#(\d+)\b|\/issues\/(\d+)\b/g;
 
 function extractPrNumbers(text) {
   const prs = new Set();
-  for (const m of text.matchAll(PR_NUMBER_REGEX)) prs.add(m[1] ?? m[2]);
+  for (const m of text.matchAll(PR_NUMBER_REGEX)) prs.add(Number(m[1] ?? m[2]));
   return prs;
 }
 
@@ -323,13 +343,13 @@ function extractBodySubjects(text) {
   const prs = extractPrNumbers(text);
   const subjects = new Set();
   for (const m of text.matchAll(ANY_NUMBER_REGEX)) {
-    const n = m[1] ?? m[2];
+    const n = Number(m[1] ?? m[2]);
     if (!prs.has(n)) subjects.add(n);
   }
   return subjects;
 }
 
-function buildLegitimateSubjectMap(registerRows) {
+export function buildLegitimateSubjectMap(registerRows) {
   const map = new Map();
   const add = (subject, id) => {
     if (!map.has(subject)) map.set(subject, new Set());
@@ -480,8 +500,12 @@ export function main(
     return 0;
   }
 
-  // Always write LF — see Task 8's CRLF-handling addition to buildLiveView's
-  // caller contract; this file's job is only to persist bytes it is handed.
+  // Always write LF. In practice this is a no-op today: readNormalized
+  // already collapsed \r\n->\n on both inputs, and every string literal in
+  // this module's own source is LF (this file is itself pinned eol=lf).
+  // Kept explicit — not because it currently does anything, but because it
+  // is the one line that keeps that true if a future edit ever concatenates
+  // in raw, unnormalised text.
   writeFileSync(htmlPath, nextHtml.replace(/\r\n/g, '\n'));
   console.log(`register:build: wrote ${liveViewPath}.`);
   return 0;
@@ -505,15 +529,27 @@ if (isDirectlyInvoked(import.meta.url)) {
   const unknown = args.filter((a) => a !== '--check');
   if (unknown.length > 0) {
     console.error(`register:build: unrecognised argument(s): ${unknown.join(', ')}`);
-    process.exit(1);
+    process.exitCode = 1;
+  } else {
+    // NOT process.exit(main(...)) — scripts/lib/is-main-module.mjs's own
+    // header comment documents why: process.exit() terminates before Node
+    // flushes pending async stdout writes, which is synchronous on Windows
+    // but asynchronous on Linux/macOS, so a script with more than trivial
+    // output can truncate its own tail on CI (ubuntu-latest) while looking
+    // fine on every Windows dev box. This script's own console.log/error
+    // calls are one line each — genuinely tiny — but set exitCode rather
+    // than call exit() regardless, matching the documented safe pattern
+    // rather than relying on today's output staying short forever.
+    process.exitCode = main(DEFAULT_REGISTER_PATH, DEFAULT_LIVE_VIEW_PATH, { check });
   }
-  process.exit(main(DEFAULT_REGISTER_PATH, DEFAULT_LIVE_VIEW_PATH, { check }));
 }
 ```
 
 Check `scripts/lib/is-main-module.mjs` exists with an `isDirectlyInvoked` export
 before relying on it (`stamp-publish-token.mjs` already imports it, so it
-should) — re-derive its exact signature from that file if this import fails.
+should) — re-derive its exact signature and read its full header comment
+(not just the export line) before wiring the CLI tail, since that comment is
+what Step above's `process.exitCode` choice is based on.
 
 - [ ] **Step 4: Write the failing tests for `parseRegisterFigures` and `buildStripRegion`**
 
@@ -659,7 +695,7 @@ export function buildStripRegion(figures) {
   return `
     <div class="stat"><div class="n owed">${figures.owedTotal}</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">${figures.glanceGroups.size}</div><div class="l">Groups</div></div>
-    <div class="stat"><div class="n">${figures.blockedCount}</div><div class="l">Blocked</div></div>
+    <div class="stat"><div class="n blk">${figures.blockedCount}</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">${figures.unconfirmedCount}</div><div class="l">Unconfirmed</div></div>
     <div class="stat"><div class="n">${figures.a1StillOwed}</div><div class="l">Still owed in A1 (of ${figures.a1Subtotal})</div></div>
     <div class="stat"><div class="n">${formatOldestDebt(figures.oldestDebtRaw)}</div><div class="l">Oldest debt</div></div>
@@ -723,7 +759,13 @@ Add `"register:build": "node scripts/build-register-live-view.mjs"` to
 Update `buildRegisterFixture`'s companion live-view fixture (add a
 `buildLiveViewFixture` matching Task 4's `buildRegisterFixture`'s group
 letters, with `<!-- BEGIN GENERATED:glance:A -->99<!-- END GENERATED:glance:A -->`
-per letter) and write:
+per letter). **Also give each group section a full `<header>…</header>` plus
+at least one real `<details class="item">` shell** — Task 7 (and Task 8's
+idempotence tests) call `buildLiveViewFixture()` bare and need a
+structurally-complete page to reconcile, not just a strip/glance skeleton.
+Match the real shape:
+`<section class="group" id="ga"><header><h3 class="gtitle">…<span class="gcount">N rows</span></h3></header><details class="item"><summary><span class="num">A1</span>…</summary><div class="body">…</div></details></section>`,
+one such section per glance-table letter, and write:
 
 ```javascript
 test('buildLiveView rewrites only the glance count cells that changed', () => {
@@ -905,33 +947,103 @@ git commit -m "feat(ops): register-build generator — groups (gcount) target"
   enumerated exclusion list); Blocked's own 5 headings; Unconfirmed's bullet
   list.
 - Produces: `reconcileRowShells(mdText, html): string` — folded into
-  `buildLiveView`.
+  `buildLiveView`, called **after** the `groups` target (Task 6) has already
+  rewritten each section's `gcount` span, since this task's replace only
+  touches the `<details>` list, never the `<header>` block `groups` writes
+  into. Also produces `splitMdSections(mdText): [{ title, body }]`, an
+  internal helper this task defines and Task 6 could have reused but does
+  not need to (Task 6 already ships without it) — needed here because
+  `reconcileRowShells` locates each `## Group <Letter>` section's row-ID
+  order the same way `parseBodyGroupCounts` locates its counts, just
+  returning the ordered `{id, title}` list instead of a bare count.
 
-This is the largest task in the plan. Split its steps by sub-behaviour rather
-than doing it in one giant step.
+**The real shell markup is NOT `<summary>…</summary><div class="body">…</div>`
+sitting directly in the section — every row is wrapped in its own
+`<details class="item">`, and every section (including Blocked and
+Unconfirmed) opens with a `<header>` block containing the `gtitle`/`gcount`/
+`setup` markup, which this task must never touch.** Confirmed against the
+real file (`onbox-acceptance-register-live-view.html:366-376` for Group A,
+`:1504-1509` for Blocked):
 
-- [ ] **Step 1: Write the failing test for ID-set insert/delete/reorder**
+```html
+<section class="group" id="ga">
+  <header>
+    <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">38 rows</span></h3>
+    <p class="setup"> … hand-authored … </p>
+  </header>
+
+  <details class="item">
+    <summary><span class="num">A1</span><span class="iname">…</span><span class="risk hot">…</span><span class="chev">›</span></summary>
+    <div class="body"> … </div>
+  </details>
+  <details class="item">
+    <summary><span class="num">A2</span>…</summary>
+    <div class="body"> … </div>
+  </details>
+</section>
+```
+
+Blocked/Unconfirmed shells are the same `<details class="item">` shape, with
+`<span class="num">—</span>` instead of an ID span. This is the single
+riskiest assumption in the whole plan — **re-confirm this structure against
+the real file yourself, at implementation time, before writing a single line
+of `reconcileRowShells`**, since a boundary mismatch here silently deletes a
+group's header on the first real run (Task 7 Step 9 exists specifically to
+catch that before it ships).
+
+- [ ] **Step 1: Write `splitMdSections` and the failing tests for ID-set insert/delete/reorder**
 
 ```javascript
-test('a row added to the .md inserts a placeholder shell in markdown order', () => {
+function splitMdSections(mdText) {
+  const headingRegex = /^## (.+)$/gm;
+  const matches = [...mdText.matchAll(headingRegex)];
+  const sections = [];
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].index + matches[i][0].length;
+    const end = i + 1 < matches.length ? matches[i + 1].index : mdText.length;
+    sections.push({ title: matches[i][1].trim(), body: mdText.slice(start, end) });
+  }
+  return sections;
+}
+```
+
+```javascript
+test('a row added to the .md inserts a placeholder shell, wrapped in <details>, in markdown order', () => {
   const md = `## Group A — setup a
 
 ### A1 · first
 ### A2 · second (new)
 `;
   const html = `<section class="group" id="ga">
-      <summary><span class="num">A1</span><span class="iname">first</span></summary>
-      <div class="body">existing body</div>
+      <header><h3 class="gtitle"><span class="gtag">A</span> setup a <span class="gcount">1 row</span></h3></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">existing body</div>
+      </details>
   </section>`;
   const next = reconcileRowShells(md, html);
   const order = [...next.matchAll(/<span class="num">(A\d+)<\/span>/g)].map((m) => m[1]);
   assert.deepEqual(order, ['A1', 'A2']);
   assert.match(next, /A2[\s\S]*body-placeholder/);
+  assert.equal((next.match(/<details class="item">/g) ?? []).length, 2);
+  assert.equal((next.match(/<\/details>/g) ?? []).length, 2); // balanced — the defect an earlier draft shipped
 });
 
-test('--check fails when a committed shell still carries the placeholder class', () => {
-  const html = '<p class="body-placeholder">TODO</p>';
-  assert.equal(html.includes('body-placeholder'), true); // the CLI-level check asserted in Task 8, not here
+test('the header block is preserved verbatim, including the gcount span Task 6 already wrote', () => {
+  const md = `## Group A — setup a
+
+### A1 · first
+`;
+  const html = `<section class="group" id="ga">
+      <header><h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">1 row</span></h3><p class="setup">hand-authored</p></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">b</div>
+      </details>
+  </section>`;
+  const next = reconcileRowShells(md, html);
+  assert.match(next, /hand-authored/);
+  assert.match(next, /<span class="gcount">1 row<\/span>/);
 });
 
 test('a row removed from the .md deletes its shell and nothing adjacent', () => {
@@ -940,10 +1052,15 @@ test('a row removed from the .md deletes its shell and nothing adjacent', () => 
 ### A1 · first
 `;
   const html = `<section class="group" id="ga">
-      <summary><span class="num">A1</span><span class="iname">first</span></summary>
-      <div class="body">keep me</div>
-      <summary><span class="num">A2</span><span class="iname">discharged</span></summary>
-      <div class="body">gone</div>
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">keep me</div>
+      </details>
+      <details class="item">
+        <summary><span class="num">A2</span><span class="iname">discharged</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">gone</div>
+      </details>
   </section>`;
   const next = reconcileRowShells(md, html);
   assert.match(next, /keep me/);
@@ -957,15 +1074,18 @@ test('reordered .md rows reorder shells, each body following its own ID', () => 
 ### A1 · first
 `;
   const html = `<section class="group" id="ga">
-      <summary><span class="num">A1</span><span class="iname">first</span></summary>
-      <div class="body">body one</div>
-      <summary><span class="num">A2</span><span class="iname">second</span></summary>
-      <div class="body">body two</div>
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">body one</div>
+      </details>
+      <details class="item">
+        <summary><span class="num">A2</span><span class="iname">second</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">body two</div>
+      </details>
   </section>`;
   const next = reconcileRowShells(md, html);
-  const bodyOneIndex = next.indexOf('body one');
-  const bodyTwoIndex = next.indexOf('body two');
-  assert.ok(bodyTwoIndex < bodyOneIndex, 'A2 (now first in .md order) must come before A1');
+  assert.ok(next.indexOf('body two') < next.indexOf('body one'), 'A2 (now first in .md order) must come before A1');
 });
 
 test('the publish-token heading is not treated as a row', () => {
@@ -980,8 +1100,11 @@ Some prose.
 ### A1 · first
 `;
   const html = `<section class="group" id="ga">
-      <summary><span class="num">A1</span><span class="iname">first</span></summary>
-      <div class="body">b</div>
+      <header><h3 class="gtitle">…<span class="gcount">1 row</span></h3></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">b</div>
+      </details>
   </section>`;
   const next = reconcileRowShells(md, html);
   const order = [...next.matchAll(/<span class="num">([^<]+)<\/span>/g)].map((m) => m[1]);
@@ -989,18 +1112,11 @@ Some prose.
 });
 ```
 
-Re-derive the real shell markup's exact tag structure (`<summary>`/`<div
-class="body">` pairing, whether `iname`/`risk` spans live inside `<summary>`,
-how one shell's boundary is detected — likely the next `<summary>` or the
-enclosing `</section>`) from the live file **before** writing
-`reconcileRowShells`'s parser; the fixtures above assume a shape that must be
-checked, not trusted.
-
 - [ ] **Step 2: Verify failure**
 
 Run: `node --test scripts/tests/build-register-live-view.test.mjs` → FAIL (function doesn't exist).
 
-- [ ] **Step 3: Implement row-ID extraction and shell parsing**
+- [ ] **Step 3: Implement row-ID extraction and `<details>`-aware shell parsing**
 
 ```javascript
 const ROW_HEADING_REGEX = /^### ([A-Z]\d+) · (.+?)\r?$/gm;
@@ -1009,59 +1125,71 @@ function extractRowIdsInOrder(sectionMd) {
   return [...sectionMd.matchAll(ROW_HEADING_REGEX)].map((m) => ({ id: m[1], title: m[2] }));
 }
 
-// One shell = one <summary>...</summary> plus everything up to the next
-// <summary> (or the section's closing tag). Re-derive this boundary rule
-// against the real file — this is the single riskiest assumption in the
-// whole task.
+// One shell = one whole <details class="item">…</details> block. Non-nested
+// in this markup (no <details> inside another), so a non-greedy match to the
+// FIRST </details> after the opening tag is exact, not an approximation.
+const SHELL_BY_ID_REGEX = /<details class="item">\s*<summary><span class="num">([^<]+)<\/span>[\s\S]*?<\/details>/g;
+
 function splitShellsById(sectionHtml) {
-  const shellRegex = /<summary><span class="num">([^<]+)<\/span>[\s\S]*?(?=<summary>|<\/section>)/g;
   const shells = new Map();
-  for (const m of sectionHtml.matchAll(shellRegex)) {
+  for (const m of sectionHtml.matchAll(SHELL_BY_ID_REGEX)) {
     shells.set(m[1], m[0]);
   }
   return shells;
 }
 
 function buildPlaceholderShell(id, title) {
-  return `<summary><span class="num">${id}</span><span class="iname">${title}</span></summary>\n      <p class="body-placeholder">Not yet published — run \`npm run register:build\` after adding row content, or fill in manually and re-run --check.</p>\n`;
+  return `      <details class="item">
+        <summary><span class="num">${id}</span><span class="iname">${title}</span><span class="risk">Not yet published</span><span class="chev">›</span></summary>
+        <div class="body">
+          <p class="body-placeholder">Not yet published — run \`npm run register:build\` after adding row content, or fill in manually and re-run --check.</p>
+        </div>
+      </details>`;
 }
 ```
 
-- [ ] **Step 4: Implement `reconcileRowShells` for the seven ID'd sections**
+- [ ] **Step 4: Implement `reconcileRowShells` for the seven ID'd sections, touching only the post-`</header>` body**
 
 ```javascript
 export function reconcileRowShells(mdText, html) {
-  const sections = splitMdSections(mdText); // reuse/adapt the ## Group <Letter> splitter from Task 6's parseBodyGroupCounts scope
+  const sections = splitMdSections(mdText);
   let result = html;
   for (const section of sections) {
     const letterMatch = section.title.match(/^Group ([A-Z])\b/);
     if (!letterMatch) continue;
     const letter = letterMatch[1];
     const rowIds = extractRowIdsInOrder(section.body);
-    const sectionId = `g${letter.toLowerCase()}`;
-    result = reconcileOneSection(result, sectionId, rowIds);
+    result = reconcileOneSection(result, `g${letter.toLowerCase()}`, rowIds);
   }
   return result;
 }
 
+// Captures three groups: everything through the closing </header> tag
+// (preserved verbatim — this is where Task 6's gcount rewrite already
+// landed), the details-list body (rebuilt), and the closing </section> tag
+// (preserved). The header is located structurally, not assumed to be a fixed
+// string, so it survives regardless of what Task 6 wrote into it.
 function reconcileOneSection(html, sectionId, rowIds) {
-  const sectionRegex = new RegExp(`(<section[^>]*\\bid="${sectionId}"[^>]*>)([\\s\\S]*?)(<\\/section>)`);
+  const sectionRegex = new RegExp(
+    `(<section[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?<\\/header>\\s*\\n)([\\s\\S]*?)(\\s*<\\/section>)`,
+  );
   const match = html.match(sectionRegex);
-  if (!match) throw new Error(`reconcileRowShells: no section#${sectionId} found`);
-  const [, openTag, body, closeTag] = match;
+  if (!match) throw new Error(`reconcileRowShells: no section#${sectionId} (with a <header>) found`);
+  const [, headerAndOpen, body, closeTag] = match;
   const existingShells = splitShellsById(body);
   const newBody = rowIds
     .map(({ id, title }) => existingShells.get(id) ?? buildPlaceholderShell(id, title))
     .join('\n');
-  return html.replace(sectionRegex, `${openTag}\n${newBody}\n      ${closeTag}`);
+  return html.replace(sectionRegex, `${headerAndOpen}${newBody}\n${closeTag}`);
 }
 ```
 
 - [ ] **Step 5: Run, expect the ID-set tests to pass; commit this slice**
 
 Run: `node --test scripts/tests/build-register-live-view.test.mjs`
-Expected: the five tests from Step 1 pass; Blocked/Unconfirmed tests (not yet
-written) don't exist yet.
+Expected: the six tests from Step 1 pass (including the `<details>`-balance
+assertion and the header-preservation test); Blocked/Unconfirmed tests (not
+yet written) don't exist yet.
 
 ```bash
 git add scripts/build-register-live-view.mjs scripts/tests/build-register-live-view.test.mjs
@@ -1070,23 +1198,72 @@ git commit -m "feat(ops): register-build generator — row-shell insert/delete/r
 
 - [ ] **Step 6: Write the failing tests for Blocked/Unconfirmed title matching**
 
+The real headings and inames are not simple prose — four of the five real
+Blocked headings end in a **markdown-linked** trailing parenthetical whose
+`(url)` is itself inside the outer `(...)`, e.g.
+`### AMD GPU support Phase 2 ([#1335](https://…/issues/1335))` — a naive
+`/\s*\([^()]*\)\s*$/` strip cannot match this (the character before the final
+`)` is `)`, not `(`), so the normaliser needs a **balanced** trailing-paren
+strip, not a no-nested-parens regex. And normalisation must apply to **both**
+sides — the `.md` heading and the decoded `.html` iname — or an entry like
+`CPU-only \`RAM_HEAVY_MODELS\` clamp (plan 263, B2 step 7)` (md) vs.
+`CPU-only RAM_HEAVY_MODELS clamp (B2 step 7)` (iname, which keeps its own
+trailing parenthetical) never matches.
+
 ```javascript
-function normaliseBlockedTitle(raw) {
-  // strip backtick/code-span markup, then the LAST trailing " (...)" parenthetical
-  const noCode = raw.replace(/`/g, '');
-  return noCode.replace(/\s*\([^()]*\)\s*$/, '').trim();
+// Strips ONE balanced trailing "(...)" — walking from the end, tracking
+// paren depth, so a nested markdown link's own (url) doesn't stop the strip
+// early. Returns the input unchanged if it doesn't end in ")".
+function stripTrailingParenthetical(s) {
+  const trimmed = s.trimEnd();
+  if (!trimmed.endsWith(')')) return trimmed;
+  let depth = 0;
+  for (let i = trimmed.length - 1; i >= 0; i--) {
+    if (trimmed[i] === ')') depth++;
+    else if (trimmed[i] === '(') {
+      depth--;
+      if (depth === 0) return trimmed.slice(0, i).trimEnd();
+    }
+  }
+  return trimmed; // unbalanced — leave as-is rather than guess
 }
 
 function decodeHtmlEntities(s) {
   return s.replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
 }
 
-test('normaliseBlockedTitle strips code spans and the trailing parenthetical, not internal text', () => {
-  const md = 'CPU-only `RAM_HEAVY_MODELS` clamp (plan 263, B2 step 7)';
-  const html = 'CPU-only RAM_HEAVY_MODELS clamp (B2 step 7)';
-  assert.equal(normaliseBlockedTitle(md), decodeHtmlEntities(html).replace(/\s*\([^()]*\)\s*$/, '').trim());
+// Applied to BOTH the .md heading and the decoded .html iname — not just one
+// side, which is the defect an earlier draft of this normaliser shipped (its
+// own paired test normalised both sides; its implementation normalised only
+// the .md side, so the test could never have failed against the real file).
+function normaliseTitle(raw) {
+  return stripTrailingParenthetical(raw.replace(/`/g, '')).trim();
+}
+
+test('normaliseTitle strips a balanced, markdown-linked trailing parenthetical', () => {
+  const md = 'AMD GPU support Phase 2 ([#1335](https://github.com/dudarenok-maker/Castwright/issues/1335))';
+  assert.equal(normaliseTitle(md), 'AMD GPU support Phase 2');
 });
 
+test('normaliseTitle applied to both sides matches the RAM_HEAVY_MODELS case', () => {
+  const md = 'CPU-only `RAM_HEAVY_MODELS` clamp (plan 263, B2 step 7)';
+  const iname = decodeHtmlEntities('CPU-only RAM_HEAVY_MODELS clamp (B2 step 7)');
+  assert.equal(normaliseTitle(md), normaliseTitle(iname));
+});
+```
+
+- [ ] **Step 7: Verify these two normalisation tests against ALL FIVE real Blocked pairs before writing `reconcileTitledSection`**
+
+Read the five real Blocked `### ` headings and their five real `iname` spans
+from the live file (re-derive — do not trust the two worked examples above as
+exhaustive) and hand-check `normaliseTitle(mdHeading) === normaliseTitle(decodeHtmlEntities(iname))`
+for every pair. If any pair still fails after this normaliser, that pair's
+shape is genuinely new since this plan was written — stop and re-derive the
+rule against it before proceeding; do not special-case it.
+
+- [ ] **Step 8: Write the failing tests for Blocked/Unconfirmed reconciliation and implement**
+
+```javascript
 test('a Blocked heading matches its shell by exact normalised title, not position', () => {
   const md = `## Blocked — hardware absent
 
@@ -1094,15 +1271,18 @@ test('a Blocked heading matches its shell by exact normalised title, not positio
 ### Second blocked thing (#222)
 `;
   const html = `<section class="group is-blocked" id="blocked">
-      <summary><span class="num">—</span><span class="iname">Second blocked thing</span></summary>
-      <div class="body">second body</div>
-      <summary><span class="num">—</span><span class="iname">First blocked thing</span></summary>
-      <div class="body">first body</div>
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">Second blocked thing</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">second body</div>
+      </details>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">First blocked thing</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">first body</div>
+      </details>
   </section>`;
   const next = reconcileRowShells(md, html);
-  const firstIndex = next.indexOf('First blocked thing');
-  const secondIndex = next.indexOf('Second blocked thing');
-  assert.ok(firstIndex < secondIndex, 'md order (First, then Second) must be preserved, not html order');
+  assert.ok(next.indexOf('First blocked thing') < next.indexOf('Second blocked thing'), 'md order must be preserved, not html order');
   assert.match(next, /First blocked thing[\s\S]*?first body/);
 });
 
@@ -1111,18 +1291,23 @@ test('a Blocked title matching zero shells is an error', () => {
 
 ### Something with no shell (#333)
 `;
-  const html = `<section class="group is-blocked" id="blocked"></section>`;
+  const html = `<section class="group is-blocked" id="blocked">
+      <header><h3 class="gtitle">…<span class="gcount">0 rows</span></h3></header>
+  </section>`;
   assert.throws(() => reconcileRowShells(md, html), /Something with no shell/);
 });
 
-test('an Unconfirmed bullet is matched by its bold-span text as a PREFIX of the iname, not exact match', () => {
+test('an Unconfirmed bullet is matched by its bold-span text as a PREFIX of the decoded iname, not exact match', () => {
   const md = `## Unconfirmed — not debts until substantiated
 
 - **fs-38 Wave 1** (designed-voice authoring, PR #1800) — no explicit owed callout
 `;
   const html = `<section class="group is-soft" id="unconfirmed">
-      <summary><span class="num">—</span><span class="iname">fs-38 Wave 1 — designed-voice authoring</span></summary>
-      <div class="body">b</div>
+      <header><h3 class="gtitle">…<span class="gcount">1 row</span></h3></header>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">fs-38 Wave 1 — designed-voice authoring</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">b</div>
+      </details>
   </section>`;
   const next = reconcileRowShells(md, html);
   assert.match(next, /fs-38 Wave 1 — designed-voice authoring/);
@@ -1135,61 +1320,80 @@ test('reordering the two Unconfirmed bullets does not re-pair their bodies', () 
 - **First bullet**
 `;
   const html = `<section class="group is-soft" id="unconfirmed">
-      <summary><span class="num">—</span><span class="iname">First bullet</span></summary>
-      <div class="body">first body</div>
-      <summary><span class="num">—</span><span class="iname">Second bullet</span></summary>
-      <div class="body">second body</div>
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">First bullet</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">first body</div>
+      </details>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">Second bullet</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">second body</div>
+      </details>
   </section>`;
   const next = reconcileRowShells(md, html);
+  assert.ok(next.indexOf('Second bullet') < next.indexOf('First bullet'));
   assert.match(next, /Second bullet[\s\S]*?second body/);
   assert.match(next, /First bullet[\s\S]*?first body/);
 });
 ```
 
-- [ ] **Step 7: Verify failure, implement, verify pass**
-
 ```javascript
-const BLOCKED_HEADING_REGEX = /^### (.+?)\r?$/gm; // within the Blocked section body only — see caller
-const UNCONFIRMED_BULLET_REGEX = /^- \*\*(.+?)\*\*/gm; // within the Unconfirmed section body only
+const BLOCKED_HEADING_REGEX = /^### (.+?)\r?$/gm;
+const UNCONFIRMED_BULLET_REGEX = /^- \*\*(.+?)\*\*/gm;
+const SHELL_BY_TITLE_REGEX = /<details class="item">\s*<summary><span class="num">—<\/span><span class="iname">([^<]+)<\/span>[\s\S]*?<\/details>/g;
 
 function reconcileTitledSection(html, sectionId, titles, { prefixMatch }) {
-  const sectionRegex = new RegExp(`(<section[^>]*\\bid="${sectionId}"[^>]*>)([\\s\\S]*?)(<\\/section>)`);
+  const sectionRegex = new RegExp(
+    `(<section[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?<\\/header>\\s*\\n)([\\s\\S]*?)(\\s*<\\/section>)`,
+  );
   const match = html.match(sectionRegex);
-  if (!match) throw new Error(`reconcileRowShells: no section#${sectionId} found`);
-  const [, openTag, body, closeTag] = match;
-  // Each shell's iname is between <span class="iname"> and </span>; the whole
-  // shell runs to the next <summary> or the section close, same boundary rule
-  // as splitShellsById above, but keyed by (decoded, normalised) iname text
-  // instead of an id.
-  const shellRegex = /<summary><span class="num">—<\/span><span class="iname">([^<]+)<\/span>[\s\S]*?(?=<summary>|<\/section>)/g;
+  if (!match) throw new Error(`reconcileRowShells: no section#${sectionId} (with a <header>) found`);
+  const [, headerAndOpen, body, closeTag] = match;
   const shellsByIname = new Map();
-  for (const m of body.matchAll(shellRegex)) {
+  for (const m of body.matchAll(SHELL_BY_TITLE_REGEX)) {
     shellsByIname.set(decodeHtmlEntities(m[1]), m[0]);
   }
   const newBody = titles
-    .map((title) => {
-      const wanted = prefixMatch ? title : normaliseBlockedTitle(title);
+    .map((rawTitle) => {
+      const wanted = prefixMatch ? rawTitle : normaliseTitle(rawTitle);
       const matches = [...shellsByIname.entries()].filter(([iname]) =>
-        prefixMatch ? iname.startsWith(wanted) : iname === wanted,
+        prefixMatch ? iname.startsWith(wanted) : normaliseTitle(iname) === wanted,
       );
       if (matches.length === 0) throw new Error(`reconcileRowShells: no shell title matches "${wanted}" in #${sectionId}`);
       if (matches.length > 1) throw new Error(`reconcileRowShells: "${wanted}" matches ${matches.length} shells in #${sectionId}`);
       return matches[0][1];
     })
     .join('\n');
-  return html.replace(sectionRegex, `${openTag}\n${newBody}\n      ${closeTag}`);
+  return html.replace(sectionRegex, `${headerAndOpen}${newBody}\n${closeTag}`);
+}
+
+// Wired into reconcileRowShells, added to the loop over splitMdSections:
+export function reconcileRowShells(mdText, html) {
+  const sections = splitMdSections(mdText);
+  let result = html;
+  for (const section of sections) {
+    const letterMatch = section.title.match(/^Group ([A-Z])\b/);
+    if (letterMatch) {
+      const rowIds = extractRowIdsInOrder(section.body);
+      result = reconcileOneSection(result, `g${letterMatch[1].toLowerCase()}`, rowIds);
+      continue;
+    }
+    // Re-derive the real ## title text for these two before trusting the
+    // literal match below — do not assume "Blocked"/"Unconfirmed" are the
+    // whole ## line.
+    if (/^Blocked\b/.test(section.title)) {
+      const blockedTitles = [...section.body.matchAll(BLOCKED_HEADING_REGEX)].map((m) => m[1]);
+      result = reconcileTitledSection(result, 'blocked', blockedTitles, { prefixMatch: false });
+    } else if (/^Unconfirmed\b/.test(section.title)) {
+      const unconfirmedTitles = [...section.body.matchAll(UNCONFIRMED_BULLET_REGEX)].map((m) => m[1]);
+      result = reconcileTitledSection(result, 'unconfirmed', unconfirmedTitles, { prefixMatch: true });
+    }
+  }
+  return result;
 }
 ```
 
-Wire both calls into `reconcileRowShells`, extracting Blocked's titles (via
-`BLOCKED_HEADING_REGEX` over the `## Blocked` section body only — re-derive
-that section's exact `##` title text from the live `.md`, do not assume it is
-literally `Blocked`) and Unconfirmed's bold-span-only titles (via
-`UNCONFIRMED_BULLET_REGEX` over the `## Unconfirmed` section body), then call
-`reconcileTitledSection(html, 'blocked', blockedTitles, { prefixMatch: false })`
-and `reconcileTitledSection(html, 'unconfirmed', unconfirmedTitles, { prefixMatch: true })`.
-
-- [ ] **Step 8: Run against real files, inspect, revert**
+- [ ] **Step 9: Run against real files, inspect, revert**
 
 ```bash
 node scripts/build-register-live-view.mjs
@@ -1197,20 +1401,19 @@ git diff docs/testing/onbox-acceptance-register-live-view.html
 git checkout -- docs/testing/onbox-acceptance-register-live-view.html
 ```
 
-If the diff shows a shell body/`iname`/`risk` span changing (not just
-insert/delete/reorder), the boundary regex from Step 3/Step 7 is wrong — stop
-and fix. This is the anti-regression case the spec's Testing section leads
-with; do not proceed to Task 8 with a boundary regex that mutates a
-hand-authored shell's content.
+Read the diff in full. If **any** `<header>` block, shell body, `iname`, or
+`risk` span changed — not just insert/delete/reorder of whole `<details>`
+blocks — the boundary regex is wrong and must not proceed to Task 8. Confirm
+specifically: every group's `<header>…</header>` is byte-identical before and
+after (Task 6's `gcount` value aside), and `<details>` open/close tag counts
+are equal.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add scripts/build-register-live-view.mjs scripts/tests/build-register-live-view.test.mjs
 git commit -m "feat(ops): register-build generator — Blocked/Unconfirmed title matching"
 ```
-
----
 
 ### Task 8: CRLF write-side, idempotence, real-file `--check`, CI wiring, and retirement
 
@@ -1285,7 +1488,7 @@ normalise trailing whitespace inside `reconcileOneSection`/`reconcileTitledSecti
 so a shell already in the right position/order round-trips byte-identically,
 not just semantically.
 
-- [ ] **Step 3: Wire the real-file `--check` test (replaces `check-onbox-register.test.mjs:1181`'s role)**
+- [ ] **Step 3: Wire the real-file `--check` test — a second real-file check, alongside `check-onbox-register.test.mjs:1181`'s, not a replacement for it (see Step 7)**
 
 ```javascript
 test('the real register and its real live view agree (register:build --check)', () => {
@@ -1384,13 +1587,21 @@ Run: `node --test scripts/tests/check-onbox-register.test.mjs`
 Expected: PASS — every `--against-published`, `extraOnly`, baseline, and
 `--discharging` test still green.
 
-- [ ] **Step 7: Replace `check-onbox-register.test.mjs:1181`'s real-file assertion**
+- [ ] **Step 7: Keep `check-onbox-register.test.mjs:1181`'s real-file assertion — it is not fully superseded**
 
-Delete the test asserting `checkLiveView(md, lv)` is empty against the real
-files (its role is now Step 3's `register:build --check` real-file test, in
-the other test file). Confirm via `git log -p` that this is the same test the
-spec's §4/§5 describe before deleting it, not a different assertion that
-happens to share a similar shape.
+Read this test in full before touching it: `test('the real register and its
+real live view agree', ...)`, calling `checkLiveView(md, lv)` on the real
+files, with a comment stating its purpose is to prove "the parsers actually
+fit the real, hand-authored markup — the thing that breaks when someone
+restyles the live view." `checkLiveView` covers substantially more than the
+four comparisons Step 6 retires — per-row `extra`/`missing` sets,
+`invalidRowIds`, malformed/duplicate glance letters, missing sections. Step
+3's `register:build --check` real-file test does **not** cover any of that.
+**Do not delete this test** — the spec's original framing ("replaced, not
+deleted... near-vacuous after Step 6's deletions") does not hold once the
+surviving comparisons are counted; keep it running exactly as it does today,
+as one of two real-file checks (alongside Step 3's), each proving a disjoint
+set of properties.
 
 - [ ] **Step 8: Wire CI**
 
@@ -1443,136 +1654,147 @@ per the spec's own PR-3 note. `Closes #2362`.
 
 ## PR 4 — `wrongId`, the held tasks, and every correction PR 2 only measured
 
-### Task 9: ID-reuse-detection rule in `checkConflictingSubjects`
+### Task 9: `checkIdReuse` — a new, narrowly-scoped ID-reuse check (#2721)
 
 **Files:**
 - Modify: `scripts/check-register-citations.mjs`
 - Test: `scripts/tests/check-register-citations.test.mjs`
 
+**This task is narrower than its first draft, and deliberately so — a
+re-derived design, not the one this plan started with.** The first draft
+tried to widen `recordSubjectConflict`/`checkConflictingSubjects` (Check C)
+to also handle a departed, unannotated ID as fatal. Re-reading the file's own
+architecture (its header comment, `:1352-1362`) shows that case is **already
+fully handled, on exactly the citation surface the six real residuals live
+on** — `checkNonexistentIds` (Check A) already scans the `Register row(s):`
+prose-label idiom (via `extractCitationsByLine`, which covers `ROW_CITATION_REGEX`
+and `REGISTER_ROW_LABEL_LINE_REGEX`, not just headings), and already applies
+`idSpecificAnnotationPresent` there: fatal when unannotated, non-fatal when
+annotated. Re-verify this against the real file before writing any code, but
+if confirmed, no new "departed ID" branch is needed anywhere.
+
+**What is genuinely missing is one narrow case: an ID that IS cited via that
+same `Register row(s):` idiom, paired with a subject number on the same line,
+where the ID currently exists but for a DIFFERENT subject than the one
+named.** Check A doesn't check subject-correctness (only existence — the ID
+resolves, so Check A is silent). Check C's `citationShapedLineIds`
+deliberately does not trust the `Register row(s):` idiom as a subject-pairing
+surface (only an anchored heading or a `Criteria source:` line — see
+`:1319-1337`, and the 114-false-positive measurement its own history records
+for widening beyond same-line, unambiguous pairing).
+
+So this task adds a **new, narrowly-scoped check** — not a modification to
+`checkConflictingSubjects`'s existing eligibility rule, which stays exactly as
+documented — that trusts exactly one additional same-line shape:
+`Register row(s): <ID> … #<subject>` on one physical line, mirroring the
+same-line-only discipline Check C's own history already established as the
+noise bar. This avoids reopening the false-positive class that shape's
+history fought to close, and avoids touching `recordSubjectConflict`'s
+existing, heavily-reviewed call sites and their `registerRows.has(id)` guards
+at all.
+
 **Interfaces:**
-- Consumes: `registerRows` (already available — its keys are the current
-  valid ID set), `idSpecificAnnotationPresent`/`enclosingSectionText` (already
-  used by `checkNonexistentIds`/Check A — reuse, don't reimplement).
-- Modifies: `recordSubjectConflict(filePath, lineIndex, id, subject,
-  legitimate, wrongId, unknownSubject)` gains two new parameters
-  (`registerRows`, `lines`) and a new branch; `checkConflictingSubjects`
-  passes them through.
+- Consumes: `registerRows` (current valid ID set + `issues`),
+  `buildLegitimateSubjectMap` (Task 3, now exported and number-keyed),
+  `deBold`/`stripFences` (already in this file, used by Check A/C's own text
+  prep — re-derive the exact prep sequence `checkNonexistentIds` uses before
+  assuming this task's snippet has it right).
+- Produces: `checkIdReuse(fileTexts, registerRows): { wrongId: string[] }` — a
+  new, standalone export. The CLI (Task 11 Step 1) folds its `wrongId` output
+  into the same fatal bucket `checkConflictingSubjects`'s `wrongId` already
+  feeds, so from the CLI's perspective there is one `wrongId` list, sourced
+  from two functions.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```javascript
-test('a citation to an ID currently minted for a different subject is fatal, even with a discharge annotation nearby', () => {
-  const registerRows = new Map([['A19', { issues: new Set(['1976']), body: '' }]]);
+test('an ID cited via "Register row:" for a subject it does not currently own is fatal, even with a discharge annotation nearby', () => {
+  const registerRows = new Map([['A19', { issues: new Set([1976]), body: '' }]]);
   const fileTexts = new Map([
     [
       'onbox-sitting-vram-contention.md',
-      '> Register row: A19 for #1893.\n> **Register row: A19 — discharged 2026-08-26, row removed from the register**\n',
+      'Register row: A19 for #1893.\n> **Register row: A19 — discharged 2026-08-26, row removed from the register**\n',
     ],
   ]);
-  const { wrongId, unknownSubject } = checkConflictingSubjects(fileTexts, registerRows);
+  const { wrongId } = checkIdReuse(fileTexts, registerRows);
   assert.equal(wrongId.some((m) => m.includes('A19') && m.includes('1893')), true);
-  assert.equal(unknownSubject.some((m) => m.includes('1893')), false);
 });
 
-test('a citation to an ID that genuinely does not exist is fatal only when no discharge annotation follows it', () => {
-  const registerRows = new Map(); // A99 minted for nothing
-  const withoutAnnotation = new Map([['f1.md', 'Register row: A99 for #500.\n']]);
-  const { wrongId: w1 } = checkConflictingSubjects(withoutAnnotation, registerRows);
-  assert.equal(w1.some((m) => m.includes('A99')), true);
+test('an ID cited via "Register row:" for a subject it currently DOES own is not fatal', () => {
+  const registerRows = new Map([['A1', { issues: new Set([700]), body: '' }]]);
+  const fileTexts = new Map([['f.md', 'Register row: A1 for #700.\n']]);
+  const { wrongId } = checkIdReuse(fileTexts, registerRows);
+  assert.equal(wrongId.length, 0);
+});
 
-  const withAnnotation = new Map([
-    ['f2.md', 'Register row: A99 for #500.\n> **Register row: A99 — discharged 2026-01-01, row removed from the register**\n'],
-  ]);
-  const { wrongId: w2 } = checkConflictingSubjects(withAnnotation, registerRows);
-  assert.equal(w2.some((m) => m.includes('A99')), false);
+test('an ID that does not exist at all is NOT this check\'s concern — Check A already owns it', () => {
+  const registerRows = new Map(); // A99 minted for nothing
+  const fileTexts = new Map([['f.md', 'Register row: A99 for #500.\n']]);
+  const { wrongId } = checkIdReuse(fileTexts, registerRows);
+  assert.equal(wrongId.length, 0); // no crash, no false claim — this check is silent, Check A handles it
 });
 
 test('a citation to one ID of a still-present multi-row subject is not fatal', () => {
   const registerRows = new Map([
-    ['A1', { issues: new Set(['700']), body: '' }],
-    ['A2', { issues: new Set(['700']), body: '' }],
+    ['A1', { issues: new Set([700]), body: '' }],
+    ['A2', { issues: new Set([700]), body: '' }],
   ]);
   const fileTexts = new Map([['f.md', 'Register row: A1 for #700.\n']]);
-  const { wrongId } = checkConflictingSubjects(fileTexts, registerRows);
+  const { wrongId } = checkIdReuse(fileTexts, registerRows);
   assert.equal(wrongId.length, 0);
 });
 ```
 
-Re-derive the exact fixture shape `checkConflictingSubjects`/`fileTexts`
-expects (a `Map<path, text>`? Confirmed already in this plan's research —
-matches `checkNonexistentIds`'s own `text, filePath, registerRows` signature;
-`checkConflictingSubjects` iterates `fileTexts` similarly per its own header
-comment) — verify by reading the function's current top lines before trusting
-this plan's fixture.
-
 - [ ] **Step 2: Verify failure**
 
 Run: `node --test scripts/tests/check-register-citations.test.mjs`
-Expected: FAIL — the reuse case currently lands in `unknownSubject`, not `wrongId`.
+Expected: FAIL — `checkIdReuse` doesn't exist yet.
 
-- [ ] **Step 3: Implement the reuse-detection branch**
+- [ ] **Step 3: Implement `checkIdReuse`**
 
 ```javascript
-function recordSubjectConflict(
-  filePath,
-  lineIndex,
-  id,
-  subject,
-  legitimate,
-  wrongId,
-  unknownSubject,
-  registerRows,
-  lines,
-) {
-  const legitimateIds = legitimate.get(subject);
-  if (!legitimateIds) {
-    // The subject doesn't appear in any current row's subject set (heading OR
-    // body, per Task 3). Two sub-cases, not one, as of this task: does the
-    // CITED ID (not the subject) currently exist in the register at all?
-    if (registerRows.has(id)) {
-      // The ID resolves — just to a different subject than this citation
-      // means. Not a departure; a wrong pointer. Fatal regardless of any
-      // discharge annotation nearby, which — if present — is itself now a
-      // false statement about a row that has been reused, not removed.
-      const currentRow = registerRows.get(id);
-      const currentSubjects = [...currentRow.issues].sort().join('/') || '(no subject in its heading)';
-      wrongId.push(
-        `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but ${id} is currently minted ` +
-          `for a different subject (${currentSubjects}) — the ID was reused, not departed; repoint or remove this citation`,
-      );
-      return;
-    }
-    // The ID genuinely does not exist anywhere in the current register.
-    // Consult the discharge-annotation convention — the same helper Check A
-    // (checkNonexistentIds) already uses.
-    if (idSpecificAnnotationPresent(enclosingSectionText(lines, lineIndex), id)) {
-      unknownSubject.push(
-        `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}; ${id} has genuinely departed ` +
-          `and is annotated as discharged/removed — not failing`,
-      );
-      return;
-    }
-    wrongId.push(
-      `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but ${id} does not exist in the ` +
-        `current register and carries no discharge/removal annotation — unexplained dangling reference`,
-    );
-    return;
+// Check D: an ID cited via the "Register row(s): <ID>" prose idiom, paired
+// with a subject number on the SAME line, where the ID currently exists for
+// a DIFFERENT subject than the one named. Deliberately narrower than Check
+// A's full citation surface — same-line pairing only, matching Check C's own
+// documented noise-avoidance rationale (see its header comment's
+// 114-false-positive measurement). Does NOT handle a departed (nonexistent)
+// ID — that is already Check A's (checkNonexistentIds') territory, on this
+// same idiom, via idSpecificAnnotationPresent; re-verify that claim against
+// the real file before relying on it.
+const REGISTER_ROW_WITH_SUBJECT_REGEX = /\bRegister\s+rows?:?\s*([A-Z]\d{1,3})\b[^\n]*?#(\d+)/gi;
+
+export function checkIdReuse(fileTexts, registerRows) {
+  const legitimate = buildLegitimateSubjectMap(registerRows);
+  const wrongId = [];
+  for (const [filePath, rawText] of fileTexts) {
+    const { text } = stripFences(rawText); // re-derive stripFences' exact return shape (this plan's earlier research found it returns { text, unterminatedFenceLine } in check-onbox-register.mjs — confirm check-register-citations.mjs's own stripFences matches before trusting this destructure)
+    const lines = deBold(text).split('\n');
+    lines.forEach((line, lineIndex) => {
+      for (const m of line.matchAll(REGISTER_ROW_WITH_SUBJECT_REGEX)) {
+        const id = m[1];
+        const subject = Number(m[2]);
+        if (!registerRows.has(id)) continue; // departed — Check A's territory, not this one
+        const legitimateIds = legitimate.get(subject);
+        if (legitimateIds && legitimateIds.has(id)) continue; // correctly resolves
+        const currentRow = registerRows.get(id);
+        const currentSubjects = [...currentRow.issues].sort((a, b) => a - b).join('/') || '(no subject in its heading)';
+        wrongId.push(
+          `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but ${id} is currently minted ` +
+            `for a different subject (${currentSubjects}) — the ID was reused, not departed; repoint or remove this citation`,
+        );
+      }
+    });
   }
-  if (!legitimateIds.has(id)) {
-    wrongId.push(
-      `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but the register's #${subject} ` +
-        `maps to ${[...legitimateIds].sort().join('/')}, not ${id}`,
-    );
-  }
+  return { wrongId };
 }
 ```
 
-Every call site of `recordSubjectConflict` inside `checkConflictingSubjects`
-(both the positional/`headingTitleSegments` path and the non-positional path)
-needs `registerRows` and `lines` threaded through — `lines` is already
-computed inside `checkConflictingSubjects`'s per-file loop for the existing
-positional logic (re-derive its exact variable name before wiring), so this is
-parameter-passing, not new parsing.
+Re-verify `deBold`'s signature (it may expect the whole text, not
+pre-split lines — confirm before wiring) and that `check-register-citations.mjs`'s
+own `stripFences` (it has its own, separate from `check-onbox-register.mjs`'s
+— confirm they're not literally the same imported function) returns the shape
+this snippet assumes.
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -1581,18 +1803,26 @@ Expected: PASS.
 
 - [ ] **Step 5: Re-run against the real tree**
 
-Run: `node scripts/check-register-citations.mjs --strict`
-Record the output. Expected shape: the `A19`/`#1893`, `A31`/`#2037`, `A34`/`#2106`
-residuals now appear in `wrongId` output (fatal, printed by default — no
-`--strict` needed for these three specifically), not `unknownSubject`. **Do
-not fix the citations in this task** — Task 10 does, once this rule's output
-is what names the exact fix each one needs.
+Run: `node -e "
+import('./scripts/check-register-citations.mjs').then(async (m) => {
+  // however this file's own CLI gathers fileTexts/registerRows today —
+  // re-derive that gathering code rather than reinventing it here, and call
+  // checkIdReuse with the same two arguments checkConflictingSubjects
+  // already receives.
+});
+"`
+(This is illustrative — Step 3 of Task 11 wires `checkIdReuse` into the real
+CLI; use whatever ad-hoc script or REPL call reproduces the CLI's own
+`fileTexts`/`registerRows` construction to sanity-check this task's output
+before that wiring lands.) Confirm the `A19`/`#1893`, `A31`/`#2037`,
+`A34`/`#2106` residuals now appear in `checkIdReuse`'s `wrongId` output.
+**Do not fix the citations in this task** — Task 10 does.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add scripts/check-register-citations.mjs scripts/tests/check-register-citations.test.mjs
-git commit -m "feat(ops): fatal ID-reuse detection for check-register-citations (#2721)"
+git commit -m "feat(ops): add checkIdReuse — fatal ID-reuse detection for check-register-citations (#2721)"
 ```
 
 ---
@@ -1679,20 +1909,34 @@ git commit -m "fix(ops): correct five stale register citations found by the reus
 - Test: `scripts/tests/check-register-citations.test.mjs`
 - Modify: `docs/testing/onbox-acceptance-register.md`
 
-**Interfaces:** none new — Task 9 already made the reuse class land in
-`wrongId`, which the header comment states is "FATAL and runs by default, no
-`--strict` needed" **already**, for the pre-existing wrongId class. Confirm
-this is still true after Task 9's change (it should be, since Task 9 only
-added a new way to reach the same `wrongId` array) before assuming this task
-has no code left to do.
+**Interfaces:**
+- Consumes: `checkIdReuse` (Task 9, a standalone function/export, not folded
+  into `checkConflictingSubjects`) and `checkConflictingSubjects`'s own
+  existing `wrongId` array.
+- Modifies: the CLI's `main`/exit-code logic to call `checkIdReuse` alongside
+  `checkConflictingSubjects` and combine both `wrongId` arrays into one fatal
+  list, printed and exit-coded identically (no `--strict` gate on either).
 
-- [ ] **Step 1: Confirm the CLI's exit-code wiring already treats any `wrongId` entry as fatal**
+Task 9 deliberately shipped `checkIdReuse` as a **separate** function rather
+than folding it into `checkConflictingSubjects`, to avoid touching that
+function's own heavily-reviewed eligibility rule and call-site guards. That
+means, unlike a plan draft that assumed the new cases land in the existing
+`wrongId` array "for free", **this task's Step 1 has real wiring to do**, not
+just a confirmation.
+
+- [ ] **Step 1: Wire `checkIdReuse` into the CLI and confirm both `wrongId` sources are fatal**
 
 Read the CLI section of `check-register-citations.mjs` (its `main`/exit-code
-logic) and confirm `wrongId.length > 0` already causes a non-zero exit
-regardless of `--strict`. If it does not, fix it — this is the actual
-"widening" the issue asks for; Task 9 supplied the new fatal cases, this step
-confirms they are actually wired to fail the build.
+logic, and wherever it currently calls `checkConflictingSubjects` and consumes
+its `wrongId`/`unknownSubject`). Add a `checkIdReuse(fileTexts, registerRows)`
+call alongside it, and concatenate its `wrongId` into the same fatal list
+`checkConflictingSubjects`'s `wrongId` already feeds — printed the same way,
+gated the same way (no `--strict` needed for either). Confirm
+`wrongId.length > 0` (now from either source) causes a non-zero exit
+regardless of `--strict`. If the existing wiring for `checkConflictingSubjects`'s
+own `wrongId` is not already unconditionally fatal, fix that too — that half
+is the pre-existing "widening" the issue originally asked for; this task is
+where both halves land together.
 
 - [ ] **Step 2: Rewrite the three deferral sites**
 
@@ -1729,23 +1973,46 @@ git commit -m "docs(ops): rewrite the three wrongId deferral sites to state the 
 - Consumes: `comparePublishTokens({ working, published, baseline, lookups,
   allowBehind })` and `nonceInHistory(repoRoot, liveViewPath, nonce, ref,
   gitRunner)` — both already implemented and exported from
-  `scripts/publish-token.mjs` (verified unused elsewhere in this plan's
-  research phase). Re-derive `nonceInHistory`'s exact return contract (does it
-  return `true`/`false`/`null` directly, or a promise?) by reading its full
-  body before wiring — this plan's research read only its signature line.
+  `scripts/publish-token.mjs`, and both already have real test coverage:
+  `scripts/tests/publish-token.test.mjs` (20+ `comparePublishTokens` cases
+  plus `nonceInHistory` unit tests) and `scripts/tests/publish-token-git.test.mjs`
+  ("REAL-GIT coverage for `nonceInHistory`", already builds a throwaway repo
+  with real history for exactly this task's git-dependent testing need — use
+  that file's fixture pattern, not `check-onbox-register.test.mjs`'s). No new
+  test-infrastructure gap here. `nonceInHistory` returns `boolean | null`
+  **synchronously** (confirmed by reading its body — not a promise).
+- Produces: a second baseline fetch this task adds — see Step 1.
 
-This task is wiring, not new comparator logic — `comparePublishTokens`
-already exists, is presumably tested in its own right (confirm a
-`publish-token.test.mjs` or equivalent exists; if not, that gap is itself a
-finding to fix in this task, not defer).
+This task is wiring, not new comparator logic. But it is **two** wiring gaps,
+not one: `comparePublishTokens` is unwired into the CLI (the obvious gap), and
+**the CLI has never fetched `origin/main`'s live view at all** — only the
+register `.md`'s baseline is resolved today (`resolveBaselineText(repoRoot,
+registerPath, gitRunner)`, `check-onbox-register.mjs:1167`), for the
+`extraOnly`/`staleExtra` machinery. `comparePublishTokens`'s `baseline`
+argument needs `origin/main`'s **live-view HTML**, which nothing today reads.
 
-- [ ] **Step 1: Locate the `--against-published` CLI path**
+- [ ] **Step 1: Add a second baseline fetch for the live view**
+
+Read `resolveBaselineText` in full (it wraps a `git fetch` + `git show
+origin/main:<path>` sequence, fails closed with `CANNOT_VERIFY_BASELINE_ERROR`
+when unreadable — re-derive its exact contract). Add a second call —
+`resolveBaselineText(repoRoot, liveViewPath, gitRunner)` — for the live-view
+path, alongside the existing register-`.md` call. Decide, and state in the
+commit/PR body: when this second baseline is unverifiable, does the whole
+`--against-published` run fail closed the same way the register baseline
+failure already does, or does the publish-token check degrade separately from
+`checkLiveView`'s own `extraOnly` result? The safer default, matching this
+file's existing fail-closed posture: **the whole run fails closed** if either
+baseline is unverifiable — do not ship a design where one baseline failing
+silently skips only the publish-token half.
+
+- [ ] **Step 2: Locate the `--against-published` CLI path**
 
 Read `runCheckOnboxRegisterCli` (or whatever the current CLI entry function is
 named — re-derive) and find where `direction: 'extraOnly'` is set up. This is
 where the publish-token check needs to run alongside `checkLiveView`.
 
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 3: Write the failing test**
 
 ```javascript
 test('--against-published fails when the working copy was bumped without a fresh nonce', () => {
@@ -1763,23 +2030,19 @@ test('--against-published fails when the working copy was bumped without a fresh
 });
 ```
 
-Building `FIXTURE_REPO_DIR`/`FIXTURE_STALE_NONCE_PATH` requires a throwaway
-git repo with real commit history for `nonceInHistory`'s `git log -S` lookups
-to run against — follow whatever pattern
-`scripts/tests/check-onbox-register.test.mjs` already uses for its own
-`resolveBaselineText`/git-dependent tests (it has some, per its imports of
-`spawnSync`/`mkdtempSync` — re-derive that pattern rather than inventing a new
-one).
+Build `FIXTURE_REPO_DIR`/`FIXTURE_STALE_NONCE_PATH` following
+`scripts/tests/publish-token-git.test.mjs`'s existing throwaway-repo-with-real-history
+pattern (Step 1's note above), not `check-onbox-register.test.mjs`'s.
 
-- [ ] **Step 3: Verify failure**
+- [ ] **Step 4: Verify failure**
 
 Run: `node --test scripts/tests/check-onbox-register.test.mjs`
 Expected: FAIL — today's `--against-published` never calls `comparePublishTokens`.
 
-- [ ] **Step 4: Wire the four lookups and the call**
+- [ ] **Step 5: Wire the four lookups and the call**
 
 ```javascript
-import { comparePublishTokens, nonceInHistory } from './publish-token.mjs';
+import { comparePublishTokens, nonceInHistory, parsePublishToken } from './publish-token.mjs';
 
 // Inside the --against-published CLI path, after resolving `published` (the
 // saved copy) and `baseline` (origin/main's live view) and before/alongside
@@ -1806,17 +2069,18 @@ const tokenErrors = comparePublishTokens({
 });
 ```
 
-Re-derive `runGitCommand`'s exact signature (already exported/used elsewhere
-in this file per this plan's research) before wiring it as the `gitRunner`
-argument. Fold `tokenErrors` into the CLI's overall error list alongside
-`checkLiveView`'s output.
+`runGitCommand` is module-local (not exported) in `check-onbox-register.mjs`
+— that's fine, this wiring stays inside the same file/module scope, so no
+import is needed; just reference it directly as the `gitRunner` argument. Fold
+`tokenErrors` into the CLI's overall error list alongside `checkLiveView`'s
+output.
 
-- [ ] **Step 5: Run to verify pass**
+- [ ] **Step 6: Run to verify pass**
 
 Run: `node --test scripts/tests/check-onbox-register.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add scripts/check-onbox-register.mjs scripts/tests/check-onbox-register.test.mjs
@@ -1901,6 +2165,29 @@ issue filed in Task 10 Step 5. `Closes #2721`, `Refs #2599`, `Refs #2603`.
 
 ## Self-Review
 
+**Revised after an adversarial review pass (2026-08-29) found the plan not
+buildable as first drafted.** That pass found: Task 7's row-shell model
+omitted the real `<details class="item">` wrapper and `<header>` block
+entirely (would have deleted every group's header on the first real run —
+fixed by re-deriving the real markup and rewriting Task 7's parser, fixtures,
+and section-replace regex to preserve `<header>` and operate on whole
+`<details>` blocks); Task 7's Blocked-title normaliser failed against all
+five real Blocked pairs (nested-paren markdown links, one-sided normalisation
+— fixed with a balanced-paren stripper applied to both sides, hand-verified
+against all five real pairs in Step 7); Task 3's body-scan used string keys
+against a numeric-keyed map, making its own fix inert (fixed, plus the
+function is now exported); Task 9's original design tried to widen
+`checkConflictingSubjects`'s existing eligibility rule, which is unreachable
+for the real citation shape and reverses a documented architectural boundary
+— redesigned as a new, narrowly-scoped `checkIdReuse` function targeting
+exactly the `Register row(s):` idiom, and confirmed Check A already handles
+the "departed ID" half; Task 12 was missing a live-view baseline fetch
+entirely and pointed at the wrong test-fixture precedent (the real one,
+`publish-token-git.test.mjs`, already exists); Task 4's `process.exit(main())`
+violated `is-main-module.mjs`'s own documented gotcha; Task 4's strip tiles
+dropped the `blk` CSS class; Task 8 would have deleted real-file test coverage
+`register:build --check` doesn't replace. All fixed in place above.
+
 **Spec coverage:**
 - §1 (generator is a reconciler) → Task 4 (`main`, region-replace primitive).
 - §2 (`strip`/`glance`/`groups` targets, `changelog` dropped) → Tasks 4/5/6;
@@ -1910,8 +2197,8 @@ issue filed in Task 10 Step 5. `Closes #2721`, `Refs #2599`, `Refs #2603`.
 - §5 (retirement) → Task 8 Step 6-7.
 - §6 (`wrongId` widening, both prerequisites, the three fixes, the two
   structurally-invisible fixes) → Task 3 (prerequisite 1), Task 9
-  (prerequisite 2 + widening mechanism), Task 10 (the five fixes), Task 11
-  (deferral-site rewrites + confirming the fatal wiring).
+  (prerequisite 2, as the narrower `checkIdReuse`), Task 10 (the five fixes),
+  Task 11 (deferral-site rewrites + wiring both `wrongId` sources into the CLI).
 - §7 (held Task 10/12) → Task 12, Task 13, named explicitly as "held" to avoid
   numbering collision with this plan's own Task 10/12.
 - Ticket disposition table → PR bodies' `Closes`/`Refs` trailers in Tasks 8's
@@ -1925,13 +2212,15 @@ issue filed in Task 10 Step 5. `Closes #2721`, `Refs #2599`, `Refs #2603`.
 **Placeholder scan:** every step above either contains real code, a real shell
 command, or an explicit "re-derive X before trusting this" instruction paired
 with the concrete thing being deferred (a line number, a fixture shape, a
-markup detail) — never a bare "handle edge cases" with no content. Several
-steps deliberately flag their own weakest assumption (shell-boundary regexes
-in Task 7, the `nonceInHistory` return contract in Task 12) rather than
-asserting confidence the research phase didn't actually reach.
+markup detail) — never a bare "handle edge cases" with no content. Task 7's
+Step 7 in particular requires the implementer to hand-verify the normaliser
+against all five real Blocked pairs **before** writing the reconciliation
+code, not after — the ordering the review pass found missing the first time.
 
 **Type/name consistency:** `parseRegisterFigures`, `buildStripRegion`,
-`applyGeneratedRegion`, `parseBodyGroupCounts`, `reconcileRowShells`, `main`
-are each defined once (Task 4/5/6/7) and referenced identically in every later
-task. `recordSubjectConflict`'s new parameter list (`registerRows`, `lines`)
-is introduced once in Task 9 and not redefined elsewhere.
+`applyGeneratedRegion`, `parseBodyGroupCounts`, `splitMdSections`,
+`reconcileRowShells`, `reconcileOneSection`, `reconcileTitledSection`,
+`normaliseTitle`, `checkIdReuse`, `main` are each defined once and referenced
+identically in every later task or step. `splitMdSections` (called by
+`reconcileRowShells`, defined in the same task) is now actually defined,
+correcting the earlier draft's forward reference.
