@@ -265,6 +265,17 @@ function isMidWordHit(haystack: string, pos: number): boolean {
   return pos > 0 && WORD_CHAR.test(haystack[pos - 1]);
 }
 
+/** True when `search` ends INSIDE a word rather than at its end — i.e. the
+    character immediately after `pos + search.length` is itself a word
+    character, so `search` is a strict prefix of a longer, unrelated word.
+    Only meaningful for the fuzzy fallback's 16-char-prefix `search` (#2608):
+    a full-length exact-match `search` ending mid-word is a separate, known
+    gap this fix does not touch (see `findNeedleSpan`'s `checkRightBoundary`). */
+function isMidWordOnRight(haystack: string, pos: number, searchLen: number): boolean {
+  const end = pos + searchLen;
+  return end < haystack.length && WORD_CHAR.test(haystack[end]);
+}
+
 /** Search `needle` in `haystack` starting at `cursor`, bounded to a
     look-ahead window; falls back to one unbounded re-search from the SAME
     cursor (tolerates a legitimately out-of-order match farther ahead). A
@@ -292,7 +303,17 @@ interface LocatedSpan {
     pre-#2537 `main`. With it on, an occurrence preceded by that sentence's own
     paragraph dash can win over an earlier bare one, reporting `start` as the
     head of the dash run — but only under the conditions `Needle`'s doc
-    comment states; a bare hit that's already independently valid is kept. */
+    comment states; a bare hit that's already independently valid is kept.
+
+    `checkRightBoundary` (#2608) additionally distrusts a bare hit whose
+    RIGHT side lands mid-word, on top of the existing left-side check — but
+    only when the caller sets it. Fed `true` only by `fillRun`'s fuzzy
+    fallback call, whose `search` is a fixed `FUZZY_ANCHOR_LEN`-char PREFIX of
+    the needle and so, by construction, almost never ends at a real word
+    boundary: without a caller-controlled gate this would make every fuzzy
+    bare hit look mid-word, including ones with no ambiguity to resolve — the
+    exact-match path's `search` is normally the needle's own full text, whose
+    right edge is a real boundary already, so it must keep passing `false`. */
 function findNeedleSpan(
   haystack: string,
   search: string,
@@ -300,6 +321,7 @@ function findNeedleSpan(
   tryDashPrefix: boolean,
   cursor: number,
   adjacent: DashAdjacency,
+  checkRightBoundary: boolean,
 ): LocatedSpan | null {
   const pos = findMatch(haystack, search, cursor);
   if (!tryDashPrefix || pos === -1) {
@@ -319,22 +341,24 @@ function findNeedleSpan(
   // text legitimately recurs later in the chapter under a DIFFERENT sentence's
   // dash, this occurrence would be discarded in favor of binding to that
   // unrelated dash (#2577 pass 4, "Q1").
-  // KNOWN RESIDUAL (#2608, found #2577 pass 5, scope corrected pass 6):
   // `isMidWordHit` only checks the LEFT boundary of `pos`. It says nothing
   // about whether `search` also ends cleanly — a `search` that is itself a
   // strict prefix of a longer word can pass this check while still being a
   // false hit on its right side, and would then be wrongly trusted here
-  // instead of walking forward to the dash-prefixed occurrence. This is NOT
-  // limited to the fuzzy 16-char-prefix fallback (which by construction
-  // usually doesn't end at a word boundary) — it reaches the plain
-  // exact-match path too, with `search` at its full needle length: e.g. a
-  // needle `"Он молчал"` (well under FUZZY_MIN_NEEDLE, fuzzy unreachable)
-  // binds to `narration@0` instead of the real dash line when the body also
-  // contains `"Он молчаливо…"`. Fixing this needs a decision on how the
-  // fuzzy path's inherently mid-word truncation point should be treated
-  // alongside the exact path — see #2608. Not a regression: this exact gap
-  // already existed on `main`, unrelated to dash-invariance.
-  if (!isMidWordHit(haystack, pos)) {
+  // instead of walking forward to the dash-prefixed occurrence.
+  // FIXED for the fuzzy 16-char-prefix fallback (#2608): its caller passes
+  // `checkRightBoundary: true`, and `isMidWordOnRight` below catches exactly
+  // this shape for that `search`.
+  // KNOWN RESIDUAL, scope-limited on purpose: the plain exact-match path
+  // (`checkRightBoundary: false`) still has this gap at `search`'s full
+  // needle length — e.g. a needle `"Он молчал"` (well under FUZZY_MIN_NEEDLE,
+  // fuzzy unreachable) binds to `narration@0` instead of the real dash line
+  // when the body also contains `"Он молчаливо…"`. #2608 resolved this only
+  // for the fuzzy path; the exact path needs its own decision (a `search`
+  // that's the needle's own full text ending mid-word is a different,
+  // rarer shape than a fixed-length prefix cut). Not a regression: this
+  // exact-path gap already existed on `main`, unrelated to dash-invariance.
+  if (!isMidWordHit(haystack, pos) && !(checkRightBoundary && isMidWordOnRight(haystack, pos, search.length))) {
     return { start: pos, end: Math.min(pos + spanLen, haystack.length) };
   }
 
@@ -384,7 +408,15 @@ function findAnchors(needles: Needle[], haystack: string, adjacent: DashAdjacenc
   for (let i = 0; i < needles.length; i++) {
     const needle = needles[i];
     if (needle.text.length < ANCHOR_MIN_LEN) continue;
-    const hit = findNeedleSpan(haystack, needle.text, needle.text.length, needle.tryDashPrefix, cursor, adjacent);
+    const hit = findNeedleSpan(
+      haystack,
+      needle.text,
+      needle.text.length,
+      needle.tryDashPrefix,
+      cursor,
+      adjacent,
+      false,
+    );
     if (hit === null) continue;
     anchors.push({ index: i, start: hit.start, end: hit.end });
     cursor = hit.end;
@@ -421,10 +453,22 @@ function fillRun(
       results[i] = null;
       continue;
     }
-    let hit = findNeedleSpan(runHaystack, needle.text, needle.text.length, needle.tryDashPrefix, cursor, runAdjacent);
+    let hit = findNeedleSpan(
+      runHaystack,
+      needle.text,
+      needle.text.length,
+      needle.tryDashPrefix,
+      cursor,
+      runAdjacent,
+      false,
+    );
     if (hit === null && fuzzy && needle.text.length >= FUZZY_MIN_NEEDLE) {
       // Exact failed (gemma paraphrased/dropped a word). Anchor on the prefix
       // so the sentence still attaches to its paragraph; approximate the extent.
+      // `checkRightBoundary: true` (#2608) — this `search` is a fixed-length
+      // prefix, so a bare hit that's a strict prefix of a longer, unrelated
+      // word must not be trusted; walk forward for a dash-prefixed occurrence
+      // of the same prefix first, same as the existing left-boundary case.
       hit = findNeedleSpan(
         runHaystack,
         needle.text.slice(0, FUZZY_ANCHOR_LEN),
@@ -432,6 +476,7 @@ function fillRun(
         needle.tryDashPrefix,
         cursor,
         runAdjacent,
+        true,
       );
     }
     if (hit === null) {
