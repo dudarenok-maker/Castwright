@@ -228,9 +228,14 @@
     separate on-box run (23 fresh syntheses, same GPU and voice) measured every line's fresh
     mean <b>6.8%–21% above</b> the committed <code>spread-report.json</code>'s means, all five
     lines shifted the same direction. That is between-session drift, not the within-session
-    noise <code>tolerance</code>'s derivation accounted for, and it raises the estimated
-    spurious-failure rate on this opt-in check to roughly <b>~3.65% per run</b> (vs. the ~2%
-    estimated from within-session spread alone). <code>tolerance</code> ships unchanged rather
+    noise <code>tolerance</code>'s derivation accounted for, and it raises this opt-in check's
+    spurious-failure rate above the ~2% within-session-only estimate by an amount that is
+    itself session-dependent — a fixed point estimate here goes stale on every re-bless
+    (review-round-3 finding: an earlier version of this note quoted a fixed ~3.65%/run figure
+    computed against <code>entries</code> this same PR round then re-blessed). Re-derive the
+    estimate from the CURRENT <code>qwen-duration-baseline.json</code> entries and
+    <code>spread-report.json</code> if a precise number is needed.
+    <code>tolerance</code> ships unchanged rather
     than widened further or re-measured across multiple sessions — see
     <a href="https://github.com/dudarenok-maker/Castwright/issues/2742">#2742</a> for the
     related but distinct open design decision (assert-time averaging to tighten the gate's

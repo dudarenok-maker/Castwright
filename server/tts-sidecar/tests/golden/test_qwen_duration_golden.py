@@ -110,11 +110,23 @@ def test_qwen_golden_lengths_match_baseline():
     # this as a failure instead, which hard-fails every box whose first
     # designed voice happens to sort before the blessed one even though
     # nothing regressed (#1994 review finding C3).
-    recorded_voices = {e.get("voice") for e in entries.values() if e.get("voice") is not None}
-    if recorded_voices and voice not in recorded_voices:
+    # Set membership ("is the resolved voice ANYWHERE among the recorded
+    # ones") is the wrong test here and was a real bug (#1994 review-round-3
+    # finding C3-R): a baseline blessed with a MIX of voices across its
+    # lines — e.g. one line re-blessed solo against a different voice than
+    # the rest — has the resolved voice "in" `recorded_voices` even though
+    # some individual entries were blessed against a DIFFERENT voice, and
+    # the per-line check this replaced (#1994 review finding C3) no longer
+    # exists to catch it once this up-front check lets the run proceed. The
+    # correct test is per-entry equality: any entry whose recorded voice
+    # disagrees with the resolved one makes the whole baseline inapplicable.
+    mismatched_voices = {
+        e.get("voice") for e in entries.values() if e.get("voice") is not None and e.get("voice") != voice
+    }
+    if mismatched_voices:
         pytest.skip(
-            f"qwen-duration-baseline.json's entries were blessed against "
-            f"voice(s) {sorted(recorded_voices)!r}, this box resolved "
+            f"qwen-duration-baseline.json has entries blessed against "
+            f"voice(s) {sorted(mismatched_voices)!r}, this box resolved "
             f"'{voice}' — re-bless on a box with the same designed voice, or "
             "here: `npm run test:golden-audio -- --sidecar-only --engine=qwen "
             "--bless`. Comparing across voices is meaningless."

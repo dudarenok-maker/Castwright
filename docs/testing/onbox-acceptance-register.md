@@ -459,11 +459,15 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > and voice) measured every line's fresh mean **6.8%–21% above** the
 > committed `spread-report.json`'s means, all five lines shifted the same
 > direction. That is between-session drift, not the within-session noise
-> `tolerance`'s derivation accounted for, and it raises the estimated
-> spurious-failure rate on this opt-in check to roughly **~3.65% per run**
-> (vs. the ~2% estimated from within-session spread alone). `tolerance` ships
-> unchanged rather than widened further or re-measured across multiple
-> sessions — see
+> `tolerance`'s derivation accounted for, and it raises this opt-in check's
+> spurious-failure rate above the ~2% within-session-only estimate by an
+> amount that is itself session-dependent — a fixed point estimate here goes
+> stale on every re-bless (review-round-3 finding: an earlier version of
+> this note quoted a fixed ~3.65%/run figure computed against `entries`
+> this same PR round then re-blessed). Re-derive the estimate from the
+> CURRENT `qwen-duration-baseline.json` entries and `spread-report.json` if
+> a precise number is needed. `tolerance` ships unchanged rather than
+> widened further or re-measured across multiple sessions — see
 > [#2742](https://github.com/dudarenok-maker/Castwright/issues/2742) for the
 > related but distinct open design decision (assert-time averaging to
 > tighten the gate's power against a real regression, which a wider

@@ -10,11 +10,11 @@ ordinary Python call, not a pytest collection, so the module-level `pytestmark`
 never attaches to these test items.
 
 This file tests:
-- `_bless` uses `synthesise_or_skip` only for the very first synthesis of
-  the whole bless (line 1's first rep); every other call goes straight to
-  the engine — an ORDERED call log, not a count, so an `i == 0` -> `i == 1`
-  swap can't survive with matching counts
-  (`test_bless_uses_synthesise_or_skip_only_for_first_line`)
+- `_bless` uses `synthesise_or_skip` only for a single discarded warm-up
+  call, made once before any line's averaged reps; every timed rep across
+  every line goes straight to the engine — an ORDERED call log, not a
+  count, so an ordering mutation can't survive with matching counts
+  (`test_bless_uses_synthesise_or_skip_only_for_the_warmup`)
 - `_bless` blesses the MEAN duration/sample_count across `BLESS_REPS`
   repeated real syntheses per line, not a single draw — #1994 review
   finding C1: `tolerance` bounds how far a single fresh draw can land from
@@ -30,6 +30,11 @@ This file tests:
   catalog like Kokoro's, so a voice mismatch means "this box hasn't been
   measured", not "a regression was detected"
   (`test_assertion_loop_skips_on_voice_mismatch_against_baseline`)
+- …and SKIPS on a MIXED-voice baseline too, where only SOME entries
+  disagree with the resolved voice — set membership ("is the resolved
+  voice anywhere among the recorded ones") is the wrong test, since it
+  passes even when one specific entry doesn't match — #1994
+  review-round-3 finding C3-R (`test_assertion_loop_skips_on_a_mixed_voice_baseline`)
 - …but does NOT skip when the resolved voice MATCHES the baseline's — the
   only voice configuration the gate ever actually asserts under, and the
   one case that catches a mutant which skips on ANY recorded voice
@@ -166,13 +171,14 @@ def test_bless_averages_across_reps(monkeypatch, tmp_path) -> None:
     from the population's TRUE mean, so the reference `_bless` writes must
     itself approximate that mean — an arbitrary single draw could sit
     anywhere in the distribution. Kills a mutant that blesses only the
-    first/last rep instead of averaging across all `BLESS_REPS` — including
-    a "bless rep 0 only" mutant, i.e. the exact pre-fix C1 behaviour: that
-    is why `sample_counts[0]` below is NOT equal to the mean (#1994
-    review-round-2 finding C4: an earlier version of this fixture had
-    `sample_counts[0] == mean` by coincidence, so a "rep 0 only" mutant
-    produced the SAME stored value as the real averaging code and the test
-    could not fail for the one mutation it exists to catch)."""
+    FIRST rep instead of averaging across all `BLESS_REPS` — including a
+    "bless rep 0 only" mutant, i.e. the exact pre-fix C1 behaviour — AND a
+    mutant that blesses only the LAST rep, because `sample_counts` below
+    puts the mean-equal value in the MIDDLE, not at either endpoint (#1994
+    review-round-3 finding C4-R: the round-2 fixture put the mean-equal
+    value LAST, which closed the "rep 0 only" gap this docstring already
+    claimed to kill but silently reopened the same gap for "rep -1 only" —
+    see the fixture's own comment below)."""
     path = _write_baseline(tmp_path)
     monkeypatch.setattr(qwen, "BASELINE_PATH", path)
     monkeypatch.setattr(qwen, "FIXTURE_PATH", tmp_path / "fixture.json")
@@ -181,12 +187,18 @@ def test_bless_averages_across_reps(monkeypatch, tmp_path) -> None:
     fixture = {"lines": [{"id": "line1", "text": "Test one."}]}
     monkeypatch.setattr(qwen, "_load_json", lambda p: fixture if p == qwen.FIXTURE_PATH else {})
 
-    # Three distinct sample counts (at 24000 Hz: 0.9s, 1.1s, 1.0s) whose mean
+    # Three distinct sample counts (at 24000 Hz: 0.9s, 1.0s, 1.1s) whose mean
     # duration (1.0s) and mean sample_count (24000) are exact round numbers,
-    # so the assertion below can't be confused by rounding -- and whose
-    # FIRST value (21600, index 0) is deliberately NOT the mean, so a mutant
-    # that blesses only rep 0 produces a different, wrong stored value.
-    sample_counts = [21600, 26400, 24000]
+    # so the assertion below can't be confused by rounding -- and whose mean
+    # value (24000) sits in the MIDDLE (index 1), so neither the FIRST nor
+    # the LAST rep alone equals the mean. A mutant that blesses only rep 0
+    # OR only the last rep therefore both produce a different, wrong stored
+    # value (#1994 review-round-3 finding C4-R: an earlier reorder of this
+    # fixture put the mean-equal value LAST, `[21600, 26400, 24000]` --
+    # closing the "rep 0 only" gap this test's docstring already claimed to
+    # kill, but silently reopening the same gap for a "last rep only"
+    # mutant, which this fixture had caught before that reorder).
+    sample_counts = [21600, 24000, 26400]
     results = [_make_mock_synthesize_result(c) for c in sample_counts]
 
     direct_results = iter(results)
@@ -328,7 +340,56 @@ def test_assertion_loop_skips_on_voice_mismatch_against_baseline(monkeypatch) ->
 
     # The mismatch is checked up front, before any synthesis, so
     # synthesise_or_skip is never actually invoked here — nothing to mock.
-    with pytest.raises(pytest.skip.Exception, match="voice_a.*voice_b|voice"):
+    # A bare `|voice` fallback here would match almost any skip message that
+    # happens to mention the word "voice" -- including the WRONG skip (e.g.
+    # `_resolve_voice`'s "no designed Qwen voice on this box" branch), so a
+    # mutation that made this test skip for a completely different reason
+    # would still pass (#1994 review-round-3 finding T1). Requiring BOTH
+    # voice ids in one message pins that the skip actually came from this
+    # test's own mismatch branch.
+    with pytest.raises(pytest.skip.Exception, match=r"voice_a.*voice_b"):
+        qwen.test_qwen_golden_lengths_match_baseline()
+
+
+def test_assertion_loop_skips_on_a_mixed_voice_baseline(monkeypatch) -> None:
+    """A baseline where SOME entries were blessed against the resolved voice
+    and OTHERS were blessed against a different voice must still SKIP the
+    whole run, not silently compare the mismatched entry — #1994
+    review-round-3 finding C3-R: set-membership ("is the resolved voice
+    ANYWHERE among the recorded ones") is the wrong test here, because the
+    resolved voice IS a member of a mixed set even though one specific entry
+    disagrees with it. Driven against the REAL function (no per-line check
+    remains to catch this once the up-front skip lets a mixed baseline
+    through), reproduced exactly: `voice_b`'s entry ran to completion
+    compared against `voice_a` audio before this fix."""
+    fixture = {
+        "lines": [
+            {"id": "line1", "text": "Test one."},
+            {"id": "line2", "text": "Test two."},
+        ]
+    }
+    baseline = {
+        "tolerance": 0.10,
+        "entries": {
+            # line1 matches the resolved voice; line2 was blessed solo
+            # against a different one -- e.g. a hand-edited or partially
+            # re-blessed baseline.
+            "line1": {"voice": "voice_a", "sample_rate": 24000, "sample_count": 24000, "duration_sec": 1.0},
+            "line2": {"voice": "voice_b", "sample_rate": 24000, "sample_count": 24000, "duration_sec": 1.0},
+        },
+    }
+
+    def mock_load(p):
+        return fixture if p == qwen.FIXTURE_PATH else baseline
+
+    monkeypatch.setattr(qwen, "_load_json", mock_load)
+    monkeypatch.setattr(qwen, "_resolve_voice", lambda engine: "voice_a")
+    monkeypatch.delenv("GOLDEN_BLESS", raising=False)
+    monkeypatch.setattr(qwen, "_make_qwen", lambda: MagicMock())
+
+    # The mismatch is checked up front, before any synthesis, so
+    # synthesise_or_skip is never actually invoked here — nothing to mock.
+    with pytest.raises(pytest.skip.Exception, match=r"voice_b"):
         qwen.test_qwen_golden_lengths_match_baseline()
 
 
