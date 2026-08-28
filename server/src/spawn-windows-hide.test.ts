@@ -212,15 +212,31 @@ function listSourceFiles(dir: string): string[] {
    disambiguate a `//` inside a string from a real line comment.
 
    KNOWN LIMITATION (#2747): an unpaired backtick or quote character inside a
-   regex literal (e.g., /^`+|`+$/g — this exact pattern appears in
-   scripts/lib/knob-docs.mjs) will desync the quote-tracking state, causing
-   everything after that point in the file to be misread as "inside a
-   string" and blanked out. This means a real spawn call appearing after such
-   a regex literal anywhere in a scanned file would be silently invisible to
-   the spawn-detection regex, producing a false "compliant" result. This is a
-   real, reproduced gap, not theoretical. Correctly fixing this requires real
+   regex literal will desync the quote-tracking state, causing everything
+   after that point in the file to be misread as "inside a string" and
+   blanked out. This means a real spawn call appearing after such a regex
+   literal anywhere in a scanned file would be silently invisible to the
+   spawn-detection regex, producing a false "compliant" result. This is a
+   real, reproduced gap, not theoretical — correctly fixing it requires real
    parsing to distinguish a regex literal from a division operator, and is a
-   design-level decision, not a quick patch. See issue #2747 for details. */
+   design-level decision, not a quick patch. See issue #2747 for details.
+
+   Currently-known live instances (a scanned file whose desync point sits
+   BEFORE a real spawn call the guard therefore cannot see) — checked
+   2716 final-pass review, not exhaustive, and NOT a substitute for #2747's
+   own fix: `server/src/export/build-m4b.ts:224`'s `/'/g` hides two spawn
+   calls (`ffprobe` at :240, `ffmpeg` at :336) from the primary server/src/**
+   scan below. Both already carry windowsHide: true in source today (verified
+   by mutation: deleting the flag from either does NOT redden the guard), so
+   there is no live defect — but a FUTURE regression on either line would ship
+   silently. `scripts/thin-backlog.mjs:187`'s `/^_`/ ` similarly desyncs
+   the whole rest of that file, dropping it from EXTERNAL_FILES_FLOOR
+   entirely (its one spawn call, fixed with windowsHide: true in the same
+   round this comment was written, is a "should be visible but isn't" case,
+   not a live defect). Three further files desync but hide nothing today
+   because no spawn call follows the desync point: `scripts/lib/knob-docs.mjs`
+   (the /^`+|`+$/g example above), `scripts/lib/slim-epub-cover.mjs`,
+   `scripts/release-notes-gate.mjs`. */
 function blankCommentsAndStrings(src: string): string {
   const out: string[] = [];
   let i = 0;
