@@ -392,11 +392,31 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > `quotes-and-punctuation` 13.0% (mean 3.752s, stdev 0.321s), `multi-sentence-group`
 > 19.9% (mean 4.696s, stdev 0.498s). Hand-set `qwen-duration-baseline.json`'s
 > `tolerance` to **0.30** (measured max 22.4% plus ~34% headroom) from this
-> measurement, then blessed `entries` via a fresh single run against the same
-> voice/model. Raw measurement retained at
-> `server/tts-sidecar/tests/golden/spread-report.json`. Per this file's own
-> "record what was observed, by whom, and when" policy: observed by Claude Code
-> (dudarenok-maker), 2026-08-28. **A101 is retired, not reused** (above).
+> measurement. `_bless` (`test_qwen_duration_golden.py`) blesses the MEAN of
+> `BLESS_REPS=5` repeated real syntheses per line as the reference, not a
+> single draw, so the blessed value is a stable estimate of the true mean —
+> matching what `tolerance` was derived to bound. Raw N=10 spread measurement
+> retained at `server/tts-sidecar/tests/golden/spread-report.json`. Per this
+> file's own "record what was observed, by whom, and when" policy: observed
+> by Claude Code (dudarenok-maker), 2026-08-28. **A101 is retired, not
+> reused** (above).
+>
+> **Known limitation, accepted 2026-08-28 (repo owner, ship-as-is decision).**
+> Independent verification during PR #2739's review found the real duration
+> distribution can drift beyond what this single on-box measurement session
+> characterized: a second, separate on-box run (23 fresh syntheses, same GPU
+> and voice) measured every line's fresh mean **6.8%–21% above** the
+> committed `spread-report.json`'s means, all five lines shifted the same
+> direction. That is between-session drift, not the within-session noise
+> `tolerance`'s derivation accounted for, and it raises the estimated
+> spurious-failure rate on this opt-in check to roughly **~3.65% per run**
+> (vs. the ~2% estimated from within-session spread alone). `tolerance` ships
+> unchanged rather than widened further or re-measured across multiple
+> sessions — see
+> [#2742](https://github.com/dudarenok-maker/Castwright/issues/2742) for the
+> related but distinct open design decision (assert-time averaging to
+> tighten the gate's power against a real regression, which a wider
+> tolerance alone would make worse, not better).
 >
 > **Prior change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A101** (Qwen duration
 > golden baseline bless, #1994) — minted from the `next-id` floor per this

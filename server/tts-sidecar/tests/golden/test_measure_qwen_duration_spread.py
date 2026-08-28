@@ -56,6 +56,22 @@ def test_line_stats_single_outlier_drives_max_frac_dev() -> None:
     assert abs(stats["max_frac_dev"] - (0.8 / 1.2)) < 1e-4
 
 
+def test_line_stats_low_outlier_still_drives_max_abs_dev() -> None:
+    """A single outlier BELOW the mean, not above, must still drive
+    max_abs_dev/max_frac_dev — kills a mutant that drops `abs()` from the
+    per-draw deviation (`max(d - mean for d in durations)` instead of
+    `max(abs(d - mean) for d in durations)`), which would only ever see
+    positive/above-mean deviations — blind to a draw SHORTER than expected,
+    the direction that actually matters for catching a real speech-rate
+    regression (#1994 review-round-2 finding M5: the previous three tests
+    all had their largest deviation on the high side, so this mutant
+    survived them all)."""
+    stats = _line_stats([0.5, 1.0, 1.0, 1.0, 1.0])  # mean=0.9, low outlier dev=-0.4
+    assert abs(stats["mean_sec"] - 0.9) < 1e-4
+    assert abs(stats["max_abs_dev_sec"] - 0.4) < 1e-4
+    assert abs(stats["max_frac_dev"] - (0.4 / 0.9)) < 1e-4
+
+
 def test_line_stats_zero_mean_returns_zero_frac_dev() -> None:
     """A degenerate zero-mean input must not raise a ZeroDivisionError —
     kills a mutant that drops the `mean > 0` guard."""

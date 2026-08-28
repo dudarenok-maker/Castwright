@@ -14,10 +14,13 @@ recorded in `qwen-duration-baseline.json`'s `_comment` and in the register's
 changelog. Re-run this script (and hand-derive a fresh `tolerance`) if the
 fixture lines, the model, or the designed voice change.
 
-Usage (from the sidecar venv):
+Usage (from the repo root; `--out` is a plain path, resolved against the
+CURRENT working directory, not this script's own directory — pass the full
+path shown below to land the report next to this file, matching where
+A101's own spread-report.json is committed):
     server/tts-sidecar/.venv/Scripts/python.exe \\
         server/tts-sidecar/tests/golden/measure_qwen_duration_spread.py \\
-        --repeats 10 --out spread-report.json
+        --repeats 10 --out server/tts-sidecar/tests/golden/spread-report.json
 
 Respects GOLDEN_QWEN_VOICE the same way the golden test does (falls back to
 the first designed voice `QwenEngine.list_voices()` finds). Pin the GPU via

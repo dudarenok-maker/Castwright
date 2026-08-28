@@ -1,36 +1,36 @@
 {
-  "_comment": "#1994. `entries` gets populated by a normal `--bless` run, but `tolerance` does NOT -- `_bless` deliberately never touches it, so it stays whatever this file already has. `tolerance` is now a MEASURED value, not a placeholder: on-box register row A101 (now discharged and removed from docs/testing/onbox-acceptance-register.md -- the ID stays retired, never reused), 2026-08-28, RTX 5070 Ti (`QWEN_DEVICE=cuda:1`), voice `cw_gpu_17b`, N=10 repeated syntheses per qwen-duration-fixture.json line via server/tts-sidecar/tests/golden/measure_qwen_duration_spread.py. Observed per-line max fractional deviation from its own mean: narrator-plain 9.0%, numbers-and-year 12.2%, abbreviations 22.4% (max), quotes-and-punctuation 13.0%, multi-sentence-group 19.9%. tolerance=0.30 is the measured max (22.4%) plus ~34% headroom. Raw measurement retained at server/tts-sidecar/tests/golden/spread-report.json. Re-measure (and re-derive tolerance) if the fixture lines, the model, or the designed voice change -- this value is specific to voice cw_gpu_17b on Qwen/Qwen3-TTS-12Hz-0.6B-Base. Bless (refreshes `entries` only) via: npm run test:golden-audio -- --sidecar-only --engine=qwen --bless",
+  "_comment": "#1994. `entries` gets populated by a normal `--bless` run, but `tolerance` does NOT -- `_bless` deliberately never touches it, so it stays whatever this file already has. `tolerance` is now a MEASURED value, not a placeholder: on-box register row A101 (now discharged and removed from docs/testing/onbox-acceptance-register.md -- the ID stays retired, never reused), 2026-08-28, RTX 5070 Ti (`QWEN_DEVICE=cuda:1`), voice `cw_gpu_17b`, N=10 repeated syntheses per qwen-duration-fixture.json line via server/tts-sidecar/tests/golden/measure_qwen_duration_spread.py. Observed per-line max fractional deviation from its own mean: narrator-plain 9.0%, numbers-and-year 12.2%, abbreviations 22.4% (max), quotes-and-punctuation 13.0%, multi-sentence-group 19.9%. tolerance=0.30 is the measured max (22.4%) plus ~34% headroom. Raw measurement retained at server/tts-sidecar/tests/golden/spread-report.json. Re-measure (and re-derive tolerance) if the fixture lines, the model, or the designed voice change -- this value is specific to voice cw_gpu_17b on Qwen/Qwen3-TTS-12Hz-0.6B-Base. `entries` is the MEAN of BLESS_REPS=5 repeated real syntheses per line, not a single draw (see `_bless`'s docstring). Bless (refreshes `entries` only) via: npm run test:golden-audio -- --sidecar-only --engine=qwen --bless. KNOWN LIMITATION (accepted 2026-08-28, repo owner ship-as-is decision): PR #2739's review found the real duration distribution can drift beyond this single measurement session -- a second on-box run measured every line's fresh mean 6.8-21% above this file's committed means, raising the estimated spurious-failure rate to roughly ~3.65%/run. tolerance ships unchanged; see docs/testing/onbox-acceptance-register.md's A101 changelog entry and https://github.com/dudarenok-maker/Castwright/issues/2742 for the full context.",
   "tolerance": 0.3,
   "entries": {
     "narrator-plain": {
       "voice": "cw_gpu_17b",
       "sample_rate": 24000,
-      "sample_count": 77952,
-      "duration_sec": 3.248
+      "sample_count": 86016,
+      "duration_sec": 3.584
     },
     "numbers-and-year": {
       "voice": "cw_gpu_17b",
       "sample_rate": 24000,
-      "sample_count": 125184,
-      "duration_sec": 5.216
+      "sample_count": 135168,
+      "duration_sec": 5.632
     },
     "abbreviations": {
       "voice": "cw_gpu_17b",
       "sample_rate": 24000,
-      "sample_count": 109056,
-      "duration_sec": 4.544
+      "sample_count": 110208,
+      "duration_sec": 4.592
     },
     "quotes-and-punctuation": {
       "voice": "cw_gpu_17b",
       "sample_rate": 24000,
-      "sample_count": 104832,
-      "duration_sec": 4.368
+      "sample_count": 102912,
+      "duration_sec": 4.288
     },
     "multi-sentence-group": {
       "voice": "cw_gpu_17b",
       "sample_rate": 24000,
-      "sample_count": 124800,
-      "duration_sec": 5.2
+      "sample_count": 127488,
+      "duration_sec": 5.312
     }
   },
   "metadata": {

@@ -219,18 +219,21 @@ def _bless(engine: "main.QwenEngine", voice: str, fixture: dict) -> None:
     baseline = _load_json(BASELINE_PATH)
     entries: dict = {}
 
-    # Use synthesise_or_skip only for the very first synthesis of the whole
-    # bless (line 0's first rep) — if that fails, the engine is absent and we
-    # skip. Any later failure is a real regression.
-    for i, line in enumerate(fixture["lines"]):
+    # A discarded warm-up call, via synthesise_or_skip, validates the
+    # engine/voice before any timed rep — if it fails, the engine is absent
+    # and we skip. Its result is NOT one of the BLESS_REPS averaged draws:
+    # the first real synthesis after model load can carry outsized
+    # first-call overhead unrelated to steady-state duration, and averaging
+    # it in would fold one cold draw into what should be BLESS_REPS
+    # equally-warm draws (#1994 review-round-2 finding N6).
+    synthesise_or_skip(engine, QWEN_MODEL, voice, fixture["lines"][0]["text"])
+
+    for line in fixture["lines"]:
         durations: list[float] = []
         sample_counts: list[int] = []
         sample_rate: Optional[int] = None
-        for rep in range(BLESS_REPS):
-            if i == 0 and rep == 0:
-                res = synthesise_or_skip(engine, QWEN_MODEL, voice, line["text"])
-            else:
-                res = engine.synthesize(QWEN_MODEL, voice, line["text"])
+        for _ in range(BLESS_REPS):
+            res = engine.synthesize(QWEN_MODEL, voice, line["text"])
             m = measure_pcm(res.pcm, res.sample_rate)
             durations.append(m["duration_sec"])
             sample_counts.append(m["sample_count"])

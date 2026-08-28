@@ -30,7 +30,11 @@ This file tests:
   catalog like Kokoro's, so a voice mismatch means "this box hasn't been
   measured", not "a regression was detected"
   (`test_assertion_loop_skips_on_voice_mismatch_against_baseline`)
-- …but does NOT skip on a baseline entry with no recorded `voice` key at all
+- …but does NOT skip when the resolved voice MATCHES the baseline's — the
+  only voice configuration the gate ever actually asserts under, and the
+  one case that catches a mutant which skips on ANY recorded voice
+  regardless of match (`test_assertion_loop_does_not_skip_when_voice_matches`)
+- …and does NOT skip on a baseline entry with no recorded `voice` key at all
   (backward-compatible with a pre-#1994-review baseline shape) — the
   guard's `is not None` half, deliberately untested by the mismatch case
   above (`test_assertion_loop_tolerates_missing_voice_key_in_baseline_entry`)
@@ -100,11 +104,16 @@ def _make_mock_synthesize_result_audible(sample_count: int) -> MagicMock:
     return result
 
 
-def test_bless_uses_synthesise_or_skip_only_for_first_line(monkeypatch, tmp_path) -> None:
-    """Fix 3: `synthesise_or_skip` is used only for the very first synthesis
-    of the whole bless (line 1's first rep); every other call — including
-    line 1's remaining reps — goes straight to `engine.synthesize` so a real
-    failure surfaces as FAIL, not a swallowed SKIP."""
+def test_bless_uses_synthesise_or_skip_only_for_the_warmup(monkeypatch, tmp_path) -> None:
+    """Fix 3: `synthesise_or_skip` is used only for the discarded warm-up
+    call, made once before any line's averaged reps; every timed rep across
+    every line goes straight to `engine.synthesize` so a real failure
+    surfaces as FAIL, not a swallowed SKIP. The warm-up is a SEPARATE call
+    from every line's BLESS_REPS reps (#1994 review-round-2 finding N6: the
+    warm-up used to double as line 1's first averaged rep, folding one cold
+    draw into what should be BLESS_REPS equally-warm draws) — this test's
+    call count (1 skip + 3*BLESS_REPS direct, not 1 skip + 3*BLESS_REPS - 1)
+    pins that separation."""
     path = _write_baseline(tmp_path)
     monkeypatch.setattr(qwen, "BASELINE_PATH", path)
     monkeypatch.setattr(qwen, "FIXTURE_PATH", tmp_path / "fixture.json")
@@ -119,14 +128,14 @@ def test_bless_uses_synthesise_or_skip_only_for_first_line(monkeypatch, tmp_path
     }
     monkeypatch.setattr(qwen, "_load_json", lambda p: fixture if p == qwen.FIXTURE_PATH else {})
 
-    results = [_make_mock_synthesize_result(24000) for _ in range(6)]
+    results = [_make_mock_synthesize_result(24000) for _ in range(7)]
 
     # A single ORDERED call log, tagged by which path was used — not two
     # separate counters. Two counters can't tell "warm-up first, direct
     # after" from "direct first, warm-up in the middle": swap which index
-    # uses which path and the counts (1 skip, 5 direct) stay identical, so a
-    # count-only assertion can't catch an `i == 0 and rep == 0` mutation. The
-    # order captured here can.
+    # uses which path and the counts (1 skip, 6 direct) stay identical, so a
+    # count-only assertion can't catch an ordering mutation. The order
+    # captured here can.
     call_log = []
 
     def mock_synthesize(model, voice, text):
@@ -144,9 +153,9 @@ def test_bless_uses_synthesise_or_skip_only_for_first_line(monkeypatch, tmp_path
         mock_skip.side_effect = mock_skip_impl
         qwen._bless(mock_engine, "test_voice", fixture)
 
-    assert call_log == ["skip", "direct", "direct", "direct", "direct", "direct"], (
-        f"expected warm-up (skip) for line 1's first rep only, then direct "
-        f"calls for every other rep across all 3 lines (2 reps each), got {call_log}"
+    assert call_log == ["skip"] + ["direct"] * 6, (
+        f"expected a single warm-up (skip) call, then direct calls for "
+        f"every rep across all 3 lines (2 reps each = 6), got {call_log}"
     )
 
 
@@ -157,7 +166,13 @@ def test_bless_averages_across_reps(monkeypatch, tmp_path) -> None:
     from the population's TRUE mean, so the reference `_bless` writes must
     itself approximate that mean — an arbitrary single draw could sit
     anywhere in the distribution. Kills a mutant that blesses only the
-    first/last rep instead of averaging across all `BLESS_REPS`."""
+    first/last rep instead of averaging across all `BLESS_REPS` — including
+    a "bless rep 0 only" mutant, i.e. the exact pre-fix C1 behaviour: that
+    is why `sample_counts[0]` below is NOT equal to the mean (#1994
+    review-round-2 finding C4: an earlier version of this fixture had
+    `sample_counts[0] == mean` by coincidence, so a "rep 0 only" mutant
+    produced the SAME stored value as the real averaging code and the test
+    could not fail for the one mutation it exists to catch)."""
     path = _write_baseline(tmp_path)
     monkeypatch.setattr(qwen, "BASELINE_PATH", path)
     monkeypatch.setattr(qwen, "FIXTURE_PATH", tmp_path / "fixture.json")
@@ -166,13 +181,15 @@ def test_bless_averages_across_reps(monkeypatch, tmp_path) -> None:
     fixture = {"lines": [{"id": "line1", "text": "Test one."}]}
     monkeypatch.setattr(qwen, "_load_json", lambda p: fixture if p == qwen.FIXTURE_PATH else {})
 
-    # Three distinct sample counts (at 24000 Hz: 1.0s, 1.1s, 0.9s) whose mean
+    # Three distinct sample counts (at 24000 Hz: 0.9s, 1.1s, 1.0s) whose mean
     # duration (1.0s) and mean sample_count (24000) are exact round numbers,
-    # so the assertion below can't be confused by rounding.
-    sample_counts = [24000, 26400, 21600]
+    # so the assertion below can't be confused by rounding -- and whose
+    # FIRST value (21600, index 0) is deliberately NOT the mean, so a mutant
+    # that blesses only rep 0 produces a different, wrong stored value.
+    sample_counts = [21600, 26400, 24000]
     results = [_make_mock_synthesize_result(c) for c in sample_counts]
 
-    direct_results = iter(results[1:])
+    direct_results = iter(results)
 
     def mock_synthesize(model, voice, text):
         return next(direct_results)
@@ -180,7 +197,11 @@ def test_bless_averages_across_reps(monkeypatch, tmp_path) -> None:
     mock_engine = MagicMock()
     mock_engine.synthesize = mock_synthesize
 
-    with patch.object(qwen, "synthesise_or_skip", return_value=results[0]):
+    # The discarded warm-up returns a wildly different sample_count -- if it
+    # were ever folded into the average (the pre-N6-fix behaviour), the
+    # assertions below would catch that too.
+    warmup_result = _make_mock_synthesize_result(999999)
+    with patch.object(qwen, "synthesise_or_skip", return_value=warmup_result):
         qwen._bless(mock_engine, "test_voice", fixture)
 
     written = json.loads(path.read_text(encoding="utf-8"))
@@ -311,16 +332,63 @@ def test_assertion_loop_skips_on_voice_mismatch_against_baseline(monkeypatch) ->
         qwen.test_qwen_golden_lengths_match_baseline()
 
 
+def test_assertion_loop_does_not_skip_when_voice_matches(monkeypatch) -> None:
+    """A baseline entry blessed against the SAME voice this run resolved must
+    proceed to the real comparison, not skip. This is the only voice
+    configuration the golden gate ever actually asserts under, and neither
+    sibling test below covers it: the mismatch test's `recorded_voices` set
+    is always non-empty AND never contains the resolved voice, and the
+    missing-key test's `recorded_voices` set is always empty — both leave
+    `if recorded_voices:` (dropping the `voice not in recorded_voices` half
+    entirely) free to skip on ANY recorded voice, matched or not, and still
+    pass. Kills exactly that mutant (#1994 review-round-2 finding M3:
+    survived 11/11 green with no test covering this case)."""
+    fixture = {"lines": [{"id": "line1", "text": "Test one."}]}
+    baseline = {
+        "tolerance": 0.10,
+        "entries": {
+            "line1": {
+                "voice": "matching_voice",
+                "sample_rate": 24000,
+                "sample_count": 24000,
+                "duration_sec": 1.0,
+            },
+        },
+    }
+
+    def mock_load(p):
+        return fixture if p == qwen.FIXTURE_PATH else baseline
+
+    monkeypatch.setattr(qwen, "_load_json", mock_load)
+    monkeypatch.setattr(qwen, "_resolve_voice", lambda engine: "matching_voice")
+    monkeypatch.delenv("GOLDEN_BLESS", raising=False)
+    monkeypatch.setattr(qwen, "_make_qwen", lambda: MagicMock())
+
+    # Sample count/rate/RMS all match the baseline entry exactly, so the
+    # only thing that could stop this test completing cleanly is a
+    # voice-check false positive (a spurious skip OR a spurious failure).
+    result = _make_mock_synthesize_result_audible(24000)
+    with patch.object(qwen, "synthesise_or_skip", return_value=result):
+        try:
+            qwen.test_qwen_golden_lengths_match_baseline()  # must not skip or fail
+        except pytest.skip.Exception as exc:
+            pytest.fail(f"must not skip when the resolved voice matches the baseline's, but skipped: {exc}")
+
+
 def test_assertion_loop_tolerates_missing_voice_key_in_baseline_entry(monkeypatch) -> None:
     """A baseline entry with NO recorded `voice` key must NOT be treated as a
     mismatch — this is the `is not None` half of the voice-mismatch check's
     guard, deliberately untested by the sibling mismatch test above (which
     always seeds a recorded voice). Passes cleanly end to end (no
-    AssertionError) with matching audio, proving the check is a no-op rather
-    than a false positive when `voice` is absent. Kills the mutation where
-    `if recorded_voice is not None and recorded_voice != voice:` loses its
-    `is not None` guard, which would make ANY recorded-voice-absent entry
-    compare `None != voice` (always true) and fail every such line."""
+    AssertionError, no SKIP) with matching audio, proving the check is a
+    no-op rather than a false positive when `voice` is absent. Kills the
+    mutation where the set comprehension's `if e.get("voice") is not None`
+    filter is dropped, which would let a bare `None` into `recorded_voices`
+    and skip every voice-absent entry (#1994 review-round-2 finding M1: this
+    test used to just call the function with no failure wrapper, so under
+    that mutant it silently turned PASS into SKIP instead of catching it —
+    pytest treats an uncaught `Skipped` from inside a test body as that test
+    being skipped, not failed, so the suite stayed green either way)."""
     fixture = {"lines": [{"id": "line1", "text": "Test one."}]}
     baseline = {
         "tolerance": 0.10,
@@ -340,12 +408,15 @@ def test_assertion_loop_tolerates_missing_voice_key_in_baseline_entry(monkeypatc
 
     # Sample count/rate match the baseline entry exactly and RMS is well
     # above MIN_RMS, so every OTHER check in the loop passes too -- the only
-    # thing that could raise is a voice-mismatch false positive.
+    # thing that could raise (or skip) is a voice-mismatch false positive.
     result = _make_mock_synthesize_result_audible(24000)
     monkeypatch.setattr(qwen, "_make_qwen", lambda: MagicMock())
 
     with patch.object(qwen, "synthesise_or_skip", return_value=result):
-        qwen.test_qwen_golden_lengths_match_baseline()  # must not raise
+        try:
+            qwen.test_qwen_golden_lengths_match_baseline()  # must not raise or skip
+        except pytest.skip.Exception as exc:
+            pytest.fail(f"must not skip when the baseline entry has no recorded voice, but skipped: {exc}")
 
 
 def test_assertion_loop_warms_up_before_missing_entry_check(monkeypatch) -> None:
