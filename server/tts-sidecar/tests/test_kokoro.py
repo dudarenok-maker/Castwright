@@ -36,23 +36,23 @@ import main  # noqa: E402
 
 @pytest.fixture
 def isolated_cuda_verification_state(monkeypatch):
-	"""Isolate _cuda_verification_state mutations between tests by saving and
-	restoring the module-level global. Without this, a test that calls
-	_ensure_loaded (which mutates the global) leaves the state altered for
-	subsequent tests in the same pytest session, leading to test-order
-	dependencies and false positives/negatives. The fixture ensures each
-	test starts with the clean initial state and leaves the global unchanged
-	for the next test, regardless of pass/fail.
+    """Isolate _cuda_verification_state mutations between tests by saving and
+    restoring the module-level global. Without this, a test that calls
+    _ensure_loaded (which mutates the global) leaves the state altered for
+    subsequent tests in the same pytest session, leading to test-order
+    dependencies and false positives/negatives. The fixture ensures each
+    test starts with the clean initial state and leaves the global unchanged
+    for the next test, regardless of pass/fail.
 
-	Usage: include `isolated_cuda_verification_state` as a parameter in any
-	test that calls _ensure_loaded or directly asserts on
-	main._cuda_verification_state."""
-	# Save the pre-test state
-	saved_state = dict(main._cuda_verification_state)
-	yield  # Test runs here
-	# Restore the state after the test, even if it failed
-	main._cuda_verification_state.clear()
-	main._cuda_verification_state.update(saved_state)
+    Usage: include `isolated_cuda_verification_state` as a parameter in any
+    test that calls _ensure_loaded or directly asserts on
+    main._cuda_verification_state."""
+    # Save the pre-test state
+    saved_state = dict(main._cuda_verification_state)
+    yield  # Test runs here
+    # Restore the state after the test, even if it failed
+    main._cuda_verification_state.clear()
+    main._cuda_verification_state.update(saved_state)
 
 
 # Representative multilingual catalog spanning every language prefix
@@ -2511,26 +2511,26 @@ def test_cuda_fallback_recorded_when_api_drift_forces_cpu(
 
 @pytest.fixture
 def cuda_state_with_sentinel():
-	"""Fixture that sets _cuda_verification_state to a non-standard sentinel
-	value and verifies the isolation fixture restores it. This fixture MUST be
-	listed before isolated_cuda_verification_state in test parameters so its
-	cleanup runs AFTER the isolation fixture's cleanup (pytest uses LIFO for
-	fixture teardown).
+    """Fixture that sets _cuda_verification_state to a non-standard sentinel
+    value and verifies the isolation fixture restores it. This fixture MUST be
+    listed before isolated_cuda_verification_state in test parameters so its
+    cleanup runs AFTER the isolation fixture's cleanup (pytest uses LIFO for
+    fixture teardown).
 
-	This proves isolation actually works by requiring the isolated_cuda_verification_state
-	fixture to restore a value that production code would never naturally produce.
-	Without proper isolation, the sentinel won't be restored and the assertion
-	in this fixture's cleanup will fail."""
-	sentinel_state = {"verified": "SENTINEL_RESTORED", "detail": "ISOLATION_VERIFIED"}
-	main._cuda_verification_state.clear()
-	main._cuda_verification_state.update(sentinel_state)
-	yield
-	# After the test AND the isolated_cuda_verification_state cleanup,
-	# assert the sentinel was restored. This assertion runs AFTER the
-	# isolation fixture's restore, proving it actually restored this state.
-	restored_state = dict(main._cuda_verification_state)
-	assert restored_state == sentinel_state, \
-		f"Isolation fixture failed to restore state. Expected {sentinel_state}, got {restored_state}"
+    This proves isolation actually works by requiring the isolated_cuda_verification_state
+    fixture to restore a value that production code would never naturally produce.
+    Without proper isolation, the sentinel won't be restored and the assertion
+    in this fixture's cleanup will fail."""
+    sentinel_state = {"verified": "SENTINEL_RESTORED", "detail": "ISOLATION_VERIFIED"}
+    main._cuda_verification_state.clear()
+    main._cuda_verification_state.update(sentinel_state)
+    yield
+    # After the test AND the isolated_cuda_verification_state cleanup,
+    # assert the sentinel was restored. This assertion runs AFTER the
+    # isolation fixture's restore, proving it actually restored this state.
+    restored_state = dict(main._cuda_verification_state)
+    assert restored_state == sentinel_state, \
+        f"Isolation fixture failed to restore state. Expected {sentinel_state}, got {restored_state}"
 
 
 def test_cuda_verification_state_isolation_across_tests(
@@ -2538,72 +2538,72 @@ def test_cuda_verification_state_isolation_across_tests(
     cuda_state_with_sentinel,
     isolated_cuda_verification_state
 ) -> None:
-	"""Regression test proving the isolated_cuda_verification_state fixture
-	actually restores the pre-test state, even when the state is set to a
-	non-standard value that production code would never naturally produce.
+    """Regression test proving the isolated_cuda_verification_state fixture
+    actually restores the pre-test state, even when the state is set to a
+    non-standard value that production code would never naturally produce.
 
-	This test:
-	1. Starts with a sentinel state set by cuda_state_with_sentinel
-	2. Runs _ensure_loaded, which mutates _cuda_verification_state to a
-	   production-standard value
-	3. Lets the isolation fixture restore the sentinel
-	4. Verifies in cuda_state_with_sentinel's cleanup that the sentinel
-	   was actually restored
+    This test:
+    1. Starts with a sentinel state set by cuda_state_with_sentinel
+    2. Runs _ensure_loaded, which mutates _cuda_verification_state to a
+       production-standard value
+    3. Lets the isolation fixture restore the sentinel
+    4. Verifies in cuda_state_with_sentinel's cleanup that the sentinel
+       was actually restored
 
-	If the isolated_cuda_verification_state fixture is gutted (reduced to
-	a bare yield), this test will fail because the sentinel won't be restored
-	and cuda_state_with_sentinel's cleanup assertion will catch it."""
-	from unittest.mock import MagicMock, patch
+    If the isolated_cuda_verification_state fixture is gutted (reduced to
+    a bare yield), this test will fail because the sentinel won't be restored
+    and cuda_state_with_sentinel's cleanup assertion will catch it."""
+    from unittest.mock import MagicMock, patch
 
-	monkeypatch.delenv("KOKORO_DEVICE", raising=False)
+    monkeypatch.delenv("KOKORO_DEVICE", raising=False)
 
-	# Verify we start with the sentinel, not a production-standard value
-	initial_state = dict(main._cuda_verification_state)
-	assert initial_state == {"verified": "SENTINEL_RESTORED", "detail": "ISOLATION_VERIFIED"}, \
-		f"Expected to start with sentinel state, got {initial_state}"
+    # Verify we start with the sentinel, not a production-standard value
+    initial_state = dict(main._cuda_verification_state)
+    assert initial_state == {"verified": "SENTINEL_RESTORED", "detail": "ISOLATION_VERIFIED"}, \
+        f"Expected to start with sentinel state, got {initial_state}"
 
-	class _TestKokoro:
-		def __init__(self, model_path: str, voices_path: str) -> None:
-			self._voices = []
+    class _TestKokoro:
+        def __init__(self, model_path: str, voices_path: str) -> None:
+            self._voices = []
 
-		@classmethod
-		def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
-			instance = cls.__new__(cls)
-			instance._voices = []
-			return instance
+        @classmethod
+        def from_session(cls, session, voices_path, espeak_config=None, vocab_config=None):
+            instance = cls.__new__(cls)
+            instance._voices = []
+            return instance
 
-		def get_voices(self):
-			return []
+        def get_voices(self):
+            return []
 
-		def create(self, text: str, voice: str, speed: float, lang: str):
-			return np.zeros(24000, dtype=np.float32), 24000
+        def create(self, text: str, voice: str, speed: float, lang: str):
+            return np.zeros(24000, dtype=np.float32), 24000
 
-	fake_mod = types.ModuleType("kokoro_onnx")
-	fake_mod.Kokoro = _TestKokoro
-	monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _TestKokoro
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
 
-	mock_session = MagicMock()
-	mock_session._model_path = str(fake_weight_files["model"])
-	mock_session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    mock_session = MagicMock()
+    mock_session._model_path = str(fake_weight_files["model"])
+    mock_session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
-	with patch(
-		"onnxruntime.get_available_providers",
-		return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
-	), patch("onnxruntime.cuda_version", "12.4", create=True), \
-		 patch("onnxruntime.InferenceSession") as mock_ort_session_class:
-		mock_ort_session_class.return_value = mock_session
-		engine = main.KokoroEngine()
-		engine._ensure_loaded("v1", device="cuda:0")
+    with patch(
+        "onnxruntime.get_available_providers",
+        return_value=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    ), patch("onnxruntime.cuda_version", "12.4", create=True), \
+         patch("onnxruntime.InferenceSession") as mock_ort_session_class:
+        mock_ort_session_class.return_value = mock_session
+        engine = main.KokoroEngine()
+        engine._ensure_loaded("v1", device="cuda:0")
 
-		# After _ensure_loaded, the state is mutated to a production-standard value
-		mutated_state = dict(main._cuda_verification_state)
-		assert mutated_state != initial_state, \
-			f"_ensure_loaded should mutate the state from the sentinel"
-		# Verify production code set it to a standard value, not our sentinel
-		assert mutated_state["verified"] in (True, False), \
-			f"Production code should set 'verified' to bool, got {mutated_state['verified']}"
+        # After _ensure_loaded, the state is mutated to a production-standard value
+        mutated_state = dict(main._cuda_verification_state)
+        assert mutated_state != initial_state, \
+            f"_ensure_loaded should mutate the state from the sentinel"
+        # Verify production code set it to a standard value, not our sentinel
+        assert mutated_state["verified"] in (True, False), \
+            f"Production code should set 'verified' to bool, got {mutated_state['verified']}"
 
-	# At this point, the isolation fixture's cleanup runs and restores
-	# the sentinel. Then cuda_state_with_sentinel's cleanup runs and
-	# asserts the sentinel was restored. If isolation is broken, that
-	# assertion will fail.
+    # At this point, the isolation fixture's cleanup runs and restores
+    # the sentinel. Then cuda_state_with_sentinel's cleanup runs and
+    # asserts the sentinel was restored. If isolation is broken, that
+    # assertion will fail.

@@ -3263,7 +3263,7 @@ class KokoroEngine(Engine):
             return
         try:
             actual_providers = list(session.get_providers())
-        except Exception as e:
+        except Exception:
             log.exception("Failed to read the real session's providers")
             _cuda_verification_state = {
                 "verified": None,
@@ -3283,11 +3283,10 @@ class KokoroEngine(Engine):
             # CUDA was requested (guarded by the early return above) but did not
             # land in the real session. Log and record the failure.
             detail = (
-                "Kokoro CUDA self-test: CUDAExecutionProvider was requested, "
-                "but the real session did not land on CUDA -- Kokoro is running on "
-                "CPU or another accelerator. See Castwright#2709."
+                "CUDAExecutionProvider was requested but did not land in the real session "
+                "(may be running on CPU or another accelerator)."
             )
-            log.warning(detail)
+            log.warning("Kokoro CUDA self-test: %s (Castwright#2709)", detail)
             _cuda_verification_state = {
                 "verified": False,
                 "detail": detail,
