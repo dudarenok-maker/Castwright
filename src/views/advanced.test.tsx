@@ -652,6 +652,26 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
     expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
   });
+
+  it('shows the data-unavailable note with valid nvidia-smi command when dataUnavailable is true', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [],
+      totalUsedMb: 0,
+      wouldFitSingleDevice: false,
+      dataUnavailable: true,
+    });
+
+    const { container } = renderView();
+    const note = await screen.findByText(/Can't determine GPU split status/);
+    expect(note).toBeInTheDocument();
+    // Verify the nvidia-smi command is present and properly formatted
+    expect(note.textContent).toMatch(/nvidia-smi --query-compute-apps=used_memory --format=csv/);
+    // Verify there are proper spaces before code blocks (not "shows[N/A]")
+    expect(container.textContent).toContain('shows [N/A]');
+  });
 });
 
 /* ── Analyzer GPU-split warning: expected-device mismatch (#2367 Task 4) ─── */

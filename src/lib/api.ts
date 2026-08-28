@@ -8579,16 +8579,17 @@ export async function mockGetAnalyzerDevice(): Promise<AnalyzerDeviceResponse> {
 }
 
 /* #2367 Task 3 — mocked analyzer GPU-split placement for the Advanced
-   Configuration warning line. Static non-split default, matching this
-   ticket's own acceptance fixture. */
+   Configuration warning line. Static non-split default baseline, matching
+   this ticket's own acceptance fixture. Individual test cases override this
+   per-test to exercise split/mismatch scenarios. */
 export async function mockGetAnalyzerGpuSplit(): Promise<AnalyzerGpuSplitResponse> {
   await wait(20);
   return {
     reachable: true,
-    split: true,
-    deviceIndices: [0, 1],
-    totalUsedMb: 9000,
-    wouldFitSingleDevice: true,
+    split: false,
+    deviceIndices: [0],
+    totalUsedMb: 4200,
+    wouldFitSingleDevice: false,
     dataUnavailable: false,
   };
 }
