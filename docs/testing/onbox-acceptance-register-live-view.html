@@ -161,6 +161,12 @@
 
   <p class="eyebrow">Castwright · docs/testing/onbox-acceptance-register.md</p>
   <h1>On-box acceptance register</h1>
+
+  <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
+       The counter orders publishes; the id proves which branch produced one.
+       Attributes, not a comment: checkLiveView removes comments before reading. -->
+  <div hidden data-published-as="2" data-publish-id="7e9d71bbbb7f"></div>
+
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
     analyzer, a real book, a real phone — and that was <strong>not</strong> proven at PR time.
@@ -189,7 +195,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">62</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">61</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">5</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -198,9 +204,53 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-28, 61 → 62 via PR #2719</b>, adding row A102 (CUDA fallback self-test #2582) — minted from the <code>next-id</code> floor; an earlier commit on this branch briefly mis-minted this as A38, a dangling ID reserved by <code>onbox-sitting-plan.md</code>, corrected before merge.
+    <b>Last change: 2026-08-28, merging <code>origin/main</code> into <code>fix/sidecar-cuda-fallback-detection</code>.</b>
+    Two independent branch tips reconciled: this branch had added row A102 (CUDA fallback
+    self-test #2582, PR #2719, 61 → 62); <code>main</code> had since discharged row A101
+    (PR #2739, 61 → 60) — the two changes started from the same post-#2704 state and never
+    saw each other. Combined: 60 (post-A101-discharge) + 1 (A102, still live) = <b>61</b>.
+    Group A likewise nets to 38 (37 + A102). <code>next-id</code> stays at A103 (unaffected
+    by A101's discharge, since IDs are allocated once and never reused).
+    <br><b>Prior change: 2026-08-28, 61 → 62 via PR #2719</b>, adding row A102 (CUDA fallback self-test #2582) — minted from the <code>next-id</code> floor; an earlier commit on this branch briefly mis-minted this as A38, a dangling ID reserved by <code>onbox-sitting-plan.md</code>, corrected before merge.
+    <br><b>Prior change: 2026-08-28 (PR #2739), 61 → 60.</b> Row A101 (Qwen duration golden baseline bless,
+    #1994) fully discharged and dropped: measured the real per-line duration spread on this
+    box (RTX 5070 Ti, <code>QWEN_DEVICE=cuda:1</code>) via a new ad-hoc script
+    (<code>server/tts-sidecar/tests/golden/measure_qwen_duration_spread.py</code>), voice
+    <code>cw_gpu_17b</code>, N=10 repeated syntheses per <code>qwen-duration-fixture.json</code>
+    line. Observed per-line max fractional deviation from its own mean: <code>narrator-plain</code>
+    9.0% (mean 2.936s, stdev 0.143s), <code>numbers-and-year</code> 12.2% (mean 5.192s, stdev
+    0.309s), <code>abbreviations</code> 22.4% — the observed max — (mean 4.184s, stdev 0.385s),
+    <code>quotes-and-punctuation</code> 13.0% (mean 3.752s, stdev 0.321s),
+    <code>multi-sentence-group</code> 19.9% (mean 4.696s, stdev 0.498s). Hand-set
+    <code>qwen-duration-baseline.json</code>'s <code>tolerance</code> to <b>0.30</b> (measured
+    max 22.4% plus ~34% headroom) from this measurement. <code>_bless</code>
+    (<code>test_qwen_duration_golden.py</code>) blesses the MEAN of <code>BLESS_REPS=5</code>
+    repeated real syntheses per line as the reference, not a single draw, so the blessed value
+    is a stable estimate of the true mean — matching what <code>tolerance</code> was derived
+    to bound. Raw N=10 spread measurement retained at
+    <code>server/tts-sidecar/tests/golden/spread-report.json</code>. Observed by Claude Code
+    (dudarenok-maker), 2026-08-28. A101 is retired, not reused.
+    <br><br><b>Known limitation, accepted 2026-08-28 (repo owner, ship-as-is decision).</b>
+    Independent verification during PR #2739's review found the real duration distribution
+    can drift beyond what this single on-box measurement session characterized: a second,
+    separate on-box run (23 fresh syntheses, same GPU and voice) measured every line's fresh
+    mean <b>6.8%–21% above</b> the committed <code>spread-report.json</code>'s means, all five
+    lines shifted the same direction. That is between-session drift, not the within-session
+    noise <code>tolerance</code>'s derivation accounted for, and it raises this opt-in check's
+    spurious-failure rate above the ~2% within-session-only estimate by an amount that is
+    itself session-dependent — a fixed point estimate here goes stale on every re-bless
+    (review-round-3 finding: an earlier version of this note quoted a fixed ~3.65%/run figure
+    computed against <code>entries</code> this same PR round then re-blessed). Re-derive the
+    estimate from the CURRENT <code>qwen-duration-baseline.json</code> entries and
+    <code>spread-report.json</code> if a precise number is needed.
+    <code>tolerance</code> ships unchanged rather
+    than widened further or re-measured across multiple sessions — see
+    <a href="https://github.com/dudarenok-maker/Castwright/issues/2742">#2742</a> for the
+    related but distinct open design decision (assert-time averaging to tighten the gate's
+    power against a real regression, which a wider tolerance alone would make worse, not
+    better).
     <br><b>Prior change: 2026-08-27 (PR #2704), 60 → 61</b>, adding row A101 (Qwen duration golden baseline bless, #1994) — minted from the <code>next-id</code> floor, not the old high-water-plus-one slot (A38), which <code>onbox-sitting-plan.md</code> already uses to mean something else.
-    <br><b>Previous change: 2026-08-27, 60 → 60 (no count change).</b> The Blocked section's
+    <br><b>Prior change: 2026-08-27, 60 → 60 (no count change).</b> The Blocked section's
     two ffmpeg rows no longer carry row IDs. They had borrowed E6 and E8 from the live
     Group E sequence, so each of those IDs named <i>two</i> rows — one live Group E row
     and one Blocked row — and Group E renumbers underneath the Blocked section whenever
@@ -300,7 +350,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>39</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>38</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>2</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>4</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>3</td></tr>
@@ -316,7 +366,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">39 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">38 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -864,13 +914,6 @@
           <li><b>Doubled-comma collapse pause, by ear.</b> Render a dash-attributed line (e.g. <code>"— Привет, — сказал Антон."</code>) and confirm collapsing the doubled comma to one doesn't shorten or eliminate an audible pause the doubled comma was incidentally providing, and doesn't introduce a new artifact.</li>
         </ul>
         <p class="src">A Coqui-capable sidecar with XTTS resident, a Russian line (no clone needed — the stock catalogue voice <code>Damien Black</code> reproduces this shape) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2059">#2059</a> · criteria: the bullet above — #2059 itself has only this one dialogue shape and no separate run sheet (unlike A31's) · short — one or two renders of a Russian test sentence</p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">A101</span><span class="iname">Qwen duration golden baseline needs its real per-line spread measured before blessing</span><span class="risk">single 8 GB card, a designed Qwen voice already present</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p><code>server/tts-sidecar/tests/golden/qwen-duration-baseline.json</code> ships UNBLESSED — the test file (<code>test_qwen_duration_golden.py</code>) is real, but the baseline has empty <code>entries</code> and a placeholder <code>tolerance</code>, so the opt-in golden gate SKIPs until it is blessed. Qwen decoding is stochastic with no seed, so the true per-line <code>duration_sec</code> spread across repeated syntheses of each <code>qwen-duration-fixture.json</code> line is the missing number: <code>tolerance</code> must be <b>derived from that measured spread</b> (with headroom), not picked, then blessed. This closes the #1994 A-grade visibility gap the scaffold was written for.</p>
-        <p class="src">single 8 GB card, a designed Qwen voice already present · <a href="https://github.com/dudarenok-maker/Castwright/issues/1994">#1994</a> · criteria: the bullet above · short — N repeated syntheses of the fixture on a real box, capture the per-line spread, derive tolerance, bless</p>
       </div>
     </details>
 
@@ -1526,7 +1569,7 @@
   <footer>
     <p><b>Deliberately not in this register:</b> <a href="https://github.com/dudarenok-maker/Castwright/issues/1826">#1826</a> (its bar is an automated interleaving regression test, not a manual walkthrough) · <a href="https://github.com/dudarenok-maker/Castwright/issues/964">#964</a> (fs-48 Fish Audio) and <a href="https://github.com/dudarenok-maker/Castwright/issues/1334">#1334</a> (fs-73 Cast Pass), parked or unbuilt — pre-implementation criteria, not debt on shipped code · <a href="https://github.com/dudarenok-maker/Castwright/issues/819">#819</a>, <code>moscow:wont</code> · archived plans whose prose still says “owed” but whose debt was discharged via a separate un-cross-referenced issue (210/#752, 214/#397, 219/#823, 193/#476, 181/#1670/#927/#515/#517).</p>
     <p>This register is for <b>manual, hardware-dependent verification of shipped code</b>. Automated-test gaps belong in the plan's test section or an issue.</p>
-    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-27</b> against branch <code>test/sidecar-1994-qwen-duration-baseline</code> (PR #2704: added row A101 for #1994's Qwen duration golden baseline bless, minted from the stable-ID <code>next-id</code> floor per origin/main's #2629/#2717, not the row's original A38 slot). Full sync history is this file's git log, not this page.</p>
+    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-28</b> against branch <code>test/sidecar-a101-qwen-duration-tolerance</code> (row A101 discharged: measured Qwen's real per-line duration spread on an RTX 5070 Ti, hand-set <code>qwen-duration-baseline.json</code>'s <code>tolerance</code> to 0.30, blessed <code>entries</code>). Full sync history is this file's git log, not this page.</p>
   </footer>
 
 </div>

@@ -3,7 +3,7 @@ status: draft
 date: 2026-08-27
 ---
 
-# On-box register: stable row IDs, and a publish check that can see row content
+# On-box register: stable row IDs, and a publish check that can see a competing publish
 
 Closes the design passes owed by
 [#2599](https://github.com/dudarenok-maker/Castwright/issues/2599),
@@ -263,24 +263,93 @@ each bump:
 data-published-as="48" data-publish-id="k7f2a9"
 ```
 
-`git log -S '<nonce>' -- <live view path>` on `HEAD` decides it: **found** → that
-page came out of this branch's history (your own publish, or one already merged
-into your baseline) → proceed; **not found** → someone else published → stop.
+The query is
+`git log --oneline -s --full-history --diff-merges=first-parent -S 'data-publish-id="<nonce>"' <ref> -- <live view path>`,
+and **every part of that command line is load-bearing.** Getting any of them
+wrong flips the answer in the *permissive* direction for every STOP it gates —
+three of the five green-direction defects this design produced in review lived
+in these nine lines, where the JavaScript shows you nothing:
+
+- **`--full-history`** — a pathspec'd `git log` prunes at a merge that is
+  TREESAME to one parent for that path, so `false` can mean *pruned* rather than
+  *absent*.
+- **`--diff-merges=first-parent`** — `git log` computes **no diff at all** for a
+  merge commit unless asked, so a nonce born in a **conflict resolution** reads
+  as absent from the history that literally contains it. That is a routine state
+  here: this repo mandates merge commits, the live view is the file lanes race,
+  and the natural resolution *is* a re-stamp — so the surviving token exists in
+  neither parent.
+- **the `data-publish-id="…"` anchor** — `-S` is a **substring** search, so a
+  bare nonce matches an abbreviated commit SHA quoted in the page's own
+  changelog prose, spuriously reporting a rival's publish as yours. The parser
+  constrains the nonce to `[A-Za-z0-9_-]{6,64}` so the anchor cannot be broken
+  out of.
+- **`-s`** — suppresses the patch body while leaving pickaxe *selection*
+  untouched. Without it every lookup streams a full diff of a 250 KB file.
+
+**Two refs, not one.** `inBaseline`/`workingInBaseline` ask the **baseline
+commit**; `inMine`/`baselineInMine` ask `HEAD`. Never `--all`: the baseline
+fetch means `--all` would see a rival's freshly-fetched commit and answer
+"found" for a publish that is not in your history at all.
 
 **The nonce is load-bearing; the counter cannot substitute for it.** Searching
 history for the *counter* fails, because two lanes both bumping `47 → 48` each
 find their own commit. Only a value unique per publish distinguishes them.
 
-Before publishing, `--against-published` evaluates, in order:
+**FOUR history answers, not one.** The caller supplies each as `true | false |
+null`, and `null` — the lookup itself failed — is never read as `false`:
 
-| State | Verdict |
+| Lookup | Question |
 |---|---|
-| any of the three copies unresolvable, or its token malformed | **STOP** — its own fail-closed error, matched by identity, never folded into a case below |
-| `published.nonce` **not** in `HEAD`'s history for that path | **STOP** — another lane published; rebase and re-read the live page |
-| `working.n < baseline.n` | **STOP** — **your branch predates `main`. Rebase.** Publishing from here overwrites whatever landed in between |
-| `working.n == baseline.n` | **STOP** — bump the counter and mint a new nonce; an unbumped publish is untracked |
-| `published.n < baseline.n` | **STOP** — the live page is *behind* `main`: a bump merged without publishing, or a publish was reverted. Clearable, see below |
-| otherwise | **OK** |
+| `inBaseline` | is the **published** nonce in the baseline commit's history? |
+| `inMine` | is the **published** nonce in `HEAD`'s history? |
+| `baselineInMine` | is **`origin/main`'s own** nonce in `HEAD`'s history — i.e. does my branch contain the live view that is currently on `main`? |
+| `workingInBaseline` | is the **working** nonce already in the baseline's history — i.e. was it not freshly minted? (consulted only when `working.n > baseline.n`) |
+
+Before publishing, `comparePublishTokens` evaluates these gates **in order**,
+returning at the first that fires. Order is load-bearing wherever noted:
+
+| # | Gate | Verdict |
+|---|---|---|
+| 1 | `baseline` / `published` / `working` unresolvable | its **own** named constant, matched by identity — three of them, because an operator does something different about each |
+| 2 | any of the three tokens malformed | **STOP**, all malformed copies reported together rather than one at a time |
+| 3 | baseline carries no token | **STOP** — a revert or deletion, never a first run (see the bootstrap note below) |
+| 4 | working carries no token | **STOP** — restore it |
+| 5 | published carries no token but the baseline does | **STOP** — the transition case: published from a branch predating the token, the wrong file published, or the page clobbered |
+| 6 | `--live-page-behind-main` passed while the page is *not* behind | **STOP** — flag misuse is refused, not ignored (the `--discharging` unconsumed-name property) |
+| 7 | `inBaseline` or `inMine` unresolvable | **STOP** — fail closed |
+| 8 | `baselineInMine` unresolvable | **STOP** — fail closed, with its own message |
+| 9 | `inBaseline && baselineInMine && !inMine` | **STOP** — the answers *contradict* each other, so a lookup is wired to the wrong ref or nonce. Every verdict below derives from these three, so one contradiction makes all of them untrustworthy |
+| 10 | `inBaseline && published.n > baseline.n` | **STOP** — the live page's nonce is already in `main`'s history while its counter is ahead: a lane published **without minting**. This is the invariant that closes the class |
+| 11 | `!baselineInMine` | **STOP — REBASE, do not bump.** My branch does not contain the live view currently on `main`. **Before the counters deliberately**, because the counters are the thing being lied to |
+| 12 | `!inBaseline && !inMine`, nonces equal | **STOP** — your own publish, not yet committed; commit the bump and re-run |
+| 13 | `!inBaseline && !inMine`, nonces differ | **STOP** — another lane published since your baseline |
+| 14 | `working.n > baseline.n` and `workingInBaseline` unresolvable | **STOP** — fail closed |
+| 15 | `working.n > baseline.n` and `workingInBaseline` | **STOP** — the working nonce was not freshly minted |
+| 16 | `published.nonce === working.nonce && working.n > published.n` | **STOP** — the counter advanced while the nonce did not. Detectable with **no** history lookup, so it catches the un-minted case one commit earlier than gate 10, before either nonce is committed |
+| 17 | `working.n < baseline.n` | **STOP — REBASE.** Your branch predates `main` |
+| 18 | `working.n === baseline.n` | **STOP** — stamp it; an unbumped publish is untracked |
+| 19 | `published.n < baseline.n` | **STOP** — the page is *behind* `main`. Clearable with the named flag, see below |
+| 20 | `working.n <= published.n` | **STOP** — not ahead of your own last publish |
+| 21 | otherwise | **OK** |
+
+**Green requires `baselineInMine === true`.** That is the whole working-side
+half of the design, and gate 11 is the only thing enforcing it. An earlier
+draft had no such gate: every invariant governed the *published* nonce, and the
+only relation between the working file and the baseline was a counter that the
+stale lane increments itself — while gate 18's remedy *told it to*. Two lanes
+branch at 47, both stamp to 48, B merges and publishes, A is told "the same as
+`origin/main` — stamp it", obeys, and gets **green** over a page it never saw.
+The rows are identical, so every other mechanical check is blind. That is the
+2026-07-31/08-01 incident, reproduced by obeying the guard's own advice.
+
+**Two orderings are load-bearing and are pinned by tests**, because a later
+edit reordering them fails silently:
+
+- **Gate 11 before gates 17-20.** Reversed, a stale lane is handed "stamp it"
+  and walks itself to green, which is the failure above.
+- **Gate 17 (`REBASE`) before gate 19 (`behind`).** Reversed, a lane that is
+  both un-rebased and looking at a behind page is handed the mute flag.
 
 **`working.n < baseline.n` and `working.n == baseline.n` are different failures
 and get different advice.** An earlier draft collapsed both into "bump it", and
@@ -294,9 +363,9 @@ is #1931's original incident, reproduced by obeying the guard's own remedy.
 
 The nonce closes it independently of the message split: an un-rebased branch
 cannot find the competing lane's nonce in its own history, so the state stops
-being "bump it" and becomes "another lane published". Both are implemented; the
-ordering above puts the ancestry check first so the diagnosis is right even when
-the counters happen to agree.
+being "bump it" and becomes "another lane published". Both are implemented, and
+the ancestry gates sit above the counter gates so the diagnosis is right even
+when the counters happen to agree.
 
 **The carrier is an attribute, not an HTML comment.** `checkLiveView`'s first
 action is `stripHtmlComments(rawLiveViewHtml)` (`:641`), and that blanking is
@@ -310,7 +379,8 @@ is the instrument-that-cannot-fail trap it was written to avoid.
 
 What this buys over every rejected rule:
 
-- **No normaliser.** An integer and an opaque token, compared as strings. The
+- **No normaliser.** An integer, compared numerically, and an opaque token,
+  compared for equality and looked up in history. The
   rejected content designs all needed a normaliser over prose dense with
   `&ldquo;`, `&nbsp;`, inline `<code>` and `<a href>` — and none of the three
   ever defined one, which is its own warning.
@@ -320,6 +390,15 @@ What this buys over every rejected rule:
 - **Nothing hand-maintained is trusted.** The nonce is not compared to a value
   someone had to remember to update; it is looked up in history. That is what
   removes all three branch-name failures at once, rather than patching them.
+  **This is only half true without the stamper, and the stamper is therefore
+  part of the design, not tooling around it**: `scripts/stamp-publish-token.mjs`
+  bumps the counter and mints a fresh id in one action, writes the genesis token
+  too, and validates what it mints against the same rule the parser enforces —
+  a stamper that wrote a token its own reader rejected would wedge the check
+  permanently. Every remedy the comparator emits names that command, so no
+  runbook line ever says "bump it by one". Bumping the counter *without*
+  minting is the hand-maintenance failure with an extra step, and gates 10, 15
+  and 16 exist because it is reachable three different ways.
 - **It covers what per-row rules could not**: a dropped row, a wrong summary
   strip, the stale callouts, and publishing the `.md` by mistake — the failure
   the register records happening four times.
@@ -330,9 +409,18 @@ and publishing runs *before* merge, so it is a second net under the ancestry
 check, not a substitute for it. An earlier draft claimed it surfaced the race
 "before either can publish", which is simply the wrong order of operations.
 
-**No bootstrap case reached through a tokenless baseline.** PR 1 seeds the token
-as *data* and PR 2 ships the code that reads it, so `origin/main` carries one by
-the time this code runs at all. A branch for "baseline has no token" is therefore
+**No bootstrap case reached through a tokenless baseline — but the split that
+guarantees it is NOT the one this document originally named.** The seeding task
+was Track B's, and Track A shipped without it, so for a period `origin/main`
+carried **no token at all** (`grep -c published-as` returned 0) while this
+section still asserted the opposite. Shipping the comparator in that state would
+have made its very first run return "origin/main carries none — this is a revert
+or a deletion" — an unclearable STOP misdiagnosing its own cause, on a design
+whose stated principle is that an unclearable STOP is a guard that gets
+bypassed. The token is therefore seeded by **its own data-only PR** ahead of any
+code that reads it (#2599, first PR), which is the same data-then-guard shape
+the stable row IDs needed. Once that has merged, a branch for "baseline has no
+token" is
 **written as an explicit error, not as a pass** — reachable only through a revert,
 a deleted token line, or PRs merging out of order, all of which are defects rather
 than a first run. An earlier draft said the branch was "not written"; it is
@@ -343,15 +431,47 @@ written, it just never returns green.
 is "no copy". Everywhere else in this file that distinction is load-bearing, with
 its own exported constant matched by identity (`CANNOT_VERIFY_BASELINE_ERROR`,
 `:529`) and its own CLI remedy branch. The token check uses the same vocabulary,
-**with a distinct constant for the baseline and for the saved published page** —
-they fail for different reasons and the operator does different things about them.
+**with a distinct constant for each of the three — the baseline, the saved
+published page, and the tracked working file** — they fail for different reasons
+and the operator does something different about each. Two constants would force
+two of those three onto one message.
 
-**Stated boundary — one, not two.** The token proves the live page came out of
-your history and that nobody else published since your baseline. It does **not**
-prove the bytes you are about to publish are the bytes you intended: a stale local
-build of your own file, correctly bumped and correctly nonced, still publishes.
-That is what git review covers, and it goes in #2599's close comment rather than
-being implied.
+**Stated boundary — two, and both are worth saying out loud.**
+
+**First: the token proves provenance, not intent.** It shows the live page came
+out of your history and that nobody else published since your baseline. It does
+**not** prove the bytes you are about to publish are the bytes you intended: a
+stale local build of your own file, correctly bumped and correctly nonced, still
+publishes. That is what git review covers, and it goes in #2599's close comment
+rather than being implied.
+
+**Second: `baselineInMine` proves your branch HELD main's live view, not that
+your working file still reflects it.** The lookup asks whether main's nonce
+appears anywhere in `HEAD`'s history for that path, and it is **the rebase
+alone that satisfies it** — measured in a real repository: before rebasing the
+query selects 0 commits, after rebasing and *before any stamp* it selects 1.
+So the staleness STOP is cleared by rebasing, which is exactly what its message
+instructs. The cost of asking a history question rather than a content one is
+that a revert, or a wholesale "take mine" conflict resolution *after* a clean
+rebase, also satisfies it and goes green.
+
+*(An earlier draft of this paragraph said the removal-match was "what lets a
+correctly rebased lane clear the STOP after one stamp". That inverts the
+causation. `-S` does match a removal — your own stamp removes main's nonce and
+the query then selects 2 commits rather than 1 — but that second match is
+**redundant**: the commit that ADDED main's nonce is already in your history
+once you have rebased. The stamp answers a different gate, `w.n === b.n`. The
+claim was written from the previous draft rather than from a probe, which is
+the failure mode this document has recorded five times and is the reason the
+correction is left visible here rather than quietly edited out.)*
+
+That residue is adjudicated, not overlooked. Detecting it means comparing
+*content* between the working file and the baseline — which is precisely the
+question the three rejected per-row designs could not answer, for a reason that
+has not changed: content comparison cannot separate "this branch edited the row"
+from "this branch is stale". The token deliberately answers a different, decidable
+question instead. What closes this last gap is git review of the diff, not a
+richer comparator.
 
 *(The previous draft carried a second boundary — that the publisher field was
 "trusted, not proven", justified as detecting accident rather than forgery. That
@@ -481,6 +601,21 @@ no checker sees them. Stable IDs stop *new* rot there; existing rot stays.
 
 This is a general rule about this codebase, not a quirk of this change, and it
 belongs in the checker's header comment.
+
+**There are TWO retro-applications, not one, and only the first was written
+down.** The rule above is about `checkRegister` over the **register**. The
+publish token creates a structurally identical one over the **live view**: the
+comparator resolves `baseline` by reading `origin/main`'s copy of the HTML, and
+its "baseline carries no token" branch is a hard error. So the *token* is
+retro-applied to `origin/main` exactly as a *check tightening* is, through a
+different function and a different file. Missing this is what produced the
+bootstrap break described in design 2: the seeding task was moved to the second
+track, the first shipped without it, and both this document and the plan went on
+asserting that `origin/main` carried a token when it carried none. The general
+form is worth stating once: **any new thing a checker requires of
+`origin/main` — a check, a marker, a token — has to be on `main` before the
+code that requires it, and "which PR seeds it" is part of the design, not
+scheduling.**
 
 **PR 1 — data only.** Adds the `next-id` markers, drops the Blocked-section row
 IDs **in both the register and the live view**, introduces the `published-as`

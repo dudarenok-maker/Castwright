@@ -306,6 +306,36 @@ def test_engine_actual_card_whisper_matching_intent_is_not_fell_back():
     assert card["fell_back"] is False
 
 
+def test_whisper_drop_model_locked_restores_device_pin_after_cpu_admission(monkeypatch):
+    """#2642: a CPU admission (`_ensure_loaded(device="cpu")`) must NOT
+    permanently overwrite an ASR_DEVICE=cuda pin. Before this fix,
+    `_drop_model_locked` left `self._device` at whatever `_ensure_loaded`
+    last resolved it to, so a CPU-admitted load stuck there until process
+    restart — the same defect class fixed for CoquiEngine (#1730 gap-3) and
+    KokoroEngine (#2631 review S4)."""
+    monkeypatch.setenv("ASR_DEVICE", "cuda:0")
+
+    class _FakeWhisperModel:
+        def __init__(self, model_name, **kwargs):
+            pass
+
+    fake_mod = types.ModuleType("faster_whisper")
+    fake_mod.WhisperModel = _FakeWhisperModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_mod)
+
+    engine = main.WhisperEngine()
+    assert engine._requested_device == "cuda:0"
+
+    # Admission ledger refuses the GPU for this cold load.
+    engine._ensure_loaded(device="cpu")
+    assert engine._device == "cpu"
+
+    with engine._infer_lock:
+        dropped = engine._drop_model_locked()
+    assert dropped is True
+    assert engine._device == "cuda:0"
+
+
 def test_is_resident_falls_back_to_intent_when_actual_card_unknown(monkeypatch):
     """#2647 companion fix (Kokoro's `_resolved_device` init sentinel moved
     `None` -> "unknown", not "cpu") made an honest "unknown" family reachable

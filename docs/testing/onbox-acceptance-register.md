@@ -48,6 +48,51 @@ and concluded they had complied. The live view is tracked in this repo — rathe
 than living in whichever session scratchpad last built it — precisely so the
 right file is always to hand.
 
+### The publish token — never hand-edit it
+
+The live view carries a **publish token** just under its `<h1>`:
+
+```html
+<div hidden data-published-as="<counter>" data-publish-id="<nonce>"></div>
+```
+
+The counter orders publishes; the id says *which branch produced this one*. Both
+are machine-written. **Do not type either value.** Run:
+
+```
+npm run stamp:publish-token              # bumps the counter AND mints a fresh id
+npm run stamp:publish-token -- --check   # report only, changes nothing
+```
+
+**Stamp, then commit, then publish** — in that order. An uncommitted stamp
+cannot be found in git history, which is where its freshness is verified.
+
+Why a command rather than an instruction to bump the number: a token that a
+human maintains goes stale, and a stale one fails in the **green** direction —
+a competing lane whose value happens to match yours reads as your *own* earlier
+publish, so the check waves through exactly the overwrite it exists to stop.
+Bumping the counter without minting a new id is that same failure with an extra
+step. Two of the eight designs considered for this token died on precisely that,
+which is why the stamper does both halves or neither.
+
+The token is inert today: nothing reads it yet. The check that does — a
+comparison against the live page's own token, to catch a lane publishing over
+work it never saw — lands separately (#2599). It is seeded first and on its own
+because a guard cannot ship in the same change as the data it requires: the
+checker validates `origin/main`'s copy, so the data has to be on `main` already
+or the guard's first run fails on its own delivery. That is the same
+data-then-guard split the stable row IDs needed (#2629).
+
+**One more thing has to happen before that check can pass, and it is easy to
+miss because it is not a code change: the live view must be PUBLISHED at least
+once with a token on it.** The comparator reads three copies — the tracked file,
+`origin/main`'s, and the *saved live page* — and the live page only acquires a
+token when someone publishes after this change merged. Until then the check
+reports that the published page carries none while `origin/main` does, and
+names the transition explicitly rather than guessing. So the first publish after
+this merges clears it, and the wording of that error is written for exactly that
+window.
+
 The live view carries derived figures — owed count, per-group counts, oldest
 debt — that must be **recomputed** on every edit. Rows can be right while the
 summary strip lies. `npm run check:onbox-register` verifies the owed total, the
@@ -94,6 +139,12 @@ CI check — the same call this design already made for the tracked-pair
 comparison, see the edge list above). The merge step that closes this, run
 **immediately before every publish**, not only after a suspected race:
 
+0. **If your change touched the live view, stamp it and commit the stamp** —
+   `npm run stamp:publish-token`, then commit. It goes *before* step 2, not
+   after step 4, for two reasons: the check reads the token, and an
+   **uncommitted** stamp cannot be found in git history, which is where its
+   freshness is verified. See "The publish token" above for why this is a
+   command rather than an instruction to edit a number.
 1. Fetch the page currently live at the canonical URL above and save it to a
    local file — this is the CURRENTLY-published register, which may be ahead
    of what you are about to publish.
@@ -367,7 +418,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -377,16 +428,66 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-28, 61 → 62 via PR #2719**, adding row **A102** (CUDA
+> **Last change: 2026-08-28, merging `origin/main` into `fix/sidecar-cuda-fallback-detection`.**
+> Two independent branch tips reconciled: this branch had added row **A102** (CUDA
+> fallback self-test #2582, PR #2719, 61 → 62); `main` had since discharged row
+> **A101** (PR #2739, 61 → 60) — the two changes started from the same post-#2704
+> state and never saw each other. Combined: 60 (post-A101-discharge) + 1 (A102,
+> still live) = **61**. Group A likewise nets to 38 (37 + A102). `next-id: A102`
+> bumped to `A103` in the same change (unaffected by A101's discharge, since IDs
+> are allocated once and never reused).
+> ([#2719](https://github.com/dudarenok-maker/Castwright/pull/2719))
+>
+> **Prior change: 2026-08-28, 61 → 62 via PR #2719**, adding row **A102** (CUDA
 > fallback self-test #2582) — minted from the next-id floor; an earlier commit on
 > this branch briefly mis-minted this as A38, a dangling ID reserved by
-> `onbox-sitting-plan.md`, corrected before merge. `next-id: A102` bumped to
-> `A103` in the same change.
+> `onbox-sitting-plan.md`, corrected before merge.
 > ([#2719](https://github.com/dudarenok-maker/Castwright/pull/2719))
+>
+> **Prior change: 2026-08-28 (PR #2739), 61 → 60.** Row **A101** (Qwen duration golden baseline
+> bless, #1994) fully discharged and dropped: measured the real per-line duration
+> spread on this box (RTX 5070 Ti, `QWEN_DEVICE=cuda:1`) via a new ad-hoc script
+> (`server/tts-sidecar/tests/golden/measure_qwen_duration_spread.py`), voice
+> `cw_gpu_17b`, N=10 repeated syntheses per `qwen-duration-fixture.json` line.
+> Observed per-line max fractional deviation from its own mean: `narrator-plain`
+> 9.0% (mean 2.936s, stdev 0.143s), `numbers-and-year` 12.2% (mean 5.192s, stdev
+> 0.309s), `abbreviations` 22.4% — the observed max — (mean 4.184s, stdev 0.385s),
+> `quotes-and-punctuation` 13.0% (mean 3.752s, stdev 0.321s), `multi-sentence-group`
+> 19.9% (mean 4.696s, stdev 0.498s). Hand-set `qwen-duration-baseline.json`'s
+> `tolerance` to **0.30** (measured max 22.4% plus ~34% headroom) from this
+> measurement. `_bless` (`test_qwen_duration_golden.py`) blesses the MEAN of
+> `BLESS_REPS=5` repeated real syntheses per line as the reference, not a
+> single draw, so the blessed value is a stable estimate of the true mean —
+> matching what `tolerance` was derived to bound. Raw N=10 spread measurement
+> retained at `server/tts-sidecar/tests/golden/spread-report.json`. Per this
+> file's own "record what was observed, by whom, and when" policy: observed
+> by Claude Code (dudarenok-maker), 2026-08-28. **A101 is retired, not
+> reused** (above).
+>
+> **Known limitation, accepted 2026-08-28 (repo owner, ship-as-is decision).**
+> Independent verification during PR #2739's review found the real duration
+> distribution can drift beyond what this single on-box measurement session
+> characterized: a second, separate on-box run (23 fresh syntheses, same GPU
+> and voice) measured every line's fresh mean **6.8%–21% above** the
+> committed `spread-report.json`'s means, all five lines shifted the same
+> direction. That is between-session drift, not the within-session noise
+> `tolerance`'s derivation accounted for, and it raises this opt-in check's
+> spurious-failure rate above the ~2% within-session-only estimate by an
+> amount that is itself session-dependent — a fixed point estimate here goes
+> stale on every re-bless (review-round-3 finding: an earlier version of
+> this note quoted a fixed ~3.65%/run figure computed against `entries`
+> this same PR round then re-blessed). Re-derive the estimate from the
+> CURRENT `qwen-duration-baseline.json` entries and `spread-report.json` if
+> a precise number is needed. `tolerance` ships unchanged rather than
+> widened further or re-measured across multiple sessions — see
+> [#2742](https://github.com/dudarenok-maker/Castwright/issues/2742) for the
+> related but distinct open design decision (assert-time averaging to
+> tighten the gate's power against a real regression, which a wider
+> tolerance alone would make worse, not better).
 >
 > **Prior change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A101** (Qwen duration
 > golden baseline bless, #1994) — minted from the `next-id` floor per this
@@ -397,7 +498,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > silent-wrong-row-resolution failure mode the stable-ID design (above) was
 > built to prevent. `next-id: A101` bumped to `A102` in the same change.
 >
-> **Previous change: 2026-08-27, 60 → 60 (no count change).** The **Blocked** section's
+> **Prior change: 2026-08-27, 60 → 60 (no count change).** The **Blocked** section's
 > two ffmpeg rows no longer carry row IDs. They had borrowed **E6** and **E8** from
 > the live Group E sequence, so each of those IDs named *two* rows — one live Group
 > E row and one Blocked row — and Group E renumbers underneath the Blocked section
@@ -3000,19 +3101,6 @@ clone needed — the stock catalogue voice `Damien Black` reproduces this
 shape). *Criteria:* the bullet above — [#2059](https://github.com/dudarenok-maker/Castwright/issues/2059)
 itself has only this one dialogue shape and no separate run sheet (unlike
 A31's). *Cost:* short — one or two renders of a Russian test sentence.
-
----
-
-### A101 · Qwen duration golden baseline needs its real per-line spread measured before blessing ([#1994](https://github.com/dudarenok-maker/Castwright/issues/1994)) · **single 8 GB card, a designed Qwen voice already present**
-
-`server/tts-sidecar/tests/golden/qwen-duration-baseline.json` ships UNBLESSED —
-the test file (`test_qwen_duration_golden.py`) is real, but the baseline has
-empty `entries` and a placeholder `tolerance`, so the opt-in golden gate SKIPs
-until it is blessed. Qwen decoding is stochastic with no seed, so the true
-per-line `duration_sec` spread across repeated syntheses of each
-`qwen-duration-fixture.json` line is the missing number: `tolerance` must be
-**derived from that measured spread** (with headroom), not picked, then blessed.
-This closes the #1994 A-grade visibility gap the scaffold was written for.
 
 ---
 

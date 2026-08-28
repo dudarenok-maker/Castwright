@@ -217,6 +217,7 @@ function printUnifiedDiff(original, proposed) {
       execFileSync('git', ['--no-pager', 'diff', '--no-index', '--color=never', BACKLOG_PATH, tmp], {
         stdio: 'inherit',
         env: scrubGitEnv(),
+        windowsHide: true,
       });
     } catch {
       // `git diff --no-index` exits 1 when the files differ — that's expected,

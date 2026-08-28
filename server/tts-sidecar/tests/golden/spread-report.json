@@ -1,0 +1,108 @@
+{
+  "voice": "cw_gpu_17b",
+  "model": "0.6b",
+  "repeats": 10,
+  "lines": {
+    "narrator-plain": {
+      "n": 10,
+      "durations_sec": [
+        3.04,
+        3.04,
+        2.72,
+        2.88,
+        2.72,
+        2.88,
+        3.04,
+        2.88,
+        2.96,
+        3.2
+      ],
+      "mean_sec": 2.936,
+      "stdev_sec": 0.1433,
+      "max_abs_dev_sec": 0.264,
+      "max_frac_dev": 0.0899,
+      "wall_sec": 215.0
+    },
+    "numbers-and-year": {
+      "n": 10,
+      "durations_sec": [
+        5.36,
+        4.88,
+        5.2,
+        4.56,
+        5.52,
+        5.2,
+        4.88,
+        5.52,
+        5.28,
+        5.52
+      ],
+      "mean_sec": 5.192,
+      "stdev_sec": 0.3087,
+      "max_abs_dev_sec": 0.632,
+      "max_frac_dev": 0.1217,
+      "wall_sec": 406.0
+    },
+    "abbreviations": {
+      "n": 10,
+      "durations_sec": [
+        4.16,
+        3.76,
+        3.84,
+        3.92,
+        4.4,
+        4.32,
+        3.84,
+        4.4,
+        5.12,
+        4.08
+      ],
+      "mean_sec": 4.184,
+      "stdev_sec": 0.3854,
+      "max_abs_dev_sec": 0.936,
+      "max_frac_dev": 0.2237,
+      "wall_sec": 325.3
+    },
+    "quotes-and-punctuation": {
+      "n": 10,
+      "durations_sec": [
+        3.92,
+        4.08,
+        3.68,
+        3.36,
+        4.08,
+        3.68,
+        3.36,
+        3.28,
+        4.24,
+        3.84
+      ],
+      "mean_sec": 3.752,
+      "stdev_sec": 0.3209,
+      "max_abs_dev_sec": 0.488,
+      "max_frac_dev": 0.1301,
+      "wall_sec": 282.4
+    },
+    "multi-sentence-group": {
+      "n": 10,
+      "durations_sec": [
+        5.12,
+        4.8,
+        4.72,
+        4.32,
+        5.28,
+        3.76,
+        5.04,
+        4.16,
+        5.36,
+        4.4
+      ],
+      "mean_sec": 4.696,
+      "stdev_sec": 0.4984,
+      "max_abs_dev_sec": 0.936,
+      "max_frac_dev": 0.1993,
+      "wall_sec": 314.2
+    }
+  },
+  "overall_max_frac_dev": 0.2237
+}

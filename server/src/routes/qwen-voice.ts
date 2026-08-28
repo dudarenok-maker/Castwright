@@ -44,7 +44,7 @@ import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import { withDesignLock, isDesignBusy } from '../tts/design-lock.js';
 import { buildHintFromCast, toVoiceLike, type CastCharacter } from '../tts/synthesise-chapter.js';
-import { forEachMatchingCastCharacter } from './voices.js';
+import { forEachMatchingCastCharacter, hasClonedSlotAmongMatches } from './voices.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import {
   buildSampleText,
@@ -98,11 +98,12 @@ export const VARIANT_EMOTIONS = EMOTIONS.filter((e) => e !== 'neutral') as Exclu
    a bare "not supported" leaves the user with no next step. */
 export function clonedVariantRefusal(name: string): string {
   return (
-    `"${name}" uses a cloned voice, so emotion variants are unavailable — ` +
+    `"${name}" is linked to a cloned voice — on this character, or a linked one elsewhere in ` +
+    `the series — so emotion variants are unavailable — ` +
     `they are only offered for a designed voice. Minting one would re-derive a ` +
     `new performance of a real person's voice under a key their consent record ` +
-    `does not cover and revoking consent does not erase. Assign a designed ` +
-    `voice to this character to use emotion variants.`
+    `does not cover and revoking consent does not erase. Remove the clone from ` +
+    `every linked book to use emotion variants for this character.`
   );
 }
 
@@ -141,16 +142,18 @@ const EMOTION_INSTRUCT: Record<Exclude<Emotion, 'neutral'>, string> = {
    Preserves the base `name` (defaulting it to the derived base id when the slot
    is fresh) and any sibling variants. No-op for an unknown character. Shared by
    the single design-voice route and the bulk "Design full cast" job. */
+export type PersistEmotionVariantOutcome = 'applied' | 'skippedClone' | 'notFound';
+
 export async function persistEmotionVariant(
   bookDir: string,
   characterId: string,
   emotion: Exclude<Emotion, 'neutral'>,
   variantVoiceId: string,
   seriesFilter?: { author: string; series: string },
-): Promise<void> {
+): Promise<PersistEmotionVariantOutcome> {
   const cast = await readJson<CastFile>(castJsonPath(bookDir));
   const character = cast?.characters?.find((c) => c.id === characterId);
-  if (!cast || !character) return;
+  if (!cast || !character) return 'notFound';
 
   /* Add/overwrite the emotion slot on a character's qwen override, defaulting
      the base name when the slot is fresh and preserving sibling variants. */
@@ -183,10 +186,39 @@ export async function persistEmotionVariant(
        key). Cross-book propagation staleness is tracked on #2006, not fixed
        here. */
     const baseVoiceId = qwenStorageKey(character, characterId);
-    await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) =>
-      addVariant(c, baseVoiceId),
-    );
-    return;
+
+    /* Fresh, series-wide re-check immediately before the walk — replaces the
+       caller's stale pre-GPU snapshot. A hit refuses the WHOLE propagation:
+       no book is written. See the qwen-voice spec's "Series-wide check,
+       reused, not reimplemented". */
+    const stillCloned = await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter);
+    if (stillCloned) return 'skippedClone';
+
+    /* Residual-window backstop: the walk still takes nonzero time after the
+       scan above passed. Threading the walk's own returned count through
+       (rather than discarding it, as an earlier revision did) is what lets
+       'applied' and 'notFound' be told apart below. */
+    let residualSkip = false;
+    const updated = await forEachMatchingCastCharacter(character.voiceId ?? character.id, seriesFilter, (c) => {
+      if (characterHasClonedSlot(c)) {
+        residualSkip = true;
+        return c; // unchanged — this book's own write correctly declined
+      }
+      return addVariant(c, baseVoiceId);
+    });
+    if (residualSkip) {
+      console.warn(
+        `[persistEmotionVariant] residual-window skip: a clone appeared on a linked book for ${characterId} between the series-wide scan and this walk reaching it (${updated} linked character(s) still received the variant).`,
+      );
+    }
+    if (updated > 0) return 'applied';
+    /* `updated === 0` is ambiguous on its own: it means either "nothing in
+       scope matched this character at all" (the pre-existing 'notFound'
+       fallthrough the caller documents as a benign empty write) or "every
+       match was declined by the residual-window clone check" (a genuine
+       refusal that must reach the caller's 409, same as the upfront
+       `stillCloned` check above). `residualSkip` disambiguates the two. */
+    return residualSkip ? 'skippedClone' : 'notFound';
   }
 
   /* Book-scoped write — this function carries no other lock, so the read
@@ -197,14 +229,16 @@ export async function persistEmotionVariant(
      this is the mirror image of the series branch above, which propagates
      the SOURCE's baseVoiceId by design instead of re-deriving it per book;
      see that branch's comment. */
-  await withCastLock(bookDir, async () => {
+  return withCastLock(bookDir, async () => {
     const fresh = await readJson<CastFile>(castJsonPath(bookDir));
     const idx = fresh?.characters?.findIndex((c) => c.id === characterId) ?? -1;
-    if (!fresh || idx === -1) return;
+    if (!fresh || idx === -1) return 'notFound';
     const freshCharacter = fresh.characters[idx];
+    if (characterHasClonedSlot(freshCharacter)) return 'skippedClone';
     const baseVoiceId = qwenStorageKey(freshCharacter, characterId);
     fresh.characters[idx] = addVariant(freshCharacter, baseVoiceId);
     await writeJsonAtomic(castJsonPath(bookDir), fresh);
+    return 'applied';
   });
 }
 
@@ -600,22 +634,6 @@ qwenVoiceRouter.post(
       return res.status(404).json({ error: `Character "${characterId}" not found.` });
     }
 
-    /* #1954 — refuse an emotion variant for a cloned character. The design
-       core holds the same invariant (see its comment for WHY refusal is the
-       chosen resolution); this is the user-facing half, refused before any
-       persona resolution or GPU work so the answer is an honest 409 rather
-       than a 502 from the core's throw. Mirrors single-design.ts's
-       `clone_protected` 409 — same code, so the drawer's existing handling
-       reads it identically. Only the VARIANT path is gated: a base design on
-       this route writes `qwen-<voiceUuid>.pt` and persists no override, so it
-       never touches the clone. */
-    if (emotion && characterHasClonedSlot(character)) {
-      return res.status(409).json({
-        error: clonedVariantRefusal(character.name ?? characterId),
-        code: 'clone_protected',
-      });
-    }
-
     /* Persona precedence: explicit body wins, else the persisted
        voiceStyle. Neither present → 400 (the user must generate or type
        a persona first). */
@@ -649,6 +667,38 @@ qwenVoiceRouter.post(
        promotes it on approve. Default false keeps the original in-place design. */
     const isStandalone = located.state?.isStandalone === true;
     const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(bookId);
+    /* #1954 — refuse an emotion variant for a cloned character, series-wide
+       (Task 7, #2006 v5). The design core holds the same invariant (see its
+       comment for WHY refusal is the chosen resolution); this is the
+       user-facing half, refused before any persona resolution or GPU work so
+       the answer is an honest 409 rather than a 502 from the core's throw.
+       Mirrors single-design.ts's `clone_protected` 409 — same code, so the
+       drawer's existing handling reads it identically. Only the VARIANT path
+       is gated: a base design on this route writes `qwen-<voiceUuid>.pt` and
+       persists no override, so it never touches the clone.
+
+       Sits here (not immediately after the emotion-shape 400 above) so it
+       runs AFTER the persona/sampleVoiceId/modelKey 400 validators below and
+       reuses `isStandalone`/`seriesInfo`, computed once for this purpose
+       already — moving THIS check down was correct; moving that computation
+       UP instead would have made every malformed request pay a full
+       workspace-directory scan (`findAuthorSeriesForBookId`) before its 400.
+
+       `characterHasClonedSlot(character) || hasClonedSlotAmongMatches(...)`
+       — a deliberate backstop, not redundant: `hasClonedSlotAmongMatches`
+       ignores books whose cast isn't confirmed yet, so a clone recorded on
+       THIS book while its own cast is still unconfirmed would otherwise slip
+       through a purely series-wide check. */
+    if (
+      emotion &&
+      (characterHasClonedSlot(character) ||
+        (await hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesInfo ?? undefined, undefined, bookDir)))
+    ) {
+      return res.status(409).json({
+        error: clonedVariantRefusal(character.name ?? characterId),
+        code: 'clone_protected',
+      });
+    }
     /* srv-43 — mint/persist a voiceUuid before the core names the .pt, but ONLY
        for a BASE design (which writes the `.pt` at the resulting `qwen-<uuid>`
        key). A VARIANT must NOT mint: it doesn't write the base `.pt`, so a fresh
@@ -680,13 +730,30 @@ qwenVoiceRouter.post(
       if (emotion && body.preview !== true) {
         /* Propagate the variant across the series (linked cast) — book-scoped
            only for a standalone. Mirrors the base-voice series scope. */
-        await persistEmotionVariant(
+        const outcome = await persistEmotionVariant(
           bookDir,
           characterId,
           emotion,
           voiceId,
           seriesInfo ?? undefined,
         );
+        if (outcome === 'skippedClone') {
+          return res.status(409).json({
+            error: clonedVariantRefusal(character.name ?? characterId),
+            code: 'clone_protected',
+          });
+        }
+        /* 'notFound' (no confirmed-cast book in scope matched this
+           character at write time — a genuinely empty write, not a
+           refusal) falls through to the same 200 as 'applied' below.
+           This is NOT a new gap this task introduces: before this task,
+           persistEmotionVariant returned void unconditionally and the
+           route always answered 200 regardless of whether anything was
+           actually written for this exact case — this branch makes that
+           pre-existing disposition explicit rather than changing it. Only
+           'skippedClone' is new, deliberate refusal-reporting behaviour;
+           'notFound' intentionally keeps today's behaviour, named rather
+           than left as a silent fallthrough. */
       }
       /* srv-43 — return voiceUuid so the drawer can stamp it locally without
          a refetch; the /sample player needs it to hit the uuid-keyed cache. */
