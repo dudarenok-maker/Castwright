@@ -784,18 +784,17 @@ test('stepTouchedByDiff: scripts/run-powershell.mjs is in scope for test:scripts
   assert.equal(stepTouchedByDiff(stepByName['test:scripts'], ['scripts/run-powershell.mjs']), true);
 });
 
-// --- test:server windowsHide-guard surface (#2567 PR review, pass 2 findings
-// 3 + 10) -------------------------------------------------------------------
-// spawn-windows-hide.test.ts (a server/src test) reads its EXTERNAL_FILES_FLOOR
-// list AND pipSpawners()'s dynamic scan (server/tts-sidecar/scripts/ + scripts/,
-// .mjs files only) as TEXT at RUNTIME — no module-graph edge to either tree.
-// Reverting the two globs added for this back to just 'server/src/**' reddens
-// these tests.
+// --- test:server windowsHide-guard surface (#2716 / #2687 / #2567) --------
+// spawn-windows-hide.test.ts (a server/src test) auto-detects files with spawn
+// calls in scripts/**, server/tts-sidecar/scripts/, and pinokio-scripts/lib/
+// via externalFilesFloor(), reading all three trees as TEXT at RUNTIME — no
+// module-graph edge to any of them. Reverting the three globs added for this
+// back to just 'server/src/**' reddens these tests.
 test('stepTouchedByDiff: an arbitrary scripts/*.mjs file is in scope for test:server (EXTERNAL_FILES_FLOOR coverage)', () => {
   assert.equal(stepTouchedByDiff(stepByName['test:server'], ['scripts/wt-new.mjs']), true);
 });
 
-test('stepTouchedByDiff: a pip-spawning install script is in scope for test:server (pipSpawners() coverage)', () => {
+test('stepTouchedByDiff: an install script is in scope for test:server (EXTERNAL_FILES_FLOOR auto-detection)', () => {
   assert.equal(
     stepTouchedByDiff(stepByName['test:server'], [
       'server/tts-sidecar/scripts/bootstrap-venv.mjs',
@@ -808,13 +807,37 @@ test('stepTouchedByDiff: a pip-spawning install script is in scope for test:serv
   );
 });
 
-// --- test:server EXTERNAL_FILES_FLOOR entries outside both globs (#2567 PR
-// review, pass 2 finding 3) --------------------------------------------------
-// launch.mjs (bare root file), pinokio-scripts/lib/resolve-release.js, and
-// e2e/global-teardown.ts sit in trees this step has no other reason to watch.
-// Reverting any one of these three extraFiles entries reddens its own test.
+// #2716 PR review, pass 2: a directory-wide glob, not a single hardcoded
+// filename, is what actually matches externalFilesFloor()'s recursive scan of
+// pinokio-scripts/lib/ — a BRAND NEW file dropped there (not just the one
+// file, resolve-release.js, that used to be named individually) must be
+// in-scope. This is the exact gap round-2 review measured as a live MISS
+// before this fix (stepTouchedByDiff returned false for a new file here).
+test('stepTouchedByDiff: a brand-new pinokio-scripts/lib/ file is in scope for test:server (not just resolve-release.js)', () => {
+  assert.equal(
+    stepTouchedByDiff(stepByName['test:server'], ['pinokio-scripts/lib/some-new-installer.js']),
+    true,
+  );
+});
+
+// --- test:server EXTERNAL_FILES_FLOOR entries outside all three globs
+// (#2567 PR review, pass 2 finding 3) ----------------------------------------
+// launch.mjs, vite.config.ts (both bare root files), and e2e/global-teardown.ts
+// sit in trees this step has no other reason to watch. Reverting any one of
+// these three extraFiles entries reddens its own test.
 test('stepTouchedByDiff: launch.mjs is in scope for test:server', () => {
   assert.equal(stepTouchedByDiff(stepByName['test:server'], ['launch.mjs']), true);
+});
+
+// #2716 PR review, pass 2: externalFilesFloor()'s root-level scan widened to
+// include .ts (not just .mjs) specifically to catch vite.config.ts, and this
+// PR added a regression test asserting it's in the floor — but that test only
+// runs in CI if a vite.config.ts-only diff is actually recognized as in-scope
+// for test:server. Before this fix it was not (measured: stepTouchedByDiff
+// returned false), so a diff stripping vite.config.ts's own windowsHide: true
+// would have skipped test:server entirely in CI.
+test('stepTouchedByDiff: vite.config.ts is in scope for test:server', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], ['vite.config.ts']), true);
 });
 
 test('stepTouchedByDiff: pinokio-scripts/lib/resolve-release.js is in scope for test:server', () => {

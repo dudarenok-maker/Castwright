@@ -23,8 +23,9 @@
  *      OUTSIDE server/src (a hidden parent does not stop a grandchild pip /
  *      python from popping its own console). */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, it, expect } from 'vitest';
 
 const SRC_ROOT = import.meta.dirname;
@@ -81,20 +82,44 @@ const EXTERNAL_FILES_MANUAL: string[] = [
    shouldn't be guarded, and name the file + reasoning in the completion comment. */
 const EXTERNAL_FILES_EXCLUSIONS: string[] = [];
 
+/* Content-filter step, extracted as its own function so it's independently
+   testable against an explicit candidate list — not just via the real
+   directory scan, whose enumeration order isn't something a test should
+   depend on for determinism.
+
+   Keeps only candidates that actually contain a spawn call.
+   blankCommentsAndStrings blanks out comments AND string literals so prose
+   that merely mentions a spawn name is never matched. CALL_RE is global, so
+   lastIndex is reset before EVERY candidate's .test() call — without this,
+   a candidate whose match leaves lastIndex parked mid-string would cause the
+   NEXT candidate's .test() to start scanning partway through its own source
+   (or past its end entirely for a short file), silently excluding it from
+   the floor even though it does spawn something.
+
+   File read errors propagate loudly (matching scanFile()'s behaviour), not
+   silently as a fail-open — a permissions or race-condition error during the
+   scan phase is a failure, not a skipped file. */
+function filterSpawningFiles(candidates: string[]): string[] {
+  return candidates.filter(f => {
+    const src = blankCommentsAndStrings(readFileSync(f, 'utf8'));
+    CALL_RE.lastIndex = 0;
+    return CALL_RE.test(src);
+  });
+}
+
 /* Build the EXTERNAL_FILES_FLOOR by scanning candidate directories for files
    that actually contain spawn calls (content-filtered via CALL_RE), then
    concatenating manual entries and subtracting exclusions.
 
    Directory scope (derived from the old 49-entry hand list):
-   - REPO_ROOT non-recursive, .mjs only (covers launch.mjs)
+   - REPO_ROOT non-recursive, .mjs/.ts (covers launch.mjs, vite.config.ts)
    - scripts/ recursive, .mjs/.cjs/.js, EXCLUDING scripts/tests/
    - server/tts-sidecar/scripts/ recursive, .mjs
    - pinokio-scripts/lib/ recursive, .js/.mjs
 
-   The content filter reuses blankCommentsAndStrings() + CALL_RE — the same
-   pair pipSpawners() already demonstrates — so a file that doesn't actually
-   spawn anything is never swept in. This mirrors the pip-specific filter's
-   shape but tests "spawns anything" instead of "spawns pip". */
+   The content filter reuses blankCommentsAndStrings() + CALL_RE to avoid
+   matching spawn names that merely appear in comments or strings, so a file
+   that doesn't actually spawn anything is never swept in. */
 function externalFilesFloor(): string[] {
   // Repo root: non-recursive, .mjs/.ts (covers launch.mjs + vite.config.ts)
   const rootFiles: string[] = [];
@@ -122,19 +147,7 @@ function externalFilesFloor(): string[] {
 
   // Combine all candidates
   const candidates = [...rootFiles, ...scriptsFiles, ...ttsFiles, ...pinokioFiles];
-
-  // Content-filter: keep only files that actually contain spawn calls.
-  // blankCommentsAndStrings blanks out comments AND string literals so prose
-  // that merely mentions a spawn name is never matched. CALL_RE is global,
-  // so reset lastIndex before each test to avoid stale state across calls.
-  // File read errors propagate loudly (matching scanFile()'s behaviour), not
-  // silently as a fail-open — a permissions or race-condition error during
-  // the scan phase is a failure, not a skipped file.
-  const filtered = candidates.filter(f => {
-    const src = blankCommentsAndStrings(readFileSync(f, 'utf8'));
-    CALL_RE.lastIndex = 0;
-    return CALL_RE.test(src);
-  });
+  const filtered = filterSpawningFiles(candidates);
 
   // Concatenate manual entries
   const withManual = [...filtered, ...EXTERNAL_FILES_MANUAL];
@@ -187,7 +200,18 @@ function listSourceFiles(dir: string): string[] {
    "skipping spawn (current sidecar honoured)" — is never matched. Replaced
    characters become spaces (newlines kept) so byte offsets and line numbers
    stay accurate for error reporting. Single-pass lexer because regex can't
-   disambiguate a `//` inside a string from a real line comment. */
+   disambiguate a `//` inside a string from a real line comment.
+
+   KNOWN LIMITATION (#2747): an unpaired backtick or quote character inside a
+   regex literal (e.g., /^`+|`+$/g — this exact pattern appears in
+   scripts/lib/knob-docs.mjs) will desync the quote-tracking state, causing
+   everything after that point in the file to be misread as "inside a
+   string" and blanked out. This means a real spawn call appearing after such
+   a regex literal anywhere in a scanned file would be silently invisible to
+   the spawn-detection regex, producing a false "compliant" result. This is a
+   real, reproduced gap, not theoretical. Correctly fixing this requires real
+   parsing to distinguish a regex literal from a division operator, and is a
+   design-level decision, not a quick patch. See issue #2747 for details. */
 function blankCommentsAndStrings(src: string): string {
   const out: string[] = [];
   let i = 0;
@@ -317,67 +341,78 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
     ).toEqual([]);
   });
 
-  /* Regression: lastIndex-leak guard is verifiable (#2687).
-     CALL_RE is a global regex shared between externalFilesFloor()'s
-     content-filter phase (which loops .test() calls) and scanFile()'s
-     matchAll phase. A shared g-flagged regex's .test() loop leaves lastIndex
-     at a nonzero offset after the last match, and a subsequent matchAll would
-     inherit that offset and silently skip content before it. The resets at
-     lines 133 and 159 guard against this, but the guard was unfalsifiable:
-     the last candidate in readdirSync order happened to have no spawn call,
-     auto-resetting lastIndex via its failed .test(). This test verifies the
-     guard works even when the last test() call succeeds (leaving lastIndex
-     dirty). */
-  it('lastIndex leak is caught by the guard resets', () => {
-    /* Create a source string with a spawn call EARLY, then exercise CALL_RE
-       with additional .test() calls that END on a match, leaving lastIndex
-       pointing PAST the end of the first spawn call. This simulates the
-       content-filter's loop leaving lastIndex dirty for a later scanFile call. */
-    const sourceWithEarlySpawn = `spawn('git', ['clone'], {});\nconst x = 1;`;
-    const earlySpawnPos = sourceWithEarlySpawn.indexOf("spawn('git'");
-    expect(earlySpawnPos).toBeLessThan(20);
+  describe('lastIndex-leak and fail-open regressions (#2716 PR review, pass 2)', () => {
+    /* A scratch dir with throwaway fixture files, NOT under any directory
+       externalFilesFloor() scans — these tests call filterSpawningFiles()/
+       scanFile() directly with explicit candidate lists, so real directory
+       enumeration order (which a test must never depend on for determinism)
+       never enters the picture. Created fresh per test file run, removed in
+       an afterAll below. */
+    const scratchDir = mkdtempSync(join(tmpdir(), 'spawn-windows-hide-test-'));
 
-    /* Run .test() calls to push lastIndex past the early spawn. */
-    CALL_RE.lastIndex = 0;
-    CALL_RE.test(sourceWithEarlySpawn); // finds first spawn
-    const indexAfterFirstTest = CALL_RE.lastIndex;
-    expect(indexAfterFirstTest).toBeGreaterThan(earlySpawnPos);
+    it('scanFile resets lastIndex, so a leaked offset does not hide an early real offender', () => {
+      /* Round-2 review found the original version of this test asserted
+         ECMAScript matchAll()/.test() semantics on synthetic strings without
+         ever calling scanFile() — true regardless of whether this file's own
+         `re.lastIndex = 0` reset (scanFile's first line) exists. This version
+         calls the REAL scanFile() against a real file, with CALL_RE dirtied
+         to an offset that only scanFile()'s own reset can clear. */
+      const fixture = join(scratchDir, 'lastindex-fixture.mjs');
+      const content = `execSync('echo hi');\n`; // unguarded spawn at offset 0
+      writeFileSync(fixture, content, 'utf8');
 
-    /* Now simulate the leaked state: lastIndex is dirty/nonzero, pointing
-       past the early spawn. A matchAll starting here would miss it. */
-    CALL_RE.lastIndex = indexAfterFirstTest;
-    const matchesWithDirtyIndex = [...sourceWithEarlySpawn.matchAll(CALL_RE)];
-    expect(matchesWithDirtyIndex).toHaveLength(0); // skips the early spawn due to dirty offset
+      // Dirty CALL_RE.lastIndex to a value well past the fixture's length —
+      // if scanFile() does NOT reset it, matchAll starts scanning from here
+      // (past EOF) and finds nothing.
+      CALL_RE.lastIndex = 1000;
+      const offenders = scanFile(fixture, CALL_RE);
+      CALL_RE.lastIndex = 0; // don't leak dirty state into later tests
 
-    /* Reset the lastIndex — this is what the guard resets do. */
-    CALL_RE.lastIndex = 0;
-    const matchesAfterReset = [...sourceWithEarlySpawn.matchAll(CALL_RE)];
-    expect(matchesAfterReset, 'lastIndex guard must enable matchAll to find the early spawn').toHaveLength(1);
-  });
+      expect(
+        offenders,
+        'scanFile() missed an offender at the start of the file — the lastIndex reset at its own top is not load-bearing',
+      ).toHaveLength(1);
+    });
 
-  /* Regression: content filter fails loud on read errors (#2687).
-     externalFilesFloor()'s content-filter phase was silently swallowing
-     readFileSync errors (permissions, race, encoding) with a try-catch,
-     unlike scanFile() which fails loud. This inconsistency meant a broken
-     read path would silently drop from EXTERNAL_FILES_FLOOR without signal,
-     leaving the file unchecked. */
-  it('externalFilesFloor fails loud when a candidate file cannot be read', () => {
-    /* To test without mocking the entire filesystem: externalFilesFloor
-       scans real directories (which won't have read errors), but we can
-       verify the try-catch was removed by checking that the function
-       rethrows on a simulated read failure. Create a minimal test by
-       directly invoking the internal filter logic with an unreadable path. */
-    expect(() => {
-      // Simulate what the content filter does: read a nonexistent file.
-      const nonexistent = join(REPO_ROOT, 'nonexistent-does-not-exist.mjs');
-      readFileSync(nonexistent, 'utf8');
-    }).toThrow();
+    it('filterSpawningFiles resets lastIndex per candidate, so a dirty leftover cannot hide the NEXT candidate', () => {
+      /* Candidate A's spawn call, once matched by CALL_RE.test(), parks
+         lastIndex well past candidate B's entire (short) length. If
+         filterSpawningFiles() does not reset lastIndex before EVERY
+         candidate's .test() call, candidate B's .test() starts scanning from
+         that leaked offset — past its own end — and wrongly reports "no
+         spawn found", excluding a file that genuinely spawns something. */
+      const fixtureA = join(scratchDir, 'a-leaves-dirty-lastindex.mjs');
+      const fixtureB = join(scratchDir, 'b-short-real-spawner.mjs');
+      writeFileSync(fixtureA, `// padding so the match position is not 0\nexecSync('a');\n`, 'utf8');
+      writeFileSync(fixtureB, `spawn('b');\n`, 'utf8'); // short — well within A's leaked offset
+
+      const result = filterSpawningFiles([fixtureA, fixtureB]);
+
+      expect(result, 'candidate A did not survive its own filter pass').toContain(fixtureA);
+      expect(
+        result,
+        'candidate B was silently dropped — a dirty lastIndex leaked from candidate A into candidate B\'s .test() call',
+      ).toContain(fixtureB);
+    });
+
+    it('filterSpawningFiles fails loud when a candidate cannot be read, not silently drop it', () => {
+      /* Calls the REAL function this time (unlike the original version of
+         this test, which only proved Node's fs module throws on a missing
+         path — never touching externalFilesFloor()'s own code at all). */
+      const missing = join(scratchDir, 'does-not-exist.mjs');
+      expect(() => filterSpawningFiles([missing])).toThrow();
+    });
+
+    it('cleans up its scratch fixtures', () => {
+      rmSync(scratchDir, { recursive: true, force: true });
+    });
   });
 
   /* Acceptance #4 (issue #2687): pinokio-scripts/lib/resolve-release.js
      had unguarded `git` spawns on both the Pinokio install and update
      paths (Electron parent, no console) — a real user-visible flash that
-     the old hand list never covered. The glob MUST pick it up. */
+     the old hand-maintained list covered manually. The new glob-based scan
+     MUST continue to pick it up. */
   it('resolve-release.js appears in the external-files floor (proves glob caught it)', () => {
     const resolveRelease = EXTERNAL_FILES_FLOOR.filter((f) =>
       f.endsWith(join('pinokio-scripts', 'lib', 'resolve-release.js')),
