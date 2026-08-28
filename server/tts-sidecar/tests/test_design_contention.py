@@ -227,3 +227,60 @@ def test_synthesize_batch_widens_guard_to_design_still_loading() -> None:
     finally:
         release.set()
         holder.join(5)
+
+
+def test_mint_variant_widens_guard_to_design_still_loading() -> None:
+    """#2678 — `mint_variant()`'s render guard must not skip `unload_design()`
+    while `design_voice()` has claimed `_design_in_flight` but has not yet
+    assigned `self._design` (the heavy VoiceDesign weights are still
+    loading). The pre-fix guard (`self._design is not None` alone) is
+    `False` in exactly this window, so a mint proceeding here loaded its
+    own model concurrently with the design's still-loading one — the
+    `Castwright#2678` vram-spill.
+
+    Mutation that must fail this (verified per this ticket's acceptance
+    criteria): revert the guard to `self._design is not None`. `_design` is
+    still `None` in this test's setup, so the reverted guard is `False` and
+    `unload_design` is never called — `mocked_unload.assert_called_once()`
+    below then fails.
+    """
+    import os
+
+    engine = main.QwenEngine()
+    engine._design = None  # design_voice() has claimed in-flight but not assigned yet
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def hold_design_in_flight() -> None:
+        with engine._design_in_flight.claim():
+            entered.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold_design_in_flight, daemon=True)
+    holder.start()
+    try:
+        assert entered.wait(2), "claim() never entered — test bug"
+        # The exact gap this fix closes: not-None is False, busy is True.
+        assert engine._design is None
+        assert engine._design_in_flight.busy is True
+
+        # Bypass early checks to reach the guard
+        with mock.patch.dict(sys.modules, {"torch": mock.MagicMock()}):
+            with mock.patch("os.path.isfile", return_value=True):
+                with mock.patch.object(engine, "_load_voice_prompt", return_value=([None], None, None)):
+                    with mock.patch.object(
+                        engine, "unload_design", side_effect=_StoppedAfterGuard
+                    ) as mocked_unload:
+                        with pytest.raises(_StoppedAfterGuard):  # Proof: guard reached and called unload_design
+                            engine.mint_variant(
+                                base_voice_id="__nonexistent_base_for_test__",
+                                variant_voice_id="__nonexistent_variant_for_test__",
+                                emotion_instruct="happy",
+                                language="en",
+                                calibration_text=None,
+                            )
+        mocked_unload.assert_called_once()
+    finally:
+        release.set()
+        holder.join(5)
