@@ -100,8 +100,8 @@ def _wire_mint_variant_internals(monkeypatch, qeng: "main.QwenEngine") -> None:
 
 def test_mint_variant_does_not_stall_kokoro_while_waiting_on_an_in_flight_design(monkeypatch) -> None:
     """Mutation that must fail it — breaks the PRODUCER: move the
-    `if self._design is not None: self.unload_design()` call back INSIDE the
-    `with _DEVICE_LEDGER.card_lock(...), self._base17_activity(),
+    `if self._design is not None or self._design_in_flight.busy: self.unload_design()`
+    call back INSIDE the `with _DEVICE_LEDGER.card_lock(...), self._base17_activity(),
     _VD_KOKORO.design():` block (the pre-fix shape). `kokoro_acquired.wait()`
     below would then time out — the Kokoro synth stays blocked for as long as
     the simulated design stays in flight, because `_VD_KOKORO._design_active`
