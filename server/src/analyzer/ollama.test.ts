@@ -164,8 +164,23 @@ vi.mock('undici', async (importOriginal) => {
   return { ...actual, fetch: fetchMock };
 });
 
+/* srv-2367 Task 2 — detectOllamaGpuSplit mocked at the module boundary so
+   tests can drive its result without a real nvidia-smi. Defaults to the
+   "nothing to see" shape so describe blocks that don't touch this mock
+   never trip the new warning. */
+const { detectOllamaGpuSplitMock } = vi.hoisted(() => ({ detectOllamaGpuSplitMock: vi.fn() }));
+vi.mock('../gpu/ollama-gpu-split.js', () => ({ detectOllamaGpuSplit: detectOllamaGpuSplitMock }));
+
 beforeEach(async () => {
   fetchMock.mockReset();
+  detectOllamaGpuSplitMock.mockReset();
+  detectOllamaGpuSplitMock.mockResolvedValue({
+    reachable: true,
+    split: false,
+    deviceIndices: [],
+    totalUsedMb: 0,
+    wouldFitSingleDevice: false,
+  });
   await mkdir(resolve(HANDOFF_ROOT, 'inbox'), { recursive: true });
   await mkdir(resolve(HANDOFF_ROOT, 'outbox'), { recursive: true });
 });
@@ -895,6 +910,100 @@ describe('OllamaAnalyzer — onEvalTiming sink (analyzer-eval-telemetry)', () =>
     });
 
     expect(result.characters).toBeDefined();
+  });
+});
+
+describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('warns once per distinct device signature and rate-limits repeats, but warns again on a new signature', async () => {
+    // A ReadableStream can only be consumed once — a fresh stream per call,
+    // since this test drives runStage1Chapter three times.
+    fetchMock.mockImplementation(async () => okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+    });
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_split_1', 1, '# prompt', {});
+    const splitWarnings = () =>
+      warnSpy.mock.calls.filter(
+        ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('analyzer model split across GPUs'),
+      );
+    expect(splitWarnings()).toHaveLength(1);
+    expect(splitWarnings()[0][0]).toContain('GPUs 0,1');
+
+    // Same signature again — rate-limited, no additional warning.
+    await analyzer.runStage1Chapter('m_gpu_split_2', 2, '# prompt', {});
+    expect(splitWarnings()).toHaveLength(1);
+
+    // A different signature is a new occurrence — warns again.
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 2],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+    });
+    await analyzer.runStage1Chapter('m_gpu_split_3', 3, '# prompt', {});
+    expect(splitWarnings()).toHaveLength(2);
+    expect(splitWarnings()[1][0]).toContain('GPUs 0,2');
+  });
+
+  it('does not warn when split is false', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [],
+      totalUsedMb: 0,
+      wouldFitSingleDevice: false,
+    });
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_split_nosplit', 1, '# prompt', {});
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when split is true but it would not have fit on a single device', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 40000,
+      wouldFitSingleDevice: false,
+    });
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_split_toobig', 1, '# prompt', {});
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('a rejecting detectOllamaGpuSplit never fails an otherwise-successful decode', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockRejectedValue(new Error('nvidia-smi boom'));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    const result = await analyzer.runStage1Chapter('m_gpu_split_throws', 1, '# prompt', {});
+    expect(result.characters).toBeDefined();
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -36,6 +36,7 @@ import { z } from 'zod';
 import { sampleAndRecordVram } from './model-vram-stats.js';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
 import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
+import { detectOllamaGpuSplit } from '../gpu/ollama-gpu-split.js';
 import { getResolvedOllamaUrl, getCachedUserSettings } from '../workspace/user-settings.js';
 import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { configValue } from '../config/resolver.js';
@@ -190,6 +191,12 @@ const DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS = 30;
    whole window). Clamped to 0 on a CPU-only box regardless of the configured
    value. Orthogonal to the per-model map — a deliberate safety rail. */
 const RAM_HEAVY_MODELS = new Set(['qwen3.5:9b']);
+
+/* srv-2367: device-signature ("0,1") of every GPU split already warned about
+   this run, so the warning fires once per distinct split rather than once
+   per chat() call (Stage 1/2 call chat() per chapter — dozens of times per
+   book). A full server restart clears this naturally; no TTL needed. */
+const warnedGpuSplitSignatures = new Set<string>();
 
 /** Strip a trailing ':latest' only (Ollama treats bare == :latest). Leaves real
     tags like 'qwen3.5:9b' untouched. */
@@ -838,6 +845,24 @@ export class OllamaAnalyzer implements Analyzer {
       // Env-gated (Global Constraints) so fetch-count tests can opt out; best-effort.
       if (process.env.CASTWRIGHT_VRAM_SAMPLE !== '0') {
         await sampleAndRecordVram(this.url, this.model, resolveAnalyzerNumCtx());
+      }
+      /* srv-2367: warn once per distinct GPU split that would have fit on a
+         single device — independently best-effort of the VRAM sample above,
+         and never trusting detectOllamaGpuSplit's own never-throws contract
+         blindly from this call site (belt and suspenders). */
+      try {
+        const splitResult = await detectOllamaGpuSplit();
+        if (splitResult.split && splitResult.wouldFitSingleDevice) {
+          const signature = splitResult.deviceIndices.join(',');
+          if (!warnedGpuSplitSignatures.has(signature)) {
+            warnedGpuSplitSignatures.add(signature);
+            console.warn(
+              `[ollama] analyzer model split across GPUs ${signature} (would fit on a single device) — see docs/local-llm.md "Pinning the analyzer to 100% GPU"`,
+            );
+          }
+        }
+      } catch {
+        /* best-effort; never let a detector bug surface as an analyzer failure */
       }
       /* fs-analyzer-eval-telemetry: best-effort decode-timing capture, gated
          by the analyzer.evalStats.enabled knob so an operator can disable it.
