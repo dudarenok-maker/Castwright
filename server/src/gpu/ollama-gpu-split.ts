@@ -11,6 +11,24 @@
 import { execFile } from 'node:child_process';
 
 const EXEC_TIMEOUT_MS = 4_000;
+/* TTL-based cache for the GPU-split probe result. The detector shells out to
+   three separate nvidia-smi queries, each with a 4-second timeout, during
+   every chat() call on the analyzer's hot path. A ~1500ms cache matches the
+   precedent in capacity-probe.ts for exactly this class of inexpensive-but-
+   not-free system probe that gets called multiple times per analysis — VRAM
+   placement doesn't change every few hundred ms, so the cache is safe and
+   necessary for performance (srv-2367). Mirrors capacity-probe.ts's caching
+   idiom: module-level cache variable, TTL check on every call, fresh-override
+   for callers that need a re-probe. */
+const CACHE_TTL_MS = 1_500;
+
+let cache: { at: number; result: OllamaGpuSplitResult } | null = null;
+
+/** Test-only: clear the module-level cache so each test starts from a cold
+    probe. Never called in production. */
+export function __resetOllamaGpuSplitCacheForTest(): void {
+  cache = null;
+}
 
 export interface OllamaGpuSplitResult {
   reachable: boolean;
@@ -127,8 +145,15 @@ export function parseGpuFreeCsv(raw: string): GpuFreeRow[] {
     Matches "Ollama" via a liberal /ollama/i substring on process_name — the
     daemon binary and its per-model runner subprocess names can differ across
     platforms/installs, so an exact-name match would miss real installs; the
-    verify child confirms this against a real box. */
-export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
+    verify child confirms this against a real box.
+    Result is cached for ~1500ms to avoid redundant nvidia-smi spawns on the
+    analyzer's hot path (chat() calls this on every inference). Pass
+    `fresh: true` to force a re-probe (for testing). */
+export async function detectOllamaGpuSplit(opts?: { fresh?: boolean }): Promise<OllamaGpuSplitResult> {
+  const now = Date.now();
+  if (!opts?.fresh && cache && now - cache.at < CACHE_TTL_MS) {
+    return cache.result;
+  }
   let computeAppsRaw: string;
   let indexUuidRaw: string;
   let freeRaw: string;
@@ -142,11 +167,17 @@ export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
       execFileAsync('nvidia-smi', ['--query-gpu=index,memory.free', '--format=csv,noheader,nounits']),
     ]);
   } catch {
-    return emptyResult();
+    const result = emptyResult();
+    cache = { at: now, result };
+    return result;
   }
 
   const uuidToIndex = new Map(parseGpuIndexUuidCsv(indexUuidRaw).map((r) => [r.uuid, r.index]));
-  if (uuidToIndex.size === 0) return emptyResult();
+  if (uuidToIndex.size === 0) {
+    const result = emptyResult();
+    cache = { at: now, result };
+    return result;
+  }
   const freeByIndex = new Map(parseGpuFreeCsv(freeRaw).map((r) => [r.index, r.freeMb]));
 
   const parsed = parseComputeAppsCsv(computeAppsRaw);
@@ -158,7 +189,7 @@ export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
   const dataUnavailable = parsed.hadUnparseableMemory && hadOllamaProcessInRaw;
 
   if (ollamaRows.length === 0) {
-    return {
+    const result = {
       reachable: true,
       split: false,
       deviceIndices: [],
@@ -166,6 +197,8 @@ export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
       wouldFitSingleDevice: false,
       dataUnavailable,
     };
+    cache = { at: now, result };
+    return result;
   }
 
   // Group rows by PID to detect whether any single Ollama model's VRAM is split
@@ -192,7 +225,7 @@ export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
   // Collect all GPUs and VRAM from split PIDs (PIDs that span 2+ GPUs)
   const splitPids = Array.from(byPid.entries()).filter(([, entry]) => entry.indices.size >= 2);
   if (splitPids.length === 0) {
-    return {
+    const result = {
       reachable: true,
       split: false,
       deviceIndices: [],
@@ -200,6 +233,8 @@ export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
       wouldFitSingleDevice: false,
       dataUnavailable: false,
     };
+    cache = { at: now, result };
+    return result;
   }
 
   // Aggregate all device indices and VRAM from split PIDs
@@ -224,5 +259,7 @@ export async function detectOllamaGpuSplit(): Promise<OllamaGpuSplitResult> {
     return freeMb + ownShareMb >= totalUsedMb;
   });
 
-  return { reachable: true, split, deviceIndices, totalUsedMb, wouldFitSingleDevice, dataUnavailable: false };
+  const result = { reachable: true, split, deviceIndices, totalUsedMb, wouldFitSingleDevice, dataUnavailable: false };
+  cache = { at: now, result };
+  return result;
 }

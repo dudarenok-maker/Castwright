@@ -14,6 +14,7 @@ import {
   parseComputeAppsCsv,
   parseGpuIndexUuidCsv,
   parseGpuFreeCsv,
+  __resetOllamaGpuSplitCacheForTest,
 } from './ollama-gpu-split.js';
 
 type Cb = (err: Error | null, stdout?: string) => void;
@@ -37,6 +38,7 @@ function mockNvidiaSmi(opts: { computeApps?: string; indexUuid?: string; free?: 
 
 beforeEach(() => {
   execFileMock.mockReset();
+  __resetOllamaGpuSplitCacheForTest();
 });
 
 describe('parseComputeAppsCsv', () => {
@@ -210,6 +212,74 @@ describe('detectOllamaGpuSplit', () => {
       totalUsedMb: 0,
       wouldFitSingleDevice: false,
       dataUnavailable: true,
+    });
+  });
+
+  describe('caching behavior (srv-2367)', () => {
+    it('caches result and returns cached copy on second call within TTL window', async () => {
+      mockNvidiaSmi({
+        computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
+        indexUuid: '0, GPU-aaa\n',
+        free: '0, 3000\n',
+      });
+
+      // First call — should invoke nvidia-smi
+      const result1 = await detectOllamaGpuSplit();
+      expect(result1.split).toBe(false);
+      const callCount1 = execFileMock.mock.calls.length;
+
+      // Second call immediately after — should return cached result without invoking nvidia-smi again
+      const result2 = await detectOllamaGpuSplit();
+      expect(result2).toEqual(result1);
+      expect(execFileMock.mock.calls.length).toBe(callCount1); // No additional calls
+    });
+
+    it('bypasses cache and re-probes when fresh: true is passed', async () => {
+      mockNvidiaSmi({
+        computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
+        indexUuid: '0, GPU-aaa\n',
+        free: '0, 3000\n',
+      });
+
+      // First call — invokes nvidia-smi
+      await detectOllamaGpuSplit();
+      const callCount1 = execFileMock.mock.calls.length;
+
+      // Second call with fresh: true — should re-probe
+      await detectOllamaGpuSplit({ fresh: true });
+      expect(execFileMock.mock.calls.length).toBeGreaterThan(callCount1);
+    });
+
+    it('re-probes after cache expires (simulated by calling with fresh: true)', async () => {
+      mockNvidiaSmi({
+        computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
+        indexUuid: '0, GPU-aaa\n',
+        free: '0, 3000\n',
+      });
+
+      // First call — invokes nvidia-smi
+      const result1 = await detectOllamaGpuSplit();
+      const callCount1 = execFileMock.mock.calls.length;
+
+      // Mock time passage (TTL would expire). We simulate this by calling with fresh: true.
+      // In production, the real cache TTL (~1500ms) prevents redundant calls within that window.
+      const result2 = await detectOllamaGpuSplit({ fresh: true });
+      expect(result2).toEqual(result1); // Result is the same (same underlying state)
+      expect(execFileMock.mock.calls.length).toBeGreaterThan(callCount1); // But we re-probed
+    });
+
+    it('caches failed probe result (reachable: false)', async () => {
+      mockNvidiaSmi({ err: Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) });
+
+      // First call — fails
+      const result1 = await detectOllamaGpuSplit();
+      expect(result1.reachable).toBe(false);
+      const callCount1 = execFileMock.mock.calls.length;
+
+      // Second call — returns cached failure without re-invoking nvidia-smi
+      const result2 = await detectOllamaGpuSplit();
+      expect(result2).toEqual(result1);
+      expect(execFileMock.mock.calls.length).toBe(callCount1);
     });
   });
 });
