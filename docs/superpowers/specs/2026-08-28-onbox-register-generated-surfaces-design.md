@@ -36,9 +36,31 @@ renumbering was only one symptom of.
 > entirely); gate 1's wiring fix was described but not actually made (path
 > filter changed, the `--check` invocation was not); six non-row headings were
 > undercounted as one; and several derivation rules and citations were missing
-> or wrong. All are corrected in place below. **The governing lesson holds and
-> sharpens: generate figures, never prose — and verify every generated target
-> against the *other* file before trusting either as the source.**
+> or wrong. All are corrected in place below.
+>
+> **Revision note (pass 3).** A third pass found pass 2's own fixes carried
+> defects, plus fresh ones: the `wrongId` widening's discharge-annotation
+> prerequisite was **unsound** — the three IDs it was meant to exempt (A19,
+> A31, A34) are all currently live for a *different* subject than their
+> adjacent annotation claims, so the annotations are themselves stale and the
+> exemption would have suppressed genuinely wrong citations. Replaced with an
+> ID-reuse-detection rule (a live ID is fatal regardless of any annotation;
+> only a genuinely departed ID consults the annotation) — an operator decision,
+> confirmed 2026-08-29. Also found: the changelog's single-line entry-detection
+> regex cannot match the register's actual final entry, which spans two lines
+> mid-sentence (replaced with a joined-stream, boundary-split parser); the
+> recovered `.html`-only entry's insertion point isn't determinable from
+> chain-continuity (its own transition doesn't bridge either neighbour) and now
+> says so, deferring to git history instead of guessing; the "six non-row
+> headings" exclusion list was replaced with the pattern match that makes an
+> exclusion list unnecessary; two further stale citations (A40, A41) invisible
+> to both existing checks; an unstated no-`npm ci` constraint on the generator's
+> dependencies; and several smaller citation and count corrections. All
+> corrected in place below. **The governing lesson holds and sharpens further:
+> generate figures, never prose — verify every generated target against the
+> *other* file before trusting either as the source — and when a fix depends on
+> an ID or a citation being either "present" or "departed," measure which,
+> because pre-floor IDs can be both at different times.**
 
 ---
 
@@ -46,7 +68,7 @@ renumbering was only one symptom of.
 
 ### The family reproduces because the register has two hand-maintained copies of the same facts
 
-Seven issues have now been filed about `docs/testing/onbox-acceptance-register.md`
+Eight issues have now been filed about `docs/testing/onbox-acceptance-register.md`
 and its published twin. Five are closed; each closure orphaned something:
 
 - **#2629** (citation rot) shipped, and its closure orphaned **#2721**.
@@ -165,10 +187,13 @@ Falsified by the 4,539-vs-1,554 ratio and the four HTML-only prose fields above.
 Option 3 says to generate what "both files share" — they share figures, not prose.
 
 **Rejected: generate any prose cell, including the glance table's Setup column and
-the group header titles.** Five of seven differ from their markdown source by
-deliberate editorial shortening, and one carries `lang="ru"`. Generation would
-overwrite hand-authored, published content. **Only the count column and the
-`gcount` spans are generated; the descriptions beside them are preserved.**
+the group header titles.** Five of seven glance Setup cells differ from their
+markdown source by deliberate editorial shortening (the other two, B and D, are
+byte-identical); **all seven** `gtitle` texts differ from their `.md` source —
+these are two separate comparisons, not one figure. One Setup cell carries
+`lang="ru"`. Generation would overwrite hand-authored, published content.
+**Only the count column and the `gcount` spans are generated; the descriptions
+beside them are preserved.**
 
 **Rejected: whole-page generation.** Discards the style block (`:35-158`), the
 `risk` synopses, the shortened titles and the jump links — none of which exist in
@@ -230,15 +255,18 @@ labels included. Sources: the `.md` glance table (`:419-430`), the owed line
 > **Two derivation rules the tiles need, stated explicitly.** (1) The `Groups`
 > tile counts glance-table rows **excluding** the Blocked and Unconfirmed rows —
 > those two have their own dedicated tiles, immediately beside it. (2) The
-> `Oldest debt` tile strips the `.md`'s bold markup and any leading label text,
-> keeping the bare date token only (`**2026-06-01**` → `06-01`).
+> `Oldest debt` tile strips the `.md`'s bold markup, its leading label text, and
+> the leading `YYYY-` year prefix, keeping `MM-DD` only (`**2026-06-01**` →
+> `06-01` — three transforms, not one; the year-strip is the one the first two
+> drafts of this rule both missed).
 
 > **The A1 tile carries two facts, not one.** `.html:202` reads
 > `Still owed in A1 (of 60)` with value `40`. A1's heading (`.md:691`) reads
 > `20 of 60 run … · ~40 still owed`: the `40` is A1's still-owed count and the
 > `60` is **A1's own sub-item total** — which merely *coincides* with the
-> register's 60 owed rows today. The changelog shows the owed total moving through
-> fifteen values in two weeks, so a generator templating `(of {owedTotal})` is
+> register's 60 owed rows today. The changelog's 16 entries show the owed total
+> moving through nine distinct values in two weeks, so a generator templating
+> `(of {owedTotal})` is
 > right now and wrong at the next discharge. Two markers are declared beside the
 > heading: `stat:a1-still-owed` and `stat:a1-subtotal`.
 
@@ -262,31 +290,63 @@ sentence "Full change-by-change history is in this file's git log, not here"
 (`:676`), which is static footer text the generator always appends after the
 last entry rather than sources per run.
 
-> **The `.md` changelog has 16 entries, not 14, and the `.html` is not a subset
-> of it.** Fourteen are `> **Last change:` / `> **Prior change:` paragraphs. Two
-> more are `Before that:` continuations inside the final paragraph (`:670`,
-> `:675`) — `:670` starts its own blockquote line and counts as its own entry;
-> `:675` is a mid-sentence continuation with no line of its own and is folded
-> into the entry it appears inside rather than split out. **Detect an entry by
-> the pattern `(Last change|Prior change|Before that):\s*.+?,\s*\d+\s*(?:→|->)
-> \s*\d+`, not by line-start alone** — a candidate line matching neither this
-> pattern nor the static footer sentence is an **error**, not a skip.
+> **The `.md` changelog has 16 entries, not 14, and line-anchored detection
+> cannot find all of them — this is the third draft of this rule.** Fourteen
+> are `> **Last change:` / `> **Prior change:` paragraphs, each starting its own
+> blockquote line. A 15th, `> Before that: 2026-08-23 (fold step, #2625), 66 →
+> 65.` (`:670`), also starts its own line and a line-anchored pattern finds it
+> fine. The 16th does not: it begins **mid-sentence** at `:675` (`` `…/step-ort-
+> b-a39.md`. Before that: wave 5, ``) and its own count transition is on the
+> **next physical line** (`:676`, `#2606 step 6, 69 → 66 …`) — no single line
+> contains both the marker and its numbers, so a line-scoped regex, however its
+> alternation is written, cannot match it and (per the error-not-skip rule)
+> would throw on the committed file.
+>
+> **The parser therefore does not operate line-by-line.** It strips the leading
+> `> ` from every blockquote line, joins the result into one continuous text
+> stream (paragraph breaks preserved as `\n\n`), then finds entry boundaries
+> with a **global** match of `(?:Last change|Prior change|Before that):\s*` over
+> that joined stream — start-of-line or mid-sentence, both. Each boundary starts
+> a new entry; each entry's text runs to the next boundary or to the fixed
+> footer sentence, whichever comes first. The footer sentence — "Full change-
+> by-change history is in this file's git log, not here — this section tracks
+> the current count, not how it got here." (`:677-678`) — is trimmed from the
+> tail of the last entry and never treated as its own entry; it is static text
+> the generator always appends after the last real entry, not something it
+> sources per run. **A joined stream containing zero boundary matches, or text
+> after the last matched entry that isn't the exact footer sentence, is an
+> error, not a skip.**
 >
 > **Independently, the `.html` today is not a rendering of the `.md` at all —
 > it has drifted on its own.** Measured: it omits the `.md`'s two oldest
 > entries (`:670`, `:675`); it relabels one surviving entry's prefix (`.md:664`'s
 > `Prior change:` renders as `.html:332`'s `Before that:`); and it carries one
 > entry, `.html:273` — *"Historical, predates wave 7: 2026-08-26 (PR #2665,
-> following an independent review of #2655), 69 → 69 (no count change)"* — with
-> **no `.md` counterpart at all** (`grep -c 2665` / `grep -c '69 → 69'` against
-> the `.md` both return zero). Regenerating naively from `.md` alone silently
-> **deletes that entry** — a real historical fact with no other surviving
-> record — which is the exact regression class this spec exists to prevent,
-> reproduced in the one target it calls "the live failure." **PR 1 recovers
-> it**: insert `.html:273`'s text as a `.md` changelog entry, in chronological
-> order (it dates 2026-08-26, alongside the wave-7 entry at `:586`), before the
-> generator is allowed to treat `.md` as authoritative. This is a one-time data
-> repair, not something the generator does at build time.
+> following an independent review of #2655), 69 → 69 (no count change)"* — whose
+> **changelog entry** (the PR #2665 reference and the "no count change" framing)
+> has **no `.md` counterpart** (`grep -c 2665` / `grep -c '69 → 69'` against the
+> `.md` both return zero), though the underlying *fact* is independently recorded
+> in prose elsewhere in the register (`:2972`, `:2983`) — so this is a changelog
+> **entry** the mirror would delete, not the sole surviving record of the fact
+> itself. Regenerating naively from `.md` alone still silently drops that entry
+> — the regression class this spec exists to prevent, reproduced in the one
+> target it calls "the live failure." **PR 1 recovers it**: insert `.html:273`'s
+> text as a `.md` changelog entry before the generator is allowed to treat `.md`
+> as authoritative.
+>
+> **Its placement in the chain is not determinable from the text alone, and
+> this spec does not guess.** The recovered entry's own transition, `69 → 69`,
+> doesn't bridge either neighbouring entry's counts (`:586`'s `69 → 61` before
+> it, `:624`'s `68 → 69` after) — a no-change entry can't be chain-ordered by
+> count the way every other entry is. Four `.md` entries share its date
+> (2026-08-26: `:586, :624, :633, :642`), so date alone doesn't fix a slot
+> either. **PR 1 resolves this by consulting `git log -p` / `git blame` on
+> `onbox-acceptance-register-live-view.html` around `:273`** to find when that
+> callout was actually added relative to the neighbouring entries' own commits,
+> and places the recovered `.md` entry in that commit-order slot. If history is
+> ambiguous, PR 1 states the ambiguity in its body and asks rather than guesses
+> — a wrong slot is invisible to every check this spec ships, since none of them
+> assert chain order (see the chain-continuity note below).
 
 This is what settles **#2708**: the choice between "keep and curate" and "drop and
 point at git" dissolves, because the curated copy stops being a copy.
@@ -321,13 +381,20 @@ a shell for a new ID, **deletes** a shell whose ID has left (a discharge),
 **reorders** shells to match, and **preserves verbatim** every surviving shell's
 body div, `iname` span and `risk` span.
 
-**Six non-row `###` headings must be excluded, not one.** `.md:51` ("The publish
-token") sits inside the Live-view section. The other five are the **Blocked**
-section's own `### <ID> · <title>` headings — real markdown headings, exactly
-row-shaped, but matched by **title** (below), not folded into the seven ID'd
-sections' heading-order reconciliation. (Sanity check the inventory table
-already implies but this paragraph must state directly: 60 ID'd-section
-headings + 5 Blocked headings = 65 total `###` headings; + 2 Unconfirmed
+**The seven ID'd sections are located by pattern, not by an exclusion list — an
+enumerated exclusion is the wrong tool and the second draft of this paragraph
+still reached for it.** `.md` has 66 `###` headings in total, not 60: the 60
+row headings, the publish-token heading (`:51`), and the **Blocked** section's
+own 5 headings — which are title-only (`### <ID> · <title>`'s `<ID> · ` is
+absent; e.g. `` ### CPU-only `RAM_HEAVY_MODELS` clamp ``), so they don't match
+the row shape to begin with. **Matching `^### ([A-Z]\d+) · ` against every
+`###` heading finds exactly the 60 row headings and nothing else** — the
+publish-token heading and all five Blocked headings fail that pattern on their
+own shape, with no enumeration needed. The Blocked headings are still matched
+by **title** for their own shell reconciliation (below); they are simply never
+candidates for the seven ID'd sections' heading-order pass. (Full accounting:
+60 ID'd-section headings + 5 Blocked headings + 1 publish-token heading = 66
+total `###` headings; the 60 row headings + 5 Blocked headings + 2 Unconfirmed
 bullets = 67 shells.)
 
 **Blocked and Unconfirmed are matched by title, not by position.** Both render
@@ -398,9 +465,14 @@ Three things ship together:
    expected diff; every run after that is stable. This is deliberate, not an
    unresolved gap — stated because the read-side fix alone does not imply it.
 
-**Idempotence is a hard requirement and a tested one.** `build` then `build` is a
-no-op; `build` then `--check` passes. A reconciler that is not idempotent silently
-rewrites hand-authored prose on its second run.
+**Idempotence is a hard requirement and a tested one — on an LF checkout.** On
+an LF checkout, `build` then `build` is a no-op, and `build` then `--check`
+passes; a reconciler that is not idempotent there silently rewrites
+hand-authored prose on its second run. **The two properties are not
+interchangeable on a CRLF checkout**: point 2's normalised read makes `--check`
+pass even though `build` still rewrites the whole file to LF (point 3) — a
+real, one-time diff, not a bug, but distinct from true no-op idempotence and
+tested as its own case, not folded into the idempotence assertion above.
 
 ### 5. What retires from `check-onbox-register.mjs`
 
@@ -457,48 +529,84 @@ characterisation was wrong on both drafts. Measured directly against
 - `onbox-sitting-cloning-identity.md:308` cites **both** `A34/#2106` and
   `A34/#2398` on the same line. `#2398` is a PR number riding along — an
   artefact by the same rule as `:237`. **`#2106` is not an artefact of either
-  kind: it is a genuine stale citation.** `#2106` is an issue, appears nowhere
-  in the register, and the run sheet's own heading there
-  ("Respawn budget deadline and exhaustion under sustained refusal") does not
-  match the register's current A34 ("Cast/analysis characterId drift —
-  #2584/#2570 wrong-direction retirement fix") — A34 was renumbered out from
-  under this citation. Neither prerequisite below fixes it; it needs its own
-  doc correction.
+  kind.** `#2106` is an issue, appears nowhere in the register, and the run
+  sheet's own heading there ("Respawn budget deadline and exhaustion under
+  sustained refusal") does not match the register's **current** A34
+  ("Cast/analysis characterId drift — #2584/#2570 wrong-direction retirement
+  fix"). **`A34` is not a departed ID — it is a live ID, currently minted for a
+  different subject.** No prerequisite that only reads `.md` more thoroughly
+  fixes this: the ID resolves, just to the wrong row.
 - `onbox-sitting-vram-contention.md:95` (A19/`#1893`) and `:248` (A31/`#2037`)
-  both already carry the repo's own discharge-annotation convention on the next
-  line — `> **Register row: A19 — discharged …, row removed from the register**`
-  — which Check A honours 23 times in this same run. **But reading row bodies
-  does not absorb these two**, because `#1893` and `#2037` never appear under
-  any row heading; they appear **only inside the changelog blockquote**
-  (`:605`, `:608`, after PR 1's changelog recovery renumbers slightly — verify
-  at plan time). A body-reading subject map is the wrong fix for this pair.
+  each sit next to the repo's own discharge-annotation convention —
+  `> **Register row: A19 — discharged …, row removed from the register**` — and
+  that sentence is **currently false**: `A19` and `A31` both exist in today's
+  register, minted for different subjects (`register.md`'s current A19 = the
+  stranded-VRAM row, `#1976`; current A31 = the Russian XTTS row, `#2026`).
+  These annotations describe a past state (the old regime, before allocate-once
+  IDs) that a later ID reuse has overtaken. They are not among the 23 citations
+  Check A currently honours via this convention — those 23 are all citations
+  whose annotated ID genuinely has no current row.
 
-**So there are two independent prerequisites, not one, and they fix different
-citations:**
+**All three findings are the same shape: an ID that resolves to a live row, just
+not the row the citation means.** That is a stronger, more useful signal than
+"stale citation" — it means the ID space isn't cleanly partitioned into
+"departed, safely dangling" vs "present, safely resolved" the way the issue's
+premise assumed, and no amount of subject-map improvement changes that, because
+the subject map only ever looks at what a row currently *is*, never at whether
+its ID was ever something else.
+
+**So the fix needs two prerequisites and a rule that adjudicates between
+"departed" and "reused" before either the subject map or an annotation gets the
+final word:**
 
 1. **Fix `buildLegitimateSubjectMap`**: read row **bodies** as well as headings,
    and distinguish issue numbers from PR numbers. This resolves `#1230` and
    `#2316`/`#2398` — three of the six. This is where the paired tests go.
-2. **Teach the widened `wrongId` check the discharge-annotation convention**:
-   a citation immediately followed by a `> **Register row: <ID> — discharged
-   …, row removed from the register**` line is not fatal, regardless of
-   whether the subject map resolves it. This resolves `#1893` and `#2037` —
-   two more of the six — and is a **second, separate prerequisite**, not a
-   consequence of prerequisite 1. Without it, PR 4's own new workflow (Task
-   12) lands red on citations that are already correctly annotated.
-3. **Fix the one real stale citation directly**: correct
-   `onbox-sitting-cloning-identity.md:308`'s `#2106` reference to name its
-   actual current subject, or annotate it per the discharge convention if the
-   subject it names did in fact leave the register. This is a doc fix, not a
-   design decision, but it is a **known instance surfaced by this spec** and
-   ships in the same round per CLAUDE.md's incidental-findings rule, not
-   deferred to whoever runs PR 4.
-4. **Then widen** `wrongId` to the discharge class, and rewrite the three
+2. **Add a reuse-detection rule to the widened `wrongId` check, evaluated for
+   every citation the subject map still can't resolve:**
+   - **If the cited ID currently exists in the register — for any subject —
+     the citation is fatal**, full stop, regardless of any discharge annotation
+     sitting next to it. A resolvable-but-wrong ID is not a departure; it's a
+     citation pointing at the wrong content, which is exactly what `wrongId`
+     exists to catch. This is the branch `A19/#1893`, `A31/#2037` and
+     `A34/#2106` all fall into.
+   - **Only if the cited ID does not exist anywhere in the current register**
+     does the discharge-annotation convention apply: present → not fatal
+     (an explained departure); absent → fatal (an unexplained dangling
+     reference).
+   This is a **second, separate prerequisite**, not a consequence of
+   prerequisite 1 — without it, Task 12's new workflow (PR 4) lands red on
+   every one of today's six residuals, including the three the old
+   "annotation exempts" rule would have wrongly passed.
+3. **Fix the three citations the reuse rule marks fatal, directly, in PR 4** —
+   this is now unambiguous, where the first two drafts of this section
+   couldn't settle it: since `A19`, `A31` and `A34` are all live for different
+   subjects, "annotate as discharged" is never the right branch for any of the
+   three; the only fix is to repoint or remove each citation. The two
+   `vram-contention.md` annotations are themselves now-false statements
+   ("row removed from the register" when the row is present, reused) and get
+   corrected in the same PR, not left standing. These are **known instances
+   surfaced by this spec** and ship in the same round per CLAUDE.md's
+   incidental-findings rule.
+4. **Two further stale citations, found on the same read, are structurally
+   invisible to both existing checks and are also fixed directly in PR 4:**
+   `onbox-sitting-cloning-identity.md:239` cites register row `A40` and `:310`
+   cites `A41` — neither exists (Group A currently tops out at A37). Check A's
+   scanner doesn't treat a bare ID on a `Criteria source:`-shaped line as a
+   citation surface, and Check C's fatal path needs a subject number on the
+   same physical line, which neither of these has. Fixing the two citations is
+   this round's job; **teaching either checker to see this citation shape is
+   its own decision** (does the citation-surface grammar expand to cover
+   `Criteria source:` lines generally, and if so what else does that newly
+   catch) and is filed as a follow-up issue, not attempted here.
+5. **Then widen** `wrongId` to the discharge class, and rewrite the three
    deferral sites to state the shipped behaviour.
 
 The subtlety recorded in #2721 still holds: the subject map is one-to-**many**, so
 discharging one row of a multi-row subject does not remove the subject. The
-widening keys on the subject leaving entirely, not on one ID leaving.
+widening keys on the subject leaving entirely, not on one ID leaving — and now,
+explicitly, "leaving" means "no longer minted for *any* subject," not just
+"not minted for the subject this particular citation meant."
 
 ### 7. The two held tasks from the predecessor plan
 
@@ -551,7 +659,7 @@ generator treats `.md` as sole source of truth for this target by design.
 |---|---|
 | **#2362** | **Narrowed and closed, not closed outright.** Designs 1–2 close it for the mechanism its own Problem section blames — the two hand-maintained derived-figure copies — via **option 3's intent**, not its letter. They do **not** close it for the incident that defines it: the "five vs seven" text lived in a **row body** (`.md:3889`/`.html:1383`, currently consistent — verified both read "seven" as of this writing), which designs 1–3 explicitly never touch. The close comment must say this plainly: the figure-duplication mechanism is gone, the specific historical instance is currently fine, and **the general class — row-body prose drift — is not detected by anything this spec ships**, exactly as "What this does NOT cover" already discloses. That disclosure is the honest closure standard; claiming closure without it is how this family gets its eighth ticket. |
 | **#2708** | Closed by the `changelog` target **plus** the newest-entry-vs-owed-total check. Neither stated option wins outright: "keep and curate" holds for the `.md`, "drop the duplicate" for the page, and option 1's demand for a mechanical check is met at both levels. |
-| **#2721** | Closed by design 6, including the subject-map prerequisite. The close comment records that the rehome half was already done, that the body's "two residuals" is six of which four are checker artefacts, and which three sites were rewritten. |
+| **#2721** | Closed by design 6, including both prerequisites. The close comment records that the rehome half was already done; that the body's "two residuals" is six, of which two are subject-map artefacts, one is an artefact riding a genuinely-fatal line, and **three are live IDs reused for a different subject** — a case the issue's own premise didn't anticipate — fixed directly rather than annotated; that two further stale citations, structurally invisible to both checks, were found and fixed in the same round with checker-coverage expansion filed separately; and which three deferral sites were rewritten. |
 | **#2599** | Closed by Task 10 — the ancestry comparator, **not** the row-content diff the issue asked for, which the predecessor spec declined with six recorded rejections. |
 | **#2603** | Closed by Task 12 — without title matching and without self-reference detection, both named above. |
 | *new* | "Promote `register-citations-check` to a required status check" — promised by the predecessor spec's disposition table and **never filed**. Filed in this round. |
@@ -565,30 +673,42 @@ Four PRs. The split is forced by the rule the predecessor spec learned the hard 
 that requires it** — and by the fact that PR 3 changes published content.
 
 **PR 1 — data and pins.** Insert the marker pairs, add the two A1 markers to the
-`.md`, and pin `*.md` / `*.html` to `eol=lf` in `.gitattributes`. No generator, no
-checker change.
+`.md`, pin `*.md` / `*.html` to `eol=lf` in `.gitattributes`, and recover the
+`.html:273`-only changelog entry into the `.md` blockquote (placement per
+`git log -p`/`git blame` on the `.html`, above). No generator, no checker change.
+The generator itself may import only node builtins and `scripts/lib/*` —
+`onbox-register-check.yml` runs `node scripts/*.mjs` directly with no `npm ci`
+step, so any external dependency would fail there silently until CI is run.
 
 **PR 2 — the subject map.** Fix `buildLegitimateSubjectMap` to read bodies and
-distinguish PR from issue numbers; re-measure the residuals; correct whichever
-survive. Independent of the generator and small enough to review on its own.
+distinguish PR from issue numbers; re-measure the residuals against the fixed
+map and report which survive. **Does not correct anything itself** — every
+correction (doc fixes, annotation rewrites) is PR 4's, once the reuse-detection
+rule below decides which branch each survivor takes. Independent of the
+generator and small enough to review on its own.
 
 **PR 3 — the generator and the retirement.** `build-register-live-view.mjs`,
 `npm run register:build` / `--check`, both wirings (`test:hooks` and the workflow),
 and §5's deletions with `:1181`'s coverage transferred. `refactor` scope, so `high`
 review depth.
 
-> **PR 3 changes the published page and must say so.** The first `register:build`
-> renders 14 changelog entries where 7 stand today, growing the page by roughly
-> 130 lines. That is a visible content change to a page an operator reads — it is
-> declared in the PR body, reviewed as content, and published in that PR.
+> **PR 3 changes the published page and must say so.** The `.md` changelog has
+> 16 entries today, 17 once PR 1 recovers `.html:273`'s; the `.html` currently
+> shows 7. The first `register:build` therefore grows the changelog box from 7
+> callouts to 17 — the PR body must state the actual measured delta on that
+> branch, not an estimate computed from an earlier, wrong entry count. That is
+> a visible content change to a page an operator reads — it is declared in the
+> PR body, reviewed as content, and published in that PR.
 
-**PR 4 — `wrongId` and the held tasks.** In order: the annotation-convention
-prerequisite (§6 step 2), the one direct doc fix (§6 step 3), the widening
-itself (§6 step 4, now safe given PR 2's subject-map fix plus these two), the
-three deferral-site rewrites, Task 10 and Task 12. **Task 12 standing up its own
-workflow is what actually exercises the widened check for the first time**, so
-the ordering above is load-bearing — landing Task 12 before the two §6
-prerequisites would make this PR red against its own new gate.
+**PR 4 — `wrongId`, the held tasks, and every correction PR 2 only measured.**
+In order: the reuse-detection rule (§6 step 2) and the ID-reuse-vs-departed
+adjudication it requires for each of PR 2's survivors; the resulting doc fixes
+(§6 step 3, now unambiguous — see below); the widening itself (§6 step 4, now
+safe given PR 2's subject-map fix plus reuse-detection); the three deferral-site
+rewrites; Task 10; Task 12. **Task 12 standing up its own workflow is what
+actually exercises the widened check for the first time**, so the ordering
+above is load-bearing — landing Task 12 before the reuse-detection rule would
+make this PR red against its own new gate.
 
 **Sequencing hazard, external to this chain.** The `#2759` sweep (children
 `#2760`–`#2769`) includes `#2768`, an on-box acceptance item whose verify PR would
@@ -636,12 +756,15 @@ test is retained and must stay green.
 
 `scripts/tests/check-register-citations.test.mjs`: a subject appearing only in a row
 **body** resolves (the `A3`/`#1230` case, red before); a **PR** number is not
-mistaken for a subject; a citation whose subject has left the register entirely is
-**fatal**; a citation to one ID of a still-present multi-row subject is **not**;
-**a citation immediately followed by the discharge-annotation convention
-(`> **Register row: <ID> — discharged …, row removed from the register**`) is
-not fatal even when the subject map cannot resolve it** (the `A19`/`#1893` and
-`A31`/`#2037` case, red before this prerequisite ships).
+mistaken for a subject; a citation to one ID of a still-present multi-row subject
+is **not** fatal; **a citation to an ID that currently exists for a *different*
+subject is fatal even when a discharge annotation sits next to it** (the
+`A19`/`#1893`, `A31`/`#2037` and `A34`/`#2106` case — red before the reuse-
+detection rule ships, since the old "annotation exempts" behaviour would have
+passed all three); **a citation to an ID that genuinely does not exist anywhere
+in the current register is fatal only when no discharge annotation follows it,
+and not fatal when one does** (the departed-ID branch, distinct from the
+reused-ID branch above — both must be tested, since they resolve oppositely).
 
 **Real-tree, on the final branch:** `npm run register:build -- --check`,
 `npm run check:onbox-register` and `npm run check:register-citations` all green with
@@ -661,17 +784,21 @@ output. A drift guard that cannot be shown failing is not a guard.
 - **No release-notes entry.** No user- or operator-visible delta. Stated, not
   skipped. (PR 3's published-page change is operator-visible but is a corrected
   mirror, not a product change.)
-- **`scripts/*.mjs` line citations were verified by an adversarial pass and hold.**
-  The two register surfaces do not: `docs/testing/onbox-acceptance-register.md`
-  and its `.html` twin move on nearly every merge (both grew again — `.md`
-  4,539→4,595, `.html` 1,554→1,575 — in the roughly nine hours between this
-  spec's post-review rewrite and its second review pass), so **every `.md`/`.html`
-  line citation in this spec should be treated as approximate, re-derived at
-  plan time, and re-derived again at implementation time** rather than trusted.
-  Navigate the register surfaces by heading/id/marker text, not by line number.
-  The predecessor plan's citations went ~100 lines stale the same way when Track
-  A moved everything in `check-onbox-register.mjs`; that file's citations are
-  more stable because it changes far less often, but the same discipline applies.
+- **`scripts/*.mjs` and `.html` line citations were verified by an adversarial
+  pass and hold; `.md` citations do not, and drift faster than either.**
+  `docs/testing/onbox-acceptance-register.md` and its `.html` twin move on
+  nearly every merge (both grew again — `.md` 4,539→4,595, `.html` 1,554→1,575
+  — in the roughly nine hours between this spec's first and second review
+  passes), but measured across three review passes the `.md` citations were
+  the ones that actually went stale (consistently ~15-20 lines low in the
+  400-1100 band) while the `.html` and `scripts/` citations checked out exact
+  every time. **Treat every `.md` line citation in this spec as approximate and
+  re-derive it before relying on it — at plan time, and again at implementation
+  time.** Navigate the register `.md` by heading/id/marker text, not by line
+  number. The predecessor plan's `scripts/` citations went ~100 lines stale the
+  same way when Track A moved everything in `check-onbox-register.mjs`; that
+  file's citations are more stable because it changes far less often, but the
+  same discipline applies there too.
 - **Marker insertion (PR 1) has a validation gap until PR 3 lands.** Between PR 1
   merging and PR 3 merging, the six declared markers
   (`stat:a1-still-owed`, `stat:a1-subtotal`, and the `BEGIN/END GENERATED:<name>`
