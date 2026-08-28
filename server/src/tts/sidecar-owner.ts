@@ -171,10 +171,53 @@ export interface ClaimOpts {
   ppid?: number;
   port?: number;
   nowIso?: () => string;
+  aliveFn?: (pid: number) => boolean;
+}
+
+/** Prune stale owner notes from OTHER ports (those whose recorded pid is no longer alive).
+    This runs as part of the write path so a new server startup cleans up litter from
+    crashed/hard-killed servers without weakening the read-side sweep's conservative logic.
+    Does NOT delete the note for the port currently being claimed (it's about to be
+    overwritten anyway). `aliveFn` is injectable for testing. */
+function pruneStaleNotes(runDir: string, currentPort: number, aliveFn: (pid: number) => boolean = isProcessAlive): void {
+  let entries: string[];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    entries = require('fs').readdirSync(runDir);
+  } catch {
+    // runDir doesn't exist yet — nothing to prune
+    return;
+  }
+
+  const noteFiles = entries.filter((name) => /^tts\.owner\.\d+\.json$/.test(name));
+  for (const fileName of noteFiles) {
+    const portMatch = fileName.match(/^tts\.owner\.(\d+)\.json$/);
+    if (!portMatch) continue;
+
+    const port = Number(portMatch[1]);
+    // Skip the port currently being claimed (it's about to be overwritten).
+    if (port === currentPort) continue;
+
+    const owner = readSidecarOwner(runDir, port);
+    // Delete the note if the recorded owner is no longer alive.
+    if (owner && !aliveFn(owner.pid)) {
+      try {
+        unlinkSync(sidecarOwnerPath(runDir, port));
+      } catch {
+        /* already gone or inaccessible — best-effort prune, not fatal */
+      }
+    }
+  }
 }
 
 /** Write the owner note, claiming sidecar ownership for this server. Creates
-    `runDir` if needed. Port defaults to the resolved sidecar port. */
+    `runDir` if needed. Port defaults to the resolved sidecar port.
+
+    As part of the write path, also prunes stale notes from OTHER ports whose
+    recorded pid is no longer alive (#2754). This cleans up litter from
+    crashed/hard-killed servers at the moment a NEW, legitimate server starts,
+    without weakening the read-side sweep's conservative, liveness-agnostic logic.
+    `aliveFn` is injectable for testing (defaults to isProcessAlive). */
 export function claimSidecarOwnership(opts: ClaimOpts): void {
   const {
     runDir,
@@ -182,8 +225,10 @@ export function claimSidecarOwnership(opts: ClaimOpts): void {
     ppid = process.ppid,
     port = sidecarPort(),
     nowIso = () => new Date().toISOString(),
+    aliveFn = isProcessAlive,
   } = opts;
   mkdirSync(runDir, { recursive: true });
+  pruneStaleNotes(runDir, port, aliveFn);
   const note: SidecarOwnerNote = { pid, ppid, port, startedAt: nowIso() };
   writeFileSync(sidecarOwnerPath(runDir, port), JSON.stringify(note), 'utf8');
 }

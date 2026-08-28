@@ -480,10 +480,10 @@ test('getStopSummaryMessage distinguishes "no ports resolved" from "checked and 
 // file is filtered out and the resolution still succeeds with the valid file.
 test('resolveSidecarSweepPort filters out note files with non-numeric port segments (mutation-proof digits-only gate)', () => {
   withTempRunDir((dir) => {
-    // Valid file with digits-only port segment and live PID
+    // Valid file with digits-only port segment
     writeFileSync(
       join(dir, 'tts.owner.9010.json'),
-      JSON.stringify({ pid: process.pid, ppid: process.ppid, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
     // Malformed file with letters in the port segment
     writeFileSync(
@@ -491,7 +491,7 @@ test('resolveSidecarSweepPort filters out note files with non-numeric port segme
       JSON.stringify({ pid: 5678, ppid: 1, port: 123, startedAt: '2026-08-25T00:00:01.000Z' }),
     );
     withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
-      // The malformed file should be filtered out, leaving exactly one valid file,
+      // The malformed file should be filtered out by the regex, leaving exactly one valid file,
       // which resolves successfully to 9010 (not falling back to 9020).
       assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
     });
@@ -502,7 +502,7 @@ test('resolveSidecarSweepPort filters out note files with mixed alphanumeric por
   withTempRunDir((dir) => {
     writeFileSync(
       join(dir, 'tts.owner.9010.json'),
-      JSON.stringify({ pid: process.pid, ppid: process.ppid, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
     // Malformed file with digits and letters mixed
     writeFileSync(
@@ -519,7 +519,7 @@ test('resolveSidecarSweepPort filters out note files with non-alphanumeric chara
   withTempRunDir((dir) => {
     writeFileSync(
       join(dir, 'tts.owner.9010.json'),
-      JSON.stringify({ pid: process.pid, ppid: process.ppid, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
     // Malformed file with dash/hyphen in port segment
     writeFileSync(
@@ -536,7 +536,7 @@ test('resolveSidecarSweepPort filters out note files with empty port segment', (
   withTempRunDir((dir) => {
     writeFileSync(
       join(dir, 'tts.owner.9010.json'),
-      JSON.stringify({ pid: process.pid, ppid: process.ppid, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
     // Malformed file with empty port segment (just dots)
     writeFileSync(
@@ -567,33 +567,31 @@ test('resolveSidecarSweepPort falls back to server/.env when run dir contains ON
   });
 });
 
-test('#2754 — resolveSidecarSweepPort excludes stale notes with dead PIDs; one live PID suffices', () => {
-  // Concrete scenario: first run on port 9010 (PID 99999, now dead), then stop
-  // via taskkill (no graceful shutdown). Next run on port 9000 (this process, PID
-  // is live) creates a new note. Now both notes exist; the stale 9010 note must
-  // not trigger ambiguity fallback — only the live PID (current process) should count.
+test('#2754 — resolveSidecarSweepPort uses a stale note (dead PID) when it is the only one (orphan detection)', () => {
+  // Concrete scenario: a server crashed hard (taskkill /T /F), leaving its sidecar
+  // running and orphaned. The note has a dead PID, but its EXISTENCE is the signal
+  // for the sweep to know "reap this port". If the resolver filters by PID liveness
+  // on the read side, it loses the signal for orphan detection.
   withTempRunDir((dir) => {
     // Stale note: dead PID (99999 is virtually guaranteed never to be running)
     writeFileSync(
       join(dir, 'tts.owner.9010.json'),
       JSON.stringify({ pid: 99999, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
-    // Live note: current process (definitely alive)
-    writeFileSync(
-      join(dir, 'tts.owner.9000.json'),
-      JSON.stringify({ pid: process.pid, ppid: process.ppid, port: 9000, startedAt: '2026-08-25T10:00:00.000Z' }),
-    );
     withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
-      // Despite two note files existing, only the one with a live PID should count.
-      // Resolution should succeed using the live note (9000), not fall back to server/.env (9020).
-      assert.equal(resolveSidecarSweepPort(dir, envPath), 9000);
+      // The single note should be used (9010), not fall back to server/.env (9020),
+      // even though its PID is dead. This is critical for `npm run stop` to detect
+      // and reap an orphaned sidecar left by a hard-killed server.
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
     });
   });
 });
 
-test('#2754 — resolveSidecarSweepPort falls back to server/.env when ALL note PIDs are dead', () => {
+test('#2754 — resolveSidecarSweepPort falls back to server/.env when two notes exist (ambiguous)', () => {
   withTempRunDir((dir) => {
-    // Two stale notes, both with dead PIDs
+    // Two notes, whether dead or live — the existence of multiple notes means
+    // ambiguity and we cannot pick a winner. Stale notes are cleaned up by
+    // claimSidecarOwnership (server-side pruning), not by the sweep resolver.
     writeFileSync(
       join(dir, 'tts.owner.9010.json'),
       JSON.stringify({ pid: 99999, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
@@ -603,30 +601,8 @@ test('#2754 — resolveSidecarSweepPort falls back to server/.env when ALL note 
       JSON.stringify({ pid: 99998, ppid: 1, port: 9011, startedAt: '2026-08-25T00:00:01.000Z' }),
     );
     withTempServerEnv('LOCAL_TTS_PORT=9030\n', (envPath) => {
-      // Zero live notes — fall back to server/.env exactly as if the notes were absent.
+      // Two notes = ambiguous; fall back to server/.env (not the digits of either note).
       assert.equal(resolveSidecarSweepPort(dir, envPath), 9030);
-    });
-  });
-});
-
-test('#2754 — resolveSidecarSweepPort falls back to server/.env when multiple PIDs are live', () => {
-  // Edge case: if by chance two PIDs are live (shouldn't happen in practice, but
-  // the code must handle it defensively), the resolver treats it as ambiguous.
-  // Synthesize a second "live" PID by using the current process again in both notes.
-  withTempRunDir((dir) => {
-    const currentPid = process.pid;
-    // Two notes both claiming the current process (ambiguous, should not happen IRL)
-    writeFileSync(
-      join(dir, 'tts.owner.9010.json'),
-      JSON.stringify({ pid: currentPid, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
-    );
-    writeFileSync(
-      join(dir, 'tts.owner.9011.json'),
-      JSON.stringify({ pid: currentPid, ppid: 1, port: 9011, startedAt: '2026-08-25T00:00:01.000Z' }),
-    );
-    withTempServerEnv('LOCAL_TTS_PORT=9040\n', (envPath) => {
-      // Multiple live notes = ambiguous; fall back to server/.env.
-      assert.equal(resolveSidecarSweepPort(dir, envPath), 9040);
     });
   });
 });

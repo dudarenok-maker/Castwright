@@ -257,10 +257,32 @@ describe('claimSidecarOwnership', () => {
   });
 
   it('claims for two different ports on one runDir without clobbering', () => {
-    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a' });
-    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b' });
+    // Use aliveFn that considers all PIDs alive to prevent pruning in this test.
+    const allAlive = () => true;
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a', aliveFn: allAlive });
+    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b', aliveFn: allAlive });
     expect(readSidecarOwner(runDir, 9000)?.pid).toBe(100);
     expect(readSidecarOwner(runDir, 9010)?.pid).toBe(200);
+  });
+
+  it('prunes stale notes with dead PIDs on OTHER ports when claiming (#2754)', () => {
+    // Setup: port 9010 has a stale note (dead PID 99999), port 9011 has a live note (current process)
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    writeNote({ pid: process.pid, ppid: process.ppid, port: 9011, startedAt: 'live' }, 9011);
+    // Claim ownership on port 9000 — should prune the stale 9010 note but leave the live 9011 note
+    claimSidecarOwnership({ runDir, pid: 555, ppid: 7, port: 9000, nowIso: () => 'new' });
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555); // newly claimed
+    expect(readSidecarOwner(runDir, 9010)).toBeNull(); // stale note pruned
+    expect(readSidecarOwner(runDir, 9011)?.pid).toBe(process.pid); // live note untouched
+  });
+
+  it('does NOT prune the note for the port currently being claimed', () => {
+    // Pre-existing stale note on port 9000 (the port we are claiming)
+    writeNote({ pid: 99999, ppid: 1, port: 9000, startedAt: 'old' }, 9000);
+    // Claim ownership on the same port — should overwrite, not skip pruning then overwrite
+    claimSidecarOwnership({ runDir, pid: 555, ppid: 7, port: 9000, nowIso: () => 'new' });
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555); // successfully overwritten
+    expect(readSidecarOwner(runDir, 9000)?.startedAt).toBe('new');
   });
 });
 
@@ -315,8 +337,9 @@ describe('findConflictingOwner', () => {
     // Regression for #2641: both ports used to share one owner file, so a
     // different-port write could silently overwrite the file a third
     // claimant's conflict check needed to read.
-    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a' });
-    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b' });
+    const allAlive = () => true; // Prevent pruning during setup
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a', aliveFn: allAlive });
+    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b', aliveFn: allAlive });
     const conflict = findConflictingOwner({
       runDir,
       pid: 300,

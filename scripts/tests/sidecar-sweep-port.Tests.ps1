@@ -233,25 +233,23 @@ Describe 'Get-SidecarSweepPort' {
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
     }
 
-    It '#2754 — excludes stale notes with dead PIDs; one live PID suffices' {
-        # Concrete scenario: first run on port 9010 (PID 99999, now dead), then stop
-        # via taskkill (no graceful shutdown). Next run on port 9000 (this process, PID
-        # is live) creates a new note. Now both notes exist; the stale 9010 note must
-        # not trigger ambiguity fallback — only the live PID (current process) should count.
+    It '#2754 — uses a stale note (dead PID) when it is the only one (orphan detection)' {
+        # Concrete scenario: a server crashed hard (taskkill /T /F), leaving its sidecar
+        # running and orphaned. The note has a dead PID, but its EXISTENCE is the signal
+        # for the sweep to know "reap this port". If the resolver filters by PID liveness
+        # on the read side, it loses the signal for orphan detection.
 
-        $deadNotePath = Join-Path $script:tempDir "tts.owner.9010.json"
-        $liveNotePath = Join-Path $script:tempDir "tts.owner.9000.json"
+        $staleNotePath = Join-Path $script:tempDir "tts.owner.9010.json"
 
         # Stale note: dead PID (99999 is virtually guaranteed never to be running)
-        Set-Content -Path $deadNotePath -Value '{"pid":99999,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
-        # Live note: current process (definitely alive)
-        Set-Content -Path $liveNotePath -Value "{`"pid`":$PID,`"ppid`":$([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id),`"port`":9000,`"startedAt`":`"2026-08-25T10:00:00.000Z`"}" -Encoding utf8
+        Set-Content -Path $staleNotePath -Value '{"pid":99999,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
 
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9020"
 
-        # Despite two note files existing, only the one with a live PID should count.
-        # Resolution should succeed using the live note (9000), not fall back to server\.env (9020).
-        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9000
+        # The single note should be used (9010), not fall back to server\.env (9020),
+        # even though its PID is dead. This is critical for `npm run stop` to detect
+        # and reap an orphaned sidecar left by a hard-killed server.
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
     }
 
     It '#2754 — falls back to server\.env when ALL note PIDs are dead' {
