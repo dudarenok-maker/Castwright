@@ -199,3 +199,50 @@ test('seedToken distinguishes MALFORMED from absent (the F7 mirror)', () => {
   const seeded = seedToken('<h1>T</h1>', () => 'seed01').html;
   assert.throws(() => seedToken(seeded, () => 'seed02'), /already has a token/);
 });
+
+test('CLI --check reports a MALFORMED token as an error, not as a value', () => {
+  // Without this the malformed branch could be deleted and --check would exit 0
+  // printing "is at undefined (id undefined)" — reporting a broken token as a
+  // healthy one, in the mode whose entire job is to tell you the token's state.
+  const dir = mkdtempSync(join(tmpdir(), 'stamp-cli-'));
+  try {
+    const target = join(dir, 'page.html');
+    writeFileSync(target, '<h1>T</h1>\n<div data-published-as="abc" data-publish-id="zzzxxx"></div>');
+    const r = runCli(['--check', '--file', target], dir);
+    assert.notEqual(r.code, 0, '--check must not exit 0 on a malformed token');
+    assert.match(r.stderr, /malformed/);
+    assert.ok(!/is at undefined/.test(r.stdout), `must not report a value: ${r.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI --check reports a TOKENLESS file as needing seeding', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stamp-cli-'));
+  try {
+    const target = join(dir, 'page.html');
+    writeFileSync(target, '<h1>T</h1>\n<p>no token</p>');
+    const r = runCli(['--check', '--file', target], dir);
+    assert.notEqual(r.code, 0, 'a tokenless file is not a passing --check');
+    assert.match(r.stdout, /NO publish token/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('seedToken REFUSES a mint its own parser would reject (the bumpToken twin)', () => {
+  // bumpToken's identical guard is pinned by 18l; this one was not. Removed, it
+  // writes data-publish-id="ab" — a token the module's own parser rejects, and
+  // one that cannot be repaired by stamping, because stamping needs a parseable
+  // token to bump. That is the unrecoverable state the guard exists to prevent.
+  for (const bad of ['ab', '', 'a b', '-Sx', 'has"q', null, 42]) {
+    assert.throws(
+      () => seedToken('<h1>T</h1>', () => bad),
+      /minted nonce/,
+      `seed mint -> ${JSON.stringify(bad)} must be refused`,
+    );
+  }
+  // and a good mint still round-trips through the parser
+  const { html } = seedToken('<h1>T</h1>', () => 'abc123');
+  assert.deepEqual(parsePublishToken(html), { n: 1, nonce: 'abc123' });
+});

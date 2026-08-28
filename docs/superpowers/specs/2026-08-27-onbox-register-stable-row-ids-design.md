@@ -462,7 +462,7 @@ the query then selects 2 commits rather than 1 — but that second match is
 **redundant**: the commit that ADDED main's nonce is already in your history
 once you have rebased. The stamp answers a different gate, `w.n === b.n`. The
 claim was written from the previous draft rather than from a probe, which is
-the failure mode this document has recorded four times and is the reason the
+the failure mode this document has recorded five times and is the reason the
 correction is left visible here rather than quietly edited out.)*
 
 That residue is adjudicated, not overlooked. Detecting it means comparing

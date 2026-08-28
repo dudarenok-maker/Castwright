@@ -24,21 +24,28 @@ const TRAW = (n, nonce) => `<p data-published-as="${n}" data-publish-id="${nonce
 // absent — and two of those asserted GREEN, through the very fail-open this
 // suite now pins. A test that omits a lookup is not testing the healthy path;
 // it is testing whatever the missing key happens to coerce to.
-// TWO KNOWN-EQUIVALENT MUTANTS. Both were survivors in the pass-5 fix round,
-// and both are unkillable because a stronger check now runs AHEAD of them —
-// defence in depth, where the outer guard subsumes the inner. Do not "fix" the
-// suite to kill these; the reachability argument is the artifact:
+// THREE KNOWN-EQUIVALENT MUTANTS. Each is unkillable because a stronger check
+// runs AHEAD of it — defence in depth, where the outer guard subsumes the
+// inner. A deletion sweep reports them as survivors on every run, so they are
+// listed here with their reachability arguments to stop the next reviewer
+// re-investigating a settled case. Do NOT "fix" the suite to kill them; that
+// would mean weakening the guard that makes each unreachable.
 //
 //   A6  `!inBaseline && !inMine`  ->  `!inMine`
 //       Distinguishable only at inBaseline=true, inMine=false. Reaching that
-//       line requires baselineInMine=true (else the C1 STOP returned), and the
-//       consistency guard rejects `inBaseline && baselineInMine && !inMine`.
-//       So inBaseline implies inMine there, and the two forms agree.
+//       line requires baselineInMine=true (else the staleness STOP returned),
+//       and the consistency guard rejects
+//       `inBaseline && baselineInMine && !inMine`. So inBaseline implies
+//       inMine there, and the two forms agree.
 //
 //   B1  function replacement  ->  string replacement (re-opens $& expansion)
 //       Distinguishable only for a nonce containing a `$` pattern, which the
 //       minted-nonce charset check ([A-Za-z0-9_-]) refuses first. Killing B1
-//       would mean weakening B2.
+//       would mean weakening that check.
+//
+//   D1  `w.n === b.n`  ->  `w.n <= b.n`   (the un-bumped gate)
+//       Distinguishable only at w.n < b.n, and the REBASE gate immediately
+//       above returns first for exactly that state.
 const HEALTHY = {
   inBaseline: true,
   inMine: true,
@@ -276,11 +283,18 @@ test('18e workingInBaseline false is genuinely green (the guard is not always-on
 test('18f the working-nonce lookup is only consulted when w.n > b.n', () => {
   // At w.n === b.n the un-bumped verdict must win, WITHOUT demanding the third
   // lookup — otherwise every caller pays a git call on a state that cannot use it.
+  //
+  // `workingInBaseline: null` is what gives this test teeth. Inheriting the
+  // healthy `false` made the second assertion unfalsifiable: a `w.n >= b.n`
+  // mutant would consult the lookup, find `false`, decline to STOP, and fall
+  // through to the same verdict — so the test passed while the boundary it is
+  // named for could be moved. `null` is the one value whose consultation is
+  // VISIBLE, because reading it is required to fail closed.
   const e = comparePublishTokens({
     working: T(47, 'zzz'),
     published: T(47, 'zzz'),
     baseline: T(47, 'zzz'),
-    ...L({ inBaseline: true, inMine: true }),
+    ...L({ inBaseline: true, inMine: true, workingInBaseline: null }),
   });
   assert.ok(e.some((x) => x.includes('same as origin/main')), e.join('|'));
   assert.ok(!e.some((x) => x.includes('could not search history')), e.join('|'));
