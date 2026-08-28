@@ -469,3 +469,99 @@ test('getStopSummaryMessage distinguishes "no ports resolved" from "checked and 
   );
   assert.equal(getStopSummaryMessage(false, false, [8080]), '[OK] nothing to stop');
 });
+
+// #2754 review finding — the regex /^tts\.owner\.\d+\.json$/ enforces
+// digits-only for the port segment, but all existing test fixtures happened
+// to already use clean port segments, so a mutant regex like /^tts\.owner\..*\.json$/
+// (accepting ANY characters) would pass every test unchanged. This cell pins
+// the digits-only requirement by creating a run dir with BOTH a valid note file
+// AND a malformed one with a non-numeric port segment, asserting the malformed
+// file is filtered out and the resolution still succeeds with the valid file.
+test('resolveSidecarSweepPort filters out note files with non-numeric port segments (mutation-proof digits-only gate)', () => {
+  withTempRunDir((dir) => {
+    // Valid file with digits-only port segment
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    // Malformed file with letters in the port segment
+    writeFileSync(
+      join(dir, 'tts.owner.abc.json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 123, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
+      // The malformed file should be filtered out, leaving exactly one valid file,
+      // which resolves successfully to 9010 (not falling back to 9020).
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort filters out note files with mixed alphanumeric port segments', () => {
+  withTempRunDir((dir) => {
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    // Malformed file with digits and letters mixed
+    writeFileSync(
+      join(dir, 'tts.owner.90a0.json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 123, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort filters out note files with non-alphanumeric characters in port segment', () => {
+  withTempRunDir((dir) => {
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    // Malformed file with dash/hyphen in port segment
+    writeFileSync(
+      join(dir, 'tts.owner.90-10.json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort filters out note files with empty port segment', () => {
+  withTempRunDir((dir) => {
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    // Malformed file with empty port segment (just dots)
+    writeFileSync(
+      join(dir, 'tts.owner..json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 123, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort falls back to server/.env when run dir contains ONLY malformed note files', () => {
+  withTempRunDir((dir) => {
+    // Only malformed files, no valid digits-only note file
+    writeFileSync(
+      join(dir, 'tts.owner.abc.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 123, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    writeFileSync(
+      join(dir, 'tts.owner.90x0.json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 456, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9030\n', (envPath) => {
+      // No valid files match the digits-only regex, so fall back to server/.env
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9030);
+    });
+  });
+});
