@@ -196,6 +196,40 @@ Describe 'Get-SidecarSweepPort' {
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9010`nLOCAL_TTS_PORT=9011 # comment"
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9011
     }
+
+    # #2754 review finding — the regex must be case-sensitive and use ASCII
+    # digits only, matching the .mjs twin exactly. PowerShell's -match is
+    # case-insensitive by default and .NET \d is Unicode-digit-aware, so
+    # the regex must use -cmatch and [0-9] to align with JS /^tts\.owner\.\d+\.json$/.
+    It 'rejects uppercase tts.owner.*.json filename (case-sensitive matching only)' {
+        # Create a single uppercase file: -match would accept it (case-insensitive),
+        # but -cmatch should reject it and fall back to server\.env
+        $notePathUpper = Join-Path $script:tempDir "TTS.OWNER.9000.JSON"
+        Set-Content -Path $notePathUpper -Value '{"pid":1234,"ppid":1,"port":9000,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
+
+        # Uppercase file should NOT be trusted; fall back to server\.env with -cmatch
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9070
+    }
+
+    It 'rejects mixed-case tts.owner.*.json filename (case-sensitive matching only)' {
+        # Create a single mixed-case file
+        $notePathMixed = Join-Path $script:tempDir "Tts.Owner.9010.Json"
+        Set-Content -Path $notePathMixed -Value '{"pid":5678,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
+
+        # Mixed-case file should NOT be trusted; fall back to server\.env with -cmatch
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9070
+    }
+
+    It 'matches lowercase tts.owner.*.json (control for the case-sensitivity cell)' {
+        $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
+        Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
+
+        # Lowercase tts.owner.9010.json should be matched and trusted
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
+    }
 }
 
 # #2632 N53 — stop-app.ps1 used to print "[OK] nothing to stop"
