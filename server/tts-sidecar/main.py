@@ -8200,6 +8200,12 @@ class SpeakerEngine:
         is otherwise invisible to the cheap check above. Calls
         `_drop_model_locked()` directly rather than `unload()` — re-entering
         `_infer_lock` here would self-deadlock.
+
+        Trade-off (#2750): when the device pin is restored from a prior cpu
+        self-demotion, a persistently-failing cuda load will re-attempt cuda
+        capacity reservation on every reload and can return `_no_capacity` → 503
+        under GPU contention, where before it would have silently stayed on cpu.
+        This trade-off was accepted to fix the permanent pin-corruption bug.
         """
         if self._model is None:
             return False
