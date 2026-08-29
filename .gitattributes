@@ -55,6 +55,19 @@ openapi.yaml text eol=lf
 # clone (pinokio-scripts/lib/resolve-release.js's `git checkout <tag>`).
 server/tts-sidecar/requirements/*.txt text eol=lf
 
+# docs/testing/onbox-acceptance-register.md and its .html twin are read and
+# byte-compared by scripts/build-register-live-view.mjs and
+# scripts/check-onbox-register.mjs. Without this pin, a checkout with Git for
+# Windows' default core.autocrlf=true materialises both as CRLF, and a naive
+# byte-compare (as opposed to the CRLF-tolerant checkLiveView) sees every line
+# as different. Pin to LF; the generator also always writes LF (see
+# scripts/build-register-live-view.mjs's writeFile). Known limitation shared
+# with every other pin in this file: this governs CHECKOUT, not re-checkout of
+# a file git already believes is unchanged — an existing CRLF working tree does
+# not self-heal from this pin alone.
+docs/testing/onbox-acceptance-register.md text eol=lf
+docs/testing/onbox-acceptance-register-live-view.html text eol=lf
+
 # Binary files we never want autocrlf to touch.
 *.png binary
 *.jpg binary
