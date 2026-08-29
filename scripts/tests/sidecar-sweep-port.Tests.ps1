@@ -252,37 +252,36 @@ Describe 'Get-SidecarSweepPort' {
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
     }
 
-    It '#2754 — falls back to server\.env when ALL note PIDs are dead' {
+    It '#2754 — falls back to server\.env when multiple notes exist' {
         $notePathA = Join-Path $script:tempDir "tts.owner.9010.json"
         $notePathB = Join-Path $script:tempDir "tts.owner.9011.json"
 
-        # Two stale notes, both with dead PIDs
+        # Two notes — ambiguous case, cannot distinguish which is the actual sidecar.
         Set-Content -Path $notePathA -Value '{"pid":99999,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
         Set-Content -Path $notePathB -Value '{"pid":99998,"ppid":1,"port":9011,"startedAt":"2026-08-25T00:00:01.000Z"}' -Encoding utf8
 
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9030"
 
-        # Zero live notes — fall back to server\.env exactly as if the notes were absent.
+        # Multiple notes = ambiguous — fall back to server\.env.
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9030
     }
 
-    It '#2754 — falls back to server\.env when multiple PIDs are live' {
-        # Edge case: if by chance two PIDs are live (shouldn't happen in practice, but
-        # the code must handle it defensively), the resolver treats it as ambiguous.
-        # Synthesize a second "live" PID by using the current process again in both notes.
+    It '#2754 — handles ambiguity defensively (multiple notes)' {
+        # Edge case: two notes present — the resolver cannot distinguish which one
+        # represents the actual sidecar, so it treats this as ambiguous and falls back.
 
         $notePath1 = Join-Path $script:tempDir "tts.owner.9010.json"
         $notePath2 = Join-Path $script:tempDir "tts.owner.9011.json"
         $pidStr = $PID
         $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
 
-        # Two notes both claiming the current process (ambiguous, should not happen IRL)
+        # Two notes (we use current process for testing, but they could be dead or live)
         Set-Content -Path $notePath1 -Value "{`"pid`":$pidStr,`"ppid`":1,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
         Set-Content -Path $notePath2 -Value "{`"pid`":$pidStr,`"ppid`":1,`"port`":9011,`"startedAt`":`"2026-08-25T00:00:01.000Z`"}" -Encoding utf8
 
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9040"
 
-        # Multiple live notes = ambiguous; fall back to server\.env.
+        # Multiple notes = ambiguous — fall back to server\.env.
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9040
     }
 }

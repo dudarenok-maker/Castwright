@@ -258,32 +258,31 @@ describe('claimSidecarOwnership', () => {
   });
 
   it('claims for two different ports on one runDir without clobbering', () => {
-    // Use aliveFn that considers all PIDs alive to prevent pruning in this test.
-    const allAlive = () => true;
-    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a', aliveFn: allAlive });
-    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b', aliveFn: allAlive });
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a' });
+    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b' });
     expect(readSidecarOwner(runDir, 9000)?.pid).toBe(100);
     expect(readSidecarOwner(runDir, 9010)?.pid).toBe(200);
   });
 
-  it('prunes stale notes with dead PIDs on OTHER ports when claiming (#2754)', () => {
-    // Setup: port 9010 has a stale note (dead PID 99999), port 9011 has a live note (current process)
-    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
-    writeNote({ pid: process.pid, ppid: process.ppid, port: 9011, startedAt: 'live' }, 9011);
-    // Claim ownership on port 9000 — should prune the stale 9010 note but leave the live 9011 note
-    claimSidecarOwnership({ runDir, pid: 555, ppid: 7, port: 9000, nowIso: () => 'new' });
-    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555); // newly claimed
-    expect(readSidecarOwner(runDir, 9010)).toBeNull(); // stale note pruned
-    expect(readSidecarOwner(runDir, 9011)?.pid).toBe(process.pid); // live note untouched
-  });
+  it('does NOT delete or modify notes for OTHER ports when claiming (#2754 regression)', () => {
+    // Regression test: claimSidecarOwnership for port P must not touch notes for other ports.
+    // Setup: port 9010 has a note (whether live or dead PID), port 9011 has another.
+    const note9010 = { pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' };
+    const note9011 = { pid: process.pid, ppid: process.ppid, port: 9011, startedAt: 'live' };
+    writeNote(note9010, 9010);
+    writeNote(note9011, 9011);
 
-  it('does NOT prune the note for the port currently being claimed', () => {
-    // Pre-existing stale note on port 9000 (the port we are claiming)
-    writeNote({ pid: 99999, ppid: 1, port: 9000, startedAt: 'old' }, 9000);
-    // Claim ownership on the same port — should overwrite, not skip pruning then overwrite
+    // Claim ownership on port 9000 (unrelated). This must NOT delete or modify 9010 or 9011.
     claimSidecarOwnership({ runDir, pid: 555, ppid: 7, port: 9000, nowIso: () => 'new' });
-    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555); // successfully overwritten
-    expect(readSidecarOwner(runDir, 9000)?.startedAt).toBe('new');
+
+    // Verify the new claim succeeded
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555);
+
+    // Verify OTHER ports' notes were untouched — this is the safety property.
+    // Even if 9010's PID is dead, the note must survive (it's the only record of
+    // a potentially-orphaned sidecar that needs sweep cleanup).
+    expect(readSidecarOwner(runDir, 9010)).toEqual(expect.objectContaining(note9010));
+    expect(readSidecarOwner(runDir, 9011)).toEqual(expect.objectContaining(note9011));
   });
 
   it('N3b: deletes the legacy note when its port matches the port being claimed', () => {

@@ -27,7 +27,7 @@
  * on different ports. The port is read once at startup and passed through to
  * both spawn-sidecar.ts and sidecar-owner.ts so they coordinate on the same port.
  */
-import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** Last invalid LOCAL_TTS_PORT value we logged an error for. Prevents duplicate
@@ -174,48 +174,9 @@ export interface ClaimOpts {
   aliveFn?: (pid: number) => boolean;
 }
 
-/** Prune stale owner notes from OTHER ports (those whose recorded pid is no longer alive).
-    This runs as part of the write path so a new server startup cleans up litter from
-    crashed/hard-killed servers without weakening the read-side sweep's conservative logic.
-    Does NOT delete the note for the port currently being claimed (it's about to be
-    overwritten anyway). `aliveFn` is injectable for testing. */
-function pruneStaleNotes(runDir: string, currentPort: number, aliveFn: (pid: number) => boolean = isProcessAlive): void {
-  let entries: string[];
-  try {
-    entries = readdirSync(runDir);
-  } catch {
-    // runDir doesn't exist yet — nothing to prune
-    return;
-  }
-
-  const noteFiles = entries.filter((name) => /^tts\.owner\.\d+\.json$/.test(name));
-  for (const fileName of noteFiles) {
-    const portMatch = fileName.match(/^tts\.owner\.(\d+)\.json$/);
-    if (!portMatch) continue;
-
-    const port = Number(portMatch[1]);
-    // Skip the port currently being claimed (it's about to be overwritten).
-    if (port === currentPort) continue;
-
-    const owner = readSidecarOwner(runDir, port);
-    // Delete the note if the recorded owner is no longer alive.
-    if (owner && !aliveFn(owner.pid)) {
-      try {
-        unlinkSync(sidecarOwnerPath(runDir, port));
-      } catch {
-        /* already gone or inaccessible — best-effort prune, not fatal */
-      }
-    }
-  }
-}
 
 /** Write the owner note, claiming sidecar ownership for this server. Creates
     `runDir` if needed. Port defaults to the resolved sidecar port.
-
-    As part of the write path, also prunes stale notes from OTHER ports whose
-    recorded pid is no longer alive (#2754). This cleans up litter from
-    crashed/hard-killed servers at the moment a NEW, legitimate server starts,
-    without weakening the read-side sweep's conservative, liveness-agnostic logic.
 
     Also cleans up the legacy note (.run/tts.owner.json) if its recorded port
     matches the port being claimed (#2754 N3b). This fixes the PID-recycle defect:
@@ -224,9 +185,7 @@ function pruneStaleNotes(runDir: string, currentPort: number, aliveFn: (pid: num
     Deleting the legacy note here (only after the conflict check passed in
     `findConflictingOwner`) is safe: we already verified no live owner exists for
     this port, so the legacy note — if present and matching — is either our own
-    or stale.
-
-    `aliveFn` is injectable for testing (defaults to isProcessAlive). */
+    or stale. */
 export function claimSidecarOwnership(opts: ClaimOpts): void {
   const {
     runDir,
@@ -234,10 +193,8 @@ export function claimSidecarOwnership(opts: ClaimOpts): void {
     ppid = process.ppid,
     port = sidecarPort(),
     nowIso = () => new Date().toISOString(),
-    aliveFn = isProcessAlive,
   } = opts;
   mkdirSync(runDir, { recursive: true });
-  pruneStaleNotes(runDir, port, aliveFn);
 
   // #2754 N3b: Clean up the legacy note if its port matches the port being claimed.
   // The legacy note is now superseded by the port-keyed note we're about to write.

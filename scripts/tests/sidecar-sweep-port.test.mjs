@@ -590,8 +590,8 @@ test('#2754 — resolveSidecarSweepPort uses a stale note (dead PID) when it is 
 test('#2754 — resolveSidecarSweepPort falls back to server/.env when two notes exist (ambiguous)', () => {
   withTempRunDir((dir) => {
     // Two notes, whether dead or live — the existence of multiple notes means
-    // ambiguity and we cannot pick a winner. Stale notes are cleaned up by
-    // claimSidecarOwnership (server-side pruning), not by the sweep resolver.
+    // ambiguity and we cannot pick a winner. The sweep resolver cannot distinguish
+    // which note represents the actual sidecar, so it falls back to server/.env.
     writeFileSync(
       join(dir, 'tts.owner.9010.json'),
       JSON.stringify({ pid: 99999, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
