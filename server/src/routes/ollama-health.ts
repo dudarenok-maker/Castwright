@@ -27,6 +27,7 @@ import {
   pullBootstrap as defaultPullBootstrap,
   type PullBootstrap,
 } from '../ollama/pull-bootstrap.js';
+import { detectOllamaGpuSplit } from '../gpu/ollama-gpu-split.js';
 
 export const ollamaHealthRouter = Router();
 
@@ -257,6 +258,14 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
    row can tell "idle" apart from "unreachable" — see issue #1225. */
 ollamaHealthRouter.get('/device', async (_req: Request, res: Response) => {
   res.json({ device: await detectOllamaDeviceDetailed() });
+});
+
+/* GET /api/ollama/gpu-split — Task 3 of the #2367 chain. Surfaces Task 1's
+   detectOllamaGpuSplit() (server/src/gpu/ollama-gpu-split.ts) verbatim as
+   JSON for the Advanced Configuration warning line, sibling to /device
+   above. */
+ollamaHealthRouter.get('/gpu-split', async (_req: Request, res: Response) => {
+  res.json(await detectOllamaGpuSplit());
 });
 
 /* Ollama doesn't expose a dedicated load/unload pair — instead it interprets
