@@ -85,6 +85,14 @@ jobs:
       - name: Verify
         run: npm run verify:quick
 
+      # #2434 → #2779: `verify:quick` is `test:all` (a hardcoded npm-script
+      # chain), not the `verify-cache.mjs`-driven `npm run verify` this repo's
+      # STEPS[] table feeds — so unlike verify.yml's scope-derived legs, the
+      # new audit STEPS[] entries do NOT flow here automatically and need
+      # their own explicit step.
+      - name: Audit
+        run: npm run audit && npm run audit:server
+
       - name: Build
         run: npm run build
 
