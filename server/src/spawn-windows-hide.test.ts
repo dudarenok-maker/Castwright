@@ -28,6 +28,104 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
+/* Characters after which a `/` is far more likely to be opening a regex
+   literal than dividing two values — a narrow, deliberately incomplete
+   heuristic (see the function doc below for why a full one is out of scope).
+   `out[j]` is checked, not `src[j]`: `out` mirrors `src` position-for-position
+   but with comments/strings already blanked to spaces, so a quote/comment
+   character that happens to precede a REAL division `/` can never leak into
+   this decision. */
+const REGEX_POSITION_PRECEDERS = new Set([
+  '(', ',', '=', ':', ';', '!', '&', '|', '?', '[', '{', '}',
+  '+', '-', '*', '%', '<', '>', '^', '~', '\n',
+]);
+
+/* True when the `/` at out[i] sits somewhere a regex literal, not a division
+   operator, would start — skipping back over run(s) of plain spaces/tabs to
+   the nearest non-blank character. Start-of-file also counts (a file cannot
+   open with a division operator). This is intentionally NOT a real
+   regex-vs-division disambiguator (that requires a full expression-position
+   tokenizer, explicitly out of scope for this fix, #2764) — it only needs to
+   catch the shape this fix targets: a `/.../ ` that looks enough like a
+   regex literal to attempt lexing one. A miss either way is harmless: lexing
+   only proceeds past this check if a same-line closing `/` is also found
+   (see tryLexRegexLiteral), and the ambiguity check inside that only fires on
+   a genuinely unpaired quote/backtick — a stray division operator does not
+   contain those and simply falls through unlexed, unchanged from today's
+   behaviour. */
+function looksLikeRegexOpen(out: string[], i: number): boolean {
+  let j = i - 1;
+  while (j >= 0 && (out[j] === ' ' || out[j] === '\t')) j -= 1;
+  if (j < 0) return true;
+  return REGEX_POSITION_PRECEDERS.has(out[j]);
+}
+
+/* Attempt to lex a single-line regex literal starting at src[openIdx] (which
+   must be '/'). Tracks character-class brackets (`[...]`) so a `/` inside one
+   is not mistaken for the closing delimiter, and honours backslash escapes
+   throughout — the same two things a real JS lexer must track to find a
+   regex literal's end, and no more than that (no attempt to also determine
+   whether this position is regex-vs-division; the caller already decided
+   that with looksLikeRegexOpen). Returns null — "not a regex literal" — if no
+   unescaped, out-of-class closing `/` is found before a newline or EOF, in
+   which case the caller falls back to treating `/` as an ordinary character,
+   identical to pre-fix behaviour. */
+function tryLexRegexLiteral(src: string, openIdx: number): { end: number; body: string } | null {
+  let j = openIdx + 1;
+  let inClass = false;
+  while (j < src.length) {
+    const ch = src[j];
+    if (ch === '\n') return null;
+    if (ch === '\\') {
+      j += 2;
+      continue;
+    }
+    if (inClass) {
+      if (ch === ']') inClass = false;
+      j += 1;
+      continue;
+    }
+    if (ch === '[') {
+      inClass = true;
+      j += 1;
+      continue;
+    }
+    if (ch === '/') {
+      return { end: j, body: src.slice(openIdx + 1, j) };
+    }
+    j += 1;
+  }
+  return null;
+}
+
+/* Would this regex literal's body, if the plain quote/backtick scanner below
+   (the one with no notion of regex literals) walked over it unaware, leave a
+   quote "open" past the literal's end? That is exactly the #2747 desync: an
+   unpaired `'`, `"`, or `` ` `` inside a regex body is indistinguishable, to
+   that scanner, from a real string delimiter, so it starts treating
+   everything after the regex as "inside a string" and blanks it out — hiding
+   any real spawn call that follows. Simulates the SAME open/close/escape
+   rules the plain scanner uses (escape only special once a quote is already
+   open — matching that scanner's own behaviour, not a generic escape rule)
+   so this answers the real question: would THIS scanner desync on THIS body,
+   not some idealized regex-escaping rule. */
+function regexLiteralDesyncsQuoteTracking(body: string): boolean {
+  let openQuote: string | null = null;
+  for (let k = 0; k < body.length; k += 1) {
+    const ch = body[k];
+    if (openQuote) {
+      if (ch === '\\') {
+        k += 1;
+        continue;
+      }
+      if (ch === openQuote) openQuote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') openQuote = ch;
+  }
+  return openQuote !== null;
+}
+
 const SRC_ROOT = import.meta.dirname;
 
 /* child_process entry points that launch an OS process (and therefore can
@@ -211,32 +309,44 @@ function listSourceFiles(dir: string): string[] {
    stay accurate for error reporting. Single-pass lexer because regex can't
    disambiguate a `//` inside a string from a real line comment.
 
-   KNOWN LIMITATION (#2747): an unpaired backtick or quote character inside a
-   regex literal will desync the quote-tracking state, causing everything
-   after that point in the file to be misread as "inside a string" and
-   blanked out. This means a real spawn call appearing after such a regex
-   literal anywhere in a scanned file would be silently invisible to the
-   spawn-detection regex, producing a false "compliant" result. This is a
-   real, reproduced gap, not theoretical — correctly fixing it requires real
-   parsing to distinguish a regex literal from a division operator, and is a
-   design-level decision, not a quick patch. See issue #2747 for details.
+   NARROWED LIMITATION (#2747, closed by #2764): an unpaired backtick or
+   quote character inside a regex literal used to desync the quote-tracking
+   state silently — everything after that point in a scanned file was
+   misread as "inside a string" and blanked out, so a real spawn call
+   appearing after such a regex anywhere in the file was silently invisible
+   to the spawn-detection regex, producing a false "compliant" result. #2764
+   closes the SILENT half of this: looksLikeRegexOpen() + tryLexRegexLiteral()
+   + regexLiteralDesyncsQuoteTracking() (above) now recognize a same-line
+   `/.../ ` at a reachable (non-nested) position as a regex literal and FAIL
+   LOUD — throwing instead of blanking — when its body contains a same-type
+   quote/backtick an odd number of times. What remains out of scope, by
+   design (#2764): true regex-vs-division disambiguation (a full
+   expression-position tokenizer) and regex literals reached only from
+   INSIDE an already-open string/template context, where this function's own
+   quote-handling loop never reaches the sibling regex-detection branch at
+   all — see server/src/export/build-m4b.ts's buildConcatList() history
+   below for exactly that shape.
 
-   Currently-known live instances (a scanned file whose desync point sits
-   BEFORE a real spawn call the guard therefore cannot see) — checked
-   2716 final-pass review, not exhaustive, and NOT a substitute for #2747's
-   own fix: `server/src/export/build-m4b.ts:224`'s `/'/g` hides two spawn
-   calls (`ffprobe` at :240, `ffmpeg` at :336) from the primary server/src/**
-   scan below. Both already carry windowsHide: true in source today (verified
-   by mutation: deleting the flag from either does NOT redden the guard), so
-   there is no live defect — but a FUTURE regression on either line would ship
-   silently. `scripts/thin-backlog.mjs:187`'s `/^_`/ ` similarly desyncs
-   the whole rest of that file, dropping it from EXTERNAL_FILES_FLOOR
-   entirely (its one spawn call, fixed with windowsHide: true in the same
-   round this comment was written, is a "should be visible but isn't" case,
-   not a live defect). Three further files desync but hide nothing today
-   because no spawn call follows the desync point: `scripts/lib/knob-docs.mjs`
-   (the /^`+|`+$/g example above), `scripts/lib/slim-epub-cover.mjs`,
-   `scripts/release-notes-gate.mjs`. */
+   All instances the #2716 final-pass review found live in this codebase at
+   the time were fixed as part of #2764, each keeping its match set identical
+   (verified by a dedicated behaviour-preserving test where the site matters):
+   `server/src/export/build-m4b.ts`'s buildConcatList() nested a template
+   literal inside another template literal's `${...}` interpolation — a
+   backtick-in-backtick that desynced this scanner regardless of what its
+   inner regex contained, hiding the `spawn('ffprobe', ...)` call at :240 and
+   `spawn('ffmpeg', ...)` at :336 from it entirely (both already carried
+   windowsHide: true, so there was no live defect, but a future regression on
+   either would have shipped silently — see the "build-m4b.ts ffprobe/ffmpeg
+   blind spot closed" tests below for the mutation proof). Fixed by
+   extracting escapeConcatSingleQuotes() so the outer template literal no
+   longer nests one, plus escaping the regex's own quote as '.
+   `scripts/thin-backlog.mjs` and `scripts/migrate-backlog-to-issues.mjs`
+   each had two ambiguous regex literals (`/^_`/ ` and the MoSCoW heading
+   pattern containing `Won't`); `scripts/render-brand-pngs.mjs` had two
+   (`width="..."` / `height="..."` attribute strips). All five files' regexes
+   are now escaped with \uXXXX in place of the literal quote/backtick — see
+   the "ambiguous regex-literal quote desync fails loud" tests below for the
+   fail-loud repro using these same shapes as fixtures. */
 function blankCommentsAndStrings(src: string): string {
   const out: string[] = [];
   let i = 0;
@@ -257,6 +367,24 @@ function blankCommentsAndStrings(src: string): string {
         i += 2;
       }
       continue;
+    }
+    if (ch === '/' && looksLikeRegexOpen(out, i)) {
+      const lexed = tryLexRegexLiteral(src, i);
+      if (lexed) {
+        if (regexLiteralDesyncsQuoteTracking(lexed.body)) {
+          throw new Error(
+            `Ambiguous regex literal desyncs quote tracking at offset ${i}: /${lexed.body}/ — an ` +
+              'unpaired quote/backtick inside a regex literal is indistinguishable from a real string ' +
+              'delimiter to this scanner, so it would silently blank everything after it as "inside a ' +
+              'string", hiding any real spawn call that follows (#2747). Escape the character as a ' +
+              '\\uXXXX sequence (e.g. \\u0027 for \', \\u0022 for ", \\u0060 for `) instead of using it ' +
+              'literally inside the regex.',
+          );
+        }
+        for (let k = i; k <= lexed.end; k += 1) out.push(keepWhitespace(src[k]));
+        i = lexed.end + 1;
+        continue;
+      }
     }
     if (ch === "'" || ch === '"' || ch === '`') {
       const quote = ch;
@@ -559,5 +687,108 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
       missing,
       `old hardcoded entries missing from EXTERNAL_FILES_FLOOR (coverage regression):\n${missing.join('\n')}`,
     ).toEqual([]);
+  });
+
+  describe('ambiguous regex-literal quote desync fails loud (#2747/#2764)', () => {
+    it("blankCommentsAndStrings throws on the historical build-m4b.ts:224 shape, /'/g, at a reachable (non-nested) call position", () => {
+      /* Acceptance #1 (#2764): reproduces using build-m4b.ts:224's own
+         pattern — the instance that hid two real spawn calls — as INPUT,
+         not by reading the (now-fixed) real file. Deliberately NOT anchored
+         to scripts/lib/knob-docs.mjs's /^`+|`+$/g: #2747's own correction
+         records that pattern hides nothing, and it turns out (verified by
+         this very detector) its two backticks are balanced anyway, so it
+         was never a real repro of the desync — proving detection fires is
+         not the same as proving the blind spot it closes. */
+      const src = "const RE = /'/g;\nspawn('ffmpeg', args, { windowsHide: true });\n";
+      expect(() => blankCommentsAndStrings(src)).toThrow(/[Aa]mbiguous regex literal/);
+    });
+
+    it('blankCommentsAndStrings throws on the historical thin-backlog.mjs backtick shape, /^_`/', () => {
+      const src = "if (/^_`/.test(line)) break;\nspawn('ffmpeg', args, { windowsHide: true });\n";
+      expect(() => blankCommentsAndStrings(src)).toThrow(/[Aa]mbiguous regex literal/);
+    });
+
+    it('does NOT throw on a regex literal with balanced quotes (an even number of the same quote char cancels out)', () => {
+      const src = 'const m = /name="cover"/.exec(line);\nspawn(\'ffmpeg\', args, { windowsHide: true });\n';
+      expect(() => blankCommentsAndStrings(src)).not.toThrow();
+    });
+
+    it('does not mistake a real division for a regex literal (no same-line closing slash means no lexed regex, no throw)', () => {
+      const src = "const half = total / 2;\nconst other = total / count;\nspawn('ffmpeg', args, { windowsHide: true });\n";
+      expect(() => blankCommentsAndStrings(src)).not.toThrow();
+    });
+  });
+
+  describe('build-m4b.ts ffprobe/ffmpeg blind spot closed (#2747/#2764)', () => {
+    /* Before this fix, buildConcatList's nested template literal at line 224
+       (`file '${p.replace(/'/g, `'\\''`)}'` — a template literal nested
+       inside another template literal's ${...} interpolation) desynced this
+       scanner's naive, non-nesting-aware quote tracking well before it ever
+       reached probeDurationSec/runFfmpegMux, silently blanking
+       spawn('ffprobe', ...) at :240 and spawn('ffmpeg', ...) at :336 out of
+       existence — a real, reproduced blind spot (mutating either call's
+       windowsHide away did NOT redden the guard pre-fix). The fix restructures
+       buildConcatList to no longer nest a template literal inside another
+       (extracted to escapeConcatSingleQuotes(), using a plain double-quoted
+       replacement string instead of a nested backtick one) and also escapes
+       the regex's own quote character, so the scanner now reaches and
+       correctly reads both spawn calls. */
+    const buildM4bPath = join(REPO_ROOT, 'server', 'src', 'export', 'build-m4b.ts');
+    const buildM4bSrc = readFileSync(buildM4bPath, 'utf8');
+
+    it('scanFile sees both the ffprobe and ffmpeg spawn calls (zero offenders reported, not zero because they are invisible)', () => {
+      /* This assertion alone can't distinguish "sees them and they're
+         compliant" from "still blind to them" — a blind scan ALSO reports
+         zero offenders for calls it never looked at. The mutation test right
+         below is the one that actually proves the blind spot closed. */
+      const offenders = scanFile(buildM4bPath, CALL_RE);
+      expect(offenders).toEqual([]);
+    });
+
+    let scratchDir: string;
+    beforeAll(() => {
+      scratchDir = mkdtempSync(join(tmpdir(), 'build-m4b-mutation-test-'));
+    });
+    afterAll(() => {
+      rmSync(scratchDir, { recursive: true, force: true });
+    });
+
+    it('mutating windowsHide away from EITHER spawn reddens the guard — proves scanFile now actually sees both calls', () => {
+      const ffprobeCall =
+        "spawn('ffprobe', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })";
+      const ffmpegCall =
+        "spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })";
+      expect(
+        buildM4bSrc,
+        'fixture out of date with build-m4b.ts — ffprobe spawn call shape changed',
+      ).toContain(ffprobeCall);
+      expect(
+        buildM4bSrc,
+        'fixture out of date with build-m4b.ts — ffmpeg spawn call shape changed',
+      ).toContain(ffmpegCall);
+
+      const mutatedFfprobe = buildM4bSrc.replace(
+        ffprobeCall,
+        "spawn('ffprobe', args, { stdio: ['ignore', 'pipe', 'pipe'] })",
+      );
+      const mutatedFfmpeg = buildM4bSrc.replace(
+        ffmpegCall,
+        "spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] })",
+      );
+
+      const ffprobeFixture = join(scratchDir, 'mutated-ffprobe.ts');
+      const ffmpegFixture = join(scratchDir, 'mutated-ffmpeg.ts');
+      writeFileSync(ffprobeFixture, mutatedFfprobe, 'utf8');
+      writeFileSync(ffmpegFixture, mutatedFfmpeg, 'utf8');
+
+      expect(
+        scanFile(ffprobeFixture, CALL_RE).length,
+        'deleting windowsHide from the ffprobe spawn did not redden the guard — still blind to it',
+      ).toBeGreaterThan(0);
+      expect(
+        scanFile(ffmpegFixture, CALL_RE).length,
+        'deleting windowsHide from the ffmpeg spawn did not redden the guard — still blind to it',
+      ).toBeGreaterThan(0);
+    });
   });
 });

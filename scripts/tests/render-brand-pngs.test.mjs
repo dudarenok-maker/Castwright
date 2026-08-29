@@ -1,10 +1,26 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { JOBS } from '../render-brand-pngs.mjs';
+import { JOBS, sized } from '../render-brand-pngs.mjs';
 // Namespace import for the symbol added in Task 3: before it's exported,
 // `brandPngs.IOS_JOBS` is `undefined` (a clean assertion failure) rather than an
 // ESM module-load error that would crash the whole file.
 import * as brandPngs from '../render-brand-pngs.mjs';
+
+// #2764: sized()'s width/height-stripping regexes were escaped ("
+// instead of a literal quote char) to avoid an ambiguous regex-literal
+// desync in the spawn-windows-hide guard (#2747). Pinned here so a future
+// edit can't silently change what these regexes match.
+test('sized() replaces an existing width/height attribute pair, no leftovers', () => {
+  const svg = '<svg width="24" height="24" viewBox="0 0 24 24"><path/></svg>';
+  const out = sized(svg, 512, 512);
+  assert.equal(out, '<svg viewBox="0 0 24 24" width="512" height="512"><path/></svg>');
+});
+
+test('sized() adds width/height when the source <svg> tag has neither', () => {
+  const svg = '<svg viewBox="0 0 24 24"><path/></svg>';
+  const out = sized(svg, 64, 64);
+  assert.equal(out, '<svg viewBox="0 0 24 24" width="64" height="64"><path/></svg>');
+});
 
 // fe-37: the small-size favicons are hand-designed and committed in public/.
 // The render script must NOT regenerate them, or a re-run would clobber the
