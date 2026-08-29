@@ -37,23 +37,29 @@ runs:
     # On a cache miss: hardened `apt-get update` (retries the mirror instead
     # of failing on the first blip) then `apt-get install`, downloading into
     # the same runner-owned dir so the cache step above has something to
-    # save. Either branch is wrapped in its own timeout, well under the
-    # smallest consuming job's budget (10 minutes), so a hang fails fast and
-    # distinctly instead of silently eating the whole job.
+    # save.
+    #
+    # `timeout-minutes:` is a job-STEP key, not something a composite
+    # action's own steps accept — GitHub rejects the action manifest outright
+    # ("Unexpected value 'timeout-minutes'") if it's used here, which this
+    # action's first real CI run caught. Each apt/dpkg call below is instead
+    # wrapped in the coreutils `timeout` command (3 minutes each — up to 6
+    # minutes worst-case on a cache miss doing update+install, still well
+    # under the smallest consuming job's 10-minute budget), so a hang fails
+    # fast and distinctly instead of silently eating the whole job.
     - name: Install ffmpeg
       shell: bash
-      timeout-minutes: 3
       run: |
         set -euo pipefail
         ARCHIVE_DIR="${{ runner.temp }}/apt-cache-ffmpeg"
         mkdir -p "$ARCHIVE_DIR"
         if [ "${{ steps.apt-cache.outputs.cache-hit }}" = "true" ]; then
           echo "apt cache hit: installing ffmpeg from $ARCHIVE_DIR, skipping apt-get"
-          sudo dpkg -i "$ARCHIVE_DIR"/*.deb
+          timeout 180 sudo dpkg -i "$ARCHIVE_DIR"/*.deb
         else
           echo "apt cache miss: installing ffmpeg via apt-get"
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Dir::Cache::Archives="$ARCHIVE_DIR" install -y ffmpeg
+          timeout 180 sudo apt-get -o Acquire::Retries=3 update
+          timeout 180 sudo apt-get -o Dir::Cache::Archives="$ARCHIVE_DIR" install -y ffmpeg
         fi
 
     - name: Verify ffmpeg
