@@ -748,7 +748,7 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
     });
 
     it('does not mistake a real division for a regex literal (no same-line closing slash means no lexed regex, no throw)', () => {
-      const src = "const half = total / 2;\nconst other = total / count;\nspawn('ffmpeg', args, { windowsHide: true });\n";
+      const src = "const c = [/ unclosed\nspawn('ffmpeg', args, { windowsHide: true });\n";
       expect(() => blankCommentsAndStrings(src)).not.toThrow();
     });
   });
