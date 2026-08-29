@@ -6667,7 +6667,16 @@ class QwenEngine(Engine):
                 # the same per-card mutex. The lock nests outside the
                 # _VD_KOKORO.design() block (not inside) to avoid interfering with
                 # the Kokoro arbiter.
-                with _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx()):
+                # The acquire is bounded (not unbounded) to prevent indefinite hangs
+                # if a concurrent mint_variant() holds the lock for an extended period.
+                card_lock = _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx())
+                if not card_lock.acquire(timeout=_BASE17_CONTENTION_WAIT_S_DEFAULT):
+                    raise Base17ContentionTimeoutError(
+                        f"Could not acquire per-card lock for Qwen design — a concurrent "
+                        f"base17 load/mint has held it for over "
+                        f"{_BASE17_CONTENTION_WAIT_S_DEFAULT:.0f}s. Retry the design shortly."
+                    )
+                try:
                     if self._base17 is not None or self._base17_in_flight.busy:
                         log.info("Evicting resident/in-flight Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
                         # Bounded wait, not the 0.0 default — this call's whole
@@ -6761,6 +6770,8 @@ class QwenEngine(Engine):
                                 ref_audio=(ref_audio, ref_sr), ref_text=ref_text
                             )
                             distil_ms = (time.perf_counter() - _t) * 1000.0
+                finally:
+                    card_lock.release()
 
                 # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
                 os.makedirs(self._voices_dir, exist_ok=True)
