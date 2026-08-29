@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p .",
     "pretest": "node ../scripts/preflight-ffmpeg.cjs",
+    "audit": "node ../scripts/check-audit.mjs --omit-dev",
     "test": "vitest run",
     "test:slow": "vitest run --config vitest.config.slow.ts",
     "test:golden": "vitest run --config vitest.config.golden.ts",
