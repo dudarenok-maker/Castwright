@@ -56,10 +56,15 @@ def test_design_voice_evicts_resident_base17(monkeypatch):
 
     # Pretend the 1.7B-Base is resident (left over from a prior mint).
     qeng._base17 = object()
-    evicted = {"called": False}
+    evicted = {"called": False, "wait_seconds": None, "poll_seconds": None}
 
-    def _fake_unload_base17():
+    def _fake_unload_base17(
+        wait_seconds: float = 0.0,
+        poll_seconds: float = main._BASE17_CONTENTION_POLL_S_DEFAULT,
+    ):
         evicted["called"] = True
+        evicted["wait_seconds"] = wait_seconds
+        evicted["poll_seconds"] = poll_seconds
         qeng._base17 = None  # simulate the real unload clearing the model
 
     monkeypatch.setattr(qeng, "unload_base17", _fake_unload_base17)
@@ -88,6 +93,12 @@ def test_design_voice_evicts_resident_base17(monkeypatch):
     qeng.design_voice("qwen-narrator-preview", "A warm voice.", "english", "Hello there.")
 
     assert evicted["called"] is True, "resident 1.7B-Base must be evicted before the VoiceDesign load"
+    assert evicted["wait_seconds"] == main._BASE17_CONTENTION_WAIT_S_DEFAULT, (
+        "unload_base17 must be called with wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT to wait for contention"
+    )
+    assert evicted["poll_seconds"] == main._BASE17_CONTENTION_POLL_S_DEFAULT, (
+        "unload_base17 must be called with poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT"
+    )
     assert captured["base17_resident_during_design"] is False, (
         "1.7B-Base must NOT be resident during the VoiceDesign forward (OOM on 8 GB)"
     )
