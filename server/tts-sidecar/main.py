@@ -8209,6 +8209,11 @@ class SpeakerEngine:
         """
         if self._model is None:
             return False
+        # #2750: demoted is family-aware (not string-exact) so indexed cuda
+        # (cuda:0) is not confused with a cpu demotion. Currently the demoted
+        # flag's value doesn't change the gate outcome in any reachable state
+        # (when device is cuda, the gate's second part is False regardless);
+        # this is defensive correctness for possible future code paths.
         demoted = _parse_device(self._requested_device)[0] == "cuda" and _parse_device(self.device)[0] != "cuda"
         if not demoted and _parse_device(self.device)[0] != "cuda":
             return False
@@ -8219,6 +8224,7 @@ class SpeakerEngine:
         with self._infer_lock:
             if self._model is None:
                 return False
+            # Re-validate demoted under lock (see fast-out comment above).
             demoted = _parse_device(self._requested_device)[0] == "cuda" and _parse_device(self.device)[0] != "cuda"
             if not demoted and _parse_device(self.device)[0] != "cuda":
                 return False
