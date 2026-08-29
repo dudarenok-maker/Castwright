@@ -675,6 +675,26 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
     expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
     expect(screen.queryByText(/despite fitting on one device/)).not.toBeInTheDocument();
   });
+
+  it('suppresses the avoidable-split warning when split is true but dataUnavailable is also true (inconclusive data)', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+      dataUnavailable: true,
+    });
+
+    renderView();
+    // The "Can't determine" note should appear even though split is true
+    const note = await screen.findByText(/Can't determine GPU split status/);
+    expect(note).toBeInTheDocument();
+    // The amber avoidable-split warning must NOT appear when dataUnavailable is true
+    expect(screen.queryByText(/despite fitting on one device/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Model split across GPUs 0, 1/)).not.toBeInTheDocument();
+  });
 });
 
 /* ── Analyzer GPU-split warning: expected-device mismatch (#2367 Task 4) ─── */

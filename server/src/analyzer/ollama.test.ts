@@ -1032,6 +1032,23 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  it('does not warn when split would fit but dataUnavailable is true (inconclusive data)', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+      dataUnavailable: true,  // Driver doesn't expose per-process VRAM — can't confidently recommend migration
+    });
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_split_inconclusive', 1, '# prompt', {});
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
   it('a rejecting detectOllamaGpuSplit never fails an otherwise-successful decode', async () => {
     fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
     detectOllamaGpuSplitMock.mockRejectedValue(new Error('nvidia-smi boom'));

@@ -309,7 +309,7 @@ export async function detectOllamaGpuSplit(opts?: { fresh?: boolean }): Promise<
     return freeMb + ownShareMb >= totalUsedMb;
   });
 
-  const result = { reachable: true, split, deviceIndices, totalUsedMb, wouldFitSingleDevice, dataUnavailable: false };
+  const result = { reachable: true, split, deviceIndices, totalUsedMb, wouldFitSingleDevice, dataUnavailable };
   cache = { at: now, result };
   return result;
 }

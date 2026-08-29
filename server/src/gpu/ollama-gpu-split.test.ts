@@ -274,6 +274,31 @@ describe('detectOllamaGpuSplit', () => {
     });
   });
 
+  it('Finding 2 regression: split: true + dataUnavailable: true emits both flags correctly', async () => {
+    // srv-2367 Finding 2: the hardcoded dataUnavailable: false on the split-detected
+    // return path meant this state was never emittable in production. Now that the fix
+    // returns the computed dataUnavailable value, verify it threads through the split path.
+    // Real scenario: one Ollama model split across GPUs 0 and 1, but GPU 2 (also holding
+    // Ollama) has unreadable VRAM. This combination is split: true + dataUnavailable: true.
+    mockNvidiaSmi({
+      // GPU 0 and 1 hold one Ollama model (PID 1), split across them.
+      // GPU 2 holds Ollama process with unreadable [N/A] memory.
+      computeApps: 'GPU-aaa, 1, ollama.exe, 3000\nGPU-bbb, 1, ollama.exe, 3000\nGPU-ccc, 2, ollama_llama_server, [N/A]\n',
+      indexUuid: '0, GPU-aaa\n1, GPU-bbb\n2, GPU-ccc\n',
+      free: '0, 5000\n1, 5000\n2, 5000\n',
+    });
+
+    const result = await detectOllamaGpuSplit();
+    expect(result).toEqual({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],  // The split PID's devices (GPU 2 unreadable doesn't appear here)
+      totalUsedMb: 6000,
+      wouldFitSingleDevice: true,  // Could fit either on GPU 0 (5000 free + 3000 own = 8000 >= 6000) or GPU 1
+      dataUnavailable: true,  // Fixed: was hardcoded false, now correctly returns true because GPU 2's Ollama row is [N/A]
+    });
+  });
+
   describe('caching behavior (srv-2367)', () => {
     it('caches result and returns cached copy on second call within TTL window', async () => {
       mockNvidiaSmi({

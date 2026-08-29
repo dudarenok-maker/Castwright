@@ -855,8 +855,11 @@ export class OllamaAnalyzer implements Analyzer {
         const splitResult = await detectOllamaGpuSplit();
         const expectedDevice = configValue<string>('analyzer.ollama.expectedDevice');
 
-        /* Check for multi-GPU split that would fit on a single device. */
-        if (splitResult.split && splitResult.wouldFitSingleDevice) {
+        /* Check for multi-GPU split that would fit on a single device. Only
+           warn if we have complete data; a split with unavailable VRAM data
+           means we can't confidently assess whether it would fit, so don't
+           suggest a migration that might not actually help. */
+        if (splitResult.split && splitResult.wouldFitSingleDevice && !splitResult.dataUnavailable) {
           const signature = splitResult.deviceIndices.join(',');
           if (!warnedGpuSplitSignatures.has(signature)) {
             warnedGpuSplitSignatures.add(signature);
