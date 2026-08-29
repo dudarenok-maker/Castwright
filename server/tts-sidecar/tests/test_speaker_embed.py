@@ -163,6 +163,7 @@ def test_maybe_free_idle_frees_and_restores_pin_on_demoted_engine(monkeypatch: p
 
 def test_maybe_free_idle_noop_on_cpu(monkeypatch: pytest.MonkeyPatch):
     eng = main.SpeakerEngine()
+    eng._requested_device = "cpu"  # pin to cpu; don't inherit from ambient SPK_DEVICE env
     eng.device = "cpu"
     eng._model = _FakeModel()
     eng._last_used = time.monotonic() - 10_000  # very idle
