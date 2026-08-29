@@ -8153,6 +8153,11 @@ class SpeakerEngine:
         if self._model is None:
             return False
         self._model = None
+        # Restore the env pref (mirrors WhisperEngine._drop_model_locked, #2642):
+        # a cuda->cpu self-demotion in ensure_loaded() overwrote self.device with
+        # the fallback card, so a later reload must re-resolve from the ORIGINAL
+        # request, not stick on cpu forever.
+        self.device = self._requested_device
         return True
 
     def _reclaim_after_drop(self) -> None:
@@ -8183,27 +8188,45 @@ class SpeakerEngine:
 
     def maybe_free_idle(self, ttl_seconds: float) -> bool:
         """Free the model once it has idled past the TTL. Reclaims VRAM only on
-        the cuda path — a NO-OP on cpu, where the ~1 s reload churn isn't worth
-        freeing ~80–200 MB of host RAM. No-op while recently used.
+        the cuda path. On cpu, a no-op UNLESS the engine was demoted from cuda
+        (in which case the reload-churn cost is paid). No-op while recently used.
 
-        Cheap, lock-free fast-outs first (cuda-only guard, then nothing
-        loaded / mid-forward / used recently) — skipping the lock matters, a
-        forward can run for seconds and admission must not block on it.
+        Cheap, lock-free fast-outs first (check for model, then demotion/cuda
+        device, then in-flight work, then recency) — skipping the lock matters,
+        a forward can run for seconds and admission must not block on it.
         Re-validated UNDER the lock before dropping (#1894): `embed` claims
         `_in_flight` and refreshes `_last_used` BEFORE taking the lock,
         so a counter that flips to nonzero WHILE this is queued on the lock
         is otherwise invisible to the cheap check above. Calls
         `_drop_model_locked()` directly rather than `unload()` — re-entering
         `_infer_lock` here would self-deadlock.
+
+        Trade-off (#2750): when the device pin is restored from a prior cpu
+        self-demotion, a persistently-failing cuda load will re-attempt cuda
+        capacity reservation on every reload and can return `_no_capacity` → 503
+        under GPU contention, where before it would have silently stayed on cpu.
+        This trade-off was accepted to fix the permanent pin-corruption bug.
         """
-        if _parse_device(self.device)[0] != "cuda" or self._model is None:
+        if self._model is None:
+            return False
+        # #2750: demoted is family-aware (not string-exact) so indexed cuda
+        # (cuda:0) is not confused with a cpu demotion. Currently the demoted
+        # flag's value doesn't change the gate outcome in any reachable state
+        # (when device is cuda, the gate's second part is False regardless);
+        # this is defensive correctness for possible future code paths.
+        demoted = _parse_device(self._requested_device)[0] == "cuda" and _parse_device(self.device)[0] != "cuda"
+        if not demoted and _parse_device(self.device)[0] != "cuda":
             return False
         if self._in_flight.busy:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
         with self._infer_lock:
-            if _parse_device(self.device)[0] != "cuda" or self._model is None:
+            if self._model is None:
+                return False
+            # Re-validate demoted under lock (see fast-out comment above).
+            demoted = _parse_device(self._requested_device)[0] == "cuda" and _parse_device(self.device)[0] != "cuda"
+            if not demoted and _parse_device(self.device)[0] != "cuda":
                 return False
             if self._in_flight.busy:
                 return False
@@ -8369,8 +8392,9 @@ async def _stop_asr_idle_watchdog() -> None:
 
 
 # Default seconds of speaker-embed inactivity before the watchdog frees the
-# ECAPA model (cuda path only). Override via SPK_IDLE_TTL. Must match the
-# registry sidecar.spkIdleTtl default (srv-47 R2-A invariant).
+# ECAPA model. Frees on cuda, and also on cpu if the engine was demoted from
+# cuda. Override via SPK_IDLE_TTL. Must match the registry sidecar.spkIdleTtl
+# default (srv-47 R2-A invariant).
 _SPK_IDLE_TTL_DEFAULT = 120.0
 _spk_idle_task: "Optional[asyncio.Task[None]]" = None
 
@@ -8409,10 +8433,10 @@ def _coqui_idle_ttl() -> float:
 
 
 async def _spk_idle_watchdog() -> None:
-    """Free the ECAPA speaker model once it idles past the TTL — reclaims VRAM
-    on the cuda path between chapters without churning it mid-pass (a no-op on
-    cpu). The free runs on a worker thread so the event loop and /health stay
-    live."""
+    """Free the ECAPA speaker model once it idles past the TTL. Reclaims VRAM
+    on the cuda path between chapters without churning it mid-pass. On cpu,
+    skipped unless the engine was demoted from cuda. The free runs on a worker
+    thread so the event loop and /health stay live."""
     ttl = _spk_idle_ttl()
     interval = min(30.0, max(5.0, ttl / 4))
     while True:
