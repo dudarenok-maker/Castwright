@@ -3177,13 +3177,21 @@ in isolation, but never against genuine multi-GPU `nvidia-smi` output.
   signature (`server/src/analyzer/ollama.ts`), and does not repeat on
   subsequent analyzer calls with the same signature.
 - Confirm the Advanced Configuration "Analyzer (Ollama) device" row
-  (`src/views/advanced.tsx`) shows the matching warning line.
+  (`src/views/advanced.tsx`) shows the matching warning line: "Model split
+  across GPUs [indices] — expected GPU [N] only" (generic split wording).
 - Repeat with a model that is genuinely too big to fit on any single card
   (`wouldFitSingleDevice: false`) and confirm NO warning fires anywhere —
   server log or UI.
-- With `analyzer.ollama.expectedDevice` set to a GPU index the real split
-  contradicts, confirm the UI sharpens into the named-mismatch wording
-  (`... expected GPU N only`) instead of the generic split wording.
+- With `analyzer.ollama.expectedDevice` set to a GPU index that contradicts
+  the real single-device placement, confirm the server logs the mismatch
+  exactly once per distinct expected/detected pair: `[ollama] analyzer GPU
+  device mismatch: expected GPU N, detected on GPU M`. Confirm the UI shows
+  the named-mismatch wording: "Analyzer model is on GPU M — expected GPU N
+  only" (distinct from the split-case wording above). Repeat with
+  `expectedDevice` contradicting a split (model is split across multiple
+  GPUs but expected on a different one) and confirm the server logs the
+  mismatch and the UI shows the split-mismatch wording: "Model split across
+  GPUs [indices] — expected GPU N only".
 
 *Needs:* two NVIDIA GPUs of different sizes, a local Ollama daemon, and a
 model sized to force a genuine split. *Criteria:* Castwright#2734 (the

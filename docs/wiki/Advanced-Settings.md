@@ -70,7 +70,7 @@ is disabled.
 | Ollama analyzer concurrency (K) | Max analyzer /api/chat calls in flight at once; also set Ollama-side OLLAMA_NUM_PARALLEL >= K | 2 | integer, min 1 | live | high |
 | Ollama warm timeout (ms) | How long to wait for a cold Ollama model to load into VRAM before reporting unreachable | 120000 | integer, min 1000 | live | low |
 | Analyzer eval-rate telemetry | Record per-pass Ollama decode speed (tok/s) to a JSONL log shown in the Admin analyzer-throughput panel | `true` | boolean | live | low |
-| GPU-split detection probe | Whether resident Ollama model VRAM is currently split across multiple physical GPUs; a costly diagnostic cached for 60s | `true` | boolean | live | low |
+| GPU-split detection probe | Enable periodic nvidia-smi probes to detect whether the analyzer's Ollama model is split across GPUs; cached for 60s. Turn off to skip the diagnostic overhead if not needed. | `true` | boolean | live | low |
 
 ## 2. Analyzer chunking & truncation guards
 
