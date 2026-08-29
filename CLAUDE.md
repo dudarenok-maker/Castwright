@@ -906,9 +906,10 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   [docs/features/163-protected-push-guard.md](docs/features/163-protected-push-guard.md);
   bypass the local hook intentionally with `git push --no-verify`). Then, unless
   the push is docs-only (below), runs `npm run verify:fast:branch` — a fast,
-  branch-diff-scoped subset (lint, typecheck, config:check, test:hooks, test,
-  test:server, build, plus test:sidecar when the diff touches
-  `server/tts-sidecar/**`). Refuses the push if any in-scope step fails. This
+  branch-diff-scoped subset (lint, typecheck, config:check, test:hooks, check:budget-poll, test,
+  test:server, build, test:sidecar, audit, audit:server). Requires npm registry
+  access (unlike other `verify:fast:branch` legs, the audit steps cannot run offline).
+  Refuses the push if any in-scope step fails. This
   replaced running the full `npm run verify` battery on every push (see
   [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md))
   — the heavy legs (e2e, server-slow, scripts, test:pinokio) now run in the
