@@ -77,6 +77,7 @@
     "verify:fast": "node scripts/verify-cache.mjs --steps test:hooks,check:budget-poll,test,test:server",
     "verify:fast:scoped": "node scripts/verify-cache.mjs --steps test:hooks,check:budget-poll,test,test:server --scope-staged",
     "verify:fast:branch": "node scripts/verify-cache.mjs --steps lint,typecheck,config:check,test:hooks,check:budget-poll,test,test:server,build,test:sidecar --scope-branch",
+    "audit": "node scripts/check-audit.mjs",
     "openapi:types": "openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts",
     "stats": "node scripts/code-stats.mjs",
     "backlog:sync": "node scripts/backlog-sync.mjs",
