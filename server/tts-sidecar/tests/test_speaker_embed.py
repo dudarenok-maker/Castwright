@@ -242,6 +242,56 @@ def test_spk_idle_ttl_default_matches_registry():
     assert main._SPK_IDLE_TTL_DEFAULT == 120.0
 
 
+def test_real_cuda_demotion_through_maybe_free_idle(monkeypatch: pytest.MonkeyPatch):
+    """#2750: chain the real cuda->cpu self-demotion from ensure_loaded into
+    maybe_free_idle, asserting the invariant end-to-end: a demoted engine
+    correctly teardown restores the device pin and frees the model.
+
+    This exercises the actual code path (not hand-assigned field values):
+    1. ensure_loaded() triggers real demotion on a cuda load failure
+    2. device is now "cpu" while _requested_device is "cuda"
+    3. maybe_free_idle() detects the demoted state and tears down
+    4. _drop_model_locked() restores device to _requested_device
+
+    If a later change made ensure_loaded record the admitted card into
+    _requested_device as well, demoted would become False and teardown
+    would be unreachable — this test would catch that regression."""
+    calls: list[str] = []
+
+    def from_hparams(**kw):
+        dev = kw["run_opts"]["device"]
+        calls.append(dev)
+        if dev == "cuda":
+            raise RuntimeError("cuDNN library mismatch")  # non-poison, triggers demotion
+        return _FakeModel()
+
+    # Set SPK_DEVICE=cuda so _requested_device will be "cuda" at init time
+    monkeypatch.setenv("SPK_DEVICE", "cuda")
+    _install_speechbrain_stub(monkeypatch, from_hparams=from_hparams)
+    _stub_torch_cuda(monkeypatch, available=True)
+
+    # Create engine — _requested_device will be "cuda" from the env
+    eng = main.SpeakerEngine()
+
+    # Trigger real demotion via ensure_loaded
+    asyncio.run(eng.ensure_loaded())
+
+    # Verify demotion occurred: device is cpu but _requested_device is cuda
+    assert eng.device == "cpu"
+    assert eng._requested_device == "cuda"
+    assert eng._model is not None
+    assert calls == ["cuda", "cpu"]  # tried cuda, fell back to cpu
+
+    # Mark it idle
+    eng._last_used = time.monotonic() - 10_000
+
+    # Call maybe_free_idle — should detect the demoted state and tear down
+    freed = eng.maybe_free_idle(120.0)
+    assert freed is True
+    assert eng._model is None  # model was dropped
+    assert eng.device == "cuda"  # device restored to _requested_device
+
+
 def test_embed_load_poison_is_fenced(monkeypatch: pytest.MonkeyPatch):
     """A cuda LOAD poison must return 503/poisoned (not an unclassified 500),
     so the supervisor recycles the corrupt context."""
