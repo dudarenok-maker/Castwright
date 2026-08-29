@@ -4194,23 +4194,16 @@ Run `npm start` or `npm run dev` in each checkout. From the primary, observe:
 sidecar) and contains a different PID. Both files coexist in the shared `.run`
 directory without collision — this is the core fix of #2641. **(3)** From the
 primary checkout, run `npm run stop` and observe the primary's sidecar (`:9000`)
-dies but the worktree's (`:9010`) survives. The sweep resolver sees two notes
-(ambiguous), falls back to the primary's own `server/.env` where `LOCAL_TTS_PORT=9000`,
-and kills only that port. **(4)** Repeat from the worktree: run `npm run stop`
-there and observe the worktree's sidecar dies, the primary's survives. The
-worktree's `server/.env` has `LOCAL_TTS_PORT=9010`, so the fallback kills only
-that port. Both outcomes are correct and safe.
-
-**Optionally,** to verify the false-collision case is now ruled out: before this
-fix, step (2) would not happen — the second sidecar would find
-`tts.owner.json` already written by the first and refuse to start with a
-"single-owner conflict" error, even though no real conflict existed (they're on
-different ports in different processes). After #2641, both start cleanly. This
-optional check runs the same worktree against an **unpatched** version of the
-codebase (checking out an earlier commit or a branch before #2641 landed) and
-confirms the old error surfaces, proving the fix was necessary — but only if a
-checkout of that earlier point is available and you have time; the forward
-direction (both start cleanly, sweep discriminates) is the core acceptance.
+dies but the worktree's (`:9010`) survives. To reach the "sweep resolver sees
+two notes" outcome, you must export `APP_RUN_DIR` in the shell running `npm run stop`
+(in addition to setting it in `server/.env` for the server): `export APP_RUN_DIR=/abs/path/shared-run-dir && npm run stop`
+or on Windows PowerShell: `$env:APP_RUN_DIR = '/abs/path/shared-run-dir'; npm run stop`.
+The sweep then reads both owner notes from the shared directory, sees the ambiguity,
+falls back to the primary's own `server/.env` where `LOCAL_TTS_PORT=9000`, and
+kills only that port. **(4)** Repeat from the worktree with its own `APP_RUN_DIR`
+export in the shell: observe the worktree's sidecar dies, the primary's survives.
+The sweep falls back to the worktree's `server/.env` where `LOCAL_TTS_PORT=9010`,
+so it kills only that port. Both outcomes are correct and safe.
 
 *Cost:* 5–10 minutes to set up and run. Needs two live sidecars on the same host.
 *Criteria:* this PR's description (§On-box acceptance), the
