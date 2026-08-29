@@ -9,13 +9,15 @@ vi.mock('node:child_process', () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-const { configValueMock } = vi.hoisted(() => ({
-  configValueMock: vi.fn((key: string) => {
-    if (key === 'gpu.split.probe') return true; // default on
-    return undefined;
-  }),
+const { readConfigOverridesMock } = vi.hoisted(() => ({
+  readConfigOverridesMock: vi.fn(() => ({})),
 }));
-vi.mock('../config/resolver.js', () => ({ configValue: configValueMock }));
+vi.mock('../workspace/user-settings.js', () => ({
+  readConfigOverrides: readConfigOverridesMock,
+  resolveUserSettingsPath: () => '/tmp/test-user-settings.json',
+  USER_SETTINGS_PATH: '/tmp/test-user-settings.json',
+  LEGACY_USER_SETTINGS_PATH: '/tmp/legacy-user-settings.json',
+}));
 
 import {
   detectOllamaGpuSplit,
@@ -24,6 +26,7 @@ import {
   parseGpuFreeCsv,
   __resetOllamaGpuSplitCacheForTest,
 } from './ollama-gpu-split.js';
+import * as us from '../workspace/user-settings.js';
 
 type Cb = (err: Error | null, stdout?: string) => void;
 
@@ -46,7 +49,8 @@ function mockNvidiaSmi(opts: { computeApps?: string; indexUuid?: string; free?: 
 
 beforeEach(() => {
   execFileMock.mockReset();
-  configValueMock.mockReset();
+  readConfigOverridesMock.mockReturnValue({});
+  delete process.env.CASTWRIGHT_GPU_SPLIT_PROBE;
   __resetOllamaGpuSplitCacheForTest();
 });
 
@@ -411,26 +415,24 @@ describe('detectOllamaGpuSplit', () => {
       }
     });
 
-    it('respects gpu.split.probe=false config to disable probe', async () => {
+    it('respects default config value (true) to enable probe', async () => {
       mockNvidiaSmi({
         computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
         indexUuid: '0, GPU-aaa\n',
         free: '0, 3000\n',
       });
 
-      (configValueMock as any).mockReturnValue(false);
-
+      // Default: no override set, no env var set — probe should run
       const result = await detectOllamaGpuSplit();
-      // When disabled, should return empty result without invoking nvidia-smi
       expect(result).toEqual({
-        reachable: false,
+        reachable: true,
         split: false,
-        deviceIndices: [],
-        totalUsedMb: 0,
+        deviceIndices: [0],
+        totalUsedMb: 5000,
         wouldFitSingleDevice: false,
         dataUnavailable: false,
       });
-      expect(execFileMock.mock.calls.length).toBe(0);
+      expect(execFileMock.mock.calls.length).toBeGreaterThan(0); // Probe ran
     });
 
     it('respects stored override of gpu.split.probe=false to disable probe', async () => {
@@ -440,11 +442,13 @@ describe('detectOllamaGpuSplit', () => {
         free: '0, 3000\n',
       });
 
-      // Simulate a stored override that has been resolved to false
-      (configValueMock as any).mockReturnValue(false);
+      // Set up a stored override that returns false (via readConfigOverrides)
+      (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
+        'gpu.split.probe': false,
+      });
 
       const result = await detectOllamaGpuSplit();
-      // When disabled via override, should return empty result without invoking nvidia-smi
+      // When disabled via stored override, should return empty result without invoking nvidia-smi
       expect(result).toEqual({
         reachable: false,
         split: false,
@@ -453,7 +457,7 @@ describe('detectOllamaGpuSplit', () => {
         wouldFitSingleDevice: false,
         dataUnavailable: false,
       });
-      expect(execFileMock.mock.calls.length).toBe(0);
+      expect(execFileMock.mock.calls.length).toBe(0); // Probe was skipped
     });
 
     it('respects env var CASTWRIGHT_GPU_SPLIT_PROBE=false to disable probe via config resolution', async () => {
@@ -463,11 +467,12 @@ describe('detectOllamaGpuSplit', () => {
         free: '0, 3000\n',
       });
 
-      // Simulate env var resolution path returning false (e.g., CASTWRIGHT_GPU_SPLIT_PROBE=0/false/no/off)
-      (configValueMock as any).mockReturnValue(false);
+      // Set env var to a string "false" to test that coerceAndValidate properly handles string-to-boolean conversion
+      // This is the key difference from the mocked test: we're testing the real config resolver's coercion logic
+      process.env.CASTWRIGHT_GPU_SPLIT_PROBE = 'false';
 
       const result = await detectOllamaGpuSplit();
-      // When disabled via env var resolution, should return empty result without invoking nvidia-smi
+      // When disabled via env var (resolved through real config logic), should return empty result without invoking nvidia-smi
       expect(result).toEqual({
         reachable: false,
         split: false,
@@ -476,7 +481,7 @@ describe('detectOllamaGpuSplit', () => {
         wouldFitSingleDevice: false,
         dataUnavailable: false,
       });
-      expect(execFileMock.mock.calls.length).toBe(0);
+      expect(execFileMock.mock.calls.length).toBe(0); // Probe was skipped
     });
   });
 });
