@@ -1165,6 +1165,30 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
     expect(mismatchWarnings()[0][0]).toContain('expected GPU 0');
     expect(mismatchWarnings()[0][0]).toContain('detected on GPU 0,1');
   });
+
+  it('does not warn when expectedDevice is non-numeric (NaN guard)', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [0],
+      totalUsedMb: 5000,
+      wouldFitSingleDevice: false,
+    });
+    /* Set expectedDevice to a non-numeric string like 'gpu0' (a typo).
+       Without the NaN guard, Number('gpu0') = NaN, and NaN === 0 is always false,
+       producing a bogus mismatch warning. With the guard, no warning fires. */
+    (configValueMock as any).mockReturnValue('gpu0');
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_expecteddevice_nan_guard', 1, '# prompt', {});
+    const mismatchWarnings = () =>
+      warnSpy.mock.calls.filter(
+        ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('GPU device mismatch'),
+      );
+    expect(mismatchWarnings()).toHaveLength(0);
+  });
 });
 
 /* srv-59 Task 9 — the escalation primitive is deliberately NOT built on

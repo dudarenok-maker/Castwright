@@ -869,24 +869,30 @@ export class OllamaAnalyzer implements Analyzer {
         /* Check for expectedDevice mismatch: either a split touching ANY device
            outside the expected one, or a single device that isn't the expected one.
            Use .every() semantics (not .includes()): a split that touches ANY
-           device outside expected counts as a mismatch, just like on the frontend. */
+           device outside expected counts as a mismatch, just like on the frontend.
+           Guard against NaN (non-numeric expectedDevice) to fail safe: a malformed
+           value like 'gpu0' would become NaN and compare false against every device
+           index, producing a bogus always-mismatch warning. Mirror the frontend's
+           !Number.isNaN guard (advanced.tsx line 314/323). */
         if (expectedDevice && splitResult.reachable) {
           const expectedIndex = Number(expectedDevice);
-          const isMismatch =
-            (splitResult.split && !splitResult.deviceIndices.every((idx) => idx === expectedIndex)) ||
-            (!splitResult.split && splitResult.deviceIndices.length === 1 && splitResult.deviceIndices[0] !== expectedIndex);
+          if (!Number.isNaN(expectedIndex)) {
+            const isMismatch =
+              (splitResult.split && !splitResult.deviceIndices.every((idx) => idx === expectedIndex)) ||
+              (!splitResult.split && splitResult.deviceIndices.length === 1 && splitResult.deviceIndices[0] !== expectedIndex);
 
-          if (isMismatch) {
-            /* Include both the device list and expectedDevice in the signature so
-               each distinct mismatch state is warned once (rate-limited per
-               device signature + expected state pair). */
-            const mismatchSignature = `${splitResult.deviceIndices.join(',')}-expected:${expectedDevice}`;
-            if (!warnedGpuSplitSignatures.has(mismatchSignature)) {
-              warnedGpuSplitSignatures.add(mismatchSignature);
-              const deviceDesc = splitResult.deviceIndices.length === 0 ? 'unknown' : splitResult.deviceIndices.join(',');
-              console.warn(
-                `[ollama] analyzer GPU device mismatch: expected GPU ${expectedDevice}, detected on GPU ${deviceDesc}`,
-              );
+            if (isMismatch) {
+              /* Include both the device list and expectedDevice in the signature so
+                 each distinct mismatch state is warned once (rate-limited per
+                 device signature + expected state pair). */
+              const mismatchSignature = `${splitResult.deviceIndices.join(',')}-expected:${expectedDevice}`;
+              if (!warnedGpuSplitSignatures.has(mismatchSignature)) {
+                warnedGpuSplitSignatures.add(mismatchSignature);
+                const deviceDesc = splitResult.deviceIndices.length === 0 ? 'unknown' : splitResult.deviceIndices.join(',');
+                console.warn(
+                  `[ollama] analyzer GPU device mismatch: expected GPU ${expectedDevice}, detected on GPU ${deviceDesc}`,
+                );
+              }
             }
           }
         }

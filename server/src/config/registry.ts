@@ -1210,6 +1210,7 @@ export const KNOBS: ConfigKnob[] = [
         + '(e.g. "0"), and a detected split that contradicts this is called out '
         + 'explicitly in the Advanced Configuration warning below.',
     type: 'string',
+    pattern: /^\d*$/,
     default: '', // no coded default — empty string means "no declared expectation"
     apply: 'live', risk: 'low',
   },
