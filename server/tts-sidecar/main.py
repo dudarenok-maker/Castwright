@@ -8203,7 +8203,7 @@ class SpeakerEngine:
         """
         if self._model is None:
             return False
-        demoted = self.device != self._requested_device
+        demoted = _parse_device(self._requested_device)[0] == "cuda" and _parse_device(self.device)[0] != "cuda"
         if not demoted and _parse_device(self.device)[0] != "cuda":
             return False
         if self._in_flight.busy:
@@ -8213,7 +8213,7 @@ class SpeakerEngine:
         with self._infer_lock:
             if self._model is None:
                 return False
-            demoted = self.device != self._requested_device
+            demoted = _parse_device(self._requested_device)[0] == "cuda" and _parse_device(self.device)[0] != "cuda"
             if not demoted and _parse_device(self.device)[0] != "cuda":
                 return False
             if self._in_flight.busy:

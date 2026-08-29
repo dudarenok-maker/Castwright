@@ -194,6 +194,28 @@ def test_maybe_free_idle_frees_on_indexed_cuda(monkeypatch: pytest.MonkeyPatch):
     assert eng._model is None
 
 
+def test_maybe_free_idle_not_demoted_on_admitted_indexed_load(monkeypatch: pytest.MonkeyPatch):
+    """#2750: capacity admission indexes an unindexed device (cuda → cuda:0).
+    The demoted check must be family-aware, not string-exact, or an admitted
+    load is incorrectly treated as self-demoted. Before the fix, with
+    _requested_device='cuda' and device='cuda:0', the string check
+    ('cuda:0' != 'cuda') wrongly reported demoted=True."""
+    _stub_torch_cuda(monkeypatch, available=True)
+    eng = main.SpeakerEngine()
+    eng._requested_device = "cuda"  # env-derived, unindexed
+    eng.device = "cuda:0"  # after capacity admission indexing
+    eng._model = _FakeModel()
+    eng._last_used = time.monotonic() - 10_000  # very idle
+    # Should evict because it's idle cuda (not because it's "demoted").
+    # Before the fix, the string-exact check would mark it as demoted,
+    # but the demoted flag wouldn't actually trigger eviction anyway —
+    # the real bug was the variable naming claiming self-demotion when
+    # there was none.
+    assert eng.maybe_free_idle(120.0) is True
+    assert eng._model is None
+    assert eng.device == "cuda"  # pin restored to unindexed
+
+
 def test_maybe_free_idle_keeps_recent_model(monkeypatch: pytest.MonkeyPatch):
     _stub_torch_cuda(monkeypatch, available=True)
     eng = main.SpeakerEngine()
