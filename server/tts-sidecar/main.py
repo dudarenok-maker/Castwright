@@ -8188,12 +8188,12 @@ class SpeakerEngine:
 
     def maybe_free_idle(self, ttl_seconds: float) -> bool:
         """Free the model once it has idled past the TTL. Reclaims VRAM only on
-        the cuda path — a NO-OP on cpu, where the ~1 s reload churn isn't worth
-        freeing ~80–200 MB of host RAM. No-op while recently used.
+        the cuda path. On cpu, a no-op UNLESS the engine was demoted from cuda
+        (in which case the reload-churn cost is paid). No-op while recently used.
 
-        Cheap, lock-free fast-outs first (cuda-only guard, then nothing
-        loaded / mid-forward / used recently) — skipping the lock matters, a
-        forward can run for seconds and admission must not block on it.
+        Cheap, lock-free fast-outs first (check for model, then demotion/cuda
+        device, then in-flight work, then recency) — skipping the lock matters,
+        a forward can run for seconds and admission must not block on it.
         Re-validated UNDER the lock before dropping (#1894): `embed` claims
         `_in_flight` and refreshes `_last_used` BEFORE taking the lock,
         so a counter that flips to nonzero WHILE this is queued on the lock
@@ -8380,8 +8380,9 @@ async def _stop_asr_idle_watchdog() -> None:
 
 
 # Default seconds of speaker-embed inactivity before the watchdog frees the
-# ECAPA model (cuda path only). Override via SPK_IDLE_TTL. Must match the
-# registry sidecar.spkIdleTtl default (srv-47 R2-A invariant).
+# ECAPA model. Frees on cuda, and also on cpu if the engine was demoted from
+# cuda. Override via SPK_IDLE_TTL. Must match the registry sidecar.spkIdleTtl
+# default (srv-47 R2-A invariant).
 _SPK_IDLE_TTL_DEFAULT = 120.0
 _spk_idle_task: "Optional[asyncio.Task[None]]" = None
 
@@ -8420,10 +8421,10 @@ def _coqui_idle_ttl() -> float:
 
 
 async def _spk_idle_watchdog() -> None:
-    """Free the ECAPA speaker model once it idles past the TTL — reclaims VRAM
-    on the cuda path between chapters without churning it mid-pass (a no-op on
-    cpu). The free runs on a worker thread so the event loop and /health stay
-    live."""
+    """Free the ECAPA speaker model once it idles past the TTL. Reclaims VRAM
+    on the cuda path between chapters without churning it mid-pass. On cpu,
+    skipped unless the engine was demoted from cuda. The free runs on a worker
+    thread so the event loop and /health stay live."""
     ttl = _spk_idle_ttl()
     interval = min(30.0, max(5.0, ttl / 4))
     while True:

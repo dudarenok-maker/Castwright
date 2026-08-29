@@ -839,7 +839,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'SPK_IDLE_TTL',
     group: 'gpu-lifecycle',
     label: 'Speaker-embed (ECAPA) idle TTL (s)',
-    help: 'Seconds of speaker-embed inactivity before the sidecar frees the ECAPA model. Reclaims VRAM only on SPK_DEVICE=cuda (a no-op on cpu). Values below 5 fall back to the default (120) to avoid reload thrash.',
+    help: 'Seconds of speaker-embed inactivity before the sidecar frees the ECAPA model. Reclaims VRAM only on SPK_DEVICE=cuda; on cpu, skipped unless the engine demoted from cuda (incurring reload thrash). Values below 5 fall back to the default (120) to avoid reload thrash.',
     type: 'integer', min: 0,
     default: 120, // ← _SPK_IDLE_TTL_DEFAULT in tts-sidecar/main.py (Task 4)
     apply: 'restart-sidecar', risk: 'high',
