@@ -27,7 +27,7 @@
  * on different ports. The port is read once at startup and passed through to
  * both spawn-sidecar.ts and sidecar-owner.ts so they coordinate on the same port.
  */
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** Last invalid LOCAL_TTS_PORT value we logged an error for. Prevents duplicate
@@ -182,8 +182,7 @@ export interface ClaimOpts {
 function pruneStaleNotes(runDir: string, currentPort: number, aliveFn: (pid: number) => boolean = isProcessAlive): void {
   let entries: string[];
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    entries = require('fs').readdirSync(runDir);
+    entries = readdirSync(runDir);
   } catch {
     // runDir doesn't exist yet — nothing to prune
     return;
