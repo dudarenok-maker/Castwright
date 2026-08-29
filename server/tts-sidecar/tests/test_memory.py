@@ -1275,6 +1275,45 @@ def test_health_exposes_qwen_design_ever_loaded(monkeypatch):
     assert body["qwen_design_ever_loaded"] is True  # after a design load
 
 
+def test_health_exposes_qwen_design_resident(monkeypatch):
+    """/health exposes a LIVE `qwen_design_resident` boolean reflecting whether a
+    VoiceDesign is resident or mid-load/mid-design RIGHT NOW, distinct from the
+    process-lifetime `qwen_design_ever_loaded` latch. The loading-window case
+    (`_design is None` but `_design_in_flight` busy) must read True - the latch
+    cannot distinguish it from "never loaded, not loading", which is the whole
+    reason this field exists (#2678)."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    qwen = main.QwenEngine()
+    monkeypatch.setitem(main.ENGINES, "qwen", qwen)
+
+    # Case 1: not resident, not in flight -> False
+    qwen._design = None
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_design_resident"] is False
+
+    # Case 3: the loading window -- `_design is None` but the counter is busy
+    #         -> STILL True. This is the case PR #2745 fixed the race around and
+    #         the latch cannot report; it is the reason this field exists.
+    qwen._design = None
+    with qwen._design_in_flight.claim():
+        with TestClient(main.app) as client:
+            body = client.get("/health").json()
+    assert body["qwen_design_resident"] is True
+
+    # Case 2: a resident design is set (non-None) -> True
+    qwen._design = object()
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_design_resident"] is True
+
+    # Case 4: no QwenEngine instance present (not installed/loaded) -> False, no crash
+    monkeypatch.delitem(main.ENGINES, "qwen", raising=False)
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_design_resident"] is False
+
+
 def test_debug_memory_includes_inflight_synth_top_level_key(monkeypatch):
     """/debug/memory must expose `inflight_synth` as a top-level key (sibling to
     `process`, `gc`, `engines`, `cuda`) so an idle-measurement probe can read the

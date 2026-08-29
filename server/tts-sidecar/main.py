@@ -10104,6 +10104,12 @@ def health() -> dict[str, Any]:
         "qwen_loaded": qwen_loaded,
         "qwen_base17_loaded": qwen_base17_loaded,
         "qwen_design_ever_loaded": _QWEN_DESIGN_EVER_LOADED,
+        # LIVE counterpart to the latch above -- true only while a VoiceDesign is
+        # actually resident or mid-load/mid-design right now.
+        "qwen_design_resident": bool(
+            isinstance(qwen, QwenEngine)
+            and (qwen._design is not None or qwen._design_in_flight.busy)
+        ),
         "qwen_loading": qwen_loading,
         "qwen_package_installed": qwen_package_installed,
         "qwen_weights_present": qwen_weights_present,
