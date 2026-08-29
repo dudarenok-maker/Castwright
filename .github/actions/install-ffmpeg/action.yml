@@ -1,0 +1,61 @@
+# Composite action — replaces the three byte-duplicated `apt-get install
+# ffmpeg` steps in verify.yml (decision on parent #2449). Those steps had no
+# retry, no mirror fallback and no step-level timeout, so a hung `apt-get
+# update` against a slow Ubuntu mirror burned the whole job's timeout budget
+# and cancelled every step after it, tests included (measured on PR #2424:
+# three jobs cancelled at 15m/15m/10m before a third attempt passed clean).
+#
+# Caching choice: this caches apt's OWN downloaded .deb packages (redirected
+# to a runner-owned temp dir, not /var/cache/apt/archives, which is
+# root-owned and not reliably writable by actions/cache's restore step)
+# rather than snapshotting the installed ffmpeg binary + its shared-library
+# closure. `apt-get install ffmpeg` pulls in a long, version-drifting chain
+# of transitive dependency packages, so re-deriving and re-linking that
+# closure by hand is the fragile option the task brief explicitly allows
+# skipping in favor of this one.
+name: 'Install ffmpeg (cached)'
+description: 'Install ffmpeg on an Ubuntu runner, caching the apt .deb packages so a cache hit skips apt-get (and the network round trip) entirely, with a step-level timeout so a stuck mirror fails fast.'
+
+inputs:
+  ffmpeg-version-pin:
+    description: 'Cache-key component. Bump to force a fresh apt-get fetch and cache write (e.g. after an Ubuntu image bump changes the available ffmpeg version).'
+    required: false
+    default: 'v1'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Cache ffmpeg apt packages
+      id: apt-cache
+      uses: actions/cache@v5
+      with:
+        path: ${{ runner.temp }}/apt-cache-ffmpeg
+        key: ${{ runner.os }}-ffmpeg-apt-${{ inputs.ffmpeg-version-pin }}
+
+    # On a cache hit: install straight from the cached .deb files with
+    # `dpkg -i` — no apt-get, no `apt-get update`, no network at all.
+    # On a cache miss: hardened `apt-get update` (retries the mirror instead
+    # of failing on the first blip) then `apt-get install`, downloading into
+    # the same runner-owned dir so the cache step above has something to
+    # save. Either branch is wrapped in its own timeout, well under the
+    # smallest consuming job's budget (10 minutes), so a hang fails fast and
+    # distinctly instead of silently eating the whole job.
+    - name: Install ffmpeg
+      shell: bash
+      timeout-minutes: 3
+      run: |
+        set -euo pipefail
+        ARCHIVE_DIR="${{ runner.temp }}/apt-cache-ffmpeg"
+        mkdir -p "$ARCHIVE_DIR"
+        if [ "${{ steps.apt-cache.outputs.cache-hit }}" = "true" ]; then
+          echo "apt cache hit: installing ffmpeg from $ARCHIVE_DIR, skipping apt-get"
+          sudo dpkg -i "$ARCHIVE_DIR"/*.deb
+        else
+          echo "apt cache miss: installing ffmpeg via apt-get"
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Dir::Cache::Archives="$ARCHIVE_DIR" install -y ffmpeg
+        fi
+
+    - name: Verify ffmpeg
+      shell: bash
+      run: ffmpeg -version

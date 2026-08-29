@@ -285,7 +285,7 @@ jobs:
       # supports: test:server
       - name: Install ffmpeg
         if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
 
       # `--changed <base>` narrows both server configs to diff-affected tests
       # (CI cost round 2). The slow config still serial-runs ONLY the hot files
@@ -404,7 +404,7 @@ jobs:
       # supports: test:e2e
       - name: Install ffmpeg
         if: fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
 
       # supports: test:e2e
       - name: Cache Playwright browsers
@@ -458,7 +458,7 @@ jobs:
       # supports: test:e2e:visual
       - name: Install ffmpeg
         if: fromJSON(needs.detect.outputs.scopes).step_test_e2e_visual || fromJSON(needs.detect.outputs.scopes).shared
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
 
       # supports: test:e2e:visual
       - name: Cache Playwright browsers
