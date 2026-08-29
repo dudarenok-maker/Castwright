@@ -3064,9 +3064,14 @@ export interface components {
              *     design) run — the result is already persisted by the time this
              *     fires. `error` is the terminal event for a failed run: `code`
              *     `not_found` (character deleted mid-run), `design_failed` (the
-             *     design call itself threw), `unsupported_language`, or
-             *     `lock-contention` (a cast-lock acquisition on this route's own
-             *     path timed out — #2260).
+             *     design call itself threw), `unsupported_language`,
+             *     `language_unset` (Task 6, #2246 — the book never stated a
+             *     language), `lock-contention` (a cast-lock acquisition on this
+             *     route's own path timed out — #2260), or `clone_protected` (the
+             *     write-time series-wide clone-consent veto refused the persist —
+             *     #2006; a distinct occurrence from the plain-JSON 409 upfront
+             *     refusal below, which shares the same code string for the same
+             *     reason).
              * @enum {string}
              */
             type: "resume_from" | "idle" | "heartbeat" | "phase" | "preview_ready" | "designed" | "error";
@@ -3100,9 +3105,13 @@ export interface components {
              *     book never stated a language — the honest pre-work abort
              *     replacing a silent English design; `unsupported_language`
              *     fires for a stated language with no sidecar mapping.
+             *     `clone_protected` fires when the write-time series-wide
+             *     clone-consent veto refused the persist — #2006; a distinct
+             *     occurrence from the plain-JSON 409 upfront refusal below,
+             *     which shares the same code string for the same reason.
              * @enum {string}
              */
-            code?: "not_found" | "design_failed" | "unsupported_language" | "lock-contention" | "language_unset";
+            code?: "not_found" | "design_failed" | "unsupported_language" | "lock-contention" | "clone_protected" | "language_unset";
             /** @description error only. */
             message?: string;
         };
@@ -5060,6 +5069,23 @@ export interface components {
                     };
                 };
             } | null;
+            /**
+             * @description True when a consented cloned voice exists on some OTHER linked
+             *     character in this book's series — false or absent when the only
+             *     clone (if any) is this book's own copy (already exposed via
+             *     overrideTtsVoices.*.provenance) or there is none. Excludes the
+             *     caller's own book deliberately, to avoid a redundant "double
+             *     true" when both this book and a sibling are independently
+             *     cloned. A UX convenience for the two frontend clone gates
+             *     (profile-drawer.tsx, emotion-variant-designer.tsx) — the
+             *     backend's own series-wide checks (#2006) are what actually
+             *     enforce consent; a stale value here degrades to "the button is
+             *     offered when it shouldn't be," never to "the write happens when
+             *     it shouldn't." Computed fresh on every GET — see book-state.ts's
+             *     write-path normalisers for why it must never be accepted back
+             *     from a client PUT.
+             */
+            clonedElsewhereInSeries?: boolean;
             evidence?: {
                 quote?: string;
                 note?: string;
@@ -8652,6 +8678,22 @@ export interface operations {
             };
         };
         responses: {
+            /** @description Applied to at least one linked character, but at least one other linked character was skipped (a residual-window clone, or — pre-existing — a same-book conflict). See `skipped`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        updated: number;
+                        skipped: {
+                            bookDir: string;
+                            characterId: string;
+                            reason: string;
+                        }[];
+                    };
+                };
+            };
             /** @description Override written (or cleared) on every matching cast.json entry */
             204: {
                 headers: {
@@ -8672,6 +8714,22 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Refused entirely — a consented cloned voice exists on this linked character somewhere in the series (or, for a SET, on a different clone-capable engine). No book was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        skipped?: {
+                            bookDir: string;
+                            characterId: string;
+                            reason: string;
+                        }[];
+                    };
+                };
             };
         };
     };

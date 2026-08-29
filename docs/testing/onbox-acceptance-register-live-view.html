@@ -161,6 +161,12 @@
 
   <p class="eyebrow">Castwright · docs/testing/onbox-acceptance-register.md</p>
   <h1>On-box acceptance register</h1>
+
+  <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
+       The counter orders publishes; the id proves which branch produced one.
+       Attributes, not a comment: checkLiveView removes comments before reading. -->
+  <div hidden data-published-as="3" data-publish-id="6238092a7384"></div>
+
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
     analyzer, a real book, a real phone — and that was <strong>not</strong> proven at PR time.
@@ -198,9 +204,56 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-28 (Castwright#2734), 61 → 62</b>, adding row A102 (analyzer GPU-split warning + expected-device mismatch, #2367) — mocked <code>execFile</code>/nvidia-smi covers every automated test, so the real two-GPU split, the once-per-signature server warning, the UI row, and the <code>expectedDevice</code> mismatch wording all still need a genuine 2-card boot. Minted from the <code>next-id</code> floor.
-    <br><b>Previous change: 2026-08-27 (PR #2704), 60 → 61</b>, adding row A101 (Qwen duration golden baseline bless, #1994) — minted from the <code>next-id</code> floor, not the old high-water-plus-one slot (A38), which <code>onbox-sitting-plan.md</code> already uses to mean something else.
-    <br><b>Previous change: 2026-08-27, 60 → 60 (no count change).</b> The Blocked section's
+    <b>Last change: 2026-08-29, merging two independent A102 additions.</b>
+    This branch had added row A102 (analyzer GPU-split warning + expected-device mismatch, #2367, Castwright#2734); <code>origin/main</code> had independently added row A102 (CUDA fallback self-test #2582, PR #2719). Both started from the same post-#2704 state. Reconciled: kept <code>main</code>'s CUDA A102; renumbered this branch's analyzer row to <b>A104</b> (next available after <code>main</code>'s advanced <code>next-id</code> of A103). Combined: 61 (from <code>main</code>, post-A101-discharge via PR #2739) + 1 (this branch's A104, analyzer GPU-split) = <b>62</b>. Group A: 38 + 1 = 39.
+    <br><b>Prior change: 2026-08-28 (Castwright#2734), 61 → 62</b>, adding row A102 (analyzer GPU-split warning + expected-device mismatch, #2367) — mocked <code>execFile</code>/nvidia-smi covers every automated test, so the real two-GPU split, the once-per-signature server warning, the UI row, and the <code>expectedDevice</code> mismatch wording all still need a genuine 2-card boot. Minted from the <code>next-id</code> floor.
+    <br><b>Prior change: 2026-08-28, merging <code>origin/main</code> into <code>fix/sidecar-cuda-fallback-detection</code>.</b>
+    Two independent branch tips reconciled: this branch had added row A102 (CUDA fallback
+    self-test #2582, PR #2719, 61 → 62); <code>main</code> had since discharged row A101
+    (PR #2739, 61 → 60) — the two changes started from the same post-#2704 state and never
+    saw each other. Combined: 60 (post-A101-discharge) + 1 (A102, still live) = <b>61</b>.
+    Group A likewise nets to 38 (37 + A102). <code>next-id</code> stays at A103 (unaffected
+    by A101's discharge, since IDs are allocated once and never reused).
+    <br><b>Prior change: 2026-08-28, 61 → 62 via PR #2719</b>, adding row A102 (CUDA fallback self-test #2582) — minted from the <code>next-id</code> floor; an earlier commit on this branch briefly mis-minted this as A38, a dangling ID reserved by <code>onbox-sitting-plan.md</code>, corrected before merge.
+    <br><b>Prior change: 2026-08-28 (PR #2739), 61 → 60.</b> Row A101 (Qwen duration golden baseline bless,
+    #1994) fully discharged and dropped: measured the real per-line duration spread on this
+    box (RTX 5070 Ti, <code>QWEN_DEVICE=cuda:1</code>) via a new ad-hoc script
+    (<code>server/tts-sidecar/tests/golden/measure_qwen_duration_spread.py</code>), voice
+    <code>cw_gpu_17b</code>, N=10 repeated syntheses per <code>qwen-duration-fixture.json</code>
+    line. Observed per-line max fractional deviation from its own mean: <code>narrator-plain</code>
+    9.0% (mean 2.936s, stdev 0.143s), <code>numbers-and-year</code> 12.2% (mean 5.192s, stdev
+    0.309s), <code>abbreviations</code> 22.4% — the observed max — (mean 4.184s, stdev 0.385s),
+    <code>quotes-and-punctuation</code> 13.0% (mean 3.752s, stdev 0.321s),
+    <code>multi-sentence-group</code> 19.9% (mean 4.696s, stdev 0.498s). Hand-set
+    <code>qwen-duration-baseline.json</code>'s <code>tolerance</code> to <b>0.30</b> (measured
+    max 22.4% plus ~34% headroom) from this measurement. <code>_bless</code>
+    (<code>test_qwen_duration_golden.py</code>) blesses the MEAN of <code>BLESS_REPS=5</code>
+    repeated real syntheses per line as the reference, not a single draw, so the blessed value
+    is a stable estimate of the true mean — matching what <code>tolerance</code> was derived
+    to bound. Raw N=10 spread measurement retained at
+    <code>server/tts-sidecar/tests/golden/spread-report.json</code>. Observed by Claude Code
+    (dudarenok-maker), 2026-08-28. A101 is retired, not reused.
+    <br><br><b>Known limitation, accepted 2026-08-28 (repo owner, ship-as-is decision).</b>
+    Independent verification during PR #2739's review found the real duration distribution
+    can drift beyond what this single on-box measurement session characterized: a second,
+    separate on-box run (23 fresh syntheses, same GPU and voice) measured every line's fresh
+    mean <b>6.8%–21% above</b> the committed <code>spread-report.json</code>'s means, all five
+    lines shifted the same direction. That is between-session drift, not the within-session
+    noise <code>tolerance</code>'s derivation accounted for, and it raises this opt-in check's
+    spurious-failure rate above the ~2% within-session-only estimate by an amount that is
+    itself session-dependent — a fixed point estimate here goes stale on every re-bless
+    (review-round-3 finding: an earlier version of this note quoted a fixed ~3.65%/run figure
+    computed against <code>entries</code> this same PR round then re-blessed). Re-derive the
+    estimate from the CURRENT <code>qwen-duration-baseline.json</code> entries and
+    <code>spread-report.json</code> if a precise number is needed.
+    <code>tolerance</code> ships unchanged rather
+    than widened further or re-measured across multiple sessions — see
+    <a href="https://github.com/dudarenok-maker/Castwright/issues/2742">#2742</a> for the
+    related but distinct open design decision (assert-time averaging to tighten the gate's
+    power against a real regression, which a wider tolerance alone would make worse, not
+    better).
+    <br><b>Prior change: 2026-08-27 (PR #2704), 60 → 61</b>, adding row A101 (Qwen duration golden baseline bless, #1994) — minted from the <code>next-id</code> floor, not the old high-water-plus-one slot (A38), which <code>onbox-sitting-plan.md</code> already uses to mean something else.
+    <br><b>Prior change: 2026-08-27, 60 → 60 (no count change).</b> The Blocked section's
     two ffmpeg rows no longer carry row IDs. They had borrowed E6 and E8 from the live
     Group E sequence, so each of those IDs named <i>two</i> rows — one live Group E row
     and one Blocked row — and Group E renumbers underneath the Blocked section whenever
@@ -866,15 +919,21 @@
         <p class="src">A Coqui-capable sidecar with XTTS resident, a Russian line (no clone needed — the stock catalogue voice <code>Damien Black</code> reproduces this shape) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2059">#2059</a> · criteria: the bullet above — #2059 itself has only this one dialogue shape and no separate run sheet (unlike A31's) · short — one or two renders of a Russian test sentence</p>
       </div>
     </details>
+
     <details class="item">
-      <summary><span class="num">A101</span><span class="iname">Qwen duration golden baseline needs its real per-line spread measured before blessing</span><span class="risk">single 8 GB card, a designed Qwen voice already present</span><span class="chev">›</span></summary>
+      <summary><span class="num">A102</span><span class="iname">CUDA self-test on real ORT session detects Kokoro CPU fallback</span><span class="risk">single 8 GB card, live Kokoro sidecar with real ORT session</span><span class="chev">›</span></summary>
       <div class="body">
-        <p><code>server/tts-sidecar/tests/golden/qwen-duration-baseline.json</code> ships UNBLESSED — the test file (<code>test_qwen_duration_golden.py</code>) is real, but the baseline has empty <code>entries</code> and a placeholder <code>tolerance</code>, so the opt-in golden gate SKIPs until it is blessed. Qwen decoding is stochastic with no seed, so the true per-line <code>duration_sec</code> spread across repeated syntheses of each <code>qwen-duration-fixture.json</code> line is the missing number: <code>tolerance</code> must be <b>derived from that measured spread</b> (with headroom), not picked, then blessed. This closes the #1994 A-grade visibility gap the scaffold was written for.</p>
-        <p class="src">single 8 GB card, a designed Qwen voice already present · <a href="https://github.com/dudarenok-maker/Castwright/issues/1994">#1994</a> · criteria: the bullet above · short — N repeated syntheses of the fixture on a real box, capture the per-line spread, derive tolerance, bless</p>
+        <p>PR #2719's <code>_cuda_selftest_or_warn</code> method (<code>server/tts-sidecar/main.py</code>) inspects the real ORT <code>InferenceSession</code> returned by Kokoro's first load and checks whether CUDA was requested but the session landed on CPU instead. The verification result (<code>cuda_verified</code>, <code>cuda_verification_detail</code>) rides the existing <code>_ensure_loaded</code> load at the <code>from_session</code> code path and is surfaced through <code>/health</code> → <code>/api/info</code> → the device-panel amber warning in the UI. Unit tests mock <code>InferenceSession</code> and cannot prove the mechanism against a genuine CUDA→CPU degradation on real hardware.</p>
+        <ul>
+          <li><b>Self-test fires at the real load boundary.</b> On first Kokoro load via the real <code>_ensure_loaded</code>/<code>from_session</code> path (during a chapter render or <code>PRELOAD_KOKORO</code> warm-up), confirm <code>/health</code>'s top-level <code>cuda_verified</code> field is populated with one of three values: <code>true</code> (CUDA was requested and landed), <code>false</code> (CUDA was requested but landed on CPU), or <code>null</code> (CUDA was not requested for this load).</li>
+          <li><b>CUDA fallback detection on real CUDA unavailability.</b> Force a real CUDA→CPU fallback using the same missing-<code>nvidia-cudnn-cu12</code> gap A33 and A28 already use to force CPU-only providers. Load Kokoro and confirm <code>/health</code>'s <code>cuda_verified === false</code> (CUDA was requested but did not land), the log shows the warning <em>"Kokoro CUDA self-test: CUDAExecutionProvider was requested but did not land …"</em> (Castwright#2709), and <code>/api/info</code>'s <code>cudaVerified</code> field reads <code>false</code>. Confirm the device-panel UI renders the amber warning <em>"GPU acceleration was configured for Kokoro, but it's running on CPU instead."</em></li>
+          <li><b>Silent verification when CUDA genuinely succeeds.</b> On a box with working CUDA support, load Kokoro and confirm <code>/health</code>'s <code>cuda_verified === true</code> (CUDA was requested and landed), that the log contains NO CUDA self-test warning message, and the device-panel warning stays absent. When CUDA was not requested for the load, <code>/health</code>'s <code>cuda_verified === null</code>; this is not a failure state and no warning should appear.</li>
+        </ul>
+        <p class="src">a single 8 GB GPU, a live Kokoro-capable sidecar, and a real ORT session accessible during <code>_ensure_loaded</code> · <a href="https://github.com/dudarenok-maker/Castwright/issues/2582">#2582</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/2719">PR #2719</a> · no separate run sheet; mechanism is integrated into Kokoro's existing health reporting · short — one Kokoro load with CPU-forced providers, one with CUDA working (or default unforced), and UI verification</p>
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A102</span><span class="iname">Analyzer GPU-split warning fires (and stays silent) correctly on real nvidia-smi output</span><span class="risk">two NVIDIA GPUs of different sizes</span><span class="chev">›</span></summary>
+      <summary><span class="num">A104</span><span class="iname">Analyzer GPU-split warning fires (and stays silent) correctly on real nvidia-smi output</span><span class="risk">two NVIDIA GPUs of different sizes</span><span class="chev">›</span></summary>
       <div class="body">
         <p><code>detectOllamaGpuSplit()</code> (<code>server/src/gpu/ollama-gpu-split.ts</code>) shells out to real <code>nvidia-smi --query-compute-apps</code>/<code>--query-gpu</code> and every automated test here mocks <code>execFile</code>, so none of it has run against a real two-GPU box. Same open shape as the rest of this register: the parse/threshold logic is pinned in isolation, but never against genuine multi-GPU <code>nvidia-smi</code> output. Load a model oversized for one card but not both, confirm <code>split: true</code> / correct <code>deviceIndices</code> / <code>wouldFitSingleDevice: true</code>, confirm the server log warns once per signature and the Advanced Configuration row shows it; repeat with a model genuinely too big for any single card and confirm no warning fires anywhere; with <code>analyzer.ollama.expectedDevice</code> set to a contradicted GPU index, confirm the UI sharpens into the named-mismatch wording.</p>
         <p class="src">two NVIDIA GPUs of different sizes, a local Ollama daemon, and a model sized to force a genuine split · <a href="https://github.com/dudarenok-maker/Castwright/issues/2367">#2367</a> · criteria: Castwright#2734 (the verify child for this chain) checklist item 6; the four task briefs under #2367 for the exact behaviour each piece owns · short — one oversized load that splits, one genuinely-too-big load that doesn't, one expectedDevice mismatch check</p>
@@ -1520,7 +1579,7 @@
   <footer>
     <p><b>Deliberately not in this register:</b> <a href="https://github.com/dudarenok-maker/Castwright/issues/1826">#1826</a> (its bar is an automated interleaving regression test, not a manual walkthrough) · <a href="https://github.com/dudarenok-maker/Castwright/issues/964">#964</a> (fs-48 Fish Audio) and <a href="https://github.com/dudarenok-maker/Castwright/issues/1334">#1334</a> (fs-73 Cast Pass), parked or unbuilt — pre-implementation criteria, not debt on shipped code · <a href="https://github.com/dudarenok-maker/Castwright/issues/819">#819</a>, <code>moscow:wont</code> · archived plans whose prose still says “owed” but whose debt was discharged via a separate un-cross-referenced issue (210/#752, 214/#397, 219/#823, 193/#476, 181/#1670/#927/#515/#517).</p>
     <p>This register is for <b>manual, hardware-dependent verification of shipped code</b>. Automated-test gaps belong in the plan's test section or an issue.</p>
-    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-28</b> against branch <code>chore/server-2367-analyzer-gpu-split-warning</code> (Castwright#2734: added row A102 for #2367's analyzer GPU-split warning + expected-device mismatch, minted from the stable-ID <code>next-id</code> floor). Full sync history is this file's git log, not this page.</p>
+    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-29</b> against merge of <code>chore/server-2367-analyzer-gpu-split-warning</code> into <code>origin/main</code>: two independent A102 additions reconciled by keeping <code>main</code>'s CUDA fallback self-test (PR #2719, row A102) and renumbering this branch's analyzer GPU-split warning to row A104 (Castwright#2734, #2367). Also includes A101's discharge via PR #2739 (Qwen duration tolerance measurement and blessing completed). Full sync history is this file's git log, not this page.</p>
   </footer>
 
 </div>

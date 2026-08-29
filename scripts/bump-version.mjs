@@ -260,12 +260,14 @@ function npm(args, opts = {}) {
       stdio: 'inherit',
       encoding: 'utf8',
       shell: true,
+      windowsHide: true,
     });
   }
   return execFileSync('npm', args, {
     cwd: opts.cwd ?? repoRoot,
     stdio: 'inherit',
     encoding: 'utf8',
+    windowsHide: true,
   });
 }
 

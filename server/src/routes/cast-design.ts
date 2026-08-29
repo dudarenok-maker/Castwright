@@ -47,7 +47,11 @@ import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import type { Emotion } from '../handoff/schemas.js';
 import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant, ensureCharacterVoiceUuid } from './qwen-voice.js';
 import { sampleScopeForCharacter } from '../tts/voice-sample-cache.js';
-import { applyOverrideToCastFiles } from './voices.js';
+import {
+  applyOverrideToCastFiles,
+  findClonedVoiceIdsAmongMatches,
+  hasClonedSlotAmongMatches,
+} from './voices.js';
 import { characterHasClonedSlot } from '../tts/clone-engines.js';
 import { resolvePersonaEngine, generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
@@ -359,6 +363,28 @@ async function runDesignJob(
     return;
   }
 
+  /* #2718 review round 1 — the per-character `hasClonedSlotAmongMatches`
+     calls below each re-walk the WHOLE series when `seriesFilter` is set,
+     even though `findClonedVoiceIdsAmongMatches` exists specifically to
+     answer this in ONE batched walk instead of O(characters × books)
+     (see that function's own header). Precomputed once, up front, so both
+     branches below do an O(1) Set lookup per character instead. Same
+     staleness tradeoff this PR already accepts everywhere else: a clone
+     appearing on a later book mid-sweep is still caught by the write-time
+     residual-window backstop inside applyOverrideToCastFiles /
+     persistEmotionVariant, so a stale upfront scan here costs at most one
+     wasted GPU design call, never a silently-persisted clobber. Left as a
+     per-book `hasClonedSlotAmongMatches` call below when `seriesFilter` is
+     absent — that scan is already onlyBookDir-restricted (fs-61) and cheap
+     regardless of how many characters this loop visits. */
+  const seriesClonedVoiceIds = seriesFilter
+    ? await findClonedVoiceIdsAmongMatches(seriesFilter)
+    : null;
+  const clonedOnLinkedBook = (character: CastCharacter): Promise<boolean> | boolean =>
+    seriesClonedVoiceIds
+      ? seriesClonedVoiceIds.has(character.voiceId ?? character.id)
+      : hasClonedSlotAmongMatches(character.voiceId ?? character.id, seriesFilter, undefined, job.bookDir);
+
   for (const task of tasks) {
     if (job.controller.signal.aborted) break;
     const { characterId, emotion } = task;
@@ -399,7 +425,7 @@ async function runDesignJob(
          character and report it — refusing the whole sweep would let one
          cloned character block designing the rest; retargeting is the
          defect itself. */
-      if (characterHasClonedSlot(character)) {
+      if (characterHasClonedSlot(character) || (await clonedOnLinkedBook(character))) {
         job.skipped += 1;
         job.clonedSkips.push({ characterId, name: character.name ?? characterId });
         broadcast(job, {
@@ -427,7 +453,10 @@ async function runDesignJob(
          Reported through the existing `clonedSkips` channel, which the UI
          already renders as "already cloned: <names>"
          (src/store/cast-design-stream-middleware.ts). */
-      if (characterHasClonedSlot(character)) {
+      /* #2006 Task 8 — upgraded to the same series-wide fresh check the base
+         branch above uses (GATE 2 fix-lane-1b): a clone on a linked sibling
+         book must refuse this character too, not just a clone on this book. */
+      if (characterHasClonedSlot(character) || (await clonedOnLinkedBook(character))) {
         job.skipped += 1;
         job.clonedSkips.push({ characterId, name: character.name ?? characterId });
         broadcast(job, {
@@ -541,21 +570,53 @@ async function runDesignJob(
                ONLY this book instead of sweeping every book in the workspace
                sharing the same bare character id (e.g. "narrator"). */
             const matchKey = character.voiceId ?? character.id;
-            await applyOverrideToCastFiles(
+            const { updated, skipped } = await applyOverrideToCastFiles(
               matchKey,
               { engine: 'qwen', name: voiceId },
               seriesFilter,
               job.bookDir,
             );
-            job.done += 1;
-            broadcast(job, { type: 'character_designed', characterId, voiceId });
+            /* Series-wide veto, mirroring the variant branch's own clone-skip
+               reporting below: a cloned slot exists somewhere in the scope,
+               caught fresh at write time (residual window after the upfront
+               check above). Report it through the same clonedSkips channel
+               the UI already renders, rather than discarding the outcome or
+               failing the whole character. */
+            if (updated === 0 && skipped.length > 0) {
+              job.skipped += 1;
+              job.clonedSkips.push({ characterId, name: character.name ?? characterId });
+              broadcast(job, {
+                type: 'character_skipped',
+                characterId,
+                name: character.name ?? characterId,
+                reason: 'already_cloned',
+              });
+            } else {
+              job.done += 1;
+              broadcast(job, { type: 'character_designed', characterId, voiceId });
+            }
           } else {
             /* Variant path — record the slot and propagate it across the
                series (linked cast), the same scope the base voice uses. */
-            await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesFilter);
-            job.done += 1;
-            broadcast(job, { type: 'variant_designed', characterId, emotion, voiceId,
-              ...(fellBackToDesignVoice ? { viaFallback: true, fallbackReason } : {}) });
+            const outcome = await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesFilter);
+            if (outcome === 'skippedClone') {
+              job.skipped += 1;
+              job.clonedSkips.push({ characterId, name: character.name ?? characterId });
+              broadcast(job, {
+                type: 'character_skipped',
+                characterId,
+                name: character.name ?? characterId,
+                reason: 'already_cloned',
+              });
+            } else {
+              /* 'applied' AND 'notFound' both reach here, deliberately — same
+                 pre-existing disposition as the JSON route (Task 7): 'notFound'
+                 is a genuinely empty write, not a refusal, and reported no
+                 differently than it always was before this task. */
+              job.done += 1;
+              broadcast(job, { type: 'variant_designed', characterId, emotion, voiceId,
+                ...(fellBackToDesignVoice ? { viaFallback: true, fallbackReason } : {}) });
+            }
           }
           break;
         } catch (e) {

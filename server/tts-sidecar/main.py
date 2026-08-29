@@ -3238,7 +3238,61 @@ class KokoroEngine(Engine):
             pass
         return kokoro
 
+    def _cuda_selftest_or_warn(self, session: Any, build_providers: list[str]) -> None:
+        """Castwright#2709: real-session CUDA self-test, modeled on
+        `_directml_selftest_or_fallback` above -- same "inspect the session
+        that's already been built" idiom, warn-and-continue severity (never
+        raise, never rebuild). Rides the load `_ensure_loaded` is already
+        doing; does not trigger any additional load of its own, and must
+        never be called from `_run_device_probe`/`_start_device_probe` (that
+        would force every box to eagerly load Kokoro's weights even with
+        PRELOAD_KOKORO=0, the documented default).
+
+        `build_providers` is the exact provider list THIS load just built the
+        session with (reused, not re-derived, matching `_ensure_loaded`'s own
+        "no second decision" discipline elsewhere in this method)."""
+        global _cuda_verification_state
+        if "CUDAExecutionProvider" not in build_providers:
+            # CUDA wasn't requested for this load -- not applicable, not a
+            # failure. Leave verified=None rather than manufacturing a
+            # confident answer to a question that wasn't asked.
+            _cuda_verification_state = {
+                "verified": None,
+                "detail": "CUDA was not requested for this load.",
+            }
+            return
+        try:
+            actual_providers = list(session.get_providers())
+        except Exception:
+            log.exception("Failed to read the real session's providers")
+            _cuda_verification_state = {
+                "verified": None,
+                "detail": "Could not read the real session's providers (API error or kokoro-onnx drift).",
+            }
+            return
+        # Correctly check if CUDA actually landed (not just that CPU wasn't first).
+        # Empty provider list or non-CUDA providers (DirectML, etc.) mean CUDA
+        # did not land, even though it was requested above.
+        cuda_landed = "CUDAExecutionProvider" in actual_providers
+        if cuda_landed:
+            _cuda_verification_state = {
+                "verified": True,
+                "detail": None,
+            }
+        else:
+            # CUDA was requested (guarded by the early return above) but did not
+            # land in the real session. Log and record the failure.
+            detail = (
+                "CUDAExecutionProvider was requested but did not land in the real session."
+            )
+            log.warning("Kokoro CUDA self-test: %s (Castwright#2709)", detail)
+            _cuda_verification_state = {
+                "verified": False,
+                "detail": detail,
+            }
+
     def _ensure_loaded(self, model: str, device: Optional[str] = None) -> None:
+        global _cuda_verification_state
         if self._kokoro is not None:
             return
         # Capacity-aware placement (task 2, vram-aware-placement plan): a
@@ -3396,6 +3450,14 @@ class KokoroEngine(Engine):
                 session_kwargs["provider_options"] = provider_options
             session = rt.InferenceSession(self._model_path, **session_kwargs)
             kokoro = Kokoro.from_session(session, self._voices_path)
+            self._cuda_selftest_or_warn(session, build_providers)
+            # NOTE: _cuda_verification_state is published here, but self._kokoro
+            # is not set until line 3530, creating a narrow window where the state
+            # reflects a verdict for a load that hasn't fully completed yet. A
+            # concurrent unload() racing this exact window is a known, unaddressed
+            # edge case with low real-world reachability (requires hand-set
+            # CUDA+DirectML provider lists to matter; unload's #12 fix already
+            # ensures stale state is cleared going forward).
             if provider_options is not None:
                 log.info(
                     "Kokoro pinned to %s via provider device_id (session built once).",
@@ -3410,6 +3472,24 @@ class KokoroEngine(Engine):
                     "resolved providers=%s.",
                     build_providers,
                 )
+                # Record CUDA fallback if CUDA was requested but the API-drift
+                # path forces CPU regardless (#2582: confirmed fallback, not just
+                # silent one). This is a different cause than
+                # `_cuda_selftest_or_warn`'s "session inspection revealed CPU",
+                # so detail text must be distinguishable.
+                if "CUDAExecutionProvider" in build_providers:
+                    detail = (
+                        "An internal API drift issue in Kokoro (from_session method unavailable) "
+                        "always forces CPU, despite CUDA being requested."
+                    )
+                    _cuda_verification_state = {
+                        "verified": False,
+                        "detail": detail,
+                    }
+            else:
+                # No providers were requested (build_providers is empty);
+                # _cuda_verification_state stays at its default (not applicable).
+                pass
             kokoro = Kokoro(self._model_path, self._voices_path)
 
         # Enumerate the voice manifest. The API has drifted across kokoro-
@@ -3522,6 +3602,16 @@ class KokoroEngine(Engine):
         # __init__ avoids reintroducing a value that reads as a real
         # placement if that gate is ever loosened.
         self._resolved_device = None
+        global _cuda_verification_state
+        # Clear CUDA verification state to avoid stale reads across unload/reload
+        # cycles (#2719). The next load's _ensure_loaded will re-run the self-test
+        # and repopulate with the current load's actual state, so a stale verified=True
+        # or verified=False from a previous load does not leak into /health or other
+        # callers until the new load's verification is fresh.
+        _cuda_verification_state = {
+            "verified": None,
+            "detail": None,
+        }
         log.info("Kokoro model unloaded.")
 
     def synthesize(self, model: str, voice: str, text: str, language: Optional[str] = None) -> SynthResult:
@@ -6804,7 +6894,13 @@ class QwenEngine(Engine):
         # entirely; the only real ordering requirement — evict-before-load —
         # still holds, since the 1.7B-Base load happens later in this same
         # function, still inside the block below.
-        if self._design is not None:
+        #
+        # #2678 — Tradeoff: the widened guard (below) includes `_design_in_flight.busy`,
+        # so if mint_variant arrives while VoiceDesign is in flight, `unload_design()` waits
+        # (bounded by 150s) for the design to finish (the full design_voice() call, not just
+        # the model load) before evicting. This undoes the "kept warm across a cast-review
+        # session" behavior in favor of preventing render stalls during heavyweight design runs.
+        if self._design is not None or self._design_in_flight.busy:
             log.info("Evicting resident Qwen VoiceDesign to free VRAM for 1.7B-Base mint.")
             self.unload_design()
         with _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx()), self._base17_activity(), _VD_KOKORO.design():
@@ -7238,10 +7334,16 @@ class QwenEngine(Engine):
         # Leaving design mode: a real synth means generation/sampling, not
         # designing — free the heavy VoiceDesign model so it can't squeeze
         # generation VRAM. Auditions inside design_voice use _base directly
-        # (not synthesize), so the design→refine loop stays warm. No-op once
-        # freed. Must precede any _synth_lock acquire (unload_design takes that
+        # (not synthesize), so the design→refine loop stays warm. Also handles
+        # the case where design_voice() is in flight: `unload_design()` waits
+        # (bounded by 150s) for `_design_in_flight` to clear (the full
+        # design_voice() call, not just the model load) before evicting. This
+        # tradeoff costs warm-reuse across a cast-review session for any render
+        # arriving mid-design, but it keeps render from starving during
+        # heavyweight audition runs (#2678). No-op once freed.
+        # Must precede any _synth_lock acquire (unload_design takes that
         # lock; it is non-reentrant).
-        if self._design is not None:
+        if self._design is not None or self._design_in_flight.busy:
             self.unload_design()
 
         if model == "1.7b":
@@ -7352,9 +7454,13 @@ class QwenEngine(Engine):
         # so a uniform batch guard is materially more complex. Deferred to a
         # follow-up; the single-synth path is guarded.
         # See synthesize(): a real batch synth means generation, so free the
-        # transient VoiceDesign model first (no-op once freed). Before any
-        # _synth_lock acquire — the lock is non-reentrant.
-        if self._design is not None:
+        # transient VoiceDesign model first. Like synthesize(), also handles
+        # design_voice() in flight: `unload_design()` waits (bounded by 150s)
+        # for `_design_in_flight` to clear (the full design_voice() call, not
+        # just the model load) before evicting (trading warm-reuse for
+        # generation isolation #2678). No-op once freed. Before any _synth_lock
+        # acquire — the lock is non-reentrant.
+        if self._design is not None or self._design_in_flight.busy:
             self.unload_design()
         if not items:
             raise RuntimeError("synthesize_batch called with no items.")
@@ -7814,6 +7920,11 @@ class WhisperEngine:
         if self._model is None:
             return False
         self._model = None
+        # Restore the env pref (mirrors CoquiEngine/#1730 gap-3, KokoroEngine/#2631
+        # S4): `_ensure_loaded` overwrote `self._device` with the resolved card
+        # on a CPU admission, so a later reload must re-resolve from the
+        # ORIGINAL request, not stick on the last admitted card.
+        self._device = self._requested_device
         return True
 
     def _reclaim_after_drop(self) -> None:
@@ -9589,6 +9700,23 @@ def _qwen_install_state(qwen_loaded: bool) -> str:
 _device_probe: dict[str, Optional[str]] = {"kokoro": None, "coqui": None, "qwen": None}
 _device_probe_state: str = "pending"  # 'pending' | 'ready' | 'error'
 
+# Castwright#2709: real-session CUDA self-test result, KOKORO-ONLY. Measures
+# whether Kokoro's ORT session successfully landed on CUDA, distinct from
+# `_device_probe` (an availability-only prediction made at startup, before
+# any real session exists) and distinct from other engines (Qwen, Coqui,
+# Whisper) which may have different CUDA outcomes. Populated the first time
+# `_ensure_loaded` actually constructs a Kokoro session that requested CUDA
+# (first real synth call, or PRELOAD_KOKORO=1's eager preload) -- never by
+# the background device probe, which must not force an eager load.
+# `verified=None` is the expected, honest steady-state on a box that never
+# triggers a Kokoro load. A caller checking overall box GPU health should NOT
+# treat `cuda_verified: true` as proof every engine is on GPU — only Kokoro's
+# placement is certified here.
+_cuda_verification_state: dict[str, Any] = {
+    "verified": None,
+    "detail": None,
+}
+
 
 def _torch_is_hip(torch_module: Any) -> bool:
     """True when torch is a ROCm/HIP build (torch.version.hip set). On AMD the
@@ -10021,6 +10149,13 @@ def health() -> dict[str, Any]:
         "devices_state": _device_probe_state,
         "device": device,
         "poisoned": poisoned,
+        # Castwright#2709: real-session CUDA self-test result, KOKORO-ONLY
+        # (distinct from `devices`/`gpus`, which are availability predictions
+        # or per-request `stale_reason` badges). Measures Kokoro's ORT session
+        # only; other engines (Qwen, Coqui) may have different CUDA outcomes.
+        # None/None until the first real Kokoro load actually requests CUDA.
+        "cuda_verified": _cuda_verification_state["verified"],
+        "cuda_verification_detail": _cuda_verification_state["detail"],
         # `poison_reason` (raw exception text) is deliberately NOT surfaced here —
         # it would leak a stack-trace fragment to any /health caller (CodeQL
         # py/stack-trace-exposure). The trigger lives in the server-side log +
