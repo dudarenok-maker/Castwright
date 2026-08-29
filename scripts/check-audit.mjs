@@ -95,23 +95,43 @@ export function collectAdvisoryIds(entry) {
 
 /**
  * A waiver is expired when its `expiry` (YYYY-MM-DD) is earlier than today
- * (UTC). Malformed/missing expiry never expires - a bad entry still fails, but
- * via loading-time validation rather than by silently ignoring it.
+ * (UTC). Fail-closed: any missing, non-string, or malformed expiry is treated
+ * as expired (invalid). This ensures waivers cannot silently persist forever
+ * due to malformed dates or missing fields. Validate calendar dates strictly
+ * to catch auto-rollover (e.g., month 13 or day 45).
  */
 export function isExpired(waiver, today = new Date()) {
-  if (!waiver || typeof waiver.expiry !== 'string') return false;
+  // Fail-closed: missing waiver or missing/non-string expiry = expired
+  if (!waiver || typeof waiver.expiry !== 'string') return true;
+
+  // Parse the expiry date string with strict validation
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(waiver.expiry);
-  if (!m) return false;
-  const expiry = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  const now = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
-  return expiry < now;
+  if (!m) return true; // Malformed: does not match YYYY-MM-DD format
+
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+
+  // Validate that the parsed components represent a valid calendar date
+  // by constructing a Date and verifying it round-trips back to the same values.
+  // This catches invalid dates like 2026-13-45 where JS Date would auto-rollover.
+  const expiry = new Date(Date.UTC(year, month - 1, day));
+  if (expiry.getUTCFullYear() !== year ||
+      expiry.getUTCMonth() !== month - 1 ||
+      expiry.getUTCDate() !== day) {
+    return true; // Invalid calendar date (auto-rollover detected)
+  }
+
+  // Compare: expiry must be strictly AFTER today to be valid (not yet expired)
+  const now = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  return expiry <= now; // Expired if expiry is today or earlier
 }
 
 /**
  * Cross-check the audit report against the waiver list.
  *
  * @param {Record<string, any>} vulnerabilities  npm audit's `vulnerabilities`
- * @param {Array<{ghsaId:string,expiry:string}>} waivers
+ * @param {Array<{ghsaId:string,package:string,expiry:string}>} waivers
  * @returns {{missing: {package:string, advisories:string[]}[], expired: string[]}}
  */
 export function gateFailures(vulnerabilities, waivers) {
@@ -120,10 +140,11 @@ export function gateFailures(vulnerabilities, waivers) {
     .map((w) => (w && typeof w.ghsaId === 'string' ? w.ghsaId : '(blank/unknown ghsaId)'));
   // An expired waiver is treated as if it does not exist: the advisory it once
   // covered is unwaived again until the waiver is renewed with a fresh look.
-  const active = new Set(
+  // Build a map of {ghsaId}_{package} for active waivers to match both fields.
+  const active = new Map(
     waivers
-      .filter((w) => w && typeof w.ghsaId === 'string' && !isExpired(w))
-      .map((w) => w.ghsaId),
+      .filter((w) => w && typeof w.ghsaId === 'string' && typeof w.package === 'string' && !isExpired(w))
+      .map((w) => [`${w.ghsaId}|${w.package}`, true]),
   );
 
   const missing = [];
@@ -136,7 +157,10 @@ export function gateFailures(vulnerabilities, waivers) {
       missing.push({ package: pkg, advisories: [] });
       continue;
     }
-    const unwaived = advisories.filter((id) => !active.has(id));
+    // For each advisory, check if there's an active waiver for this specific
+    // package. Extract the base package name (strip @version specifier).
+    const pkgBase = pkg.split('@')[0] || pkg;
+    const unwaived = advisories.filter((id) => !active.has(`${id}|${pkgBase}`));
     if (unwaived.length > 0) missing.push({ package: pkg, advisories: unwaived });
   }
   return { missing, expired };
@@ -191,10 +215,56 @@ export function parseAuditOutput(stdout) {
   return vulns && typeof vulns === 'object' ? vulns : {};
 }
 
+/**
+ * Load and validate waivers. Each entry must be an object with:
+ *   ghsaId (string): the GHSA advisory id
+ *   package (string): the package name the waiver applies to
+ *   reason (string): justification for the waiver
+ *   expiry (string): YYYY-MM-DD date when the waiver expires
+ *
+ * Fail closed: any entry missing required fields or with a malformed expiry
+ * causes the entire waivers file to be rejected.
+ */
 export function loadWaivers(file = WAIVERS_FILE) {
   if (!existsSync(file)) return [];
   const parsed = JSON.parse(readFileSync(file, 'utf8'));
   if (!Array.isArray(parsed)) throw new Error(`${file} must be an array of {ghsaId, package, reason, expiry}`);
+
+  // Validate each entry - fail closed if any entry is malformed
+  for (let i = 0; i < parsed.length; i++) {
+    const entry = parsed[i];
+    if (!entry || typeof entry !== 'object') {
+      throw new Error(`${file} entry ${i} is not an object`);
+    }
+    if (typeof entry.ghsaId !== 'string' || !entry.ghsaId) {
+      throw new Error(`${file} entry ${i} missing or invalid ghsaId`);
+    }
+    if (typeof entry.package !== 'string' || !entry.package) {
+      throw new Error(`${file} entry ${i} missing or invalid package`);
+    }
+    if (typeof entry.reason !== 'string' || !entry.reason) {
+      throw new Error(`${file} entry ${i} missing or invalid reason`);
+    }
+    if (typeof entry.expiry !== 'string' || !entry.expiry) {
+      throw new Error(`${file} entry ${i} missing or invalid expiry`);
+    }
+    // Validate expiry format strictly
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(entry.expiry);
+    if (!m) {
+      throw new Error(`${file} entry ${i} expiry '${entry.expiry}' does not match YYYY-MM-DD format`);
+    }
+    // Validate it's a real calendar date (reject auto-rollover)
+    const year = Number(m[1]);
+    const month = Number(m[2]);
+    const day = Number(m[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year ||
+        date.getUTCMonth() !== month - 1 ||
+        date.getUTCDate() !== day) {
+      throw new Error(`${file} entry ${i} expiry '${entry.expiry}' is not a valid calendar date`);
+    }
+  }
+
   return parsed;
 }
 

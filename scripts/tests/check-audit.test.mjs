@@ -48,10 +48,28 @@ test('collectAdvisoryIds: empty/missing via yields empty set', () => {
 test('isExpired: expiry strictly before today (UTC) is expired', () => {
   const today = new Date('2026-08-29T12:00:00Z');
   assert.equal(isExpired({ expiry: '2026-08-28' }, today), true);
-  assert.equal(isExpired({ expiry: '2026-08-29' }, today), false); // same day = not yet
+  assert.equal(isExpired({ expiry: '2026-08-29' }, today), true); // same day = expired
   assert.equal(isExpired({ expiry: '2026-08-30' }, today), false);
-  assert.equal(isExpired({ expiry: 'not-a-date' }, today), false);
-  assert.equal(isExpired({}, today), false);
+});
+
+test('isExpired: missing or malformed expiry is treated as expired (fail-closed)', () => {
+  const today = new Date('2026-08-29T12:00:00Z');
+  // Missing expiry field
+  assert.equal(isExpired({}, today), true);
+  assert.equal(isExpired(null, today), true);
+  assert.equal(isExpired(undefined, today), true);
+  // Non-string expiry
+  assert.equal(isExpired({ expiry: 123 }, today), true);
+  assert.equal(isExpired({ expiry: null }, today), true);
+  assert.equal(isExpired({ expiry: ['2026-08-30'] }, today), true);
+  // Malformed date string
+  assert.equal(isExpired({ expiry: 'not-a-date' }, today), true);
+  assert.equal(isExpired({ expiry: '2026/08/29' }, today), true);
+  assert.equal(isExpired({ expiry: '08-29-2026' }, today), true);
+  // Invalid calendar date (auto-rollover detection)
+  assert.equal(isExpired({ expiry: '2026-13-01' }, today), true); // month 13
+  assert.equal(isExpired({ expiry: '2026-08-45' }, today), true); // day 45
+  assert.equal(isExpired({ expiry: '2026-02-30' }, today), true); // Feb 30 doesn't exist
 });
 
 test('gateFailures: clean report passes with no waivers', () => {
@@ -88,7 +106,7 @@ test('gateFailures: flags unwaived high advisory', () => {
   ]);
 });
 
-test('gateFailures: active waiver covers its GHSA', () => {
+test('gateFailures: active waiver covers its GHSA and package', () => {
   const vulns = {
     'react-router@8': {
       severity: 'high',
@@ -99,6 +117,21 @@ test('gateFailures: active waiver covers its GHSA', () => {
   const { missing, expired } = gateFailures(vulns, waivers);
   assert.deepEqual(expired, []);
   assert.deepEqual(missing, []);
+});
+
+test('gateFailures: waiver with matching GHSA but wrong package does not cover the advisory', () => {
+  const vulns = {
+    'react-router@8': {
+      severity: 'high',
+      via: [{ source: 999111, url: 'https://github.com/advisories/GHSA-7jn1-qqq4-99gw', title: 'ReDoS' }],
+    },
+  };
+  // Waiver is for a different package, even though the GHSA matches
+  const waivers = [{ ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'lodash', reason: 'false positive', expiry: '2099-01-01' }];
+  const { missing, expired } = gateFailures(vulns, waivers);
+  assert.deepEqual(expired, []);
+  // The advisory should NOT be waived because the package doesn't match
+  assert.deepEqual(missing, [{ package: 'react-router@8', advisories: ['GHSA-7jn1-qqq4-99gw'] }]);
 });
 
 test('gateFailures: expired waiver no longer covers its GHSA and is reported', () => {
@@ -121,15 +154,70 @@ test('gateFailures: high severity with no attributable advisory fails closed', (
   assert.deepEqual(missing, [{ package: 'mystery@1', advisories: [] }]);
 });
 
-test('loadWaivers: parses an array and rejects a non-array', () => {
+test('loadWaivers: parses a valid array and rejects a non-array', () => {
   const dir = mkdtempSync(join(tmpdir(), 'check-audit-waivers-'));
   try {
     const good = join(dir, 'good.json');
-    writeFileSync(good, JSON.stringify([{ ghsaId: 'GHSA-x', expiry: '2099-01-01' }]));
-    assert.deepEqual(loadWaivers(good), [{ ghsaId: 'GHSA-x', expiry: '2099-01-01' }]);
+    writeFileSync(good, JSON.stringify([
+      { ghsaId: 'GHSA-x', package: 'lodash', reason: 'dismissed', expiry: '2099-01-01' }
+    ]));
+    assert.deepEqual(loadWaivers(good), [
+      { ghsaId: 'GHSA-x', package: 'lodash', reason: 'dismissed', expiry: '2099-01-01' }
+    ]);
     const bad = join(dir, 'bad.json');
     writeFileSync(bad, '{"not":"an array"}');
     assert.throws(() => loadWaivers(bad), /must be an array/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadWaivers: rejects entries with missing required fields', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'check-audit-waivers-'));
+  try {
+    // Missing ghsaId
+    let f = join(dir, 'missing-ghsa.json');
+    writeFileSync(f, JSON.stringify([{ package: 'lodash', reason: 'ok', expiry: '2099-01-01' }]));
+    assert.throws(() => loadWaivers(f), /missing or invalid ghsaId/);
+
+    // Missing package
+    f = join(dir, 'missing-package.json');
+    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', reason: 'ok', expiry: '2099-01-01' }]));
+    assert.throws(() => loadWaivers(f), /missing or invalid package/);
+
+    // Missing reason
+    f = join(dir, 'missing-reason.json');
+    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', package: 'lodash', expiry: '2099-01-01' }]));
+    assert.throws(() => loadWaivers(f), /missing or invalid reason/);
+
+    // Missing expiry
+    f = join(dir, 'missing-expiry.json');
+    writeFileSync(f, JSON.stringify([{ ghsaId: 'GHSA-x', package: 'lodash', reason: 'ok' }]));
+    assert.throws(() => loadWaivers(f), /missing or invalid expiry/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadWaivers: rejects entries with malformed or invalid expiry dates', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'check-audit-waivers-'));
+  try {
+    const base = { ghsaId: 'GHSA-x', package: 'lodash', reason: 'ok' };
+
+    // Malformed date format
+    let f = join(dir, 'bad-format.json');
+    writeFileSync(f, JSON.stringify([{ ...base, expiry: '2099/01/01' }]));
+    assert.throws(() => loadWaivers(f), /does not match YYYY-MM-DD format/);
+
+    // Invalid calendar date (month 13)
+    f = join(dir, 'bad-month.json');
+    writeFileSync(f, JSON.stringify([{ ...base, expiry: '2099-13-01' }]));
+    assert.throws(() => loadWaivers(f), /not a valid calendar date/);
+
+    // Invalid calendar date (day 45)
+    f = join(dir, 'bad-day.json');
+    writeFileSync(f, JSON.stringify([{ ...base, expiry: '2099-08-45' }]));
+    assert.throws(() => loadWaivers(f), /not a valid calendar date/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
