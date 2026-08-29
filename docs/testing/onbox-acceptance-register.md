@@ -705,6 +705,8 @@ eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
 ### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **20 of 60 run (2026-07-29, 2026-07-31) · ~40 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 40 -->
+<!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
 dual-GPU box, SHA `2503bca6`, clean tree, real sidecar + real Qwen weights, no
