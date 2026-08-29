@@ -195,7 +195,7 @@
   </div>
 
   <div class="strip">
-    <div class="stat"><div class="n owed">61</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">62</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">5</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -204,7 +204,10 @@
   </div>
 
   <div class="callout warn">
-    <b>Last change: 2026-08-28, merging <code>origin/main</code> into <code>fix/sidecar-cuda-fallback-detection</code>.</b>
+    <b>Last change: 2026-08-29, merging two independent A102 additions.</b>
+    This branch had added row A102 (analyzer GPU-split warning + expected-device mismatch, #2367, Castwright#2734); <code>origin/main</code> had independently added row A102 (CUDA fallback self-test #2582, PR #2719). Both started from the same post-#2704 state. Reconciled: kept <code>main</code>'s CUDA A102; during the merge resolution <b>A103</b> (the next-free id) was mistakenly treated as unavailable and skipped, so this branch's analyzer row was allocated <b>A104</b> instead. A103 remains permanently unused — a gap in the numbering that allocate-once rules prevent from being filled later. Combined: 61 (from <code>main</code>, post-A101-discharge via PR #2739) + 1 (this branch's A104, analyzer GPU-split) = <b>62</b>. Group A: 38 + 1 = 39. <code>next-id</code> bumped from A103 → A105 (skipping the permanent gap) in this merge.
+    <br><b>Prior change: 2026-08-28 (Castwright#2734), 61 → 62</b>, adding row A102 (analyzer GPU-split warning + expected-device mismatch, #2367) — mocked <code>execFile</code>/nvidia-smi covers every automated test, so the real two-GPU split, the once-per-signature server warning, the UI row, and the <code>expectedDevice</code> mismatch wording all still need a genuine 2-card boot. Minted from the <code>next-id</code> floor.
+    <br><b>Prior change: 2026-08-28, merging <code>origin/main</code> into <code>fix/sidecar-cuda-fallback-detection</code>.</b>
     Two independent branch tips reconciled: this branch had added row A102 (CUDA fallback
     self-test #2582, PR #2719, 61 → 62); <code>main</code> had since discharged row A101
     (PR #2739, 61 → 60) — the two changes started from the same post-#2704 state and never
@@ -350,7 +353,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>38</td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td>39</td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td>2</td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td>4</td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td>3</td></tr>
@@ -366,7 +369,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">38 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">39 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -927,6 +930,21 @@
           <li><b>Silent verification when CUDA genuinely succeeds.</b> On a box with working CUDA support, load Kokoro and confirm <code>/health</code>'s <code>cuda_verified === true</code> (CUDA was requested and landed), that the log contains NO CUDA self-test warning message, and the device-panel warning stays absent. When CUDA was not requested for the load, <code>/health</code>'s <code>cuda_verified === null</code>; this is not a failure state and no warning should appear.</li>
         </ul>
         <p class="src">a single 8 GB GPU, a live Kokoro-capable sidecar, and a real ORT session accessible during <code>_ensure_loaded</code> · <a href="https://github.com/dudarenok-maker/Castwright/issues/2582">#2582</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/2719">PR #2719</a> · no separate run sheet; mechanism is integrated into Kokoro's existing health reporting · short — one Kokoro load with CPU-forced providers, one with CUDA working (or default unforced), and UI verification</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A104</span><span class="iname">Analyzer GPU-split warning fires (and stays silent) correctly on real nvidia-smi output</span><span class="risk">two NVIDIA GPUs of different sizes</span> · <a href="https://github.com/dudarenok-maker/Castwright/pull/2753">PR #2753</a><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>detectOllamaGpuSplit()</code> (<code>server/src/gpu/ollama-gpu-split.ts</code>) shells out to real <code>nvidia-smi --query-compute-apps</code>/<code>--query-gpu</code> and every automated test here mocks <code>execFile</code>, so none of it has run against a real two-GPU box. Same open shape as the rest of this register: the parse/threshold logic is pinned in isolation, but never against genuine multi-GPU <code>nvidia-smi</code> output.</p>
+        <ul>
+          <li><strong>PREREQUISITE:</strong> First confirm on this box whether <code>nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv</code> returns numeric values for <code>used_memory</code> (alongside the readable <code>process_name</code> field) or <code>[N/A]</code>/<code>[Not Supported]</code> under this GPU's driver model (WDDM on Windows). If <code>[N/A]</code>, the <code>dataUnavailable</code> code path should be exercised separately instead of a real split/no-split result.</li>
+          <li>Load a model on Ollama that is oversized for one card but fits the combined VRAM of both, so Ollama itself splits it across GPUs. Confirm <code>detectOllamaGpuSplit()</code> reports <code>split: true</code> with the correct <code>deviceIndices</code>, and <code>wouldFitSingleDevice: true</code>.</li>
+          <li>Confirm the server log warns exactly once for that split's device signature (<code>server/src/analyzer/ollama.ts</code>), and does not repeat on subsequent analyzer calls with the same signature.</li>
+          <li>Confirm the Advanced Configuration "Analyzer (Ollama) device" row (<code>src/views/advanced.tsx</code>) shows the matching generic-split warning line: "Model split across GPUs [indices] despite fitting on one device".</li>
+          <li>Repeat with a model that is genuinely too big to fit on any single card (<code>wouldFitSingleDevice: false</code>) and confirm NO warning fires anywhere — server log or UI.</li>
+          <li>With <code>analyzer.ollama.expectedDevice</code> set to a GPU index that contradicts the real single-device placement, confirm the server logs the mismatch exactly once per distinct expected/detected pair: <code>[ollama] analyzer GPU device mismatch: expected GPU N, detected on GPU M</code>. Confirm the UI shows the single-device mismatch wording: "Analyzer model is on GPU M — expected GPU N only" (distinct from the split-case wording above). Repeat with <code>expectedDevice</code> contradicting a split (model is split across multiple GPUs but expected on a different one) and confirm the server logs the mismatch and the UI shows the split-mismatch wording: "Model split across GPUs [indices] — expected GPU N only".</li>
+        </ul>
+        <p class="src">two NVIDIA GPUs of different sizes, a local Ollama daemon, and a model sized to force a genuine split · <a href="https://github.com/dudarenok-maker/Castwright/issues/2367">#2367</a> · criteria: Castwright#2734 (the verify child for this chain) checklist item 6; the four task briefs under #2367 for the exact behaviour each piece owns · short — one oversized load that splits, one genuinely-too-big load that doesn't, one expectedDevice mismatch check</p>
       </div>
     </details>
 
@@ -1569,7 +1587,7 @@
   <footer>
     <p><b>Deliberately not in this register:</b> <a href="https://github.com/dudarenok-maker/Castwright/issues/1826">#1826</a> (its bar is an automated interleaving regression test, not a manual walkthrough) · <a href="https://github.com/dudarenok-maker/Castwright/issues/964">#964</a> (fs-48 Fish Audio) and <a href="https://github.com/dudarenok-maker/Castwright/issues/1334">#1334</a> (fs-73 Cast Pass), parked or unbuilt — pre-implementation criteria, not debt on shipped code · <a href="https://github.com/dudarenok-maker/Castwright/issues/819">#819</a>, <code>moscow:wont</code> · archived plans whose prose still says “owed” but whose debt was discharged via a separate un-cross-referenced issue (210/#752, 214/#397, 219/#823, 193/#476, 181/#1670/#927/#515/#517).</p>
     <p>This register is for <b>manual, hardware-dependent verification of shipped code</b>. Automated-test gaps belong in the plan's test section or an issue.</p>
-    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-28</b> against branch <code>test/sidecar-a101-qwen-duration-tolerance</code> (row A101 discharged: measured Qwen's real per-line duration spread on an RTX 5070 Ti, hand-set <code>qwen-duration-baseline.json</code>'s <code>tolerance</code> to 0.30, blessed <code>entries</code>). Full sync history is this file's git log, not this page.</p>
+    <p>Mirrors <code>docs/testing/onbox-acceptance-register.md</code> — update both, in the PR that changes either. Last synced <b>2026-08-29</b> against merge of <code>chore/server-2367-analyzer-gpu-split-warning</code> into <code>origin/main</code>: two independent A102 additions reconciled by keeping <code>main</code>'s CUDA fallback self-test (PR #2719, row A102) and renumbering this branch's analyzer GPU-split warning to row A104 (Castwright#2734, #2367). Also includes A101's discharge via PR #2739 (Qwen duration tolerance measurement and blessing completed). Full sync history is this file's git log, not this page.</p>
   </footer>
 
 </div>

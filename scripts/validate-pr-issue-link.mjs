@@ -74,6 +74,25 @@ export function hasIssueLink(body) {
   return ISSUE_LINK_PATTERN.test(stripCodeSpans(body));
 }
 
+// #2791/#2433: Dependabot version-update PRs have no mechanism to add a
+// `Closes #NN`/`Refs #NN` line to their auto-generated body, so this gate
+// (required + unbypassable, both rulesets carry `bypass_actors: []`) made
+// every Dependabot PR permanently unmergeable and, combined with
+// `open-pull-requests-limit: 5`, would self-disable dependabot.yml into a
+// pile of stuck PRs. This is the ONE exemption: only the bot that authored
+// the PR skips the body check, and only that bot -- a human PR (or any
+// other bot) is still fully gated. Match the PR's AUTHOR
+// (github.event.pull_request.user.login), not github.actor: on a
+// `synchronize`/`edited` re-run of an existing Dependabot PR the triggering
+// actor can be a human (e.g. re-running a check, pushing a rebase commit
+// via the GitHub UI), while the PR's author never changes after it's
+// opened. Gating on actor would either wrongly exempt that human action or
+// wrongly re-gate a legitimate Dependabot update, depending on who acted
+// last.
+export function isDependabotExempt(author) {
+  return author === 'dependabot[bot]';
+}
+
 export function helpMessage() {
   return [
     `PR body doesn't link a GitHub issue.`,
@@ -88,12 +107,24 @@ export function helpMessage() {
   ].join('\n');
 }
 
-// CLI mode: `node scripts/validate-pr-issue-link.mjs <pr-body-file>`
+// CLI mode: `node scripts/validate-pr-issue-link.mjs <pr-body-file> [pr-author]`
+// `pr-author` is optional and, when present, is checked against the single
+// #2791/#2433 exemption above (see isDependabotExempt) before the body is
+// parsed at all -- so a Dependabot PR body never even needs to satisfy
+// ISSUE_LINK_PATTERN.
 if (isDirectlyInvoked(import.meta.url)) {
   const path = process.argv[2];
+  const author = process.argv[3];
   if (!path) {
-    console.error('Usage: validate-pr-issue-link.mjs <pr-body-file>');
+    console.error('Usage: validate-pr-issue-link.mjs <pr-body-file> [pr-author]');
     process.exit(2);
+  }
+  if (isDependabotExempt(author)) {
+    console.log(
+      `PR author is ${author} -- skipping the issue-link check (#2791/#2433: ` +
+        `Dependabot bodies have no mechanism to add Closes/Refs).`,
+    );
+    process.exit(0);
   }
   const body = readFileSync(path, 'utf8');
   if (!hasIssueLink(body)) {
