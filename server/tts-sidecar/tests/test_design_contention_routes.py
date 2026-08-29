@@ -187,3 +187,46 @@ def test_synthesize_maps_a_real_unload_design_timeout_to_503(monkeypatch: pytest
     finally:
         release.set()
         holder.join(5)
+
+
+def test_design_voice_maps_base17_contention_timeout_to_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2752 finding — the `/qwen/design-voice` route had NO arm for
+    `Base17ContentionTimeoutError` at all — it fell through to the generic
+    `except Exception` -> 500, contradicting the analogous 503 mapping for
+    `DesignContentionTimeoutError` on related routes.
+
+    Mutation that must fail it — breaks the PRODUCER: remove the
+    `except Base17ContentionTimeoutError` arm from `/qwen/design-voice`
+    (main.py `qwen_design_voice`). The response reverts to a plain 500
+    `{"detail": "Internal error."}`.
+    """
+    _reset_poison_guards(monkeypatch)
+
+    class _FakeQwenDesign(main.QwenEngine):
+        def __init__(self):
+            pass  # skip the real heavy __init__ — the route only calls design_voice
+
+        def design_voice(
+            self, voice_id, instruct, language=None, calibration_text=None,
+            voice_uuid=None, report_progress=None, mint_method=None,
+            fallback_for=None, device=None,
+        ):
+            raise main.Base17ContentionTimeoutError(
+                "Qwen 1.7B-Base has been in flight for over 30s — refusing to evict it."
+            )
+
+    monkeypatch.setitem(main.ENGINES, "qwen", _FakeQwenDesign())
+    client = TestClient(main.app)
+    res = client.post(
+        "/qwen/design-voice",
+        json={
+            "voiceId": "qwen-base",
+            "instruct": "Speak softly and delicately.",
+        },
+    )
+
+    assert res.status_code == 503
+    body = res.json()
+    assert body["code"] == "base17_in_flight"
+    assert body.get("poisoned") is not True
+    assert body["detail"] != "Internal error."

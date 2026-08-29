@@ -10791,6 +10791,17 @@ async def qwen_design_voice(req: Request) -> Response:
                 mint_method,
                 fallback_for,
             )
+    except Base17ContentionTimeoutError as exc:
+        # #2752 finding — design_voice() needed to evict the resident 1.7B-Base
+        # model, but a base17 load/mint stayed in flight past unload_base17()'s
+        # bounded wait. Same non-poisoned, retry-safe 503 shape as the analogous
+        # DesignContentionTimeoutError mapping — this route was missing the arm
+        # entirely and fell into the generic 500 below.
+        log.warning("/qwen/design-voice: base17 contention timeout: %s", exc)
+        return JSONResponse(
+            {"detail": str(exc), "code": "base17_in_flight"},  # exc-text-safe: Base17ContentionTimeoutError message is a curated static template plus a timeout number; never a traceback or third-party string
+            status_code=503,
+        )
     except Exception as e:
         err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         if _CUDA_POISON_RE.search(err_str):
