@@ -119,6 +119,14 @@ const REQUIREMENTS_DIR = path.join('server', 'tts-sidecar', 'requirements');
  * deletion, checkout is verified to succeed, and if it fails the backup is
  * restored before throwing. This ensures the directory is never left empty
  * on a restore failure.
+ *
+ * ONE-UPDATE LAG: Because Pinokio loads `resolve-release.js` from the CURRENTLY
+ * checked-out release before the update proceeds, a user updating FROM a release
+ * that predates this function will run the old version (which lacks this call
+ * entirely). The fix only takes effect starting with their NEXT update, once the
+ * version containing this call is itself checked out. See update.js lines 19–28
+ * for the documented mechanism.
+ *
  * @param {string} [cwd]
  * @throws {Error} if git checkout fails and recovery fails
  */

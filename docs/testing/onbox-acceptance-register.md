@@ -4237,6 +4237,10 @@ Pinokio box. *Criteria:* this PR's `resolve-release.test.js` acceptance test
 that a stale-CRLF install updates without spurious reinstall and that a fresh install 
 normalizes correctly. Issue #2596 and PR #2799 body.
 
+**One-update lag:** Updates FROM pre-#2799 releases run the old `resolve-release.js`, 
+so CRLF normalization only takes effect from the NEXT update onward (see E1 and 
+`pinokio-scripts/update.js` lines 19–28).
+
 ### E12 · ASR warm footprint measurement via torch allocator peak ([#2682](https://github.com/dudarenok-maker/Castwright/issues/2682), PR #2799) · **GPU with CTranslate2/faster-whisper resident**
 
 PR #2799 changes how `asr.warm` (the learned warmup footprint for Whisper ASR) is 

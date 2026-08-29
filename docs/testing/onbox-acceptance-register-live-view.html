@@ -1434,6 +1434,7 @@
           <li>Confirm a subsequent Install (the <code>install.js</code> path) also normalizes any stale CRLF it finds to LF and proceeds with the normal install flow.</li>
         </ul>
         <p class="src">Windows box with Pinokio installed, a pre-existing install with CRLF-mangled <code>requirements/*.txt</code> (or ability to create one by checking out an old release prior to <code>.gitattributes</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2596">#2596</a>, PR #2799 · automated acceptance test in <code>resolve-release.test.js</code>; real-world confirmation that a stale-CRLF install updates without spurious reinstall and that a fresh install normalizes correctly · 10–15 minutes, grouping with <a href="#ge1">E1</a></p>
+        <p><b>One-update lag:</b> Updates FROM pre-#2799 releases run the old <code>resolve-release.js</code>, so CRLF normalization only takes effect from the NEXT update onward (see <a href="#ge1">E1</a> and <code>pinokio-scripts/update.js</code> lines 19–28).</p>
       </div>
     </details>
 
