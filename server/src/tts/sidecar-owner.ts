@@ -171,6 +171,7 @@ export interface ClaimOpts {
   ppid?: number;
   port?: number;
   nowIso?: () => string;
+  aliveFn?: (pid: number) => boolean;
 }
 
 
@@ -178,13 +179,20 @@ export interface ClaimOpts {
     `runDir` if needed. Port defaults to the resolved sidecar port.
 
     Also cleans up the legacy note (.run/tts.owner.json) if its recorded port
-    matches the port being claimed (#2754 N3b). This fixes the PID-recycle defect:
-    if an old server crashed with the legacy note still present, and the OS later
-    recycled its PID, the legacy note's stale PID check would block the new owner.
-    Deleting the legacy note here (only after the conflict check passed in
-    `findConflictingOwner`) is safe: `findConflictingOwner` already checked via its
-    full logic (including self/lineage short-circuits, not just liveness checks), so
-    the legacy note — if present and matching — is either our own or stale. */
+    matches the port being claimed AND the legacy note's pid is safe to delete
+    (#2754 N3b). This fixes the PID-recycle defect: if an old server crashed
+    with the legacy note still present, and the OS later recycled its PID, the
+    legacy note's stale PID check would block the new owner.
+
+    The legacy note is deleted ONLY if one of these is true:
+    - Its pid is our own pid
+    - Its ppid matches our lineage (same parent, e.g. tsx watch reload)
+    - Its pid is no longer alive
+
+    This check is independent (not derived from findConflictingOwner's side effects),
+    ensuring we never delete a live, foreign legacy owner's only record.
+    Also writes the port-keyed note FIRST, then deletes the legacy note, to avoid
+    losing our ownership record if a crash occurs between the two operations. */
 export function claimSidecarOwnership(opts: ClaimOpts): void {
   const {
     runDir,
@@ -192,22 +200,36 @@ export function claimSidecarOwnership(opts: ClaimOpts): void {
     ppid = process.ppid,
     port = sidecarPort(),
     nowIso = () => new Date().toISOString(),
+    aliveFn = isProcessAlive,
   } = opts;
   mkdirSync(runDir, { recursive: true });
 
-  // #2754 N3b: Clean up the legacy note if its port matches the port being claimed.
-  // The legacy note is now superseded by the port-keyed note we're about to write.
-  const legacyOwner = readLegacySidecarOwner(runDir);
-  if (legacyOwner && legacyOwner.port === port) {
-    try {
-      unlinkSync(legacySidecarOwnerPath(runDir));
-    } catch {
-      /* already gone or inaccessible — best-effort cleanup */
-    }
-  }
-
+  // Write the port-keyed note FIRST, before any cleanup of the legacy note.
+  // This ensures we always have a record of ownership, even if cleanup fails or
+  // a crash occurs during this function.
   const note: SidecarOwnerNote = { pid, ppid, port, startedAt: nowIso() };
   writeFileSync(sidecarOwnerPath(runDir, port), JSON.stringify(note), 'utf8');
+
+  // #2754 N3b: Clean up the legacy note if its port matches AND it's safe to delete.
+  // The legacy note is now superseded by the port-keyed note we just wrote.
+  const legacyOwner = readLegacySidecarOwner(runDir);
+  if (legacyOwner && legacyOwner.port === port) {
+    // Independent safety check: only delete if the legacy note's pid is ours, same lineage, or dead.
+    // This ensures we never delete a live foreign owner's only record, even if findConflictingOwner
+    // didn't perform its full check (e.g., due to early exits on self/lineage paths).
+    const isSafeToDelete =
+      legacyOwner.pid === pid ||
+      (legacyOwner.ppid > 0 && legacyOwner.ppid === ppid) ||
+      !aliveFn(legacyOwner.pid);
+
+    if (isSafeToDelete) {
+      try {
+        unlinkSync(legacySidecarOwnerPath(runDir));
+      } catch {
+        /* already gone or inaccessible — best-effort cleanup */
+      }
+    }
+  }
 }
 
 /** Delete the owner note iff WE still own it (pid matches). A no-op when the
