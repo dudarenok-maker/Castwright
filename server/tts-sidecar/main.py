@@ -5384,9 +5384,9 @@ _DESIGN_CONTENTION_POLL_S_DEFAULT = 0.5
 # instead of silently nulling `_base17` out from under it. Kept below
 # `_DESIGN_CONTENTION_WAIT_S_DEFAULT`: a plain base17 load/mint is lighter
 # than a full VoiceDesign forward+load, so it doesn't need the same headroom.
-# Not exposed as an env knob (deliberately — see CLAUDE.md's "new env var
-# MUST be a knob" rule this avoids triggering; a fixed conservative bound is
-# simpler and this is the only caller).
+# Not exposed as an env knob (deliberately — a new registry knob needs a
+# Settings row / .env.example line per this repo's CLAUDE.md; a fixed
+# conservative bound is simpler and this is the only caller).
 _BASE17_CONTENTION_WAIT_S_DEFAULT = 60.0
 _BASE17_CONTENTION_POLL_S_DEFAULT = 0.5
 
@@ -5951,18 +5951,24 @@ class QwenEngine(Engine):
 
         `wait_seconds` DEFAULTS TO 0.0, unlike `unload_design`'s 150s default —
         deliberately, not an oversight. The bare call (the `/unload
-        {model:'1.7b'}` Stop route, and `maybe_free_idle_base17`'s callers)
-        must stay non-blocking and NEVER raise: #1975 already established that
-        a Stop must always succeed. At `wait_seconds <= 0.0` (the bare/Stop-
-        route case), this unconditionally nulls `_base17` without waiting or
-        raising, mirroring the sibling `unload()` method's stop semantics. Only
-        `design_voice()`'s eviction guard opts into the bounded wait, passing
+        {model:'1.7b'}` Stop route) must stay non-blocking and NEVER raise:
+        #1975 already established that a Stop must always succeed.
+        `maybe_free_idle_base17` does NOT go through this method at all — it
+        nulls `_base17` inline under its own re-validated lock, because a call
+        here would re-acquire the non-reentrant `_synth_lock` and deadlock
+        (see that method's own docstring) — it is unaffected by this default
+        either way. At `wait_seconds <= 0.0` (the bare/Stop-route case), this
+        unconditionally nulls `_base17` without waiting or raising, mirroring
+        the sibling `unload()` method's stop semantics. Only `design_voice()`'s
+        eviction guard opts into the bounded wait, passing
         `_BASE17_CONTENTION_WAIT_S_DEFAULT`/`_POLL_S_DEFAULT` explicitly,
         because that call site's whole purpose is to wait for a
         wedged-looking-but-still-loading base17 rather than race it."""
         if wait_seconds <= 0.0:
             # Bare call (Stop route, or idle eviction): never block, never raise.
             # Unconditionally null the model, matching unload()'s semantics.
+            # The early return below skips `_reclaim_host_and_vram()` on
+            # purpose — nothing was resident, so there's nothing to reclaim.
             with self._synth_lock:
                 if self._base17 is None:
                     return
@@ -6663,7 +6669,7 @@ class QwenEngine(Engine):
                 # the Kokoro arbiter.
                 with _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx()):
                     if self._base17 is not None or self._base17_in_flight.busy:
-                        log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
+                        log.info("Evicting resident/in-flight Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
                         # Bounded wait, not the 0.0 default — this call's whole
                         # point is to wait out a still-loading base17 rather
                         # than race it (see unload_base17's docstring for why
