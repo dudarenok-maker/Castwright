@@ -25,6 +25,7 @@ vi.mock('../lib/api', () => ({
     cleanupEnvKnobs: vi.fn(),
     getGpuDevices: vi.fn(),
     getAnalyzerDevice: vi.fn(),
+    getAnalyzerGpuSplit: vi.fn(),
   },
 }));
 
@@ -34,6 +35,7 @@ const mockResetConfig = vi.mocked(api.resetConfig);
 const mockCleanupEnvKnobs = vi.mocked(api.cleanupEnvKnobs);
 const mockGetGpuDevices = vi.mocked(api.getGpuDevices);
 const mockGetAnalyzerDevice = vi.mocked(api.getAnalyzerDevice);
+const mockGetAnalyzerGpuSplit = vi.mocked(api.getAnalyzerGpuSplit);
 
 const FIXTURE_GPU_DEVICES: GpuDevicesResponse = {
   devices: [
@@ -181,6 +183,14 @@ beforeEach(() => {
   mockCleanupEnvKnobs.mockResolvedValue({ cleaned: [] });
   mockGetGpuDevices.mockResolvedValue(FIXTURE_GPU_DEVICES);
   mockGetAnalyzerDevice.mockResolvedValue({ device: 'idle' });
+  mockGetAnalyzerGpuSplit.mockResolvedValue({
+    reachable: true,
+    split: false,
+    deviceIndices: [0],
+    totalUsedMb: 4200,
+    wouldFitSingleDevice: false,
+    dataUnavailable: false,
+  });
 });
 
 /* ── Group headers ────────────────────────────────────────────────────────── */
@@ -489,64 +499,64 @@ const CONFIG_WITH_TTS_ENGINE_GROUP: ConfigResponse = {
   },
 };
 
-/* 'tts-engine' is risk:'high' (matches the real registry group), so
-   SettingsSection starts it collapsed regardless of collapsedByDefault —
-   the row only mounts once the section is expanded. Mirrors how a real
-   user would reach the "Voice engine & device" section. */
-async function openVoiceEngineSection(): Promise<void> {
-  /* Both the nav rail and the section header render a "Voice engine &
-     device"-named button; only the section header carries aria-expanded. */
-  const toggles = await screen.findAllByRole('button', { name: /Voice engine & device/ });
-  const toggle = toggles.find((el) => el.hasAttribute('aria-expanded'));
-  if (!toggle) throw new Error('Voice engine & device section toggle not found');
-  fireEvent.click(toggle);
-}
+/* CONFIG_WITH_ANALYZER_MODELS_GROUP adds the analyzer-models section (where
+   the analyzer device row now renders). Used by analyzer device and GPU-split
+   warning tests that need to verify the row/warning render. */
+const CONFIG_WITH_ANALYZER_MODELS_GROUP: ConfigResponse = {
+  ...CONFIG_WITH_TTS_ENGINE_GROUP,
+  groups: [
+    ...CONFIG_WITH_TTS_ENGINE_GROUP.groups,
+    {
+      id: 'analyzer-models',
+      label: 'Analyzer models & endpoints',
+      help: 'Which model/endpoint runs the analysis.',
+      risk: 'medium',
+      collapsedByDefault: false,
+    },
+  ],
+};
 
 describe('AdvancedView — analyzer read-only row (Plan 2 §2.4, issue #1225)', () => {
   it('shows the analyzer GPU/CPU/idle/unreachable placement, not editable', async () => {
-    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
     mockGetAnalyzerDevice.mockResolvedValue({ device: 'cuda' });
 
     renderView();
-    await openVoiceEngineSection();
     await screen.findByText(/Analyzer \(Ollama\) device/i);
     expect(screen.getByText(/GPU — not app-pinnable/)).toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: /analyzer/i })).not.toBeInTheDocument();
   });
 
   it('shows "Idle" (not "Unknown") when Ollama has nothing resident', async () => {
-    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
     mockGetAnalyzerDevice.mockResolvedValue({ device: 'idle' });
 
     renderView();
-    await openVoiceEngineSection();
     expect(await screen.findByText(/Idle \(no model currently loaded\)/)).toBeInTheDocument();
   });
 
   it('shows "Unreachable" when the daemon never answers', async () => {
-    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
     mockGetAnalyzerDevice.mockRejectedValue(new Error('network error'));
 
     renderView();
-    await openVoiceEngineSection();
     expect(await screen.findByText(/Unreachable — not app-pinnable/)).toBeInTheDocument();
   });
 
   it('links to the documented OS-env path', async () => {
-    mockGetConfig.mockResolvedValue(CONFIG_WITH_TTS_ENGINE_GROUP);
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
     mockGetAnalyzerDevice.mockResolvedValue({ device: 'cpu' });
 
     renderView();
-    await openVoiceEngineSection();
     const link = await screen.findByRole('link', { name: /change.*analyzer.*device/i });
     expect(link).toHaveAttribute('href', expect.stringMatching(/local-llm/));
   });
 
   it('hides the row entirely when the analyzer engine is gemini (§2.4 gate)', async () => {
     mockGetConfig.mockResolvedValue({
-      ...CONFIG_WITH_TTS_ENGINE_GROUP,
+      ...CONFIG_WITH_ANALYZER_MODELS_GROUP,
       values: {
-        ...CONFIG_WITH_TTS_ENGINE_GROUP.values,
+        ...CONFIG_WITH_ANALYZER_MODELS_GROUP.values,
         'analyzer.engine': {
           key: 'analyzer.engine',
           effective: 'gemini',
@@ -559,8 +569,272 @@ describe('AdvancedView — analyzer read-only row (Plan 2 §2.4, issue #1225)', 
     mockGetAnalyzerDevice.mockResolvedValue({ device: 'cuda' });
 
     renderView();
-    await openVoiceEngineSection();
+    await screen.findAllByText('Text-to-speech');
     expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
+  });
+});
+
+/* ── Analyzer GPU-split warning (#2367 Task 3) ───────────────────────────── */
+
+describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
+  it('renders the warning, including both device indices, when split and avoidable', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+      dataUnavailable: false,
+    });
+
+    renderView();
+    const warning = await screen.findByText(/Model split across GPUs 0, 1/);
+    expect(warning).toBeInTheDocument();
+  });
+
+  it('shows no warning when the split genuinely does not fit on one device', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 20000,
+      wouldFitSingleDevice: false,
+      dataUnavailable: false,
+    });
+
+    renderView();
+    await screen.findByText(/Analyzer \(Ollama\) device/i);
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+  });
+
+  it('shows no warning when there is no split', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [0],
+      totalUsedMb: 4200,
+      wouldFitSingleDevice: false,
+      dataUnavailable: false,
+    });
+
+    renderView();
+    await screen.findByText(/Analyzer \(Ollama\) device/i);
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+  });
+
+  it('hides the whole block, including the split warning, when the analyzer engine is not local', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...CONFIG_WITH_ANALYZER_MODELS_GROUP,
+      values: {
+        ...CONFIG_WITH_ANALYZER_MODELS_GROUP.values,
+        'analyzer.engine': {
+          key: 'analyzer.engine',
+          effective: 'gemini',
+          source: 'default',
+          locked: false,
+          overridden: false,
+        },
+      },
+    });
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+      dataUnavailable: false,
+    });
+
+    renderView();
+    expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+  });
+
+  it('shows the data-unavailable note with valid nvidia-smi command when dataUnavailable is true', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [],
+      totalUsedMb: 0,
+      wouldFitSingleDevice: false,
+      dataUnavailable: true,
+    });
+
+    const { container } = renderView();
+    const note = await screen.findByText(/Can't determine GPU split status/);
+    expect(note).toBeInTheDocument();
+    // Verify the nvidia-smi command is present and properly formatted
+    expect(note.textContent).toMatch(
+      /nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv/,
+    );
+    // Verify there are proper spaces before code blocks (not "shows[N/A]")
+    expect(container.textContent).toContain('shows [N/A]');
+    // Verify the amber avoidable-split warning is NOT shown (they're mutually exclusive)
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/despite fitting on one device/)).not.toBeInTheDocument();
+  });
+
+  it('suppresses the avoidable-split warning when split is true but dataUnavailable is also true (inconclusive data)', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+      dataUnavailable: true,
+    });
+
+    renderView();
+    // The "Can't determine" note should appear even though split is true
+    const note = await screen.findByText(/Can't determine GPU split status/);
+    expect(note).toBeInTheDocument();
+    // The amber avoidable-split warning must NOT appear when dataUnavailable is true
+    expect(screen.queryByText(/despite fitting on one device/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Model split across GPUs 0, 1/)).not.toBeInTheDocument();
+  });
+});
+
+/* ── Analyzer GPU-split warning: expected-device mismatch (#2367 Task 4) ─── */
+
+/* Adds the expectedDevice knob's descriptor on top of
+   CONFIG_WITH_ANALYZER_MODELS_GROUP. The analyzer-models group is already
+   included in CONFIG_WITH_ANALYZER_MODELS_GROUP. */
+const CONFIG_WITH_EXPECTED_DEVICE_KNOB: ConfigResponse = {
+  ...CONFIG_WITH_ANALYZER_MODELS_GROUP,
+  descriptors: [
+    ...CONFIG_WITH_ANALYZER_MODELS_GROUP.descriptors,
+    {
+      key: 'analyzer.ollama.expectedDevice',
+      group: 'analyzer-models',
+      label: 'Expected analyzer GPU',
+      help: "Informational only — this app cannot pin an external Ollama daemon's device.",
+      type: 'string',
+      apply: 'live',
+      risk: 'low',
+      isPrompt: false,
+      default: '',
+    },
+  ],
+};
+
+function withExpectedDevice(effective: string): ConfigResponse {
+  return {
+    ...CONFIG_WITH_EXPECTED_DEVICE_KNOB,
+    values: {
+      ...CONFIG_WITH_EXPECTED_DEVICE_KNOB.values,
+      'analyzer.ollama.expectedDevice': {
+        key: 'analyzer.ollama.expectedDevice',
+        effective,
+        source: effective ? 'override' : 'default',
+        locked: false,
+        overridden: Boolean(effective),
+      },
+    },
+  };
+}
+
+describe('AdvancedView — analyzer GPU-split warning, expected-device mismatch (#2367 Task 4)', () => {
+  it('knob empty + an avoidable split -> Task 3\'s original unqualified warning', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_EXPECTED_DEVICE_KNOB);
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+      dataUnavailable: false,
+    });
+
+    renderView();
+    expect(await screen.findByText(/despite fitting on one device/)).toBeInTheDocument();
+    expect(screen.queryByText(/expected GPU/)).not.toBeInTheDocument();
+  });
+
+  it('knob "0" + deviceIndices [0, 1] (mismatch) -> the sharpened mismatch text, naming both', async () => {
+    mockGetConfig.mockResolvedValue(withExpectedDevice('0'));
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 20000,
+      wouldFitSingleDevice: false,
+      dataUnavailable: false,
+    });
+
+    renderView();
+    const warning = await screen.findByText(/Model split across GPUs 0, 1/);
+    expect(warning).toBeInTheDocument();
+    expect(warning.textContent).toMatch(/expected GPU 0 only/);
+    expect(screen.queryByText(/despite fitting on one device/)).not.toBeInTheDocument();
+  });
+
+  it('knob "0" + deviceIndices [0] (no split, matches expectation) -> no warning at all', async () => {
+    mockGetConfig.mockResolvedValue(withExpectedDevice('0'));
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [0],
+      totalUsedMb: 4200,
+      wouldFitSingleDevice: false,
+      dataUnavailable: false,
+    });
+
+    renderView();
+    await screen.findByText(/Analyzer \(Ollama\) device/i);
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+  });
+
+  it('knob "0" + deviceIndices [1] (no split, wrong single device) -> model on wrong GPU message', async () => {
+    mockGetConfig.mockResolvedValue(withExpectedDevice('0'));
+    mockGetAnalyzerGpuSplit.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [1],
+      totalUsedMb: 4200,
+      wouldFitSingleDevice: false,
+      dataUnavailable: false,
+    });
+
+    renderView();
+    const warning = await screen.findByText(/Analyzer model is on GPU 1/);
+    expect(warning).toBeInTheDocument();
+    expect(warning.textContent).toMatch(/expected GPU 0 only/);
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+  });
+
+  it('renders the knob as an editable text row in analyzer-models and round-trips a saved value', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_EXPECTED_DEVICE_KNOB);
+    mockPutConfig.mockResolvedValue({
+      ok: true,
+      applied: ['analyzer.ollama.expectedDevice'],
+      values: {
+        ...CONFIG_WITH_EXPECTED_DEVICE_KNOB.values,
+        'analyzer.ollama.expectedDevice': {
+          key: 'analyzer.ollama.expectedDevice',
+          effective: '0',
+          source: 'override',
+          locked: false,
+          overridden: true,
+        },
+      },
+    });
+
+    renderView();
+    const input = (await screen.findByRole('textbox', {
+      name: 'Expected analyzer GPU',
+    })) as HTMLInputElement;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '0' } });
+    fireEvent.blur(input);
+
+    await waitFor(() =>
+      expect(mockPutConfig).toHaveBeenCalledWith({ 'analyzer.ollama.expectedDevice': '0' }),
+    );
   });
 });
 

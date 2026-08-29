@@ -19,6 +19,12 @@ import { InstallBootstrap } from '../ollama/install-bootstrap.js';
 import { PullBootstrap } from '../ollama/pull-bootstrap.js';
 import { setLastKnownVram } from '../gpu/vram-state.js';
 
+/* Task 3 of the #2367 chain — detectOllamaGpuSplit mocked at the module
+   boundary, same pattern as analyzer/ollama.test.ts's Task 2 mock, so this
+   suite only pins the route's own JSON round-trip, not the detector. */
+const { detectOllamaGpuSplitMock } = vi.hoisted(() => ({ detectOllamaGpuSplitMock: vi.fn() }));
+vi.mock('../gpu/ollama-gpu-split.js', () => ({ detectOllamaGpuSplit: detectOllamaGpuSplitMock }));
+
 function makeApp() {
   const app = express();
   app.use(express.json());
@@ -43,6 +49,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
   _resetUserSettingsCache();
+  detectOllamaGpuSplitMock.mockReset();
 });
 
 afterEach(() => {
@@ -150,6 +157,43 @@ describe('GET /api/ollama/device', () => {
     const res = await request(makeApp()).get('/api/ollama/device');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ device: 'unreachable' });
+  });
+});
+
+/* Task 3 of the #2367 chain — thin proxy over Task 1's detectOllamaGpuSplit()
+   (server/src/gpu/ollama-gpu-split.ts), backing the Advanced Configuration
+   warning line. The detector itself is unit-tested in its own suite; this
+   only pins that the route round-trips its result verbatim as JSON. */
+describe('GET /api/ollama/gpu-split', () => {
+  it('round-trips the detector result verbatim including dataUnavailable', async () => {
+    const result = {
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+      dataUnavailable: false,
+    };
+    detectOllamaGpuSplitMock.mockResolvedValue(result);
+    const res = await request(makeApp()).get('/api/ollama/gpu-split');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(result);
+  });
+
+  it('passes through dataUnavailable: true when the detector reports it', async () => {
+    const result = {
+      reachable: true,
+      split: false,
+      deviceIndices: [],
+      totalUsedMb: 0,
+      wouldFitSingleDevice: false,
+      dataUnavailable: true,
+    };
+    detectOllamaGpuSplitMock.mockResolvedValue(result);
+    const res = await request(makeApp()).get('/api/ollama/gpu-split');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(result);
+    expect(res.body.dataUnavailable).toBe(true);
   });
 });
 

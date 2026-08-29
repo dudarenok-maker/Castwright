@@ -54,9 +54,11 @@ replaced. Do not resurrect them.
   source of truth for what "generated" looks like.
 - **A citation or defect description written into any tracked file — including
   this plan — must never place the word "row"/"rows" immediately before a
-  bare register-ID-shaped token** (e.g. `` row A40 ``). `check-register-citations.mjs`'s
-  `ROW_CITATION_REGEX` matches that shape anywhere in the tree and will fail
-  `test:hooks` on the prose itself, not just on a real citation. This plan
+  bare register-ID-shaped token**, with nothing but whitespace between them
+  (e.g. the word "row" directly followed by a bare `A40`-style token).
+  `check-register-citations.mjs`'s `ROW_CITATION_REGEX` matches that shape
+  anywhere in the tree and will fail `test:hooks` on the prose itself, not
+  just on a real citation. This plan
   observes that rule throughout (see Task 9).
 
 ---
@@ -93,16 +95,18 @@ Add, following the existing pattern (each pinned line has a comment explaining
 why):
 
 ```gitattributes
-# docs/testing/onbox-acceptance-register.md and its .html twin are read and
-# byte-compared by scripts/build-register-live-view.mjs and
-# scripts/check-onbox-register.mjs. Without this pin, a checkout with Git for
-# Windows' default core.autocrlf=true materialises both as CRLF, and a naive
-# byte-compare (as opposed to the CRLF-tolerant checkLiveView) sees every line
-# as different. Pin to LF; the generator also always writes LF (see
-# scripts/build-register-live-view.mjs's writeFile). Known limitation shared
-# with every other pin in this file: this governs CHECKOUT, not re-checkout of
-# a file git already believes is unchanged — an existing CRLF working tree does
-# not self-heal from this pin alone.
+# docs/testing/onbox-acceptance-register.md and its .html twin are read by
+# scripts/check-onbox-register.mjs (structural parsing, not a byte-compare —
+# checkLiveView is already CRLF-tolerant) and, once a later PR lands it, by
+# scripts/build-register-live-view.mjs, the generator that will own these
+# files' GENERATED regions and always write LF. The pin exists for a simpler
+# reason than either parser: without it, a checkout with Git for Windows'
+# default core.autocrlf=true materialises both files as CRLF, and this repo's
+# convention (see the pins above) is LF for anything read as text at runtime,
+# so a Windows checkout's line endings match what every other platform sees.
+# Known limitation shared with every other pin in this file: this governs
+# CHECKOUT, not re-checkout of a file git already believes is unchanged — an
+# existing CRLF working tree does not self-heal from this pin alone.
 docs/testing/onbox-acceptance-register.md text eol=lf
 docs/testing/onbox-acceptance-register-live-view.html text eol=lf
 ```
