@@ -193,31 +193,36 @@ def test_design_voice_evicts_base17_outside_kokoro_design_block(monkeypatch):
     The eviction-before-load ordering still holds since the VoiceDesign
     load happens later inside the block.
 
-    This test tracks when unload_base17() is called relative to when the
-    design block's inner operations run. By using a fake model forward that
-    would fail if called, we can verify the eviction happens BEFORE trying
-    to load and use the design model."""
+    This test pin: that the arbiter's _design_active flag is False when
+    base17 eviction runs, proving it happens BEFORE the design block, not
+    inside it. If the eviction were inside the block, _design_active would
+    be True at that moment."""
     qeng = main.QwenEngine()
     _quiet_kokoro()
 
     # Pretend the 1.7B-Base is resident (left over from a prior mint).
     qeng._base17 = object()
 
-    # Track the order of events: when did the base17 eviction happen
-    # relative to design model forward?
-    call_order = []
+    # Capture the state of the arbiter's flag when eviction runs
+    eviction_state = {"design_active_during_eviction": None, "evicted": False}
 
     def _fake_unload_base17(
         wait_seconds: float = 0.0,
         poll_seconds: float = main._BASE17_CONTENTION_POLL_S_DEFAULT,
     ):
-        call_order.append("unload_base17")
+        # Capture _VD_KOKORO._design_active at the moment the eviction runs.
+        # If eviction is OUTSIDE the design block (correct), this should be False.
+        # If eviction is INSIDE the block (bug), this would be True.
+        eviction_state["design_active_during_eviction"] = main._VD_KOKORO._design_active
+        eviction_state["evicted"] = True
         qeng._base17 = None  # simulate the real unload clearing the model
 
+    design_forward_called = {"before_eviction_check": False}
+
     def _fake_ensure_design_loaded(device=None):
-        # If we get here and base17 is still resident, the eviction
-        # didn't happen outside the block as required.
-        call_order.append("ensure_design_loaded")
+        # This runs inside the design block, so _design_active should be True here.
+        # Mark that we reached this point to verify the eviction happened first.
+        design_forward_called["before_eviction_check"] = main._VD_KOKORO._design_active
         if qeng._base17 is not None:
             raise AssertionError(
                 "Design model load started while 1.7B-Base was still resident! "
@@ -248,8 +253,17 @@ def test_design_voice_evicts_base17_outside_kokoro_design_block(monkeypatch):
         monkeypatch.setattr("torch.save", lambda *a, **k: None)
         qeng.design_voice("qwen-narrator-preview", "A warm voice.", "english", "Hello there.")
 
-    # Verify the order: unload_base17 must be called BEFORE ensure_design_loaded
-    assert call_order == ["unload_base17", "ensure_design_loaded"], (
-        f"Base17 eviction must happen BEFORE design model load "
-        f"(to avoid stalling Kokoro synth), but got order: {call_order}"
+    # The key assertion: eviction must run while the arbiter's flag is False,
+    # proving the eviction happens OUTSIDE the design() context manager, not inside.
+    assert eviction_state["evicted"] is True, (
+        "Base17 eviction must have been called during design_voice()"
+    )
+    assert eviction_state["design_active_during_eviction"] is False, (
+        "Eviction must run BEFORE entering the _VD_KOKORO.design() block "
+        "(where _design_active would be True). If this fails, the eviction "
+        "has regressed to running inside the block, which stalls Kokoro synths."
+    )
+    # Verify the design forward ran inside the block where _design_active is True
+    assert design_forward_called["before_eviction_check"] is True, (
+        "Design model load must run inside the _VD_KOKORO.design() block"
     )
