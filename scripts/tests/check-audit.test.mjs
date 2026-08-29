@@ -93,7 +93,7 @@ test('collectAdvisoryIds: filters advisory objects by their own severity (Bug C)
   }
 });
 
-test('isExpired: expiry strictly before today (UTC) is expired', () => {
+test('isExpired: expiry today or earlier (UTC) is expired', () => {
   const today = new Date('2026-08-29T12:00:00Z');
   assert.equal(isExpired({ expiry: '2026-08-28' }, today), true);
   assert.equal(isExpired({ expiry: '2026-08-29' }, today), true); // same day = expired

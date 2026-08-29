@@ -464,9 +464,12 @@ export const STEPS = [
        resolves to", not any source file, so this step is deliberately
        lockfile-only (no globs) — includeLockfiles is what makes a bare
        dependency bump (no source change at all) invalidate the cache entry.
-       check-audit.mjs / audit-waivers.json are extraFiles because a waiver
-       edit or a change to the checker's own logic must also bust the cache
-       even though neither is a lockfile. */
+       This means a newly-disclosed CVE against an unchanged lockfile will NOT
+       trigger a re-run here; that gap is intentionally covered by the separate
+       `cross-os.yml` cron, which runs the full unscoped battery on a fixed
+       schedule to catch new CVEs. check-audit.mjs / audit-waivers.json are
+       extraFiles because a waiver edit or a change to the checker's own logic
+       must also bust the cache even though neither is a lockfile. */
     name: 'audit',
     inputs: {
       globs: [],

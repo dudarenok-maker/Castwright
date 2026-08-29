@@ -147,7 +147,7 @@ export function collectAdvisoryIds(entry, vulnerabilities = {}, sourcePackage = 
 }
 
 /**
- * A waiver is expired when its `expiry` (YYYY-MM-DD) is earlier than today
+ * A waiver is expired when its `expiry` (YYYY-MM-DD) is today or earlier
  * (UTC). Fail-closed: any missing, non-string, or malformed expiry is treated
  * as expired (invalid). This ensures waivers cannot silently persist forever
  * due to malformed dates or missing fields. Validate calendar dates strictly
