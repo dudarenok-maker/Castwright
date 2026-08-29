@@ -540,10 +540,32 @@ jobs:
         # two — so an upstream `detect` failure (which SKIPS every leg job
         # rather than failing it, since they `needs: detect`) still fails
         # this aggregator instead of silently reporting green.
+        #
+        # `needs.*.result` (expression syntax) only gives the flat list of
+        # results, not which job produced which — so a raw toJSON(needs) dump
+        # was the only way to tell WHICH leg was cancelled vs. genuinely
+        # failed, and a human had to parse that JSON by eye to see it (costing
+        # ~50 minutes on PR #2424, three apt-hang cancellations misread as
+        # real test failures). Bucket by job name via jq instead so the log
+        # itself says which legs were cancelled (likely CI infra) vs. failed.
         run: |
-          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" == "true" ]]; then
+          echo '${{ toJSON(needs) }}' > needs.json
+          CANCELLED=()
+          FAILED=()
+          SKIPPED=()
+          for job in $(jq -r 'keys[]' needs.json); do
+            result="$(jq -r --arg j "$job" '.[$j].result' needs.json)"
+            case "$result" in
+              cancelled) CANCELLED+=("$job") ;;
+              failure) FAILED+=("$job") ;;
+              skipped) SKIPPED+=("$job") ;;
+            esac
+          done
+          if [ "${#CANCELLED[@]}" -gt 0 ] || [ "${#FAILED[@]}" -gt 0 ] || [ "${#SKIPPED[@]}" -gt 0 ]; then
             echo "One or more verify legs did not succeed:"
-            echo '${{ toJSON(needs) }}'
+            [ "${#CANCELLED[@]}" -gt 0 ] && echo "CANCELLED (likely CI infra, not a test failure): ${CANCELLED[*]}"
+            [ "${#FAILED[@]}" -gt 0 ] && echo "FAILED: ${FAILED[*]}"
+            [ "${#SKIPPED[@]}" -gt 0 ] && echo "SKIPPED: ${SKIPPED[*]}"
             exit 1
           fi
           echo "All verify legs passed."
