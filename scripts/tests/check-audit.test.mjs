@@ -53,18 +53,19 @@ test('collectAdvisoryIds: resolves transitive-only advisories by package name', 
   // Bug A fix: when via[] is strings-only (purely transitive), resolve the
   // package names in the vulnerabilities map to find their advisory ids.
   // Example: async has via: ["lodash"], and lodash entry has the actual advisory.
+  // Real npm audit --json uses bare package names as keys (e.g., "lodash", not "lodash@4.17.20").
   const vulns = {
-    'async@2.6.0': {
+    'async': {
       severity: 'high',
       via: ['lodash'], // Only a package name - no direct advisory object
     },
-    'lodash@4.17.20': {
+    'lodash': {
       severity: 'high',
       via: [{ source: 1106913, url: 'https://github.com/advisories/GHSA-p6mc-m468-83gw', severity: 'high', title: 'Prototype Pollution' }],
     },
   };
   // Should resolve async's "lodash" reference and find the GHSA from lodash's entry
-  const result = collectAdvisoryIds(vulns['async@2.6.0'], vulns, 'async');
+  const result = collectAdvisoryIds(vulns['async'], vulns, 'async');
   assert.deepEqual([...result.keys()].sort(), ['GHSA-p6mc-m468-83gw']);
   // The advisory came from lodash (the transitive source)
   assert.deepEqual([...result.get('GHSA-p6mc-m468-83gw')], ['lodash']);
@@ -203,14 +204,15 @@ test('gateFailures: high severity with no attributable advisory fails closed', (
 });
 
 test('gateFailures: transitive-only advisory is waivable when underlying GHSA is waived', () => {
-  // Bug A fix: async@2 has via: ["lodash"] (strings-only, purely transitive).
+  // Bug A fix: async has via: ["lodash"] (strings-only, purely transitive).
   // When we waive the underlying GHSA from lodash's advisory, async should pass.
+  // Real npm audit --json uses bare package names as keys (e.g., "async", not "async@2.6.0").
   const vulns = {
-    'async@2.6.0': {
+    'async': {
       severity: 'high',
       via: ['lodash'],
     },
-    'lodash@4.17.20': {
+    'lodash': {
       severity: 'high',
       via: [{ source: 1106913, url: 'https://github.com/advisories/GHSA-p6mc-m468-83gw', severity: 'high', title: 'Prototype Pollution' }],
     },
@@ -221,6 +223,48 @@ test('gateFailures: transitive-only advisory is waivable when underlying GHSA is
   assert.deepEqual(expired, []);
   // Both async and lodash should now be waived
   assert.deepEqual(missing, []);
+});
+
+test('collectAdvisoryIds: handles circular dependency chains without infinite recursion', () => {
+  // Cycle detection guard: when two packages reference each other transitively,
+  // the cycle-detection visited set prevents infinite recursion (RangeError).
+  // Example: package-a has via: ["package-b"], and package-b has via: ["package-a"].
+  const vulns = {
+    'package-a': {
+      severity: 'high',
+      via: ['package-b'], // Points to package-b
+    },
+    'package-b': {
+      severity: 'high',
+      via: ['package-a'], // Points back to package-a - creates a cycle
+    },
+  };
+  // Should terminate without infinite recursion and return a sensible result
+  const result = collectAdvisoryIds(vulns['package-a'], vulns, 'package-a');
+  // With the cycle guard, this should not throw and should return an empty map
+  // (no advisory objects with GHSAs exist in this fixture)
+  assert.deepEqual(result.size, 0);
+});
+
+test('collectAdvisoryIds: complex cycle with advisory object should terminate', () => {
+  // More complex case: a cycle where one entry has an actual advisory object
+  const vulns = {
+    'pkg-x': {
+      severity: 'high',
+      via: [
+        'pkg-y',
+        { source: 111111, url: 'https://github.com/advisories/GHSA-xxxx-1111-yyyy', severity: 'high', title: 'Issue' },
+      ],
+    },
+    'pkg-y': {
+      severity: 'high',
+      via: ['pkg-x'], // Points back to pkg-x
+    },
+  };
+  // Should terminate and collect the advisory from pkg-x
+  const result = collectAdvisoryIds(vulns['pkg-x'], vulns, 'pkg-x');
+  assert.deepEqual([...result.keys()].sort(), ['GHSA-xxxx-1111-yyyy']);
+  assert.deepEqual([...result.get('GHSA-xxxx-1111-yyyy')], ['pkg-x']);
 });
 
 test('gateFailures: entry with multi-severity advisories only requires qualifying ones to be waived', () => {
