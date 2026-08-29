@@ -38,4 +38,22 @@ jobs:
           printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.txt"
 
       - name: Validate PR issue link
-        run: node scripts/validate-pr-issue-link.mjs "$RUNNER_TEMP/pr-body.txt"
+        # #2791/#2433: this context is required on `main` by BOTH rulesets
+        # (17654264, 18362221), and both set `bypass_actors: []` — nothing
+        # can skip it. Dependabot's auto-generated PR bodies never contain
+        # `Closes #NN`/`Refs #NN` (it has no mechanism to add one), which
+        # would make every Dependabot PR permanently unmergeable and, with
+        # dependabot.yml's `open-pull-requests-limit: 5`, self-disable the
+        # whole feature into a pile of stuck PRs. The fix is scoped to a
+        # single actor, at the STEP level, not the job level: a job-level
+        # `if:` would leave this required status context PENDING forever on
+        # a Dependabot PR (a required check needs a completed run to report
+        # success, not merely to be skipped), which blocks the merge exactly
+        # as hard as an outright failure. Passing PR_AUTHOR through lets
+        # validate-pr-issue-link.mjs's isDependabotExempt() do the actual
+        # gating (see its own comment) — the job still runs and completes
+        # GREEN for a Dependabot PR, and every other author (human or bot)
+        # stays fully gated.
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: node scripts/validate-pr-issue-link.mjs "$RUNNER_TEMP/pr-body.txt" "$PR_AUTHOR"
