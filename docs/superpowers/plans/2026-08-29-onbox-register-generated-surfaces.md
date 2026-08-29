@@ -54,7 +54,7 @@ replaced. Do not resurrect them.
   source of truth for what "generated" looks like.
 - **A citation or defect description written into any tracked file — including
   this plan — must never place the word "row"/"rows" immediately before a
-  bare register-ID-shaped token** (e.g. `` row A40 ``). `check-register-citations.mjs`'s
+  bare register-ID-shaped token** (e.g. ` row A40 `). `check-register-citations.mjs`'s
   `ROW_CITATION_REGEX` matches that shape anywhere in the tree and will fail
   `test:hooks` on the prose itself, not just on a real citation. This plan
   observes that rule throughout (see Task 9).
