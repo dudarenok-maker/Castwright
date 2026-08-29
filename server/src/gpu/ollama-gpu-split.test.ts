@@ -9,6 +9,14 @@ vi.mock('node:child_process', () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
+const { configValueMock } = vi.hoisted(() => ({
+  configValueMock: vi.fn((key: string) => {
+    if (key === 'gpu.split.probe') return true; // default on
+    return undefined;
+  }),
+}));
+vi.mock('../config/resolver.js', () => ({ configValue: configValueMock }));
+
 import {
   detectOllamaGpuSplit,
   parseComputeAppsCsv,
@@ -38,6 +46,7 @@ function mockNvidiaSmi(opts: { computeApps?: string; indexUuid?: string; free?: 
 
 beforeEach(() => {
   execFileMock.mockReset();
+  configValueMock.mockReset();
   __resetOllamaGpuSplitCacheForTest();
 });
 
@@ -352,35 +361,72 @@ describe('detectOllamaGpuSplit', () => {
       }
     });
 
-    it('respects CASTWRIGHT_GPU_SPLIT_PROBE=0 env var to disable probe', async () => {
+    it('respects gpu.split.probe=false config to disable probe', async () => {
       mockNvidiaSmi({
         computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
         indexUuid: '0, GPU-aaa\n',
         free: '0, 3000\n',
       });
 
-      const originalEnv = process.env.CASTWRIGHT_GPU_SPLIT_PROBE;
-      process.env.CASTWRIGHT_GPU_SPLIT_PROBE = '0';
+      (configValueMock as any).mockReturnValue(false);
 
-      try {
-        const result = await detectOllamaGpuSplit();
-        // When disabled, should return empty result without invoking nvidia-smi
-        expect(result).toEqual({
-          reachable: false,
-          split: false,
-          deviceIndices: [],
-          totalUsedMb: 0,
-          wouldFitSingleDevice: false,
-          dataUnavailable: false,
-        });
-        expect(execFileMock.mock.calls.length).toBe(0);
-      } finally {
-        if (originalEnv === undefined) {
-          delete process.env.CASTWRIGHT_GPU_SPLIT_PROBE;
-        } else {
-          process.env.CASTWRIGHT_GPU_SPLIT_PROBE = originalEnv;
-        }
-      }
+      const result = await detectOllamaGpuSplit();
+      // When disabled, should return empty result without invoking nvidia-smi
+      expect(result).toEqual({
+        reachable: false,
+        split: false,
+        deviceIndices: [],
+        totalUsedMb: 0,
+        wouldFitSingleDevice: false,
+        dataUnavailable: false,
+      });
+      expect(execFileMock.mock.calls.length).toBe(0);
+    });
+
+    it('respects stored override of gpu.split.probe=false to disable probe', async () => {
+      mockNvidiaSmi({
+        computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
+        indexUuid: '0, GPU-aaa\n',
+        free: '0, 3000\n',
+      });
+
+      // Simulate a stored override that has been resolved to false
+      (configValueMock as any).mockReturnValue(false);
+
+      const result = await detectOllamaGpuSplit();
+      // When disabled via override, should return empty result without invoking nvidia-smi
+      expect(result).toEqual({
+        reachable: false,
+        split: false,
+        deviceIndices: [],
+        totalUsedMb: 0,
+        wouldFitSingleDevice: false,
+        dataUnavailable: false,
+      });
+      expect(execFileMock.mock.calls.length).toBe(0);
+    });
+
+    it('respects env var CASTWRIGHT_GPU_SPLIT_PROBE=false to disable probe via config resolution', async () => {
+      mockNvidiaSmi({
+        computeApps: 'GPU-aaa, 1, ollama.exe, 5000\n',
+        indexUuid: '0, GPU-aaa\n',
+        free: '0, 3000\n',
+      });
+
+      // Simulate env var resolution path returning false (e.g., CASTWRIGHT_GPU_SPLIT_PROBE=0/false/no/off)
+      (configValueMock as any).mockReturnValue(false);
+
+      const result = await detectOllamaGpuSplit();
+      // When disabled via env var resolution, should return empty result without invoking nvidia-smi
+      expect(result).toEqual({
+        reachable: false,
+        split: false,
+        deviceIndices: [],
+        totalUsedMb: 0,
+        wouldFitSingleDevice: false,
+        dataUnavailable: false,
+      });
+      expect(execFileMock.mock.calls.length).toBe(0);
     });
   });
 });

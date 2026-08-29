@@ -9,6 +9,7 @@
    failure, or timeout degrades to reachable: false rather than throwing. */
 
 import { execFile } from 'node:child_process';
+import { configValue } from '../config/resolver.js';
 
 const EXEC_TIMEOUT_MS = 4_000;
 /* TTL-based cache for the GPU-split probe result. The detector shells out to
@@ -19,8 +20,8 @@ const EXEC_TIMEOUT_MS = 4_000;
    (once per chapter per analysis stage), so a much longer TTL is safe and
    necessary (srv-2367). GPU placement essentially never changes mid-generation,
    so a 60-second window coalesces all redundant probes within a typical
-   analysis run without stale-cache risk. Env-gated by CASTWRIGHT_GPU_SPLIT_PROBE
-   (default on; set to '0' to disable if the operator doesn't need this diagnostic).
+   analysis run without stale-cache risk. Config-gated via gpu.split.probe
+   (default on; set to false to disable if the operator doesn't need this diagnostic).
    Mirrors capacity-probe.ts's caching idiom: module-level cache variable, TTL
    check on every call, fresh-override for callers that need a re-probe. */
 const CACHE_TTL_MS = 60_000;
@@ -151,12 +152,12 @@ export function parseGpuFreeCsv(raw: string): GpuFreeRow[] {
     verify child confirms this against a real box.
     Result is cached for 60 seconds to avoid redundant nvidia-smi spawns on the
     analyzer's hot path (chat() calls this on every inference, seconds apart).
-    Env-gated by CASTWRIGHT_GPU_SPLIT_PROBE (default on; set to '0' to disable).
+    Config-gated via gpu.split.probe (default on; set to false to disable).
     Pass `fresh: true` to force a re-probe (for testing). */
 export async function detectOllamaGpuSplit(opts?: { fresh?: boolean }): Promise<OllamaGpuSplitResult> {
-  /* Permit operators to disable the probe entirely via env var, matching the
+  /* Permit operators to disable the probe entirely via config, matching the
      pattern in sampleAndRecordVram (analyzer/ollama.ts). */
-  if (process.env.CASTWRIGHT_GPU_SPLIT_PROBE === '0') {
+  if (configValue<boolean>('gpu.split.probe') === false) {
     return emptyResult();
   }
 
