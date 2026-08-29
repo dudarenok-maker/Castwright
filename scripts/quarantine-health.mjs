@@ -310,6 +310,32 @@ function* yieldAllCandidateRows(markdown) {
   }
 }
 
+// Recognizes recognized "this row IS quarantined" values in the Quarantined
+// column. A cell is treated as quarantined if it either:
+//   1. Starts with "Quarantined" (e.g. "Quarantined (2026-08-01)" or just "Quarantined"), or
+//   2. Matches a bare YYYY-MM-DD date pattern (legacy format from before the
+//      startsWith check was added — bare dates were previously used to mark rows
+//      as quarantined; this is preserved for backward compatibility).
+// Anything else (including unrecognized formats and empty cells) is NOT treated
+// as a recognized quarantined value — a separate check must count those as unparsed.
+export function isQuarantinedCell(cellValue) {
+  const trimmed = (cellValue ?? '').trim();
+  if (trimmed.startsWith('Quarantined')) return true;
+  // Bare date pattern YYYY-MM-DD (legacy format)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return true;
+  return false;
+}
+
+// Recognizes "this row is NOT quarantined" values in the Quarantined column.
+// A row explicitly marked "Not quarantined" (e.g. "Not quarantined — still gates")
+// is in scope for the normal gating suite and must NOT be re-run or reported by
+// the quarantine lane. This is distinct from an unrecognized value (which should
+// be a parse error).
+export function isNotQuarantinedCell(cellValue) {
+  const trimmed = (cellValue ?? '').trim();
+  return trimmed.startsWith('Not quarantined');
+}
+
 // Parses the register's markdown table into one entry per quarantined TEST
 // (a row can name more than one backtick-quoted test sharing a file, as the
 // wake-lock row did — each becomes its own entry). Never throws on malformed
@@ -321,12 +347,13 @@ function* yieldAllCandidateRows(markdown) {
 // produce an entry (no file to test), so it's skipped here but counted as
 // unparsed by countUnparsedDataRows so the loud-failure guard catches it.
 //
-// A row whose Quarantined cell does not start with "Quarantined" (#2496) is
-// also skipped here — e.g. #1981, which reads "Not quarantined — still
-// gates". That row is not quarantined at all, so it must never be re-run by
-// or reported on by this tool. Unlike the empty-File-cell case, this is not
-// a parse failure — the row parsed fine, it's just out of scope — so it is
-// NOT counted by countUnparsedDataRows.
+// A row whose Quarantined cell indicates it is NOT quarantined (e.g. "Not
+// quarantined — still gates", like #1981) is also skipped here — that row is
+// not quarantined at all, so it must never be re-run by or reported on by
+// this tool. Unlike the empty-File-cell case, this is not a parse failure —
+// the row parsed fine, it's just out of scope — so it is NOT counted by
+// countUnparsedDataRows. A row with an unrecognized Quarantined value is
+// handled by countUnparsedDataRows as a parse failure (loud).
 export function parseRegister(markdown) {
   const entries = [];
   for (const cells of yieldDataRowCells(markdown)) {
@@ -337,15 +364,16 @@ export function parseRegister(markdown) {
     // still be counted as unparsed data rows by the guard (Bug A).
     if (!file) continue;
 
-    // Skip rows that aren't actually quarantined (#2496): the register also
-    // carries rows like #1981 whose "Quarantined" cell reads "Not quarantined
-    // — still gates" — these still gate the normal suite and must never be
-    // re-run by the quarantine lane or appear in its report. Only a cell that
-    // literally starts with "Quarantined" opts a row into this tool; a row
-    // with fewer than 6 cells (no Quarantined cell at all) is treated the
-    // same as "not quarantined", not as a parse failure — that guard is
-    // countUnparsedDataRows' job, not this one's.
-    if (!(quarantinedCell ?? '').trim().startsWith('Quarantined')) continue;
+    // Skip rows that are explicitly NOT quarantined — they gate the normal
+    // suite and must never be re-run by the quarantine lane. This is not a
+    // parse failure, just out of scope.
+    if (isNotQuarantinedCell(quarantinedCell)) continue;
+
+    // Skip rows that are recognized as quarantined and proceed to extract their
+    // test names. Unrecognized Quarantined values are not skipped here — they
+    // will be counted as unparsed by countUnparsedDataRows so the loud-failure
+    // guard catches the malformed cell.
+    if (!isQuarantinedCell(quarantinedCell)) continue;
 
     // Check for prose format prefix first (Bug C fix: prose prefix takes
     // priority over incidental backticks). Once a #NNNN — prefix is detected,
@@ -386,11 +414,13 @@ export function countRegisterDataRows(markdown) {
 }
 
 // Counts data rows that cannot produce a usable entry — a partial-drop
-// detection for finding 1, Bug A, and Fix 3 (malformed rows). A row is
-// "unparsed" if it either:
+// detection for finding 1, Bug A, Fix 3 (malformed rows), and the fail-open
+// Quarantined-cell gap (#2799). A row is "unparsed" if it either:
 //   1. Has fewer than 5 cells (malformed row — Fix 3), or
 //   2. Has an empty/whitespace-only File cell (Bug A), or
-//   3. Has ≥5 cells and a non-empty File cell but neither backtick-quoted
+//   3. Has an unrecognized/malformed Quarantined cell value (neither a
+//      recognized "quarantined" nor "not quarantined" shape), or
+//   4. Has ≥5 cells and a non-empty File cell but neither backtick-quoted
 //      test names nor a #NNNN — prose match yield any test name.
 // The guard in main() uses this to fire on a partial drop (one or more
 // unparsed rows), not just a total drop (all rows unparsed).
@@ -406,10 +436,20 @@ export function countUnparsedDataRows(markdown) {
 
     const testCell = cells[0];
     const fileCell = cells[1];
+    const quarantinedCell = cells[5]; // 6th column, index 5
     const file = fileCell.replace(/`/g, '').trim();
 
     // Empty File cell is unparsed (Bug A).
     if (!file) {
+      unparsedCount++;
+      continue;
+    }
+
+    // Unrecognized Quarantined cell value is unparsed (#2799). A well-formed
+    // row with a recognized "not quarantined" value is NOT unparsed (it's
+    // just out of scope and skipped by parseRegister), but an unrecognized
+    // value is a parse error and must fail loud.
+    if (!isQuarantinedCell(quarantinedCell) && !isNotQuarantinedCell(quarantinedCell)) {
       unparsedCount++;
       continue;
     }

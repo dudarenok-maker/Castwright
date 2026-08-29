@@ -138,6 +138,47 @@ test('parseRegister excludes a row whose Quarantined cell reads "Not quarantined
   );
 });
 
+// #2799 fix: recognize bare-date legacy Quarantined cells and unrecognized
+// values as parse anomalies (loud failure, not silent drop).
+test('parseRegister accepts a bare YYYY-MM-DD date as a recognized quarantined value (#2799 legacy format)', () => {
+  // Before PR #2799, the old parser used .startsWith('Quarantined'), silently
+  // dropping bare-date rows. This test verifies the new value-set check still
+  // accepts bare dates as a legitimate legacy format.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | intermittent | Fails on retry | #2235 | 2026-08-01 |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1, 'a bare-date Quarantined cell should be recognized as quarantined');
+  assert.equal(entries[0].file, 'server/src/routes/export.test.ts');
+});
+
+test('countUnparsedDataRows detects unrecognized Quarantined cell values as parse failures (#2799)', () => {
+  // An unrecognized Quarantined value (neither "Quarantined*", "Not quarantined*",
+  // nor a bare YYYY-MM-DD date) must be counted as unparsed so the loud-failure
+  // guard catches the malformed cell and reports it, not silently dropping it.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #2235 — revokes the older manifest | \`server/src/routes/export.test.ts\` | intermittent | Fails on retry | #2235 | garbled-unrecognized-value |
+`;
+  const unparsed = countUnparsedDataRows(markdown);
+  assert.equal(unparsed, 1, 'an unrecognized Quarantined value should be counted as unparsed, not silently dropped');
+  // Verify the loud-failure guard would fire
+  const plan = planRegisterRun(markdown);
+  assert.equal(plan.outcome, 'parse-failure', 'the guard should detect the unrecognized value as a parse failure');
+});
+
+test('countUnparsedDataRows does not count "Not quarantined" rows as unparsed (#2799)', () => {
+  // A row explicitly marked "Not quarantined" is not unparsed — it's in scope
+  // for the normal suite and is simply skipped (out of scope), not a parse error.
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — a stale cast PUT | \`server/src/routes/book-state-preserve-voices.test.ts\` | intermittent | Fails intermittently | #2226 | Not quarantined — still gates |
+`;
+  const unparsed = countUnparsedDataRows(markdown);
+  assert.equal(unparsed, 0, 'a "Not quarantined" row should not be counted as unparsed (it is in scope, just skipped)');
+});
+
 test('parseRegister excludes a row with fewer than 6 cells (no Quarantined cell) the same as "not quarantined"', () => {
   const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
 |------|------|-------|---------|----------------|-------------|
