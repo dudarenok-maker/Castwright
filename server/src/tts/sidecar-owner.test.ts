@@ -8,8 +8,10 @@ import {
   claimSidecarOwnership,
   enforceSingleSidecarOwner,
   findConflictingOwner,
+  isPortListening,
   isProcessAlive,
   legacySidecarOwnerPath,
+  pruneStaleNotesSafely,
   readSidecarOwner,
   releaseSidecarOwnership,
   resolveSidecarPort,
@@ -264,23 +266,21 @@ describe('claimSidecarOwnership', () => {
     expect(readSidecarOwner(runDir, 9010)?.pid).toBe(200);
   });
 
-  it('does NOT delete or modify notes for OTHER ports when claiming (#2754 regression)', () => {
-    // Regression test: claimSidecarOwnership for port P must not touch notes for other ports.
-    // Setup: port 9010 has a note (whether live or dead PID), port 9011 has another.
+  it('does not touch other ports\' notes SYNCHRONOUSLY, before returning (#2754 regression)', () => {
+    // claimSidecarOwnership itself must never delete/modify another port's note as
+    // part of its own synchronous contract — #2792's background reap (below) is a
+    // separate, fire-and-forget, awaited-nowhere operation; this test only pins
+    // that claimSidecarOwnership's own return does not depend on, or wait for, it.
     const note9010 = { pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' };
     const note9011 = { pid: process.pid, ppid: process.ppid, port: 9011, startedAt: 'live' };
     writeNote(note9010, 9010);
     writeNote(note9011, 9011);
 
-    // Claim ownership on port 9000 (unrelated). This must NOT delete or modify 9010 or 9011.
+    // Claim ownership on port 9000 (unrelated). Neither note is touched by the
+    // time this call returns, regardless of what the background reap later decides.
     claimSidecarOwnership({ runDir, pid: 555, ppid: 7, port: 9000, nowIso: () => 'new' });
 
-    // Verify the new claim succeeded
     expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555);
-
-    // Verify OTHER ports' notes were untouched — this is the safety property.
-    // Even if 9010's PID is dead, the note must survive (it's the only record of
-    // a potentially-orphaned sidecar that needs sweep cleanup).
     expect(readSidecarOwner(runDir, 9010)).toEqual(expect.objectContaining(note9010));
     expect(readSidecarOwner(runDir, 9011)).toEqual(expect.objectContaining(note9011));
   });
@@ -439,6 +439,102 @@ describe('claimSidecarOwnership', () => {
       // the code source has writeFileSync before unlinkSync by inspecting behavior:
       // if the port-keyed write fails, no cleanup should happen.)
     });
+  });
+});
+
+describe('isPortListening (#2792)', () => {
+  it('returns true while a real server is bound, false once it is closed', async () => {
+    const { createServer } = await import('node:net');
+    const server = createServer();
+    const port: number = await new Promise((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        resolve(typeof addr === 'object' && addr !== null ? addr.port : 0);
+      });
+    });
+
+    await expect(isPortListening(port)).resolves.toBe(true);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await expect(isPortListening(port)).resolves.toBe(false);
+  });
+});
+
+describe('pruneStaleNotesSafely (#2792)', () => {
+  it('deletes a stale note whose pid is dead AND whose port is not listening', async () => {
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    await pruneStaleNotesSafely(
+      runDir,
+      9000,
+      () => false, // aliveFn: dead
+      async () => false, // portListeningFn: nothing bound there
+    );
+    expect(readSidecarOwner(runDir, 9010)).toBeNull();
+  });
+
+  it('#2792 — preserves a stale-pid note when the port IS still listening (the orphan case)', () => {
+    // The exact defect this issue exists to prevent: a dead recorded server
+    // pid does not prove the port is free, because the sidecar it spawned may
+    // have survived as an orphan still bound there. This is the ONE case the
+    // whole safe-reap design exists to protect.
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    return pruneStaleNotesSafely(
+      runDir,
+      9000,
+      () => false, // aliveFn: recorded server is dead
+      async () => true, // portListeningFn: but something IS bound there — an orphan
+    ).then(() => {
+      expect(readSidecarOwner(runDir, 9010)).toEqual(
+        expect.objectContaining({ pid: 99999, port: 9010 }),
+      );
+    });
+  });
+
+  it('preserves a live-pid note without ever probing the port (aliveFn short-circuits first)', async () => {
+    writeNote({ pid: process.pid, ppid: process.ppid, port: 9010, startedAt: 'live' }, 9010);
+    const portListeningFn = vi.fn(async () => false);
+    await pruneStaleNotesSafely(runDir, 9000, () => true, portListeningFn);
+    expect(readSidecarOwner(runDir, 9010)).not.toBeNull();
+    expect(portListeningFn).not.toHaveBeenCalled();
+  });
+
+  it('never touches the note for currentPort, even if it looks stale', async () => {
+    writeNote({ pid: 99999, ppid: 1, port: 9000, startedAt: 'stale' }, 9000);
+    await pruneStaleNotesSafely(
+      runDir,
+      9000, // currentPort — the note we just wrote for it must be left alone
+      () => false,
+      async () => false,
+    );
+    expect(readSidecarOwner(runDir, 9000)).not.toBeNull();
+  });
+
+  it('is wired into claimSidecarOwnership as a fire-and-forget background reap', async () => {
+    // claimSidecarOwnership itself returns synchronously without pruning (pinned
+    // above); this test observes claimSidecarOwnership's OWN internal fire-and-
+    // forget call actually running, by hooking the injected portListeningFn it
+    // passes through, then waits for it to finish and confirms the reap happened.
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    let resolveProbed: () => void;
+    const probed = new Promise<void>((resolve) => {
+      resolveProbed = resolve;
+    });
+    const portListeningFn = async () => {
+      resolveProbed();
+      return false;
+    };
+    claimSidecarOwnership({
+      runDir,
+      pid: 555,
+      ppid: 7,
+      port: 9000,
+      nowIso: () => 'new',
+      aliveFn: () => false,
+      portListeningFn,
+    });
+    await probed; // the background reap has called our probe — it's about to unlink
+    await new Promise((resolve) => setImmediate(resolve)); // let the unlink actually run
+    expect(readSidecarOwner(runDir, 9010)).toBeNull();
   });
 });
 

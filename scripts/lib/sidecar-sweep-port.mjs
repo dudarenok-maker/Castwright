@@ -158,9 +158,12 @@ export function resolveConfiguredVitePort(envLocalPath) {
     ownership here, and more than one means this run dir is shared across
     ports (#2641) with no way to tell which note is current, so both degrade
     to the same safe server/.env fallback the absent/corrupt cases already
-    use. Port-keyed notes may accumulate over time (issue #2792), but this
-    resolver's job is to safely fall back to config when ambiguous, not to
-    guarantee freshness. */
+    use. A server claiming a port safely reaps OTHER ports' stale notes in
+    the background (sidecar-owner.ts#pruneStaleNotesSafely, #2792 — gated on
+    both a dead recorded pid AND nothing actually listening on that port, so
+    it never destroys an orphan's only record), but that's best-effort and
+    happens elsewhere: this resolver's own job stays to fall back to config
+    when ambiguous, not to guarantee freshness itself. */
 export function resolveSidecarSweepPort(runDir, serverEnvPath) {
   let entries;
   try {
@@ -186,8 +189,8 @@ export function resolveSidecarSweepPort(runDir, serverEnvPath) {
     }
   }
   // Zero notes, more than one note, or corrupt/out-of-range: ambiguous or absent.
-  // Port-keyed notes may accumulate over time (issue #2792); this resolver's job is
-  // to safely fall back to config when ambiguous, not to guarantee freshness.
+  // Stale notes are safely reaped elsewhere (sidecar-owner.ts, #2792); this
+  // resolver's own job stays to fall back to config when ambiguous.
   return serverEnvPath ? parseLocalTtsPortFromServerEnv(serverEnvPath) : null;
 }
 

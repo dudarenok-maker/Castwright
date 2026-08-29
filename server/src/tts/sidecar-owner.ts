@@ -27,7 +27,8 @@
  * on different ports. The port is read once at startup and passed through to
  * both spawn-sidecar.ts and sidecar-owner.ts so they coordinate on the same port.
  */
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 
 /** Last invalid LOCAL_TTS_PORT value we logged an error for. Prevents duplicate
@@ -165,6 +166,66 @@ export function isProcessAlive(pid: number, killFn: typeof process.kill = proces
   }
 }
 
+/** True if some process is currently bound/listening on `port` on this host.
+    Used ONLY to gate safe reaping of a stale owner note (#2792): a dead
+    recorded server pid does NOT prove the port is free, because the sidecar
+    subprocess that server spawned may have survived as an orphan still bound
+    there. Binds a throwaway TCP server — EADDRINUSE means something is
+    listening; a successful bind (immediately closed) means the port is free. */
+export function isPortListening(port: number, host = '127.0.0.1'): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      resolve(err.code === 'EADDRINUSE');
+    });
+    server.once('listening', () => {
+      server.close(() => resolve(false));
+    });
+    server.listen(port, host);
+  });
+}
+
+/** Reap OTHER ports' stale owner notes, safely (#2792). A note is deleted
+    only when BOTH: its recorded pid is no longer alive, AND nothing is
+    actually listening on the port it names. The second check is what makes
+    this safe where the earlier write-side pruning attempt (reverted in
+    #2754) was not — a dead server pid alone does not mean the port is free,
+    since the orphaned sidecar it spawned may still be bound there, and that
+    note is the only record of it. Never touches the note for `currentPort`.
+    Best-effort: any I/O error on a given note is swallowed and that note is
+    left alone rather than risking a wrong delete. */
+export async function pruneStaleNotesSafely(
+  runDir: string,
+  currentPort: number,
+  aliveFn: (pid: number) => boolean = isProcessAlive,
+  portListeningFn: (port: number) => Promise<boolean> = isPortListening,
+): Promise<void> {
+  let entries: string[];
+  try {
+    entries = readdirSync(runDir);
+  } catch {
+    return; // runDir doesn't exist yet — nothing to prune
+  }
+  const noteFiles = entries.filter((name) => /^tts\.owner\.\d+\.json$/.test(name));
+  for (const fileName of noteFiles) {
+    const match = fileName.match(/^tts\.owner\.(\d+)\.json$/);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (port === currentPort) continue; // about to be/just been overwritten — not this function's job
+
+    const owner = readSidecarOwner(runDir, port);
+    if (!owner) continue; // already gone or unreadable
+    if (aliveFn(owner.pid)) continue; // recorded server still alive — not stale
+
+    try {
+      if (await portListeningFn(port)) continue; // an orphan is still bound there — this note is its only record
+      unlinkSync(sidecarOwnerPath(runDir, port));
+    } catch {
+      /* already gone, inaccessible, or the port probe failed — leave the note, best-effort only */
+    }
+  }
+}
+
 export interface ClaimOpts {
   runDir: string;
   pid?: number;
@@ -172,6 +233,7 @@ export interface ClaimOpts {
   port?: number;
   nowIso?: () => string;
   aliveFn?: (pid: number) => boolean;
+  portListeningFn?: (port: number) => Promise<boolean>;
 }
 
 
@@ -192,7 +254,14 @@ export interface ClaimOpts {
     This check is independent (not derived from findConflictingOwner's side effects),
     ensuring we never delete a live, foreign legacy owner's only record.
     Also writes the port-keyed note FIRST, then deletes the legacy note, to avoid
-    losing our ownership record if a crash occurs between the two operations. */
+    losing our ownership record if a crash occurs between the two operations.
+
+    Also fires (fire-and-forget) pruneStaleNotesSafely for OTHER ports' notes
+    (#2792) — a best-effort background reap, gated by both dead-pid AND
+    nothing-listening, so it never destroys an orphan's only record. This is
+    genuinely fire-and-forget: any error is swallowed, and callers do not
+    wait on it, since claimSidecarOwnership's own contract (write the note,
+    decide the fast synchronous return) must not depend on network I/O. */
 export function claimSidecarOwnership(opts: ClaimOpts): void {
   const {
     runDir,
@@ -201,6 +270,7 @@ export function claimSidecarOwnership(opts: ClaimOpts): void {
     port = sidecarPort(),
     nowIso = () => new Date().toISOString(),
     aliveFn = isProcessAlive,
+    portListeningFn = isPortListening,
   } = opts;
   mkdirSync(runDir, { recursive: true });
 
@@ -230,6 +300,11 @@ export function claimSidecarOwnership(opts: ClaimOpts): void {
       }
     }
   }
+
+  // #2792 — best-effort background reap of OTHER ports' stale notes. Never
+  // awaited: a claim must not block on a network probe, and a rejection here
+  // must never surface as an unhandled rejection.
+  void pruneStaleNotesSafely(runDir, port, aliveFn, portListeningFn).catch(() => {});
 }
 
 /** Delete the owner note iff WE still own it (pid matches). A no-op when the
