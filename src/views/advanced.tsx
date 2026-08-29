@@ -318,6 +318,9 @@ export function AdvancedView() {
     !gpuSplit.deviceIndices.every((idx) => idx === expectedDeviceNum);
 
   // Case 2: No split (split=false), but the single device is wrong
+  // With 2+ resident PIDs (e.g., analyzer + design model), deviceIndices.length > 1,
+  // so expectedDeviceWrongSingle remains false — ambiguous which model expectedDevice
+  // refers to, so we don't show a mismatch warning (fail-closed behavior).
   const expectedDeviceWrongSingle =
     expectedDevice !== '' &&
     !Number.isNaN(expectedDeviceNum) &&

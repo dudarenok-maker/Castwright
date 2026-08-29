@@ -873,12 +873,18 @@ export class OllamaAnalyzer implements Analyzer {
            Guard against NaN (non-numeric expectedDevice) to fail safe: a malformed
            value like 'gpu0' would become NaN and compare false against every device
            index, producing a bogus always-mismatch warning. Mirror the frontend's
-           !Number.isNaN guard (advanced.tsx line 314/323). */
-        if (expectedDevice && splitResult.reachable) {
+           !Number.isNaN guard (advanced.tsx line 314/323).
+           Also mirror the frontend's dataUnavailable suppression: when the VRAM data
+           is inconclusive (driver doesn't expose per-process memory), we can't
+           confidently assert a mismatch, so suppress the warning. */
+        if (expectedDevice && splitResult.reachable && !splitResult.dataUnavailable) {
           const expectedIndex = Number(expectedDevice);
           if (!Number.isNaN(expectedIndex)) {
             const isMismatch =
               (splitResult.split && !splitResult.deviceIndices.every((idx) => idx === expectedIndex)) ||
+              /* Mismatch only fires when there's exactly one resident Ollama process/PID.
+                 With 2+ distinct PIDs on different GPUs (e.g., analyzer + design model),
+                 ambiguous which model expectedDevice refers to, so skip the warning. */
               (!splitResult.split && splitResult.deviceIndices.length === 1 && splitResult.deviceIndices[0] !== expectedIndex);
 
             if (isMismatch) {

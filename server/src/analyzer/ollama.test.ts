@@ -211,6 +211,7 @@ beforeEach(async () => {
     deviceIndices: [],
     totalUsedMb: 0,
     wouldFitSingleDevice: false,
+    dataUnavailable: false,
   });
   configValueMock.mockReset();
   await mkdir(resolve(HANDOFF_ROOT, 'inbox'), { recursive: true });
@@ -966,6 +967,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [0, 1],
       totalUsedMb: 9000,
       wouldFitSingleDevice: true,
+      dataUnavailable: false,
     });
     const { OllamaAnalyzer } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
@@ -989,6 +991,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [0, 2],
       totalUsedMb: 9000,
       wouldFitSingleDevice: true,
+      dataUnavailable: false,
     });
     await analyzer.runStage1Chapter('m_gpu_split_3', 3, '# prompt', {});
     expect(splitWarnings()).toHaveLength(2);
@@ -1003,6 +1006,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [],
       totalUsedMb: 0,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
     const { OllamaAnalyzer } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
@@ -1019,6 +1023,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [0, 1],
       totalUsedMb: 40000,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
     const { OllamaAnalyzer } = await import('./ollama.js');
     const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
@@ -1046,6 +1051,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [1],
       totalUsedMb: 5000,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
     (configValueMock as any).mockReturnValue('0');
     const { OllamaAnalyzer } = await import('./ollama.js');
@@ -1071,6 +1077,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [2],
       totalUsedMb: 5000,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
     await analyzer.runStage1Chapter('m_gpu_expecteddevice_mismatch_3', 3, '# prompt', {});
     expect(mismatchWarnings()).toHaveLength(2);
@@ -1086,6 +1093,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [1, 2],
       totalUsedMb: 9000,
       wouldFitSingleDevice: true,
+      dataUnavailable: false,
     });
     (configValueMock as any).mockReturnValue('0');
     const { OllamaAnalyzer } = await import('./ollama.js');
@@ -1109,6 +1117,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [1],
       totalUsedMb: 5000,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
     (configValueMock as any).mockReturnValue('');
     const { OllamaAnalyzer } = await import('./ollama.js');
@@ -1130,6 +1139,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [1],
       totalUsedMb: 5000,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
     (configValueMock as any).mockReturnValue('1');
     const { OllamaAnalyzer } = await import('./ollama.js');
@@ -1151,6 +1161,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [0, 1],
       totalUsedMb: 9000,
       wouldFitSingleDevice: true,
+      dataUnavailable: false,
     });
     (configValueMock as any).mockReturnValue('0');
     const { OllamaAnalyzer } = await import('./ollama.js');
@@ -1174,6 +1185,7 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       deviceIndices: [0],
       totalUsedMb: 5000,
       wouldFitSingleDevice: false,
+      dataUnavailable: false,
     });
     /* Set expectedDevice to a non-numeric string like 'gpu0' (a typo).
        Without the NaN guard, Number('gpu0') = NaN, and NaN === 0 is always false,
@@ -1187,6 +1199,60 @@ describe('OllamaAnalyzer — GPU split warning (srv-2367 Task 2)', () => {
       warnSpy.mock.calls.filter(
         ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('GPU device mismatch'),
       );
+    expect(mismatchWarnings()).toHaveLength(0);
+  });
+
+  it('Finding 2 regression: does not warn when dataUnavailable: true, even if placement mismatches expectedDevice', async () => {
+    // srv-2367 Finding 2: The UI suppresses mismatch warnings when dataUnavailable
+    // is true (driver doesn't expose per-process GPU memory). The server-side log
+    // must agree to avoid contradictory behavior. This test ensures the server
+    // also suppresses the mismatch warning when dataUnavailable: true.
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [1],  // Detected on GPU 1
+      totalUsedMb: 5000,
+      wouldFitSingleDevice: false,
+      dataUnavailable: true,  // But data is inconclusive (WDDM driver)
+    });
+    (configValueMock as any).mockReturnValue('0');  // expectedDevice = 0
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_dataunavailable_mismatch', 1, '# prompt', {});
+    const mismatchWarnings = () =>
+      warnSpy.mock.calls.filter(
+        ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('GPU device mismatch'),
+      );
+    // Must NOT warn when dataUnavailable: true, mirroring the UI's suppression
+    expect(mismatchWarnings()).toHaveLength(0);
+  });
+
+  it('Finding 3 regression: does not warn when 2+ resident PIDs on different GPUs (ambiguous which model expectedDevice refers to)', async () => {
+    // srv-2367 Finding 3: With multiple resident Ollama PIDs (e.g., analyzer on GPU 0,
+    // design model on GPU 1), it's ambiguous which model an expectedDevice value
+    // refers to. This is a defensible fail-closed behavior: we skip the warning
+    // entirely rather than guess. This test documents that intentional behavior.
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    detectOllamaGpuSplitMock.mockResolvedValue({
+      reachable: true,
+      split: false,
+      deviceIndices: [0, 1],  // Two distinct resident Ollama PIDs on different GPUs
+      totalUsedMb: 8000,
+      wouldFitSingleDevice: false,
+      dataUnavailable: false,
+    });
+    (configValueMock as any).mockReturnValue('2');  // expectedDevice = 2 (neither GPU)
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_gpu_multipid_mismatch', 1, '# prompt', {});
+    const mismatchWarnings = () =>
+      warnSpy.mock.calls.filter(
+        ([msg]: [unknown]) => typeof msg === 'string' && msg.includes('GPU device mismatch'),
+      );
+    // Must NOT warn: deviceIndices.length === 2, so mismatch gate skips the check
     expect(mismatchWarnings()).toHaveLength(0);
   });
 });

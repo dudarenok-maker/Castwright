@@ -58,6 +58,7 @@ describe('parseComputeAppsCsv', () => {
       { gpuUuid: 'GPU-bbb', pid: '456', processName: 'chrome.exe', usedMemoryMb: 200 },
     ]);
     expect(result.hadUnparseableMemory).toBe(false);
+    expect(result.unparseableProcessNames.size).toBe(0);
   });
 
   it('skips structurally invalid rows (field count < 4)', () => {
@@ -72,6 +73,7 @@ describe('parseComputeAppsCsv', () => {
       { gpuUuid: 'GPU-ccc', pid: '789', processName: 'chrome.exe', usedMemoryMb: 200 },
     ]);
     expect(result.hadUnparseableMemory).toBe(true);
+    expect(result.unparseableProcessNames).toEqual(new Set(['ollama.exe', 'ollama_llama_server']));
   });
 });
 
@@ -246,6 +248,29 @@ describe('detectOllamaGpuSplit', () => {
       totalUsedMb: 0,
       wouldFitSingleDevice: false,
       dataUnavailable: true,
+    });
+  });
+
+  it('Finding 1 regression: unrelated process unreadable, Ollama readable -> dataUnavailable: false', async () => {
+    // srv-2367 Finding 1: dataUnavailable was incorrectly set to true whenever ANY
+    // process's VRAM was unreadable and the string "ollama" appeared anywhere in the
+    // raw output. This test proves the fix: Ollama's row is cleanly readable on GPU 1,
+    // while an unrelated chrome process on GPU 0 has [N/A] — dataUnavailable must be
+    // false because Ollama's own data is available.
+    mockNvidiaSmi({
+      computeApps: 'GPU-aaa, 99, chrome.exe, [N/A]\nGPU-bbb, 1, ollama.exe, 5000\n',
+      indexUuid: '0, GPU-aaa\n1, GPU-bbb\n',
+      free: '0, 3000\n1, 500\n',
+    });
+
+    const result = await detectOllamaGpuSplit();
+    expect(result).toEqual({
+      reachable: true,
+      split: false,
+      deviceIndices: [1],  // Ollama on GPU 1
+      totalUsedMb: 5000,
+      wouldFitSingleDevice: false,
+      dataUnavailable: false,  // Fixed: was incorrectly true before the fix
     });
   });
 

@@ -90,6 +90,10 @@ interface ParseComputeAppsResult {
   /** True if at least one structurally-valid row (correct field count, non-empty fields)
       was skipped due to non-finite usedMemoryMb (e.g., [N/A] under WDDM driver). */
   hadUnparseableMemory: boolean;
+  /** Process names of rows that had unparseable used_memory. Only Ollama-specific
+      unparseable rows indicate data unavailability (other processes' VRAM read
+      failures don't affect the Ollama detector). */
+  unparseableProcessNames: Set<string>;
 }
 
 /** Parse `nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory
@@ -97,6 +101,7 @@ interface ParseComputeAppsResult {
 export function parseComputeAppsCsv(raw: string): ParseComputeAppsResult {
   const rows: ComputeAppRow[] = [];
   let hadUnparseableMemory = false;
+  const unparseableProcessNames = new Set<string>();
   for (const line of raw.split('\n')) {
     const parts = line.split(',').map((p) => p.trim());
     if (parts.length < 4) continue;
@@ -106,11 +111,12 @@ export function parseComputeAppsCsv(raw: string): ParseComputeAppsResult {
     // Row is structurally valid but memory parse failed
     if (!Number.isFinite(usedMemoryMb)) {
       hadUnparseableMemory = true;
+      unparseableProcessNames.add(processName);
       continue;
     }
     rows.push({ gpuUuid, pid, processName, usedMemoryMb });
   }
-  return { rows, hadUnparseableMemory };
+  return { rows, hadUnparseableMemory, unparseableProcessNames };
 }
 
 /** Parse `nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits` —
@@ -194,10 +200,14 @@ export async function detectOllamaGpuSplit(opts?: { fresh?: boolean }): Promise<
   const parsed = parseComputeAppsCsv(computeAppsRaw);
   const ollamaRows = parsed.rows.filter((r) => /ollama/i.test(r.processName));
 
-  // If we saw unparseable VRAM data and Ollama processes in the raw output,
-  // the data is inconclusive (driver doesn't expose per-process VRAM).
-  const hadOllamaProcessInRaw = /ollama/i.test(computeAppsRaw);
-  const dataUnavailable = parsed.hadUnparseableMemory && hadOllamaProcessInRaw;
+  // If we saw unparseable VRAM data ON AN OLLAMA PROCESS, the detector is
+  // inconclusive (driver doesn't expose per-process VRAM for this process).
+  // Unparseable rows from other processes (chrome, VS Code, etc.) don't affect
+  // the Ollama detector — we only care if Ollama's own row is unreadable.
+  const hadOllamaUnparseableMemory = Array.from(parsed.unparseableProcessNames).some(
+    (name) => /ollama/i.test(name),
+  );
+  const dataUnavailable = hadOllamaUnparseableMemory;
 
   if (ollamaRows.length === 0) {
     const result = {
