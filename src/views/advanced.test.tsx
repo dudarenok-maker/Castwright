@@ -668,7 +668,9 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
     const note = await screen.findByText(/Can't determine GPU split status/);
     expect(note).toBeInTheDocument();
     // Verify the nvidia-smi command is present and properly formatted
-    expect(note.textContent).toMatch(/nvidia-smi --query-compute-apps=used_memory --format=csv/);
+    expect(note.textContent).toMatch(
+      /nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv/,
+    );
     // Verify there are proper spaces before code blocks (not "shows[N/A]")
     expect(container.textContent).toContain('shows [N/A]');
     // Verify the amber avoidable-split warning is NOT shown (they're mutually exclusive)
