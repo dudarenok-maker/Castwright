@@ -4192,18 +4192,21 @@ Run `npm start` or `npm run dev` in each checkout. From the primary, observe:
 **(1)** `.run/tts.owner.9000.json` exists and contains the primary's sidecar PID;
 **(2)** `.run/tts.owner.9010.json` also exists (written by the worktree's
 sidecar) and contains a different PID. Both files coexist in the shared `.run`
-directory without collision — this is the core fix of #2641. **(3)** From the
-primary checkout, run `npm run stop` and observe the primary's sidecar (`:9000`)
-dies but the worktree's (`:9010`) survives. To reach the "sweep resolver sees
-two notes" outcome, you must export `APP_RUN_DIR` in the shell running `npm run stop`
-(in addition to setting it in `server/.env` for the server): `export APP_RUN_DIR=/abs/path/shared-run-dir && npm run stop`
-or on Windows PowerShell: `$env:APP_RUN_DIR = '/abs/path/shared-run-dir'; npm run stop`.
-The sweep then reads both owner notes from the shared directory, sees the ambiguity,
-falls back to the primary's own `server/.env` where `LOCAL_TTS_PORT=9000`, and
-kills only that port. **(4)** Repeat from the worktree with its own `APP_RUN_DIR`
-export in the shell: observe the worktree's sidecar dies, the primary's survives.
-The sweep falls back to the worktree's `server/.env` where `LOCAL_TTS_PORT=9010`,
-so it kills only that port. Both outcomes are correct and safe.
+directory without collision — this is the core fix of #2641. Verify by inspecting
+file contents directly (e.g., `cat /abs/path/shared-run-dir/tts.owner.*.json`);
+the port-keyed naming prevents the overwrite-collision that would have occurred
+before this fix. 
+
+**Note:** Verifying the port-based sweep's behavior in a shared-run-dir configuration
+is not currently a safe on-box test, because the PID file (`.run/tts.pid`) is not
+port-keyed — only the owner notes are. When two servers share a run directory, both
+write to the same `tts.pid`, and whichever started last overwrites the first. Running
+`npm run stop` from either checkout can then kill the wrong process (the one whose
+PID happens to be in the file, not the one whose checkout the stop was issued from),
+defeating the separation the port-keyed owner notes provide. The actual #2641 fix
+(port-keyed owner-note filenames) is verified above; the sweep's correctness in
+this shared-run-dir scenario will require #2641 to be extended to port-key the PID
+files as well.
 
 *Cost:* 5–10 minutes to set up and run. Needs two live sidecars on the same host.
 *Criteria:* this PR's description (§On-box acceptance), the
