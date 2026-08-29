@@ -309,7 +309,7 @@ describe('claimSidecarOwnership', () => {
       'utf8',
     );
     // Claim ownership on port 9010 (different port) — should NOT delete the legacy note
-    claimSidecarOwnership({ runDir, pid: 555, ppid: 8, port: 9010, nowIso: () => 'new', aliveFn: () => true });
+    claimSidecarOwnership({ runDir, pid: 555, ppid: 8, port: 9010, nowIso: () => 'new' });
     expect(readSidecarOwner(runDir, 9010)?.pid).toBe(555); // new owner claimed on 9010
     // Legacy note should still exist (it's for a different port)
     expect(JSON.parse(readFileSync(legacyPath, 'utf8'))).toEqual(
@@ -369,9 +369,8 @@ describe('findConflictingOwner', () => {
     // Regression for #2641: both ports used to share one owner file, so a
     // different-port write could silently overwrite the file a third
     // claimant's conflict check needed to read.
-    const allAlive = () => true; // Prevent pruning during setup
-    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a', aliveFn: allAlive });
-    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b', aliveFn: allAlive });
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a' });
+    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b' });
     const conflict = findConflictingOwner({
       runDir,
       pid: 300,

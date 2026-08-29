@@ -158,9 +158,9 @@ export function resolveConfiguredVitePort(envLocalPath) {
     ownership here, and more than one means this run dir is shared across
     ports (#2641) with no way to tell which note is current, so both degrade
     to the same safe server/.env fallback the absent/corrupt cases already
-    use. Stale notes from dead processes are cleaned up by the server
-    (claimSidecarOwnership, server/src/tts/sidecar-owner.ts#pruneStaleNotes)
-    at startup, so they do not accumulate (#2754). */
+    use. Port-keyed notes may accumulate over time (issue #2792), but this
+    resolver's job is to safely fall back to config when ambiguous, not to
+    guarantee freshness. */
 export function resolveSidecarSweepPort(runDir, serverEnvPath) {
   let entries;
   try {
@@ -181,6 +181,9 @@ export function resolveSidecarSweepPort(runDir, serverEnvPath) {
       // Unreadable or corrupt — fall through to the server/.env fallback.
     }
   }
+  // Zero notes, more than one note, or corrupt/out-of-range: ambiguous or absent.
+  // Port-keyed notes may accumulate over time (issue #2792); this resolver's job is
+  // to safely fall back to config when ambiguous, not to guarantee freshness.
   return serverEnvPath ? parseLocalTtsPortFromServerEnv(serverEnvPath) : null;
 }
 

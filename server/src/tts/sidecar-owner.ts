@@ -171,7 +171,6 @@ export interface ClaimOpts {
   ppid?: number;
   port?: number;
   nowIso?: () => string;
-  aliveFn?: (pid: number) => boolean;
 }
 
 
@@ -183,9 +182,9 @@ export interface ClaimOpts {
     if an old server crashed with the legacy note still present, and the OS later
     recycled its PID, the legacy note's stale PID check would block the new owner.
     Deleting the legacy note here (only after the conflict check passed in
-    `findConflictingOwner`) is safe: we already verified no live owner exists for
-    this port, so the legacy note — if present and matching — is either our own
-    or stale. */
+    `findConflictingOwner`) is safe: `findConflictingOwner` already checked via its
+    full logic (including self/lineage short-circuits, not just liveness checks), so
+    the legacy note — if present and matching — is either our own or stale. */
 export function claimSidecarOwnership(opts: ClaimOpts): void {
   const {
     runDir,
