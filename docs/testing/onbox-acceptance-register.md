@@ -422,13 +422,13 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 12 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**63 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
@@ -3683,7 +3683,9 @@ to real output, not about VRAM or a specific card.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E101 -->
+<!-- next-id: E103 -->
+
+Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5/E6/E8 for front-end acceptance), or platform-independent infrastructure (E1/E7/E9/E10/E11/E12). E1/E7/E11 group on the Pinokio box; E6/E9/E10 need two live checkouts.
 
 ### E1 · ops-16 Pinokio installer ([#822](https://github.com/dudarenok-maker/Castwright/issues/822)) · **macOS is the gap**
 
@@ -4205,6 +4207,69 @@ a false "nothing to stop" while a raw exception scrolled past above it.
 this PR's description (§On-box acceptance) and `docs/features/` plan 43's
 stop-script contract, plus `scripts/lib/sidecar-sweep-port.mjs`'s own
 module-level comment for the exact fallback order being exercised.
+
+### E11 · Pinokio Install/Update: requirements CRLF normalization ([#2596](https://github.com/dudarenok-maker/Castwright/issues/2596), PR #2799) · **Windows box with pre-existing Pinokio install**
+
+PR #2799 adds `renormalizeRequirementsCrlf()` to `pinokio-scripts/lib/resolve-release.js`, 
+called during both `install.js` and `update.js` to normalize CRLF line endings in 
+`requirements/*.txt` files after `git checkout` of a release tag. Before `.gitattributes` 
+enforced `eol=lf` repo-wide, a user's pre-existing install may have stale CRLF 
+requirements. The normalization prevents spurious 'file changed' detections that would 
+trigger an unnecessary full `pip install --force-reinstall` on the next Update.
+
+- On a Windows machine with a **pre-existing** Pinokio install that has CRLF-mangled 
+  `requirements/*.txt` files (e.g. from a prior checkout before `.gitattributes` 
+  enforcement), run Update.
+- Confirm the requirements files are normalized to LF (check file endings via `file` 
+  or hex dump, or confirm the files read as unchanged after running the normalizer 
+  a second time).
+- Confirm that the normalization does not trigger an unnecessary `pip install` 
+  reinstall — `bootstrap-venv.mjs`'s `classifyVenvState` should see unchanged 
+  `reqHash` and take the `noop` branch, exiting before `runInstall`.
+- Confirm a subsequent Install (the `install.js` path) also normalizes any stale 
+  CRLF it finds to LF and proceeds with the normal install flow.
+
+*Needs:* a Windows machine with Pinokio installed, a pre-existing install with 
+CRLF-mangled `requirements/*.txt` (or ability to create one by checking out an old 
+release prior to `.gitattributes`). *Cost:* 10–15 minutes, grouping with E1's 
+Pinokio box. *Criteria:* this PR's `resolve-release.test.js` acceptance test 
+(automated verification of the CRLF→LF transform path), plus real-world confirmation 
+that a stale-CRLF install updates without spurious reinstall and that a fresh install 
+normalizes correctly. Issue #2596 and PR #2799 body.
+
+### E12 · ASR warm footprint measurement via torch allocator peak ([#2682](https://github.com/dudarenok-maker/Castwright/issues/2682), PR #2799) · **GPU with CTranslate2/faster-whisper resident**
+
+PR #2799 changes how `asr.warm` (the learned warmup footprint for Whisper ASR) is 
+measured in the TTS sidecar (`server/tts-sidecar/main.py`). Previously, footprint was 
+estimated via a snapshot of free GPU memory before and after warm load. Now it is 
+measured via torch's allocator peak (the highest VRAM allocated during the entire 
+warm-up). This is more reliable than free-memory deltas because:
+
+- Free-memory measurements race against other concurrent processes and can miss 
+  spikes that spike-then-release.
+- Allocator peak is the actual peak VRAM the warm forward actually used, captured 
+  from the torch/CUDA allocator itself.
+
+However, the allocator-peak measurement is unproven on real hardware with a live 
+CTranslate2-backed ASR session (the pytest only stubs `_observed_mb` to a fixed 
+test value and doesn't exercise the real forward).
+
+- Load the TTS sidecar with `faster-whisper` engine resident on a GPU.
+- Trigger a real ASR warm-up via the app (e.g. during a repair/re-synthesis pass that 
+  needs the ASR transcription gate, or an explicit `/warm` call to `POST /api/ollama/warm` 
+  for ASR).
+- Confirm that `asr.warm`'s learned footprint **moves off its 128 MB seed value** after 
+  the real warm forward completes — i.e., the allocator-peak measurement produces a 
+  positive, observed value that is recorded, not dropped.
+- Verify the recorded value matches the expected range for CTranslate2+faster-whisper 
+  on this box's GPU (typically a few hundred MB, depending on model size and CUDA 
+  compute capacity).
+
+*Needs:* a GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar 
+with ASR enabled (`SEG_ASR_ENABLED=1`). *Cost:* short — one real ASR warm-up sequence 
+during a render or via manual endpoint. *Criteria:* the allocator-peak measurement in 
+`server/tts-sidecar/main.py`'s `_WarmFootprint` class must observe a positive value 
+from a real forward, not a stubbed test value. Issue #2682 and PR #2799 body.
 
 ## Group G — GitHub Actions itself
 
