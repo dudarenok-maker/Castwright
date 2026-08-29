@@ -31,18 +31,66 @@ test('collectAdvisoryIds: extracts GHSA from url, skips package names, dedupes',
   // advisory objects with source (number) and url (GHSA link).
   const entry = {
     via: [
-      'lodash', // package name - skip this
+      'lodash', // package name - resolved separately
       { source: 1106913, url: 'https://github.com/advisories/GHSA-p6mc-m468-83gw', title: 'Prototype Pollution' },
-      'debug', // another package name - skip
+      'debug', // another package name - would be resolved separately
       { source: 1106913, url: 'https://github.com/advisories/GHSA-p6mc-m468-83gw', title: 'Prototype Pollution' }, // duplicate
     ],
   };
-  assert.deepEqual([...collectAdvisoryIds(entry)].sort(), ['GHSA-p6mc-m468-83gw']);
+  // collectAdvisoryIds now returns Map<id, Set<sourcePackages>>
+  const result = collectAdvisoryIds(entry, {}, 'react-router');
+  assert.deepEqual([...result.keys()].sort(), ['GHSA-p6mc-m468-83gw']);
+  // The advisory came from the direct package (react-router)
+  assert.deepEqual([...result.get('GHSA-p6mc-m468-83gw')], ['react-router']);
 });
 
-test('collectAdvisoryIds: empty/missing via yields empty set', () => {
-  assert.deepEqual([...collectAdvisoryIds({})], []);
-  assert.deepEqual([...collectAdvisoryIds(null)], []);
+test('collectAdvisoryIds: empty/missing via yields empty map', () => {
+  assert.equal(collectAdvisoryIds({}).size, 0);
+  assert.equal(collectAdvisoryIds(null).size, 0);
+});
+
+test('collectAdvisoryIds: resolves transitive-only advisories by package name', () => {
+  // Bug A fix: when via[] is strings-only (purely transitive), resolve the
+  // package names in the vulnerabilities map to find their advisory ids.
+  // Example: async has via: ["lodash"], and lodash entry has the actual advisory.
+  const vulns = {
+    'async@2.6.0': {
+      severity: 'high',
+      via: ['lodash'], // Only a package name - no direct advisory object
+    },
+    'lodash@4.17.20': {
+      severity: 'high',
+      via: [{ source: 1106913, url: 'https://github.com/advisories/GHSA-p6mc-m468-83gw', severity: 'high', title: 'Prototype Pollution' }],
+    },
+  };
+  // Should resolve async's "lodash" reference and find the GHSA from lodash's entry
+  const result = collectAdvisoryIds(vulns['async@2.6.0'], vulns, 'async');
+  assert.deepEqual([...result.keys()].sort(), ['GHSA-p6mc-m468-83gw']);
+  // The advisory came from lodash (the transitive source)
+  assert.deepEqual([...result.get('GHSA-p6mc-m468-83gw')], ['lodash']);
+});
+
+test('collectAdvisoryIds: filters advisory objects by their own severity (Bug C)', () => {
+  // Bug C fix: only include advisory ids whose own severity is at/above gate threshold.
+  // Example: a high-severity entry has via[] with both high and moderate advisories.
+  const vulns = {
+    'some-package@1.0': {
+      severity: 'high',
+      via: [
+        { source: 111111, url: 'https://github.com/advisories/GHSA-hhhh-1111-aaaa', severity: 'high', title: 'Critical Flaw' },
+        { source: 222222, url: 'https://github.com/advisories/GHSA-mmmm-2222-bbbb', severity: 'moderate', title: 'Minor Issue' },
+        { source: 333333, url: 'https://github.com/advisories/GHSA-cccc-3333-dddd', severity: 'critical', title: 'Critical' },
+        { source: 444444, url: 'https://github.com/advisories/GHSA-llll-4444-eeee', severity: 'low', title: 'Low Priority' },
+      ],
+    },
+  };
+  // Should only collect the high and critical severity advisories, skip moderate and low
+  const result = collectAdvisoryIds(vulns['some-package@1.0'], vulns, 'some-package');
+  assert.deepEqual([...result.keys()].sort(), ['GHSA-cccc-3333-dddd', 'GHSA-hhhh-1111-aaaa']);
+  // All came from the direct package
+  for (const sources of result.values()) {
+    assert.deepEqual([...sources], ['some-package']);
+  }
 });
 
 test('isExpired: expiry strictly before today (UTC) is expired', () => {
@@ -154,6 +202,47 @@ test('gateFailures: high severity with no attributable advisory fails closed', (
   assert.deepEqual(missing, [{ package: 'mystery@1', advisories: [] }]);
 });
 
+test('gateFailures: transitive-only advisory is waivable when underlying GHSA is waived', () => {
+  // Bug A fix: async@2 has via: ["lodash"] (strings-only, purely transitive).
+  // When we waive the underlying GHSA from lodash's advisory, async should pass.
+  const vulns = {
+    'async@2.6.0': {
+      severity: 'high',
+      via: ['lodash'],
+    },
+    'lodash@4.17.20': {
+      severity: 'high',
+      via: [{ source: 1106913, url: 'https://github.com/advisories/GHSA-p6mc-m468-83gw', severity: 'high', title: 'Prototype Pollution' }],
+    },
+  };
+  // Waive the underlying GHSA for the package that actually pulled in the vulnerability
+  const waivers = [{ ghsaId: 'GHSA-p6mc-m468-83gw', package: 'lodash', reason: 'dismissed', expiry: '2099-01-01' }];
+  const { missing, expired } = gateFailures(vulns, waivers);
+  assert.deepEqual(expired, []);
+  // Both async and lodash should now be waived
+  assert.deepEqual(missing, []);
+});
+
+test('gateFailures: entry with multi-severity advisories only requires qualifying ones to be waived', () => {
+  // Bug C fix: high-severity entry with both high and moderate advisories in via[].
+  // Waiving just the high-severity advisory should be sufficient.
+  const vulns = {
+    'some-package@1.0': {
+      severity: 'high',
+      via: [
+        { source: 111111, url: 'https://github.com/advisories/GHSA-hhhh-1111-aaaa', severity: 'high', title: 'Critical Flaw' },
+        { source: 222222, url: 'https://github.com/advisories/GHSA-mmmm-2222-bbbb', severity: 'moderate', title: 'Minor Issue' },
+      ],
+    },
+  };
+  // Only waive the high-severity advisory, not the moderate one
+  const waivers = [{ ghsaId: 'GHSA-hhhh-1111-aaaa', package: 'some-package', reason: 'dismissed', expiry: '2099-01-01' }];
+  const { missing, expired } = gateFailures(vulns, waivers);
+  assert.deepEqual(expired, []);
+  // The moderate advisory should be filtered out (not collected), so missing should be empty
+  assert.deepEqual(missing, []);
+});
+
 test('loadWaivers: parses a valid array and rejects a non-array', () => {
   const dir = mkdtempSync(join(tmpdir(), 'check-audit-waivers-'));
   try {
@@ -227,10 +316,21 @@ test('loadWaivers: missing file is an empty list', () => {
   assert.deepEqual(loadWaivers(join(tmpdir(), 'definitely-missing-waivers-2778.json')), []);
 });
 
-test('parseAuditOutput: extract vulnerabilities map, tolerate empty', () => {
-  assert.deepEqual(parseAuditOutput(''), {});
+test('parseAuditOutput: extract vulnerabilities map from valid reports', () => {
   assert.deepEqual(parseAuditOutput(JSON.stringify({ vulnerabilities: { a: 1 } })), { a: 1 });
   assert.deepEqual(parseAuditOutput(JSON.stringify({ vulnerabilities: {} })), {});
+});
+
+test('parseAuditOutput: fail-closed on empty stdout', () => {
+  // Empty stdout indicates npm failed or produced no output - fail closed
+  assert.throws(
+    () => parseAuditOutput(''),
+    /produced no output/,
+  );
+  assert.throws(
+    () => parseAuditOutput('   '),
+    /produced no output/,
+  );
 });
 
 test('parseAuditOutput: fail-closed when vulnerabilities key is missing', () => {

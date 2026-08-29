@@ -77,22 +77,73 @@ export function isGateSeverity(severity) {
   return GATE_SEVERITIES.has(severity);
 }
 
-/** Collect every advisory GHSA id reachable from one vulnerabilities entry. */
-export function collectAdvisoryIds(entry) {
-  const ids = new Set();
-  for (const v of entry?.via ?? []) {
-    // via[] entries that are strings are package names (e.g., "lodash"), not advisories - skip them.
-    if (typeof v === 'string') continue;
+/**
+ * Collect advisory GHSA ids and their source packages from one vulnerabilities
+ * entry. Returns a map from GHSA id to a set of package names that are the
+ * source of that advisory (for waivers to check).
+ *
+ * For direct advisory objects in via[], the source package is the entry's own
+ * package (determined by the caller). For transitive advisories (via entries
+ * that are package name strings), the source is the referenced package.
+ *
+ * Filtering excludes only those explicitly marked below the gate severity
+ * threshold (moderate/low/info). If an advisory object doesn't carry its own
+ * severity info, it is collected anyway (conservative approach).
+ *
+ * Cycle detection: track visited packages to avoid infinite recursion on
+ * circular dependency chains.
+ */
+export function collectAdvisoryIds(entry, vulnerabilities = {}, sourcePackage = null, visited = new Set()) {
+  // Map from GHSA id to Set of source packages (for waiver checking)
+  const idToSourcePackages = new Map();
 
-    // For advisory objects, extract GHSA id from the url field (e.g., from
-    // https://github.com/advisories/GHSA-p6mc-m468-83gw). In npm audit --json,
-    // the source field is a number (advisory id), not a GHSA string.
-    if (v && typeof v.url === 'string') {
+  for (const v of entry?.via ?? []) {
+    if (typeof v === 'string') {
+      // This is a package name (e.g., "lodash"). Resolve it in the
+      // vulnerabilities map to find its advisory ids.
+      if (!visited.has(v)) {
+        visited.add(v);
+        // Find the first vulnerabilities entry for this package
+        let pkgEntry = null;
+        for (const [key, vEntry] of Object.entries(vulnerabilities)) {
+          if (key === v || key.startsWith(`${v}@`)) {
+            pkgEntry = vEntry;
+            break;
+          }
+        }
+        if (pkgEntry) {
+          // Recursively collect advisory ids from the referenced package.
+          // This package is the source of the advisory.
+          const transitiveIds = collectAdvisoryIds(pkgEntry, vulnerabilities, v, visited);
+          for (const [id, sources] of transitiveIds) {
+            if (!idToSourcePackages.has(id)) {
+              idToSourcePackages.set(id, new Set());
+            }
+            for (const src of sources) {
+              idToSourcePackages.get(id).add(src);
+            }
+          }
+        }
+      }
+    } else if (v && typeof v.url === 'string') {
+      // This is an advisory object. Extract GHSA id from the url field.
+      // Skip ONLY if it explicitly has a severity below the gate threshold.
+      // If severity is missing, include it anyway (conservative).
+      if (v.severity && !isGateSeverity(v.severity)) continue;
       const match = v.url.match(/GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}/i);
-      if (match) ids.add(match[0]);
+      if (match) {
+        const id = match[0];
+        if (!idToSourcePackages.has(id)) {
+          idToSourcePackages.set(id, new Set());
+        }
+        // If sourcePackage is set, this advisory came from a transitive dep
+        if (sourcePackage) {
+          idToSourcePackages.get(id).add(sourcePackage);
+        }
+      }
     }
   }
-  return ids;
+  return idToSourcePackages;
 }
 
 /**
@@ -152,17 +203,27 @@ export function gateFailures(vulnerabilities, waivers) {
   const missing = [];
   for (const [pkg, entry] of Object.entries(vulnerabilities ?? {})) {
     if (!entry || !isGateSeverity(entry.severity)) continue;
-    const advisories = [...collectAdvisoryIds(entry)];
-    if (advisories.length === 0) {
+    const pkgBase = pkg.split('@')[0] || pkg;
+    const idToSources = collectAdvisoryIds(entry, vulnerabilities, pkgBase);
+
+    if (idToSources.size === 0) {
       // high/critical with no attributable advisory id - fail closed rather
       // than let an unmatchable entry pass silently.
       missing.push({ package: pkg, advisories: [] });
       continue;
     }
-    // For each advisory, check if there's an active waiver for this specific
-    // package. Extract the base package name (strip @version specifier).
-    const pkgBase = pkg.split('@')[0] || pkg;
-    const unwaived = advisories.filter((id) => !active.has(`${id}|${pkgBase}`));
+
+    // For each advisory, check if there's an active waiver for this package
+    // or any of its source packages (for transitive dependencies).
+    const unwaived = [];
+    for (const [id, sourcePackages] of idToSources) {
+      // Check if the advisory is waived for either the direct package or
+      // any of its source packages (for transitive dependencies)
+      const isWaived = active.has(`${id}|${pkgBase}`) ||
+        [...sourcePackages].some((src) => active.has(`${id}|${src}`));
+      if (!isWaived) unwaived.push(id);
+    }
+
     if (unwaived.length > 0) missing.push({ package: pkg, advisories: unwaived });
   }
   return { missing, expired };
@@ -195,14 +256,17 @@ export function runNpmAudit({ dir, omitDev = false } = {}) {
  * when it finds advisories, but still prints the JSON on stdout, so the exit
  * code is not a reliable signal - the parsed report is.
  *
- * Fail closed: if the output does not have a valid `vulnerabilities` key
- * (indicating an error response like { error: {...} } or { error: "..." }),
+ * Fail closed: if the output is empty or does not have a valid `vulnerabilities`
+ * key (indicating an error response like { error: {...} } or { error: "..." }),
  * throw an error rather than laundering it as an empty vulnerabilities map.
- * A gate that can't verify is a gate that must not report green.
+ * A gate that can't verify is a gate that must not report green. Empty output
+ * indicates npm failed or produced no output, both of which are untrustworthy.
  */
 export function parseAuditOutput(stdout) {
   const trimmed = (stdout ?? '').trim();
-  if (trimmed.length === 0) return {};
+  if (trimmed.length === 0) {
+    throw new Error('npm audit produced no output - audit report is empty or npm failed to run');
+  }
   const parsed = JSON.parse(trimmed);
   // Real npm audit reports always have a `vulnerabilities` key, even if empty.
   // Error responses (e.g., ENOLOCK, registry unreachable) have an `error` key instead.
