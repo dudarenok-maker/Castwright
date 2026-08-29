@@ -173,6 +173,13 @@ interface SidecarHealthBody {
      used by the VRAM sampler's clean-process gate. Absent on an older sidecar →
      false / null below. */
   qwen_design_ever_loaded?: boolean;
+  /* LIVE (non-latching) counterpart to `qwen_design_ever_loaded` above —
+     true only while a VoiceDesign is actually resident or mid-load/mid-design
+     RIGHT NOW (`self._design is not None or self._design_in_flight.busy` on
+     the sidecar). Unlike the latch, this resets to false once the design
+     finishes/unloads — used by capacity-retry.ts to tell "in-flight now"
+     apart from "ever loaded". Absent on an older sidecar → false below. */
+  qwen_design_resident?: boolean;
   recycle_pending?: boolean;
   committed_mb?: number | null;
   vram_reserved_mb?: number | null;
@@ -363,6 +370,7 @@ export interface SidecarHealthResult {
   qwenBase17Loaded?: boolean;
   qwenBase17WeightsPresent?: boolean;
   qwenDesignEverLoaded?: boolean;
+  qwenDesignResident?: boolean;
   qwenLoading?: boolean;
   qwenPackageInstalled?: boolean;
   qwenWeightsPresent?: boolean;
@@ -520,6 +528,7 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       recyclePending: body.recycle_pending === true,
       committedMb: typeof body.committed_mb === 'number' ? body.committed_mb : null,
       qwenDesignEverLoaded: body.qwen_design_ever_loaded === true,
+      qwenDesignResident: body.qwen_design_resident === true,
       vramReservedMb:
         typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
       vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,

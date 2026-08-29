@@ -234,6 +234,37 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.qwenLoading).toBe(false);
   });
 
+  it('forwards qwen_design_resident as qwenDesignResident (Castwright#2757)', async () => {
+    /* LIVE counterpart to qwenDesignEverLoaded — capacity-retry.ts needs to
+       tell "resident/in-flight right now" apart from "ever loaded". */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['qwen'],
+          qwen_loaded: true,
+          qwen_design_resident: true,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenDesignResident).toBe(true);
+  });
+
+  it('defaults qwenDesignResident=false when the sidecar omits it', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['qwen'], qwen_loaded: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenDesignResident).toBe(false);
+  });
+
   it('coerces missing Qwen load-state fields to safe defaults', async () => {
     /* An older sidecar that predates Qwen support must not leave the new
        Qwen pill rendering as `undefined`. Mirror the Kokoro back-compat

@@ -49,6 +49,7 @@ export interface SidecarHealthSnapshot {
       consumer — it simply ignores the two new optional fields it doesn't
       read. */
   qwenDesignEverLoaded?: boolean;
+  qwenDesignResident?: boolean;
   vramReservedMb?: number | null;
 }
 
