@@ -1,0 +1,93 @@
+# Dependabot configuration for Castwright.
+# Decision: ops-60 (#2433). Adopt Dependabot version updates for npm
+# (root + server, separate entries) and github-actions. Weekly cadence,
+# open-PR cap 5, grouped per ecosystem so a routine sweep lands as one PR.
+# No pip / gradle / pub entries per the decision (deliberately pinned).
+#
+# #2791 review findings, folded into this same file:
+# - groups: each ecosystem now carries TWO groups, one applies-to:
+#   version-updates and one applies-to: security-updates -- a group's
+#   applies-to takes a single value, not a list, and the decision's point 5
+#   cites #2424 (a security-ALERT sweep of 20 advisories) as the reason
+#   grouping matters. Without a security-updates group that class of PR
+#   would still land ungrouped, and (being security updates) uncapped by
+#   open-pull-requests-limit too.
+# - commit-message: prefix "chore" with NO `include: scope`. GitHub's
+#   `include: scope` appends "(deps)"/"(deps-dev)" independently of
+#   prefix/prefix-development, and "deps-dev" is not an allowed scope in
+#   scripts/validate-commit-msg.mjs -- left default, a dev-dependency batch
+#   would fail pr-title-lint.yml permanently. Omitting `include` drops the
+#   scope suffix entirely, landing on the no-scope "chore: <subject>"
+#   catch-all the validator accepts, uniformly for prod and dev batches.
+# - github-actions: `directories` (plural) replaces `directory: "/"`, which
+#   only scans .github/workflows plus a ROOT action.yml/action.yaml. This
+#   repo also has TWO composite actions -- .github/actions/setup/action.yml
+#   (pins actions/setup-node@v6 + actions/cache@v5, consumed by 8 verify.yml
+#   jobs) and .github/actions/install-ffmpeg-windows/action.yml -- that
+#   `directory: "/"` alone would silently leave unbumped. `directories`
+#   supports a glob (e.g. '/.github/actions/*') for the npm/pip ecosystems,
+#   but GitHub's own docs list only `directory: "/"` for github-actions
+#   specifically, and dependabot-core#10884 is an open, unresolved issue
+#   asking whether directories/glob expansion is honored for this ecosystem
+#   at all. Rather than depend on undocumented behavior, this entry lists
+#   each composite action's directory explicitly. The tradeoff: a newly
+#   added composite action needs a new line here, or it silently stops
+#   getting version bumps -- scripts/tests/dependabot-config.test.mjs
+#   enumerates .github/actions/*/action.yml from disk and fails red if this
+#   list falls behind.
+version: 2
+
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore'
+    groups:
+      root-npm:
+        applies-to: version-updates
+        patterns:
+          - '*'
+      root-npm-security:
+        applies-to: security-updates
+        patterns:
+          - '*'
+
+  - package-ecosystem: 'npm'
+    directory: '/server'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore'
+    groups:
+      server-npm:
+        applies-to: version-updates
+        patterns:
+          - '*'
+      server-npm-security:
+        applies-to: security-updates
+        patterns:
+          - '*'
+
+  - package-ecosystem: 'github-actions'
+    directories:
+      - '/'
+      - '/.github/actions/setup'
+      - '/.github/actions/install-ffmpeg-windows'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'chore'
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns:
+          - '*'
+      actions-security:
+        applies-to: security-updates
+        patterns:
+          - '*'
