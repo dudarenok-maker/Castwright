@@ -671,6 +671,9 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
     expect(note.textContent).toMatch(/nvidia-smi --query-compute-apps=used_memory --format=csv/);
     // Verify there are proper spaces before code blocks (not "shows[N/A]")
     expect(container.textContent).toContain('shows [N/A]');
+    // Verify the amber avoidable-split warning is NOT shown (they're mutually exclusive)
+    expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/despite fitting on one device/)).not.toBeInTheDocument();
   });
 });
 

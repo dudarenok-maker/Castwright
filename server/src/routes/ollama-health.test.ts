@@ -165,18 +165,35 @@ describe('GET /api/ollama/device', () => {
    warning line. The detector itself is unit-tested in its own suite; this
    only pins that the route round-trips its result verbatim as JSON. */
 describe('GET /api/ollama/gpu-split', () => {
-  it('round-trips the detector result verbatim', async () => {
+  it('round-trips the detector result verbatim including dataUnavailable', async () => {
     const result = {
       reachable: true,
       split: true,
       deviceIndices: [0, 1],
       totalUsedMb: 9000,
       wouldFitSingleDevice: true,
+      dataUnavailable: false,
     };
     detectOllamaGpuSplitMock.mockResolvedValue(result);
     const res = await request(makeApp()).get('/api/ollama/gpu-split');
     expect(res.status).toBe(200);
     expect(res.body).toEqual(result);
+  });
+
+  it('passes through dataUnavailable: true when the detector reports it', async () => {
+    const result = {
+      reachable: true,
+      split: false,
+      deviceIndices: [],
+      totalUsedMb: 0,
+      wouldFitSingleDevice: false,
+      dataUnavailable: true,
+    };
+    detectOllamaGpuSplitMock.mockResolvedValue(result);
+    const res = await request(makeApp()).get('/api/ollama/gpu-split');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(result);
+    expect(res.body.dataUnavailable).toBe(true);
   });
 });
 
