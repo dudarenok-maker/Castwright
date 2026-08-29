@@ -294,14 +294,14 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
        Base+VoiceDesign together into an 8 GB card (OOM).
        This test confirms the node side now checks res.ok and does not report
        success when the sidecar returns non-ok. */
-    const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
+    mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
     global.fetch = vi
       .fn()
       .mockImplementationOnce(async (url: string, _init?: RequestInit) => {
         if (url.endsWith('/health')) return { ok: true, json: async () => ({ qwen_loaded: true, qwen_base17_loaded: true }) };
         throw new Error(`unexpected ${url}`);
       })
-      .mockImplementationOnce(async (_url: string, init?: RequestInit) => {
+      .mockImplementationOnce(async (_url: string, _init?: RequestInit) => {
         // First /unload returns 500 (base17 in flight, unload_base17() raised)
         return { ok: false, status: 500, json: async () => ({}) };
       })
