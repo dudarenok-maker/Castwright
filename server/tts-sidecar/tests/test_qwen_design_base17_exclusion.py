@@ -22,6 +22,7 @@ import sys
 import tempfile
 import types
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -182,4 +183,73 @@ def test_mint_variant_evicts_resident_design(monkeypatch):
     assert evicted["called"] is True, "resident VoiceDesign must be evicted before the 1.7B-Base load"
     assert captured["design_resident_at_base17_load"] is False, (
         "VoiceDesign must NOT be resident when the 1.7B-Base loads (OOM on 8 GB)"
+    )
+
+
+def test_design_voice_evicts_base17_outside_kokoro_design_block(monkeypatch):
+    """design_voice must evict resident 1.7B-Base BEFORE entering the
+    _VD_KOKORO.design() block, not inside it. Holding a wait inside the
+    block stalls every Kokoro synth while _design_active is set (see #2752).
+    The eviction-before-load ordering still holds since the VoiceDesign
+    load happens later inside the block.
+
+    This test tracks when unload_base17() is called relative to when the
+    design block's inner operations run. By using a fake model forward that
+    would fail if called, we can verify the eviction happens BEFORE trying
+    to load and use the design model."""
+    qeng = main.QwenEngine()
+    _quiet_kokoro()
+
+    # Pretend the 1.7B-Base is resident (left over from a prior mint).
+    qeng._base17 = object()
+
+    # Track the order of events: when did the base17 eviction happen
+    # relative to design model forward?
+    call_order = []
+
+    def _fake_unload_base17(
+        wait_seconds: float = 0.0,
+        poll_seconds: float = main._BASE17_CONTENTION_POLL_S_DEFAULT,
+    ):
+        call_order.append("unload_base17")
+        qeng._base17 = None  # simulate the real unload clearing the model
+
+    def _fake_ensure_design_loaded(device=None):
+        # If we get here and base17 is still resident, the eviction
+        # didn't happen outside the block as required.
+        call_order.append("ensure_design_loaded")
+        if qeng._base17 is not None:
+            raise AssertionError(
+                "Design model load started while 1.7B-Base was still resident! "
+                "Base17 eviction must happen OUTSIDE the design block."
+            )
+
+    monkeypatch.setattr(qeng, "unload_base17", _fake_unload_base17)
+    monkeypatch.setattr(qeng, "_ensure_design_loaded", _fake_ensure_design_loaded)
+
+    class _FakeDesign:
+        def generate_voice_design(self, text, language, instruct):
+            return [np.zeros(10, dtype="float32")], 24000
+
+    class _FakeBase:
+        def create_voice_clone_prompt(self, ref_audio, ref_text):
+            return {"prompt": True}
+
+        def generate_voice_clone(self, text, language, voice_clone_prompt):
+            return [np.zeros(10, dtype="float32")], 24000
+
+    qeng._design = _FakeDesign()
+    qeng._base = _FakeBase()
+    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda device=None: None)
+    qeng._voices_dir = tempfile.mkdtemp()
+
+    # Mock torch before it's imported
+    with mock.patch.dict(sys.modules, {"torch": mock.MagicMock()}):
+        monkeypatch.setattr("torch.save", lambda *a, **k: None)
+        qeng.design_voice("qwen-narrator-preview", "A warm voice.", "english", "Hello there.")
+
+    # Verify the order: unload_base17 must be called BEFORE ensure_design_loaded
+    assert call_order == ["unload_base17", "ensure_design_loaded"], (
+        f"Base17 eviction must happen BEFORE design model load "
+        f"(to avoid stalling Kokoro synth), but got order: {call_order}"
     )

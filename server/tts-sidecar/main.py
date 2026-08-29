@@ -6613,45 +6613,60 @@ class QwenEngine(Engine):
                 # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
                 # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
                 # (waits for any in-flight Kokoro synth to drain, blocks new ones),
-                # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
-                # reloads on the next synth (~1s); when no generation ran it isn't
-                # resident, so this is a no-op.
+                # then evict residents to make headroom. Kokoro reloads on the next
+                # synth (~1s); when no generation ran it isn't resident, so its
+                # eviction is a no-op.
                 _kokoro_pre = ENGINES.get("kokoro")
                 if isinstance(_kokoro_pre, KokoroEngine) and _kokoro_pre._kokoro is not None:
                     _phase("freeing-vram")
+
+                # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
+                # can't co-reside on an 8 GB card. A bulk "Design full cast" run
+                # interleaves variant mints (which leave _base17 resident) with
+                # base designs; evict the lingering 1.7B-Base before the
+                # VoiceDesign load — symmetric with the synth path's
+                # unload_design() (synthesize/synthesize_batch) and the Kokoro
+                # evict above. design_voice never uses _base17, so this is safe;
+                # the idle watchdog would reclaim it eventually, but not within
+                # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
+                #
+                # #2070 review R5 — deliberately OUTSIDE the _VD_KOKORO.design()
+                # block below, not inside it. Since #2070, unload_base17() can wait
+                # up to ~150s for an in-flight base17 load to clear (the design-wins
+                # policy). `_VD_KOKORO.design()` sets `_design_active` for its ENTIRE
+                # span, and `kokoro_synth()` blocks while that's set — so a wait
+                # held inside that block would stall EVERY Kokoro synth for up to
+                # 150s during exactly the bulk "Design full cast" run this eviction
+                # exists to support. Evicting here keeps any such wait off the
+                # arbiter (and the design-active flag) entirely; the only real
+                # ordering requirement — evict-before-load — still holds, since the
+                # VoiceDesign load happens later in this same function, still inside
+                # the block below.
+                #
+                # #2752 — the widened guard (below) includes
+                # `_base17_in_flight.busy`: `_base17` stays `None` for the ENTIRE
+                # duration of a mint/synth load, so an in-flight-but-unassigned
+                # load was previously invisible here (the #1156 OOM shape) —
+                # `design_voice()` proceeded straight into the VoiceDesign load
+                # with both models resident. `unload_base17()` now waits
+                # (bounded) for that load to clear before evicting, same
+                # "design wins" direction as `unload_design()`.
+                if self._base17 is not None or self._base17_in_flight.busy:
+                    log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
+                    # Bounded wait, not the 0.0 default — this call's whole
+                    # point is to wait out a still-loading base17 rather
+                    # than race it (see unload_base17's docstring for why
+                    # 0.0 is right everywhere else).
+                    self.unload_base17(
+                        wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT,
+                        poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT,
+                    )
+
                 with _VD_KOKORO.design():
                     _kokoro_eng = ENGINES.get("kokoro")
                     if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
                         log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
                         _kokoro_eng.unload()
-                    # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
-                    # can't co-reside on an 8 GB card. A bulk "Design full cast" run
-                    # interleaves variant mints (which leave _base17 resident) with
-                    # base designs; evict the lingering 1.7B-Base before the
-                    # VoiceDesign load — symmetric with the synth path's
-                    # unload_design() (synthesize/synthesize_batch) and the Kokoro
-                    # evict above. design_voice never uses _base17, so this is safe;
-                    # the idle watchdog would reclaim it eventually, but not within
-                    # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
-                    #
-                    # #2752 — the widened guard (below) includes
-                    # `_base17_in_flight.busy`: `_base17` stays `None` for the ENTIRE
-                    # duration of a mint/synth load, so an in-flight-but-unassigned
-                    # load was previously invisible here (the #1156 OOM shape) —
-                    # `design_voice()` proceeded straight into the VoiceDesign load
-                    # with both models resident. `unload_base17()` now waits
-                    # (bounded) for that load to clear before evicting, same
-                    # "design wins" direction as `unload_design()`.
-                    if self._base17 is not None or self._base17_in_flight.busy:
-                        log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
-                        # Bounded wait, not the 0.0 default — this call's whole
-                        # point is to wait out a still-loading base17 rather
-                        # than race it (see unload_base17's docstring for why
-                        # 0.0 is right everywhere else).
-                        self.unload_base17(
-                            wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT,
-                            poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT,
-                        )
                     _phase("loading-model")
                     # Capacity-aware placement (task 3, vram-aware-placement plan):
                     # a concrete `device` from an admitted reservation overrides the
