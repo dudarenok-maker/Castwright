@@ -195,3 +195,42 @@ def test_design_voice_widens_guard_to_base17_still_loading() -> None:
     finally:
         release.set()
         holder.join(5)
+
+
+def test_unload_base17_with_default_wait_never_raises_during_stop() -> None:
+    """#2752 — the bare unload_base17() call (no args, used by the /unload Stop
+    route) must NEVER raise, even if base17 is in flight. Stop must always
+    succeed, freeing the model regardless of in-flight state — mirroring the
+    sibling unload() method's unconditional-null semantics.
+
+    The bare call uses wait_seconds=0.0 (the default), which should bypass the
+    busy-wait path entirely and unconditionally null _base17, NOT raise
+    Base17ContentionTimeoutError immediately.
+
+    Mutation that must fail this (verified) — keep the current behavior where
+    wait_seconds=0.0 raises immediately if busy: set up an in-flight claim,
+    call unload_base17() with no args, and it will raise instead of returning.
+    """
+    engine = main.QwenEngine()
+    engine._base17 = _FakeBase17Model()
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def hold_base17_in_flight() -> None:
+        with engine._base17_in_flight.claim():
+            entered.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold_base17_in_flight, daemon=True)
+    holder.start()
+    assert entered.wait(2), "claim() never entered — test bug"
+
+    try:
+        # Bare call with default wait_seconds=0.0, as the Stop route uses it.
+        # Must NOT raise, must return normally and null _base17.
+        engine.unload_base17()
+        assert engine._base17 is None, "bare unload_base17() should have nulled _base17"
+    finally:
+        release.set()
+        holder.join(5)

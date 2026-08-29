@@ -282,6 +282,38 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     global.fetch = vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
     await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBe(false);
   });
+
+  it('#2790 — checks /unload response status: non-ok (e.g. 500 from base17 contention) does not report success', async () => {
+    /* #2752's regression: if the base17 load is in flight when Stop presses
+       /unload {model:'1.7b'}, unload_base17() raises unhandled → 500 response.
+       The old code caught ALL errors and treated them as success, then told
+       the caller the tier was evicted when it was not. The second-stage
+       reconcile on the Node side compounded this: it checked neither res.ok
+       nor threw on error, so a 500 from the sidecar was silently swallowed,
+       and the caller was told the 1.7B was free when it was not — then loaded
+       Base+VoiceDesign together into an 8 GB card (OOM).
+       This test confirms the node side now checks res.ok and does not report
+       success when the sidecar returns non-ok. */
+    const m = mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
+    global.fetch = vi
+      .fn()
+      .mockImplementationOnce(async (url: string, _init?: RequestInit) => {
+        if (url.endsWith('/health')) return { ok: true, json: async () => ({ qwen_loaded: true, qwen_base17_loaded: true }) };
+        throw new Error(`unexpected ${url}`);
+      })
+      .mockImplementationOnce(async (_url: string, init?: RequestInit) => {
+        // First /unload returns 500 (base17 in flight, unload_base17() raised)
+        return { ok: false, status: 500, json: async () => ({}) };
+      })
+      .mockImplementationOnce(async (url: string, _init?: RequestInit) => {
+        // Subsequent /health calls succeed normally
+        if (url.endsWith('/health')) return { ok: true, json: async () => ({ qwen_loaded: true, qwen_base17_loaded: true }) };
+        throw new Error(`unexpected ${url}`);
+      });
+
+    await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBe(false);
+    // Caller does NOT get told the tier was evicted
+  });
 });
 
 describe('ensureSidecarEngineReady — withGpuLoad gate', () => {

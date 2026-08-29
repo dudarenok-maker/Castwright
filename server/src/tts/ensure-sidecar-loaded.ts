@@ -241,17 +241,29 @@ export async function reconcileResidentQwenTiers(
 
   const budget = AbortSignal.timeout(UNLOAD_ABSOLUTE_MAX_MS);
   const bounded = signal ? AbortSignal.any([budget, signal]) : budget;
+  let allEvicted = true; // track whether all evictions succeeded
   const unload = async (model?: '1.7b'): Promise<void> => {
     try {
-      await undiciFetch(`${base}/unload`, {
+      const res = await undiciFetch(`${base}/unload`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(model ? { engine: 'qwen', model } : { engine: 'qwen' }),
         signal: bounded,
         dispatcher: UNLOAD_DISPATCHER,
       });
+      if (!res.ok) {
+        /* Sidecar returned an error (e.g. 500 from base17 in-flight contention).
+           Mark the eviction as failed and log it for visibility (the sidecar
+           already logged the root cause). Callers interpret the return value as
+           "the tier has been freed", so return false if any eviction failed. */
+        allEvicted = false;
+        console.warn(
+          `[generation] failed to unload Qwen ${model || '0.6B'}: sidecar returned ${res.status}`,
+        );
+      }
     } catch {
-      /* best-effort */
+      /* best-effort — network error, timeout, abort, etc. */
+      allEvicted = false;
     }
   };
 
@@ -264,7 +276,7 @@ export async function reconcileResidentQwenTiers(
       `[${!keep.keep06 && h.qwen_loaded ? '0.6B ' : ''}${!keep.keep17 && h.qwen_base17_loaded ? '1.7B' : ''}]`.trim(),
   );
   await Promise.allSettled(evictions);
-  return true;
+  return allEvicted;
 }
 
 /* Register this module's own reconciler into the stateless leaf gate

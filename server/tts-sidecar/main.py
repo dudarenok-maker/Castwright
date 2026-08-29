@@ -5952,17 +5952,27 @@ class QwenEngine(Engine):
         `wait_seconds` DEFAULTS TO 0.0, unlike `unload_design`'s 150s default —
         deliberately, not an oversight. The bare call (the `/unload
         {model:'1.7b'}` Stop route, and `maybe_free_idle_base17`'s callers)
-        must stay non-blocking: #1975 already established that a Stop must
-        never queue behind a whole batch's `_base17_activity()` span (see
-        `test_unload_base17_is_not_blocked_by_a_cold_load_during_batch_synth`),
-        and `_base17_activity()` brackets the ENTIRE 1.7B batch loop, not just
-        one load — a 60s wait here would stall Stop for the whole remainder of
-        a render, not just a load. At `wait_seconds=0.0` the loop below still
-        never SILENTLY nulls a genuinely in-flight load (it raises instead of
-        looping) — only `design_voice()`'s guard opts into the bounded wait,
-        passing `_BASE17_CONTENTION_WAIT_S_DEFAULT`/`_POLL_S_DEFAULT`
-        explicitly, because that call site's whole purpose is to wait for a
+        must stay non-blocking and NEVER raise: #1975 already established that
+        a Stop must always succeed. At `wait_seconds <= 0.0` (the bare/Stop-
+        route case), this unconditionally nulls `_base17` without waiting or
+        raising, mirroring the sibling `unload()` method's stop semantics. Only
+        `design_voice()`'s eviction guard opts into the bounded wait, passing
+        `_BASE17_CONTENTION_WAIT_S_DEFAULT`/`_POLL_S_DEFAULT` explicitly,
+        because that call site's whole purpose is to wait for a
         wedged-looking-but-still-loading base17 rather than race it."""
+        if wait_seconds <= 0.0:
+            # Bare call (Stop route, or idle eviction): never block, never raise.
+            # Unconditionally null the model, matching unload()'s semantics.
+            with self._synth_lock:
+                if self._base17 is None:
+                    return
+                self._base17 = None
+            _reclaim_host_and_vram()
+            return
+
+        # Bounded wait for a callee that passed explicit wait_seconds > 0
+        # (currently only design_voice()'s contention guard): wait for the
+        # in-flight load to clear, or raise if it doesn't within the budget.
         deadline = time.monotonic() + wait_seconds
         while self._base17_in_flight.busy:
             if time.monotonic() >= deadline:
