@@ -1426,16 +1426,16 @@
     <details class="item">
       <summary><span class="num">E101</span><span class="iname">Port-keyed TTS owner notes prevent collision when servers share a run directory (#2641)</span><span class="risk low">Two live sidecars, shared run dir</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>Before #2641, the TTS sidecar owner-note file was fixed at <code>.run/tts.owner.json</code> regardless of which port the sidecar was listening on. When two different server instances on different ports both used the same <code>.run</code> directory (set via <code>APP_RUN_DIR</code>) they would both try to write to this single filename. Whichever wrote last would silently clobber the other's note, so a third instance might read the wrong owner.</p>
+        <p>Before #2641, the TTS sidecar owner-note file was fixed at <code>.run/tts.owner.json</code> regardless of which port the sidecar was listening on. When two different server instances on different ports both used the same <code>.run</code> directory (set via <code>APP_RUN_DIR</code>) they would both try to write to this single filename. Whichever wrote last would silently clobber the other's note, losing the ownership information (PID, port, lineage). A server reading the note later would find stale or wrong data about which sidecar it was supposed to manage.</p>
         <p>#2641 fixes this by keying the owner-note filename by port: <code>.run/tts.owner.&lt;port&gt;.json</code>. The sidecar-sweep logic that reads owner notes also resolves the port, so it correctly discriminates.</p>
         <p>E10 verifies the sweep with <b>separate</b> <code>.run/</code> directories; this row verifies port-keying prevents collision when <b>the run directory is shared</b>.</p>
         <ul>
           <li>Primary checkout at default ports (<code>PORT=8080</code>, <code>LOCAL_TTS_PORT=9000</code>) + worktree at slot 1 (<code>PORT=8090</code>, <code>LOCAL_TTS_PORT=9010</code>), both with <code>APP_RUN_DIR=/abs/path/shared-run-dir</code> in their <code>server/.env</code>.</li>
-          <li>Run <code>npm start</code> or <code>npm run dev</code> in each checkout. From the primary, observe both <code>.run/tts.owner.9000.json</code> and <code>.run/tts.owner.9010.json</code> coexist without collision.</li>
-          <li>From the primary, run <code>npm run stop</code> — the primary's sidecar (:9000) dies, the worktree's (:9010) survives.</li>
-          <li>Repeat from the worktree: <code>npm run stop</code> there kills the worktree's sidecar, the primary's survives — port discrimination in reverse.</li>
+          <li>Run <code>npm start</code> or <code>npm run dev</code> in each checkout. From the primary, observe both <code>.run/tts.owner.9000.json</code> and <code>.run/tts.owner.9010.json</code> coexist without collision — this is the core fix of #2641.</li>
+          <li>From the primary, run <code>npm run stop</code> — the primary's sidecar (:9000) dies, the worktree's (:9010) survives. The sweep resolver sees two notes (ambiguous), falls back to the primary's own <code>server/.env</code> where <code>LOCAL_TTS_PORT=9000</code>, and kills only that port.</li>
+          <li>Repeat from the worktree: <code>npm run stop</code> there and observe the worktree's sidecar dies, the primary's survives. The worktree's <code>server/.env</code> has <code>LOCAL_TTS_PORT=9010</code>, so the fallback kills only that port. Both outcomes are correct and safe.</li>
         </ul>
-        <p class="src">Two live sidecars on the same host with a shared run directory · 5–10 min · <a href="https://github.com/dudarenok-maker/Castwright/issues/2641">#2641</a> · PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2754">#2754</a></p>
+        <p class="src">Two live sidecars on the same host with a shared run directory · 5–10 min · this PR's description (§On-box acceptance), <code>server/src/tts/sidecar-owner.ts</code> (Node server write path), <code>scripts/lib/sidecar-sweep-port.mjs</code> and <code>.psm1</code> (sweep read and fallback logic) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2641">#2641</a> · PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2754">#2754</a></p>
       </div>
     </details>
 

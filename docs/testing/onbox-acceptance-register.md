@@ -4163,9 +4163,9 @@ regardless of which port the sidecar was listening on. When two different server
 instances on different ports both used the same `.run` directory — set via
 `APP_RUN_DIR` environment variable pointing to a shared location — they would
 both try to write to this single fixed filename. Whichever wrote last would
-silently clobber the other's note, so a third instance starting on either port
-might read the wrong owner, treating a live sidecar as a collision when no real
-conflict existed, or adopting a sidecar it did not own.
+silently clobber the other's note, losing the ownership information (PID, port,
+lineage). A server reading the note later would find stale or wrong data about
+which sidecar it was supposed to manage.
 
 #2641 fixes this by keying the owner-note filename by port: each sidecar now
 writes to `.run/tts.owner.<port>.json`. When two instances share a `.run`
@@ -4192,12 +4192,14 @@ Run `npm start` or `npm run dev` in each checkout. From the primary, observe:
 **(1)** `.run/tts.owner.9000.json` exists and contains the primary's sidecar PID;
 **(2)** `.run/tts.owner.9010.json` also exists (written by the worktree's
 sidecar) and contains a different PID. Both files coexist in the shared `.run`
-directory without collision. **(3)** From the primary checkout, run `npm run stop`
-and observe the primary's sidecar (`:9000`) dies but the worktree's (`:9010`)
-survives, confirming the sweep read the correct port-keyed owner note and did not
-treat the worktree's note as a collision. **(4)** Repeat from the worktree: run
-`npm run stop` there and observe the worktree's sidecar dies, the primary's
-survives, same port discrimination in reverse.
+directory without collision — this is the core fix of #2641. **(3)** From the
+primary checkout, run `npm run stop` and observe the primary's sidecar (`:9000`)
+dies but the worktree's (`:9010`) survives. The sweep resolver sees two notes
+(ambiguous), falls back to the primary's own `server/.env` where `LOCAL_TTS_PORT=9000`,
+and kills only that port. **(4)** Repeat from the worktree: run `npm run stop`
+there and observe the worktree's sidecar dies, the primary's survives. The
+worktree's `server/.env` has `LOCAL_TTS_PORT=9010`, so the fallback kills only
+that port. Both outcomes are correct and safe.
 
 **Optionally,** to verify the false-collision case is now ruled out: before this
 fix, step (2) would not happen — the second sidecar would find
@@ -4211,10 +4213,10 @@ checkout of that earlier point is available and you have time; the forward
 direction (both start cleanly, sweep discriminates) is the core acceptance.
 
 *Cost:* 5–10 minutes to set up and run. Needs two live sidecars on the same host.
-*Criteria:* this PR's description (§On-box acceptance) and the
-`.run/tts.owner.<port>.json` naming in `server/src/tts-sidecar/main.py`
-(sidecar write path), `scripts/lib/sidecar-sweep-port.mjs` and `.psm1` (sweep
-read path).
+*Criteria:* this PR's description (§On-box acceptance), the
+`.run/tts.owner.<port>.json` keying in `server/src/tts/sidecar-owner.ts`
+(the Node server that writes owner notes), and `scripts/lib/sidecar-sweep-port.mjs`
+and `.psm1` (the sweep logic that reads notes and falls back to config).
 
 ## Group G — GitHub Actions itself
 
