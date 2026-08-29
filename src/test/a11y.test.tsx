@@ -34,92 +34,119 @@ import { configSlice } from '../store/config-slice';
 
 import type { Chapter, Character, Voice, LibraryAuthor } from '../lib/types';
 import type { EditableBookMeta } from '../store/book-meta-slice';
+import { api } from '../lib/api';
 
 /* The Upload view fires api.importManuscript on user action only,
    but the workspace-path row mounts on render and calls
    getWorkspaceInfo. The Listen view's chapter rows fetch real waveform
    peaks via getChapterAudio for every `done` chapter on mount.
    Never-resolving promises keep the render shape stable for axe to scan. */
-vi.mock('../lib/api', () => ({
-  api: {
-    getWorkspaceInfo: () => new Promise(() => {}),
-    importManuscript: () => new Promise(() => {}),
-    getChapterAudio: () => new Promise(() => {}),
-    // Listen-view companion banner probes this on mount; no APK in the a11y
-    // fixture, so the "Download .apk" button stays hidden.
-    checkCompanionApk: () => Promise.resolve({ available: false, sizeBytes: null }),
-    // Book-library view fetches the continue-listening rail on mount.
-    getContinueListening: () => new Promise(() => {}),
-    // Stats view fetches the library stats on mount; seed a small payload
-    // so it renders real content (lede, sparkbars, progress rows, series)
-    // for axe to scan rather than the loading state.
-    getLibraryStats: () =>
-      Promise.resolve({
-        totalListenedSec: 47 * 3600 + 12 * 60,
-        booksFinished: 6,
-        perBook: [
-          { bookId: 'b-coalfall', title: 'The Coalfall Commission', completionPct: 1, finished: true },
-          { bookId: 'b-hollow', title: 'Hollow Tide', completionPct: 0.78, finished: false },
-          { bookId: 'b-never2', title: 'Neverseen · Book 2', completionPct: 0.54, finished: false },
-        ],
-        perSeries: [
-          { series: 'Neverseen', finishedCount: 1, importedCount: 3 },
-          { series: 'Coalfall', finishedCount: 1, importedCount: 2 },
-        ],
-        byDay: [
-          { date: '2026-06-11', seconds: 1200 },
-          { date: '2026-06-12', seconds: 1800 },
-          { date: '2026-06-13', seconds: 3600 },
-        ],
-      }),
-    // Advanced Configuration view fetches its config + GPU device list +
-    // analyzer device on mount.
-    getConfig: () =>
-      Promise.resolve({
-        groups: [
-          {
-            id: 'tts-engine',
-            label: 'Voice engine & device',
-            help: 'Voice engine device, language, and preload behaviour.',
-            risk: 'high',
-            collapsedByDefault: true,
+vi.mock('../lib/api', () => {
+  const mockGetAnalyzerGpuSplit = vi.fn().mockResolvedValue({
+    reachable: true,
+    split: false,
+    deviceIndices: [0],
+    totalUsedMb: 4200,
+    wouldFitSingleDevice: false,
+    dataUnavailable: false,
+  });
+
+  return {
+    api: {
+      getWorkspaceInfo: () => new Promise(() => {}),
+      importManuscript: () => new Promise(() => {}),
+      getChapterAudio: () => new Promise(() => {}),
+      // Listen-view companion banner probes this on mount; no APK in the a11y
+      // fixture, so the "Download .apk" button stays hidden.
+      checkCompanionApk: () => Promise.resolve({ available: false, sizeBytes: null }),
+      // Book-library view fetches the continue-listening rail on mount.
+      getContinueListening: () => new Promise(() => {}),
+      // Stats view fetches the library stats on mount; seed a small payload
+      // so it renders real content (lede, sparkbars, progress rows, series)
+      // for axe to scan rather than the loading state.
+      getLibraryStats: () =>
+        Promise.resolve({
+          totalListenedSec: 47 * 3600 + 12 * 60,
+          booksFinished: 6,
+          perBook: [
+            { bookId: 'b-coalfall', title: 'The Coalfall Commission', completionPct: 1, finished: true },
+            { bookId: 'b-hollow', title: 'Hollow Tide', completionPct: 0.78, finished: false },
+            { bookId: 'b-never2', title: 'Neverseen · Book 2', completionPct: 0.54, finished: false },
+          ],
+          perSeries: [
+            { series: 'Neverseen', finishedCount: 1, importedCount: 3 },
+            { series: 'Coalfall', finishedCount: 1, importedCount: 2 },
+          ],
+          byDay: [
+            { date: '2026-06-11', seconds: 1200 },
+            { date: '2026-06-12', seconds: 1800 },
+            { date: '2026-06-13', seconds: 3600 },
+          ],
+        }),
+      // Advanced Configuration view fetches its config + GPU device list +
+      // analyzer device on mount.
+      getConfig: () =>
+        Promise.resolve({
+          groups: [
+            {
+              id: 'tts-engine',
+              label: 'Voice engine & device',
+              help: 'Voice engine device, language, and preload behaviour.',
+              risk: 'high',
+              collapsedByDefault: true,
+            },
+            {
+              id: 'analyzer-models',
+              label: 'Analyzer models & endpoints',
+              help: 'Which model/endpoint runs the analysis.',
+              risk: 'medium',
+              collapsedByDefault: false,
+            },
+          ],
+          descriptors: [
+            {
+              key: 'tts.qwen.codecChunkSize',
+              group: 'tts-engine',
+              label: 'Qwen codec chunk size',
+              help: 'Codec decode chunk size (time-axis frames).',
+              type: 'integer',
+              min: 1,
+              apply: 'restart-sidecar',
+              risk: 'high',
+              isPrompt: false,
+              default: 300,
+            },
+          ],
+          values: {
+            'tts.qwen.codecChunkSize': {
+              key: 'tts.qwen.codecChunkSize',
+              effective: 300,
+              source: 'default',
+              locked: false,
+              overridden: false,
+            },
+            'analyzer.engine': {
+              key: 'analyzer.engine',
+              effective: 'local',
+              source: 'default',
+              locked: false,
+              overridden: false,
+            },
           },
-        ],
-        descriptors: [
-          {
-            key: 'tts.qwen.codecChunkSize',
-            group: 'tts-engine',
-            label: 'Qwen codec chunk size',
-            help: 'Codec decode chunk size (time-axis frames).',
-            type: 'integer',
-            min: 1,
-            apply: 'restart-sidecar',
-            risk: 'high',
-            isPrompt: false,
-            default: 300,
-          },
-        ],
-        values: {
-          'tts.qwen.codecChunkSize': {
-            key: 'tts.qwen.codecChunkSize',
-            effective: 300,
-            source: 'default',
-            locked: false,
-            overridden: false,
-          },
-        },
-        restartPending: false,
-        cudaEnvShadow: false,
-        envCleanupCandidates: [],
-      }),
-    getGpuDevices: () =>
-      Promise.resolve({
-        devices: [{ uuid: 'GPU-0', idx: 0, name: 'RTX 4070 Laptop', total_mb: 8000, free_mb: 6000 }],
-        cpu: true,
-      }),
-    getAnalyzerDevice: () => Promise.resolve({ device: 'idle' as const }),
-  },
-}));
+          restartPending: false,
+          cudaEnvShadow: false,
+          envCleanupCandidates: [],
+        }),
+      getGpuDevices: () =>
+        Promise.resolve({
+          devices: [{ uuid: 'GPU-0', idx: 0, name: 'RTX 4070 Laptop', total_mb: 8000, free_mb: 6000 }],
+          cpu: true,
+        }),
+      getAnalyzerDevice: () => Promise.resolve({ device: 'idle' as const }),
+      getAnalyzerGpuSplit: mockGetAnalyzerGpuSplit,
+    },
+  };
+});
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -357,6 +384,17 @@ describe('a11y — listen view', () => {
 
 describe('a11y — advanced configuration view', () => {
   it('has no axe violations', async () => {
+    // Override the getAnalyzerGpuSplit mock for this test to return a split
+    // state so the analyzer GPU-split warning block renders and can be scanned.
+    vi.mocked(api.getAnalyzerGpuSplit).mockResolvedValueOnce({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 9000,
+      wouldFitSingleDevice: true,
+      dataUnavailable: false,
+    });
+
     const store = configureStore({
       reducer: { config: configSlice.reducer, ui: uiSlice.reducer },
     });
@@ -377,6 +415,9 @@ describe('a11y — advanced configuration view', () => {
     if (!toggle) throw new Error('Voice engine & device section toggle not found');
     fireEvent.click(toggle);
     await screen.findByText('Qwen codec chunk size');
+    // Verify the analyzer GPU-split warning is actually present before scanning
+    // — this confirms the mock override worked and the warning block renders.
+    await screen.findByText(/Model split across GPUs/);
     expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
   });
 });
