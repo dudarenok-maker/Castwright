@@ -10,7 +10,11 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { hasIssueLink, isDependabotExempt } from '../validate-pr-issue-link.mjs';
 
-const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'validate-pr-issue-link.mjs');
+const scriptPath = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'validate-pr-issue-link.mjs',
+);
 
 const accepted = [
   'Closes #123',
@@ -99,11 +103,18 @@ test('CLI: a dependabot[bot]-authored PR with no Closes/Refs still passes the ch
     const bodyFile = join(dir, 'body.txt');
     // Real shape of a Dependabot PR body (see PR #873, cited in the finding):
     // no Closes/Refs anywhere.
-    writeFileSync(bodyFile, 'Bumps [esbuild](https://github.com/evanw/esbuild) from 0.28.0 to 0.28.1.\n');
+    writeFileSync(
+      bodyFile,
+      'Bumps [esbuild](https://github.com/evanw/esbuild) from 0.28.0 to 0.28.1.\n',
+    );
     const result = spawnSync(process.execPath, [scriptPath, bodyFile, 'dependabot[bot]'], {
       encoding: 'utf8',
     });
-    assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -117,11 +128,18 @@ test('CLI: a human-authored PR with no Closes/Refs still fails the check', () =>
   const dir = mkdtempSync(join(tmpdir(), 'pr-issue-link-'));
   try {
     const bodyFile = join(dir, 'body.txt');
-    writeFileSync(bodyFile, 'Bumps [esbuild](https://github.com/evanw/esbuild) from 0.28.0 to 0.28.1.\n');
+    writeFileSync(
+      bodyFile,
+      'Bumps [esbuild](https://github.com/evanw/esbuild) from 0.28.0 to 0.28.1.\n',
+    );
     const result = spawnSync(process.execPath, [scriptPath, bodyFile, 'some-human'], {
       encoding: 'utf8',
     });
-    assert.equal(result.status, 1, `expected exit 1, got ${result.status}\nstderr: ${result.stderr}`);
+    assert.equal(
+      result.status,
+      1,
+      `expected exit 1, got ${result.status}\nstderr: ${result.stderr}`,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -137,7 +155,11 @@ test('CLI: a human-authored PR with a Closes link still passes', () => {
     const result = spawnSync(process.execPath, [scriptPath, bodyFile, 'some-human'], {
       encoding: 'utf8',
     });
-    assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -19,12 +19,22 @@
 #   would fail pr-title-lint.yml permanently. Omitting `include` drops the
 #   scope suffix entirely, landing on the no-scope "chore: <subject>"
 #   catch-all the validator accepts, uniformly for prod and dev batches.
-# - github-actions: `directories` (plural, glob-capable) replaces
-#   `directory: "/"`, which only scans .github/workflows plus a ROOT
-#   action.yml/action.yaml. This repo also has a composite action at
-#   .github/actions/setup/action.yml (pins actions/setup-node@v6 +
-#   actions/cache@v5, consumed by 8 verify.yml jobs) that `directory: "/"`
-#   alone would silently leave unbumped.
+# - github-actions: `directories` (plural) replaces `directory: "/"`, which
+#   only scans .github/workflows plus a ROOT action.yml/action.yaml. This
+#   repo also has TWO composite actions -- .github/actions/setup/action.yml
+#   (pins actions/setup-node@v6 + actions/cache@v5, consumed by 8 verify.yml
+#   jobs) and .github/actions/install-ffmpeg-windows/action.yml -- that
+#   `directory: "/"` alone would silently leave unbumped. `directories`
+#   supports a glob (e.g. '/.github/actions/*') for the npm/pip ecosystems,
+#   but GitHub's own docs list only `directory: "/"` for github-actions
+#   specifically, and dependabot-core#10884 is an open, unresolved issue
+#   asking whether directories/glob expansion is honored for this ecosystem
+#   at all. Rather than depend on undocumented behavior, this entry lists
+#   each composite action's directory explicitly. The tradeoff: a newly
+#   added composite action needs a new line here, or it silently stops
+#   getting version bumps -- scripts/tests/dependabot-config.test.mjs
+#   enumerates .github/actions/*/action.yml from disk and fails red if this
+#   list falls behind.
 version: 2
 
 updates:
@@ -65,7 +75,8 @@ updates:
   - package-ecosystem: 'github-actions'
     directories:
       - '/'
-      - '/.github/actions/*'
+      - '/.github/actions/setup'
+      - '/.github/actions/install-ffmpeg-windows'
     schedule:
       interval: 'weekly'
     open-pull-requests-limit: 5
