@@ -79,10 +79,15 @@ export function isGateSeverity(severity) {
 export function collectAdvisoryIds(entry) {
   const ids = new Set();
   for (const v of entry?.via ?? []) {
-    if (typeof v === 'string') {
-      ids.add(v);
-    } else if (v && typeof v.source === 'string') {
-      ids.add(v.source);
+    // via[] entries that are strings are package names (e.g., "lodash"), not advisories - skip them.
+    if (typeof v === 'string') continue;
+
+    // For advisory objects, extract GHSA id from the url field (e.g., from
+    // https://github.com/advisories/GHSA-p6mc-m468-83gw). In npm audit --json,
+    // the source field is a number (advisory id), not a GHSA string.
+    if (v && typeof v.url === 'string') {
+      const match = v.url.match(/GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}/i);
+      if (match) ids.add(match[0]);
     }
   }
   return ids;
@@ -163,12 +168,26 @@ export function runNpmAudit({ dir, omitDev = false } = {}) {
  * Parse npm audit's --json stdout into its `vulnerabilities` map. npm exits 1
  * when it finds advisories, but still prints the JSON on stdout, so the exit
  * code is not a reliable signal - the parsed report is.
+ *
+ * Fail closed: if the output does not have a valid `vulnerabilities` key
+ * (indicating an error response like { error: {...} } or { error: "..." }),
+ * throw an error rather than laundering it as an empty vulnerabilities map.
+ * A gate that can't verify is a gate that must not report green.
  */
 export function parseAuditOutput(stdout) {
   const trimmed = (stdout ?? '').trim();
   if (trimmed.length === 0) return {};
   const parsed = JSON.parse(trimmed);
-  const vulns = parsed && parsed.vulnerabilities ? parsed.vulnerabilities : parsed;
+  // Real npm audit reports always have a `vulnerabilities` key, even if empty.
+  // Error responses (e.g., ENOLOCK, registry unreachable) have an `error` key instead.
+  if (!parsed || typeof parsed !== 'object' || !('vulnerabilities' in parsed)) {
+    throw new Error(
+      parsed && parsed.error
+        ? `npm audit returned an error: ${typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error)}`
+        : 'npm audit output is missing the vulnerabilities key - output is not a valid audit report',
+    );
+  }
+  const vulns = parsed.vulnerabilities;
   return vulns && typeof vulns === 'object' ? vulns : {};
 }
 

@@ -26,11 +26,18 @@ test('isGateSeverity: only high and critical count', () => {
   assert.equal(isGateSeverity('info'), false);
 });
 
-test('collectAdvisoryIds: reads strings and object .source, dedupes', () => {
+test('collectAdvisoryIds: extracts GHSA from url, skips package names, dedupes', () => {
+  // Real npm audit --json shape: via[] contains package names (strings) and
+  // advisory objects with source (number) and url (GHSA link).
   const entry = {
-    via: ['GHSA-aaa-111', { source: 'GHSA-bbb-222', title: 'x' }, 'GHSA-aaa-111'],
+    via: [
+      'lodash', // package name - skip this
+      { source: 1106913, url: 'https://github.com/advisories/GHSA-p6mc-m468-83gw', title: 'Prototype Pollution' },
+      'debug', // another package name - skip
+      { source: 1106913, url: 'https://github.com/advisories/GHSA-p6mc-m468-83gw', title: 'Prototype Pollution' }, // duplicate
+    ],
   };
-  assert.deepEqual([...collectAdvisoryIds(entry)].sort(), ['GHSA-aaa-111', 'GHSA-bbb-222']);
+  assert.deepEqual([...collectAdvisoryIds(entry)].sort(), ['GHSA-p6mc-m468-83gw']);
 });
 
 test('collectAdvisoryIds: empty/missing via yields empty set', () => {
@@ -64,32 +71,48 @@ test('gateFailures: ignores below-high noise', () => {
 
 test('gateFailures: flags unwaived high advisory', () => {
   const vulns = {
-    'react-router@8': { severity: 'high', via: ['GHSA-hhh-111'] },
-    'server-dep': { severity: 'critical', via: [{ source: 'GHSA-ccc-222', title: 'x' }] },
+    'react-router@8': {
+      severity: 'high',
+      via: ['webpack', { source: 999111, url: 'https://github.com/advisories/GHSA-7jn1-qqq4-99gw', title: 'ReDoS' }],
+    },
+    'server-dep': {
+      severity: 'critical',
+      via: [{ source: 888222, url: 'https://github.com/advisories/GHSA-cccc-2222-88gw', title: 'Injection' }],
+    },
   };
   const { missing, expired } = gateFailures(vulns, []);
   assert.deepEqual(expired, []);
   assert.deepEqual(missing, [
-    { package: 'react-router@8', advisories: ['GHSA-hhh-111'] },
-    { package: 'server-dep', advisories: ['GHSA-ccc-222'] },
+    { package: 'react-router@8', advisories: ['GHSA-7jn1-qqq4-99gw'] },
+    { package: 'server-dep', advisories: ['GHSA-cccc-2222-88gw'] },
   ]);
 });
 
 test('gateFailures: active waiver covers its GHSA', () => {
-  const vulns = { 'react-router@8': { severity: 'high', via: ['GHSA-hhh-111'] } };
-  const waivers = [{ ghsaId: 'GHSA-hhh-111', package: 'react-router', reason: 'dismissed', expiry: '2099-01-01' }];
+  const vulns = {
+    'react-router@8': {
+      severity: 'high',
+      via: ['npm', { source: 999111, url: 'https://github.com/advisories/GHSA-7jn1-qqq4-99gw', title: 'ReDoS' }],
+    },
+  };
+  const waivers = [{ ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'react-router', reason: 'dismissed', expiry: '2099-01-01' }];
   const { missing, expired } = gateFailures(vulns, waivers);
   assert.deepEqual(expired, []);
   assert.deepEqual(missing, []);
 });
 
 test('gateFailures: expired waiver no longer covers its GHSA and is reported', () => {
-  const vulns = { 'react-router@8': { severity: 'high', via: ['GHSA-hhh-111'] } };
+  const vulns = {
+    'react-router@8': {
+      severity: 'high',
+      via: [{ source: 999111, url: 'https://github.com/advisories/GHSA-7jn1-qqq4-99gw', title: 'ReDoS' }],
+    },
+  };
   // isExpired uses real Date.now(), so drive the waiver into the past directly.
-  const waivers = [{ ghsaId: 'GHSA-hhh-111', package: 'react-router', reason: 'stale', expiry: '2020-01-01' }];
+  const waivers = [{ ghsaId: 'GHSA-7jn1-qqq4-99gw', package: 'react-router', reason: 'stale', expiry: '2020-01-01' }];
   const { missing, expired } = gateFailures(vulns, waivers);
-  assert.deepEqual(expired, ['GHSA-hhh-111']);
-  assert.deepEqual(missing, [{ package: 'react-router@8', advisories: ['GHSA-hhh-111'] }]);
+  assert.deepEqual(expired, ['GHSA-7jn1-qqq4-99gw']);
+  assert.deepEqual(missing, [{ package: 'react-router@8', advisories: ['GHSA-7jn1-qqq4-99gw'] }]);
 });
 
 test('gateFailures: high severity with no attributable advisory fails closed', () => {
@@ -119,5 +142,26 @@ test('loadWaivers: missing file is an empty list', () => {
 test('parseAuditOutput: extract vulnerabilities map, tolerate empty', () => {
   assert.deepEqual(parseAuditOutput(''), {});
   assert.deepEqual(parseAuditOutput(JSON.stringify({ vulnerabilities: { a: 1 } })), { a: 1 });
-  assert.deepEqual(parseAuditOutput(JSON.stringify({ a: 1 })), { a: 1 });
+  assert.deepEqual(parseAuditOutput(JSON.stringify({ vulnerabilities: {} })), {});
+});
+
+test('parseAuditOutput: fail-closed when vulnerabilities key is missing', () => {
+  // Missing vulnerabilities key indicates an error response (e.g., npm audit failed).
+  assert.throws(
+    () => parseAuditOutput(JSON.stringify({ a: 1 })),
+    /missing the vulnerabilities key/,
+  );
+});
+
+test('parseAuditOutput: fail-closed when npm audit returns an error response', () => {
+  // ENOLOCK (no package-lock.json) response.
+  assert.throws(
+    () => parseAuditOutput(JSON.stringify({ error: { code: 'ENOLOCK', message: 'No package-lock.json' } })),
+    /npm audit returned an error/,
+  );
+  // String error message.
+  assert.throws(
+    () => parseAuditOutput(JSON.stringify({ error: 'Registry unreachable' })),
+    /npm audit returned an error/,
+  );
 });
