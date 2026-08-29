@@ -3081,6 +3081,64 @@ per synthesis group). *Criteria:* full text in [#2700](https://github.com/dudare
 *Cost:* short, opportunistic — rides along with any cloned-voice reassignment
 test that happens to produce a long-enough sample.
 
+> **PARTIALLY run 2026-08-29 (claude) — the first two criteria are met for
+> real on real hardware; the third (mismatch detection in both directions)
+> surfaced a genuine new defect and is NOT met.** Live Coqui/XTTS resident
+> on-box (RTX 4070 8GB, `cuda:0`, DeepSpeed+fp16), no mocking: a throwaway
+> fixture (`mkdtemp`, never the operator's book) gave a synthetic character
+> only 2 in-book anchor vectors (well below `AUDITION_POOL_TARGET_N=6`, a
+> genuine deficit of 4) plus 6 real evidence quotes (~30-45 words each,
+> pulled from `the-coalfall-commission.md`) and a voice assignment to the
+> real catalogue voice `Claribel Dervla`. Calling `scoreBook()` unmocked
+> made real network calls to the live sidecar: 6 real XTTS renders (RTF
+> ~0.58-0.68, all clearing `MIN_DURATION_SEC`), each embedded for real via
+> `/embed` (ECAPA, 192-d). The 2 synthetic anchors were far enough from the
+> real embeddings to trigger `buildCentroid`'s bimodal check, so
+> `auditionCentroid` correctly ran its Phase B (anchors dropped, synthetic-
+> only pool topped up and rebuilt) — itself a real exercise of a code path
+> `aggregate-audition-pool-real.test.ts` never reaches.
+> — **Criterion 1 MET:** persisted `referenceKind: "audition"`, not
+> `"too-short"`.
+> — **Criterion 2 MET:** real, non-placeholder, non-degenerate values —
+> `cleanMean=0.9629`, `pSevere=0.9409`, `pBand=0.9446`, all finite, all
+> distinct from the synthetic old-voice anchors (which scored `cosine ≈
+> -0.004` to `-0.005` against the new centroid — correctly discarded as
+> `voice-mismatch`/`severe`, confirming the stale reference is genuinely
+> gone, not silently reused).
+> — **Criterion 3 mismatch direction #1 (genuinely wrong voice) MET:** a
+> real render of `Damien Black` (a clearly different catalogue voice)
+> against the same text scored `cosine≈0.16-0.18` and was correctly flagged
+> `voice-mismatch`/`severe` in two independent probes (a generic sentence
+> and a book-register narrative line neither in the evidence pool).
+> — **Criterion 3 mismatch direction #2 (correctly-assigned voice) NOT
+> MET — new defect found:** a real render of the CORRECT voice
+> (`Claribel Dervla`) against fresh text — tried twice, once with a short
+> generic sentence (`cosine=0.928`) and once with a book-register narrative
+> line matched in length/style to the evidence pool but not one of the 6
+> quotes that built it (`cosine=0.934`) — **both scored `voice-mismatch`/
+> `severe`**, i.e. a false positive on the very voice the character is
+> actually cast to. Root cause: `pSevere`/`pBand` are the 6th/10th
+> percentile of the pool's OWN cosines-to-centroid (`score.ts`), which for
+> a synthetic-only Phase B pool of just 6 renders — all the same engine,
+> same voice, same controlled acoustic conditions — clusters far tighter
+> (severe/band boundary within ~0.02 of cleanMean) than the natural
+> cosine variance of a genuinely-correct NEW render on different content.
+> This is a sharper version of the already-documented "thin ~0.05-wide
+> over-flag band for the tightest voices" calibration caveat in
+> `score.ts` (Task 16, real in-book anchors), not a new mechanism — but it
+> is worse here because the audition-only pool is both smaller (N=6) and
+> more homogeneous (no real recording variance) than any in-book anchor
+> set the calibration was tuned against.
+> **Still owed:** this criterion, and — new — a decision on whether/how
+> to widen the severity band for small, synthetic-only Phase B pools (a
+> calibration/design question, not fixed here: the existing percentile
+> mechanism isn't wrong on its own terms, it just wasn't validated against
+> a pool this tight before). Recommend a follow-up issue scoped to that
+> specifically before this row can close. Full log/observation detail
+> (render RTFs, per-render text, raw cosines) is in this run's session
+> record; no code was changed by this run — the fixture and probe scripts
+> used were throwaway and were not committed.
+
 ### A37 · Russian dash-attributed dialogue — doubled-comma collapse pause by ear ([#2059](https://github.com/dudarenok-maker/Castwright/issues/2059), PR #2688) · **Coqui/XTTS resident, Russian text; no clone needed**
 
 PR #2688 fixed `softenDashes` (`server/src/tts/text-normalize.ts`) producing a
