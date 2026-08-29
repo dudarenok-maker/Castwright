@@ -171,7 +171,16 @@ function Get-SidecarSweepPort {
     if ($noteFiles.Count -eq 1) {
         try {
             $note = Get-Content $noteFiles[0].FullName -Raw -ErrorAction Stop | ConvertFrom-Json
-            if ($note.port -is [int] -or $note.port -is [long] -or $note.port -is [double]) {
+            # Windows PowerShell 5.1's ConvertFrom-Json deserialises every JSON
+            # number as [double] (pwsh7 may give [long]/[int]) — [int]$note.port
+            # on a [double] ROUNDS rather than rejects, so a fractional port
+            # (e.g. a corrupt "9000.5") would silently resolve to 9000, the one
+            # value this resolver must never guess. Mirror .mjs's
+            # Number.isInteger() semantics: a [double] is only accepted when it
+            # has no fractional component.
+            $isWholeNumber = ($note.port -is [int]) -or ($note.port -is [long]) -or
+                (($note.port -is [double]) -and ($note.port -eq [math]::Truncate($note.port)))
+            if ($isWholeNumber) {
                 $port = [int]$note.port
                 if ($port -gt 0 -and $port -lt 65536) { return $port }
             }

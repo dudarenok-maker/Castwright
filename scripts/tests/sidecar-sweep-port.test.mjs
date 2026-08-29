@@ -587,6 +587,22 @@ test('#2754 — resolveSidecarSweepPort uses a stale note (dead PID) when it is 
   });
 });
 
+test('narrow review, correctness bug 2 — a boolean `port` field does not coerce to 1 via Number(true)', () => {
+  // Number(true) === 1, and Number.isInteger(1) === true, so a naive
+  // `Number(note.port)` coercion would silently accept a malformed note
+  // whose port field is a boolean, resolving to port 1. The port field
+  // must be a genuine number before any arithmetic coercion is applied.
+  withTempRunDir((dir) => {
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: true, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9030\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9030);
+    });
+  });
+});
+
 test('#2754 — resolveSidecarSweepPort falls back to server/.env when two notes exist (ambiguous)', () => {
   withTempRunDir((dir) => {
     // Two notes, whether dead or live — the existence of multiple notes means

@@ -173,7 +173,11 @@ export function resolveSidecarSweepPort(runDir, serverEnvPath) {
     try {
       const raw = readFileSync(resolve(runDir, noteFiles[0]), 'utf8');
       const note = JSON.parse(raw);
-      const port = Number(note?.port);
+      // Reject before coercing: Number(true) === 1 and Number.isInteger(1) === true,
+      // so a malformed note with a boolean/array `port` would otherwise silently
+      // validate as port 1. sidecar-owner.ts's own note readers already gate on
+      // `typeof === 'number'` first (see readSidecarOwner) — mirror that here.
+      const port = typeof note?.port === 'number' ? note.port : NaN;
       if (Number.isInteger(port) && port > 0 && port < 65536) {
         return port;
       }

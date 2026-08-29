@@ -88,6 +88,17 @@ Describe 'Get-SidecarSweepPort' {
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9050
     }
 
+    It 'falls back to server\.env LOCAL_TTS_PORT when the recorded port is fractional (narrow review, correctness bug 2)' {
+        # [int]$note.port on a [double] ROUNDS rather than rejects -- a corrupt
+        # "9000.5" would otherwise silently resolve to 9000, the one value this
+        # resolver must never guess (stop-app.ps1 force-kills whatever answers there).
+        $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
+        Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":9000.5,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
+
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9070
+    }
+
     It 'returns $null (sweep nothing) when neither the note nor server\.env yield a port (#2632 N29)' {
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be $null
     }
