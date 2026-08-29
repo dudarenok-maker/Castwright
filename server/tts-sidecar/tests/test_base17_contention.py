@@ -268,7 +268,8 @@ def test_design_voice_card_lock_prevents_concurrent_base17_reload() -> None:
     """
     engine = main.QwenEngine()
 
-    # Simulate that Kokoro is already warm from a prior operation
+    # Ensure Kokoro isn't resident so its eviction branch is a no-op and
+    # doesn't interfere with the model under test.
     _quiet_kokoro()
 
     design_started = threading.Event()

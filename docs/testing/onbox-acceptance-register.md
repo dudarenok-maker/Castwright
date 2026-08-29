@@ -3155,17 +3155,22 @@ span to close a race where concurrent `mint_variant()` could reload base17 mid-e
 Unit tests cannot prove VRAM co-residency, eviction ordering, or Stop-button success
 against the real model weights and sidecar lifecycle.
 
-- **Widened eviction guard prevents OOM in #1156 scenario.** On a single 8 GB GPU with
-  Qwen 0.6B Base + 1.7B VoiceDesign resident, trigger a `design_voice()` call for a
-  character, then — while the VoiceDesign load is in flight — open the developer
-  console network tab and repeat the call a second time before the first one completes,
-  racing the two loads. Confirm neither triggers an OOM: the widened guard's check of
-  `_base17_in_flight.busy` prevents base17 from loading into the co-residency gap.
-- **Stop button works mid-base17-load.** During an active `design_voice()` call (before
-  completion), call `POST /qwen/unload` (or click Stop in the UI). Confirm the call
-  returns 200/success and logs show the model unloaded immediately (not waiting), and
-  `nvidia-smi` memory usage drops by ~4–5 GB (the base17 1.7B model freed), proving
-  the unconditional null at `wait_seconds<=0` succeeded.
+- **Widened eviction guard prevents OOM in #1156 scenario.** On a single 8 GB GPU,
+  start a mint (`mint_variant()`) or a 1.7B synth so base17 begins loading — while
+  that load is in flight (`_base17_in_flight.busy`, `_base17` still `None`), trigger a
+  `design_voice()` call for a character on the same card. Confirm neither triggers an
+  OOM: the widened guard's check of `_base17_in_flight.busy` (not just
+  `self._base17 is not None`) makes `design_voice()` wait for the in-flight base17
+  load to clear before proceeding into the VoiceDesign load, instead of missing it
+  and letting both heavy models co-reside.
+- **Stop button works mid-base17-load.** While base17 is loading (mid-mint or
+  mid-1.7B-synth, `_base17_in_flight.busy` true), call `POST /unload` with body
+  `{"engine":"qwen","model":"1.7b"}` (or click Stop in the UI). Confirm the call
+  returns 200/success — not a 500 — and logs show the model unloaded immediately
+  (not waiting or raising), and `nvidia-smi` memory usage drops by ~3.4 GB (the
+  base17 1.7B model freed), proving the unconditional null at `wait_seconds<=0`
+  succeeded rather than the pass-1 regression (raising `Base17ContentionTimeoutError`
+  and freeing nothing).
 - **Bulk design run doesn't stall Kokoro.** With Kokoro resident, start a design run
   (bulk "Design full cast" or repeated single-character designs), and concurrently
   request a chapter render on a Kokoro voice in the same book. Confirm the render

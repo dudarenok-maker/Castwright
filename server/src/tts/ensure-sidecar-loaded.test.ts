@@ -283,18 +283,20 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBe(false);
   });
 
-  it('#2790 — checks /unload response status: non-ok (e.g. 500 from base17 contention) does not report success', async () => {
+  it('#2790 — checks /unload response status: non-ok (e.g. base17 contention on another tier) does not report success', async () => {
     /* #2752's regression: if the base17 load is in flight when Stop presses
        /unload {model:'1.7b'}, unload_base17() raises unhandled → 500 response.
        The old code caught ALL errors and treated them as success, then told
        the caller the tier was evicted when it was not. The second-stage
        reconcile on the Node side compounded this: it checked neither res.ok
        nor threw on error, so a 500 from the sidecar was silently swallowed,
-       and the caller was told the 1.7B was free when it was not — then loaded
-       Base+VoiceDesign together into an 8 GB card (OOM).
-       This test confirms the node side now checks res.ok and does not report
-       success when the sidecar returns non-ok. */
-    mockSidecar({ qwen_loaded: true, qwen_base17_loaded: true });
+       and the caller was told the tier was free when it was not — risking
+       loading two tiers together on an 8 GB card (OOM).
+       This test drops `keep17: true` (so only the 0.6B tier's bare /unload is
+       issued) and has that single call return a non-ok response, confirming
+       the node side now checks res.ok and does not report success when the
+       sidecar returns non-ok — the same check that protects the 1.7B/base17
+       path #2752 actually regressed. */
     global.fetch = vi
       .fn()
       .mockImplementationOnce(async (url: string, _init?: RequestInit) => {
@@ -302,7 +304,7 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
         throw new Error(`unexpected ${url}`);
       })
       .mockImplementationOnce(async (_url: string, _init?: RequestInit) => {
-        // First /unload returns 500 (base17 in flight, unload_base17() raised)
+        // The 0.6B /unload (no `model` field — keep17: true drops the 0.6B) returns 500.
         return { ok: false, status: 500, json: async () => ({}) };
       })
       .mockImplementationOnce(async (url: string, _init?: RequestInit) => {

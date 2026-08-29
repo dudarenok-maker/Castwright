@@ -181,13 +181,15 @@ export async function ensureSidecarEngineReady(
     that is down / mid-recycle just skips (the next run reconciles).
 
     `keep06` / `keep17` = "this run uses the 0.6B / 1.7B base tier". Returns
-    `true` when this call actually issued a `/unload` — `false` for every
-    other outcome (sidecar unreachable, mid-recycle, or the tier(s) not kept
-    were never resident to begin with, e.g. a fresh sidecar). #1839's
-    `evictIdleQwenBase` lever (`gpu/evict-idle-tts.ts`, via
-    `gpu/qwen-tier-reconcile-gate.ts`) threads this value through so it can
-    honestly report whether it freed anything, instead of reporting success
-    just because it was called. */
+    `true` only when every issued `/unload` for a non-kept, resident tier
+    actually succeeded (per `res.ok`) — `false` if any issue failed (sidecar
+    returned an error, e.g. base17 in-flight contention; or a network error/
+    timeout/abort) as well as for every other non-issuing outcome (sidecar
+    unreachable, mid-recycle, or the tier(s) not kept were never resident to
+    begin with, e.g. a fresh sidecar). #1839's `evictIdleQwenBase` lever
+    (`gpu/evict-idle-tts.ts`, via `gpu/qwen-tier-reconcile-gate.ts`) threads
+    this value through so it can honestly report whether it freed anything,
+    instead of reporting success just because it was called. */
 /* Seventh instance of #2287's defect, and the same endpoint as the sixth
    (synthesise-chapter.ts's EVICT_DISPATCHER). /unload dispatches to
    QwenEngine.unload() / unload_base17(), both of which take `_synth_lock`
@@ -197,20 +199,22 @@ export async function ensureSidecarEngineReady(
    300s.
 
    Left on the global fetch this failed WORSE than the sixth site, because the
-   failure is invisible: the catch below swallows it, Promise.allSettled
-   discards the rejection, and the function returns `true` regardless. The
-   caller is therefore told the tier was evicted when it was not — so
-   generation.ts loads the 1.7B on top of a still-resident 0.6B, the 8 GB OOM
-   its own comment warns about. It also feeds gpu/evict-idle-tts.ts, where a
-   bogus `true` makes withCapacityRetry burn a retry attempt on an eviction
-   that freed nothing.
+   failure used to be invisible: the catch below swallowed it, Promise.allSettled
+   discarded the rejection, and the function returned `true` regardless. The
+   caller was therefore told the tier was evicted when it was not — so
+   generation.ts would load the 1.7B on top of a still-resident 0.6B, the 8 GB
+   OOM its own comment warns about. It also fed gpu/evict-idle-tts.ts, where a
+   bogus `true` made withCapacityRetry burn a retry attempt on an eviction that
+   freed nothing.
 
-   NARROWED, NOT CLOSED: the 300s cap was by far the likeliest way to reach
-   that state, but past the ceiling below — or on any other error — the
-   swallow-and-return-`true` path still exists. Closing it means changing what
-   this function's return value MEANS ("issued an unload" per the doc above vs
-   "the tier is actually gone"), which both callers and evictIdleQwenBase read,
-   so it is a deliberate design decision rather than a fix to smuggle in here.
+   CLOSED (PR #2790 / #2752): `unload`'s inner `try` now checks `res.ok` and
+   the outer `try`'s `catch` sets `allEvicted = false` on any network error too
+   (see the `unload` closure above), so the swallow-and-return-`true` path no
+   longer exists — a failed `/unload` (a 500 from base17 contention, a network
+   error, a timeout) now surfaces as a `false` return rather than a silent
+   success. The only caller that mattered for this decision, `evictIdleQwenBase`
+   (`gpu/evict-idle-tts.ts`), reads it exactly this way: a bounded poll on
+   `false` instead of burning an immediate retry on a phantom success.
 
    BOTH production callers (generation.ts:194 and :1069) pass no signal, so
    the hidden 300s cap was the only bound in existence — meaning a dispatcher

@@ -96,13 +96,14 @@ export interface EvictIdleQwenBaseOpts {
 }
 
 /** Returns true when the underlying `reconcileResidentQwenTiers` actually
-    issued a real `/unload` request (see that function's doc comment) — not
-    that anything was necessarily freed, since that function's `unload()`
-    swallows its own fetch failures and never checks `res.ok`. `false` covers
-    every other outcome, including "called successfully but the tier to drop
-    was never resident" — that used to collapse into `true` here (#1839
+    freed the tier(s) to drop (see that function's doc comment) — it now checks
+    `res.ok` on every `/unload` it issues and reports a network/sidecar failure
+    as `false` too (PR #2790 / #2752), not just "a request was issued". `false`
+    covers every other outcome, including "called successfully but the tier to
+    drop was never resident" — that used to collapse into `true` here (#1839
     finding 1), which made `capacity-retry.ts` `continue` into an immediate,
-    wasted retry attempt instead of falling through to its bounded poll. */
+    wasted retry attempt instead of falling through to its bounded poll; the
+    same is now true of a failed eviction, not just a no-op one. */
 export async function evictIdleQwenBase(opts: EvictIdleQwenBaseOpts): Promise<boolean> {
   const anyGenerationActive = opts._isAnyGenerationActive ?? isAnyGenerationActive;
   const { modelKey } = opts;
