@@ -386,7 +386,7 @@ export function parseRegister(markdown) {
       testNames.push(proseMatch[1].trim());
     } else {
       // No prose prefix — try backtick-quoted test names (multi-test expansion).
-      testNames = [...testCell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+      testNames = [...testCell.matchAll(/\u0060([^\u0060]+)\u0060/g)].map((m) => m[1]);
     }
 
     if (testNames.length === 0) continue;
@@ -462,7 +462,7 @@ export function countUnparsedDataRows(markdown) {
     if (proseMatch) continue; // This row parsed successfully.
 
     // No prose prefix — try backtick-quoted test names.
-    const testNames = [...testCell.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    const testNames = [...testCell.matchAll(/\u0060([^\u0060]+)\u0060/g)].map((m) => m[1]);
     if (testNames.length > 0) continue; // This row parsed successfully.
 
     // If we get here, the row is well-formed but unparsed.

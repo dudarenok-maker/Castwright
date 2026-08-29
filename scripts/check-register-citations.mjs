@@ -539,7 +539,7 @@ const OWNERSHIP_MARKER_REGEXES = [/run sheet/i, /\*criteria:\*/i, /\bfull criter
 // whole file, then a separate "§... gate."/"§2A.5" clause. A short lookahead
 // (past an optional closing `` ` ``/`]`/`)` the path sits inside) is enough
 // to tell the two apart.
-const POSSESSIVE_SUBSECTION_REGEX = /^[`\])]*['’]s\b/;
+const POSSESSIVE_SUBSECTION_REGEX = /^[\u0060\u005d)]*[\u0027\u2019]s\b/;
 
 function isPossessiveSubsectionReference(rowBody, matchEnd) {
   return POSSESSIVE_SUBSECTION_REGEX.test(rowBody.slice(matchEnd, matchEnd + 8));
@@ -974,7 +974,7 @@ const CODE_SPAN_BLANK_CHAR = '';
 const SINGLE_ID_SPAN_REGEX = new RegExp(`^${ROW_ID_TOKEN}$`);
 
 function stripInlineCodeSpans(text) {
-  return text.replace(/`([^`\n]*)`/g, (m, inner) => {
+  return text.replace(/\u0060([^\u0060\n]*)\u0060/g, (m, inner) => {
     const trimmed = inner.trim();
     if (SINGLE_ID_SPAN_REGEX.test(trimmed)) {
       const pad = m.length - trimmed.length;

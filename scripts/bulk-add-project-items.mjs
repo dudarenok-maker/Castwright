@@ -74,7 +74,7 @@ export function parseBacklogOrder(markdown) {
       position = 0;
       continue;
     }
-    if (/^##\s+(Won't|Retired numbering)\b/.test(line)) {
+    if (/^##\s+(Won\u0027t|Retired numbering)\b/.test(line)) {
       tier = null;
       continue;
     }

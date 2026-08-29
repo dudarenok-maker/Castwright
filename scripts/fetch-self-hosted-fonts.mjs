@@ -131,7 +131,7 @@ async function main() {
       );
       await writeFile(resolve(OUT_DIR, file), buf);
       process.stdout.write(
-        `  ✓ ${file}  (${face.family} ${face.style} ${face.weight}${face.subset ? ` / ${face.subset}` : ''}, ${(buf.length / 1024).toFixed(1)} KB)\n`,
+        `  ✓ ${file}  (${face.family} ${face.style} ${face.weight}${face.subset ? \u0060 / ${face.subset}\u0060 : ''}, ${(buf.length / 1024).toFixed(1)} KB)\n`,
       );
       generated.push({ ...face, file });
     }
