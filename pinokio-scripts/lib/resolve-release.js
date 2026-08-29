@@ -39,7 +39,9 @@ function highestSemverTag(tagNames) {
     })
     .filter(Boolean);
   if (parsed.length === 0) return null;
-  parsed.sort((a, b) => b.parts[0] - a.parts[0] || b.parts[1] - a.parts[1] || b.parts[2] - a.parts[2]);
+  parsed.sort(
+    (a, b) => b.parts[0] - a.parts[0] || b.parts[1] - a.parts[1] || b.parts[2] - a.parts[2],
+  );
   return parsed[0].name;
 }
 
@@ -47,7 +49,7 @@ module.exports = { latestReleaseTag, highestSemverTag };
 
 // ---- CLI (acceptance-tested, not unit-tested) ----
 const { execFileSync } = require('node:child_process');
-const { existsSync } = require('node:fs');
+const { existsSync, readdirSync, unlinkSync } = require('node:fs');
 const path = require('node:path');
 // #2216 — scripts/git-env.mjs is ESM; this file is CommonJS
 // ("type": "commonjs" in pinokio-scripts/package.json). `require()` of an
@@ -91,12 +93,44 @@ async function resolveTag() {
     .filter(Boolean);
   const best = highestSemverTag(tags);
   if (!best) {
-    process.stderr.write('GitHub Releases API unreachable and no local vX.Y.Z tag to fall back to.\n');
+    process.stderr.write(
+      'GitHub Releases API unreachable and no local vX.Y.Z tag to fall back to.\n',
+    );
     process.exit(3);
   }
   process.stderr.write(`[resolve-release] API unreachable; falling back to local tag ${best}\n`);
   return best;
 }
+
+const REQUIREMENTS_DIR = path.join('server', 'tts-sidecar', 'requirements');
+
+/**
+ * Force a fresh re-checkout of server/tts-sidecar/requirements/*.txt from the
+ * index. `git checkout <tag>` alone is a no-op for these files on a clone
+ * whose working tree already has stale CRLF bytes: text=auto's clean filter
+ * normalizes CRLF->LF before comparing to the LF blob, so git considers the
+ * file unchanged and never rewrites it on disk (see .gitattributes and
+ * #2588 pass-2/#2596). Deleting the files first removes that "unchanged"
+ * comparison target, so the following checkout re-materializes them from the
+ * index using the .gitattributes eol=lf pin. Scoped to REQUIREMENTS_DIR so it
+ * cannot touch anything else in the tree.
+ * @param {string} [cwd]
+ */
+function renormalizeRequirementsCrlf(cwd = process.cwd()) {
+  const dir = path.join(cwd, REQUIREMENTS_DIR);
+  if (!existsSync(dir)) return;
+  for (const name of readdirSync(dir)) {
+    if (name.endsWith('.txt')) unlinkSync(path.join(dir, name));
+  }
+  execFileSync('git', ['checkout', '--', REQUIREMENTS_DIR], {
+    cwd,
+    stdio: 'inherit',
+    env: scrubGitEnv(),
+    windowsHide: true,
+  });
+}
+
+module.exports.renormalizeRequirementsCrlf = renormalizeRequirementsCrlf;
 
 async function main() {
   execFileSync('git', ['fetch', '--tags', '--force'], {
@@ -106,7 +140,12 @@ async function main() {
   });
   const tag = await resolveTag();
   process.stderr.write(`[resolve-release] checking out ${tag}\n`);
-  execFileSync('git', ['checkout', tag], { stdio: 'inherit', env: scrubGitEnv(), windowsHide: true });
+  execFileSync('git', ['checkout', tag], {
+    stdio: 'inherit',
+    env: scrubGitEnv(),
+    windowsHide: true,
+  });
+  renormalizeRequirementsCrlf();
   // Guard against a release that predates Pinokio support: git checkout to such a
   // tag would DELETE pinokio-scripts/ from the tree, breaking Start/Stop/Update.
   if (!existsSync('pinokio-scripts/start.js')) {
