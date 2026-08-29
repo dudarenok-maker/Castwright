@@ -374,3 +374,61 @@ def test_design_voice_card_lock_prevents_concurrent_base17_reload() -> None:
             "base17 loaded while design was loading — card_lock is not preventing "
             "concurrent loads on the same card"
         )
+
+
+def test_design_voice_card_lock_acquire_is_bounded() -> None:
+    """#2790 (pass-2 review) — design_voice() must NOT hang indefinitely when
+    trying to acquire card_lock. The lock acquire in the card_lock context
+    manager must be bounded by a timeout matching _BASE17_CONTENTION_WAIT_S_DEFAULT,
+    raising Base17ContentionTimeoutError if the lock is held by another thread
+    (e.g. a mint_variant loading base17) and the timeout expires.
+
+    Before the fix, the lock acquire was unbounded (plain `with` statement),
+    so if a concurrent mint_variant() held the lock for any duration,
+    design_voice() would block indefinitely instead of timing out and raising
+    a proper error.
+
+    Mutation that must fail this (verified) — remove the timeout from the
+    lock acquire (restore plain `with` statement): the acquire call will block
+    forever instead of timing out after 60s, causing this test to hang past
+    its 10s deadline.
+    """
+    engine = main.QwenEngine()
+    _quiet_kokoro()
+
+    # Create a long-lived hold on the card_lock to simulate a slow/wedged
+    # mint_variant() call
+    card_idx = main._qwen_configured_card_idx()
+    lock = main._DEVICE_LEDGER.card_lock(card_idx)
+
+    # Hold the lock in a background thread for longer than the design's
+    # acquire timeout (60s), simulating a slow base17 load
+    release = threading.Event()
+    entered = threading.Event()
+
+    def hold_card_lock() -> None:
+        with lock:
+            entered.set()
+            # Hold for 120s (longer than the 60s design timeout)
+            release.wait(120)
+
+    holder = threading.Thread(target=hold_card_lock, daemon=True)
+    holder.start()
+
+    try:
+        assert entered.wait(2), "card_lock holder never entered — test bug"
+
+        # Now try design_voice while the card_lock is held by another thread.
+        # It should timeout and raise Base17ContentionTimeoutError, NOT hang.
+        # Mock torch and other heavy dependencies to avoid loading the real models
+        with mock.patch.dict(sys.modules, {"torch": mock.MagicMock()}):
+            with pytest.raises(main.Base17ContentionTimeoutError):
+                engine.design_voice(
+                    voice_id="__nonexistent_voice_for_test__",
+                    instruct="a warm, gentle teenage girl",
+                    language="en",
+                    calibration_text=None,
+                )
+    finally:
+        release.set()
+        holder.join(5)
