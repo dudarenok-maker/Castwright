@@ -231,6 +231,140 @@ describe('withCapacityRetry', () => {
   });
 });
 
+describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', () => {
+  it('(1) isDesignResident true throughout → keeps polling past generic maxAttempts, up to the design budget', async () => {
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:0'));
+    const isDesignResident = vi.fn().mockResolvedValue(true);
+
+    const err = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident,
+      pollMs: 0,
+      maxAttempts: 3,
+      designMaxAttempts: 5,
+    }).then(
+      () => null,
+      (e) => e,
+    );
+
+    expect(err).toBeInstanceOf(NoCapacityError);
+    // 3 generic attempts, then 5 more under the design budget.
+    expect(doPost).toHaveBeenCalledTimes(3 + 5);
+    // Consulted exactly once, at the moment the generic bound was reached.
+    expect(isDesignResident).toHaveBeenCalledTimes(1);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('(2) doPost starts returning ok partway through the extended window → resolves with that response', async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      // 3 generic attempts + 2 more under the design budget, then ok.
+      return calls <= 5 ? noCapacityResponse(4_000, 'cuda:0') : okResponse();
+    });
+    const isDesignResident = vi.fn().mockResolvedValue(true);
+
+    const result = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident,
+      pollMs: 0,
+      maxAttempts: 3,
+      designMaxAttempts: 10,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(6);
+    expect(isDesignResident).toHaveBeenCalledTimes(1);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('(3) isDesignResident false throughout → NoCapacityError still thrown at the ORIGINAL maxAttempts bound', async () => {
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:0'));
+    const isDesignResident = vi.fn().mockResolvedValue(false);
+
+    const err = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident,
+      pollMs: 0,
+      maxAttempts: 3,
+      designMaxAttempts: 100,
+    }).then(
+      () => null,
+      (e) => e,
+    );
+
+    expect(err).toBeInstanceOf(NoCapacityError);
+    expect(doPost).toHaveBeenCalledTimes(3);
+    expect(isDesignResident).toHaveBeenCalledTimes(1);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('(4) isDesignResident rejects → treated as false (fail-closed), thrown at the original bound, no unhandled rejection', async () => {
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:0'));
+    const isDesignResident = vi.fn().mockRejectedValue(new Error('probe exploded'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        analyzerEvictWouldHelp: async () => false,
+        isDesignResident,
+        pollMs: 0,
+        maxAttempts: 3,
+        designMaxAttempts: 100,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    expect(doPost).toHaveBeenCalledTimes(3);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('(5) getCapacityWaiterCount() reflects the call as waiting for the entire extended window, then decrements to 0', async () => {
+    expect(getCapacityWaiterCount()).toBe(0);
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls > 3) {
+        // Inside the extended design-budget window — waiter must already be up.
+        expect(getCapacityWaiterCount()).toBe(1);
+      }
+      return calls <= 5 ? noCapacityResponse(4_000, 'cuda:0') : okResponse();
+    });
+
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident: async () => true,
+      pollMs: 0,
+      maxAttempts: 3,
+      designMaxAttempts: 10,
+    });
+
+    expect(calls).toBe(6);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('defaultIsDesignResident (via probeSidecarHealthIfRegistered) does not extend the wait when unregistered — same original bound', async () => {
+    // No isDesignResident override, no sidecar-health registration in this
+    // test process → probeSidecarHealthIfRegistered() resolves null →
+    // defaultIsDesignResident fails closed to false.
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:0'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    expect(doPost).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('parseNoCapacity', () => {
   it('returns the parsed shape for a 503 noCapacity body', async () => {
     const parsed = await parseNoCapacity(noCapacityResponse(1_234, 'cuda:1'));

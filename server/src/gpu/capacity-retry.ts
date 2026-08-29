@@ -35,6 +35,20 @@ const GPU_CAPACITY_MAX_ATTEMPTS = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30;
 })();
 
+/* Extended attempt budget that applies ONLY once the generic maxAttempts
+   bound is reached AND the sidecar reports a resident/in-flight VoiceDesign
+   (#2678 Task 3). A real design run legitimately outlasts the normal ~60s
+   admission window — the sidecar's own unload_design() waits up to ~150s for
+   an in-flight design before evicting it (server/tts-sidecar/main.py, see
+   unload_design's header) — so a render blocked behind one should keep
+   waiting rather than surface NoCapacityError. This budget is consulted at
+   most once per call (see the isDesignResident check in withCapacityRetry);
+   it never widens the timeout for a denial that was never design-blocked. */
+const GPU_CAPACITY_DESIGN_MAX_ATTEMPTS = (() => {
+  const raw = Number(process.env.GPU_CAPACITY_DESIGN_MAX_ATTEMPTS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 100; // ~200s at the 2s default poll
+})();
+
 /* GPU-queue status surface (server/src/routes/gpu-queue.ts) — counts ops
    currently parked in the no-capacity poll-wait below, giving the frontend
    "Queued (N ahead)" pill something to read now that gpuSemaphore is gone.
@@ -79,6 +93,20 @@ export interface CapacityRetryOpts {
       (./describe-vram-blockers.ts). Folded into `NoCapacityError`'s message
       when admission finally gives up (#1839). */
   describeBlockers?: () => Promise<VramBlocker[]>;
+  /** Injected "is a VoiceDesign currently resident/in-flight on the sidecar"
+      check — defaults to `defaultIsDesignResident`, which reads
+      `probeSidecarHealthIfRegistered()`'s `qwenDesignResident` field.
+      Consulted at most once per call, only when the generic `maxAttempts`
+      bound has just been reached: `true` extends the wait using
+      `GPU_CAPACITY_DESIGN_MAX_ATTEMPTS` instead of giving up immediately
+      (#2678 Task 3). Fail-closed like `describeBlockers` — an unregistered
+      gate or a probe failure reports `false`, never inventing a design
+      blocker. */
+  isDesignResident?: () => Promise<boolean>;
+  /** Injected cap on the EXTENDED no-capacity retry attempts used once
+      `isDesignResident` reports true at the generic bound — defaults to
+      `GPU_CAPACITY_DESIGN_MAX_ATTEMPTS`. */
+  designMaxAttempts?: number;
 }
 
 /* Default `describeBlockers` — reads the sidecar health snapshot through the
@@ -99,6 +127,21 @@ async function defaultDescribeBlockers(): Promise<VramBlocker[]> {
     });
   } catch {
     return [];
+  }
+}
+
+/* Default `isDesignResident` — reads the same stateless leaf gate as
+   `defaultDescribeBlockers` (see its header for the import-cycle rationale
+   for going through `sidecar-health-gate.ts` rather than
+   `routes/sidecar-health.ts` directly). Fail-closed: an unregistered gate, a
+   probe failure, or a missing field all report `false` — this never invents
+   a design blocker that would extend a wait past the normal ~60s budget. */
+async function defaultIsDesignResident(): Promise<boolean> {
+  try {
+    const health = await probeSidecarHealthIfRegistered();
+    return health?.qwenDesignResident === true;
+  } catch {
+    return false;
   }
 }
 
@@ -127,10 +170,21 @@ export async function withCapacityRetry(
   const maxAttempts = opts.maxAttempts ?? GPU_CAPACITY_MAX_ATTEMPTS;
   const evictIdleTts = opts.evictIdleTts ?? (async () => false);
   const describeBlockers = opts.describeBlockers ?? defaultDescribeBlockers;
+  const isDesignResident = opts.isDesignResident ?? defaultIsDesignResident;
+  const designMaxAttempts = opts.designMaxAttempts ?? GPU_CAPACITY_DESIGN_MAX_ATTEMPTS;
 
   let evicted = false;
   let evictedTts = false;
   let waiting = false;
+  /* Set once the generic maxAttempts bound is reached AND isDesignResident()
+     reported true at that moment — from then on this call is polling on the
+     extended design budget, and isDesignResident is never consulted again
+     (a design that clears mid-wait is caught by doPost returning ok, same as
+     any other retry). designAttempt counts attempts taken under that
+     extended budget, separate from the outer `attempt` which keeps counting
+     for readability but no longer gates anything once this is true. */
+  let usingDesignBudget = false;
+  let designAttempt = 0;
   try {
     for (let attempt = 0; ; attempt++) {
       const response = await doPost(opts.signal);
@@ -162,13 +216,28 @@ export async function withCapacityRetry(
         if (await evictIdleTts()) continue; // immediate retry after freeing VRAM
       }
 
-      if (attempt + 1 >= maxAttempts) {
-        throw new NoCapacityError(
-          opts.engine as TtsEngine,
-          noCap.neededMb,
-          noCap.deviceKey,
-          await describeBlockers(),
-        );
+      if (usingDesignBudget) {
+        designAttempt++;
+        if (designAttempt >= designMaxAttempts) {
+          throw new NoCapacityError(
+            opts.engine as TtsEngine,
+            noCap.neededMb,
+            noCap.deviceKey,
+            await describeBlockers(),
+          );
+        }
+      } else if (attempt + 1 >= maxAttempts) {
+        const designResident = await isDesignResident().catch(() => false);
+        if (designResident) {
+          usingDesignBudget = true;
+        } else {
+          throw new NoCapacityError(
+            opts.engine as TtsEngine,
+            noCap.neededMb,
+            noCap.deviceKey,
+            await describeBlockers(),
+          );
+        }
       }
       if (!waiting) {
         waiting = true;
