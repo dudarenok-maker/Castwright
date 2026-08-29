@@ -202,7 +202,7 @@ export function main(argv) {
     return 3;
   }
 
-  const { status, stdout, stderr, error } = runNpmAudit({ dir, omitDev: args.omitDev });
+  const { stdout, stderr, error } = runNpmAudit({ dir, omitDev: args.omitDev });
   if (error) {
     process.stderr.write(`check-audit: FAILED to run npm audit - ${error.message}\n`);
     return 3;

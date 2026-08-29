@@ -84,7 +84,6 @@ test('gateFailures: active waiver covers its GHSA', () => {
 });
 
 test('gateFailures: expired waiver no longer covers its GHSA and is reported', () => {
-  const today = new Date('2026-08-29T12:00:00Z');
   const vulns = { 'react-router@8': { severity: 'high', via: ['GHSA-hhh-111'] } };
   // isExpired uses real Date.now(), so drive the waiver into the past directly.
   const waivers = [{ ghsaId: 'GHSA-hhh-111', package: 'react-router', reason: 'stale', expiry: '2020-01-01' }];
