@@ -6651,36 +6651,47 @@ class QwenEngine(Engine):
                 # with both models resident. `unload_base17()` now waits
                 # (bounded) for that load to clear before evicting, same
                 # "design wins" direction as `unload_design()`.
-                if self._base17 is not None or self._base17_in_flight.busy:
-                    log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
-                    # Bounded wait, not the 0.0 default — this call's whole
-                    # point is to wait out a still-loading base17 rather
-                    # than race it (see unload_base17's docstring for why
-                    # 0.0 is right everywhere else).
-                    self.unload_base17(
-                        wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT,
-                        poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT,
-                    )
+                #
+                # #2790 — the evict-through-load sequence now holds
+                # `_DEVICE_LEDGER.card_lock()` to prevent a concurrent
+                # `mint_variant()` call from loading base17 in the gap between the
+                # eviction check and the VoiceDesign load. `mint_variant()` already
+                # holds this lock while loading base17 (see line ~7011), so both
+                # paths serialize their check-residency->evict->load sequences on
+                # the same per-card mutex. The lock nests outside the
+                # _VD_KOKORO.design() block (not inside) to avoid interfering with
+                # the Kokoro arbiter.
+                with _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx()):
+                    if self._base17 is not None or self._base17_in_flight.busy:
+                        log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
+                        # Bounded wait, not the 0.0 default — this call's whole
+                        # point is to wait out a still-loading base17 rather
+                        # than race it (see unload_base17's docstring for why
+                        # 0.0 is right everywhere else).
+                        self.unload_base17(
+                            wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT,
+                            poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT,
+                        )
 
-                with _VD_KOKORO.design():
-                    _kokoro_eng = ENGINES.get("kokoro")
-                    if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
-                        log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
-                        _kokoro_eng.unload()
-                    _phase("loading-model")
-                    # Capacity-aware placement (task 3, vram-aware-placement plan):
-                    # a concrete `device` from an admitted reservation overrides the
-                    # env-derived pref for this design. `device` is threaded straight
-                    # into each ensure call so the set-pref + resolve + load are ONE
-                    # atomic acquisition under that model's own load lock — a
-                    # concurrent design/mint admitted to a DIFFERENT card can't clobber
-                    # `_device_pref` in the gap between set and resolve (the TOCTOU
-                    # this closes). The design load runs first and sets `_device_pref`,
-                    # so the base load inherits the same card; passing it here too is
-                    # belt-and-suspenders for the warm-design / cold-base case. `None`
-                    # leaves `_device_pref` untouched (flag-off byte-for-byte).
-                    self._ensure_design_loaded(device=device)
-                    self._ensure_base_loaded(device=device)
+                    with _VD_KOKORO.design():
+                        _kokoro_eng = ENGINES.get("kokoro")
+                        if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
+                            log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
+                            _kokoro_eng.unload()
+                        _phase("loading-model")
+                        # Capacity-aware placement (task 3, vram-aware-placement plan):
+                        # a concrete `device` from an admitted reservation overrides the
+                        # env-derived pref for this design. `device` is threaded straight
+                        # into each ensure call so the set-pref + resolve + load are ONE
+                        # atomic acquisition under that model's own load lock — a
+                        # concurrent design/mint admitted to a DIFFERENT card can't clobber
+                        # `_device_pref` in the gap between set and resolve (the TOCTOU
+                        # this closes). The design load runs first and sets `_device_pref`,
+                        # so the base load inherits the same card; passing it here too is
+                        # belt-and-suspenders for the warm-design / cold-base case. `None`
+                        # leaves `_device_pref` untouched (flag-off byte-for-byte).
+                        self._ensure_design_loaded(device=device)
+                        self._ensure_base_loaded(device=device)
                     # Phase boundary: everything above is Kokoro-evict + (cold) model
                     # load; everything below is GPU forwards. `load_ms` isolates the
                     # cold-start cost (the transient 1.7B VoiceDesign load the operator

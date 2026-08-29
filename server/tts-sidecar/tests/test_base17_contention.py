@@ -24,10 +24,13 @@ mirroring `test_design_contention.py`'s
 from __future__ import annotations
 
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 from unittest import mock
+
+import numpy as np
 
 SIDECAR_ROOT = Path(__file__).resolve().parent.parent
 if str(SIDECAR_ROOT) not in sys.path:
@@ -47,6 +50,14 @@ class _StoppedAfterGuard(Exception):
     """Raised by a mocked `unload_base17()` so a guard test can prove the
     call happened without running the rest of `design_voice()` (which needs
     a real cached voice prompt / VoiceDesign load, neither available here)."""
+
+
+def _quiet_kokoro() -> None:
+    """Ensure no resident Kokoro so the Kokoro-eviction branch is a no-op and
+    doesn't interfere with the model under test (other tests may leave it set)."""
+    kok = main.ENGINES.get("kokoro")
+    if isinstance(kok, main.KokoroEngine):
+        kok._kokoro = None
 
 
 def test_unload_base17_waits_for_in_flight_base17_then_unloads() -> None:
@@ -234,3 +245,132 @@ def test_unload_base17_with_default_wait_never_raises_during_stop() -> None:
     finally:
         release.set()
         holder.join(5)
+
+
+def test_design_voice_card_lock_prevents_concurrent_base17_reload() -> None:
+    """#2790 — design_voice() must hold card_lock during evict-through-load to
+    prevent a concurrent mint_variant() from loading base17 in the gap.
+
+    Before this fix, design_voice() evicted base17 without holding the same
+    per-card mutex that mint_variant() holds during its base17 load. A
+    concurrent mint_variant() could reload base17 on the card after
+    design_voice()'s eviction check but before its VoiceDesign load started,
+    causing both 1.7B models to co-reside (OOM on 8 GB).
+
+    This test verifies that with card_lock, a concurrent base17 load is
+    blocked until the design's VoiceDesign load completes (inside the design()
+    block), serializing the two check-residency->evict->load sequences.
+
+    Mutation that must fail this (verified) — remove the card_lock wrapping
+    in design_voice(): the lock acquisition on the background thread will
+    succeed immediately (instead of being blocked), causing both loads to
+    overlap in time instead of serializing.
+    """
+    engine = main.QwenEngine()
+
+    # Simulate that Kokoro is already warm from a prior operation
+    _quiet_kokoro()
+
+    design_started = threading.Event()
+    allow_design_to_complete = threading.Event()
+    base17_loaded_while_design_loading = {"value": False}
+    design_load_complete = threading.Event()
+
+    class _FakeDesign:
+        def generate_voice_design(self, text, language, instruct):
+            return [np.zeros(10, dtype="float32")], 24000
+
+    class _FakeBase:
+        def create_voice_clone_prompt(self, ref_audio, ref_text):
+            return {"prompt": True}
+
+        def generate_voice_clone(self, text, language, voice_clone_prompt):
+            return [np.zeros(10, dtype="float32")], 24000
+
+    engine._design = _FakeDesign()
+    engine._base = _FakeBase()
+
+    # Mock ensure to track when loads happen
+    original_ensure_design = engine._ensure_design_loaded
+    def _tracked_ensure_design(device=None):
+        design_started.set()
+        # Signal that design load has started, then wait for the test
+        # to try a concurrent base17 load before completing
+        allow_design_to_complete.wait(10)
+        # Simulate the design model loading
+        engine._design = _FakeDesign()
+        design_load_complete.set()
+
+    engine._ensure_design_loaded = _tracked_ensure_design
+    engine._ensure_base_loaded = lambda device=None: None
+
+    # Mock torch
+    with mock.patch.dict(sys.modules, {"torch": mock.MagicMock()}):
+        import torch
+        torch.save = lambda *a, **k: None
+
+        engine._voices_dir = tempfile.mkdtemp()
+
+        # Start design_voice in a background thread
+        def run_design() -> None:
+            try:
+                engine.design_voice(
+                    voice_id="test-voice",
+                    instruct="a warm voice",
+                    language="en",
+                    calibration_text="Hello",
+                )
+            except Exception:
+                # Expected to fail since we're mocking, just need to get
+                # past the ensure calls
+                pass
+
+        design_thread = threading.Thread(target=run_design, daemon=True)
+        design_thread.start()
+
+        # Wait for design load to start
+        assert design_started.wait(5), "design_voice never started loading"
+
+        # Now try to load base17 concurrently (simulating mint_variant)
+        # This should BLOCK until the card_lock is released
+        base17_load_acquired_lock = threading.Event()
+
+        def try_load_base17() -> None:
+            # Try to acquire the same card lock that design_voice holds
+            card_idx = main._qwen_configured_card_idx()
+            lock = main._DEVICE_LEDGER.card_lock(card_idx)
+
+            # If the lock is being held by design_voice's card_lock context,
+            # this acquire will block. Set an event to show we tried.
+            base17_load_acquired_lock.set()
+            acquired = lock.acquire(timeout=0.5)  # Short timeout to detect blocking
+
+            if acquired:
+                try:
+                    # We got the lock quickly, which means design_voice released it
+                    # (or never held it). Record that we loaded base17 while design
+                    # was loading.
+                    if not design_load_complete.is_set():
+                        base17_loaded_while_design_loading["value"] = True
+                finally:
+                    lock.release()
+
+        base17_thread = threading.Thread(target=try_load_base17, daemon=True)
+        base17_thread.start()
+
+        # Give the base17 thread time to try acquiring the lock
+        base17_load_acquired_lock.wait(5)
+
+        # Allow design to complete
+        allow_design_to_complete.set()
+
+        # Wait for both to complete
+        design_thread.join(10)
+        base17_thread.join(5)
+
+        # Verify the race is closed: base17 should NOT have loaded while
+        # design was loading (because card_lock prevented it)
+        assert base17_loaded_while_design_loading["value"] is False, (
+            "base17 loaded while design was loading — card_lock is not preventing "
+            "concurrent loads on the same card"
+        )
