@@ -54,6 +54,11 @@ recite:
    reused as evidence for another.
 10. **One instance fixed, the class left armed** — sibling call sites, other
     entry points, the second copy.
+11. **A fixture that invents an external tool's output contract** — the test
+    oracle and the code under test share the same wrong belief about a
+    third-party format, so a red-before/green-after test proves nothing: both
+    states agree with the fixture, and the fixture disagrees with reality
+    (PR #2795 — `npm audit --json`'s real `via[]` shape).
 
 ### Keeping the catalogue current
 
