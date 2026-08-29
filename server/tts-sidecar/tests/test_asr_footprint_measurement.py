@@ -1,12 +1,17 @@
 """#2094 review — the ASR-specific free-memory-DELTA measurement
-`PlacementController.reservation()` uses instead of the torch-allocator
-peak every other engine uses. faster-whisper's CTranslate2 backend
-allocates outside torch's caching allocator, so `_observed_mb`
-(`torch.cuda.max_memory_allocated`) reads ~0 for a warm ASR forward and
-whatever residual torch activity happened to be co-resident for a cold
-one — the root cause `asr.warm` was never expected to learn from, and a
-plausible source of the contaminated 3707 MB `asr` figure #2094 itself
-reported.
+`PlacementController.reservation()` uses for a COLD `asr` load, instead of
+the torch-allocator peak every other engine (and, since #2682, a RESIDENT
+"asr.warm" forward too) uses. faster-whisper's CTranslate2 backend
+allocates its weights entirely outside torch's caching allocator, so a
+cold `_observed_mb` (`torch.cuda.max_memory_allocated`) reading is
+whatever residual torch activity happened to be co-resident — a plausible
+source of the contaminated 3707 MB `asr` figure #2094 itself reported.
+
+#2682: the device-wide delta this module exercises essentially never
+returned a positive `asr.warm` sample in practice, so `reservation()` now
+measures a RESIDENT ASR forward via `_observed_mb` instead, same as every
+other key — see `test_asr_footprint_measurement_warm.py` for that path.
+This module now covers the COLD `asr` delta only.
 
 These drive `reservation()` end-to-end for `engine="asr"` with
 `PlacementController._device_free_mb` monkeypatched to a scripted
@@ -128,10 +133,10 @@ def test_asr_cold_reservation_records_the_free_memory_delta(monkeypatch) -> None
     nothing here caps it.
 
     Mutation that must fail it — breaks the PRODUCER: revert `reservation()`'s
-    `observed_mb = asr_observed_mb if engine == "asr" else self._observed_mb(...)`
-    back to unconditionally calling `self._observed_mb(device_key)` (the
-    torch-allocator path) — with no real torch/CUDA, that returns 0 and this
-    test's delta assertion fails.
+    `observed_mb = asr_observed_mb if (engine == "asr" and not resident) else
+    self._observed_mb(...)` back to unconditionally calling
+    `self._observed_mb(device_key)` (the torch-allocator path) — with no real
+    torch/CUDA, that returns 0 and this test's delta assertion fails.
     """
     devices = [dev()]
     pc, fp = make_pc(devices, peak=400, resident=lambda e: None)
@@ -181,21 +186,35 @@ def test_asr_reservation_discards_when_another_engine_holds_the_device(monkeypat
     assert fp.records == [("asr", None, {}, 0, False)]
 
 
-def test_asr_warm_measurement_discards_an_implausible_delta(monkeypatch) -> None:
-    """RESIDENT ASR (warm): a delta bigger than the cold-load seed (400 MB)
-    is implausible on its face — a warm forward should never need more VRAM
-    than a cold load, so a reading this large is treated as contamination
-    (a foreign, non-ledger process on the same card, e.g. #2094's own
-    3707 MB finding) and discarded rather than trusted. Conservative, not
-    optimistic, per the review.
+def test_asr_warm_measurement_uses_the_torch_allocator_path(monkeypatch) -> None:
+    """RESIDENT ASR (warm) — #2682: `_device_free_mb` essentially never
+    returned a positive `asr.warm` sample in practice, so the learned
+    estimate could never move off its 128 MB seed. `reservation()` now
+    measures a resident ASR forward via `_observed_mb` (the torch-allocator
+    peak), matching every other engine's key, and never touches
+    `_device_free_mb` for this case at all.
 
-    Mutation that must fail it — breaks the PRODUCER: drop the
-    `not (resident and warm_ceiling > 0 and delta > warm_ceiling)` guard. The
-    3707 MB delta would then be recorded as a genuine "asr.warm" observation.
+    Mutation that must fail it — breaks the PRODUCER: revert
+    `reservation()`'s `observed_mb = asr_observed_mb if (engine == "asr" and
+    not resident) else self._observed_mb(...)` back to `asr_observed_mb if
+    engine == "asr" else ...`. `asr_observed_mb` stays `None` for a resident
+    op (mem_before_mb is never set for it, see `_resolve_admission`), so the
+    mutated version would record 0 instead of falling through to
+    `_observed_mb`.
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
-    _patch_free_mb(monkeypatch, [10000, 6293])  # a 3707 MB delta — #2094's own figure
+
+    def fail_if_called(device_key):
+        raise AssertionError("_device_free_mb must not be called for a resident ASR forward")
+
+    monkeypatch.setattr(main.PlacementController, "_device_free_mb", staticmethod(fail_if_called))
+    # Stubbed (rather than relying on the no-CUDA-in-CI 0 every other test in
+    # this module uses) so this test can tell "used _observed_mb" apart from
+    # "asr_observed_mb stayed None and fell through to `or 0`" — both read 0
+    # without a real torch/CUDA device, which would let the mutation named
+    # above pass by coincidence.
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
 
     async def body():
         async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=False):
@@ -204,37 +223,21 @@ def test_asr_warm_measurement_discards_an_implausible_delta(monkeypatch) -> None
 
     run_case(body())
 
-    assert fp.records == [("asr", None, {}, 0, True)]
+    assert fp.records == [("asr", None, {}, 77, True)]
 
 
-def test_asr_warm_measurement_keeps_a_plausible_delta(monkeypatch) -> None:
-    """RESIDENT ASR (warm): a small delta — well under the cold seed — is
-    exactly the incremental per-forward figure `asr.warm` exists to learn.
-    Not discarded."""
-    devices = [dev(total=16000, free=16000)]
-    pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
-    _patch_free_mb(monkeypatch, [10000, 9910])  # a 90 MB delta — plausible warm cost
+def test_asr_cold_measurement_is_not_capped(monkeypatch) -> None:
+    """#2682 removed the implausible-delta "warm ceiling" entirely — it only
+    ever applied to the RESIDENT case, which no longer takes this
+    (`_device_free_mb`-delta) path at all (see
+    `test_asr_warm_measurement_uses_the_torch_allocator_path`). A cold
+    observation — even an unusually large one — is NOT capped here;
+    FootprintTable's own p95 windowing is what tames a cold-side outlier,
+    matching every other key's "up OR down" learning philosophy.
 
-    async def body():
-        async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=False):
-            pass
-        return _RAN
-
-    run_case(body())
-
-    assert fp.records == [("asr", None, {}, 90, True)]
-
-
-def test_asr_cold_measurement_is_not_capped_by_the_warm_ceiling(monkeypatch) -> None:
-    """The implausible-delta ceiling is WARM-only (review: "a warm forward
-    should never need more than a cold load"). A cold observation — even an
-    unusually large one — is NOT capped here; FootprintTable's own p95
-    windowing is what tames a cold-side outlier, matching every other key's
-    "up OR down" learning philosophy.
-
-    Mutation that must fail it — breaks the PRODUCER: apply the warm ceiling
-    unconditionally (drop the `resident and` clause). A cold 3707 MB delta
-    would then be discarded (recorded as 0) instead of kept.
+    Mutation that must fail it — breaks the PRODUCER: reintroduce a ceiling
+    that discards a large cold delta. A cold 3707 MB delta would then be
+    discarded (recorded as 0) instead of kept.
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=400, resident=lambda e: None)

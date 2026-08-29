@@ -4047,23 +4047,23 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # buffers for one short sentence), not weight materialisation. No on-box
     # measurement exists yet for this specific figure (the observed 3707 MB
     # that motivated #2094 was the CONTAMINATED cold "asr" learned estimate,
-    # not a warm one) — deliberately conservative rather than measured. Unlike
-    # the OTHER seeds here, this one previously had NO real path to being
-    # learned from: `_observed_mb` reads torch's caching-allocator peak, but
-    # CTranslate2 (faster-whisper's backend) allocates entirely outside it, so
-    # a warm ASR forward measured that way read ~0 (dropped by `record()`'s
-    # `<= 0` guard) and never accumulated real `asr.warm` samples. `reservation()`
-    # now measures ASR specifically via a device-wide free-memory DELTA
-    # (`PlacementController._device_free_mb`) instead, which DOES see
-    # CTranslate2's allocations — guarded against attributing a concurrent
-    # OTHER engine's allocation to ASR (`ledger.engines_holding`) and against
-    # an implausible warm reading above this same cold seed (a resident
-    # forward should never need more than a cold load would). With that fix,
-    # the SAME learning mechanism as every other key here genuinely supersedes
-    # this seed once real `asr.warm` observations accumulate
-    # (`_FOOTPRINT_MIN_SAMPLES`) — see `_device_free_mb`'s docstring for the
-    # residual: a foreign, non-sidecar process on the same card is still
-    # invisible to the ledger-based contamination guard.
+    # not a warm one) — deliberately conservative rather than measured.
+    # #2094 originally routed a warm ASR forward through the same device-wide
+    # free-memory DELTA (`PlacementController._device_free_mb`) the COLD "asr"
+    # key still uses (see there), reasoning that `_observed_mb` (torch's
+    # caching-allocator peak) would read ~0 since CTranslate2 (faster-
+    # whisper's backend) allocates its own weights/buffers entirely outside
+    # torch's allocator. #2682 found that premise didn't hold in practice: the
+    # device-wide delta essentially never returned positive for `asr.warm`
+    # (unlike the genuinely-noisy-but-real cold-load delta), so the learned
+    # estimate could never move off this seed at all — worse than the ~0
+    # `_observed_mb` was expected to give. `reservation()` now measures
+    # `asr.warm` via `_observed_mb` like every other key, on the theory that a
+    # resident forward's OWN torch-side activity (feature extraction,
+    # attention buffers) is enough for the allocator peak to see, even though
+    # CTranslate2's own weights/buffers aren't. The device-wide delta remains
+    # in place for the COLD "asr" key only, where it keeps working as #2094
+    # designed it.
     "asr.warm": 128,
     "spk": 200,
 }
@@ -4683,17 +4683,19 @@ class PlacementController:
         `_observed_mb`/`_reset_peak_mb` above read torch's OWN caching
         allocator peak — which is exactly right for a torch-resident engine
         (Qwen, Coqui, ECAPA), but blind to an allocation torch never sees.
-        faster-whisper's CTranslate2 backend allocates via its own CUDA
-        context, entirely outside torch's allocator, so a warm ASR forward
-        measured via `_observed_mb` reads ~0 (dropped by `record()`'s `<= 0`
-        guard) and a cold one reads whatever residual torch activity happened
-        to be co-resident — this is the root cause `asr.warm` was never
-        expected to learn from, and a plausible source of the contaminated
-        3707 MB `asr` figure that motivated #2094 in the first place.
+        faster-whisper's CTranslate2 backend allocates its weights/buffers via
+        its own CUDA context, entirely outside torch's allocator, so a COLD
+        ASR load measured via `_observed_mb` reads whatever residual torch
+        activity happened to be co-resident — a plausible source of the
+        contaminated 3707 MB `asr` figure that motivated #2094 in the first
+        place. (#2682: a resident "asr.warm" forward is measured via
+        `_observed_mb` instead — see `reservation()`'s `finally` — since its
+        own torch-side activity, unlike CTranslate2's weights, is enough for
+        the allocator peak to see; this method is COLD-`asr`-only now.)
 
         A before/after DELTA of this device-wide free-memory reading — not a
         single snapshot — is what `_resolve_admission`/`reservation()` use for
-        the `asr` engine specifically (see there): it sees ANY allocation on
+        a COLD `asr` load specifically (see there): it sees ANY allocation on
         the device, CTranslate2's included, at the cost of also seeing every
         OTHER engine's. That attribution problem is NOT fully solved here —
         `reservation()`'s ASR branch discards a measurement instead of trusting
@@ -4780,11 +4782,13 @@ class PlacementController:
         `footprints.record()` so the observation lands in the same peak-mb
         bucket (`FootprintTable._key`) the reservation itself was booked
         under. `mem_before_mb` (#2094 review) is the `_device_free_mb`
-        snapshot taken for `engine == "asr"` specifically — `None` for every
-        other engine, and `None` when the snapshot itself failed — so
-        `reservation()` can measure ASR's peak via a device-wide free-memory
-        DELTA instead of torch's allocator, which CTranslate2 (faster-whisper's
-        backend) allocates entirely outside of. `foreign_before` (#2094
+        snapshot taken for a COLD `engine == "asr"` load specifically (#2682
+        narrowed this from ASR generally to cold-only) — `None` for every
+        other engine, for a resident ("asr.warm") ASR forward, and when the
+        snapshot itself failed — so `reservation()` can measure a cold ASR
+        load's peak via a device-wide free-memory DELTA instead of torch's
+        allocator, which CTranslate2 (faster-whisper's backend) allocates its
+        weights entirely outside of. `foreign_before` (#2094
         per-process attribution) is whether `_foreign_pid_holds_device`
         reported (or could not rule out) a non-sidecar process on the device
         at this SAME snapshot point — `False` for every non-ASR engine;
@@ -4845,9 +4849,12 @@ class PlacementController:
             # #2094 review — ASR-specific: snapshot device-wide free VRAM here,
             # at the SAME point `_reset_peak_mb` brackets from, so `reservation()`
             # can pair it with an after-snapshot into a delta. See
-            # `_device_free_mb`'s docstring for why ASR needs this instead of
-            # the torch-allocator peak every other engine uses.
-            if engine == "asr":
+            # `_device_free_mb`'s docstring for why a COLD ASR load needs this
+            # instead of the torch-allocator peak every other engine uses.
+            # `resident` (#2682) is `None` for a cold load — a RESIDENT
+            # ("asr.warm") forward no longer takes this branch; see
+            # `reservation()`'s `finally` for why.
+            if engine == "asr" and resident is None:
                 mem_before_mb = self._device_free_mb(held[0])
                 # #2094 per-process attribution — only bother querying NVML
                 # when the free-mb snapshot itself succeeded; a failed
@@ -4913,8 +4920,9 @@ class PlacementController:
                 # captured BEFORE releasing our own hold (so `engines_holding`
                 # still includes it and the "any OTHER engine" check below is
                 # correct) and BEFORE the generic torch-allocator path runs.
-                # `mem_before_mb` is only ever non-None for engine == "asr"
-                # (see `_resolve_admission`).
+                # `mem_before_mb` is only ever non-None for a COLD ASR load
+                # (see `_resolve_admission`) — #2682 moved the RESIDENT
+                # ("asr.warm") case off this path entirely (below).
                 asr_observed_mb: Optional[int] = None
                 if engine == "asr" and mem_before_mb is not None:
                     mem_after_mb = self._device_free_mb(device_key)
@@ -4932,22 +4940,11 @@ class PlacementController:
                         and not foreign_before
                         and not foreign_after
                     ):
-                        delta = mem_before_mb - mem_after_mb
-                        # Conservative, not optimistic (review): a resident
-                        # ("warm") forward should NEVER need more than a cold
-                        # load would — a delta above the cold seed is almost
-                        # certainly contamination (a foreign, non-ledger
-                        # process on the same card; see #2094's own 3707 MB
-                        # finding) rather than genuine ASR demand, so it's
-                        # discarded rather than trusted. A negative/zero delta
-                        # (the device gained free memory during the op — e.g.
-                        # a concurrent unload elsewhere) is already dropped by
-                        # `record()`'s own `<= 0` guard below; the ceiling
-                        # here only matters for the WARM bucket, where "more
-                        # than a cold load" is the implausible direction.
-                        warm_ceiling = SEED_FOOTPRINTS_MB.get("asr", 0)
-                        if not (resident and warm_ceiling > 0 and delta > warm_ceiling):
-                            asr_observed_mb = delta
+                        # Not capped against a "warm ceiling" here — this
+                        # branch is COLD-only now (#2682), and FootprintTable's
+                        # own p95 windowing is what tames a cold-side outlier,
+                        # matching every other key's "up OR down" learning.
+                        asr_observed_mb = mem_before_mb - mem_after_mb
                     # else: another engine holds a concurrent reservation on
                     # this device, the after-snapshot itself failed, or a
                     # foreign (non-sidecar) PID was seen holding memory on the
@@ -4964,11 +4961,18 @@ class PlacementController:
                 # `resident` (#2094) is the PRE-op snapshot `_resolve_admission`
                 # booked the reservation under — recording under that same key
                 # (not a freshly re-checked residency) keeps the observation in
-                # the bucket its own peak_mb() estimate came from. ASR uses the
-                # free-memory-delta measurement above (or is dropped, per the
-                # guards there); every other engine keeps the torch-allocator
-                # peak unchanged.
-                observed_mb = asr_observed_mb if engine == "asr" else self._observed_mb(device_key)
+                # the bucket its own peak_mb() estimate came from. A COLD ASR
+                # load uses the free-memory-delta measurement above (or is
+                # dropped, per the guards there); a RESIDENT ("asr.warm") ASR
+                # forward and every other engine keep the torch-allocator peak
+                # (#2682 — the device-wide delta essentially never returned a
+                # positive `asr.warm` sample, so it can never learn off its
+                # seed; the torch-allocator peak sees the CTranslate2-backed
+                # forward's own torch-side feature-extraction/attention-buffer
+                # activity instead, matching every other engine's key).
+                observed_mb = (
+                    asr_observed_mb if (engine == "asr" and not resident) else self._observed_mb(device_key)
+                )
                 self.footprints.record(engine, model, cfg, observed_mb or 0, resident)
 
 
