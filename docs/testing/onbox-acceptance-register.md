@@ -418,7 +418,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -428,7 +428,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
@@ -697,7 +697,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A103 -->
+<!-- next-id: A104 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -3141,6 +3141,41 @@ session accessible during `_ensure_loaded`. *Criteria:* the three bullets above 
 no separate run sheet; mechanism is integrated into Kokoro's existing health
 reporting. *Cost:* short — one Kokoro load with CPU-forced providers, one with
 CUDA working (or default unforced), and UI verification.
+
+### A103 · Qwen base17 eviction guard and _DEVICE_LEDGER serialization ([#2752](https://github.com/dudarenok-maker/Castwright/issues/2752), PR [#2790](https://github.com/dudarenok-maker/Castwright/pull/2790)) · **single 8 GB GPU card, Qwen VoiceDesign 1.7B resident, real sidecar with base17 weights**
+
+PR #2790's six commits improve base17 co-residency safety in `design_voice()`:
+the eviction guard now checks both `self._base17 is not None` and
+`self._base17_in_flight.busy` (closing the #1156-shape OOM where in-flight-but-unassigned
+base17 load was invisible); `unload_base17()` at `wait_seconds<=0` unconditionally nulls
+without waiting (restoring "Stop always succeeds"); base17 eviction wait moved outside
+the VoiceDesign block to avoid stalling concurrent Kokoro synths; and `design_voice()`
+now serializes via `_DEVICE_LEDGER.card_lock()` during the evict-through-VoiceDesign-load
+span to close a race where concurrent `mint_variant()` could reload base17 mid-eviction.
+Unit tests cannot prove VRAM co-residency, eviction ordering, or Stop-button success
+against the real model weights and sidecar lifecycle.
+
+- **Widened eviction guard prevents OOM in #1156 scenario.** On a single 8 GB GPU with
+  Qwen 0.6B Base + 1.7B VoiceDesign resident, trigger a `design_voice()` call for a
+  character, then — while the VoiceDesign load is in flight — open the developer
+  console network tab and repeat the call a second time before the first one completes,
+  racing the two loads. Confirm neither triggers an OOM: the widened guard's check of
+  `_base17_in_flight.busy` prevents base17 from loading into the co-residency gap.
+- **Stop button works mid-base17-load.** During an active `design_voice()` call (before
+  completion), call `POST /qwen/unload` (or click Stop in the UI). Confirm the call
+  returns 200/success and logs show the model unloaded immediately (not waiting), and
+  `nvidia-smi` memory usage drops by ~4–5 GB (the base17 1.7B model freed), proving
+  the unconditional null at `wait_seconds<=0` succeeded.
+- **Bulk design run doesn't stall Kokoro.** With Kokoro resident, start a design run
+  (bulk "Design full cast" or repeated single-character designs), and concurrently
+  request a chapter render on a Kokoro voice in the same book. Confirm the render
+  completes within its normal wall-clock time (not paused/stalled waiting for base17
+  eviction). The eviction-wait moved outside the VoiceDesign block ensures this.
+
+*Needs:* single 8 GB GPU card, Qwen base17 weights (`server/tts-sidecar/voices/qwen/base17/`),
+Qwen VoiceDesign 1.7B model, real sidecar, optionally Kokoro resident for the third criterion.
+*Criteria:* the three bullets above — no separate run sheet.
+*Cost:* moderate — three concurrent-load/eviction scenarios + VRAM observation.
 
 ## Group B — local Ollama analyzer only
 
