@@ -87,3 +87,63 @@ test('renormalizeRequirementsCrlf rewrites a stale on-disk CRLF requirements fil
 
   fs.rmSync(repo, { recursive: true, force: true });
 });
+
+test('renormalizeRequirementsCrlf recovers from git checkout failure via backup restore', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-release-fail-'));
+  const reqDir = path.join(repo, 'server', 'tts-sidecar', 'requirements');
+  fs.mkdirSync(reqDir, { recursive: true });
+  const reqFile = path.join(reqDir, 'base.txt');
+  const testContent = 'important-dependencies\n';
+
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });
+
+  git('init', '-q');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'user.name', 'test');
+
+  // Create an initial commit with a marker file but no requirements directory
+  const marker = path.join(repo, 'marker.txt');
+  fs.writeFileSync(marker, 'marker\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'initial (no requirements yet)');
+
+  // Now create a requirements file on disk but DON'T add it to git.
+  // This simulates a scenario where:
+  // - A file exists in the working directory
+  // - But the git index has no entry for it
+  // - So "git checkout -- requirements/..." will fail with
+  //   "error: pathspec 'server/tts-sidecar/requirements' did not match any files known to git"
+  fs.writeFileSync(reqFile, testContent);
+
+  // Call renormalizeRequirementsCrlf. It will:
+  // 1. Find the file (directory exists, .txt file is there)
+  // 2. Back it up to memory
+  // 3. Delete it
+  // 4. Try "git checkout -- server/tts-sidecar/requirements"
+  // 5. Fail because the pathspec doesn't exist in the index
+  // 6. Catch the error and restore from backup
+  // 7. Throw an error with a clear message
+
+  assert.throws(
+    () => renormalizeRequirementsCrlf(repo),
+    /Failed to normalize requirements CRLF|did not match any files known to git/,
+    'should throw an error when git checkout fails'
+  );
+
+  // Most important: verify the file still exists (restored from backup)
+  assert.ok(
+    fs.existsSync(reqFile),
+    'requirements file must be restored from backup after git checkout failure'
+  );
+
+  // Verify the file content was preserved
+  const restoredContent = fs.readFileSync(reqFile, 'utf8');
+  assert.equal(
+    restoredContent,
+    testContent,
+    'backed-up file content must be intact after recovery'
+  );
+
+  fs.rmSync(repo, { recursive: true, force: true });
+});

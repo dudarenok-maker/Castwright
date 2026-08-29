@@ -49,7 +49,7 @@ module.exports = { latestReleaseTag, highestSemverTag };
 
 // ---- CLI (acceptance-tested, not unit-tested) ----
 const { execFileSync } = require('node:child_process');
-const { existsSync, readdirSync, unlinkSync } = require('node:fs');
+const { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync } = require('node:fs');
 const path = require('node:path');
 // #2216 — scripts/git-env.mjs is ESM; this file is CommonJS
 // ("type": "commonjs" in pinokio-scripts/package.json). `require()` of an
@@ -114,20 +114,114 @@ const REQUIREMENTS_DIR = path.join('server', 'tts-sidecar', 'requirements');
  * comparison target, so the following checkout re-materializes them from the
  * index using the .gitattributes eol=lf pin. Scoped to REQUIREMENTS_DIR so it
  * cannot touch anything else in the tree.
+ *
+ * Deletion is guarded by backup + verify: files are read into memory before
+ * deletion, checkout is verified to succeed, and if it fails the backup is
+ * restored before throwing. This ensures the directory is never left empty
+ * on a restore failure.
  * @param {string} [cwd]
+ * @throws {Error} if git checkout fails and recovery fails
  */
 function renormalizeRequirementsCrlf(cwd = process.cwd()) {
   const dir = path.join(cwd, REQUIREMENTS_DIR);
   if (!existsSync(dir)) return;
-  for (const name of readdirSync(dir)) {
-    if (name.endsWith('.txt')) unlinkSync(path.join(dir, name));
+
+  // Identify .txt files to be re-normalized
+  const txtFiles = readdirSync(dir).filter((name) => name.endsWith('.txt'));
+  if (txtFiles.length === 0) return;
+
+  // Backup file contents before deletion
+  const backup = {};
+  for (const name of txtFiles) {
+    const filePath = path.join(dir, name);
+    try {
+      backup[name] = readFileSync(filePath);
+    } catch {
+      // If a file can't be read (permissions, in-use, etc.), skip it.
+      // We'll still attempt the checkout; if it fails, we recover what we backed up.
+    }
   }
-  execFileSync('git', ['checkout', '--', REQUIREMENTS_DIR], {
-    cwd,
-    stdio: 'inherit',
-    env: scrubGitEnv(),
-    windowsHide: true,
-  });
+
+  // Delete the .txt files to reset the "unchanged" comparison target
+  for (const name of txtFiles) {
+    try {
+      unlinkSync(path.join(dir, name));
+    } catch {
+      // If deletion fails (e.g., file in use), restore backup immediately
+      for (const [bakName, bakContent] of Object.entries(backup)) {
+        try {
+          writeFileSync(path.join(dir, bakName), bakContent);
+        } catch {
+          /* swallow recovery failures here; will be reported below */
+        }
+      }
+      throw new Error(
+        `Failed to delete requirements file '${name}' during CRLF normalization. ` +
+        `Attempted to restore backup. Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
+      );
+    }
+  }
+
+  // Restore files via git checkout
+  try {
+    execFileSync('git', ['checkout', '--', REQUIREMENTS_DIR], {
+      cwd,
+      stdio: 'inherit',
+      env: scrubGitEnv(),
+      windowsHide: true,
+    });
+  } catch (err) {
+    // git checkout failed. Restore from backup and throw a clear error.
+    if (Object.keys(backup).length > 0) {
+      for (const [name, content] of Object.entries(backup)) {
+        try {
+          writeFileSync(path.join(dir, name), content);
+        } catch {
+          /* swallow recovery failures; will be reported in the error below */
+        }
+      }
+    }
+    throw new Error(
+      `Failed to normalize requirements CRLF via 'git checkout -- ${REQUIREMENTS_DIR}': ` +
+      `${err.message}. Attempted to restore from backup. ` +
+      `Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
+    );
+  }
+
+  // Verify that checkout actually restored the files
+  const restored = readdirSync(dir).filter((name) => name.endsWith('.txt'));
+  if (restored.length === 0) {
+    // Checkout succeeded (didn't throw) but produced no files. Restore backup and error.
+    for (const [name, content] of Object.entries(backup)) {
+      try {
+        writeFileSync(path.join(dir, name), content);
+      } catch {
+        /* swallow recovery failures */
+      }
+    }
+    throw new Error(
+      `git checkout succeeded but no .txt files were restored to ${REQUIREMENTS_DIR}/. ` +
+      `Attempted to restore from backup. Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
+    );
+  }
+
+  // Verify each originally-present file was restored
+  for (const name of txtFiles) {
+    if (!existsSync(path.join(dir, name))) {
+      // A file that existed before is now missing. Restore backup and error.
+      for (const [bakName, bakContent] of Object.entries(backup)) {
+        try {
+          writeFileSync(path.join(dir, bakName), bakContent);
+        } catch {
+          /* swallow recovery failures */
+        }
+      }
+      throw new Error(
+        `git checkout succeeded but required file '${name}' is missing from ${REQUIREMENTS_DIR}/. ` +
+        `Attempted to restore from backup. Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
+      );
+    }
+  }
 }
 
 module.exports.renormalizeRequirementsCrlf = renormalizeRequirementsCrlf;
