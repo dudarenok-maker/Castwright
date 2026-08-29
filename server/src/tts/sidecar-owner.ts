@@ -100,8 +100,8 @@ export function sidecarOwnerPath(runDir: string, port: number): string {
 
 /** Legacy fixed-name path (pre-#2641): `.run/tts.owner.json`. Used for
     cross-version conflict detection — when upgrading from an old version to
-    a port-keyed one, the legacy note must not be missed. */
-function legacySidecarOwnerPath(runDir: string): string {
+    a port-keyed one, the legacy note must not be missed. Exported for testing. */
+export function legacySidecarOwnerPath(runDir: string): string {
   return join(runDir, 'tts.owner.json');
 }
 
@@ -216,6 +216,16 @@ function pruneStaleNotes(runDir: string, currentPort: number, aliveFn: (pid: num
     recorded pid is no longer alive (#2754). This cleans up litter from
     crashed/hard-killed servers at the moment a NEW, legitimate server starts,
     without weakening the read-side sweep's conservative, liveness-agnostic logic.
+
+    Also cleans up the legacy note (.run/tts.owner.json) if its recorded port
+    matches the port being claimed (#2754 N3b). This fixes the PID-recycle defect:
+    if an old server crashed with the legacy note still present, and the OS later
+    recycled its PID, the legacy note's stale PID check would block the new owner.
+    Deleting the legacy note here (only after the conflict check passed in
+    `findConflictingOwner`) is safe: we already verified no live owner exists for
+    this port, so the legacy note — if present and matching — is either our own
+    or stale.
+
     `aliveFn` is injectable for testing (defaults to isProcessAlive). */
 export function claimSidecarOwnership(opts: ClaimOpts): void {
   const {
@@ -228,6 +238,18 @@ export function claimSidecarOwnership(opts: ClaimOpts): void {
   } = opts;
   mkdirSync(runDir, { recursive: true });
   pruneStaleNotes(runDir, port, aliveFn);
+
+  // #2754 N3b: Clean up the legacy note if its port matches the port being claimed.
+  // The legacy note is now superseded by the port-keyed note we're about to write.
+  const legacyOwner = readLegacySidecarOwner(runDir);
+  if (legacyOwner && legacyOwner.port === port) {
+    try {
+      unlinkSync(legacySidecarOwnerPath(runDir));
+    } catch {
+      /* already gone or inaccessible — best-effort cleanup */
+    }
+  }
+
   const note: SidecarOwnerNote = { pid, ppid, port, startedAt: nowIso() };
   writeFileSync(sidecarOwnerPath(runDir, port), JSON.stringify(note), 'utf8');
 }
@@ -326,11 +348,18 @@ export function enforceSingleSidecarOwner(opts: EnforceOwnerOpts): boolean {
   } = opts;
   const conflict = findConflictingOwner({ runDir, pid, ppid, port, aliveFn });
   if (conflict) {
+    // #2754 N3a: Determine which file the conflict came from (port-keyed vs legacy)
+    // so the FATAL message names the correct file for deletion.
+    const portKeyedOwner = readSidecarOwner(runDir, port);
+    const conflictPath = portKeyedOwner && portKeyedOwner.pid === conflict.pid
+      ? sidecarOwnerPath(runDir, port)
+      : legacySidecarOwnerPath(runDir);
+
     log(
       `[server] FATAL: another Castwright server (pid ${conflict.pid}) already owns the TTS ` +
         `sidecar on :${conflict.port}. Two servers managing one sidecar fight over it ` +
         `(recycle storm — generation stalls). Stop the other instance first, then restart. ` +
-        `If you are certain no other server is running, delete ${sidecarOwnerPath(runDir, port)} and retry.`,
+        `If you are certain no other server is running, delete ${conflictPath} and retry.`,
     );
     exit(1);
     return false; // reached only in tests where `exit` does not terminate

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,6 +9,7 @@ import {
   enforceSingleSidecarOwner,
   findConflictingOwner,
   isProcessAlive,
+  legacySidecarOwnerPath,
   readSidecarOwner,
   releaseSidecarOwnership,
   resolveSidecarPort,
@@ -284,6 +285,38 @@ describe('claimSidecarOwnership', () => {
     expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555); // successfully overwritten
     expect(readSidecarOwner(runDir, 9000)?.startedAt).toBe('new');
   });
+
+  it('N3b: deletes the legacy note when its port matches the port being claimed', () => {
+    // Setup: legacy note (pre-#2641) exists for port 9000
+    const legacyPath = legacySidecarOwnerPath(runDir);
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({ pid: 100, ppid: 7, port: 9000, startedAt: '2026-06-23T00:00:00.000Z' }),
+      'utf8',
+    );
+    // Claim ownership on port 9000 — should delete the legacy note since it's superseded
+    claimSidecarOwnership({ runDir, pid: 555, ppid: 8, port: 9000, nowIso: () => 'new' });
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555); // new owner claimed
+    // Legacy note should be deleted (it's now superseded by the port-keyed note)
+    expect(() => readFileSync(legacyPath, 'utf8')).toThrow();
+  });
+
+  it('N3b: leaves the legacy note alone when its port does NOT match the port being claimed', () => {
+    // Setup: legacy note (pre-#2641) exists for port 9000
+    const legacyPath = legacySidecarOwnerPath(runDir);
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({ pid: 100, ppid: 7, port: 9000, startedAt: '2026-06-23T00:00:00.000Z' }),
+      'utf8',
+    );
+    // Claim ownership on port 9010 (different port) — should NOT delete the legacy note
+    claimSidecarOwnership({ runDir, pid: 555, ppid: 8, port: 9010, nowIso: () => 'new', aliveFn: () => true });
+    expect(readSidecarOwner(runDir, 9010)?.pid).toBe(555); // new owner claimed on 9010
+    // Legacy note should still exist (it's for a different port)
+    expect(JSON.parse(readFileSync(legacyPath, 'utf8'))).toEqual(
+      expect.objectContaining({ pid: 100, port: 9000 }),
+    );
+  });
 });
 
 describe('releaseSidecarOwnership', () => {
@@ -497,5 +530,69 @@ describe('enforceSingleSidecarOwner', () => {
     expect(ok).toBe(true);
     expect(exit).not.toHaveBeenCalled();
     expect(readSidecarOwner(runDir, 9000)?.pid).toBe(200);
+  });
+
+  it('N3a: FATAL message names the PORT-KEYED path when conflict came from port-keyed note', () => {
+    // Setup: port-keyed note exists (current mechanism)
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'owner' });
+    // Another server (different pid, different ppid) tries to enforce ownership
+    const log = vi.fn();
+    const exit = vi.fn();
+    const ok = enforceSingleSidecarOwner({
+      runDir,
+      pid: 200,
+      ppid: 8,
+      port: 9000,
+      aliveFn: () => true,
+      log,
+      exit,
+    });
+    expect(ok).toBe(false);
+    expect(exit).toHaveBeenCalledWith(1);
+    // The message should name the port-keyed path (tts.owner.9000.json)
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(sidecarOwnerPath(runDir, 9000)),
+    );
+    // Verify it names the correct full path (not the legacy path)
+    expect(log).not.toHaveBeenCalledWith(
+      expect.stringContaining(legacySidecarOwnerPath(runDir)),
+    );
+  });
+
+  it('N3a: FATAL message names the LEGACY path when conflict came from legacy note', () => {
+    // Setup: legacy note (pre-#2641) exists for the same port
+    const legacyPath = legacySidecarOwnerPath(runDir);
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        pid: 100,
+        ppid: 7,
+        port: 9000, // legacy note also records the port
+        startedAt: '2026-06-23T00:00:00.000Z',
+      }),
+      'utf8',
+    );
+    // Another server (different pid, different ppid) tries to enforce ownership on the same port
+    const log = vi.fn();
+    const exit = vi.fn();
+    const ok = enforceSingleSidecarOwner({
+      runDir,
+      pid: 200,
+      ppid: 8,
+      port: 9000,
+      aliveFn: () => true,
+      log,
+      exit,
+    });
+    expect(ok).toBe(false);
+    expect(exit).toHaveBeenCalledWith(1);
+    // The message should name the LEGACY path (tts.owner.json), not the port-keyed one
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(legacyPath),
+    );
+    // Verify it does NOT name the port-keyed path
+    expect(log).not.toHaveBeenCalledWith(
+      expect.stringContaining(sidecarOwnerPath(runDir, 9000)),
+    );
   });
 });
