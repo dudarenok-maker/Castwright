@@ -54,12 +54,11 @@ recite:
    reused as evidence for another.
 10. **One instance fixed, the class left armed** — sibling call sites, other
     entry points, the second copy.
-11. **A fixture that invents an external tool's output contract** — the
-    fixture is the suite's only definition of a third-party format, and
-    nothing in it ever runs the real tool to check that definition against
-    reality. Checkable during a pass: does any test invoke the real producer
-    — not whether the suite went red before the fix, which it genuinely can
-    (PR #2795 — `npm audit --json`'s real `via[]` shape).
+11. **A fixture that invents an external tool's output contract** — written
+    from belief rather than from a recorded run, so oracle and code share one
+    wrong shape and the suite is green. Checkable: is the fixture traceable
+    to real output? Red-before/green-after does not settle it — it measures
+    conformance to the fixture (PR #2795 — `npm audit --json`'s `via[]`).
 
 ### Keeping the catalogue current
 
