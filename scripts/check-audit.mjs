@@ -15,11 +15,13 @@
 // Exit codes:
 //   0  everything at/above high is waived, and no waiver is expired.
 //   1  a high/critical advisory is not covered by an active waiver.
-//   2  a waiver entry in audit-waivers.json is past its expiry (must be renewed
-//      or removed; an expired waiver also counts as absent for exit-1 matching).
+//   2  either: (a) a waiver entry in audit-waivers.json is past its expiry
+//      (must be renewed or removed; an expired waiver also counts as absent
+//      for exit-1 matching), or (b) CLI argument parsing failed (unknown flag
+//      or missing required value).
 //   3  the audit cannot be trusted - npm audit failed to run, or its --json
-//      output could not be parsed. Fail closed: a gate that can't report is a
-//      gate that must not report green.
+//      output could not be parsed, or audit-waivers.json could not be loaded.
+//      Fail closed: a gate that can't report is a gate that must not report green.
 //
 // Severity threshold matches both #2424's and #1863's accepted baseline
 // (`high: 0, critical: 0`): low/moderate noise is deliberately ignored.
