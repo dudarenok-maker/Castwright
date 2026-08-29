@@ -151,6 +151,7 @@ def test_maybe_free_idle_frees_and_restores_pin_on_demoted_engine(monkeypatch: p
     """#2750: once self-demoted, `self.device` reads "cpu" forever unless
     `maybe_free_idle`'s device-family gate also admits a demoted engine —
     otherwise teardown (and the pin restore inside it) can never run."""
+    _stub_torch_cuda(monkeypatch, available=True)
     eng = main.SpeakerEngine()
     eng._requested_device = "cuda"
     eng.device = "cpu"  # demoted: device != _requested_device
