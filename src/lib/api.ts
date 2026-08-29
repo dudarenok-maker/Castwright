@@ -57,6 +57,7 @@ import type {
   SeriesMemoryDetail,
   GpuDevicesResponse,
   AnalyzerDeviceResponse,
+  AnalyzerGpuSplitResponse,
   BookQaReport,
 } from './types';
 import type { components as ApiComponents, paths as ApiPaths } from './api-types';
@@ -8603,6 +8604,61 @@ export async function mockGetAnalyzerDevice(): Promise<AnalyzerDeviceResponse> {
   return { device: 'cuda' };
 }
 
+/* e2e seam: `?e2eAnalyzerGpuSplit=split|unavailable` forces specific GPU-split
+   states in mock mode so Playwright specs can exercise the warning variants
+   without relying on fixed mock data. Pure + exported so it's unit-tested
+   directly. */
+export function readE2eAnalyzerGpuSplitOverride(
+  search: string,
+): AnalyzerGpuSplitResponse | null {
+  try {
+    const override = new URLSearchParams(search).get('e2eAnalyzerGpuSplit');
+    if (override === 'split') {
+      return {
+        reachable: true,
+        split: true,
+        deviceIndices: [0, 1],
+        totalUsedMb: 5000,
+        wouldFitSingleDevice: true,
+        dataUnavailable: false,
+      };
+    }
+    if (override === 'unavailable') {
+      return {
+        reachable: true,
+        split: false,
+        deviceIndices: [0],
+        totalUsedMb: 4200,
+        wouldFitSingleDevice: false,
+        dataUnavailable: true,
+      };
+    }
+  } catch {
+    /* swallow — fall through to defaults */
+  }
+  return null;
+}
+
+/* #2367 Task 3 — mocked analyzer GPU-split placement for the Advanced
+   Configuration warning line. Static non-split default baseline, matching
+   this ticket's own acceptance fixture. Individual test cases override this
+   per-test to exercise split/mismatch scenarios. */
+export async function mockGetAnalyzerGpuSplit(): Promise<AnalyzerGpuSplitResponse> {
+  await wait(20);
+  const override = readE2eAnalyzerGpuSplitOverride(
+    typeof window !== 'undefined' ? window.location.search : '',
+  );
+  if (override) return override;
+  return {
+    reachable: true,
+    split: false,
+    deviceIndices: [0],
+    totalUsedMb: 4200,
+    wouldFitSingleDevice: false,
+    dataUnavailable: false,
+  };
+}
+
 export async function mockGetConfig(): Promise<ConfigResponse> {
   await wait(40);
   return {
@@ -8844,6 +8900,17 @@ async function realGetAnalyzerDevice(): Promise<AnalyzerDeviceResponse> {
   if (!res.ok)
     throw new Error(
       `Analyzer device fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+/* #2367 Task 3 — real analyzer GPU-split placement, backing the Advanced
+   Configuration warning line. */
+async function realGetAnalyzerGpuSplit(): Promise<AnalyzerGpuSplitResponse> {
+  const res = await fetch('/api/ollama/gpu-split');
+  if (!res.ok)
+    throw new Error(
+      `Analyzer GPU-split fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
   return res.json();
 }
@@ -10143,6 +10210,7 @@ const real = {
   restartSidecar: realRestartSidecar,
   getGpuDevices: realGetGpuDevices,
   getAnalyzerDevice: realGetAnalyzerDevice,
+  getAnalyzerGpuSplit: realGetAnalyzerGpuSplit,
   getQaReport: realGetQaReport,
   resumeScoring: realResumeScoring,
   listVoiceLibrary: realListVoiceLibrary,
@@ -10442,6 +10510,7 @@ const mock = {
   restartSidecar: mockRestartSidecar,
   getGpuDevices: mockGetGpuDevices,
   getAnalyzerDevice: mockGetAnalyzerDevice,
+  getAnalyzerGpuSplit: mockGetAnalyzerGpuSplit,
   getQaReport: mockGetQaReport,
   resumeScoring: mockResumeScoring,
   listVoiceLibrary: mockListVoiceLibrary,
