@@ -10,7 +10,7 @@ source of the contaminated 3707 MB `asr` figure #2094 itself reported.
 #2682: the device-wide delta this module exercises essentially never
 returned a positive `asr.warm` sample in practice, so `reservation()` now
 measures a RESIDENT ASR forward via `_observed_mb` instead, same as every
-other key — see `test_asr_footprint_measurement_warm.py` for that path.
+other key — see `test_asr_warm_measurement_uses_the_torch_allocator_path` for that path.
 This module now covers the COLD `asr` delta only.
 
 These drive `reservation()` end-to-end for `engine="asr"` with
