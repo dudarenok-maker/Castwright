@@ -415,6 +415,8 @@
 - **Smaller things that add up.** Smarter cover search, cleaner exports, and a new place to tune the finer settings.
 - **Audio transcription now resets properly after a GPU load failure.** The transcription engine used to stay stuck running on your processor after a failed attempt to use your graphics card, slowing down future transcription work even once your GPU became available again. It now clears that state so it can try using your GPU the next time.
 
+- **Speech synthesis now properly frees GPU memory when stepping down to your processor.** Your speech engine used to stay locked onto your CPU after stepping down from your GPU to conserve memory, so even when the memory pressure eased, your graphics card still sat idle for the rest of the job and the next one. It now recognises that the step-down was temporary and your GPU is available again, reclaiming the memory and letting the graphics card do its work.
+
 # Castwright 1.6.0
 
 - **Update from inside the app.** Castwright can update itself, and tells you what's new when a fresh version lands.
