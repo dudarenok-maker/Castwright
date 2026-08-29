@@ -580,7 +580,7 @@ export function AdvancedView() {
                         <p className="text-xs text-slate-600 mb-1">
                           Can't determine GPU split status — your driver doesn't expose per-process GPU
                           memory. Run{' '}
-                          <code className="text-slate-700 font-mono">nvidia-smi --query-compute-apps=used_memory --format=csv</code> to
+                          <code className="text-slate-700 font-mono">nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv</code> to
                           check if <code className="text-slate-700 font-mono">used_memory</code> shows{' '}
                           <code className="text-slate-700 font-mono">[N/A]</code> or{' '}
                           <code className="text-slate-700 font-mono">[Not Supported]</code>.

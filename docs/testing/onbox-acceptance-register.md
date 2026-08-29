@@ -436,11 +436,13 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > This branch had added row **A102** (analyzer GPU-split warning + expected-device
 > mismatch, #2367, Castwright#2734); `origin/main` had independently added row
 > **A102** (CUDA fallback self-test #2582, PR #2719). Both started from the same
-> post-#2704 state. Reconciled: kept `main`'s CUDA A102; renumbered this branch's
-> analyzer row to **A104** (next available after `main`'s advanced `next-id` of
-> A103). Combined: 61 (from `main`, post-A101-discharge via PR #2739) + 1 (this
-> branch's A104, analyzer GPU-split) = **62**. Group A: 38 (main's A102) + 1 (this
-> branch's A104) = 39. `next-id: A103` bumped to `A105` in this merge.
+> post-#2704 state. Reconciled: kept `main`'s CUDA A102; during the merge resolution
+> **A103** (the next-free id) was mistakenly treated as unavailable and skipped,
+> so this branch's analyzer row was allocated **A104** instead. A103 remains
+> permanently unused — a gap in the numbering that allocate-once rules prevent
+> from being filled later. Combined: 61 (from `main`, post-A101-discharge via PR #2739)
+> + 1 (this branch's A104, analyzer GPU-split) = **62**. Group A: 38 (main's A102) + 1 (this
+> branch's A104) = 39. `next-id` bumped from A103 → A105 (skipping the permanent gap) in this merge.
 >
 > **Prior change: 2026-08-28 (Castwright#2734), 61 → 62**, adding row **A102**
 > (analyzer GPU-split warning + expected-device mismatch, #2367) — mocked
@@ -3160,7 +3162,7 @@ no separate run sheet; mechanism is integrated into Kokoro's existing health
 reporting. *Cost:* short — one Kokoro load with CPU-forced providers, one with
 CUDA working (or default unforced), and UI verification.
 
-### A104 · Analyzer GPU-split warning fires (and stays silent) correctly on real nvidia-smi output ([#2367](https://github.com/dudarenok-maker/Castwright/issues/2367)) · **two NVIDIA GPUs of different sizes**
+### A104 · Analyzer GPU-split warning fires (and stays silent) correctly on real nvidia-smi output ([#2367](https://github.com/dudarenok-maker/Castwright/issues/2367)) · **two NVIDIA GPUs of different sizes** · PR #2753
 
 `detectOllamaGpuSplit()` (`server/src/gpu/ollama-gpu-split.ts`) shells out to
 real `nvidia-smi --query-compute-apps`/`--query-gpu` and every automated test
@@ -3168,7 +3170,7 @@ here mocks `execFile`, so none of it has run against a real two-GPU box. Same
 open shape as the rest of this register: the parse/threshold logic is pinned
 in isolation, but never against genuine multi-GPU `nvidia-smi` output.
 
-- **PREREQUISITE:** First confirm on this box whether `nvidia-smi --query-compute-apps=used_memory --format=csv` returns a numeric value or `[N/A]`/`[Not Supported]` under this GPU's driver model (WDDM on Windows). If `[N/A]`, the `dataUnavailable` code path should be exercised separately instead of a real split/no-split result — until the WDDM question is settled, 'no warning fired' is not evidence of anything.
+- **PREREQUISITE:** First confirm on this box whether `nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv` returns numeric values for `used_memory` (alongside the readable `process_name` field) or `[N/A]`/`[Not Supported]` under this GPU's driver model (WDDM on Windows). If `[N/A]`, the `dataUnavailable` code path should be exercised separately instead of a real split/no-split result — until the WDDM question is settled, 'no warning fired' is not evidence of anything.
 - Load a model on Ollama that is oversized for one card but fits the combined
   VRAM of both, so Ollama itself splits it across GPUs. Confirm
   `detectOllamaGpuSplit()` reports `split: true` with the correct
@@ -3177,8 +3179,7 @@ in isolation, but never against genuine multi-GPU `nvidia-smi` output.
   signature (`server/src/analyzer/ollama.ts`), and does not repeat on
   subsequent analyzer calls with the same signature.
 - Confirm the Advanced Configuration "Analyzer (Ollama) device" row
-  (`src/views/advanced.tsx`) shows the matching warning line: "Model split
-  across GPUs [indices] — expected GPU [N] only" (generic split wording).
+  (`src/views/advanced.tsx`) shows the matching generic-split warning line: "Model split across GPUs [indices] despite fitting on one device".
 - Repeat with a model that is genuinely too big to fit on any single card
   (`wouldFitSingleDevice: false`) and confirm NO warning fires anywhere —
   server log or UI.
@@ -3186,7 +3187,7 @@ in isolation, but never against genuine multi-GPU `nvidia-smi` output.
   the real single-device placement, confirm the server logs the mismatch
   exactly once per distinct expected/detected pair: `[ollama] analyzer GPU
   device mismatch: expected GPU N, detected on GPU M`. Confirm the UI shows
-  the named-mismatch wording: "Analyzer model is on GPU M — expected GPU N
+  the single-device mismatch wording: "Analyzer model is on GPU M — expected GPU N
   only" (distinct from the split-case wording above). Repeat with
   `expectedDevice` contradicting a split (model is split across multiple
   GPUs but expected on a different one) and confirm the server logs the

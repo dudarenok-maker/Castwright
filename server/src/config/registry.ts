@@ -973,7 +973,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'CASTWRIGHT_GPU_SPLIT_PROBE',
     group: 'analyzer-sampling',
     label: 'GPU-split detection probe',
-    help: 'Enable periodic nvidia-smi probes to detect whether the analyzer\'s Ollama model is split across multiple GPUs. '
+    help: 'Enable on-demand nvidia-smi probes to detect whether the analyzer\'s Ollama model is split across multiple GPUs. '
         + 'Cached for 60s per probe. Default on; turn off to skip the diagnostic overhead if this information is not needed.',
     type: 'boolean',
     default: true,

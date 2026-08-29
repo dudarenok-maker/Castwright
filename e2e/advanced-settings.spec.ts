@@ -184,9 +184,11 @@ test.describe('Advanced Settings — plan 199 golden path', () => {
 
     /* The analyzer-models section is open by default. Look for the
        GPU-split warning text. The warning should mention the devices
-       and the fact that it could fit on one device. */
+       and the fact that it could fit on one device. This is the
+       generic-split case, not the expectedDevice-mismatch case, so
+       the text must include "despite fitting on one device". */
     await expect(
-      page.getByText(/Model split across GPUs/i),
+      page.getByText(/Model split across GPUs.*despite fitting on one device/i),
     ).toBeVisible({ timeout: 10_000 });
 
     /* Verify the link to docs is present in the warning. */
