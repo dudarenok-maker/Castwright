@@ -93,16 +93,21 @@ export interface CapacityRetryOpts {
       (./describe-vram-blockers.ts). Folded into `NoCapacityError`'s message
       when admission finally gives up (#1839). */
   describeBlockers?: () => Promise<VramBlocker[]>;
-  /** Injected "is a VoiceDesign currently resident/in-flight on the sidecar"
-      check — defaults to `defaultIsDesignResident`, which reads
-      `probeSidecarHealthIfRegistered()`'s `qwenDesignResident` field.
-      Consulted at most once per call, only when the generic `maxAttempts`
-      bound has just been reached: `true` extends the wait using
-      `GPU_CAPACITY_DESIGN_MAX_ATTEMPTS` instead of giving up immediately
-      (#2678 Task 3). Fail-closed like `describeBlockers` — an unregistered
-      gate or a probe failure reports `false`, never inventing a design
+  /** Injected "is a VoiceDesign currently resident/in-flight on the SAME
+      device this admission was denied on" check — defaults to
+      `defaultIsDesignResident`, which reads
+      `probeSidecarHealthIfRegistered()`'s `qwenDesignResident` field
+      qualified against `qwenDeviceKey`. Takes the denied request's
+      `deviceKey` (from the `noCapacity` body) so residency on an unrelated
+      card never extends the wait (#2678 review finding — a resident design
+      on `cuda:0` cannot free capacity denied on `cuda:1`). Consulted at most
+      once per call, only when the generic `maxAttempts` bound has just been
+      reached: `true` extends the wait using `GPU_CAPACITY_DESIGN_MAX_ATTEMPTS`
+      instead of giving up immediately (#2678 Task 3). Fail-closed like
+      `describeBlockers` — an unregistered gate, a probe failure, or a
+      device mismatch all report `false`, never inventing a design
       blocker. */
-  isDesignResident?: () => Promise<boolean>;
+  isDesignResident?: (deviceKey: string) => Promise<boolean>;
   /** Injected cap on the EXTENDED no-capacity retry attempts used once
       `isDesignResident` reports true at the generic bound — defaults to
       `GPU_CAPACITY_DESIGN_MAX_ATTEMPTS`. */
@@ -133,13 +138,20 @@ async function defaultDescribeBlockers(): Promise<VramBlocker[]> {
 /* Default `isDesignResident` — reads the same stateless leaf gate as
    `defaultDescribeBlockers` (see its header for the import-cycle rationale
    for going through `sidecar-health-gate.ts` rather than
-   `routes/sidecar-health.ts` directly). Fail-closed: an unregistered gate, a
-   probe failure, or a missing field all report `false` — this never invents
-   a design blocker that would extend a wait past the normal ~60s budget. */
-async function defaultIsDesignResident(): Promise<boolean> {
+   `routes/sidecar-health.ts` directly). Qualified by `deviceKey` (#2678
+   review finding): `qwenDesignResident` alone is global — it says a
+   VoiceDesign is resident SOMEWHERE, not on the card this admission was
+   denied on. A resident design on an unrelated card (a 2-GPU box, VoiceDesign
+   on cuda:0, this request denied on cuda:1) can never free the blocked
+   device, so extending the wait for it just burns ~200s before failing with
+   the same error anyway. Fail-closed: an unregistered gate, a probe failure,
+   a missing field, or a device mismatch all report `false` — this never
+   invents a design blocker that would extend a wait past the normal ~60s
+   budget. */
+async function defaultIsDesignResident(deviceKey: string): Promise<boolean> {
   try {
     const health = await probeSidecarHealthIfRegistered();
-    return health?.qwenDesignResident === true;
+    return health?.qwenDesignResident === true && health?.qwenDeviceKey === deviceKey;
   } catch {
     return false;
   }
@@ -232,7 +244,7 @@ export async function withCapacityRetry(
           );
         }
       } else if (attempt + 1 >= maxAttempts) {
-        const designResident = await isDesignResident().catch(() => false);
+        const designResident = await isDesignResident(noCap.deviceKey).catch(() => false);
         if (designResident) {
           usingDesignBudget = true;
         } else {

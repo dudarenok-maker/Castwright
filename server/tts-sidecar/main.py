@@ -10110,6 +10110,17 @@ def health() -> dict[str, Any]:
             isinstance(qwen, QwenEngine)
             and (qwen._design is not None or qwen._design_in_flight.busy)
         ),
+        # #2678 review finding — the device `qwen_design_resident` above is
+        # true on, as a concrete "cuda:N" (or None off a GPU / unresolvable).
+        # `_base`/`_design` share one QwenEngine instance and therefore one
+        # `_device`, so this is equally the design model's card whenever
+        # `qwen_design_resident` is true. Node-side capacity-retry.ts uses it
+        # to qualify the design-residency wait extension: a resident design on
+        # a DIFFERENT card than the one this admission was denied on can never
+        # free the blocked device, so it must not extend that wait. Reuses
+        # `_is_resident`, the same probe /health's device map already relies
+        # on, rather than re-deriving card placement here.
+        "qwen_device_key": _is_resident("qwen"),
         "qwen_loading": qwen_loading,
         "qwen_package_installed": qwen_package_installed,
         "qwen_weights_present": qwen_weights_present,

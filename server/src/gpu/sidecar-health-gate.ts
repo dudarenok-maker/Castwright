@@ -50,6 +50,13 @@ export interface SidecarHealthSnapshot {
       read. */
   qwenDesignEverLoaded?: boolean;
   qwenDesignResident?: boolean;
+  /** #2678 review finding — the concrete "cuda:N" card a resident
+      QwenEngine (base or design; they share one `_device`) sits on, or
+      `null`/absent when unresolvable or no engine is resident. Lets a reader
+      qualify `qwenDesignResident` against a specific `deviceKey` rather than
+      treating residency as global — see `capacity-retry.ts`'s
+      `defaultIsDesignResident`. */
+  qwenDeviceKey?: string | null;
   vramReservedMb?: number | null;
 }
 

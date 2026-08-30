@@ -265,6 +265,39 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.qwenDesignResident).toBe(false);
   });
 
+  it('forwards qwen_device_key as qwenDeviceKey (#2678 review finding)', async () => {
+    /* capacity-retry.ts's defaultIsDesignResident needs this to qualify
+       qwenDesignResident against the specific device a request was denied
+       capacity on, rather than treating residency as global. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['qwen'],
+          qwen_loaded: true,
+          qwen_design_resident: true,
+          qwen_device_key: 'cuda:1',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenDeviceKey).toBe('cuda:1');
+  });
+
+  it('defaults qwenDeviceKey=null when the sidecar omits it', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['qwen'], qwen_loaded: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenDeviceKey).toBeNull();
+  });
+
   it('coerces missing Qwen load-state fields to safe defaults', async () => {
     /* An older sidecar that predates Qwen support must not leave the new
        Qwen pill rendering as `undefined`. Mirror the Kokoro back-compat

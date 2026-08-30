@@ -180,6 +180,11 @@ interface SidecarHealthBody {
      finishes/unloads — used by capacity-retry.ts to tell "in-flight now"
      apart from "ever loaded". Absent on an older sidecar → false below. */
   qwen_design_resident?: boolean;
+  /* #2678 review finding — the concrete "cuda:N" card a resident QwenEngine
+     (base or design; they share one `_device`) sits on. Absent on an older
+     sidecar → null below. Reused, not re-derived: the sidecar's own
+     `_is_resident("qwen")` probe (main.py) computes it. */
+  qwen_device_key?: string | null;
   recycle_pending?: boolean;
   committed_mb?: number | null;
   vram_reserved_mb?: number | null;
@@ -371,6 +376,9 @@ export interface SidecarHealthResult {
   qwenBase17WeightsPresent?: boolean;
   qwenDesignEverLoaded?: boolean;
   qwenDesignResident?: boolean;
+  /* #2678 review finding — forwarded verbatim from qwen_device_key (see
+     SidecarHealthBody above). null on an older sidecar or when unresolvable. */
+  qwenDeviceKey?: string | null;
   qwenLoading?: boolean;
   qwenPackageInstalled?: boolean;
   qwenWeightsPresent?: boolean;
@@ -529,6 +537,7 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       committedMb: typeof body.committed_mb === 'number' ? body.committed_mb : null,
       qwenDesignEverLoaded: body.qwen_design_ever_loaded === true,
       qwenDesignResident: body.qwen_design_resident === true,
+      qwenDeviceKey: typeof body.qwen_device_key === 'string' ? body.qwen_device_key : null,
       vramReservedMb:
         typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
       vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,

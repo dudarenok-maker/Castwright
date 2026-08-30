@@ -1314,6 +1314,30 @@ def test_health_exposes_qwen_design_resident(monkeypatch):
     assert body["qwen_design_resident"] is False
 
 
+def test_health_exposes_qwen_device_key(monkeypatch):
+    """/health exposes `qwen_device_key` as the concrete "cuda:N" card the
+    resident QwenEngine (base or design, they share one `_device`) sits on -
+    the piece capacity-retry.ts's design-residency wait extension needs to
+    tell "the resident design is on the SAME card this admission was denied
+    on" apart from "it's resident somewhere, just not here" (#2678 review
+    finding). None when unresolvable / no QwenEngine instance."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    qwen = main.QwenEngine()
+    monkeypatch.setitem(main.ENGINES, "qwen", qwen)
+    monkeypatch.setattr(main, "_is_resident", lambda engine_id: "cuda:1" if engine_id == "qwen" else None)
+
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_device_key"] == "cuda:1"
+
+    # No QwenEngine instance present -> the underlying `_is_resident` probe
+    # itself reports None; /health must forward that, not invent a card.
+    monkeypatch.setattr(main, "_is_resident", lambda engine_id: None)
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_device_key"] is None
+
+
 def test_debug_memory_includes_inflight_synth_top_level_key(monkeypatch):
     """/debug/memory must expose `inflight_synth` as a top-level key (sibling to
     `process`, `gc`, `engines`, `cuda`) so an idle-measurement probe can read the
