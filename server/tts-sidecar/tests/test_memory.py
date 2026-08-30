@@ -1352,16 +1352,33 @@ def test_health_exposes_qwen_device_key(monkeypatch):
         body = client.get("/health").json()
     assert body["qwen_device_key"] == "cuda:1"
 
-    # N1 case 2: the design's own cold-load window -- `_design` is still None
-    # but `_design_in_flight` is busy. Must still report the (already-
-    # resolved, per `_ensure_device_resolved` running before the weights
-    # pull) device, not None.
+    # N1 case 2: the design's own cold-load window, ONCE `_device` has
+    # already resolved -- `_design` is still None but `_design_in_flight` is
+    # busy (`_ensure_device_resolved` has run, `_design` hasn't been
+    # assigned yet). Must still report the device, not None.
     qwen._design = None
     qwen._device = "cuda:1"
     with qwen._design_in_flight.claim():
         with TestClient(main.app) as client:
             body = client.get("/health").json()
     assert body["qwen_device_key"] == "cuda:1"
+
+    # F8 (post #2678 review): the EARLIER sub-window of the same cold-load
+    # path, BEFORE `_ensure_device_resolved` has run at all. `design_voice()`
+    # claims `_design_in_flight` (`.busy` -> True) well before it reaches
+    # `_ensure_design_loaded()` -- Kokoro/base17 eviction and a per-card lock
+    # acquire sit in between and can block for real time -- so on a
+    # genuinely cold engine `_device` can still read its unresolved
+    # `_device_pref` ("auto") while `.busy` is already True. This must fail
+    # closed (None), never crash or report a stale/wrong device -- the gap
+    # the previous version of this test (which pre-set `_device` to an
+    # already-resolved "cuda:1" before claiming) could not exercise.
+    qwen._design = None
+    qwen._device = "auto"
+    with qwen._design_in_flight.claim():
+        with TestClient(main.app) as client:
+            body = client.get("/health").json()
+    assert body["qwen_device_key"] is None
 
     # N2: a real admission onto a non-default card. `_resolve_torch_device`
     # returns an explicit ("cuda:1") pref unchanged rather than collapsing to

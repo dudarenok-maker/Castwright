@@ -5069,8 +5069,21 @@ def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
     `_design` (set by `_ensure_device_resolved`, called by both
     `_ensure_base_loaded` and `_ensure_design_loaded` before their weights
     pull begins), so reading it directly answers "which card is Qwen on"
-    from either model's residency without needing Base to be non-None, and
-    is already resolved (not still "auto") well before a cold pull finishes.
+    from either model's residency without needing Base to be non-None.
+    `_ensure_device_resolved` does run before the weights pull itself
+    starts -- but NOT necessarily before `_design_in_flight.busy` goes
+    True: `design_voice()` claims `_design_in_flight` (its `with
+    self._design_in_flight.claim():`) well before it reaches
+    `_ensure_design_loaded()` -- the Kokoro/base17 eviction and the
+    per-card lock acquire in between can block for real time -- so on a
+    genuinely cold engine (`_device` still at its unresolved
+    `_device_pref`, typically "auto") there IS a real window where `.busy`
+    is already True and `_device` has not yet resolved to a concrete
+    "cuda:N"/"rocm:N". That's handled, not ignored: `_parse_device("auto")`
+    returns `("auto", None)`, `fam` is not in `("cuda", "rocm")` below, and
+    this function correctly returns None for that window -- the fail-closed
+    behaviour this codebase's design principle calls for, not a crash or a
+    stale/wrong device key.
 
     This also correctly reflects an admitted `device=` argument onto a
     NON-default card (#2678 review N2): `_resolve_torch_device` returns an
