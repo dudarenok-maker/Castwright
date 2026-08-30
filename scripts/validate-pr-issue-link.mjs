@@ -30,7 +30,7 @@ function stripFencedBlocks(text) {
   const kept = [];
   let inFence = false;
   for (const line of lines) {
-    const isFenceLine = /^ {0,3}`{3,}/.test(line);
+    const isFenceLine = new RegExp('^ {0,3}`{3,}').test(line);
     if (isFenceLine) {
       inFence = !inFence;
       // A fence is a block boundary even when the source has no blank line
@@ -61,7 +61,7 @@ function stripInlineSpans(text) {
   return text
     .replace(/\r\n/g, '\n')
     .split(/\n{2,}/)
-    .map((paragraph) => paragraph.replace(/(`+)(?:(?!\1)[\s\S])*?\1/g, ''))
+    .map((paragraph) => paragraph.replace(new RegExp('(`+)(?:(?!\\1)[\\s\\S])*?\\1', 'g'), ''))
     .join('\n\n');
 }
 

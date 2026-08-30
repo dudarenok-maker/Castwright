@@ -188,10 +188,14 @@ function normalize(s: string): string {
         an occurrence that IS preceded by a paragraph dash and reports the
         match from the head of that dash run — the exact offset the
         dash-carrying form of the same sentence produces — but ONLY when its
-        own bare first hit is a false substring match (mid-word, the "да."
-        inside "правда." shape; see `isMidWordHit`). A bare hit that already
-        lands at a genuine word boundary is an independently valid occurrence
-        and is trusted as-is, with no forward walk: otherwise a sentence whose
+        own bare first hit is a false substring match. A false substring match
+        is detected two ways: (1) at the LEFT boundary, the "да." inside
+        "правда." shape via `isMidWordHit`; (2) in the fuzzy prefix case only,
+        at the RIGHT boundary when the continuation DIFFERS from the needle's
+        own text (see `isMidWordOnRight` #2608/#2799). A bare hit that already
+        lands at a genuine word boundary, or whose right-side continuation
+        matches the needle's own text, is an independently valid occurrence and
+        is trusted as-is, with no forward walk: otherwise a sentence whose
         exact text legitimately recurs later in the chapter under a
         DIFFERENT line's dash would be discarded in favor of that unrelated
         dash (#2577 pass 4, "Q1"). Only when the bare hit IS a false
@@ -265,6 +269,33 @@ function isMidWordHit(haystack: string, pos: number): boolean {
   return pos > 0 && WORD_CHAR.test(haystack[pos - 1]);
 }
 
+/** True when `search` ends INSIDE a word at a position where the continuation
+    does NOT match the needle's own text — i.e. the character immediately after
+    `pos + search.length` is a word character that would form a DIFFERENT word
+    than what the needle contains at that position. Only applies when `search`
+    is strictly shorter than the full needle (the fuzzy 16-char-prefix case).
+
+    The distinction matters: a search that is truncated by design will often end
+    mid-word in correct matches (e.g., "смотрел" ending and the needle continuing
+    with "а" from "смотрела"). That's not evidence of a false hit. Only when the
+    continuation CHARACTER differs from the needle's own character is it evidence
+    of a false prefix match (e.g., "в" inside an unrelated word "вспоминая").
+    See #2799 for the regression that occurred when this check was too broad. */
+function isMidWordOnRight(haystack: string, pos: number, search: string, needle: string): boolean {
+  const end = pos + search.length;
+  if (end >= haystack.length) return false; // at or past end, no continuation
+  if (!WORD_CHAR.test(haystack[end])) return false; // not a word char, boundary is clean
+
+  // The character after the search is a word character. But only distrust it if
+  // it's DIFFERENT from what the needle itself would have at this position.
+  // If they match, the search is just truncated and the match is still valid.
+  if (search.length < needle.length && haystack[end] === needle[search.length]) {
+    return false; // continuation matches needle, it's a legit match
+  }
+
+  return true; // continuation differs from needle, it's an unrelated word
+}
+
 /** Search `needle` in `haystack` starting at `cursor`, bounded to a
     look-ahead window; falls back to one unbounded re-search from the SAME
     cursor (tolerates a legitimately out-of-order match farther ahead). A
@@ -292,7 +323,17 @@ interface LocatedSpan {
     pre-#2537 `main`. With it on, an occurrence preceded by that sentence's own
     paragraph dash can win over an earlier bare one, reporting `start` as the
     head of the dash run — but only under the conditions `Needle`'s doc
-    comment states; a bare hit that's already independently valid is kept. */
+    comment states; a bare hit that's already independently valid is kept.
+
+    `checkRightBoundary` (#2608) additionally distrusts a bare hit whose
+    RIGHT side lands mid-word, on top of the existing left-side check — but
+    only when the caller sets it. Fed `true` only by `fillRun`'s fuzzy
+    fallback call, whose `search` is a fixed `FUZZY_ANCHOR_LEN`-char PREFIX of
+    the needle and so, by construction, almost never ends at a real word
+    boundary: without a caller-controlled gate this would make every fuzzy
+    bare hit look mid-word, including ones with no ambiguity to resolve — the
+    exact-match path's `search` is normally the needle's own full text, whose
+    right edge is a real boundary already, so it must keep passing `false`. */
 function findNeedleSpan(
   haystack: string,
   search: string,
@@ -300,6 +341,8 @@ function findNeedleSpan(
   tryDashPrefix: boolean,
   cursor: number,
   adjacent: DashAdjacency,
+  checkRightBoundary: boolean,
+  needle: string = search, // full needle text, for distinguishing truncated-prefix mismatches
 ): LocatedSpan | null {
   const pos = findMatch(haystack, search, cursor);
   if (!tryDashPrefix || pos === -1) {
@@ -319,22 +362,28 @@ function findNeedleSpan(
   // text legitimately recurs later in the chapter under a DIFFERENT sentence's
   // dash, this occurrence would be discarded in favor of binding to that
   // unrelated dash (#2577 pass 4, "Q1").
-  // KNOWN RESIDUAL (#2608, found #2577 pass 5, scope corrected pass 6):
   // `isMidWordHit` only checks the LEFT boundary of `pos`. It says nothing
   // about whether `search` also ends cleanly — a `search` that is itself a
   // strict prefix of a longer word can pass this check while still being a
   // false hit on its right side, and would then be wrongly trusted here
-  // instead of walking forward to the dash-prefixed occurrence. This is NOT
-  // limited to the fuzzy 16-char-prefix fallback (which by construction
-  // usually doesn't end at a word boundary) — it reaches the plain
-  // exact-match path too, with `search` at its full needle length: e.g. a
-  // needle `"Он молчал"` (well under FUZZY_MIN_NEEDLE, fuzzy unreachable)
-  // binds to `narration@0` instead of the real dash line when the body also
-  // contains `"Он молчаливо…"`. Fixing this needs a decision on how the
-  // fuzzy path's inherently mid-word truncation point should be treated
-  // alongside the exact path — see #2608. Not a regression: this exact gap
-  // already existed on `main`, unrelated to dash-invariance.
-  if (!isMidWordHit(haystack, pos)) {
+  // instead of walking forward to the dash-prefixed occurrence.
+  // FIXED for the fuzzy 16-char-prefix fallback (#2608/#2799): its caller passes
+  // `checkRightBoundary: true` and the full needle, and `isMidWordOnRight` below
+  // catches a false prefix match whose continuation DIFFERS from the needle itself.
+  // A correct match where the search is just truncated (e.g., "смотрел" + "а" from
+  // "смотрела") is correctly trusted, since the "а" matches the needle's own text.
+  // A false match forming an unrelated word (e.g., "в" in "вспоминая") is correctly
+  // distrusted, since "в" differs from the needle's continuation character.
+  // KNOWN RESIDUAL, scope-limited on purpose: the plain exact-match path
+  // (`checkRightBoundary: false`) still has this gap at `search`'s full
+  // needle length — e.g. a needle `"Он молчал"` (well under FUZZY_MIN_NEEDLE,
+  // fuzzy unreachable) binds to `narration@0` instead of the real dash line
+  // when the body also contains `"Он молчаливо…"`. #2608 resolved this only
+  // for the fuzzy path; the exact path needs its own decision (a `search`
+  // that's the needle's own full text ending mid-word is a different,
+  // rarer shape than a fixed-length prefix cut). Not a regression: this
+  // exact-path gap already existed on `main`, unrelated to dash-invariance.
+  if (!isMidWordHit(haystack, pos) && !(checkRightBoundary && isMidWordOnRight(haystack, pos, search, needle))) {
     return { start: pos, end: Math.min(pos + spanLen, haystack.length) };
   }
 
@@ -384,7 +433,16 @@ function findAnchors(needles: Needle[], haystack: string, adjacent: DashAdjacenc
   for (let i = 0; i < needles.length; i++) {
     const needle = needles[i];
     if (needle.text.length < ANCHOR_MIN_LEN) continue;
-    const hit = findNeedleSpan(haystack, needle.text, needle.text.length, needle.tryDashPrefix, cursor, adjacent);
+    const hit = findNeedleSpan(
+      haystack,
+      needle.text,
+      needle.text.length,
+      needle.tryDashPrefix,
+      cursor,
+      adjacent,
+      false,
+      needle.text,
+    );
     if (hit === null) continue;
     anchors.push({ index: i, start: hit.start, end: hit.end });
     cursor = hit.end;
@@ -421,10 +479,23 @@ function fillRun(
       results[i] = null;
       continue;
     }
-    let hit = findNeedleSpan(runHaystack, needle.text, needle.text.length, needle.tryDashPrefix, cursor, runAdjacent);
+    let hit = findNeedleSpan(
+      runHaystack,
+      needle.text,
+      needle.text.length,
+      needle.tryDashPrefix,
+      cursor,
+      runAdjacent,
+      false,
+      needle.text,
+    );
     if (hit === null && fuzzy && needle.text.length >= FUZZY_MIN_NEEDLE) {
       // Exact failed (gemma paraphrased/dropped a word). Anchor on the prefix
       // so the sentence still attaches to its paragraph; approximate the extent.
+      // `checkRightBoundary: true` (#2608) — this `search` is a fixed-length
+      // prefix, so a bare hit that's a strict prefix of a longer, unrelated
+      // word must not be trusted; walk forward for a dash-prefixed occurrence
+      // of the same prefix first, same as the existing left-boundary case.
       hit = findNeedleSpan(
         runHaystack,
         needle.text.slice(0, FUZZY_ANCHOR_LEN),
@@ -432,6 +503,8 @@ function fillRun(
         needle.tryDashPrefix,
         cursor,
         runAdjacent,
+        true,
+        needle.text, // pass full needle for right-boundary check
       );
     }
     if (hit === null) {
@@ -548,7 +621,9 @@ export function alignSentences(
     #2537/#2540 — dash-invariant needle construction (gated), identical to
     alignSentences: when the gate is on, a needle with no leading dash prefers an
     occurrence that carries the paragraph dash and reports the dash's offset when
-    its own bare hit would otherwise be a false substring match, so the
+    its own bare hit would otherwise be a false substring match (detected via
+    left-boundary checks and, for the fuzzy prefix case, right-boundary checks
+    that verify the continuation differs from the needle's own text), so the
     dash-stripped and dash-included forms of an ambiguous sentence resolve to the
     identical offset — see `Needle`'s doc comment for the full rule, including
     the #2577 "Q1" carve-out for a bare hit that is already independently valid.

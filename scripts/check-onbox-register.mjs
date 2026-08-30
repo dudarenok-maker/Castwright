@@ -537,7 +537,7 @@ function parseLiveViewSections(html) {
   const sections = new Map();
   const duplicateLetters = new Set();
   const invalidRowIds = [];
-  const blocks = html.split(/<section\b[^>]*\bclass="group(?:\s[^"]*)?"[^>]*>/).slice(1);
+  const blocks = html.split(/<section\b[^>]*\bclass=\u0022group(?:\s[^\u0022]*)?\u0022[^>]*>/).slice(1);
   for (const block of blocks) {
     const tagMatch = block.match(/<span class="gtag">([^<]*)<\/span>/);
     if (!tagMatch || !/^[A-Z]$/.test(tagMatch[1].trim())) continue;

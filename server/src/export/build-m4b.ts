@@ -217,11 +217,30 @@ function buildFfmetadata(
   return lines.join('\n');
 }
 
+/* ffmpeg concat-demuxer escape for a single path: embedded single-quotes
+   become '\'' (close-quote, escaped-literal-quote, reopen-quote). Split out
+   of buildConcatList below so the outer template literal never nests a
+   second template literal inside its own ${...} interpolation — a nested
+   backtick-in-backtick, independent of the regex it contained, desyncs the
+   spawn-windows-hide guard's naive (non-nesting-aware) quote scanner and
+   hides real spawn calls later in this file from it (#2747/#2764: mutation-
+   tested — deleting windowsHide from either the ffprobe or ffmpeg spawn below
+   now reddens the guard; before this restructuring it did not, regardless of
+   the regex fix, because the guard never got far enough to see either call).
+   The regex below also escapes its single-quote as ', not a literal
+   quote char, so the regex literal itself is unambiguous to that same
+   scanner if it is ever reached at top level (see the guard's own tests for
+   that case). Both changes are behaviour-preserving: the escaped runtime
+   string is still '\''. */
+export function escapeConcatSingleQuotes(p: string): string {
+  return p.replace(/\u0027/g, "'\\''");
+}
+
 /* Concat demuxer file: one `file '<path>'` per chapter. Single-quotes
    are the only delimiter that survives backslashes on Windows; embedded
    single-quotes escape as `'\''`. */
-function buildConcatList(paths: string[]): string {
-  return paths.map((p) => `file '${p.replace(/'/g, `'\\''`)}'`).join('\n') + '\n';
+export function buildConcatList(paths: string[]): string {
+  return paths.map((p) => `file '${escapeConcatSingleQuotes(p)}'`).join('\n') + '\n';
 }
 
 /* ---- ffprobe / ffmpeg child-process helpers ------------------------ */

@@ -60,7 +60,9 @@ export const IOS_JOBS = [
 export function sized(svg, w, h) {
   // Force the root <svg> to the target pixel box; viewBox drives the scaling.
   return svg.replace(/<svg\b([^>]*)>/, (m, attrs) => {
-    const cleaned = attrs.replace(/\swidth="[^"]*"/, '').replace(/\sheight="[^"]*"/, '');
+    // Uses backslash-u0022 escapes (not literal quote chars) in these two regexes to avoid a
+    // regex-literal desync in the spawn-windows-hide guard (#2747/#2764).
+    const cleaned = attrs.replace(/\swidth=\u0022[^\u0022]*\u0022/, '').replace(/\sheight=\u0022[^\u0022]*\u0022/, '');
     return `<svg${cleaned} width="${w}" height="${h}">`;
   });
 }

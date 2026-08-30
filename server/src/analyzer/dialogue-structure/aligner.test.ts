@@ -188,6 +188,56 @@ describe('alignSentences', () => {
     const result = alignSentences([mkSentence(1, 'anton', 'Нет.')], paras, body); // <24 chars, absent
     expect(result.aligned[0].spans).toEqual([]);
   });
+
+  it('(#2608) fuzzy-path right-boundary gap: a paraphrased dash-led sentence does not bind to an unrelated narration word sharing its 16-char fuzzy prefix', () => {
+    const ruIdx = buildNameIndex([{ id: 'viktor', name: 'Виктор' }], conventionsFor('ru')!);
+    // DECOY shares the fuzzy fallback's FUZZY_ANCHOR_LEN=16-char prefix
+    // ("он долго смотрел") with the real speech line below, but continues
+    // into a DIFFERENT word ("смотрела" vs "смотрел") — a false hit whose
+    // LEFT boundary looks clean (start of body) but whose RIGHT side is
+    // still mid-word. Before this fix, `isMidWordHit`'s left-only check
+    // trusted it and the real dash-led occurrence past it was never reached.
+    const DECOY = 'Он долго смотрела в окно, вспоминая прошлое.';
+    const SPEECH_RAW = '— Он долго смотрел на дорогу, ожидая её возвращения, — сказал Виктор.';
+    const body = `${DECOY}\n${SPEECH_RAW}`;
+    const paras = parseChapterStructure(body, ruIdx);
+    const speechSpan = paras.flatMap((p) => p.spans).find((s) => s.kind === 'speech')!;
+    const narrationSpan = paras.flatMap((p) => p.spans).find((s) => s.kind === 'narration')!;
+
+    // Paraphrased past the shared prefix — exact match fails (forces the
+    // FUZZY_ANCHOR_LEN-prefix fallback), but the drifted text still shares
+    // needle.text.slice(0, 16) === "он долго смотрел" with both DECOY and
+    // the real speech line.
+    const drifted = 'Он долго смотрел на дорогу, мечтая о её скором приезде,';
+    const result = alignSentences([mkSentence(1, 'viktor', drifted)], paras, body, true);
+
+    expect(result.aligned[0].spans).toContain(speechSpan);
+    expect(result.aligned[0].spans).not.toContain(narrationSpan);
+  });
+
+  it('(#2799) regression: fuzzy fallback does not distrust a correct match just because the search prefix ends mid-word (when the continuation matches the needle)', () => {
+    const ruIdx = buildNameIndex([{ id: 'viktor', name: 'Виктор' }], conventionsFor('ru')!);
+    // The correct occurrence of the drifted sentence appears as part of a longer
+    // narration line (before the filler). The 16-char fuzzy prefix "он долго
+    // смотрел" ends mid-word ('л' → 'а' from "смотрела"), but that 'а' is the
+    // CORRECT continuation from the needle itself, not an unrelated word. Before
+    // this fix, the right-boundary check wrongly distrusted this correct match
+    // and walked forward to find a different dash-prefixed line — the wrong answer.
+    const body = '— Простите. Он долго смотрела в окно, ожидая её возвращения.\n<filler>\n— Он долго смотрел на дорогу, — сказал Виктор.';
+    const paras = parseChapterStructure(body, ruIdx);
+    const firstSpeechSpan = paras.flatMap((p) => p.spans).find((s) => s.kind === 'speech' && s.start < 50)!;
+
+    // Exact match fails (paraphrased past the common prefix). Falls back to
+    // fuzzy matching on "он долго смотрел" (16 chars), which should bind to
+    // the first occurrence in the narration line, not walk forward to the
+    // later dash-prefixed occurrence.
+    const drifted = 'Он долго смотрела в окно, мечтая о её скором приезде,';
+    const result = alignSentences([mkSentence(1, 'viktor', drifted)], paras, body, true);
+
+    // The correct span is the first narration line containing "Он долго смотрела"
+    expect(result.aligned[0].spans).toContain(firstSpeechSpan);
+    expect(result.alignedPct).toBe(100);
+  });
 });
 
 describe('locateSentenceOffsets (#1679)', () => {

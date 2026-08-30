@@ -8,6 +8,12 @@ back.
 Empty register = done. See the rewrite playbook in
 `docs/superpowers/specs/2026-06-17-flaky-test-release-hardening-design.md`.
 
+**Quarantined column convention.** The "Quarantined" cell must be one of:
+- Starts with "Quarantined" (e.g., `Quarantined`, `Quarantined (2026-08-01)`, `Quarantined — routes through ...`)
+- Bare YYYY-MM-DD date (e.g., `2026-08-01`)
+- Starts with "Not quarantined" (e.g., `Not quarantined — still gates`)
+Any other value will cause `npm run quarantine:health` to report a parse failure.
+
 **Lane health (ops-32).** A row here being "quarantined, not gating" says
 nothing about whether the test is actually flaky vs. permanently broken — a
 single run can't tell those apart. `.github/workflows/quarantine-health.yml`
