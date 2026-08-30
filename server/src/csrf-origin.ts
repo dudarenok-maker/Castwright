@@ -83,7 +83,7 @@ function originOf(req: Request): string | undefined {
 }
 
 function hasCwLanCookie(req: Request): boolean {
-  // Use the SAME parser as the auth guard (readCwLanCookie → cookie.parse), so a
+  // Use the SAME parser as the auth guard (readCwLanCookie → parseCookie), so a
   // cookie that authenticates the request is never treated as "no cookie" here —
   // a regex/parse divergence would silently drop CSRF protection.
   return readCwLanCookie(req.headers['cookie']) !== undefined;
