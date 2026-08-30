@@ -239,6 +239,7 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
 
     const err = await withCapacityRetry(doPost, {
       engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
       analyzerEvictWouldHelp: async () => false,
       isDesignResident,
       pollMs: 0,
@@ -268,6 +269,7 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
 
     const result = await withCapacityRetry(doPost, {
       engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
       analyzerEvictWouldHelp: async () => false,
       isDesignResident,
       pollMs: 0,
@@ -287,6 +289,7 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
 
     const err = await withCapacityRetry(doPost, {
       engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
       analyzerEvictWouldHelp: async () => false,
       isDesignResident,
       pollMs: 0,
@@ -310,6 +313,7 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     await expect(
       withCapacityRetry(doPost, {
         engine: 'qwen',
+        capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
         analyzerEvictWouldHelp: async () => false,
         isDesignResident,
         pollMs: 0,
@@ -336,6 +340,7 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
 
     await withCapacityRetry(doPost, {
       engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
       analyzerEvictWouldHelp: async () => false,
       isDesignResident: async () => true,
       pollMs: 0,
@@ -407,6 +412,7 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     await expect(
       withCapacityRetry(doPost, {
         engine: 'qwen',
+        capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
         analyzerEvictWouldHelp: async () => false,
         pollMs: 0,
         maxAttempts: 3,
