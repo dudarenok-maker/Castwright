@@ -27,12 +27,17 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    - name: Resolve runner image identity
+      id: image
+      shell: bash
+      run: echo "id=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+
     - name: Cache ffmpeg apt packages
       id: apt-cache
       uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/apt-cache-ffmpeg
-        key: ${{ runner.os }}-ffmpeg-apt-${{ inputs.ffmpeg-version-pin }}-${{ env.ImageOS }}-${{ env.ImageVersion }}
+        key: ${{ runner.os }}-ffmpeg-apt-${{ inputs.ffmpeg-version-pin }}-${{ steps.image.outputs.id }}
 
     # On a cache hit: install straight from the cached .deb files with
     # `dpkg -i` — no apt-get, no `apt-get update`, no network at all.
