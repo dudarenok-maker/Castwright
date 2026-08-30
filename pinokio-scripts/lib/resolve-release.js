@@ -215,21 +215,27 @@ function renormalizeRequirementsCrlf(cwd = process.cwd()) {
 
   // Verify each backed-up file was restored. Only verify files that were
   // successfully backed up — files that failed to read are not our concern
-  // (e.g., permissions, in-use), and files that were never in git (untracked)
-  // won't come back from 'git checkout --' anyway.
+  // (e.g., permissions, in-use), as they should be restored by git checkout.
+  // Files that were never in git (untracked) won't come back from 'git checkout --'.
+  // Collect ALL missing files before throwing, so the error names all of them.
+  const missingBackedupFiles = [];
   for (const name of Object.keys(backup)) {
     if (!existsSync(path.join(dir, name))) {
-      // This specific file failed to restore. Restore only this file from backup.
+      missingBackedupFiles.push(name);
+      // This file failed to be restored by git checkout. Restore from backup.
       try {
         writeFileSync(path.join(dir, name), backup[name]);
       } catch {
-        /* swallow recovery failures */
+        /* swallow recovery failures; will be reported in error below */
       }
-      throw new Error(
-        `git checkout succeeded but backed-up file '${name}' is missing from ${REQUIREMENTS_DIR}/. ` +
-        `Attempted to restore from backup. Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
-      );
     }
+  }
+  if (missingBackedupFiles.length > 0) {
+    throw new Error(
+      `git checkout succeeded but backed-up file(s) are missing from ${REQUIREMENTS_DIR}/: ` +
+      missingBackedupFiles.join(', ') + '. ' +
+      `Attempted to restore from backup. Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
+    );
   }
 }
 

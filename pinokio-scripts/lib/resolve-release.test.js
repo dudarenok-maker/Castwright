@@ -201,13 +201,13 @@ test('renormalizeRequirementsCrlf restores only unrestorable files, not all back
   // 4. Run git checkout -- requirements
   // 5. Git restores tracked1 and tracked2 with eol=lf pin → LF on disk
   // 6. Git cannot restore untracked (was never in index)
-  // 7. Verification finds untracked missing
+  // 7. Verification finds untracked missing and restores it from backup
   // OLD BUG: would restore ALL files from backup (overwriting tracked files with stale CRLF)
-  // NEW FIX: should only restore untracked if it exists, or skip verification for untracked files
+  // NEW FIX: should only restore untracked from backup, not overwrite tracked files
 
   assert.throws(
     () => renormalizeRequirementsCrlf(repo),
-    /required file.*is missing|file.*is missing/,
+    /backed-up file.*missing|missing.*from/,
     'should throw because untracked file cannot be restored'
   );
 
@@ -235,6 +235,93 @@ test('renormalizeRequirementsCrlf restores only unrestorable files, not all back
     tracked2After,
     'pandas==2.0.0\n',
     'tracked file 2 content must not be overwritten by stale backup'
+  );
+
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('renormalizeRequirementsCrlf restores all missing files when multiple are unrestorable', () => {
+  // Regression test for PR #2799 pass-3 finding: when multiple files cannot
+  // be restored by git checkout (e.g., untracked files), the old code would
+  // throw on the FIRST missing file, leaving subsequent ones unrestored and
+  // unnamed in the error message. This test verifies that ALL missing files
+  // are attempted restoration and that the error message names all of them.
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-release-multi-fail-'));
+  const reqDir = path.join(repo, 'server', 'tts-sidecar', 'requirements');
+  fs.mkdirSync(reqDir, { recursive: true });
+
+  const trackedFile = path.join(reqDir, 'base.txt');
+  const untrackedFile1 = path.join(reqDir, 'untracked1.txt');
+  const untrackedFile2 = path.join(reqDir, 'untracked2.txt');
+  const testContent1 = 'untracked-package-1==1.0.0\n';
+  const testContent2 = 'untracked-package-2==2.0.0\n';
+
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });
+
+  git('init', '-q');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'user.name', 'test');
+
+  // Create and commit a tracked file so git checkout will succeed on that directory
+  fs.writeFileSync(trackedFile, 'torch==2.4.0\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'initial with requirements');
+
+  // Now create two untracked files in the requirements directory.
+  // These won't be in git, so 'git checkout -- requirements' cannot restore them.
+  fs.writeFileSync(untrackedFile1, testContent1);
+  fs.writeFileSync(untrackedFile2, testContent2);
+
+  // Call renormalizeRequirementsCrlf. It will:
+  // 1. Find all three files and back them up (tracked + 2 untracked)
+  // 2. Delete all three
+  // 3. Run 'git checkout -- server/tts-sidecar/requirements'
+  //    - Git restores tracked file
+  //    - Git cannot restore untracked files (not in index)
+  // 4. Verification finds both untracked files missing
+  // OLD BUG: would attempt to restore first untracked, then throw immediately
+  //          without checking/restoring the second untracked file
+  // NEW FIX: should restore both untracked and throw error naming both
+
+  let caughtError;
+  try {
+    renormalizeRequirementsCrlf(repo);
+  } catch (e) {
+    caughtError = e;
+  }
+
+  assert.ok(caughtError, 'should throw an error when untracked files cannot be restored');
+
+  // Verify the error message contains BOTH untracked filenames
+  const errorMsg = caughtError.message;
+  assert.match(errorMsg, /backed-up file.*missing|missing.*from/, 'error message format should match');
+  assert.match(errorMsg, /untracked1\.txt/, 'error message must name first untracked file');
+  assert.match(errorMsg, /untracked2\.txt/, 'error message must name second untracked file');
+
+  // Verify BOTH files were restored from backup (not just the first)
+  // This is the critical regression test: both should exist on disk
+  assert.ok(
+    fs.existsSync(untrackedFile1),
+    'untracked file 1 must be restored from backup after renormalize'
+  );
+  assert.ok(
+    fs.existsSync(untrackedFile2),
+    'untracked file 2 must be restored from backup after renormalize'
+  );
+
+  // Verify the file contents are intact (restored from backup, not lost)
+  const restored1 = fs.readFileSync(untrackedFile1, 'utf8');
+  const restored2 = fs.readFileSync(untrackedFile2, 'utf8');
+  assert.equal(
+    restored1,
+    testContent1,
+    'untracked file 1 content must be intact after restore'
+  );
+  assert.equal(
+    restored2,
+    testContent2,
+    'untracked file 2 content must be intact after restore'
   );
 
   fs.rmSync(repo, { recursive: true, force: true });
