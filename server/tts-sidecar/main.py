@@ -6674,8 +6674,14 @@ class QwenEngine(Engine):
                 # mint_variant() can reload base17 after VoiceDesign load finishes,
                 # since VoiceDesign is then resident and doesn't compete for VRAM
                 # with base17 (VoiceDesign is freed after design completes).
-                # The lock nests outside the _VD_KOKORO.design() block (not inside)
-                # to avoid interfering with the Kokoro arbiter.
+                # card_lock and _VD_KOKORO.design() do NOT nest congruently — one
+                # is not simply "outside" the other. card_lock is acquired BEFORE
+                # design() opens (it must cover the base17 eviction, which per the
+                # #2070 R5 note above has to stay outside design()) and is released
+                # PARTWAY THROUGH design()'s span (once model load finishes, so the
+                # GPU forwards run lock-free). The two spans therefore overlap
+                # without either containing the other, which is why both are driven
+                # manually below rather than as two stacked `with` blocks.
                 # The acquire is bounded (not unbounded) to prevent indefinite hangs
                 # if a concurrent mint_variant() holds the lock for an extended period.
                 card_lock = _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx())
@@ -6685,20 +6691,30 @@ class QwenEngine(Engine):
                         f"base17 load/mint or another design's model load has held it for over "
                         f"{_BASE17_CONTENTION_WAIT_S_DEFAULT:.0f}s. Retry the design shortly."
                     )
-                # Manually manage _VD_KOKORO.design() context to let it outlive card_lock release.
-                # The design context must wrap model load + GPU forwards, but MUST NOT wrap the
-                # base17 eviction wait (per #2070 review R5 — that wait must be outside because
-                # holding it inside would stall Kokoro synths for up to 150s). So we acquire
-                # card_lock, evict base17 (outside design), then enter design() for load + GPU
-                # forwards, then release card_lock (inside design context), letting GPU forwards
-                # run inside design() with the lock released (achieving non-congruent nesting).
+                # Manually manage _VD_KOKORO.design() and card_lock so their lifetimes can
+                # overlap without nesting congruently: card_lock must be held from acquire
+                # through model load (not GPU forwards, #2790), while _VD_KOKORO.design()
+                # must span model load through GPU forwards (not the base17 eviction wait,
+                # #2070 review R5) — the two release points don't coincide with either
+                # `with` block's natural exit, so both are entered/exited manually with an
+                # explicit `card_lock_released` flag guarding against double-release/no-release
+                # on every raise path (eviction, design-context entry, model load, forwards).
+                card_lock_released = False
                 try:
                     if self._base17 is not None or self._base17_in_flight.busy:
                         log.info("Evicting resident/in-flight Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
                         # Bounded wait, not the 0.0 default — this call's whole
                         # point is to wait out a still-loading base17 rather
                         # than race it (see unload_base17's docstring for why
-                        # 0.0 is right everywhere else).
+                        # 0.0 is right everywhere else). Deliberately OUTSIDE
+                        # _VD_KOKORO.design() (#2070 review R5) — this wait can
+                        # run up to _BASE17_CONTENTION_WAIT_S_DEFAULT and holding
+                        # it inside the arbiter would stall every Kokoro synth
+                        # for that long during exactly the bulk "Design full
+                        # cast" run this eviction exists to support. It can also
+                        # RAISE (Base17ContentionTimeoutError) — the outer
+                        # `finally` below is what keeps that from leaking
+                        # card_lock (#2809 review pass 2).
                         self.unload_base17(
                             wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT,
                             poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT,
@@ -6733,7 +6749,14 @@ class QwenEngine(Engine):
                             self._ensure_design_loaded(device=device)
                             self._ensure_base_loaded(device=device)
                         finally:
+                            # Release card_lock once model load is done — GPU forwards
+                            # below run with the lock released (#2790: a concurrent
+                            # mint_variant() can reload base17 once VoiceDesign is
+                            # resident, since the two don't compete for VRAM) but still
+                            # inside _VD_KOKORO.design() (#2809: Kokoro stays excluded
+                            # for the full design span, including the forwards).
                             card_lock.release()
+                            card_lock_released = True
 
                         # Phase boundary: model load above holds card_lock; GPU forwards below
                         # release it but remain inside _VD_KOKORO.design(). `load_ms` isolates
@@ -6801,13 +6824,22 @@ class QwenEngine(Engine):
                             )
                             distil_ms = (time.perf_counter() - _t) * 1000.0
                     finally:
-                        design_context.__exit__(None, None, None)
+                        # Pass the in-flight exception through rather than
+                        # (None, None, None) — the CM must see it to run any
+                        # exception-aware cleanup, and it can never suppress
+                        # here (#2809 review pass 2).
+                        design_context.__exit__(*sys.exc_info())
                 finally:
-                    # Ensure card_lock is released even if eviction raised
-                    # (it will also be released in the inner finally above if
-                    # we reached that far, but this outer one provides a second
-                    # safeguard if eviction failed before we entered design).
-                    pass
+                    # Belt-and-suspenders: card_lock is normally released above,
+                    # inside design(), once model load completes. This only fires
+                    # if we never got that far — unload_base17() or
+                    # design_context.__enter__() raised — so card_lock would
+                    # otherwise leak for the process lifetime (card_lock
+                    # instances are cached per card index and never recreated,
+                    # so a leak wedges every later design AND mint on that card
+                    # until the sidecar restarts).
+                    if not card_lock_released:
+                        card_lock.release()
 
                 # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
                 os.makedirs(self._voices_dir, exist_ok=True)
