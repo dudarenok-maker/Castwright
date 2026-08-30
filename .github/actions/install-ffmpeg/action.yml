@@ -50,10 +50,12 @@ runs:
     # action's own steps accept — GitHub rejects the action manifest outright
     # ("Unexpected value 'timeout-minutes'") if it's used here, which this
     # action's first real CI run caught. Each apt/dpkg call below is instead
-    # wrapped in the coreutils `timeout` command (3 minutes each — up to 6
-    # minutes worst-case on a cache miss doing update+install, still well
-    # under the smallest consuming job's 10-minute budget), so a hang fails
-    # fast and distinctly instead of silently eating the whole job.
+    # wrapped in the coreutils `timeout` command with `-k` (SIGKILL-after grace
+    # period) to guarantee termination even if the process ignores SIGTERM
+    # (3 minutes + 10s grace each — up to 6 min 20s worst-case on a cache miss
+    # doing update+install, still well under the smallest consuming job's
+    # 10-minute budget), so a hang fails fast and distinctly instead of
+    # silently eating the whole job.
     - name: Install ffmpeg
       shell: bash
       run: |
@@ -62,11 +64,11 @@ runs:
         mkdir -p "$ARCHIVE_DIR"
         if [ "${{ steps.apt-cache.outputs.cache-hit }}" = "true" ]; then
           echo "apt cache hit: installing ffmpeg from $ARCHIVE_DIR, skipping apt-get"
-          timeout 180 sudo dpkg -i "$ARCHIVE_DIR"/*.deb
+          timeout -k 10 180 sudo dpkg -i "$ARCHIVE_DIR"/*.deb
         else
           echo "apt cache miss: installing ffmpeg via apt-get"
-          timeout 180 sudo apt-get -o Acquire::Retries=3 update
-          timeout 180 sudo apt-get -o Dir::Cache::Archives="$ARCHIVE_DIR" install -y ffmpeg
+          timeout -k 10 180 sudo apt-get -o Acquire::Retries=3 update
+          timeout -k 10 180 sudo apt-get -o Dir::Cache::Archives="$ARCHIVE_DIR" install -y ffmpeg
           sudo rm -rf "$ARCHIVE_DIR/lock" "$ARCHIVE_DIR/partial"
           sudo chown -R "$(id -u):$(id -g)" "$ARCHIVE_DIR"
         fi
