@@ -43,12 +43,24 @@ export interface VramBlockerHealth {
   kokoroLoaded?: boolean;
   qwenLoaded?: boolean;
   qwenBase17Loaded?: boolean;
+  /** Unlike the resident-model flags above, a VoiceDesign IS worth naming:
+      there is no auto-evict for it (it frees itself once the design session
+      goes idle, or the user finishes/cancels the review), so unlike Qwen
+      base/Coqui/Kokoro this is the one blocker where "wait it out" is the
+      whole remedy, not noise on top of an action already taken (#2678). */
+  qwenDesignResident?: boolean;
 }
 
 export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
   const out: VramBlocker[] = [];
   if (health.kokoroLoaded) {
     out.push({ model: 'Kokoro', remedy: 'Turn off "Preload Kokoro at startup" in settings.' });
+  }
+  if (health.qwenDesignResident) {
+    out.push({
+      model: 'A voice design',
+      remedy: 'Wait for the in-progress voice design to finish — it frees automatically once idle.',
+    });
   }
   return out;
 }

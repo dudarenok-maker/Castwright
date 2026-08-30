@@ -169,6 +169,7 @@ async function defaultDescribeBlockers(
       kokoroLoaded: health.kokoroLoaded,
       qwenLoaded: health.qwenLoaded,
       qwenBase17Loaded: health.qwenBase17Loaded,
+      qwenDesignResident: health.qwenDesignResident,
     });
   } catch {
     return [];

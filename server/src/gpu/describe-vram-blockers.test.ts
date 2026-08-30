@@ -31,4 +31,17 @@ describe('describeVramBlockers', () => {
   it('returns nothing when the sidecar reported nothing resident', () => {
     expect(describeVramBlockers({})).toEqual([]);
   });
+
+  it('names an in-progress voice design as a blocker (#2678)', () => {
+    /* Unlike a resident Qwen base or Coqui, admission never auto-evicts a
+       resident VoiceDesign — it frees itself once idle — so this is the one
+       case where "wait it out" is the actionable, and only, remedy. */
+    const out = describeVramBlockers({ qwenDesignResident: true });
+    expect(out).toEqual([
+      {
+        model: 'A voice design',
+        remedy: 'Wait for the in-progress voice design to finish — it frees automatically once idle.',
+      },
+    ]);
+  });
 });

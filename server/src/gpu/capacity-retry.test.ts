@@ -568,6 +568,38 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     expect(doPost).toHaveBeenCalledTimes(3 + 5);
   });
 
+  it('#2678 review finding: defaultDescribeBlockers forwards qwenDesignResident into the give-up error', async () => {
+    // Same extended-wait-then-exhausted scenario as above, but this pins that
+    // the FINAL NoCapacityError actually names the resident VoiceDesign as a
+    // blocker — previously describeVramBlockers had no way to hear about it,
+    // so the operator got a generic "free VRAM" message even though a
+    // VoiceDesign was the exact, known cause.
+    setProbeSidecarHealthProvider(async () => ({
+      qwenDesignResident: true,
+      qwenDeviceKey: 'cuda:1',
+    }));
+
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:1'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'coqui',
+        capacityProbe: { read: async () => fakeDevices('cuda:1', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+        designMaxAttempts: 5,
+      }),
+    ).rejects.toMatchObject({
+      blockers: [
+        {
+          model: 'A voice design',
+          remedy: 'Wait for the in-progress voice design to finish — it frees automatically once idle.',
+        },
+      ],
+    });
+  });
+
   it('defaultIsDesignResident does NOT extend the wait for qwenDesignEverLoaded — the process-lifetime latch is not current residency', async () => {
     // qwenDesignEverLoaded is a process-lifetime latch (server/tts-sidecar/main.py):
     // set once on first design use and never reset. If defaultIsDesignResident
