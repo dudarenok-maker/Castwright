@@ -273,11 +273,25 @@ up.
 
 ### A24 · Design-wins VRAM contention timeout vs. a real 0.6B cold load (#2070) — step 11
 
-> **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2057-2086`;
+> **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md), row
+> **A24** (line numbers drift as that file grows — cite the row, not a range);
 > `unload_design`'s docstring and the `_DESIGN_CONTENTION_WAIT_S_DEFAULT`
 > comment in `server/tts-sidecar/main.py`. Re-resolved: #2070 closed
 > 2026-08-05T05:54:35Z. STILL OWED — the 150 s bound is sized off the design
 > path's documented budget, not an on-box measurement.
+>
+> **Update 2026-08-30:** this session's original run (2026-08-26, wave 6 — see the
+> register row's own run note) found step 11's premise didn't hold: the render did
+> not wait, it failed `vram-spill`. That gap was filed as
+> [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678) and its fix has
+> now shipped in PR [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797)
+> (`withCapacityRetry` extends its wait for a same-device resident VoiceDesign).
+> **Step 11 below is STALE** — it still describes the pre-fix expected behaviour
+> from #2070's original design and does not yet cover the new
+> `deviceKey`-qualification or caller-abort cases PR #2797 added. The register
+> row's own body (bullets 4–6) is the current source of truth for what to run
+> next; re-derive this sitting pack's step 11 from there before using it again,
+> rather than following the text below as-is.
 
 11. **(A32) Overlapping design + render, then a forced timeout.** Start a
     voice design (cast review → Design a new voice) on one browser
