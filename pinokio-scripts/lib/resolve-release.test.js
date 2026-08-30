@@ -147,3 +147,95 @@ test('renormalizeRequirementsCrlf recovers from git checkout failure via backup 
 
   fs.rmSync(repo, { recursive: true, force: true });
 });
+
+test('renormalizeRequirementsCrlf restores only unrestorable files, not all backup on verification failure', () => {
+  // Regression test for PR #2799 pass-2 finding: when verification fails
+  // (e.g. an untracked file can't be restored by git checkout), only that
+  // file should be restored from backup. Files that git successfully
+  // restored should NOT be overwritten with stale backup bytes.
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-release-partial-'));
+  const reqDir = path.join(repo, 'server', 'tts-sidecar', 'requirements');
+  fs.mkdirSync(reqDir, { recursive: true });
+
+  // Create tracked files
+  const trackedFile1 = path.join(reqDir, 'tracked1.txt');
+  const trackedFile2 = path.join(reqDir, 'tracked2.txt');
+  // Create an untracked file that can't be restored by git checkout
+  const untrackedFile = path.join(reqDir, 'untracked.txt');
+
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });
+
+  git('init', '-q');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'user.name', 'test');
+
+  // Write tracked files as LF and commit them
+  fs.writeFileSync(trackedFile1, 'torch==2.4.0\nnumpy==1.26.0\n');
+  fs.writeFileSync(trackedFile2, 'pandas==2.0.0\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'initial with tracked files');
+
+  // Pin eol=lf in gitattributes and commit
+  fs.writeFileSync(
+    path.join(repo, '.gitattributes'),
+    'server/tts-sidecar/requirements/*.txt text eol=lf\n',
+  );
+  git('add', '-A');
+  git('commit', '-q', '-m', 'pin eol=lf');
+
+  // Now simulate a stale CRLF state by manually writing CRLF bytes to disk
+  // (this represents what a stale clone would have)
+  const staleCrlfContent1 = 'torch==2.4.0\r\nnumpy==1.26.0\r\n';
+  const staleCrlfContent2 = 'pandas==2.0.0\r\n';
+  fs.writeFileSync(trackedFile1, staleCrlfContent1);
+  fs.writeFileSync(trackedFile2, staleCrlfContent2);
+
+  // Now introduce an untracked file that will NOT be restored by git checkout
+  fs.writeFileSync(untrackedFile, 'untracked-content\n');
+
+  // Call renormalizeRequirementsCrlf. It will:
+  // 1. Find all three .txt files (tracked1, tracked2, untracked)
+  // 2. Back them up to memory (tracked1=stale CRLF, tracked2=stale CRLF, untracked=text)
+  // 3. Delete all three
+  // 4. Run git checkout -- requirements
+  // 5. Git restores tracked1 and tracked2 with eol=lf pin → LF on disk
+  // 6. Git cannot restore untracked (was never in index)
+  // 7. Verification finds untracked missing
+  // OLD BUG: would restore ALL files from backup (overwriting tracked files with stale CRLF)
+  // NEW FIX: should only restore untracked if it exists, or skip verification for untracked files
+
+  assert.throws(
+    () => renormalizeRequirementsCrlf(repo),
+    /required file.*is missing|file.*is missing/,
+    'should throw because untracked file cannot be restored'
+  );
+
+  // The crucial assertion: tracked files must retain their fresh LF content
+  // from git checkout, NOT stale CRLF bytes from the backup
+  const tracked1After = fs.readFileSync(trackedFile1, 'utf8');
+  const tracked2After = fs.readFileSync(trackedFile2, 'utf8');
+
+  assert.doesNotMatch(
+    tracked1After,
+    /\r/,
+    'tracked file 1 must remain LF, not be overwritten with stale CRLF backup'
+  );
+  assert.doesNotMatch(
+    tracked2After,
+    /\r/,
+    'tracked file 2 must remain LF, not be overwritten with stale CRLF backup'
+  );
+  assert.equal(
+    tracked1After,
+    'torch==2.4.0\nnumpy==1.26.0\n',
+    'tracked file 1 content must not be overwritten by stale backup'
+  );
+  assert.equal(
+    tracked2After,
+    'pandas==2.0.0\n',
+    'tracked file 2 content must not be overwritten by stale backup'
+  );
+
+  fs.rmSync(repo, { recursive: true, force: true });
+});

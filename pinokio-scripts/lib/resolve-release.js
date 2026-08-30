@@ -213,19 +213,20 @@ function renormalizeRequirementsCrlf(cwd = process.cwd()) {
     );
   }
 
-  // Verify each originally-present file was restored
-  for (const name of txtFiles) {
+  // Verify each backed-up file was restored. Only verify files that were
+  // successfully backed up — files that failed to read are not our concern
+  // (e.g., permissions, in-use), and files that were never in git (untracked)
+  // won't come back from 'git checkout --' anyway.
+  for (const name of Object.keys(backup)) {
     if (!existsSync(path.join(dir, name))) {
-      // A file that existed before is now missing. Restore backup and error.
-      for (const [bakName, bakContent] of Object.entries(backup)) {
-        try {
-          writeFileSync(path.join(dir, bakName), bakContent);
-        } catch {
-          /* swallow recovery failures */
-        }
+      // This specific file failed to restore. Restore only this file from backup.
+      try {
+        writeFileSync(path.join(dir, name), backup[name]);
+      } catch {
+        /* swallow recovery failures */
       }
       throw new Error(
-        `git checkout succeeded but required file '${name}' is missing from ${REQUIREMENTS_DIR}/. ` +
+        `git checkout succeeded but backed-up file '${name}' is missing from ${REQUIREMENTS_DIR}/. ` +
         `Attempted to restore from backup. Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
       );
     }
