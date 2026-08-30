@@ -600,6 +600,37 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     });
   });
 
+  it('#2678 review finding F1: defaultDescribeBlockers does NOT name a design resident on a DIFFERENT device as a blocker', async () => {
+    // Same 2-GPU repro as the isDesignResident test above (design resident on
+    // cuda:0, this request denied on cuda:1) — but this pins the OTHER half:
+    // before the fix, defaultDescribeBlockers forwarded the raw, unqualified
+    // `qwenDesignResident` flag straight into describeVramBlockers regardless
+    // of which device it named, so the final NoCapacityError still told the
+    // operator to "wait for the in-progress voice design to finish" even
+    // though that design runs on an unrelated card and can never free cuda:1.
+    setProbeSidecarHealthProvider(async () => ({
+      qwenDesignResident: true,
+      qwenDeviceKey: 'cuda:0',
+    }));
+
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:1'));
+
+    const err = await withCapacityRetry(doPost, {
+      engine: 'coqui',
+      capacityProbe: { read: async () => fakeDevices('cuda:1', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      pollMs: 0,
+      maxAttempts: 3,
+      designMaxAttempts: 5,
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(NoCapacityError);
+    // No extension (isDesignResident correctly says false for this device)...
+    expect(doPost).toHaveBeenCalledTimes(3);
+    // ...AND no misleading "wait for the voice design" blocker in the error.
+    expect((err as NoCapacityError).blockers).toEqual([]);
+  });
+
   it('defaultIsDesignResident does NOT extend the wait for qwenDesignEverLoaded — the process-lifetime latch is not current residency', async () => {
     // qwenDesignEverLoaded is a process-lifetime latch (server/tts-sidecar/main.py):
     // set once on first design use and never reset. If defaultIsDesignResident

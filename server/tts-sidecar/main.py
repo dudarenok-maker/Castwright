@@ -5090,6 +5090,14 @@ def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
     fam, idx = _parse_device(qwen._device)
     if fam not in ("cuda", "rocm"):
         return None
+    # On a ROCm/HIP build torch's own device string still reads "cuda" (HIP
+    # aliases the CUDA API) -- _parse_device has no way to tell them apart,
+    # so normalise the family the same way probe_capacity() does (whose
+    # `kind` field is what PlacementController._device_key's format mirrors)
+    # via the SAME _cuda_is_rocm() check, rather than a second ad hoc test
+    # that could drift from it (#2678 review F2).
+    if fam == "cuda" and _cuda_is_rocm():
+        fam = "rocm"
     return f"{fam}:{idx if idx is not None else 0}"
 
 

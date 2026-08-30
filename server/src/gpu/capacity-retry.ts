@@ -129,8 +129,11 @@ export interface CapacityRetryOpts {
   /** Injected "name what's holding the VRAM" action — defaults to a live
       probe of sidecar health mapped through `describeVramBlockers`
       (./describe-vram-blockers.ts). Folded into `NoCapacityError`'s message
-      when admission finally gives up (#1839). */
-  describeBlockers?: () => Promise<VramBlocker[]>;
+      when admission finally gives up (#1839). Takes the denied request's
+      `deviceKey` so a `qwenDesignResident` blocker on an unrelated card is
+      never named (#2678 review finding F1 — same qualification
+      `isDesignResident` already applies). */
+  describeBlockers?: (deviceKey: string) => Promise<VramBlocker[]>;
   /** Injected "is a VoiceDesign currently resident/in-flight on the SAME
       device this admission was denied on" check — defaults to
       `defaultIsDesignResident`, which reads
@@ -159,6 +162,7 @@ export interface CapacityRetryOpts {
    gate or a probe failure both report no blockers rather than turning a
    probe failure into a worse error than the one already being thrown. */
 async function defaultDescribeBlockers(
+  deviceKey: string,
   fetchHealth: () => Promise<SidecarHealthSnapshot | null> = probeSidecarHealthIfRegistered,
 ): Promise<VramBlocker[]> {
   try {
@@ -169,7 +173,12 @@ async function defaultDescribeBlockers(
       kokoroLoaded: health.kokoroLoaded,
       qwenLoaded: health.qwenLoaded,
       qwenBase17Loaded: health.qwenBase17Loaded,
-      qwenDesignResident: health.qwenDesignResident,
+      // Qualified by deviceKey (#2678 review finding F1), same as
+      // `defaultIsDesignResident` below: `qwenDesignResident` alone is
+      // global, so a design resident on an unrelated card (cuda:0) must not
+      // be named as a blocker for a denial on this device (cuda:1) — it can
+      // never free capacity there.
+      qwenDesignResident: health.qwenDesignResident === true && health.qwenDeviceKey === deviceKey,
     });
   } catch {
     return [];
@@ -283,7 +292,7 @@ export async function withCapacityRetry(
             opts.engine as TtsEngine,
             noCap.neededMb,
             noCap.deviceKey,
-            await describeBlockers(),
+            await describeBlockers(noCap.deviceKey),
           );
         }
       } else if (attempt + 1 >= maxAttempts) {
@@ -312,8 +321,8 @@ export async function withCapacityRetry(
             noCap.neededMb,
             noCap.deviceKey,
             opts.describeBlockers
-              ? await opts.describeBlockers()
-              : await defaultDescribeBlockers(fetchHealthOnce),
+              ? await opts.describeBlockers(noCap.deviceKey)
+              : await defaultDescribeBlockers(noCap.deviceKey, fetchHealthOnce),
           );
         }
       }
@@ -351,7 +360,7 @@ export async function withCapacityRetry(
         opts.engine as TtsEngine,
         lastNoCap.neededMb,
         lastNoCap.deviceKey,
-        await describeBlockers(),
+        await describeBlockers(lastNoCap.deviceKey),
       );
     }
     throw err;

@@ -1412,6 +1412,28 @@ def test_qwen_resident_device_key_direct():
     assert main._qwen_resident_device_key(qwen) == "cuda:2"
 
 
+def test_qwen_resident_device_key_reports_rocm_family_on_rocm_box(monkeypatch):
+    """On a ROCm/HIP build, torch's own device string still reads "cuda:N"
+    (HIP aliases the CUDA API) -- `_parse_device` has no way to tell cuda and
+    rocm apart on its own. `_qwen_resident_device_key` must normalise the
+    family the SAME way `probe_capacity` does (`kind = "rocm" if
+    _cuda_is_rocm() else "cuda"`, ~line 3994), which is what
+    `PlacementController._device_key` -- and therefore the `deviceKey` a
+    denied noCapacity admission reports -- is built from. Without this, the
+    Node-side `qwenDeviceKey === deviceKey` comparison in
+    `defaultIsDesignResident` (server/src/gpu/capacity-retry.ts) never
+    matches on a ROCm box: this side reports "cuda:0", the admission layer
+    reports "rocm:0", so the design-wait extension silently never fires
+    (#2678 review F2)."""
+    qwen = main.QwenEngine()
+    qwen._base = object()
+    qwen._device = "cuda:0"
+
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: True)
+
+    assert main._qwen_resident_device_key(qwen) == "rocm:0"
+
+
 def test_debug_memory_includes_inflight_synth_top_level_key(monkeypatch):
     """/debug/memory must expose `inflight_synth` as a top-level key (sibling to
     `process`, `gc`, `engines`, `cuda`) so an idle-measurement probe can read the
