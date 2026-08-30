@@ -95,16 +95,18 @@ Add, following the existing pattern (each pinned line has a comment explaining
 why):
 
 ```gitattributes
-# docs/testing/onbox-acceptance-register.md and its .html twin are read and
-# byte-compared by scripts/build-register-live-view.mjs and
-# scripts/check-onbox-register.mjs. Without this pin, a checkout with Git for
-# Windows' default core.autocrlf=true materialises both as CRLF, and a naive
-# byte-compare (as opposed to the CRLF-tolerant checkLiveView) sees every line
-# as different. Pin to LF; the generator also always writes LF (see
-# scripts/build-register-live-view.mjs's writeFile). Known limitation shared
-# with every other pin in this file: this governs CHECKOUT, not re-checkout of
-# a file git already believes is unchanged — an existing CRLF working tree does
-# not self-heal from this pin alone.
+# docs/testing/onbox-acceptance-register.md and its .html twin are read by
+# scripts/check-onbox-register.mjs (structural parsing, not a byte-compare —
+# checkLiveView is already CRLF-tolerant) and, once a later PR lands it, by
+# scripts/build-register-live-view.mjs, the generator that will own these
+# files' GENERATED regions and always write LF. The pin exists for a simpler
+# reason than either parser: without it, a checkout with Git for Windows'
+# default core.autocrlf=true materialises both files as CRLF, and this repo's
+# convention (see the pins above) is LF for anything read as text at runtime,
+# so a Windows checkout's line endings match what every other platform sees.
+# Known limitation shared with every other pin in this file: this governs
+# CHECKOUT, not re-checkout of a file git already believes is unchanged — an
+# existing CRLF working tree does not self-heal from this pin alone.
 docs/testing/onbox-acceptance-register.md text eol=lf
 docs/testing/onbox-acceptance-register-live-view.html text eol=lf
 ```
@@ -130,10 +132,12 @@ git commit -m "chore(ops): pin the on-box register and its live view to eol=lf"
 - Modify: `docs/testing/onbox-acceptance-register.md`
 
 **Interfaces:**
-- Produces: three HTML comment region-marker pairs in the `.html` (`strip`,
-  `glance`, `groups`) that Task 4/5/6 locate by exact string match; two
-  single-line markers in the `.md` (`stat:a1-still-owed`, `stat:a1-subtotal`)
-  that Task 4 reads by regex.
+- Produces: the `strip` region-marker pair plus one `glance:<letter>`
+  region-marker pair per glance-table group in the `.html`, that Task 4/5
+  locate by exact string match — `groups` is out of scope here, per the
+  Global Constraint above: it is located structurally (see Task 6), not by a
+  marker pair; two single-line markers in the `.md` (`stat:a1-still-owed`,
+  `stat:a1-subtotal`) that Task 4 reads by regex.
 
 This task ships **no code** — it is a content-only PR-1 step, per the spec's
 "marker insertion has a validation gap until PR 3 lands" note. State that gap
