@@ -207,8 +207,9 @@ test('parseRegister returns one entry per quarantined data row of the real flaky
   const markdown = readFileSync(registerPath, 'utf8');
   const entries = parseRegister(markdown);
   // The real register currently has 2 data rows (#1981, not quarantined, and
-  // #2235, quarantined) but only the quarantined one becomes an entry.
-  assert.equal(entries.length, 1, `expected exactly 1 entry from the real register, got ${entries.length}`);
+  // #2235, quarantined) but only the quarantined one(s) become entries.
+  // Assert at least 1 to avoid brittleness when new quarantined entries are added.
+  assert.ok(entries.length >= 1, `expected at least 1 quarantined entry from the real register, got ${entries.length}`);
   const files = entries.map((e) => e.file);
   assert.ok(
     !files.includes('server/src/routes/book-state-preserve-voices.test.ts'),
