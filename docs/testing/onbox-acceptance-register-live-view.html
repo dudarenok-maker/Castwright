@@ -1467,7 +1467,7 @@
           <li>Confirm that <code>asr.warm</code>&#39;s learned footprint <b>moves off its 128 MB seed value</b> after the real warm forward completes — i.e., the allocator-peak measurement produces a positive, observed value that is recorded, not dropped.</li>
           <li>Verify the recorded value matches the expected range for CTranslate2+faster-whisper on this box&#39;s GPU (typically a few hundred MB, depending on model size and CUDA compute capacity).</li>
         </ul>
-        <p class="src">GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar with ASR enabled (<code>SEG_ASR_ENABLED=1</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2682">#2682</a>, PR #2799 · the allocator-peak measurement in <code>server/tts-sidecar/main.py</code>&#39;s <code>FootprintTable</code> class must observe a positive value recorded via its <code>record()</code> method when a real forward runs, not a stubbed test value · short — one real ASR warm-up sequence during a render or via manual endpoint</p>
+        <p class="src">GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar with ASR enabled (<code>SEG_ASR_ENABLED=1</code>) and configured to use GPU (<code>ASR_DEVICE=cuda</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2682">#2682</a>, PR #2799 · the allocator-peak measurement in <code>server/tts-sidecar/main.py</code>&#39;s <code>FootprintTable</code> class must observe a positive value recorded via its <code>record()</code> method when a real forward runs, not a stubbed test value · short — one real ASR warm-up sequence during a render or via manual endpoint</p>
       </div>
     </details>
 

@@ -4329,7 +4329,7 @@ test value and doesn't exercise the real forward).
   compute capacity).
 
 *Needs:* a GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar 
-with ASR enabled (`SEG_ASR_ENABLED=1`). *Cost:* short — one real ASR warm-up sequence 
+with ASR enabled (`SEG_ASR_ENABLED=1`) and configured to use GPU (`ASR_DEVICE=cuda`). *Cost:* short — one real ASR warm-up sequence 
 during a render or via manual endpoint. *Criteria:* the allocator-peak measurement in 
 `server/tts-sidecar/main.py`'s `FootprintTable` class must observe a positive value 
 recorded via its `record()` method when a real forward runs, not a stubbed test value. 
