@@ -1398,9 +1398,17 @@ wastes zero GPU. Discharges 268's owed item (a).
     `Cloned voice(s) unavailable — a cloned voice must never be substituted with another: "<Character>" (revoked). Restore the missing voice(s); reassign the character(s).` (pre-#1967 this read "Re-enable Qwen or restore the missing voice(s)" — a plain `revoked` entry never implies an engine is unavailable, so #1967 dropped the invented "Re-enable Qwen" clause; see clone-voice-resolver.ts.)
   - `generationRemediation` is non-empty.
 
-**Record:** elapsed to failure = ______ s · `tts.log` grew by ______ bytes
+**Record:** elapsed to failure = **0.75 s** · `tts.log` grew by **474 bytes**
+(all `/health` and `/capacity` probes — zero `/synthesize`)
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 2026-08-31 (Claude Code, isolated
+worktree `wt-onbox-a1-wave10`, throwaway fixture book, real Qwen 0.6B sidecar,
+no mocks). Revoked a fresh clone assigned to "Wren", generated chapter 2:
+`chapter_failed` in 748 ms with `errorCode: "cloned-voice-broken"`,
+`errorReason` exactly matching the post-#1967 wording
+(`Cloned voice(s) unavailable — a cloned voice must never be substituted with
+another: "Wren" (revoked)...`). `tts.log` delta was pure health-check noise, no
+synth/derive calls. `audio/` dir confirmed empty. All criteria met.
 
 ---
 
@@ -1426,7 +1434,24 @@ Confirm the speaking set from the chapter's sentence attribution before starting
   with `cloned-voice-broken` naming character B. (Same-run confirmation that the
   gate is scoping, not just globally passing.)
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 2026-08-31 (Claude Code, same
+worktree/setup as C-02). Clone A (healthy) assigned to Pell Hollis (speaks in
+ch.2 only); Clone B (revoked) assigned to Sela (speaks in ch.3 only, not
+ch.2) — this fixture's chapter-2/chapter-3 character split made a clean B-not-
+speaking chapter available without needing two separate books. Chapter 2:
+completed in ~71s real Qwen 0.6B render (`chapter_complete`,
+`audioQa.status: "ok"`, `measuredLufs: -16.1`) — confirms the first pass also
+retroactively confirmed the recycle-storm finding below wasn't a genuine
+regression. Chapter 3: `chapter_failed` in 681ms naming Sela, reason
+`(revoked)`. Both halves pass.
+**Incidental finding (filed, not a defect in this row's own mechanism):**
+first two chapter-2 attempts hit a real `errorCode: "recycle-storm"` — root
+cause was this worktree's missing `server/tts-sidecar/voices/` junction
+(Kokoro model-not-found crash loop tripping the recycle circuit breaker), NOT
+a side-11 regression. Junctioning `voices/` from the primary checkout fixed it
+immediately and reproducibly. Filed as
+[#2811](https://github.com/dudarenok-maker/Castwright/issues/2811); CLAUDE.md's
+worktree setup checklist updated in this same PR.
 
 ---
 
@@ -2079,7 +2104,13 @@ cannot self-heal (that is expected, not a defect).
 
 **Record:** `instruct` identical after self-heal? ☐ yes ☐ no (fail)
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☐ P ☐ F ☒ B ☐ N/A  **Notes:** Attempted 2026-08-31 (Claude Code,
+isolated worktree). `POST .../cast/design` requires `GEMINI_API_KEY` to
+generate the persona text — an isolated worktree deliberately carries no
+secrets (CLAUDE.md: "no GEMINI_API_KEY, no secrets, nothing"), so this row
+cannot be exercised from a worktree at all. Needs a session with real Gemini
+credentials (or a local-Ollama persona path if one exists) — not attempted
+further this run, still owed.
 
 ---
 
@@ -2467,7 +2498,22 @@ generating and before any audio appears.
 **If you miss the window entirely** (revoke lands well before or well after
 the derive), retry — budget 3–5 attempts, same as 268's C-01.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Attempts:** ____  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Attempts:** 1  **Notes:** Run 2026-08-31
+(Claude Code, same worktree). No prior `voices\xtts\` artifact existed for
+Pell's clone, so a derive was guaranteed on first Coqui-engine render — no
+need to force-delete a `.pt`. Fired the chapter generation
+(`modelKey: coqui-xtts-v2`, chapter 2) and the revoke ~0.6s later, landing
+during `chapter_preparing_voice` for Pell. Result: `revokedAt` **survived**
+(not clobbered); chapter **failed**, reason named "Pell Hollis"; **no**
+artifact under `voices\xtts\` (directory doesn't even exist) — all three core
+guarantees held on first attempt. One wording deviation from the sheet's
+expected text: the reason read `(derive-failed)`, not `(revoked)` — the revoke
+landed early enough that the derive attempt itself observed the revoked state
+and failed rather than the pre-check short-circuiting first. Substance
+(fail-loud, no resurrection, no orphaned artifact) matches the invariant; the
+exact reason-code branch taken is a minor, not-clearly-wrong classification
+nuance, not filed as a defect — flagging here in case a future reader expects
+byte-identical wording.
 
 ---
 
