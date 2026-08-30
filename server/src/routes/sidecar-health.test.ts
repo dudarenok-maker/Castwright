@@ -53,9 +53,26 @@ import * as supervisorMod from '../tts/sidecar-supervisor.js';
    is a plain passthrough — one doPost call — so every PRE-EXISTING /load
    test in this file keeps exercising exactly the same single-fetch behavior
    it did before this wiring landed. Tests that care about the retry/throw
-   wiring itself override the implementation locally. */
-vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
-import { withCapacityRetry } from '../gpu/capacity-retry.js';
+   wiring itself override the implementation locally.
+
+   importOriginal-merged (like the coqui-install-detect mock above), NOT a
+   bare replacement object: sidecar-health.ts also imports
+   `createHardTimeoutAbortReason` from this module (#2678 re-review N3) to
+   mark its 90s /load timeout so withCapacityRetry's catch block can
+   recognize it. A bare `{ withCapacityRetry: vi.fn() }` silently drops that
+   export — invisible in every existing test because none of them let the
+   route's real 90s timer actually fire, but a real regression (reviewer pass
+   3, mutation-proven): reverting the route's marked abort back to a bare
+   `controller.abort()` left the full suite green, since the broken export
+   was never exercised either. Re-exporting the REAL (pure, dependency-free)
+   `createHardTimeoutAbortReason` here keeps the marker genuine so a test
+   that lets the timer fire can actually distinguish a marked abort from a
+   bare one. */
+vi.mock('../gpu/capacity-retry.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../gpu/capacity-retry.js')>();
+  return { ...actual, withCapacityRetry: vi.fn() };
+});
+import { withCapacityRetry, createHardTimeoutAbortReason } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 
 function makeApp() {
@@ -654,6 +671,67 @@ describe('POST /api/sidecar/load', () => {
     const res = await request(makeApp()).post('/api/sidecar/load').send({});
     expect(res.status).toBe(503);
     expect(res.body.error).toMatch(/did not complete within/);
+  });
+
+  it('marks the 90s hard-timeout abort so withCapacityRetry can distinguish it from a user Pause (#2678 re-review N3)', async () => {
+    /* The prior "returns 503 + timeout-specific message" test above rejects
+       fetch directly with an AbortError, which never actually lets the
+       route's own setTimeout callback run — so it can't catch a regression
+       in HOW that callback aborts. This test genuinely fires the route's 90s
+       ceiling and inspects what reason ends up on the signal
+       withCapacityRetry receives — the exact seam reviewer pass 3 found was
+       uncovered (reverting sidecar-health.ts's marked abort back to a bare
+       `controller.abort()` left the whole suite green).
+
+       Full `vi.useFakeTimers()` was tried here first and rejected: faking
+       every global timer also stalls Node's own http/net internals that
+       supertest's real request/response round-trip depends on, hanging the
+       test (and leaking fake timers into later tests since the hang skips
+       `vi.useRealTimers()`). Instead, spy on `setTimeout` and intercept ONLY
+       the route's 90s call (LOAD_TIMEOUT_MS === 90_000, matching
+       UNLOAD_TIMEOUT_MS too, but this test only ever hits /load) — firing it
+       on the real event loop with a 0ms delay so the test stays fast without
+       touching any other timer supertest or Express relies on. */
+    let capturedSignal: AbortSignal | undefined;
+    mockWithCapacityRetry.mockImplementation(async (doPost, opts) => {
+      capturedSignal = opts.signal;
+      return doPost(opts.signal);
+    });
+    fetchMock.mockImplementation(
+      (_url: string, init: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          });
+        }),
+    );
+
+    const realSetTimeout = globalThis.setTimeout;
+    const timeoutSpy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(((cb: (...cbArgs: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+        if (ms === 90_000) return realSetTimeout(cb, 0, ...args);
+        return realSetTimeout(cb, ms, ...args);
+      }) as typeof setTimeout);
+
+    try {
+      const res = await request(makeApp()).post('/api/sidecar/load').send({});
+
+      expect(capturedSignal?.aborted).toBe(true);
+      /* Compare against the REAL createHardTimeoutAbortReason's shape (now
+         genuinely re-exported by the fixed mock above) — a bare
+         `controller.abort()` produces a DOMException with the engine's
+         default "This operation was aborted" message, not this one, so this
+         assertion fails against the reverted-route mutation. */
+      const expected = createHardTimeoutAbortReason('Sidecar /load caller timeout');
+      const reason = capturedSignal?.reason as { name?: string; message?: string } | undefined;
+      expect(reason?.name).toBe(expected.name);
+      expect(reason?.message).toBe(expected.message);
+
+      expect(res.status).toBe(503);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it('forwards the engine field through to the sidecar', async () => {
