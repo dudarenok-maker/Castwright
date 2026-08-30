@@ -46,8 +46,8 @@ it('passes a header-token POST (companion) with no cookie', () => {
   expect(next).toHaveBeenCalled();
 });
 
-it('still gates a cookie that cookie.parse accepts but a naive regex might miss', () => {
-  // Leading whitespace + other pairs first — cookie.parse handles it; assert CSRF still fires.
+it('still gates a cookie that parseCookie accepts but a naive regex might miss', () => {
+  // Leading whitespace + other pairs first — parseCookie handles it; assert CSRF still fires.
   const next = vi.fn(); const r = res();
   requireSameOrigin(mk('POST', { cookie: 'foo=bar; __Host-cw_lan=x', origin: 'https://evil.example:8443' }), r, next);
   expect(next).not.toHaveBeenCalled();
