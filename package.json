@@ -112,7 +112,7 @@
     "redux-persist": "^6.0.0"
   },
   "devDependencies": {
-    "@eslint/js": "^10",
+    "@eslint/js": "^9",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^7.0.1",
@@ -127,7 +127,7 @@
     "archiver": "^8",
     "concurrently": "^10.0.5",
     "cross-env": "^10.1.0",
-    "eslint": "^10",
+    "eslint": "^9",
     "eslint-config-prettier": "^10",
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react": "^7.37.5",
@@ -145,7 +145,7 @@
     "sharp": "^0.35.4",
     "std-env": "^4.2.0",
     "tailwindcss": "^4.3.0",
-    "typescript": "^7.0.2",
+    "typescript": "^6.0.0",
     "typescript-eslint": "^8",
     "vite": "^8.2.2",
     "vite-plugin-mkcert": "^2.0.0",
