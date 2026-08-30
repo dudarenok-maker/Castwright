@@ -46,7 +46,7 @@ foreach ($name in $names) {
 }
 
 # The TTS port is per-checkout since #2632 (LOCAL_TTS_PORT); Get-PortsToSweep
-# reads the ACTUAL owned port from .run\tts.owner.json when a sidecar has
+# reads the ACTUAL owned port from .run\tts.owner.<port>.json when a sidecar has
 # claimed one, falling back to what this checkout's own server\.env / shell
 # environment CONFIGURE LOCAL_TTS_PORT to (not necessarily the port a
 # sidecar is actually bound to right now) — never assuming 9000, which would
@@ -75,7 +75,7 @@ foreach ($name in $names) {
 # (crash-logging.ts) — "my config says LAN_HTTPS=1" does not mean "the
 # process holding :8443 right now is mine"; it only means I would have been
 # the one holding it had I won the race. There's no owner-note file for the
-# main server's bound port the way .run\tts.owner.json exists for the
+# main server's bound port the way .run\tts.owner.<port>.json exists for the
 # sidecar, so there is no authoritative source here at all — only the PID
 # the taskkill loop above already reaped when start-app.ps1 wrote it.
 # Killing nothing is safer than guessing whose :8443 it is.

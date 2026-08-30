@@ -57,22 +57,23 @@ Describe 'Get-SidecarSweepPort' {
         }
     }
 
-    It 'returns the per-checkout port recorded in tts.owner.json over server\.env (#2632 N27 fix)' {
-        $notePath = Join-Path $script:tempDir "tts.owner.json"
-        Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+    It 'returns the per-checkout port recorded in tts.owner.<port>.json over server\.env (#2632 N27 fix)' {
+        $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
+        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9020"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
     }
 
-    It 'falls back to server\.env LOCAL_TTS_PORT when tts.owner.json is absent (#2632 N29)' {
+    It 'falls back to server\.env LOCAL_TTS_PORT when no tts.owner.<port>.json note exists (#2632 N29)' {
         Set-EnvFixture -Path $script:envPath -Content "PORT=8080`nLOCAL_TTS_PORT=9030"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9030
     }
 
-    It 'falls back to server\.env LOCAL_TTS_PORT when tts.owner.json is corrupt JSON' {
-        $notePath = Join-Path $script:tempDir "tts.owner.json"
+    It 'falls back to server\.env LOCAL_TTS_PORT when tts.owner.<port>.json is corrupt JSON' {
+        $notePath = Join-Path $script:tempDir "tts.owner.9040.json"
         Set-Content -Path $notePath -Value 'not valid json {{{' -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9040"
 
@@ -80,15 +81,51 @@ Describe 'Get-SidecarSweepPort' {
     }
 
     It 'falls back to server\.env LOCAL_TTS_PORT when the recorded port is out of range' {
-        $notePath = Join-Path $script:tempDir "tts.owner.json"
+        $notePath = Join-Path $script:tempDir "tts.owner.99999.json"
         Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":99999,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9050"
 
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9050
     }
 
+    It 'falls back to server\.env LOCAL_TTS_PORT when the recorded port is fractional (narrow review, correctness bug 2)' {
+        # [int]$note.port on a [double] ROUNDS rather than rejects -- a corrupt
+        # "9000.5" would otherwise silently resolve to 9000, the one value this
+        # resolver must never guess (stop-app.ps1 force-kills whatever answers there).
+        $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
+        Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":9000.5,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
+
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9070
+    }
+
     It 'returns $null (sweep nothing) when neither the note nor server\.env yield a port (#2632 N29)' {
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be $null
+    }
+
+    It 'falls back to server\.env LOCAL_TTS_PORT when two note files exist in the same run dir (#2641 shared-run-dir scenario)' {
+        $notePathA = Join-Path $script:tempDir "tts.owner.9010.json"
+        $notePathB = Join-Path $script:tempDir "tts.owner.9011.json"
+        Set-Content -Path $notePathA -Value '{"pid":1234,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-Content -Path $notePathB -Value '{"pid":5678,"ppid":1,"port":9011,"startedAt":"2026-08-25T00:00:01.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9060"
+
+        # Two candidate notes, no way to tell which is current — must not
+        # guess between them; fall back exactly as the zero-match case does.
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9060
+    }
+
+    It 'falls back to server\.env LOCAL_TTS_PORT when the only tts.owner.*.json file has a non-numeric port segment (#2641 digits-only fix)' {
+        $notePath = Join-Path $script:tempDir "tts.owner.stale.json"
+        Set-Content -Path $notePath -Value '{"pid":1234,"ppid":1,"port":9075,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
+
+        # -Filter's '*' wildcard would count this as the sole match and trust
+        # its (wrong) port 9075; the port segment must be digits-only,
+        # mirroring the .mjs resolver's /^tts\.owner\.\d+\.json$/ exactly, so
+        # this must fall back to server\.env's 9070 instead of trusting a
+        # malformed filename.
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9070
     }
 
     It 'returns $null when server\.env has no LOCAL_TTS_PORT line' {
@@ -170,6 +207,93 @@ Describe 'Get-SidecarSweepPort' {
     It 'takes the LAST duplicate value even when it carries a trailing comment, matching process.loadEnvFile' {
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9010`nLOCAL_TTS_PORT=9011 # comment"
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9011
+    }
+
+    # #2754 review finding — the regex must be case-sensitive and use ASCII
+    # digits only, matching the .mjs twin exactly. PowerShell's -match is
+    # case-insensitive by default and .NET \d is Unicode-digit-aware, so
+    # the regex must use -cmatch and [0-9] to align with JS /^tts\.owner\.\d+\.json$/.
+    It 'rejects uppercase tts.owner.*.json filename (case-sensitive matching only)' {
+        # Create a single uppercase file: -match would accept it (case-insensitive),
+        # but -cmatch should reject it and fall back to server\.env
+        $notePathUpper = Join-Path $script:tempDir "TTS.OWNER.9000.JSON"
+        Set-Content -Path $notePathUpper -Value '{"pid":1234,"ppid":1,"port":9000,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
+
+        # Uppercase file should NOT be trusted; fall back to server\.env with -cmatch
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9070
+    }
+
+    It 'rejects mixed-case tts.owner.*.json filename (case-sensitive matching only)' {
+        # Create a single mixed-case file
+        $notePathMixed = Join-Path $script:tempDir "Tts.Owner.9010.Json"
+        Set-Content -Path $notePathMixed -Value '{"pid":5678,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
+
+        # Mixed-case file should NOT be trusted; fall back to server\.env with -cmatch
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9070
+    }
+
+    It 'matches lowercase tts.owner.*.json (control for the case-sensitivity cell)' {
+        $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
+        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
+
+        # Lowercase tts.owner.9010.json should be matched and trusted
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
+    }
+
+    It '#2754 — uses a stale note (dead PID) when it is the only one (orphan detection)' {
+        # Concrete scenario: a server crashed hard (taskkill /T /F), leaving its sidecar
+        # running and orphaned. The note has a dead PID, but its EXISTENCE is the signal
+        # for the sweep to know "reap this port". If the resolver filters by PID liveness
+        # on the read side, it loses the signal for orphan detection.
+
+        $staleNotePath = Join-Path $script:tempDir "tts.owner.9010.json"
+
+        # Stale note: dead PID (99999 is virtually guaranteed never to be running)
+        Set-Content -Path $staleNotePath -Value '{"pid":99999,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9020"
+
+        # The single note should be used (9010), not fall back to server\.env (9020),
+        # even though its PID is dead. This is critical for `npm run stop` to detect
+        # and reap an orphaned sidecar left by a hard-killed server.
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
+    }
+
+    It '#2754 — falls back to server\.env when multiple notes exist' {
+        $notePathA = Join-Path $script:tempDir "tts.owner.9010.json"
+        $notePathB = Join-Path $script:tempDir "tts.owner.9011.json"
+
+        # Two notes — ambiguous case, cannot distinguish which is the actual sidecar.
+        Set-Content -Path $notePathA -Value '{"pid":99999,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+        Set-Content -Path $notePathB -Value '{"pid":99998,"ppid":1,"port":9011,"startedAt":"2026-08-25T00:00:01.000Z"}' -Encoding utf8
+
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9030"
+
+        # Multiple notes = ambiguous — fall back to server\.env.
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9030
+    }
+
+    It '#2754 — handles ambiguity defensively (multiple notes)' {
+        # Edge case: two notes present — the resolver cannot distinguish which one
+        # represents the actual sidecar, so it treats this as ambiguous and falls back.
+
+        $notePath1 = Join-Path $script:tempDir "tts.owner.9010.json"
+        $notePath2 = Join-Path $script:tempDir "tts.owner.9011.json"
+        $pidStr = $PID
+        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+
+        # Two notes (we use current process for testing, but they could be dead or live)
+        Set-Content -Path $notePath1 -Value "{`"pid`":$pidStr,`"ppid`":1,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
+        Set-Content -Path $notePath2 -Value "{`"pid`":$pidStr,`"ppid`":1,`"port`":9011,`"startedAt`":`"2026-08-25T00:00:01.000Z`"}" -Encoding utf8
+
+        Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9040"
+
+        # Multiple notes = ambiguous — fall back to server\.env.
+        Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9040
     }
 }
 
@@ -274,9 +398,10 @@ Describe 'Get-PortsToSweep (#2632 N34)' {
     # port (pass 7's mutant G: `$ports = @(5173, 8080, 8443, 9000)`, resolver
     # still called) has nowhere to hide — there's no logic left at the call
     # site to independently mutate away from what's tested here.
-    It 'includes the resolved sidecar port from tts.owner.json' {
-        $notePath = Join-Path $script:tempDir "tts.owner.json"
-        Set-Content -Path $notePath -Value '{"pid":1,"ppid":1,"port":9010,"startedAt":"2026-08-25T00:00:00.000Z"}' -Encoding utf8
+    It 'includes the resolved sidecar port from tts.owner.<port>.json' {
+        $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
+        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
 
         $ports = Get-PortsToSweep -BasePorts @(5173, 8080, 8443) -RunDir $script:tempDir -ServerEnvPath $script:envPath
         $ports | Should -Be @(5173, 8080, 8443, 9010)
