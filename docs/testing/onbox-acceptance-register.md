@@ -757,8 +757,8 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **20 of 60 run (2026-07-29, 2026-07-31) · ~40 still owed · 3 run-2 results retracted**
-<!-- stat:a1-still-owed 40 -->
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **23 of 60 run (2026-07-29, 2026-07-31, 2026-08-31) · ~37 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 37 -->
 <!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
@@ -796,7 +796,12 @@ artifacts across 3 locations all gone including both cached mp3s and the
 original recording; wildcard sweep 0 files; entry + `voice.json` survive with
 `revokedAt`), **C-11** (409-with-usage then `{deleted:true}`, entry dir removed,
 both cast slots cascade-cleared), C-19 first half (1.7B tier renders a cloned
-voice; its erasure is covered by C-10).
+voice; its erasure is covered by C-10), **C-02** (revoked voice fails the
+chapter loud in 748ms, zero audio, zero GPU work), **C-03** (a Broken voice
+not speaking in the chapter under render doesn't fail it; the same voice does
+fail the chapter it actually speaks in), **E-03** (revoke racing an in-flight
+Coqui derive: `revokedAt` survives, no orphaned artifact, chapter fails
+naming the character — Run 4, see below).
 
 **Also proven — the wave's central claim, measured not asserted.** A cloned
 voice renders inside a real book: `wren`'s segments re-recorded into Coalfall
@@ -871,7 +876,38 @@ re-segmentation. **The precondition is only "analysis has run since the last
 render."** Full chapter generation is unaffected. No test caught it because none
 asserts which voice reached the provider.
 
-**Still owed (~40), and why:**
+**Run 4 — 2026-08-31, Claude Code, isolated worktree `wt-onbox-a1-wave10`,
+throwaway fixture book (the canonical `the-coalfall-commission.md`, imported
+fresh, not the operator's real book), real Qwen 0.6B + Coqui/XTTS sidecar, no
+mocks.** Three more discharged: **C-02** (revoked voice fails the chapter
+loud with zero audio and zero GPU work — 748ms to failure, `tts.log` delta was
+pure health-check noise), **C-03** (a Broken voice not used in the current
+chapter doesn't fail it, and the *same* voice does fail the chapter where its
+character actually speaks — both halves run on one real render each), and
+**E-03** (revoke landing during an in-flight Coqui derive: `revokedAt`
+survives, no orphaned `voices\xtts\` artifact, chapter fails naming the
+character — one attempt, first try, though the reported reason read
+`(derive-failed)` rather than the sheet's expected `(revoked)` wording; the
+underlying data-integrity guarantees the row cares about held regardless).
+**C-17** was attempted and is **blocked, not failed**: designing a voice
+requires `GEMINI_API_KEY`, which an isolated worktree deliberately never
+carries (CLAUDE.md's "no secrets" worktree rule) — this row needs a session
+with real Gemini credentials, not a fresh worktree.
+**Incidental finding, filed as [#2811](https://github.com/dudarenok-maker/Castwright/issues/2811):**
+the first two C-03 attempts hit a real `errorCode: "recycle-storm"`, initially
+indistinguishable from a side-11 regression — root-caused to this worktree's
+setup being incomplete (`server/tts-sidecar/voices/` was never junctioned
+alongside `.venv`, so Kokoro's missing weights crash-looped the sidecar into
+tripping the recycle-storm breaker mid-chapter). Junctioning `voices/` fixed
+it immediately and reproducibly; CLAUDE.md's worktree checklist updated in the
+same PR. **This means the row's "BLOCKED by the side-11 host-memory leak"
+framing above is likely stale for a *properly-set-up* box** — not
+re-verified at full-book scale this run (only single-chapter renders), so C-02
+above is left as its own row rather than assumed to also clear full-book
+work, but the specific failure mode this run hit was environmental, not
+side-11 recurring.
+
+**Still owed (~37), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
@@ -939,23 +975,29 @@ asserts which voice reached the provider.
   sticky `coqui_import_ok` reflecting a real import attempt, which is the one
   to read. Note #1963: `models-status`'s `importable` is still the old
   find_spec value.
-- **C-02, D-02 and any full-book work — BLOCKED by the side-11 host-memory
-  leak.** Two full-chapter render attempts died: one at the QA gate (ASR could
+- **C-02 — DISCHARGED, Run 4 (above).** D-02 and full-book work at scale
+  remain unconfirmed (only single-chapter renders proven in Run 4). #1972
+  (the splice attribution defect) is CLOSED (2026-07-31) and #399/side-11
+  itself is CLOSED — Run 4's own `recycle-storm` hit was root-caused to a
+  worktree-setup gap ([#2811](https://github.com/dudarenok-maker/Castwright/issues/2811)),
+  not a live leak. Treat the paragraph below as historical context for how
+  this row was scoped, not a current blocker.
+  <details><summary>Original 2026-07 finding (kept for history)</summary>
+
+  Two full-chapter render attempts died: one at the QA gate (ASR could
   not get VRAM alongside Kokoro), one with `recycle-storm` after the sidecar
   recycled 3× (committed memory peaked at 29,395 MB). The sidecar's own log
   names it: *"expected for the variable-shape leak; the restart ceiling is the
-  real guard"*. **Workaround, qualified since [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972):**
-  the per-character re-record (splice) path renders one character's lines
-  without the full-chapter memory churn — that is how the central claim above
-  was proven — but it now REFUSES on a chapter whose `segments.json` and the
-  current analysis disagree (exactly the shape both fixture books in this run
-  hit). It only stays usable as a workaround when the two agree; when they
-  don't, re-run analysis first (so the splice becomes usable again), or fall
-  back to a full chapter generation — which the side-11 leak still blocks, but
-  which is at least immune to the splice's own attribution defect.
-- **The rest of Section C (18) and Section D (3):** not reached. C-08/C-12
-  (deliberate mid-write sidecar kills) and C-01/E-03 (revoke racing an in-flight
-  derive) are untouched and remain the highest-risk unproven behaviour here.
+  real guard"*. The per-character re-record (splice) path rendered one
+  character's lines without the full-chapter memory churn — that is how the
+  central claim above was proven — but at the time it refused on a chapter
+  whose `segments.json` and the current analysis disagreed (exactly the shape
+  both fixture books in that run hit); #1972 has since closed that refusal.
+  </details>
+- **The rest of Section C (15) and Section D (2):** not reached. C-08/C-12
+  (deliberate mid-write sidecar kills) and C-01 (revoke racing an in-flight
+  Qwen derive) are untouched and remain the highest-risk unproven behaviour
+  here. E-03 (the Coqui equivalent of C-01) is now discharged (Run 4, above).
 - **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
   a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
   / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
