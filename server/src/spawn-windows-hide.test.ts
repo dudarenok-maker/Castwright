@@ -736,7 +736,7 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
       expect(() => blankCommentsAndStrings(src)).not.toThrow();
     });
 
-    it('does not mistake a real division for a regex literal (no same-line closing slash means no lexed regex, no throw)', () => {
+    it('does NOT throw on slash after regex-preceder with no same-line close (not lexed as regex, bails out safely)', () => {
       const src = "const c = [/ unclosed\nspawn('ffmpeg', args, { windowsHide: true });\n";
       expect(() => blankCommentsAndStrings(src)).not.toThrow();
     });
