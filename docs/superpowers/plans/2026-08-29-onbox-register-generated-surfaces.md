@@ -132,10 +132,12 @@ git commit -m "chore(ops): pin the on-box register and its live view to eol=lf"
 - Modify: `docs/testing/onbox-acceptance-register.md`
 
 **Interfaces:**
-- Produces: three HTML comment region-marker pairs in the `.html` (`strip`,
-  `glance`, `groups`) that Task 4/5/6 locate by exact string match; two
-  single-line markers in the `.md` (`stat:a1-still-owed`, `stat:a1-subtotal`)
-  that Task 4 reads by regex.
+- Produces: the `strip` region-marker pair plus one `glance:<letter>`
+  region-marker pair per glance-table group in the `.html`, that Task 4/5
+  locate by exact string match — `groups` is out of scope here, per the
+  Global Constraint above: it is located structurally (see Task 6), not by a
+  marker pair; two single-line markers in the `.md` (`stat:a1-still-owed`,
+  `stat:a1-subtotal`) that Task 4 reads by regex.
 
 This task ships **no code** — it is a content-only PR-1 step, per the spec's
 "marker insertion has a validation gap until PR 3 lands" note. State that gap
