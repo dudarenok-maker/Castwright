@@ -50,12 +50,17 @@ runs:
     # action's own steps accept — GitHub rejects the action manifest outright
     # ("Unexpected value 'timeout-minutes'") if it's used here, which this
     # action's first real CI run caught. Each apt/dpkg call below is instead
-    # wrapped in the coreutils `timeout` command with `-k` (SIGKILL-after grace
-    # period) to guarantee termination even if the process ignores SIGTERM
-    # (3 minutes + 10s grace each — up to 6 min 20s worst-case on a cache miss
-    # doing update+install, still well under the smallest consuming job's
-    # 10-minute budget), so a hang fails fast and distinctly instead of
-    # silently eating the whole job.
+    # wrapped in the coreutils `timeout` command with `-k 10 180` (180s timeout
+    # + 10s SIGKILL grace period) to guarantee termination even if the process
+    # ignores SIGTERM. This acts as a hang-detection ceiling: a normal
+    # (non-hanging) cache-miss apt-get is expected to be much faster than the
+    # 180s ceiling, but the ceiling itself can consume up to 190s per call
+    # (~380s / 6 min 20s for a two-call worst case). Note: this leaves
+    # comparatively tight headroom on jobs with small total budgets; e.g.,
+    # e2e-visual's 10-minute job timeout leaves ~4 minutes for the test battery
+    # itself after checkout + `npm ci` + Playwright setup + this install step.
+    # Still preferable to the prior unbounded step that silently ate entire job
+    # timeouts when a mirror hung.
     - name: Install ffmpeg
       shell: bash
       run: |
