@@ -91,7 +91,9 @@ export function parseBacklogItems(markdown) {
     const line = lines[i];
 
     // MoSCoW section heading: "## Must — …", "## Won't (this round) — …".
-    const section = /^##\s+(Must|Should|Could|Won't)\b/.exec(line);
+    // Uses a ' escape (not a literal quote char) to avoid a
+    // regex-literal desync in the spawn-windows-hide guard (#2747/#2764).
+    const section = /^##\s+(Must|Should|Could|Won\u0027t)\b/.exec(line);
     if (section) {
       tier = TIER_FROM_SECTION[section[1]] ?? null;
       continue;
@@ -136,7 +138,9 @@ export function parseBacklogItems(markdown) {
       const b = lines[j];
       if (/^#{2,4}\s/.test(b)) break;
       if (/^---\s*$/.test(b)) break;
-      if (/^_`/.test(b)) break; // standalone shipped-note paragraph
+      // Uses a backtick escape (not a literal backtick) to avoid a regex-literal
+      // desync in the spawn-windows-hide guard (#2747/#2764).
+      if (/^_\u0060/.test(b)) break; // standalone shipped-note paragraph
       bodyLines.push(b);
     }
     const body = bodyLines.join('\n').trim();

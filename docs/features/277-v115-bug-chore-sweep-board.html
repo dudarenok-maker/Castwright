@@ -429,10 +429,14 @@
         <span class="acts"><button class="btn" type="button" data-brief="w2">copy brief</button></span>
         <p class="why"><b>Not diff-shaped, despite reading like small fixes.</b> Each is filed as
           a decision request with 2–3 options already weighed by whoever found it.
-          <b>QUEUED 2026-08-28</b> — parent <a href="https://github.com/dudarenok-maker/Castwright/issues/2759">#2759</a>
-          bundles this wave into a 9-child Open Engine chain, one branch/PR. Decisions were made
-          by the filer rather than deferred to a same-day pick, documented on #2759. Outcome not
-          yet known — watch for the final <span class="mono">[claude][verify]</span> child.</p>
+          <b>RUNNING since 2026-08-29</b> — parent <a href="https://github.com/dudarenok-maker/Castwright/issues/2759">#2759</a>
+          bundles this wave into an <b>eight</b>-child Open Engine chain (filed as nine; #2765 was
+          closed as a duplicate — see the correction below), one branch/PR. Decisions were made
+          by the filer rather than deferred to a same-day pick, documented on #2759. #2760 is
+          <span class="mono">Agent Todo</span> and the queue is claiming it; the chain runs
+          <span class="mono">#2760 → #2762 → #2763 → #2764 → #2766 → #2767 → #2768 → #2769</span>
+          unattended. Outcome not yet known — watch for the final
+          <span class="mono">[claude][verify]</span> child.</p>
       </header>
       <ul class="items">
         <li class="item" data-id="2608" data-disp="design" data-area="srv">
@@ -471,17 +475,24 @@
     <!-- collision found mid-decomposition -->
     <section class="group" style="margin-bottom:1.1rem">
       <header>
-        <h3>Correction — #2765 (under #2759) is likely a duplicate of already-shipped #2582</h3>
-        <span class="disp gated">flag</span>
-        <span class="meta">found while this table was being written</span>
+        <h3>Correction — RESOLVED: #2765 was a duplicate of already-shipped #2582, and is closed</h3>
+        <span class="disp ready">resolved 2026-08-28</span>
+        <span class="meta">flagged while this table was being written; confirmed and acted on the same day</span>
         <p class="why">#2582 closed via PR #2719 (merged) <em>before</em> #2759 was filed — that PR
           already added CUDA-provider-fallback detection at
           <span class="mono">server/tts-sidecar/main.py</span>,
           <span class="mono">server/src/routes/sidecar-health.ts</span>/<span class="mono">info.ts</span>,
           and <span class="mono">src/components/device-panel.tsx</span>.
           <a href="https://github.com/dudarenok-maker/Castwright/issues/2765">#2765</a>'s brief
-          describes building the same detection again. Premise-check it against current
-          <span class="mono">main</span> before it executes, or pull it from the chain.</p>
+          described building the same detection again. <b>Confirmed and closed <span class="mono">not
+          planned</span> on 2026-08-28</b> — checked against PR #2719's <em>actual merged diff</em>
+          rather than #2582's title (real <span class="mono">InferenceSession</span> +
+          <span class="mono">.get_providers()</span> at <span class="mono">main.py:3240-3292</span>,
+          plus existing <span class="mono">test_kokoro.py</span> coverage).
+          <b>The chain was repaired at the same time</b>: #2764's successor link was re-pointed
+          from #2765 straight to #2766, and #2769's brief was rewritten to <b>seven</b> fixes with
+          #2582 struck from its checklist and its <span class="mono">Closes</span> trailers. The
+          <span class="mono">#2764 → #2766</span> edge is correct — do not "repair" it back.</p>
       </header>
     </section>
 
@@ -520,19 +531,25 @@
         <p class="why">Both in <span class="mono">server/tts-sidecar/main.py</span> — <b>one
           lane, not two</b>, per the Round-1 Lane-4 rule (files that overlap share a lane
           regardless of how unrelated the defects look).</p>
+        <p class="why"><b>IN DECOMPOSITION 2026-08-29</b> — both decisions have been taken by
+          the operator and both items are now <b>In Progress</b> on the board, labelled
+          <span class="mono">area:side</span>. <b>The chosen options are not yet written back to
+          the issue bodies</b>, which still end with their original <em>Decision owed</em> line —
+          so a cold implementation brief must not be derived from those bodies alone, or it will
+          re-open a settled question. Child issue numbers are not yet assigned.</p>
       </header>
       <ul class="items">
         <li class="item" data-id="2750" data-disp="ready" data-area="side">
           <input type="checkbox" aria-label="Mark 2750 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2750">#2750</a></div>
           <div class="body"><div class="t">SpeakerEngine never restores its device pin after a cuda→cpu self-demotion</div>
-          <div class="n">Same class as #2642 (Whisper, already fixed) and #1730 gap-3 (Coqui) — #2642's audit enumerated all four engines and missed this one.</div></div>
-          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
+          <div class="n">Same class as #2642 (Whisper, already fixed) and #1730 gap-3 (Coqui) — #2642's audit enumerated all four engines and missed this one. <b>Decision taken 2026-08-29; in decomposition.</b> The three options differ materially in code — the teardown-gate shape also touches <span class="mono">maybe_free_idle</span>'s <span class="mono">!= "cuda"</span> gate, the demotion-point shape does not, and the third changes whether plan 264's teardown contract applies to SPK at all.</div></div>
+          <div class="tags"><span class="tag queued">in decomposition</span><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
         </li>
         <li class="item" data-id="2752" data-disp="ready" data-area="side">
           <input type="checkbox" aria-label="Mark 2752 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2752">#2752</a></div>
           <div class="body"><div class="t"><span class="mono">design_voice()</span>'s 1.7B-Base evict guard blind to an in-flight base17 load</div>
-          <div class="n">Same blind-spot shape PR #2745 just fixed on the design side, in the opposite direction (<span class="mono">main.py:6472</span>).</div></div>
-          <div class="tags"><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
+          <div class="n">Same blind-spot shape PR #2745 just fixed on the design side, in the opposite direction (<span class="mono">main.py:6472</span>). <b>Decision taken 2026-08-29; in decomposition.</b> The two options move the wait to opposite sides — a wait-then-evict path inside <span class="mono">unload_base17()</span> mirroring #2070's "design wins" policy, or refusing admission in <span class="mono">design_voice()</span> until the in-flight load finishes — and they differ in which operation blocks, and for how long.</div></div>
+          <div class="tags"><span class="tag queued">in decomposition</span><span class="tag bug">bug</span><span class="tag">sidecar</span></div>
         </li>
       </ul>
     </section>
@@ -544,10 +561,19 @@
         <span class="disp design">design</span>
         <span class="meta">4 items · one decision gates a 3-item lane</span>
         <span class="acts"><button class="btn" type="button" data-brief="w4">copy brief</button></span>
-        <p class="why"><b>IN PROGRESS on a concurrent thread as of 2026-08-28 — outcome not yet
-          known.</b> A self-replicating family: #2629's closure orphaned #2721 — a fix creating
-          the next ticket about itself. <b>Decide #2708 first</b> or risk a sixth register ticket
-          the same way.</p>
+        <p class="why"><b>PHASE 1 DONE 2026-08-29 — spec written and adversarially reviewed, not
+          yet planned or merged.</b> A self-replicating family: #2629's closure orphaned #2721 — a
+          fix creating the next ticket about itself. <b>The root cause is now named</b>: the
+          register's derived <em>figures</em> exist twice, in the markdown and its hand-authored
+          twin, so every fix has shipped another drift detector and every detector raised a new
+          boundary question that became a ticket. Spec:
+          <span class="mono">docs/superpowers/specs/2026-08-28-onbox-register-generated-surfaces-design.md</span>
+          on branch <span class="mono">docs/docs-register-generated-surfaces</span>.
+          <b>#2708 no longer needs deciding</b> — generating the changelog dissolves it. Also
+          folded in: <a href="https://github.com/dudarenok-maker/Castwright/issues/2362">#2362</a>,
+          currently filed down in Wave 6, is the fifth member of this family and the surviving home
+          for the row-content question #2599 was closed by declining. <b>Sequenced after #2759</b>
+          — its #2768 child edits the same two register files.</p>
       </header>
       <ul class="items">
         <li class="item" data-id="2708" data-disp="design" data-area="ops">
@@ -847,7 +873,7 @@
         <li class="item shipped" data-id="2582" data-disp="gated" data-area="side">
           <input type="checkbox" aria-label="Mark 2582 cleared"><div class="num"><a href="https://github.com/dudarenok-maker/Castwright/issues/2582">#2582</a></div>
           <div class="body"><div class="t">Sidecar should detect and surface a silent CUDAExecutionProvider→CPU fallback</div>
-          <div class="n"><b>Shipped since this row was written</b> — PR #2719 merged. A later child (#2765, under #2759) was independently filed against it and is likely a duplicate — see the Wave 2 correction callout.</div></div>
+          <div class="n"><b>Shipped since this row was written</b> — PR #2719 merged. A later child (#2765, under #2759) was independently filed against it; that was <b>confirmed a duplicate and closed on 2026-08-28</b>, and #2759's chain re-pointed around it — see the Wave 2 correction callout.</div></div>
           <div class="tags"><span class="tag shipped">✓ shipped</span><span class="tag">sidecar</span></div>
         </li>
         <li class="item" data-id="2641" data-disp="gated" data-area="side">
@@ -902,7 +928,7 @@
 
   <footer class="foot">
     <span>Plan of record: <span class="mono">docs/features/277-v115-bug-chore-sweep.md</span> · tracker <a href="https://github.com/dudarenok-maker/Castwright/issues/2042">#2042</a></span>
-    <span class="mono">31 closed since the 08-11 Round-4 baseline · 58 open &amp; tracked (57 once #2582 is confirmed clear of #2765) · Wave 2 queued under #2759 · updated 2026-08-28</span>
+    <span class="mono">31 closed since the 08-11 Round-4 baseline · 58 open &amp; tracked (#2582 confirmed shipped, #2765 closed as its duplicate; the row is kept for the record) · Wave 2 running under #2759 · Wave 3 in decomposition · updated 2026-08-29</span>
   </footer>
 </div>
 

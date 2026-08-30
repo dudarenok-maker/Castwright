@@ -460,6 +460,34 @@ export const STEPS = [
     },
   },
   {
+    /* #2434 → #2779: npm audit's actual dependency is "what package-lock.json
+       resolves to", not any source file, so this step is deliberately
+       lockfile-only (no globs) — includeLockfiles is what makes a bare
+       dependency bump (no source change at all) invalidate the cache entry.
+       This means a newly-disclosed CVE against an unchanged lockfile will NOT
+       trigger a re-run here; that gap is intentionally covered by the separate
+       `cross-os.yml` cron, which runs the full unscoped battery on a fixed
+       schedule to catch new CVEs. check-audit.mjs / audit-waivers.json are
+       extraFiles because a waiver edit or a change to the checker's own logic
+       must also bust the cache even though neither is a lockfile. */
+    name: 'audit',
+    inputs: {
+      globs: [],
+      extraFiles: ['scripts/check-audit.mjs', 'audit-waivers.json'],
+      includeLockfiles: ['root'],
+    },
+  },
+  {
+    // Sibling to `audit` above, scoped to the server tree's own lockfile and
+    // manifest (server/package.json decides --omit=dev's dependency set).
+    name: 'audit:server',
+    inputs: {
+      globs: [],
+      extraFiles: ['scripts/check-audit.mjs', 'audit-waivers.json', 'server/package.json'],
+      includeLockfiles: ['server'],
+    },
+  },
+  {
     /* #2053: madge's --circular pass over server/src is not free on this
        graph, so (per the repo-owner decision recorded on the issue) it's
        cloud/full-`npm run verify`-only, same tier as test:e2e/test:server-

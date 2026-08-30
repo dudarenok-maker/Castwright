@@ -418,17 +418,17 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 40 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**66 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
@@ -445,7 +445,60 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > observed `vram-spill` failure) is still unproven on real hardware. See the row body
 > for the updated acceptance criteria.
 >
-> **Prior change: 2026-08-28, merging `origin/main` into `fix/sidecar-cuda-fallback-detection`.**
+> **Prior change: 2026-08-30, merging PR #2790's independent A105 addition
+> with `main`'s independent E101 addition.** This branch
+> (`fix/sidecar-2752-base17-evict-guard`) had added row **A105** (Qwen base17
+> eviction guard, #2752, PR #2790 — itself already reconciled once against
+> `main`'s A102/A104 IDs in an earlier merge, see the entries below); `origin/main`
+> had independently added row **E101** (#2641 — port-keyed TTS owner notes, PR
+> #2754). The two rows sit in different groups and different id sequences, so
+> no rename was needed this time — just combining the counts. Combined: 63
+> (from `main`, including E101) + 1 (this branch's A105, base17 eviction guard)
+> = **64**. Group A stays 40 (this branch's A102+A104+A105); Group E becomes 11
+> (main's E101). `next-id` markers: Group A at A106 (unchanged by this merge),
+> Group E bumped from E101 → E102 (main's own change).
+>
+> **Prior change: 2026-08-30, merging PR #2790's independent A103 addition.**
+> This branch (`fix/sidecar-2752-base17-evict-guard`) had added row **A103**
+> (Qwen base17 eviction guard, #2752, PR #2790), minted before `origin/main`'s
+> A102/A104 reconciliation below had landed — this branch's `next-id` still
+> read A103 at mint time. By the time this branch merged, `main` had already
+> declared A103 a permanently-unused gap (see the entry directly below) and
+> moved on to A104 (analyzer GPU-split, #2367) with `next-id` at A105. Renamed
+> this branch's row from A103 to **A105** (the next free id on `main`) rather
+> than reopen the gap. Combined: 62 (from `main`) + 1 (this branch's A105,
+> base17 eviction guard) = **63**. Group A: 39 (main's A102 + A104) + 1 (this
+> branch's A105) = 40. `next-id` bumped from A105 → A106 in this merge.
+>
+> **Prior change: 2026-08-29 (PR #2754 review), 62 → 63**, adding row **E101**
+> (#2641 — port-keyed TTS owner notes) — documents the case where two server
+> instances on different ports SHARE ONE `.run/` directory, the mechanism #2641
+> fixes to prevent collision. E10 already mentions port keying but covers a
+> different scenario (two separate checkouts with separate `.run/` dirs, where
+> collision never occurred even before the fix); E101 covers the actual shared-run
+> case now locked down. `next-id: E101` bumped to `E102` in the same change.
+>
+> **Prior change: 2026-08-29, merging two independent A102 additions.**
+> This branch had added row **A102** (analyzer GPU-split warning + expected-device
+> mismatch, #2367, Castwright#2734); `origin/main` had independently added row
+> **A102** (CUDA fallback self-test #2582, PR #2719). Both started from the same
+> post-#2704 state. Reconciled: kept `main`'s CUDA A102; during the merge resolution
+> **A103** (the next-free id) was mistakenly treated as unavailable and skipped,
+> so this branch's analyzer row was allocated **A104** instead. A103 remains
+> permanently unused — a gap in the numbering that allocate-once rules prevent
+> from being filled later. Combined: 61 (from `main`, post-A101-discharge via PR #2739)
+> + 1 (this branch's A104, analyzer GPU-split) = **62**. Group A: 38 (main's A102) + 1 (this
+> branch's A104) = 39. `next-id` bumped from A103 → A105 (skipping the permanent gap) in this merge.
+>
+> **Prior change: 2026-08-28 (Castwright#2734), 61 → 62**, adding row **A102**
+> (analyzer GPU-split warning + expected-device mismatch, #2367) — mocked
+> `execFile`/nvidia-smi covers every automated test, so the real two-GPU
+> split, the once-per-signature server warning, the UI row, and the
+> `expectedDevice` mismatch wording all still need a genuine 2-card boot.
+> Minted from Group A's `next-id` floor; marker bumped `A102` → `A103` in
+> the same change.
+>
+> **Previous change: 2026-08-28, merging `origin/main` into `fix/sidecar-cuda-fallback-detection`.**
 > Two independent branch tips reconciled: this branch had added row **A102** (CUDA
 > fallback self-test #2582, PR #2719, 61 → 62); `main` had since discharged row
 > **A101** (PR #2739, 61 → 60) — the two changes started from the same post-#2704
@@ -710,7 +763,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A103 -->
+<!-- next-id: A106 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -718,6 +771,8 @@ eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
 ### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **20 of 60 run (2026-07-29, 2026-07-31) · ~40 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 40 -->
+<!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
 dual-GPU box, SHA `2503bca6`, clean tree, real sidecar + real Qwen weights, no
@@ -2171,7 +2226,7 @@ already-analysed workspace, then one chapter re-render.
 > `docs/testing/onbox-sitting-cloning-identity.md` still correctly lists this
 > row for §8.7.
 
-### A24 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070), [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678), PR [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797)) · **single 8 GB card; the deviceKey qualification (bullet 4) needs the 2-card boot**
+### A24 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070), [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678), PR [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797)) · **single 8 GB card; the deviceKey qualification (bullet 5) needs the 2-card boot**
 
 Unit tests (`server/tts-sidecar/tests/test_design_contention.py`) fully pin
 the logic with a simulated `_design_in_flight` claim: `unload_design()` now
@@ -2211,7 +2266,11 @@ flagged.
   its signal fires while `withCapacityRetry` is still inside the extended
   design-wait budget, the caller sees the same `NoCapacityError` it would have
   seen at `designMaxAttempts` — not a raw `AbortError` misread as a generic stuck
-  process.
+  process. Only a caller opted in via `createHardTimeoutAbortReason()` (currently
+  just `/api/sidecar/load`) gets this conversion (re-review finding N3) — separately
+  confirm a real user Pause or regen-displacement mid-design-wait on the synthesis
+  path still surfaces as a plain, recognisable `AbortError` and is NOT converted to
+  `NoCapacityError`/`vram-spill`.
 
 *Needs:* a live sidecar with Qwen VoiceDesign installed, and a way to trigger
 two overlapping requests (a second browser tab/session is enough); the
@@ -2276,6 +2335,26 @@ above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
 > a real GPU run. Bullet 3 (wedged-design timeout) and the `unknown-male` no-audio
 > hang from the 2026-08-26 run remain unreached/un-root-caused as before — this fix
 > does not touch either.
+
+> **Correction, 2026-08-30 (PR #2797 re-review, rounds 2–3) — both claims above were
+> wrong; genuinely fixed since.** The "deviceKey-qualified" cross-device fix above
+> (`8633e75a`) never actually worked: it read `qwen_device_key` via `_is_resident("qwen")`
+> → `_engine_actual_card`, which resolves a model from
+> `_model`/`_kokoro`/`_base`/`_tts` and never checks `_design` — so the field was
+> `null` whenever only the VoiceDesign was resident/in-flight, exactly the case this
+> row exists to cover, and unconditionally `"cuda:0"` for a loaded Qwen otherwise.
+> Fixed for real in `113379dd`, which reads `QwenEngine._device` directly, guarded by
+> Base-or-design residency, with tests against a genuine `QwenEngine` instance rather
+> than a hand-authored fixture. Separately, the abort→`NoCapacityError` conversion
+> above (`4c4b229b`) was unconditional: `withCapacityRetry`'s `signal` is ALSO the
+> synthesis path's own cancellation signal (a user Pause or a regen displacement), so
+> a pause mid-design-wait was silently converted to a fatal `vram-spill` instead of a
+> clean pause. Fixed in `c2269799` via an opt-in `createHardTimeoutAbortReason()`
+> marker: only `/api/sidecar/load`'s own hard timeout converts; every other abort now
+> passes through as a plain `AbortError`. Both fixes are mutation-verified (reverting
+> either fails its own new test for the exact reason described), but — same as the
+> original fix — only against simulated/unit-level state, not a real sidecar. This row
+> stays open for the same reason as before.
 
 ### A25 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
 
@@ -3134,6 +3213,64 @@ per synthesis group). *Criteria:* full text in [#2700](https://github.com/dudare
 *Cost:* short, opportunistic — rides along with any cloned-voice reassignment
 test that happens to produce a long-enough sample.
 
+> **PARTIALLY run 2026-08-29 (claude) — the first two criteria are met for
+> real on real hardware; the third (mismatch detection in both directions)
+> surfaced a genuine new defect and is NOT met.** Live Coqui/XTTS resident
+> on-box (RTX 4070 8GB, `cuda:0`, DeepSpeed+fp16), no mocking: a throwaway
+> fixture (`mkdtemp`, never the operator's book) gave a synthetic character
+> only 2 in-book anchor vectors (well below `AUDITION_POOL_TARGET_N=6`, a
+> genuine deficit of 4) plus 6 real evidence quotes (~30-45 words each,
+> pulled from `the-coalfall-commission.md`) and a voice assignment to the
+> real catalogue voice `Claribel Dervla`. Calling `scoreBook()` unmocked
+> made real network calls to the live sidecar: 6 real XTTS renders (RTF
+> ~0.58-0.68, all clearing `MIN_DURATION_SEC`), each embedded for real via
+> `/embed` (ECAPA, 192-d). The 2 synthetic anchors were far enough from the
+> real embeddings to trigger `buildCentroid`'s bimodal check, so
+> `auditionCentroid` correctly ran its Phase B (anchors dropped, synthetic-
+> only pool topped up and rebuilt) — itself a real exercise of a code path
+> `aggregate-audition-pool-real.test.ts` never reaches.
+> — **Criterion 1 MET:** persisted `referenceKind: "audition"`, not
+> `"too-short"`.
+> — **Criterion 2 MET:** real, non-placeholder, non-degenerate values —
+> `cleanMean=0.9629`, `pSevere=0.9409`, `pBand=0.9446`, all finite, all
+> distinct from the synthetic old-voice anchors (which scored `cosine ≈
+> -0.004` to `-0.005` against the new centroid — correctly discarded as
+> `voice-mismatch`/`severe`, confirming the stale reference is genuinely
+> gone, not silently reused).
+> — **Criterion 3 mismatch direction #1 (genuinely wrong voice) MET:** a
+> real render of `Damien Black` (a clearly different catalogue voice)
+> against the same text scored `cosine≈0.16-0.18` and was correctly flagged
+> `voice-mismatch`/`severe` in two independent probes (a generic sentence
+> and a book-register narrative line neither in the evidence pool).
+> — **Criterion 3 mismatch direction #2 (correctly-assigned voice) NOT
+> MET — new defect found:** a real render of the CORRECT voice
+> (`Claribel Dervla`) against fresh text — tried twice, once with a short
+> generic sentence (`cosine=0.928`) and once with a book-register narrative
+> line matched in length/style to the evidence pool but not one of the 6
+> quotes that built it (`cosine=0.934`) — **both scored `voice-mismatch`/
+> `severe`**, i.e. a false positive on the very voice the character is
+> actually cast to. Root cause: `pSevere`/`pBand` are the 6th/10th
+> percentile of the pool's OWN cosines-to-centroid (`score.ts`), which for
+> a synthetic-only Phase B pool of just 6 renders — all the same engine,
+> same voice, same controlled acoustic conditions — clusters far tighter
+> (severe/band boundary within ~0.02 of cleanMean) than the natural
+> cosine variance of a genuinely-correct NEW render on different content.
+> This is a sharper version of the already-documented "thin ~0.05-wide
+> over-flag band for the tightest voices" calibration caveat in
+> `score.ts` (Task 16, real in-book anchors), not a new mechanism — but it
+> is worse here because the audition-only pool is both smaller (N=6) and
+> more homogeneous (no real recording variance) than any in-book anchor
+> set the calibration was tuned against.
+> **Still owed:** this criterion, and — new — a decision on whether/how
+> to widen the severity band for small, synthetic-only Phase B pools (a
+> calibration/design question, not fixed here: the existing percentile
+> mechanism isn't wrong on its own terms, it just wasn't validated against
+> a pool this tight before). Recommend a follow-up issue scoped to that
+> specifically before this row can close. Full log/observation detail
+> (render RTFs, per-render text, raw cosines) is in this run's session
+> record; no code was changed by this run — the fixture and probe scripts
+> used were throwaway and were not committed.
+
 ### A37 · Russian dash-attributed dialogue — doubled-comma collapse pause by ear ([#2059](https://github.com/dudarenok-maker/Castwright/issues/2059), PR #2688) · **Coqui/XTTS resident, Russian text; no clone needed**
 
 PR #2688 fixed `softenDashes` (`server/src/tts/text-normalize.ts`) producing a
@@ -3194,6 +3331,85 @@ session accessible during `_ensure_loaded`. *Criteria:* the three bullets above 
 no separate run sheet; mechanism is integrated into Kokoro's existing health
 reporting. *Cost:* short — one Kokoro load with CPU-forced providers, one with
 CUDA working (or default unforced), and UI verification.
+
+### A104 · Analyzer GPU-split warning fires (and stays silent) correctly on real nvidia-smi output ([#2367](https://github.com/dudarenok-maker/Castwright/issues/2367)) · **two NVIDIA GPUs of different sizes** · PR #2753
+
+`detectOllamaGpuSplit()` (`server/src/gpu/ollama-gpu-split.ts`) shells out to
+real `nvidia-smi --query-compute-apps`/`--query-gpu` and every automated test
+here mocks `execFile`, so none of it has run against a real two-GPU box. Same
+open shape as the rest of this register: the parse/threshold logic is pinned
+in isolation, but never against genuine multi-GPU `nvidia-smi` output.
+
+- **PREREQUISITE:** First confirm on this box whether `nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv` returns numeric values for `used_memory` (alongside the readable `process_name` field) or `[N/A]`/`[Not Supported]` under this GPU's driver model (WDDM on Windows). If `[N/A]`, the `dataUnavailable` code path should be exercised separately instead of a real split/no-split result — until the WDDM question is settled, 'no warning fired' is not evidence of anything.
+- Load a model on Ollama that is oversized for one card but fits the combined
+  VRAM of both, so Ollama itself splits it across GPUs. Confirm
+  `detectOllamaGpuSplit()` reports `split: true` with the correct
+  `deviceIndices`, and `wouldFitSingleDevice: true`.
+- Confirm the server log warns exactly once for that split's device
+  signature (`server/src/analyzer/ollama.ts`), and does not repeat on
+  subsequent analyzer calls with the same signature.
+- Confirm the Advanced Configuration "Analyzer (Ollama) device" row
+  (`src/views/advanced.tsx`) shows the matching generic-split warning line: "Model split across GPUs [indices] despite fitting on one device".
+- Repeat with a model that is genuinely too big to fit on any single card
+  (`wouldFitSingleDevice: false`) and confirm NO warning fires anywhere —
+  server log or UI.
+- With `analyzer.ollama.expectedDevice` set to a GPU index that contradicts
+  the real single-device placement, confirm the server logs the mismatch
+  exactly once per distinct expected/detected pair: `[ollama] analyzer GPU
+  device mismatch: expected GPU N, detected on GPU M`. Confirm the UI shows
+  the single-device mismatch wording: "Analyzer model is on GPU M — expected GPU N
+  only" (distinct from the split-case wording above). Repeat with
+  `expectedDevice` contradicting a split (model is split across multiple
+  GPUs but expected on a different one) and confirm the server logs the
+  mismatch and the UI shows the split-mismatch wording: "Model split across
+  GPUs [indices] — expected GPU N only".
+
+*Needs:* two NVIDIA GPUs of different sizes, a local Ollama daemon, and a
+model sized to force a genuine split. *Criteria:* Castwright#2734 (the
+verify child for this chain) checklist item 6; the four task briefs under
+#2367 for the exact behaviour each piece owns. *Cost:* short — one oversized
+load that splits, one genuinely-too-big load that doesn't, one
+`expectedDevice` mismatch check.
+
+### A105 · Qwen base17 eviction guard and _DEVICE_LEDGER serialization ([#2752](https://github.com/dudarenok-maker/Castwright/issues/2752), PR [#2790](https://github.com/dudarenok-maker/Castwright/pull/2790)) · **single 8 GB GPU card, Qwen VoiceDesign 1.7B resident, real sidecar with base17 weights**
+
+PR #2790 (two rounds of independent review) improves base17 co-residency safety in `design_voice()`:
+the eviction guard now checks both `self._base17 is not None` and
+`self._base17_in_flight.busy` (closing the #1156-shape OOM where in-flight-but-unassigned
+base17 load was invisible); `unload_base17()` at `wait_seconds<=0` unconditionally nulls
+without waiting (restoring "Stop always succeeds"); base17 eviction wait moved outside
+the VoiceDesign block to avoid stalling concurrent Kokoro synths; and `design_voice()`
+now serializes via `_DEVICE_LEDGER.card_lock()` during the evict-through-VoiceDesign-load
+span to close a race where concurrent `mint_variant()` could reload base17 mid-eviction.
+Unit tests cannot prove VRAM co-residency, eviction ordering, or Stop-button success
+against the real model weights and sidecar lifecycle.
+
+- **Widened eviction guard prevents OOM in #1156 scenario.** On a single 8 GB GPU,
+  start a mint (`mint_variant()`) or a 1.7B synth so base17 begins loading — while
+  that load is in flight (`_base17_in_flight.busy`, `_base17` still `None`), trigger a
+  `design_voice()` call for a character on the same card. Confirm neither triggers an
+  OOM: the widened guard's check of `_base17_in_flight.busy` (not just
+  `self._base17 is not None`) makes `design_voice()` wait for the in-flight base17
+  load to clear before proceeding into the VoiceDesign load, instead of missing it
+  and letting both heavy models co-reside.
+- **Stop button works mid-base17-load.** While base17 is loading (mid-mint or
+  mid-1.7B-synth, `_base17_in_flight.busy` true), call `POST /unload` with body
+  `{"engine":"qwen","model":"1.7b"}` (or click Stop in the UI). Confirm the call
+  returns 200/success — not a 500 — and logs show the model unloaded immediately
+  (not waiting or raising), and `nvidia-smi` memory usage drops by ~3.4 GB (the
+  base17 1.7B model freed), proving the unconditional null at `wait_seconds<=0`
+  succeeded rather than the pass-1 regression (raising `Base17ContentionTimeoutError`
+  and freeing nothing).
+- **Bulk design run doesn't stall Kokoro.** With Kokoro resident, start a design run
+  (bulk "Design full cast" or repeated single-character designs), and concurrently
+  request a chapter render on a Kokoro voice in the same book. Confirm the render
+  completes within its normal wall-clock time (not paused/stalled waiting for base17
+  eviction). The eviction-wait moved outside the VoiceDesign block ensures this.
+
+*Needs:* single 8 GB GPU card, Qwen base17 weights (`server/tts-sidecar/voices/qwen/base17/`),
+Qwen VoiceDesign 1.7B model, real sidecar, optionally Kokoro resident for the third criterion.
+*Criteria:* the three bullets above — no separate run sheet.
+*Cost:* moderate — three concurrent-load/eviction scenarios + VRAM observation.
 
 ## Group B — local Ollama analyzer only
 
@@ -3678,7 +3894,9 @@ to real output, not about VRAM or a specific card.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E101 -->
+<!-- next-id: E103 -->
+
+Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5/E6/E8 for front-end acceptance), or platform-independent infrastructure (E1/E7/E9/E10/E11/E12/E101). E1/E7/E11 group on the Pinokio box; E6/E9/E10 need two live checkouts.
 
 ### E1 · ops-16 Pinokio installer ([#822](https://github.com/dudarenok-maker/Castwright/issues/822)) · **macOS is the gap**
 
@@ -4146,7 +4364,7 @@ where dev mode never rebinds — a losing checkout's server exits with an
 actionable `EADDRINUSE` instead), "my config says `LAN_HTTPS=1`" only means
 *this checkout would hold `:8443` if it won the race*, not that it currently
 does. There is no owner-note file for the main server's bound port the way
-`.run/tts.owner.json` exists for the sidecar, so neither script has an
+`.run/tts.owner.<port>.json` exists for the sidecar, so neither script has an
 authoritative source to settle it — the sweep now sweeps nothing for
 `:8443` rather than guess. This is a **coverage tradeoff, not a defect**: an
 orphaned LAN-HTTPS listener with no surviving PID file is no longer
@@ -4168,14 +4386,14 @@ running a live stack is "a real sidecar" in this register's own vocabulary
 worktree, e.g. slot 1: `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`,
 `LOCAL_TTS_PORT=9010`), each with **all three** of Vite, the server, and the
 sidecar live (`npm start` / `npm run dev`) so each checkout owns a
-`tts.owner.json` note. From the worktree, run `npm run stop` and observe
+`tts.owner.<port>.json` note. From the worktree, run `npm run stop` and observe
 **four** things, not just the sidecar pair: (1) the worktree's own sidecar
 (`:9010`) dies; (2) the primary's sidecar (`:9000`) survives; (3) the
 worktree's own Vite (`:5183`) and server (`:8090`) die; (4) the **primary's**
 Vite (`:5173`) and server (`:8080`) survive — this last pair is the one pass
 8 found broken and is the one an operator must not skip. Then repeat after a
-clean shutdown of the worktree's sidecar (so `tts.owner.json` is absent and
-the sweep falls back to `server/.env`/`.env.local`) and confirm the same
+clean shutdown of the worktree's sidecar (so `tts.owner.<port>.json` is absent
+and the sweep falls back to `server/.env`/`.env.local`) and confirm the same
 four-way discrimination holds. **Optionally**, if exercising the LAN-HTTPS
 path too: start the primary with `LAN_HTTPS=1` (so it's listening on
 `:8443`), then from the worktree run `npm run stop` and confirm the
@@ -4200,6 +4418,132 @@ a false "nothing to stop" while a raw exception scrolled past above it.
 this PR's description (§On-box acceptance) and `docs/features/` plan 43's
 stop-script contract, plus `scripts/lib/sidecar-sweep-port.mjs`'s own
 module-level comment for the exact fallback order being exercised.
+
+### E11 · Pinokio Install/Update: requirements CRLF normalization ([#2596](https://github.com/dudarenok-maker/Castwright/issues/2596), PR #2799) · **Windows box with pre-existing Pinokio install**
+
+PR #2799 adds `renormalizeRequirementsCrlf()` to `pinokio-scripts/lib/resolve-release.js`, 
+called during both `install.js` and `update.js` to normalize CRLF line endings in 
+`requirements/*.txt` files after `git checkout` of a release tag. Before `.gitattributes` 
+enforced `eol=lf` repo-wide, a user's pre-existing install may have stale CRLF 
+requirements. The normalization prevents spurious 'file changed' detections that would 
+trigger an unnecessary full `pip install --force-reinstall` on the next Update.
+
+- On a Windows machine with a **pre-existing** Pinokio install that has CRLF-mangled 
+  `requirements/*.txt` files (e.g. from a prior checkout before `.gitattributes` 
+  enforcement), run Update.
+- Confirm the requirements files are normalized to LF (check file endings via `file` 
+  or hex dump, or confirm the files read as unchanged after running the normalizer 
+  a second time).
+- Confirm that the normalization does not trigger an unnecessary `pip install` 
+  reinstall — `bootstrap-venv.mjs`'s `classifyVenvState` should see unchanged 
+  `reqHash` and take the `noop` branch, exiting before `runInstall`.
+- Confirm a subsequent Install (the `install.js` path) also normalizes any stale 
+  CRLF it finds to LF and proceeds with the normal install flow.
+
+*Needs:* a Windows machine with Pinokio installed, a pre-existing install with 
+CRLF-mangled `requirements/*.txt` (or ability to create one by checking out an old 
+release prior to `.gitattributes`). *Cost:* 10–15 minutes, grouping with E1's 
+Pinokio box. *Criteria:* this PR's `resolve-release.test.js` acceptance test 
+(automated verification of the CRLF→LF transform path), plus real-world confirmation 
+that a stale-CRLF install updates without spurious reinstall and that a fresh install 
+normalizes correctly. Issue #2596 and PR #2799 body.
+
+**One-update lag:** Updates FROM pre-#2799 releases run the old `resolve-release.js`, 
+so CRLF normalization only takes effect from the NEXT update onward (see E1 and 
+`pinokio-scripts/update.js` lines 19–28).
+
+### E12 · ASR warm footprint measurement via torch allocator peak ([#2682](https://github.com/dudarenok-maker/Castwright/issues/2682), PR #2799) · **GPU with CTranslate2/faster-whisper resident**
+
+PR #2799 changes how `asr.warm` (the learned warmup footprint for Whisper ASR) is 
+measured in the TTS sidecar (`server/tts-sidecar/main.py`). Previously, footprint was 
+estimated via a snapshot of free GPU memory before and after warm load. Now it is 
+measured via torch's allocator peak (the highest VRAM allocated during the entire 
+warm-up). This is more reliable than free-memory deltas because:
+
+- Free-memory measurements race against other concurrent processes and can miss 
+  spikes that spike-then-release.
+- Allocator peak is the actual peak VRAM the warm forward actually used, captured 
+  from the torch/CUDA allocator itself.
+
+However, the allocator-peak measurement is unproven on real hardware with a live 
+CTranslate2-backed ASR session (the pytest only stubs `_observed_mb` to a fixed 
+test value and doesn't exercise the real forward).
+
+- Load the TTS sidecar with `faster-whisper` engine resident on a GPU.
+- Trigger a real ASR warm-up via the app (e.g. during a repair/re-synthesis pass that 
+  needs the ASR transcription gate, or an explicit `POST /transcribe` call with sample PCM 
+  data).
+- Confirm that `asr.warm`'s learned footprint **moves off its 128 MB seed value** after 
+  the real warm forward completes — i.e., the allocator-peak measurement produces a 
+  positive, observed value that is recorded, not dropped.
+- Verify the recorded value matches the expected range for CTranslate2+faster-whisper 
+  on this box's GPU (typically a few hundred MB, depending on model size and CUDA 
+  compute capacity).
+
+*Needs:* a GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar 
+with ASR enabled (`SEG_ASR_ENABLED=1`) and configured to use GPU (`ASR_DEVICE=cuda`). *Cost:* short — one real ASR warm-up sequence 
+during a render or via manual endpoint. *Criteria:* the allocator-peak measurement in 
+`server/tts-sidecar/main.py`'s `FootprintTable` class must observe a positive value 
+recorded via its `record()` method when a real forward runs, not a stubbed test value. 
+Issue #2682 and PR #2799 body.
+
+### E101 · Port-keyed TTS owner notes prevent collision when servers share a run directory (#2641, PR #2754) · **no GPU needed**
+
+Before #2641, the TTS sidecar owner-note file was fixed at `.run/tts.owner.json`
+regardless of which port the sidecar was listening on. When two different server
+instances on different ports both used the same `.run` directory — set via
+`APP_RUN_DIR` environment variable pointing to a shared location — they would
+both try to write to this single fixed filename. Whichever wrote last would
+silently clobber the other's note, losing the ownership information (PID, port,
+lineage). A server reading the note later would find stale or wrong data about
+which sidecar it was supposed to manage.
+
+#2641 fixes this by keying the owner-note filename by port: each sidecar now
+writes to `.run/tts.owner.<port>.json`. When two instances share a `.run`
+directory, each gets its own file. The sidecar-sweep logic that reads owner
+notes to decide which listeners to kill also resolves the port, so it correctly
+discriminates: a sweep from port 8090 reads `tts.owner.8090.json` only and leaves
+`tts.owner.9000.json` untouched.
+
+The claim is never tested by E10 — that row's setup uses **two separate
+checkouts with two separate `.run/` directories**, so the fixed filename never
+collided even before this fix. E10 verifies the sweep correctly uses different
+ports; this row verifies the port-keying prevents collision when the run
+directory **is** shared.
+
+*Needs:* two checkouts of this repo, both with live TTS sidecars and servers on
+**different ports**, both pointing to the **same `.run/` directory**. The most
+straightforward setup: primary checkout at default ports (`PORT=8080`,
+`LOCAL_TTS_PORT=9000`) + worktree at slot 1 (`PORT=8090`, `LOCAL_TTS_PORT=9010`),
+then override both to share one `.run` by setting `APP_RUN_DIR=/abs/path/shared-run-dir` in
+**both** checkouts' `server/.env` before starting, so each server will write its
+owner note there instead of in its own checkout's `.run/`.
+
+Run `npm start` or `npm run dev` in each checkout. From the primary, observe:
+**(1)** `.run/tts.owner.9000.json` exists and contains the primary's sidecar PID;
+**(2)** `.run/tts.owner.9010.json` also exists (written by the worktree's
+sidecar) and contains a different PID. Both files coexist in the shared `.run`
+directory without collision — this is the core fix of #2641. Verify by inspecting
+file contents directly (e.g., `cat /abs/path/shared-run-dir/tts.owner.*.json`);
+the port-keyed naming prevents the overwrite-collision that would have occurred
+before this fix. 
+
+**Note:** Verifying the port-based sweep's behavior in a shared-run-dir configuration
+is not currently a safe on-box test, because the PID file (`.run/tts.pid`) is not
+port-keyed — only the owner notes are. When two servers share a run directory, both
+write to the same `tts.pid`, and whichever started last overwrites the first. Running
+`npm run stop` from either checkout can then kill the wrong process (the one whose
+PID happens to be in the file, not the one whose checkout the stop was issued from),
+defeating the separation the port-keyed owner notes provide. The actual #2641 fix
+(port-keyed owner-note filenames) is verified above; the sweep's correctness in
+this shared-run-dir scenario will require #2641 to be extended to port-key the PID
+files as well.
+
+*Cost:* 5–10 minutes to set up and run. Needs two live sidecars on the same host.
+*Criteria:* this PR's description (§On-box acceptance), the
+`.run/tts.owner.<port>.json` keying in `server/src/tts/sidecar-owner.ts`
+(the Node server that writes owner notes), and `scripts/lib/sidecar-sweep-port.mjs`
+and `.psm1` (the sweep logic that reads notes and falls back to config).
 
 ## Group G — GitHub Actions itself
 

@@ -3,7 +3,7 @@
 // on a different LOCAL_TTS_PORT: the sweep (a force-kill in stop-app.ps1, a
 // warn in stop-app.mjs) targeted the PRIMARY checkout's sidecar instead of
 // this checkout's own. Fix: read the actual owned port from
-// .run/tts.owner.json (server/src/tts/sidecar-owner.ts's SidecarOwnerNote).
+// .run/tts.owner.<port>.json (server/src/tts/sidecar-owner.ts's SidecarOwnerNote).
 //
 // N29: the note is absent in three routine states (after a clean shutdown,
 // with autoStartSidecar off, or before a sidecar has ever claimed ownership
@@ -51,11 +51,11 @@ function withTempServerEnv(contents, fn) {
   }
 }
 
-test('resolveSidecarSweepPort returns the per-checkout port recorded in tts.owner.json', () => {
+test('resolveSidecarSweepPort returns the per-checkout port recorded in tts.owner.<port>.json', () => {
   withTempRunDir((dir) => {
     writeFileSync(
-      join(dir, 'tts.owner.json'),
-      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: process.pid, ppid: process.ppid, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
     withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
       // The live owner note wins over server/.env when both are present.
@@ -64,7 +64,7 @@ test('resolveSidecarSweepPort returns the per-checkout port recorded in tts.owne
   });
 });
 
-test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when tts.owner.json is absent', () => {
+test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when no tts.owner.<port>.json note exists', () => {
   withTempRunDir((dir) => {
     withTempServerEnv('PORT=8080\nLOCAL_TTS_PORT=9030\n', (envPath) => {
       assert.equal(resolveSidecarSweepPort(dir, envPath), 9030);
@@ -72,9 +72,9 @@ test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when tts.
   });
 });
 
-test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when tts.owner.json is corrupt JSON', () => {
+test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when tts.owner.<port>.json is corrupt JSON', () => {
   withTempRunDir((dir) => {
-    writeFileSync(join(dir, 'tts.owner.json'), 'not valid json {{{');
+    writeFileSync(join(dir, 'tts.owner.9040.json'), 'not valid json {{{');
     withTempServerEnv('LOCAL_TTS_PORT=9040\n', (envPath) => {
       assert.equal(resolveSidecarSweepPort(dir, envPath), 9040);
     });
@@ -84,11 +84,30 @@ test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when tts.
 test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when the recorded port is out of range', () => {
   withTempRunDir((dir) => {
     writeFileSync(
-      join(dir, 'tts.owner.json'),
+      join(dir, 'tts.owner.99999.json'),
       JSON.stringify({ pid: 1234, ppid: 1, port: 99999, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
     withTempServerEnv('LOCAL_TTS_PORT=9050\n', (envPath) => {
       assert.equal(resolveSidecarSweepPort(dir, envPath), 9050);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort falls back to server/.env LOCAL_TTS_PORT when two note files exist in the same run dir (#2641 shared-APP_RUN_DIR scenario)', () => {
+  withTempRunDir((dir) => {
+    // Two live notes (both have current process PID) = ambiguous, must fall back
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: process.pid, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    writeFileSync(
+      join(dir, 'tts.owner.9011.json'),
+      JSON.stringify({ pid: process.pid, ppid: 1, port: 9011, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9060\n', (envPath) => {
+      // Two candidate notes, no way to tell which is current — must not
+      // guess between them; fall back exactly as the zero-match case does.
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9060);
     });
   });
 });
@@ -129,11 +148,11 @@ test('resolveSidecarSweepPort never returns the factory-default 9000 as a guess'
 // (resolve + assemble), so testing it end-to-end via real temp files proves
 // the resolved port actually reaches the swept list — there's no separate
 // "call site" left to independently mutate away from the tested behaviour.
-test('buildPortsToSweep includes the resolved sidecar port from tts.owner.json', () => {
+test('buildPortsToSweep includes the resolved sidecar port from tts.owner.<port>.json', () => {
   withTempRunDir((dir) => {
     writeFileSync(
-      join(dir, 'tts.owner.json'),
-      JSON.stringify({ pid: 1, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: process.pid, ppid: process.ppid, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
     );
     withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
       assert.deepEqual(buildPortsToSweep([8080, 8443], dir, envPath), [8080, 8443, 9010]);
@@ -227,7 +246,7 @@ test('stop-app.mjs resolves its server base port via resolveConfiguredServerPort
 // always spawns NODE_ENV=production, so listenWithAutoRebind can rebind
 // LAN_HTTPS_PORT away from its configured value on conflict — a
 // server/.env-derived guess could still name a port this checkout never
-// bound, and there is no owner-note file (unlike .run/tts.owner.json) to
+// bound, and there is no owner-note file (unlike .run/tts.owner.<port>.json) to
 // settle it. basePorts must stay resolver-derived only, never a literal
 // 8443 added back in.
 test('stop-app.mjs never assembles a literal 8443 into basePorts', () => {
@@ -450,4 +469,156 @@ test('getStopSummaryMessage distinguishes "no ports resolved" from "checked and 
     '[OK] nothing to stop (no ports resolved for this checkout)',
   );
   assert.equal(getStopSummaryMessage(false, false, [8080]), '[OK] nothing to stop');
+});
+
+// #2754 review finding — the regex /^tts\.owner\.\d+\.json$/ enforces
+// digits-only for the port segment, but all existing test fixtures happened
+// to already use clean port segments, so a mutant regex like /^tts\.owner\..*\.json$/
+// (accepting ANY characters) would pass every test unchanged. This cell pins
+// the digits-only requirement by creating a run dir with BOTH a valid note file
+// AND a malformed one with a non-numeric port segment, asserting the malformed
+// file is filtered out and the resolution still succeeds with the valid file.
+test('resolveSidecarSweepPort filters out note files with non-numeric port segments (mutation-proof digits-only gate)', () => {
+  withTempRunDir((dir) => {
+    // Valid file with digits-only port segment
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    // Malformed file with letters in the port segment
+    writeFileSync(
+      join(dir, 'tts.owner.abc.json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 123, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
+      // The malformed file should be filtered out by the regex, leaving exactly one valid file,
+      // which resolves successfully to 9010 (not falling back to 9020).
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort filters out note files with mixed alphanumeric port segments', () => {
+  withTempRunDir((dir) => {
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    // Malformed file with digits and letters mixed
+    writeFileSync(
+      join(dir, 'tts.owner.90a0.json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 123, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort filters out note files with non-alphanumeric characters in port segment', () => {
+  withTempRunDir((dir) => {
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    // Malformed file with dash/hyphen in port segment
+    writeFileSync(
+      join(dir, 'tts.owner.90-10.json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort filters out note files with empty port segment', () => {
+  withTempRunDir((dir) => {
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    // Malformed file with empty port segment (just dots)
+    writeFileSync(
+      join(dir, 'tts.owner..json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 123, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
+    });
+  });
+});
+
+test('resolveSidecarSweepPort falls back to server/.env when run dir contains ONLY malformed note files', () => {
+  withTempRunDir((dir) => {
+    // Only malformed files, no valid digits-only note file
+    writeFileSync(
+      join(dir, 'tts.owner.abc.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: 123, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    writeFileSync(
+      join(dir, 'tts.owner.90x0.json'),
+      JSON.stringify({ pid: 5678, ppid: 1, port: 456, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9030\n', (envPath) => {
+      // No valid files match the digits-only regex, so fall back to server/.env
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9030);
+    });
+  });
+});
+
+test('#2754 — resolveSidecarSweepPort uses a stale note (dead PID) when it is the only one (orphan detection)', () => {
+  // Concrete scenario: a server crashed hard (taskkill /T /F), leaving its sidecar
+  // running and orphaned. The note has a dead PID, but its EXISTENCE is the signal
+  // for the sweep to know "reap this port". If the resolver filters by PID liveness
+  // on the read side, it loses the signal for orphan detection.
+  withTempRunDir((dir) => {
+    // Stale note: dead PID (99999 is virtually guaranteed never to be running)
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 99999, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9020\n', (envPath) => {
+      // The single note should be used (9010), not fall back to server/.env (9020),
+      // even though its PID is dead. This is critical for `npm run stop` to detect
+      // and reap an orphaned sidecar left by a hard-killed server.
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9010);
+    });
+  });
+});
+
+test('narrow review, correctness bug 2 — a boolean `port` field does not coerce to 1 via Number(true)', () => {
+  // Number(true) === 1, and Number.isInteger(1) === true, so a naive
+  // `Number(note.port)` coercion would silently accept a malformed note
+  // whose port field is a boolean, resolving to port 1. The port field
+  // must be a genuine number before any arithmetic coercion is applied.
+  withTempRunDir((dir) => {
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 1234, ppid: 1, port: true, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9030\n', (envPath) => {
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9030);
+    });
+  });
+});
+
+test('#2754 — resolveSidecarSweepPort falls back to server/.env when two notes exist (ambiguous)', () => {
+  withTempRunDir((dir) => {
+    // Two notes, whether dead or live — the existence of multiple notes means
+    // ambiguity and we cannot pick a winner. The sweep resolver cannot distinguish
+    // which note represents the actual sidecar, so it falls back to server/.env.
+    writeFileSync(
+      join(dir, 'tts.owner.9010.json'),
+      JSON.stringify({ pid: 99999, ppid: 1, port: 9010, startedAt: '2026-08-25T00:00:00.000Z' }),
+    );
+    writeFileSync(
+      join(dir, 'tts.owner.9011.json'),
+      JSON.stringify({ pid: 99998, ppid: 1, port: 9011, startedAt: '2026-08-25T00:00:01.000Z' }),
+    );
+    withTempServerEnv('LOCAL_TTS_PORT=9030\n', (envPath) => {
+      // Two notes = ambiguous; fall back to server/.env (not the digits of either note).
+      assert.equal(resolveSidecarSweepPort(dir, envPath), 9030);
+    });
+  });
 });

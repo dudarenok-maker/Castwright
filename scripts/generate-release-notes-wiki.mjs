@@ -65,7 +65,7 @@ export function reflowHardWrappedMarkdown(markdown) {
   let mode = null; // null | 'listItem' | 'para' | 'blockquote'
 
   for (const line of lines) {
-    if (/^\s*```/.test(line)) {
+    if (/^\s*\u0060\u0060\u0060/.test(line)) {
       out.push(line);
       inFence = !inFence;
       mode = null;

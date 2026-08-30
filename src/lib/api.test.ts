@@ -10,6 +10,7 @@ import {
   _resetMockListenStats,
   readE2eUpdateOverride,
   readE2eWorkspaceRootOverride,
+  readE2eAnalyzerGpuSplitOverride,
   readDemoWhatsNewOverride,
   buildMockAppInfo,
   loadMockReleaseNotes,
@@ -381,6 +382,42 @@ describe('readE2eWorkspaceRootOverride (bug #1298)', () => {
     expect(readE2eWorkspaceRootOverride('?e2eWorkspaceRoot=C%3A%5CLong%5CPath')).toBe(
       'C:\\Long\\Path',
     );
+  });
+});
+
+describe('readE2eAnalyzerGpuSplitOverride (#2367 e2e seam)', () => {
+  it('defaults to null when the param is absent', () => {
+    expect(readE2eAnalyzerGpuSplitOverride('')).toBeNull();
+    expect(readE2eAnalyzerGpuSplitOverride('?foo=bar')).toBeNull();
+  });
+
+  it('honours ?e2eAnalyzerGpuSplit=split', () => {
+    const result = readE2eAnalyzerGpuSplitOverride('?e2eAnalyzerGpuSplit=split');
+    expect(result).toEqual({
+      reachable: true,
+      split: true,
+      deviceIndices: [0, 1],
+      totalUsedMb: 5000,
+      wouldFitSingleDevice: true,
+      dataUnavailable: false,
+    });
+  });
+
+  it('honours ?e2eAnalyzerGpuSplit=unavailable', () => {
+    const result = readE2eAnalyzerGpuSplitOverride('?e2eAnalyzerGpuSplit=unavailable');
+    expect(result).toEqual({
+      reachable: true,
+      split: false,
+      deviceIndices: [0],
+      totalUsedMb: 4200,
+      wouldFitSingleDevice: false,
+      dataUnavailable: true,
+    });
+  });
+
+  it('returns null for unrecognized override values', () => {
+    expect(readE2eAnalyzerGpuSplitOverride('?e2eAnalyzerGpuSplit=invalid')).toBeNull();
+    expect(readE2eAnalyzerGpuSplitOverride('?e2eAnalyzerGpuSplit=')).toBeNull();
   });
 });
 
