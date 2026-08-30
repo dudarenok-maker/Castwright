@@ -29,7 +29,7 @@ function joinRel(dir, href) {
 export function findOpfPath(entries) {
   const container = entries['META-INF/container.xml'];
   if (!container) throw new Error('epub: missing META-INF/container.xml');
-  const m = strFromU8(container).match(/<rootfile\b[^>]*\bfull-path="([^"]+)"/);
+  const m = strFromU8(container).match(/<rootfile\b[^>]*\bfull-path=\u0022([^\u0022]+)\u0022/);
   if (!m) throw new Error('epub: no <rootfile full-path> in container.xml');
   return m[1];
 }
@@ -43,13 +43,13 @@ export function findCover(entries) {
 
   // Attribute order isn't fixed by the spec — find the tag by name="cover",
   // then read content= from within it regardless of order.
-  const metaTag = opf.match(/<meta\b[^>]*\bname="cover"[^>]*>/);
-  const coverId = metaTag && metaTag[0].match(/\bcontent="([^"]+)"/)?.[1];
+  const metaTag = opf.match(/<meta\b[^>]*\bname=\u0022cover\u0022[^>]*>/);
+  const coverId = metaTag && metaTag[0].match(/\bcontent=\u0022([^\u0022]+)\u0022/)?.[1];
   if (!coverId) throw new Error('epub: no <meta name="cover"> in opf');
 
   const item = opf.match(new RegExp(`<item\\b[^>]*\\bid="${escapeRe(coverId)}"[^>]*?/?>`));
   if (!item) throw new Error(`epub: no manifest <item id="${coverId}">`);
-  const href = item[0].match(/\bhref="([^"]+)"/);
+  const href = item[0].match(/\bhref=\u0022([^\u0022]+)\u0022/);
   if (!href) throw new Error('epub: cover manifest item has no href');
 
   const opfDir = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/')) : '';
@@ -83,8 +83,8 @@ export function slimEpubBuffer(inputBuf, coverJpgBytes) {
 
   // opf: retarget the cover item's href + media-type in one surgical edit.
   const newItem = coverItem
-    .replace(/\bhref="[^"]+"/, () => `href="${newHref}"`)
-    .replace(/\bmedia-type="[^"]+"/, () => 'media-type="image/jpeg"');
+    .replace(/\bhref=\u0022[^\u0022]+\u0022/, () => `href="${newHref}"`)
+    .replace(/\bmedia-type=\u0022[^\u0022]+\u0022/, () => 'media-type="image/jpeg"');
   const newOpf = opf.replace(coverItem, () => newItem);
 
   const rebuilt = {};

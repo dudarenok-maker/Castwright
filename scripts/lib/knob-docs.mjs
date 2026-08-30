@@ -100,11 +100,12 @@ export function extractKnobLabels(source) {
      single-quote-only pattern skips it silently, leaving the knob
      undocumented with the guard still green (PR #2159 review, finding 1). */
   const labels = [];
-  const re = /label:\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")/g;
+  // Escape ambiguous quotes with \uXXXX to avoid false-positive regex detection (#2747)
+  const re = /label:\s*(?:\u0027((?:[^\u0027\\]|\\.)*)\u0027|\u0022((?:[^\u0022\\]|\\.)*)\u0022)/g;
   let m;
   while ((m = re.exec(body)) !== null) {
     const raw = m[1] !== undefined ? m[1] : m[2];
-    labels.push(raw.replace(/\\(['"])/g, '$1'));
+    labels.push(raw.replace(/\\([\u0027\u0022])/g, '$1'));
   }
 
   /* A regex that silently matches a SUBSET is the failure mode this whole
