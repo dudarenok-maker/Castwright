@@ -150,6 +150,35 @@ test('aggregator sentinel: detect is in needs: and its result/ok are checked fir
   );
 });
 
+test('leg-result check: needs.json is validated before processing', () => {
+  const jobBlocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const aggregator = jobBlocks.find(([, name]) => name === 'verify');
+  assert.ok(aggregator, 'aggregator job `verify` not found');
+  const [, , body] = aggregator;
+
+  const legCheckBody = body.slice(body.indexOf('- name: Check leg results'));
+  assert.ok(
+    legCheckBody,
+    'no "Check leg results" step found in the verify aggregator job',
+  );
+
+  // Guard against jq failures inside command substitutions (set -e does not
+  // catch those): the step must validate needs.json is parseable JSON before
+  // trying to use it, and must guard the `for job in $(jq ...)` with an
+  // explicit error check — not just relying on errexit inside $(...)
+  assert.match(
+    legCheckBody,
+    /jq\s+(-e|--exit-status)\s+\.\s+needs\.json.*exit\s+1/s,
+    'step does not validate needs.json is valid JSON before processing',
+  );
+
+  assert.match(
+    legCheckBody,
+    /job_list="\$\(jq\s+-r\s+'keys\[\]'\s+needs\.json\)"\s*\|\|\s*\{/,
+    'step does not guard the jq "keys[]" call with explicit error checking (||)',
+  );
+});
+
 // Setup steps (ffmpeg, Playwright cache/install) are not legs. Each declares
 // the leg it supports; its condition must be identical to that leg's, or e2e
 // runs without a browser.

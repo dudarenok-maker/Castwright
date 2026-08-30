@@ -548,13 +548,38 @@ jobs:
         # ~50 minutes on PR #2424, three apt-hang cancellations misread as
         # real test failures). Bucket by job name via jq instead so the log
         # itself says which legs were cancelled (likely CI infra) vs. failed.
+        #
+        # ROBUSTNESS GUARD (ops-2449): bash's `set -e` does not trip on
+        # command-substitution failures inside for/while word lists, so a
+        # missing/corrupt needs.json would silently exit 0. Validate JSON after
+        # writing it, and guard each jq call with explicit error checking rather
+        # than relying on errexit inside $(...) command substitutions.
         run: |
           echo '${{ toJSON(needs) }}' > needs.json
+
+          # Fail closed if needs.json is not valid JSON
+          if ! jq -e . needs.json > /dev/null 2>&1; then
+            echo "::error::needs.json is not valid JSON — cannot verify leg results, refusing to report green"
+            cat needs.json
+            exit 1
+          fi
+
           CANCELLED=()
           FAILED=()
           SKIPPED=()
-          for job in $(jq -r 'keys[]' needs.json); do
-            result="$(jq -r --arg j "$job" '.[$j].result' needs.json)"
+
+          # Capture the job list and check jq exit code explicitly (errexit
+          # does not catch failures inside command-substitution word lists).
+          job_list="$(jq -r 'keys[]' needs.json)" || {
+            echo "::error::failed to list job keys from needs.json"
+            exit 1
+          }
+
+          for job in $job_list; do
+            result="$(jq -r --arg j "$job" '.[$j].result' needs.json)" || {
+              echo "::error::failed to read result for job '$job'"
+              exit 1
+            }
             case "$result" in
               cancelled) CANCELLED+=("$job") ;;
               failure) FAILED+=("$job") ;;
