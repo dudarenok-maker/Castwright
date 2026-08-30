@@ -98,7 +98,11 @@ export function createHardTimeoutAbortReason(message = 'capacity-retry caller ti
   return reason;
 }
 
-function isHardTimeoutAbort(reason: unknown): boolean {
+/** Exported so tests can assert the ACTUAL marker-checking logic recognises a
+    given abort reason, rather than only comparing `.name`/`.message` — a
+    same-shape-but-unmarked `DOMException('msg', 'AbortError')` would pass a
+    shape-only comparison while failing this one (#2678 review finding F3). */
+export function isHardTimeoutAbort(reason: unknown): boolean {
   return typeof reason === 'object' && reason !== null && (reason as Record<symbol, unknown>)[HARD_TIMEOUT_ABORT_MARKER] === true;
 }
 

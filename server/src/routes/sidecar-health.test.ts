@@ -72,7 +72,7 @@ vi.mock('../gpu/capacity-retry.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../gpu/capacity-retry.js')>();
   return { ...actual, withCapacityRetry: vi.fn() };
 });
-import { withCapacityRetry, createHardTimeoutAbortReason } from '../gpu/capacity-retry.js';
+import { withCapacityRetry, createHardTimeoutAbortReason, isHardTimeoutAbort } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 
 function makeApp() {
@@ -727,6 +727,15 @@ describe('POST /api/sidecar/load', () => {
       const reason = capturedSignal?.reason as { name?: string; message?: string } | undefined;
       expect(reason?.name).toBe(expected.name);
       expect(reason?.message).toBe(expected.message);
+      /* The name/message pair above is trivially reproducible by a bare
+         `new DOMException('Sidecar /load caller timeout', 'AbortError')` that
+         never actually calls createHardTimeoutAbortReason — same shape, no
+         Symbol marker (#2678 review finding F3, mutation-proven: that hand-
+         built mutation left the two assertions above green). Assert the REAL
+         marker-checking function recognises the captured reason so this test
+         proves the mechanism withCapacityRetry's catch block actually relies
+         on, not just a shape comparison. */
+      expect(isHardTimeoutAbort(capturedSignal?.reason)).toBe(true);
 
       expect(res.status).toBe(503);
     } finally {
