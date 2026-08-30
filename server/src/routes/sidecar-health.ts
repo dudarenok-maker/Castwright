@@ -27,7 +27,7 @@ import {
   type SidecarDeviceMap,
 } from '../gpu/engine-device-state.js';
 import { TRACKED_ENGINES } from '../gpu/tracked-engines.js';
-import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { withCapacityRetry, createHardTimeoutAbortReason } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { setProbeSidecarHealthProvider } from '../gpu/sidecar-health-gate.js';
 
@@ -597,7 +597,12 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
   const url = getResolvedSidecarUrl();
   const target = `${url}/load`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LOAD_TIMEOUT_MS);
+  /* Marked with createHardTimeoutAbortReason() (#2678 re-review N3) so
+     withCapacityRetry's design-budget catch block recognises THIS abort as
+     its own hard timeout and converts it to NoCapacityError — as opposed to
+     an unmarked abort (e.g. a user Pause on the synthesis path), which must
+     pass through unconverted. See capacity-retry.ts's own comment. */
+  const timer = setTimeout(() => controller.abort(createHardTimeoutAbortReason('Sidecar /load caller timeout')), LOAD_TIMEOUT_MS);
   try {
     const engine = (((req.body ?? {}) as { engine?: unknown }).engine as string) || 'coqui';
     const upstream = await withCapacityRetry(

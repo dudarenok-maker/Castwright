@@ -67,6 +67,41 @@ export function getCapacityWaiterCount(): number {
   return _capacityWaiters;
 }
 
+/* Marker distinguishing "the CALLER's own hard-timeout AbortController fired"
+   (currently only /api/sidecar/load's 90s ceiling, server/src/routes/
+   sidecar-health.ts) from every other reason `opts.signal` can abort for —
+   most importantly a user Pause or a regen-displacement abort on the
+   synthesis path (server/src/routes/generation.ts's `chapterCtrl`), which
+   shares this same `withCapacityRetry` call via server/src/tts/sidecar.ts.
+   Both cases produce a `DOMException(..., 'AbortError')`, so `.name` alone
+   can't tell them apart — only a caller that OPTS IN by aborting with a
+   reason created via `createHardTimeoutAbortReason()` gets converted to
+   `NoCapacityError` below; every other abort (the default, safe case) is
+   rethrown as a plain AbortError so a route's own pause-detection (e.g.
+   generation.ts's `name === 'AbortError'` check) still sees it (#2678
+   re-review N3 — a Pause during the extended design-wait was previously
+   surfacing as a fatal `vram-spill` instead of a clean pause). */
+const HARD_TIMEOUT_ABORT_MARKER = Symbol('capacityRetryHardTimeoutAbort');
+
+/** Creates an abort reason for a caller's own hard-timeout `AbortController`
+    (e.g. /api/sidecar/load's 90s ceiling) that should be converted to
+    `NoCapacityError` if it fires while `withCapacityRetry` is polling on the
+    extended design-wait budget. Keeps `.name === 'AbortError'` so any other
+    code inspecting the error shape (e.g. sidecar-health.ts's own `isTimeout`
+    check) is unaffected — only `withCapacityRetry`'s catch block below reads
+    the marker. Do NOT use this for a signal that can also fire for a user
+    Pause or a regen-displacement (e.g. generation.ts's `chapterCtrl`) — those
+    must remain unmarked so they pass through as a plain AbortError. */
+export function createHardTimeoutAbortReason(message = 'capacity-retry caller timeout'): DOMException {
+  const reason = new DOMException(message, 'AbortError');
+  Object.defineProperty(reason, HARD_TIMEOUT_ABORT_MARKER, { value: true });
+  return reason;
+}
+
+function isHardTimeoutAbort(reason: unknown): boolean {
+  return typeof reason === 'object' && reason !== null && (reason as Record<symbol, unknown>)[HARD_TIMEOUT_ABORT_MARKER] === true;
+}
+
 export interface CapacityRetryOpts {
   engine: string;
   signal?: AbortSignal;
@@ -299,8 +334,18 @@ export async function withCapacityRetry(
        Once this call has committed to the design budget, treat the caller's
        own signal firing as the equivalent of exhausting that budget: report
        the same NoCapacityError the caller would have seen at
-       designMaxAttempts, using the last noCapacity body observed. */
-    if (usingDesignBudget && opts.signal?.aborted && lastNoCap) {
+       designMaxAttempts, using the last noCapacity body observed.
+
+       Gated on `isHardTimeoutAbort` (#2678 re-review N3): `opts.signal` is
+       ALSO the run's own cancellation signal on the synthesis path (server/
+       src/tts/sidecar.ts → generation.ts's `chapterCtrl`), which aborts for a
+       user Pause or a regen displacement — a case that must surface as a
+       plain AbortError, not this NoCapacityError, so generation.ts's own
+       pause-detector still recognises it. Only a signal aborted via
+       `createHardTimeoutAbortReason()` (currently just /api/sidecar/load's
+       90s ceiling) gets converted; every other abort falls through to the
+       plain `throw err` below. */
+    if (usingDesignBudget && opts.signal?.aborted && isHardTimeoutAbort(opts.signal.reason) && lastNoCap) {
       throw new NoCapacityError(
         opts.engine as TtsEngine,
         lastNoCap.neededMb,

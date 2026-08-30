@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { withCapacityRetry, getCapacityWaiterCount, parseNoCapacity } from './capacity-retry.js';
+import {
+  withCapacityRetry,
+  getCapacityWaiterCount,
+  parseNoCapacity,
+  createHardTimeoutAbortReason,
+} from './capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { setProbeSidecarHealthProvider } from './sidecar-health-gate.js';
 
@@ -363,7 +368,7 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     expect(getCapacityWaiterCount()).toBe(0);
   });
 
-  it('PR-review finding: caller abort mid-design-budget throws NoCapacityError, not a raw AbortError', async () => {
+  it('PR-review finding: caller HARD-TIMEOUT abort mid-design-budget throws NoCapacityError, not a raw AbortError', async () => {
     /* Simulates /api/sidecar/load's own 90s AbortController firing before the
        ~200s extended design-wait budget completes. Before the fix, once
        usingDesignBudget flips true, abortableDelay's rejection (the caller's
@@ -377,7 +382,9 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
        just been committed to (call #3, with maxAttempts:2) — mirroring the
        real route's 90s ceiling landing partway through the extended window.
        pollMs:0 keeps every wait a same-tick no-op except the one the abort
-       lands on. */
+       lands on. The abort is marked via createHardTimeoutAbortReason() —
+       exactly what /api/sidecar/load's route now does (#2678 re-review N3) —
+       so this stays the ONLY abort shape withCapacityRetry converts. */
     const controller = new AbortController();
     let calls = 0;
     const doPost = vi.fn(async () => {
@@ -386,7 +393,7 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
         // The caller's own hard timeout fires here — after usingDesignBudget
         // has been committed to (set on call #2), but long before this call's
         // own designMaxAttempts could ever be reached.
-        controller.abort(new DOMException('caller timeout', 'AbortError'));
+        controller.abort(createHardTimeoutAbortReason('caller timeout'));
       }
       return noCapacityResponse(4_000, 'cuda:0');
     });
@@ -410,6 +417,51 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     expect((err as InstanceType<typeof NoCapacityError>).engine).toBe('qwen');
     expect((err as InstanceType<typeof NoCapacityError>).neededMb).toBe(4_000);
     expect((err as InstanceType<typeof NoCapacityError>).deviceKey).toBe('cuda:0');
+    expect(calls).toBe(3);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('#2678 re-review N3: a user-pause/regen-displacement abort mid-design-budget passes through as a plain AbortError, not NoCapacityError', async () => {
+    /* Mirrors the previous test exactly, EXCEPT the caller's AbortController
+       fires with the same unmarked shape generation.ts's `chapterCtrl` uses
+       (a bare `.abort()` — see generation.ts's `onParentAbort`/explicit-pause
+       call sites) rather than createHardTimeoutAbortReason(). This is the
+       signal shape a real user Pause or regen displacement produces on the
+       synthesis path (server/src/tts/sidecar.ts shares the SAME
+       withCapacityRetry call with /api/sidecar/load). Before the fix, ANY
+       abort while usingDesignBudget was true — marked or not — was converted
+       to NoCapacityError, which generation.ts's `name === 'AbortError'`
+       pause-detector does not recognise, so it fell through to
+       describeSynthesisError and surfaced as a fatal `vram-spill` instead of
+       a clean pause. The fix must let this unmarked abort through unchanged:
+       a plain AbortError, `.name === 'AbortError'`, not NoCapacityError. */
+    const controller = new AbortController();
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 3) {
+        controller.abort(); // unmarked — exactly what a user Pause produces
+      }
+      return noCapacityResponse(4_000, 'cuda:0');
+    });
+    const isDesignResident = vi.fn().mockResolvedValue(true);
+
+    const err = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident,
+      signal: controller.signal,
+      pollMs: 0,
+      maxAttempts: 2,
+      designMaxAttempts: 1_000,
+    }).then(
+      () => null,
+      (e) => e,
+    );
+
+    expect(err).not.toBeInstanceOf(NoCapacityError);
+    expect((err as { name?: string })?.name).toBe('AbortError');
     expect(calls).toBe(3);
     expect(getCapacityWaiterCount()).toBe(0);
   });
