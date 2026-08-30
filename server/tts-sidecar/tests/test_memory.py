@@ -1451,6 +1451,39 @@ def test_qwen_resident_device_key_reports_rocm_family_on_rocm_box(monkeypatch):
     assert main._qwen_resident_device_key(qwen) == "rocm:0"
 
 
+def test_qwen_resident_device_key_handles_already_indexed_rocm_device():
+    """Admission hands an engine an ALREADY-resolved device string -- on a
+    real AMD box that string can itself read "rocm:N" directly, not only the
+    torch-native "cuda:N" the sibling test above normalises via
+    `_cuda_is_rocm()`. No `_cuda_is_rocm()` monkeypatch here on purpose: this
+    pins `_parse_device`/`_qwen_resident_device_key` handling a `_device`
+    value that is ALREADY "rocm:0", independent of the cuda->rocm
+    normalisation path (#2678 review N1). Before the fix, `_parse_device`
+    had no "rocm" branch, so "rocm:0" fell through to its final `return (p,
+    None)` with the WHOLE STRING "rocm:0" as the family -- never in
+    ("cuda", "rocm") -- and `_qwen_resident_device_key` returned None."""
+    qwen = main.QwenEngine()
+    qwen._base = object()
+    qwen._device = "rocm:0"
+
+    assert main._qwen_resident_device_key(qwen) == "rocm:0"
+
+
+def test_qwen_resident_device_key_covers_base17_only_residency():
+    """A genuinely resident Qwen engine with ONLY the 1.7B-Base model loaded
+    (not `_base`, not `_design`) must still report a device key -- the same
+    `_engine_actual_card`-style blindness this function was written to fix
+    for `_base`/`_design` (#2678 review N1), reproduced for the `_base17`
+    tier (#2678 review N3). `health()` treats `qwen._base17 is not None` as
+    the residency sentinel for this tier (`qwen_base17_loaded`), so
+    `_qwen_resident_device_key` must too."""
+    qwen = main.QwenEngine()
+    qwen._base17 = object()
+    qwen._device = "cuda:1"
+
+    assert main._qwen_resident_device_key(qwen) == "cuda:1"
+
+
 def test_debug_memory_includes_inflight_synth_top_level_key(monkeypatch):
     """/debug/memory must expose `inflight_synth` as a top-level key (sibling to
     `process`, `gc`, `engines`, `cuda`) so an idle-measurement probe can read the

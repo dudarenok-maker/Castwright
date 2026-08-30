@@ -3771,8 +3771,19 @@ def _audio_duration_ms(audio: Any, sample_rate: int) -> float:
 
 def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     """Split a device knob value into (family, index). The single place that
-    understands the cuda:N grammar — every engine routes through it so an indexed
-    pin can't silently degrade. Malformed index ('cuda:x') keeps family, drops index."""
+    understands the cuda:N / rocm:N grammar — every engine routes through it so
+    an indexed pin can't silently degrade. Malformed index ('cuda:x') keeps
+    family, drops index.
+
+    `rocm:N` is handled explicitly, not just `cuda:N`-then-normalised (#2678
+    review N1): admission hands engines an ALREADY-indexed device string, and
+    on a real AMD box that string can itself read `"rocm:N"` directly (not
+    only the torch-native `"cuda:N"` that `_qwen_resident_device_key`
+    normalises via `_cuda_is_rocm()`). Without this branch a `"rocm:0"` input
+    fell through to the final `return (p, None)` with the WHOLE string
+    (`"rocm:0"`) as the family — never splitting the index — so every caller
+    gating on `fam in ("cuda", "rocm")` silently treated a resident ROCm
+    engine as absent."""
     p = (value or "auto").strip().lower()
     if p in ("", "auto"):
         return ("auto", None)
@@ -3781,6 +3792,9 @@ def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     if p.startswith("cuda"):
         _, _, idx = p.partition(":")
         return ("cuda", int(idx) if idx.isdigit() else None)
+    if p.startswith("rocm"):
+        _, _, idx = p.partition(":")
+        return ("rocm", int(idx) if idx.isdigit() else None)
     return (p, None)
 
 
@@ -5052,8 +5066,18 @@ def _is_resident(engine_id: str) -> Optional[str]:
 def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
     """Concrete "cuda:N"/"rocm:N" device key for a QwenEngine, valid whenever
     ANY of its models are resident or in-flight -- the Base 0.6B (`_base is
-    not None`) or the transient VoiceDesign (`_design is not None` or
-    `_design_in_flight.busy`).
+    not None`), the 1.7B-Base (`_base17 is not None`), or the transient
+    VoiceDesign (`_design is not None` or `_design_in_flight.busy`).
+
+    `_base17` residency counts for the same reason `_base` does (#2678 review
+    N3): `_ensure_base17_loaded` mirrors `_ensure_base_loaded` exactly --
+    same `_cold_load_lock`, same `_ensure_device_resolved()` call setting the
+    ONE shared `self._device` before its weights pull -- so a resident-only-
+    `_base17` engine is genuinely on a concrete device, same as a
+    resident-only-`_base` one; the sentinel used elsewhere for this tier is
+    `health()`'s own `qwen_base17_loaded = qwen._base17 is not None`.
+    Omitting it reproduced, for `_base17`, the exact `_engine_actual_card`
+    blindness this function exists to fix for `_base`/`_design`.
 
     Deliberately NOT `_is_resident("qwen")` / `_engine_actual_card` (#2678
     review N1): that path resolves a model-presence gate scanning
@@ -5095,6 +5119,7 @@ def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
         return None
     resident = (
         qwen._base is not None
+        or qwen._base17 is not None
         or qwen._design is not None
         or qwen._design_in_flight.busy
     )
