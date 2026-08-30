@@ -2328,7 +2328,7 @@ above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
 > rather than a raw `AbortError`. A further review fix pins that the check keys off
 > the live `qwenDesignResident` flag, not the process-lifetime `qwenDesignEverLoaded`
 > latch, so the extension doesn't wrongly apply to every capacity denial after a
-> box's first-ever design. All of this is proven by sidecar-side unit tests against a
+> box's first-ever design. All of this is proven by Node-side unit tests against a
 > *simulated* health provider (`defaultIsDesignResident`, `capacity-retry.test.ts`) —
 > none of them touch a real sidecar with genuine warm VoiceDesign residency, so
 > **this row stays open**: bullets 4–6 above (added for this fix) are what still needs

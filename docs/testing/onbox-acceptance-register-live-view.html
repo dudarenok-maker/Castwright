@@ -215,7 +215,7 @@
     "wait" choice (<code>withCapacityRetry</code>'s extended design-residency wait, qualified
     by <code>deviceKey</code>, plus the caller-abort and <code>qwenDesignEverLoaded</code>-confusion
     fixes found in its own review). The row stays live and owed: the fix is pinned by
-    sidecar-side unit tests against a <em>simulated</em> health provider, not a real sidecar
+    Node-side unit tests against a <em>simulated</em> health provider, not a real sidecar
     with genuine warm VoiceDesign residency, so whether the render now actually waits (rather
     than the observed <code>vram-spill</code> failure) is still unproven on real hardware. See
     the row body for the updated acceptance criteria.

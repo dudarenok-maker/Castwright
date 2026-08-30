@@ -33,9 +33,13 @@ describe('describeVramBlockers', () => {
   });
 
   it('names an in-progress voice design as a blocker (#2678)', () => {
-    /* Unlike a resident Qwen base or Coqui, admission never auto-evicts a
-       resident VoiceDesign — it frees itself once idle — so this is the one
-       case where "wait it out" is the actionable, and only, remedy. */
+    /* While genuinely in-flight (a design forward actively computing), there
+       is no auto-evict at all — same as a resident Qwen base or Coqui mid-
+       forward. Once merely resident-and-idle, the sidecar's own admission
+       ladder DOES auto-evict it (ttl 0) as a side effect of the next
+       admission attempt — but that's a side effect of a later retry, not of
+       the request that has already been denied, so "wait it out" is still
+       the whole correct remedy either way. */
     const out = describeVramBlockers({ qwenDesignResident: true });
     expect(out).toEqual([
       {
