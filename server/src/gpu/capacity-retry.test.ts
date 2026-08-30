@@ -346,6 +346,57 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     expect(getCapacityWaiterCount()).toBe(0);
   });
 
+  it('PR-review finding: caller abort mid-design-budget throws NoCapacityError, not a raw AbortError', async () => {
+    /* Simulates /api/sidecar/load's own 90s AbortController firing before the
+       ~200s extended design-wait budget completes. Before the fix, once
+       usingDesignBudget flips true, abortableDelay's rejection (the caller's
+       AbortError) propagated straight out of withCapacityRetry — the route's
+       `e instanceof NoCapacityError` check missed it, and the caller reported
+       a generic "stuck process" timeout instead of the real, well-classified
+       capacity-contention diagnosis.
+
+       Deterministic (no wall-clock race): the caller's AbortController fires
+       on the FIRST doPost call made after the extended design budget has
+       just been committed to (call #3, with maxAttempts:2) — mirroring the
+       real route's 90s ceiling landing partway through the extended window.
+       pollMs:0 keeps every wait a same-tick no-op except the one the abort
+       lands on. */
+    const controller = new AbortController();
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 3) {
+        // The caller's own hard timeout fires here — after usingDesignBudget
+        // has been committed to (set on call #2), but long before this call's
+        // own designMaxAttempts could ever be reached.
+        controller.abort(new DOMException('caller timeout', 'AbortError'));
+      }
+      return noCapacityResponse(4_000, 'cuda:0');
+    });
+    const isDesignResident = vi.fn().mockResolvedValue(true);
+
+    const err = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident,
+      signal: controller.signal,
+      pollMs: 0,
+      maxAttempts: 2,
+      designMaxAttempts: 1_000,
+    }).then(
+      () => null,
+      (e) => e,
+    );
+
+    expect(err).toBeInstanceOf(NoCapacityError);
+    expect((err as InstanceType<typeof NoCapacityError>).engine).toBe('qwen');
+    expect((err as InstanceType<typeof NoCapacityError>).neededMb).toBe(4_000);
+    expect((err as InstanceType<typeof NoCapacityError>).deviceKey).toBe('cuda:0');
+    expect(calls).toBe(3);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
   it('defaultIsDesignResident (via probeSidecarHealthIfRegistered) does not extend the wait when unregistered — same original bound', async () => {
     // No isDesignResident override, no sidecar-health registration in this
     // test process → probeSidecarHealthIfRegistered() resolves null →

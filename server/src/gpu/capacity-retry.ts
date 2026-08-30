@@ -185,6 +185,10 @@ export async function withCapacityRetry(
      for readability but no longer gates anything once this is true. */
   let usingDesignBudget = false;
   let designAttempt = 0;
+  /* Last noCapacity body seen, kept so a caller-signal abort that fires
+     mid-design-budget (see the catch block below) can still report the real
+     deviceKey/neededMb instead of inventing one. */
+  let lastNoCap: { neededMb: number; deviceKey: string } | null = null;
   try {
     for (let attempt = 0; ; attempt++) {
       const response = await doPost(opts.signal);
@@ -196,6 +200,7 @@ export async function withCapacityRetry(
         // CALLER applies its own error handling. Return it untouched.
         return response;
       }
+      lastNoCap = noCap;
 
       const devices = await capacityProbe.read({ fresh: true });
       const freeMb =
@@ -245,6 +250,28 @@ export async function withCapacityRetry(
       }
       await abortableDelay(pollMs, opts.signal); // bounded wait; rejects if the caller aborts
     }
+  } catch (err) {
+    /* A caller's own hard timeout (e.g. /api/sidecar/load's 90s
+       AbortController) can fire before the EXTENDED design-wait budget
+       completes — that budget runs ~200s past the generic ~60s bound, well
+       past a 90s ceiling the caller committed to for an unrelated reason
+       (guarding against a stuck process). Left alone, that produces a raw
+       AbortError, which callers don't recognise as NoCapacityError, so they
+       report "model load is unusually slow or the process is stuck" for
+       what is actually a known, well-classified capacity-contention case.
+       Once this call has committed to the design budget, treat the caller's
+       own signal firing as the equivalent of exhausting that budget: report
+       the same NoCapacityError the caller would have seen at
+       designMaxAttempts, using the last noCapacity body observed. */
+    if (usingDesignBudget && opts.signal?.aborted && lastNoCap) {
+      throw new NoCapacityError(
+        opts.engine as TtsEngine,
+        lastNoCap.neededMb,
+        lastNoCap.deviceKey,
+        await describeBlockers(),
+      );
+    }
+    throw err;
   } finally {
     if (waiting) _capacityWaiters--;
   }
