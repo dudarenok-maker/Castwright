@@ -12,7 +12,7 @@
 import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { parse as parseCookie } from 'cookie';
+import { parseCookie } from 'cookie';
 import type { Request, Response, NextFunction } from './http.js';
 import { isLanHttpsEnabled } from './routes/export-lan.js';
 import { isValidDeviceToken } from './workspace/device-tokens.js';
@@ -158,7 +158,7 @@ export function pairingOriginHint(): string {
 
 /** Parse the cw_lan cookie defensively — this runs on EVERY /api request, so an
  *  unguarded throw here (e.g. a future `cookie` version that rejects bad input)
- *  would 500 the entire API. cookie@0.7.x doesn't throw, but the catch is cheap
+ *  would 500 the entire API. cookie@2.x doesn't throw, but the catch is cheap
  *  insurance for the hottest path. The same helper also backs the CSRF guard's
  *  cookie detection, so auth and CSRF agree on whether a request carries the cookie. */
 export function readCwLanCookie(cookieHeader: unknown): string | undefined {

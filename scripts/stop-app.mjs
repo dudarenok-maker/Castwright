@@ -86,7 +86,7 @@ for (const name of ['server', 'tts']) {
 // production (isLanHttpsEnabled(), export-lan.ts) unless explicitly turned
 // off, so guessing would apply to nearly every prod run. There is no
 // owner-note file for the main server's bound port (unlike
-// .run/tts.owner.json for the sidecar) to settle which port is really this
+// .run/tts.owner.<port>.json for the sidecar) to settle which port is really this
 // checkout's — the only authoritative source is the PID the 'server' loop
 // above already reaped by tree-kill, which needs no port sweep at all.
 // Sweep nothing here rather than warn about a port that might be someone
@@ -110,7 +110,7 @@ async function probeAndSweep(port) {
 }
 
 // The TTS port is per-checkout since #2632 (LOCAL_TTS_PORT); read the actual
-// owned port from .run/tts.owner.json, falling back to this checkout's own
+// owned port from .run/tts.owner.<port>.json, falling back to this checkout's own
 // server/.env, rather than assuming 9000 — a hardcoded 9000 here would warn
 // about (and stop-app.ps1's sibling would force-kill) a DIFFERENT checkout's
 // sidecar from a worktree (#2632 N27/N29). When neither source yields a
