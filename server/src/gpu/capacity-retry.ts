@@ -21,7 +21,10 @@ import { getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js
 import { NoCapacityError } from '../tts/tts-errors.js';
 import type { TtsEngine } from '../tts/model-keys.js';
 import { describeVramBlockers, type VramBlocker } from './describe-vram-blockers.js';
-import { probeSidecarHealthIfRegistered } from './sidecar-health-gate.js';
+import {
+  probeSidecarHealthIfRegistered,
+  type SidecarHealthSnapshot,
+} from './sidecar-health-gate.js';
 
 /* Bounded poll for the no-capacity retry loop. GPU_CAPACITY_POLL_MS is the
    wait between admission checks; GPU_CAPACITY_MAX_ATTEMPTS bounds the total
@@ -120,9 +123,11 @@ export interface CapacityRetryOpts {
    that gate's file header for the full path). Best-effort: an unregistered
    gate or a probe failure both report no blockers rather than turning a
    probe failure into a worse error than the one already being thrown. */
-async function defaultDescribeBlockers(): Promise<VramBlocker[]> {
+async function defaultDescribeBlockers(
+  fetchHealth: () => Promise<SidecarHealthSnapshot | null> = probeSidecarHealthIfRegistered,
+): Promise<VramBlocker[]> {
   try {
-    const health = await probeSidecarHealthIfRegistered();
+    const health = await fetchHealth();
     if (!health) return [];
     return describeVramBlockers({
       coquiLoaded: health.modelLoaded,
@@ -148,9 +153,12 @@ async function defaultDescribeBlockers(): Promise<VramBlocker[]> {
    Fail-closed: an unregistered gate, a probe failure, a missing field, or a
    device mismatch all report `false` — this never invents a design blocker
    that would extend a wait past the normal ~60s budget. */
-async function defaultIsDesignResident(deviceKey: string): Promise<boolean> {
+async function defaultIsDesignResident(
+  deviceKey: string,
+  fetchHealth: () => Promise<SidecarHealthSnapshot | null> = probeSidecarHealthIfRegistered,
+): Promise<boolean> {
   try {
-    const health = await probeSidecarHealthIfRegistered();
+    const health = await fetchHealth();
     return health?.qwenDesignResident === true && health?.qwenDeviceKey === deviceKey;
   } catch {
     return false;
@@ -182,7 +190,6 @@ export async function withCapacityRetry(
   const maxAttempts = opts.maxAttempts ?? GPU_CAPACITY_MAX_ATTEMPTS;
   const evictIdleTts = opts.evictIdleTts ?? (async () => false);
   const describeBlockers = opts.describeBlockers ?? defaultDescribeBlockers;
-  const isDesignResident = opts.isDesignResident ?? defaultIsDesignResident;
   const designMaxAttempts = opts.designMaxAttempts ?? GPU_CAPACITY_DESIGN_MAX_ATTEMPTS;
 
   let evicted = false;
@@ -244,7 +251,23 @@ export async function withCapacityRetry(
           );
         }
       } else if (attempt + 1 >= maxAttempts) {
-        const designResident = await isDesignResident(noCap.deviceKey).catch(() => false);
+        /* #2678 review finding: isDesignResident and describeBlockers, when
+           both left at their defaults, each independently call
+           probeSidecarHealthIfRegistered() — two full live /health
+           round-trips (each with its own ~2s timeout and disk-touching
+           side effects, e.g. setLastKnownCoquiInstallState) to answer one
+           give-up decision that only needs one snapshot. Share a single
+           probe between them here when both are using their default
+           implementation; an injected override of either still gets its
+           own call, unaffected, so the injection contract for tests that
+           override one or the other independently is unchanged. */
+        let sharedHealth: Promise<SidecarHealthSnapshot | null> | undefined;
+        const fetchHealthOnce = () => (sharedHealth ??= probeSidecarHealthIfRegistered());
+        const designResident = await (
+          opts.isDesignResident
+            ? opts.isDesignResident(noCap.deviceKey)
+            : defaultIsDesignResident(noCap.deviceKey, fetchHealthOnce)
+        ).catch(() => false);
         if (designResident) {
           usingDesignBudget = true;
         } else {
@@ -252,7 +275,9 @@ export async function withCapacityRetry(
             opts.engine as TtsEngine,
             noCap.neededMb,
             noCap.deviceKey,
-            await describeBlockers(),
+            opts.describeBlockers
+              ? await opts.describeBlockers()
+              : await defaultDescribeBlockers(fetchHealthOnce),
           );
         }
       }

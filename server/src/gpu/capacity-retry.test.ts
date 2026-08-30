@@ -444,6 +444,38 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     expect(doPost).toHaveBeenCalledTimes(3);
   });
 
+  it('review finding: default isDesignResident + default describeBlockers share ONE sidecar-health probe on give-up, not two', async () => {
+    // Both isDesignResident (false, so the call proceeds to give up) and
+    // describeBlockers run at the SAME give-up decision, back-to-back, when
+    // both are left at their defaults. Before the fix each called
+    // probeSidecarHealthIfRegistered() independently — two full live
+    // /health round-trips (each with its own timeout and disk-touching side
+    // effects) for one give-up event. After the fix they share one probe.
+    const probe = vi.fn(async () => ({
+      qwenDesignResident: false,
+      qwenDeviceKey: 'cuda:0',
+      modelLoaded: false,
+      kokoroLoaded: false,
+      qwenLoaded: false,
+      qwenBase17Loaded: false,
+    }));
+    setProbeSidecarHealthProvider(probe);
+
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:1'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'coqui',
+        capacityProbe: { read: async () => fakeDevices('cuda:1', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
   it('#2678 review finding: defaultIsDesignResident DOES extend the wait when the resident design is on the SAME device as the one denied', async () => {
     setProbeSidecarHealthProvider(async () => ({
       qwenDesignResident: true,
