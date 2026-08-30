@@ -20,7 +20,7 @@ description: 'Install ffmpeg on an Ubuntu runner, caching the apt .deb packages 
 
 inputs:
   ffmpeg-version-pin:
-    description: 'Cache-key component. Bump to force a fresh apt-get fetch and cache write (e.g. after an Ubuntu image bump changes the available ffmpeg version).'
+    description: 'Manual cache-invalidation override. The cache key now auto-invalidates on runner image updates; use this to force a fresh apt-get fetch and cache write mid-image-version if needed.'
     required: false
     default: 'v1'
 
@@ -32,7 +32,7 @@ runs:
       uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/apt-cache-ffmpeg
-        key: ${{ runner.os }}-ffmpeg-apt-${{ inputs.ffmpeg-version-pin }}
+        key: ${{ runner.os }}-ffmpeg-apt-${{ inputs.ffmpeg-version-pin }}-${{ env.ImageOS }}-${{ env.ImageVersion }}
 
     # On a cache hit: install straight from the cached .deb files with
     # `dpkg -i` — no apt-get, no `apt-get update`, no network at all.
