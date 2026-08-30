@@ -28,7 +28,7 @@
  * both spawn-sidecar.ts and sidecar-owner.ts so they coordinate on the same port.
  */
 import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { createConnection } from 'node:net';
 import { join } from 'node:path';
 
 /** Last invalid LOCAL_TTS_PORT value we logged an error for. Prevents duplicate
@@ -166,22 +166,44 @@ export function isProcessAlive(pid: number, killFn: typeof process.kill = proces
   }
 }
 
-/** True if some process is currently bound/listening on `port` on this host.
-    Used ONLY to gate safe reaping of a stale owner note (#2792): a dead
+/** True if some process is currently accepting connections on `port` on this
+    host. Used ONLY to gate safe reaping of a stale owner note (#2792): a dead
     recorded server pid does NOT prove the port is free, because the sidecar
     subprocess that server spawned may have survived as an orphan still bound
-    there. Binds a throwaway TCP server — EADDRINUSE means something is
-    listening; a successful bind (immediately closed) means the port is free. */
+    there.
+
+    Connects rather than binds: a bind probe only tests availability of the
+    exact address it binds to, so a probe bound to `127.0.0.1` fails to
+    detect a listener on `0.0.0.0` (wildcard) or another specific interface —
+    measured, not assumed, and reachable via this app's own config
+    (`LOCAL_TTS_HOST`, `start.ps1`/`start.sh`). A connection attempt to
+    `127.0.0.1`, by contrast, succeeds against a listener bound to EITHER
+    `127.0.0.1` or `0.0.0.0` (wildcard binds accept loopback connections
+    too), which covers every host shape this app's sidecar actually uses.
+
+    Fails CLOSED on ambiguity, mirroring `isProcessAlive`'s EPERM-as-alive
+    convention ("err toward refusing rather than stomping" the only record
+    of a possible orphan): only `ECONNREFUSED` — the one error that
+    unambiguously means nothing is listening there — resolves `false`. A
+    timeout, `EHOSTUNREACH`, or any other outcome resolves `true` (treat as
+    listening, leave the note alone) rather than risking a wrong delete. */
 export function isPortListening(port: number, host = '127.0.0.1'): Promise<boolean> {
   return new Promise((resolve) => {
-    const server = createServer();
-    server.once('error', (err: NodeJS.ErrnoException) => {
-      resolve(err.code === 'EADDRINUSE');
+    const socket = createConnection({ port, host });
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(true)); // ambiguous -- fail closed
+    socket.once('error', (err: NodeJS.ErrnoException) => {
+      finish(err.code !== 'ECONNREFUSED'); // only a refusal proves nothing is listening
     });
-    server.once('listening', () => {
-      server.close(() => resolve(false));
-    });
-    server.listen(port, host);
+    socket.setTimeout(1000);
   });
 }
 
@@ -192,6 +214,15 @@ export function isPortListening(port: number, host = '127.0.0.1'): Promise<boole
     #2754) was not — a dead server pid alone does not mean the port is free,
     since the orphaned sidecar it spawned may still be bound there, and that
     note is the only record of it. Never touches the note for `currentPort`.
+
+    Re-reads and compares the note immediately before deleting it (mirroring
+    `releaseSidecarOwnership`'s "delete iff we still own it" idiom): the port
+    probe above is the one genuinely slow, awaited step in this function, and
+    a legitimate server can claim that exact port during that window. Without
+    the re-check, this function would delete that FRESH, live claim's note —
+    the same class of harm #2792 exists to prevent, just arriving through a
+    race instead of a bad liveness signal.
+
     Best-effort: any I/O error on a given note is swallowed and that note is
     left alone rather than risking a wrong delete. */
 export async function pruneStaleNotesSafely(
@@ -219,6 +250,17 @@ export async function pruneStaleNotesSafely(
 
     try {
       if (await portListeningFn(port)) continue; // an orphan is still bound there — this note is its only record
+
+      // Re-check immediately before deleting: a legitimate new claim could have
+      // overwritten this note during the async port probe above (TOCTOU).
+      const stillSameOwner = readSidecarOwner(runDir, port);
+      if (
+        !stillSameOwner ||
+        stillSameOwner.pid !== owner.pid ||
+        stillSameOwner.startedAt !== owner.startedAt
+      ) {
+        continue; // the note changed under us — a fresh claim landed, leave it alone
+      }
       unlinkSync(sidecarOwnerPath(runDir, port));
     } catch {
       /* already gone, inaccessible, or the port probe failed — leave the note, best-effort only */
@@ -377,6 +419,7 @@ export interface EnforceOwnerOpts {
   ppid?: number;
   port?: number;
   aliveFn?: (pid: number) => boolean;
+  portListeningFn?: (port: number) => Promise<boolean>;
   log?: (msg: string) => void;
   exit?: (code: number) => void;
   nowIso?: () => string;
@@ -395,6 +438,7 @@ export function enforceSingleSidecarOwner(opts: EnforceOwnerOpts): boolean {
     ppid = process.ppid,
     port = sidecarPort(),
     aliveFn,
+    portListeningFn,
     log = (m) => console.error(m),
     exit = (c) => process.exit(c),
     nowIso,
@@ -417,6 +461,6 @@ export function enforceSingleSidecarOwner(opts: EnforceOwnerOpts): boolean {
     exit(1);
     return false; // reached only in tests where `exit` does not terminate
   }
-  claimSidecarOwnership({ runDir, pid, ppid, port, nowIso });
+  claimSidecarOwnership({ runDir, pid, ppid, port, nowIso, aliveFn, portListeningFn });
   return true;
 }

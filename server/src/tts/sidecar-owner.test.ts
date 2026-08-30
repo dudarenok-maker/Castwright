@@ -458,6 +458,59 @@ describe('isPortListening (#2792)', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await expect(isPortListening(port)).resolves.toBe(false);
   });
+
+  it('narrow review — detects a listener bound to the wildcard address (0.0.0.0), not just 127.0.0.1', async () => {
+    // Correctness bug found in review: a BIND probe only tests the exact
+    // address it targets, so a probe bound to 127.0.0.1 could fail to detect
+    // a listener on 0.0.0.0 — bit-for-bit the outcome #2792 exists to
+    // prevent, since the sidecar's LOCAL_TTS_HOST can be configured to
+    // 0.0.0.0. A CONNECT probe to 127.0.0.1 succeeds against a wildcard
+    // listener too (wildcard binds accept loopback connections), which is
+    // why isPortListening connects rather than binds.
+    const { createServer } = await import('node:net');
+    const server = createServer();
+    const port: number = await new Promise((resolve) => {
+      server.listen(0, '0.0.0.0', () => {
+        const addr = server.address();
+        resolve(typeof addr === 'object' && addr !== null ? addr.port : 0);
+      });
+    });
+
+    await expect(isPortListening(port, '127.0.0.1')).resolves.toBe(true);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('narrow review — fails CLOSED (treats as listening) on an error other than ECONNREFUSED', async () => {
+    // Correctness bug found in review: the prior bind-probe resolved `false`
+    // (safe to delete) on ANY error other than EADDRINUSE, including
+    // transient/ambiguous failures it could not actually interpret. Only
+    // ECONNREFUSED unambiguously proves nothing is listening; every other
+    // error (here: ENOTFOUND, a fast DNS-resolution failure — no listener
+    // exists to refuse the connection, so a naive "no ECONNREFUSED means
+    // free" reading would be wrong) must resolve `true`, mirroring
+    // isProcessAlive's EPERM-as-alive convention. Mutation-verified: this is
+    // the one test that reddens if the `!== 'ECONNREFUSED'` check is
+    // replaced with an unconditional `false` — a bare timeout-based test did
+    // NOT catch that mutation, since it never reaches the error handler.
+    await expect(isPortListening(9999, 'nonexistent.invalid.test')).resolves.toBe(true);
+  });
+
+  it('narrow review — resolves false (nothing listening) on an actual ECONNREFUSED', async () => {
+    // Control for the test above: the one case that legitimately means free.
+    // Bind a server, grab its port, close it, then connect immediately -- on
+    // a loopback address with nothing bound, this is a fast, real refusal.
+    const { createServer } = await import('node:net');
+    const server = createServer();
+    const port: number = await new Promise((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        resolve(typeof addr === 'object' && addr !== null ? addr.port : 0);
+      });
+    });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await expect(isPortListening(port, '127.0.0.1')).resolves.toBe(false);
+  });
 });
 
 describe('pruneStaleNotesSafely (#2792)', () => {
@@ -507,6 +560,35 @@ describe('pruneStaleNotesSafely (#2792)', () => {
       async () => false,
     );
     expect(readSidecarOwner(runDir, 9000)).not.toBeNull();
+  });
+
+  it('narrow review — does not delete a note that a fresh legitimate claim overwrote during the port probe (TOCTOU)', async () => {
+    // Correctness bug found in review: the async port probe is the one slow,
+    // awaited step here, and a legitimate server can claim that exact port
+    // during the window it's pending. Without a re-check immediately before
+    // the delete, this would destroy that FRESH, live claim's note — the
+    // same class of harm #2792 exists to prevent, arriving via a race
+    // instead of a bad liveness signal.
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    const portListeningFn = async () => {
+      // Simulate a legitimate server claiming port 9010 WHILE our probe is pending.
+      claimSidecarOwnership({
+        runDir,
+        pid: 777,
+        ppid: 9,
+        port: 9010,
+        nowIso: () => 'fresh',
+        aliveFn: () => true, // no need for its own background reap to do anything here
+        portListeningFn: async () => true,
+      });
+      return false; // the probe itself still correctly reports nothing listening yet
+    };
+    await pruneStaleNotesSafely(runDir, 9000, () => false, portListeningFn);
+    // The fresh claim must survive — it must NOT have been deleted as if it
+    // were still the stale note we started with.
+    expect(readSidecarOwner(runDir, 9010)).toEqual(
+      expect.objectContaining({ pid: 777, startedAt: 'fresh' }),
+    );
   });
 
   it('is wired into claimSidecarOwnership as a fire-and-forget background reap', async () => {
@@ -813,4 +895,40 @@ describe('enforceSingleSidecarOwner', () => {
       expect.stringContaining(sidecarOwnerPath(runDir, 9000)),
     );
   });
+
+  it('narrow review — passes aliveFn AND portListeningFn through to the background reap', async () => {
+    // Correctness bug found in review: enforceSingleSidecarOwner destructured
+    // aliveFn/portListeningFn but never forwarded them to claimSidecarOwnership,
+    // so the ONLY production caller always used the real isPortListening —
+    // meaning these injected seams were unreachable from production code, and
+    // npm run test:server was doing real TCP connects on every test through
+    // this path. This pins that both injected functions actually reach the
+    // fire-and-forget reap this function kicks off. A short timeout is set
+    // explicitly: if the wiring regresses, portListeningFn is never called
+    // and `probed` never resolves — this must fail cleanly, not hang the
+    // whole worker.
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    let resolveProbed: () => void;
+    const probed = new Promise<void>((resolve) => {
+      resolveProbed = resolve;
+    });
+    const portListeningFn = async () => {
+      resolveProbed();
+      return false;
+    };
+    enforceSingleSidecarOwner({
+      runDir,
+      pid: 555,
+      ppid: 7,
+      port: 9000,
+      aliveFn: () => false,
+      portListeningFn,
+      log: vi.fn(),
+      exit: vi.fn(),
+      nowIso: () => 'new',
+    });
+    await probed; // proves portListeningFn reached the internal reap, not the real isPortListening
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(readSidecarOwner(runDir, 9010)).toBeNull();
+  }, 3000);
 });
