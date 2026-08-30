@@ -179,6 +179,35 @@ test('leg-result check: needs.json is validated before processing', () => {
   );
 });
 
+test('leg-result check: case statement has default arm for unrecognized results', () => {
+  const jobBlocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const aggregator = jobBlocks.find(([, name]) => name === 'verify');
+  assert.ok(aggregator, 'aggregator job `verify` not found');
+  const [, , body] = aggregator;
+
+  const legCheckBody = body.slice(body.indexOf('- name: Check leg results'));
+  assert.ok(
+    legCheckBody,
+    'no "Check leg results" step found in the verify aggregator job',
+  );
+
+  // The case statement must have an explicit `success) ;;` arm so unrecognized
+  // results fall into the default `*)` arm, not the success path.
+  assert.match(
+    legCheckBody,
+    /success\)\s*;;/,
+    'case statement is missing explicit `success) ;;` arm',
+  );
+
+  // The case statement must have a default `*)` arm that treats unrecognized
+  // results as failures — deny-list polarity (fail closed on unknown values).
+  assert.match(
+    legCheckBody,
+    /\*\)\s+echo\s+"::warning::[^"]*\$result[^"]*"[^;]*;?\s*FAILED\+=\(/,
+    'case statement is missing default `*)` arm that treats unrecognized results as failures',
+  );
+});
+
 // Setup steps (ffmpeg, Playwright cache/install) are not legs. Each declares
 // the leg it supports; its condition must be identical to that leg's, or e2e
 // runs without a browser.

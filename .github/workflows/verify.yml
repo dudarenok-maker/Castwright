@@ -584,6 +584,8 @@ jobs:
               cancelled) CANCELLED+=("$job") ;;
               failure) FAILED+=("$job") ;;
               skipped) SKIPPED+=("$job") ;;
+              success) ;;
+              *) echo "::warning::job '$job' has unrecognized result '$result' — treating as failed"; FAILED+=("$job") ;;
             esac
           done
           if [ "${#CANCELLED[@]}" -gt 0 ] || [ "${#FAILED[@]}" -gt 0 ] || [ "${#SKIPPED[@]}" -gt 0 ]; then
