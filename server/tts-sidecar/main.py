@@ -10059,7 +10059,8 @@ def health() -> dict[str, Any]:
     # Qwen load state — its own pair of fields, same pattern as Kokoro, so the
     # Node proxy + useTtsLifecycle hook read every engine's state off one poll.
     # `_base is not None` is "ready to synth" (the resident clone model);
-    # the transient VoiceDesign model isn't surfaced (it's a creation-time detail).
+    # the transient VoiceDesign model's own residency/device are surfaced
+    # separately below (`qwen_design_resident` / `qwen_device_key`, #2678).
     qwen_loaded = False
     qwen_base17_loaded = False
     qwen_loading = False

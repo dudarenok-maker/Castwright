@@ -45,9 +45,10 @@ export interface SidecarHealthSnapshot {
       dynamic import reaching into `routes/sidecar-health.ts` directly. Both
       fields are already present on that module's real `SidecarHealthResult`
       (a structural superset of this snapshot), so widening the type here
-      changes no runtime behaviour for the existing `capacity-retry.ts`
-      consumer — it simply ignores the two new optional fields it doesn't
-      read. */
+      changed no runtime behaviour at the time — `capacity-retry.ts` didn't
+      read either field yet. That has since changed (#2678): `capacity-retry.ts`
+      now reads `qwenDesignResident`, qualified against `qwenDeviceKey` below,
+      to decide whether to extend the no-capacity wait. */
   qwenDesignEverLoaded?: boolean;
   qwenDesignResident?: boolean;
   /** #2678 review finding — the concrete "cuda:N" card a resident

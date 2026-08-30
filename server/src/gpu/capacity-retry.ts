@@ -46,7 +46,7 @@ const GPU_CAPACITY_MAX_ATTEMPTS = (() => {
    it never widens the timeout for a denial that was never design-blocked. */
 const GPU_CAPACITY_DESIGN_MAX_ATTEMPTS = (() => {
   const raw = Number(process.env.GPU_CAPACITY_DESIGN_MAX_ATTEMPTS);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 100; // ~200s at the 2s default poll
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 100; // ~200s on top of the generic ~60s budget above (~258s total wait, not ~200s — see withCapacityRetry's attempt accounting)
 })();
 
 /* GPU-queue status surface (server/src/routes/gpu-queue.ts) — counts ops
@@ -143,11 +143,11 @@ async function defaultDescribeBlockers(): Promise<VramBlocker[]> {
    VoiceDesign is resident SOMEWHERE, not on the card this admission was
    denied on. A resident design on an unrelated card (a 2-GPU box, VoiceDesign
    on cuda:0, this request denied on cuda:1) can never free the blocked
-   device, so extending the wait for it just burns ~200s before failing with
-   the same error anyway. Fail-closed: an unregistered gate, a probe failure,
-   a missing field, or a device mismatch all report `false` — this never
-   invents a design blocker that would extend a wait past the normal ~60s
-   budget. */
+   device, so extending the wait for it just burns another ~200s on top of the
+   ~60s already spent (~258s total) before failing with the same error anyway.
+   Fail-closed: an unregistered gate, a probe failure, a missing field, or a
+   device mismatch all report `false` — this never invents a design blocker
+   that would extend a wait past the normal ~60s budget. */
 async function defaultIsDesignResident(deviceKey: string): Promise<boolean> {
   try {
     const health = await probeSidecarHealthIfRegistered();
@@ -265,8 +265,8 @@ export async function withCapacityRetry(
   } catch (err) {
     /* A caller's own hard timeout (e.g. /api/sidecar/load's 90s
        AbortController) can fire before the EXTENDED design-wait budget
-       completes — that budget runs ~200s past the generic ~60s bound, well
-       past a 90s ceiling the caller committed to for an unrelated reason
+       completes — that budget runs ~200s past the generic ~60s bound (~258s
+       total), well past a 90s ceiling the caller committed to for an unrelated reason
        (guarding against a stuck process). Left alone, that produces a raw
        AbortError, which callers don't recognise as NoCapacityError, so they
        report "model load is unusually slow or the process is stuck" for
