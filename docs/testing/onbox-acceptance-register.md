@@ -418,7 +418,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 40 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -428,11 +428,36 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**63 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**64 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-29 (PR #2754 review), 62 → 63**, adding row **E101**
+> **Last change: 2026-08-30, merging PR #2790's independent A105 addition
+> with `main`'s independent E101 addition.** This branch
+> (`fix/sidecar-2752-base17-evict-guard`) had added row **A105** (Qwen base17
+> eviction guard, #2752, PR #2790 — itself already reconciled once against
+> `main`'s A102/A104 IDs in an earlier merge, see the entries below); `origin/main`
+> had independently added row **E101** (#2641 — port-keyed TTS owner notes, PR
+> #2754). The two rows sit in different groups and different id sequences, so
+> no rename was needed this time — just combining the counts. Combined: 63
+> (from `main`, including E101) + 1 (this branch's A105, base17 eviction guard)
+> = **64**. Group A stays 40 (this branch's A102+A104+A105); Group E becomes 11
+> (main's E101). `next-id` markers: Group A at A106 (unchanged by this merge),
+> Group E bumped from E101 → E102 (main's own change).
+>
+> **Prior change: 2026-08-30, merging PR #2790's independent A103 addition.**
+> This branch (`fix/sidecar-2752-base17-evict-guard`) had added row **A103**
+> (Qwen base17 eviction guard, #2752, PR #2790), minted before `origin/main`'s
+> A102/A104 reconciliation below had landed — this branch's `next-id` still
+> read A103 at mint time. By the time this branch merged, `main` had already
+> declared A103 a permanently-unused gap (see the entry directly below) and
+> moved on to A104 (analyzer GPU-split, #2367) with `next-id` at A105. Renamed
+> this branch's row from A103 to **A105** (the next free id on `main`) rather
+> than reopen the gap. Combined: 62 (from `main`) + 1 (this branch's A105,
+> base17 eviction guard) = **63**. Group A: 39 (main's A102 + A104) + 1 (this
+> branch's A105) = 40. `next-id` bumped from A105 → A106 in this merge.
+>
+> **Prior change: 2026-08-29 (PR #2754 review), 62 → 63**, adding row **E101**
 > (#2641 — port-keyed TTS owner notes) — documents the case where two server
 > instances on different ports SHARE ONE `.run/` directory, the mechanism #2641
 > fixes to prevent collision. E10 already mentions port keying but covers a
@@ -725,7 +750,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A105 -->
+<!-- next-id: A106 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -3210,6 +3235,46 @@ verify child for this chain) checklist item 6; the four task briefs under
 #2367 for the exact behaviour each piece owns. *Cost:* short — one oversized
 load that splits, one genuinely-too-big load that doesn't, one
 `expectedDevice` mismatch check.
+
+### A105 · Qwen base17 eviction guard and _DEVICE_LEDGER serialization ([#2752](https://github.com/dudarenok-maker/Castwright/issues/2752), PR [#2790](https://github.com/dudarenok-maker/Castwright/pull/2790)) · **single 8 GB GPU card, Qwen VoiceDesign 1.7B resident, real sidecar with base17 weights**
+
+PR #2790 (two rounds of independent review) improves base17 co-residency safety in `design_voice()`:
+the eviction guard now checks both `self._base17 is not None` and
+`self._base17_in_flight.busy` (closing the #1156-shape OOM where in-flight-but-unassigned
+base17 load was invisible); `unload_base17()` at `wait_seconds<=0` unconditionally nulls
+without waiting (restoring "Stop always succeeds"); base17 eviction wait moved outside
+the VoiceDesign block to avoid stalling concurrent Kokoro synths; and `design_voice()`
+now serializes via `_DEVICE_LEDGER.card_lock()` during the evict-through-VoiceDesign-load
+span to close a race where concurrent `mint_variant()` could reload base17 mid-eviction.
+Unit tests cannot prove VRAM co-residency, eviction ordering, or Stop-button success
+against the real model weights and sidecar lifecycle.
+
+- **Widened eviction guard prevents OOM in #1156 scenario.** On a single 8 GB GPU,
+  start a mint (`mint_variant()`) or a 1.7B synth so base17 begins loading — while
+  that load is in flight (`_base17_in_flight.busy`, `_base17` still `None`), trigger a
+  `design_voice()` call for a character on the same card. Confirm neither triggers an
+  OOM: the widened guard's check of `_base17_in_flight.busy` (not just
+  `self._base17 is not None`) makes `design_voice()` wait for the in-flight base17
+  load to clear before proceeding into the VoiceDesign load, instead of missing it
+  and letting both heavy models co-reside.
+- **Stop button works mid-base17-load.** While base17 is loading (mid-mint or
+  mid-1.7B-synth, `_base17_in_flight.busy` true), call `POST /unload` with body
+  `{"engine":"qwen","model":"1.7b"}` (or click Stop in the UI). Confirm the call
+  returns 200/success — not a 500 — and logs show the model unloaded immediately
+  (not waiting or raising), and `nvidia-smi` memory usage drops by ~3.4 GB (the
+  base17 1.7B model freed), proving the unconditional null at `wait_seconds<=0`
+  succeeded rather than the pass-1 regression (raising `Base17ContentionTimeoutError`
+  and freeing nothing).
+- **Bulk design run doesn't stall Kokoro.** With Kokoro resident, start a design run
+  (bulk "Design full cast" or repeated single-character designs), and concurrently
+  request a chapter render on a Kokoro voice in the same book. Confirm the render
+  completes within its normal wall-clock time (not paused/stalled waiting for base17
+  eviction). The eviction-wait moved outside the VoiceDesign block ensures this.
+
+*Needs:* single 8 GB GPU card, Qwen base17 weights (`server/tts-sidecar/voices/qwen/base17/`),
+Qwen VoiceDesign 1.7B model, real sidecar, optionally Kokoro resident for the third criterion.
+*Criteria:* the three bullets above — no separate run sheet.
+*Cost:* moderate — three concurrent-load/eviction scenarios + VRAM observation.
 
 ## Group B — local Ollama analyzer only
 

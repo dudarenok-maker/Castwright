@@ -5339,6 +5339,18 @@ class DesignContentionTimeoutError(RuntimeError):
     wedged, not merely slow — the caller should retry the synth shortly."""
 
 
+class Base17ContentionTimeoutError(RuntimeError):
+    """`design_voice()` needed to evict the resident 1.7B-Base model, but a
+    base17 load/mint stayed in flight past `unload_base17()`'s bounded wait.
+
+    Mirrors `DesignContentionTimeoutError`'s "design wins" policy in the same
+    direction, not the reverse: a VoiceDesign load is user-initiated and
+    interactive (someone watching it render in cast review), so it must not
+    be starved waiting on a batch mint. Reaching this error means the base17
+    load outlived even that bounded wait, i.e. it is genuinely wedged, not
+    merely slow — the caller should retry the design shortly."""
+
+
 class Base17UnavailableError(Exception):
     """The 1.7B-Base model can't be used for an anchored mint for a
     deterministic reason the separate VoiceDesign model won't share. The
@@ -5361,11 +5373,22 @@ class Base17UnavailableError(Exception):
 # a design's own request budget would trip on a design that is merely slow,
 # not wedged, defeating the "design wins" policy this exists to implement. A
 # design still running past its OWN budget is wedged, not slow, so only that
-# case reaches the timeout. Not exposed as an env knob (deliberately — see
-# CLAUDE.md's "new env var MUST be a knob" rule this avoids triggering; a
-# fixed conservative bound is simpler and this is the only caller).
+# case reaches the timeout. Not exposed as an env knob (deliberately — a new
+# registry knob needs a Settings row / .env.example line per this repo's
+# CLAUDE.md; a fixed conservative bound is simpler and this is the only caller).
 _DESIGN_CONTENTION_WAIT_S_DEFAULT = 150.0
 _DESIGN_CONTENTION_POLL_S_DEFAULT = 0.5
+
+# #2752 — how long `unload_base17()` waits for an in-flight base17 load/mint
+# to clear before giving up and raising `Base17ContentionTimeoutError`
+# instead of silently nulling `_base17` out from under it. Kept below
+# `_DESIGN_CONTENTION_WAIT_S_DEFAULT`: a plain base17 load/mint is lighter
+# than a full VoiceDesign forward+load, so it doesn't need the same headroom.
+# Not exposed as an env knob (deliberately — a new registry knob needs a
+# Settings row / .env.example line per this repo's CLAUDE.md; a fixed
+# conservative bound is simpler and this is the only caller).
+_BASE17_CONTENTION_WAIT_S_DEFAULT = 60.0
+_BASE17_CONTENTION_POLL_S_DEFAULT = 0.5
 
 
 class QwenEngine(Engine):
@@ -5904,13 +5927,70 @@ class QwenEngine(Engine):
                 raise  # OOM → generic 500, NEVER a fallback
             raise Base17UnavailableError("corrupt") from e
 
-    def unload_base17(self) -> None:
+    def unload_base17(
+        self,
+        wait_seconds: float = 0.0,
+        poll_seconds: float = _BASE17_CONTENTION_POLL_S_DEFAULT,
+    ) -> None:
         """Drop the 1.7B-Base model and free VRAM. Idempotent.
 
         Mirrors `unload` but targets only the 1.7B-Base. Acquires `_synth_lock`
         before nulling — same rationale as `unload` (prevents a concurrent
-        synth forward from seeing a null mid-generate)."""
+        synth forward from seeing a null mid-generate).
+
+        #2752 — mirrors `unload_design()`'s wait-then-evict shape (#2070): a
+        base17 load/mint can be in flight with `_base17` still `None` for the
+        entire load, so an unconditional null here could kill that load's
+        result out from under whatever's waiting on it. This waits (bounded
+        by `wait_seconds`, polling every `poll_seconds`) for `_base17_in_flight`
+        to clear before nulling, rather than nulling it out from under an
+        active forward. The wait is bounded, never unbounded — a genuinely
+        wedged load must not hang the caller forever — so a load still in
+        flight past `wait_seconds` raises `Base17ContentionTimeoutError`
+        instead.
+
+        `wait_seconds` DEFAULTS TO 0.0, unlike `unload_design`'s 150s default —
+        deliberately, not an oversight. The bare call (the `/unload
+        {model:'1.7b'}` Stop route) must stay non-blocking and NEVER raise:
+        #1975 already established that a Stop must always succeed.
+        `maybe_free_idle_base17` does NOT go through this method at all — it
+        nulls `_base17` inline under its own re-validated lock, because a call
+        here would re-acquire the non-reentrant `_synth_lock` and deadlock
+        (see that method's own docstring) — it is unaffected by this default
+        either way. At `wait_seconds <= 0.0` (the bare/Stop-route case), this
+        unconditionally nulls `_base17` without waiting or raising, mirroring
+        the sibling `unload()` method's stop semantics. Only `design_voice()`'s
+        eviction guard opts into the bounded wait, passing
+        `_BASE17_CONTENTION_WAIT_S_DEFAULT`/`_POLL_S_DEFAULT` explicitly,
+        because that call site's whole purpose is to wait for a
+        wedged-looking-but-still-loading base17 rather than race it."""
+        if wait_seconds <= 0.0:
+            # Bare call (Stop route, or idle eviction): never block, never raise.
+            # Unconditionally null the model, matching unload()'s semantics.
+            # The early return below skips `_reclaim_host_and_vram()` on
+            # purpose — nothing was resident, so there's nothing to reclaim.
+            with self._synth_lock:
+                if self._base17 is None:
+                    return
+                self._base17 = None
+            _reclaim_host_and_vram()
+            return
+
+        # Bounded wait for a callee that passed explicit wait_seconds > 0
+        # (currently only design_voice()'s contention guard): wait for the
+        # in-flight load to clear, or raise if it doesn't within the budget.
+        deadline = time.monotonic() + wait_seconds
+        while self._base17_in_flight.busy:
+            if time.monotonic() >= deadline:
+                raise Base17ContentionTimeoutError(
+                    f"Qwen 1.7B-Base has been in flight for over "
+                    f"{wait_seconds:.0f}s — refusing to evict it out from "
+                    "under an active load. Retry the design shortly."
+                )
+            time.sleep(poll_seconds)
         with self._synth_lock:
+            if self._base17 is None:
+                return
             self._base17 = None
         _reclaim_host_and_vram()
 
@@ -6539,106 +6619,168 @@ class QwenEngine(Engine):
                 # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
                 # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
                 # (waits for any in-flight Kokoro synth to drain, blocks new ones),
-                # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
-                # reloads on the next synth (~1s); when no generation ran it isn't
-                # resident, so this is a no-op.
+                # then evict residents to make headroom. Kokoro reloads on the next
+                # synth (~1s); when no generation ran it isn't resident, so its
+                # eviction is a no-op.
                 _kokoro_pre = ENGINES.get("kokoro")
                 if isinstance(_kokoro_pre, KokoroEngine) and _kokoro_pre._kokoro is not None:
                     _phase("freeing-vram")
-                with _VD_KOKORO.design():
-                    _kokoro_eng = ENGINES.get("kokoro")
-                    if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
-                        log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
-                        _kokoro_eng.unload()
-                    # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
-                    # can't co-reside on an 8 GB card. A bulk "Design full cast" run
-                    # interleaves variant mints (which leave _base17 resident) with
-                    # base designs; evict the lingering 1.7B-Base before the
-                    # VoiceDesign load — symmetric with the synth path's
-                    # unload_design() (synthesize/synthesize_batch) and the Kokoro
-                    # evict above. design_voice never uses _base17, so this is safe;
-                    # the idle watchdog would reclaim it eventually, but not within
-                    # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
-                    if self._base17 is not None:
-                        log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
-                        self.unload_base17()
-                    _phase("loading-model")
-                    # Capacity-aware placement (task 3, vram-aware-placement plan):
-                    # a concrete `device` from an admitted reservation overrides the
-                    # env-derived pref for this design. `device` is threaded straight
-                    # into each ensure call so the set-pref + resolve + load are ONE
-                    # atomic acquisition under that model's own load lock — a
-                    # concurrent design/mint admitted to a DIFFERENT card can't clobber
-                    # `_device_pref` in the gap between set and resolve (the TOCTOU
-                    # this closes). The design load runs first and sets `_device_pref`,
-                    # so the base load inherits the same card; passing it here too is
-                    # belt-and-suspenders for the warm-design / cold-base case. `None`
-                    # leaves `_device_pref` untouched (flag-off byte-for-byte).
-                    self._ensure_design_loaded(device=device)
-                    self._ensure_base_loaded(device=device)
-                    # Phase boundary: everything above is Kokoro-evict + (cold) model
-                    # load; everything below is GPU forwards. `load_ms` isolates the
-                    # cold-start cost (the transient 1.7B VoiceDesign load the operator
-                    # suspects) from the design forward itself.
-                    load_ms = (time.perf_counter() - t0) * 1000.0
-                    # Serialise the GPU forwards against any concurrent synth/design — see
-                    # `_synth_lock` in __init__ (the Base model isn't thread-safe).
-                    with self._synth_lock:
-                        # Capture UNDER the lock instead of silently re-ensuring
-                        # (#2021 — extends #1975's AUDITION-forward pattern to
-                        # this, the heaviest forward in the process:
-                        # `_ensure_design_loaded()` pulls the ~4-5 GB VoiceDesign
-                        # model, the longest possible Stop-blocking pull in
-                        # QwenEngine. Every in-place nuller of `_design`/`_base`
-                        # (the idle watchdog, a concurrent /synthesize's
-                        # unload_design, a full /unload) holds `_synth_lock`, so
-                        # a model ensured before we took the lock may have been
-                        # freed in the gap — raise loud instead of silently
-                        # absorbing that race with an in-lock re-pull that would
-                        # itself hold `_synth_lock` for the whole cold load.
-                        design = self._design
-                        if design is None:
-                            # #2070 fixed the ordinary-synth race this used to
-                            # cover: `unload_design()` now waits (bounded) on
-                            # `_design_in_flight` before nulling `_design`, and
-                            # THIS call is what holds it busy, so a concurrent
-                            # /synthesize's unload_design can no longer land
-                            # here mid-design. What remains is a genuinely
-                            # explicit action — a full /unload landing in the
-                            # gap between `_ensure_design_loaded()` above and
-                            # this lock acquire — which deliberately is NOT
-                            # gated by the design-wins policy (an explicit
-                            # Stop must still be able to free the model). Raise
-                            # loud rather than silently absorbing that race
-                            # with an in-lock re-pull that would itself hold
-                            # `_synth_lock` for the whole cold load.
-                            raise RuntimeError(
-                                "Qwen VoiceDesign model was unloaded before "
-                                "this design could render — reload it and "
-                                "retry."
-                            )
-                        base = self._base
-                        if base is None:
-                            raise RuntimeError(
-                                "Qwen Base model was unloaded before this "
-                                "design could render — reload it and retry."
-                            )
-                        # 1. design a reference clip from the persona instruction.
-                        _phase("designing")
-                        _t = time.perf_counter()
-                        ref_wavs, ref_sr = design.generate_voice_design(
-                            text=ref_text, language=lang, instruct=instruct
-                        )
-                        design_fwd_ms = (time.perf_counter() - _t) * 1000.0
-                        ref_audio = ref_wavs[0]
 
-                        # 2. distil into a reusable clone prompt on the Base model.
-                        _phase("distilling")
-                        _t = time.perf_counter()
-                        prompt = base.create_voice_clone_prompt(
-                            ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
+                # can't co-reside on an 8 GB card. A bulk "Design full cast" run
+                # interleaves variant mints (which leave _base17 resident) with
+                # base designs; evict the lingering 1.7B-Base before the
+                # VoiceDesign load — symmetric with the synth path's
+                # unload_design() (synthesize/synthesize_batch) and the Kokoro
+                # evict above. design_voice never uses _base17, so this is safe;
+                # the idle watchdog would reclaim it eventually, but not within
+                # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
+                #
+                # #2070 review R5 — deliberately OUTSIDE the _VD_KOKORO.design()
+                # block below, not inside it. Since #2070, unload_base17() can wait
+                # up to ~150s for an in-flight base17 load to clear (the design-wins
+                # policy). `_VD_KOKORO.design()` sets `_design_active` for its ENTIRE
+                # span, and `kokoro_synth()` blocks while that's set — so a wait
+                # held inside that block would stall EVERY Kokoro synth for up to
+                # 150s during exactly the bulk "Design full cast" run this eviction
+                # exists to support. Evicting here keeps any such wait off the
+                # arbiter (and the design-active flag) entirely; the only real
+                # ordering requirement — evict-before-load — still holds, since the
+                # VoiceDesign load happens later in this same function, still inside
+                # the block below.
+                #
+                # #2752 — the widened guard (below) includes
+                # `_base17_in_flight.busy`: `_base17` stays `None` for the ENTIRE
+                # duration of a mint/synth load, so an in-flight-but-unassigned
+                # load was previously invisible here (the #1156 OOM shape) —
+                # `design_voice()` proceeded straight into the VoiceDesign load
+                # with both models resident. `unload_base17()` now waits
+                # (bounded) for that load to clear before evicting, same
+                # "design wins" direction as `unload_design()`.
+                #
+                # #2790 — the evict-through-load sequence now holds
+                # `_DEVICE_LEDGER.card_lock()` to prevent a concurrent
+                # `mint_variant()` call from loading base17 in the gap between the
+                # eviction check and the VoiceDesign load. `mint_variant()` already
+                # holds this lock while loading base17 (see line ~7011), so both
+                # paths serialize their check-residency->evict->load sequences on
+                # the same per-card mutex. The lock holds only through model load
+                # (not GPU forwards), to close the race: evict base17 → load
+                # VoiceDesign → (release card_lock) → GPU forwards. A concurrent
+                # mint_variant() can reload base17 after VoiceDesign load finishes,
+                # since VoiceDesign is then resident and doesn't compete for VRAM
+                # with base17 (VoiceDesign is freed after design completes).
+                # The lock nests outside the _VD_KOKORO.design() block (not inside)
+                # to avoid interfering with the Kokoro arbiter.
+                # The acquire is bounded (not unbounded) to prevent indefinite hangs
+                # if a concurrent mint_variant() holds the lock for an extended period.
+                card_lock = _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx())
+                if not card_lock.acquire(timeout=_BASE17_CONTENTION_WAIT_S_DEFAULT):
+                    raise Base17ContentionTimeoutError(
+                        f"Could not acquire per-card lock for Qwen design — a concurrent "
+                        f"base17 load/mint or another design's model load has held it for over "
+                        f"{_BASE17_CONTENTION_WAIT_S_DEFAULT:.0f}s. Retry the design shortly."
+                    )
+                try:
+                    if self._base17 is not None or self._base17_in_flight.busy:
+                        log.info("Evicting resident/in-flight Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
+                        # Bounded wait, not the 0.0 default — this call's whole
+                        # point is to wait out a still-loading base17 rather
+                        # than race it (see unload_base17's docstring for why
+                        # 0.0 is right everywhere else).
+                        self.unload_base17(
+                            wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT,
+                            poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT,
                         )
-                        distil_ms = (time.perf_counter() - _t) * 1000.0
+
+                    with _VD_KOKORO.design():
+                        _kokoro_eng = ENGINES.get("kokoro")
+                        if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
+                            log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
+                            _kokoro_eng.unload()
+                        _phase("loading-model")
+                        # Capacity-aware placement (task 3, vram-aware-placement plan):
+                        # a concrete `device` from an admitted reservation overrides the
+                        # env-derived pref for this design. `device` is threaded straight
+                        # into each ensure call so the set-pref + resolve + load are ONE
+                        # atomic acquisition under that model's own load lock — a
+                        # concurrent design/mint admitted to a DIFFERENT card can't clobber
+                        # `_device_pref` in the gap between set and resolve (the TOCTOU
+                        # this closes). The design load runs first and sets `_device_pref`,
+                        # so the base load inherits the same card; passing it here too is
+                        # belt-and-suspenders for the warm-design / cold-base case. `None`
+                        # leaves `_device_pref` untouched (flag-off byte-for-byte).
+                        self._ensure_design_loaded(device=device)
+                        self._ensure_base_loaded(device=device)
+                finally:
+                    card_lock.release()
+
+                # Phase boundary: everything above was Kokoro-evict + (cold) model
+                # load under card_lock; everything below is GPU forwards. `load_ms`
+                # isolates the cold-start cost (the transient 1.7B VoiceDesign load
+                # the operator suspects) from the design forward itself. Card lock
+                # is released above to allow concurrent base17 load/mint, since
+                # VoiceDesign resident doesn't compete with base17 (design frees
+                # VoiceDesign after completion).
+                load_ms = (time.perf_counter() - t0) * 1000.0
+                # Serialise the GPU forwards against any concurrent synth/design — see
+                # `_synth_lock` in __init__ (the Base model isn't thread-safe).
+                with self._synth_lock:
+                    # Capture UNDER the lock instead of silently re-ensuring
+                    # (#2021 — extends #1975's AUDITION-forward pattern to
+                    # this, the heaviest forward in the process:
+                    # `_ensure_design_loaded()` pulls the ~4-5 GB VoiceDesign
+                    # model, the longest possible Stop-blocking pull in
+                    # QwenEngine. Every in-place nuller of `_design`/`_base`
+                    # (the idle watchdog, a concurrent /synthesize's
+                    # unload_design, a full /unload) holds `_synth_lock`, so
+                    # a model ensured before we took the lock may have been
+                    # freed in the gap — raise loud instead of silently
+                    # absorbing that race with an in-lock re-pull that would
+                    # itself hold `_synth_lock` for the whole cold load.
+                    design = self._design
+                    if design is None:
+                        # #2070 fixed the ordinary-synth race this used to
+                        # cover: `unload_design()` now waits (bounded) on
+                        # `_design_in_flight` before nulling `_design`, and
+                        # THIS call is what holds it busy, so a concurrent
+                        # /synthesize's unload_design can no longer land
+                        # here mid-design. What remains is a genuinely
+                        # explicit action — a full /unload landing in the
+                        # gap between `_ensure_design_loaded()` above and
+                        # this lock acquire — which deliberately is NOT
+                        # gated by the design-wins policy (an explicit
+                        # Stop must still be able to free the model). Raise
+                        # loud rather than silently absorbing that race
+                        # with an in-lock re-pull that would itself hold
+                        # `_synth_lock` for the whole cold load.
+                        raise RuntimeError(
+                            "Qwen VoiceDesign model was unloaded before "
+                            "this design could render — reload it and "
+                            "retry."
+                        )
+                    base = self._base
+                    if base is None:
+                        raise RuntimeError(
+                            "Qwen Base model was unloaded before this "
+                            "design could render — reload it and retry."
+                        )
+                    # 1. design a reference clip from the persona instruction.
+                    _phase("designing")
+                    _t = time.perf_counter()
+                    ref_wavs, ref_sr = design.generate_voice_design(
+                        text=ref_text, language=lang, instruct=instruct
+                    )
+                    design_fwd_ms = (time.perf_counter() - _t) * 1000.0
+                    ref_audio = ref_wavs[0]
+
+                    # 2. distil into a reusable clone prompt on the Base model.
+                    _phase("distilling")
+                    _t = time.perf_counter()
+                    prompt = base.create_voice_clone_prompt(
+                        ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                    )
+                    distil_ms = (time.perf_counter() - _t) * 1000.0
 
                 # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
                 os.makedirs(self._voices_dir, exist_ok=True)
@@ -10725,6 +10867,17 @@ async def qwen_design_voice(req: Request) -> Response:
                 mint_method,
                 fallback_for,
             )
+    except Base17ContentionTimeoutError as exc:
+        # #2752 finding — design_voice() needed to evict the resident 1.7B-Base
+        # model, but a base17 load/mint stayed in flight past unload_base17()'s
+        # bounded wait. Same non-poisoned, retry-safe 503 shape as the analogous
+        # DesignContentionTimeoutError mapping — this route was missing the arm
+        # entirely and fell into the generic 500 below.
+        log.warning("/qwen/design-voice: base17 contention timeout: %s", exc)
+        return JSONResponse(
+            {"detail": str(exc), "code": "base17_in_flight"},  # exc-text-safe: Base17ContentionTimeoutError message is a curated static template plus a timeout number; never a traceback or third-party string
+            status_code=503,
+        )
     except Exception as e:
         err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         if _CUDA_POISON_RE.search(err_str):

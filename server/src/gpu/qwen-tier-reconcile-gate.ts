@@ -25,12 +25,14 @@
    declines to evict rather than pretending it succeeded. Do NOT "simplify"
    the unregistered default to `true`.
 
-   TRUTHFUL RETURN (#1839 finding 1). The registered `reconcileResidentQwenTiers`
-   itself reports whether it actually issued an `/unload` (its `evictions`
-   array was non-empty) — this gate passes that value straight through rather
-   than collapsing "registered" and "freed something" into the same `true`.
-   Being registered but freeing nothing (the tier to drop was never resident)
-   must read as `false` here too, or `evictIdleQwenBase` reports success having
+   TRUTHFUL RETURN (#1839 finding 1, tightened by PR #2790 / #2752). The
+   registered `reconcileResidentQwenTiers` itself reports whether every
+   `/unload` it issued actually succeeded (checking `res.ok`, and any network
+   error) — this gate passes that value straight through rather than
+   collapsing "registered" and "freed something" into the same `true`. Being
+   registered but freeing nothing — the tier to drop was never resident, OR an
+   issued `/unload` failed (e.g. a 500 from base17 in-flight contention) — must
+   read as `false` here too, or `evictIdleQwenBase` reports success having
    freed nothing and `capacity-retry.ts` burns a retry attempt on an immediate
    no-op retry instead of polling. */
 
