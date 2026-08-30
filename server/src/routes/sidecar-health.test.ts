@@ -859,7 +859,29 @@ describe('POST /api/sidecar/load', () => {
 
     expect(res.status).toBe(503);
     expect(res.body.status).toBe('error');
-    expect(res.body.error).toMatch(/no capacity/i);
+    /* #2678 F6 — with no blockers, NoCapacityError falls back to its own
+       generic "not enough GPU memory" message (tts-errors.ts), which this
+       route now forwards verbatim rather than a route-local hardcoded string. */
+    expect(res.body.error).toMatch(/not enough gpu memory/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a voice-design blocker rather than the generic "stop the analyzer" remedy (#2678 F6)', async () => {
+    mockWithCapacityRetry.mockImplementation(async () => {
+      throw new NoCapacityError('coqui', 3_000, 'cuda:0', [
+        {
+          model: 'A voice design',
+          remedy: 'Wait for the in-progress voice design to finish — it frees automatically once idle.',
+        },
+      ]);
+    });
+
+    const res = await request(makeApp()).post('/api/sidecar/load').send({});
+
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('error');
+    expect(res.body.error).toMatch(/voice design/i);
+    expect(res.body.error).not.toMatch(/stop the analyzer/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

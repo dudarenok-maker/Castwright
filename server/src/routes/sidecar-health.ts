@@ -627,9 +627,17 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
   } catch (e) {
     clearTimeout(timer);
     if (e instanceof NoCapacityError) {
+      /* #2678 review finding (F6) — carry the error's own message through
+         rather than a hardcoded "stop the analyzer" remedy: NoCapacityError's
+         constructor (tts-errors.ts) already folds `blockers` into `.message`,
+         naming whatever is actually holding the VRAM (analyzer, Kokoro, or —
+         since e92cf9bf/ec98bf40 — a resident voice design) with its own
+         actionable remedy, falling back to the generic "free VRAM or attach a
+         second GPU" line only when `blockers` is empty. Mirrors the pattern
+         already used by voice-sample.ts's /synthesize NoCapacityError catch. */
       return res.status(503).json({
         status: 'error',
-        error: 'GPU has no capacity to load this model right now — free VRAM (e.g. stop the analyzer) and retry.',
+        error: e.message,
       });
     }
     const err = e as { name?: string; message?: string; cause?: unknown };
