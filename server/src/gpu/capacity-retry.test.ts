@@ -466,6 +466,37 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
     // Extended: 3 generic attempts + 5 more under the design budget.
     expect(doPost).toHaveBeenCalledTimes(3 + 5);
   });
+
+  it('defaultIsDesignResident does NOT extend the wait for qwenDesignEverLoaded — the process-lifetime latch is not current residency', async () => {
+    // qwenDesignEverLoaded is a process-lifetime latch (server/tts-sidecar/main.py):
+    // set once on first design use and never reset. If defaultIsDesignResident
+    // read that field instead of (or in addition to) qwenDesignResident, every
+    // future capacity denial for the rest of the process's life would extend to
+    // the ~200s design budget even with no VoiceDesign resident right now. This
+    // pins the distinction: everLoaded=true, resident=false/absent, matching
+    // deviceKey, must still give up at the ORIGINAL maxAttempts bound.
+    setProbeSidecarHealthProvider(async () => ({
+      qwenDesignEverLoaded: true,
+      qwenDesignResident: false,
+      qwenDeviceKey: 'cuda:1',
+    }));
+
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:1'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'coqui',
+        capacityProbe: { read: async () => fakeDevices('cuda:1', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+        designMaxAttempts: 5,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    // No extension: gives up at the ORIGINAL maxAttempts bound, not 3 + 5.
+    expect(doPost).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('parseNoCapacity', () => {
