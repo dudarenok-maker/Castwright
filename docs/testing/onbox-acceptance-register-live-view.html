@@ -1463,11 +1463,11 @@
         <p>However, the allocator-peak measurement is unproven on real hardware with a live CTranslate2-backed ASR session — the pytest only stubs <code>_observed_mb</code> to a fixed test value and doesn&#39;t exercise the real forward.</p>
         <ul>
           <li>Load the TTS sidecar with <code>faster-whisper</code> engine resident on a GPU.</li>
-          <li>Trigger a real ASR warm-up via the app (e.g. during a repair/re-synthesis pass that needs the ASR transcription gate, or an explicit <code>/warm</code> call).</li>
+          <li>Trigger a real ASR warm-up via the app (e.g. during a repair/re-synthesis pass that needs the ASR transcription gate, or an explicit <code>POST /transcribe</code> call with sample PCM data).</li>
           <li>Confirm that <code>asr.warm</code>&#39;s learned footprint <b>moves off its 128 MB seed value</b> after the real warm forward completes — i.e., the allocator-peak measurement produces a positive, observed value that is recorded, not dropped.</li>
           <li>Verify the recorded value matches the expected range for CTranslate2+faster-whisper on this box&#39;s GPU (typically a few hundred MB, depending on model size and CUDA compute capacity).</li>
         </ul>
-        <p class="src">GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar with ASR enabled (<code>SEG_ASR_ENABLED=1</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2682">#2682</a>, PR #2799 · the allocator-peak measurement in <code>server/tts-sidecar/main.py</code>&#39;s <code>_WarmFootprint</code> class must observe a positive value from a real forward, not a stubbed test value · short — one real ASR warm-up sequence during a render or via manual endpoint</p>
+        <p class="src">GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar with ASR enabled (<code>SEG_ASR_ENABLED=1</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2682">#2682</a>, PR #2799 · the allocator-peak measurement in <code>server/tts-sidecar/main.py</code>&#39;s <code>FootprintTable</code> class must observe a positive value recorded via its <code>record()</code> method when a real forward runs, not a stubbed test value · short — one real ASR warm-up sequence during a render or via manual endpoint</p>
       </div>
     </details>
 

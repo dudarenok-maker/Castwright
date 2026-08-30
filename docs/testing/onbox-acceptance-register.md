@@ -4319,8 +4319,8 @@ test value and doesn't exercise the real forward).
 
 - Load the TTS sidecar with `faster-whisper` engine resident on a GPU.
 - Trigger a real ASR warm-up via the app (e.g. during a repair/re-synthesis pass that 
-  needs the ASR transcription gate, or an explicit `/warm` call to `POST /api/ollama/warm` 
-  for ASR).
+  needs the ASR transcription gate, or an explicit `POST /transcribe` call with sample PCM 
+  data).
 - Confirm that `asr.warm`'s learned footprint **moves off its 128 MB seed value** after 
   the real warm forward completes — i.e., the allocator-peak measurement produces a 
   positive, observed value that is recorded, not dropped.
@@ -4331,8 +4331,9 @@ test value and doesn't exercise the real forward).
 *Needs:* a GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar 
 with ASR enabled (`SEG_ASR_ENABLED=1`). *Cost:* short — one real ASR warm-up sequence 
 during a render or via manual endpoint. *Criteria:* the allocator-peak measurement in 
-`server/tts-sidecar/main.py`'s `_WarmFootprint` class must observe a positive value 
-from a real forward, not a stubbed test value. Issue #2682 and PR #2799 body.
+`server/tts-sidecar/main.py`'s `FootprintTable` class must observe a positive value 
+recorded via its `record()` method when a real forward runs, not a stubbed test value. 
+Issue #2682 and PR #2799 body.
 
 ## Group G — GitHub Actions itself
 
