@@ -7,12 +7,14 @@
 #
 # Caching choice: this caches apt's OWN downloaded .deb packages (redirected
 # to a runner-owned temp dir, not /var/cache/apt/archives, which is
-# root-owned and not reliably writable by actions/cache's restore step)
-# rather than snapshotting the installed ffmpeg binary + its shared-library
-# closure. `apt-get install ffmpeg` pulls in a long, version-drifting chain
-# of transitive dependency packages, so re-deriving and re-linking that
-# closure by hand is the fragile option the task brief explicitly allows
-# skipping in favor of this one.
+# root-owned). Even in a runner-owned directory, apt-get runs as root via
+# sudo and creates lock/partial/ as root-owned, so the post-step cleanup also
+# removes apt's bookkeeping files and transfers ownership back to the runner
+# so actions/cache can save the directory. Rather than snapshotting the
+# installed ffmpeg binary + its shared-library closure: `apt-get install
+# ffmpeg` pulls in a long, version-drifting chain of transitive dependency
+# packages, so re-deriving and re-linking that closure by hand is the fragile
+# option the task brief explicitly allows skipping in favor of this one.
 name: 'Install ffmpeg (cached)'
 description: 'Install ffmpeg on an Ubuntu runner, caching the apt .deb packages so a cache hit skips apt-get (and the network round trip) entirely, with a step-level timeout so a stuck mirror fails fast.'
 
@@ -60,6 +62,8 @@ runs:
           echo "apt cache miss: installing ffmpeg via apt-get"
           timeout 180 sudo apt-get -o Acquire::Retries=3 update
           timeout 180 sudo apt-get -o Dir::Cache::Archives="$ARCHIVE_DIR" install -y ffmpeg
+          sudo rm -rf "$ARCHIVE_DIR/lock" "$ARCHIVE_DIR/partial"
+          sudo chown -R "$(id -u):$(id -g)" "$ARCHIVE_DIR"
         fi
 
     - name: Verify ffmpeg
