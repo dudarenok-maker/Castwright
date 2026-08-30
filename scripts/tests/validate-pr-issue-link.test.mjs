@@ -3,7 +3,18 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hasIssueLink } from '../validate-pr-issue-link.mjs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { hasIssueLink, isDependabotExempt } from '../validate-pr-issue-link.mjs';
+
+const scriptPath = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'validate-pr-issue-link.mjs',
+);
 
 const accepted = [
   'Closes #123',
@@ -62,4 +73,94 @@ for (const body of rejected) {
 test('rejects non-string input', () => {
   assert.equal(hasIssueLink(undefined), false);
   assert.equal(hasIssueLink(null), false);
+});
+
+// --- #2791/#2433: dependabot[bot] exemption -----------------------------
+// PR review gate finding on #2791: main's rulesets require this check with
+// bypass_actors: [], and a Dependabot-authored PR body never contains
+// Closes/Refs (it has no mechanism to add one), so every Dependabot PR was
+// permanently unmergeable. isDependabotExempt() is the single carve-out;
+// these tests pin both halves so the exemption can't quietly widen or
+// silently do nothing.
+
+test('isDependabotExempt: true only for the exact bot login', () => {
+  assert.equal(isDependabotExempt('dependabot[bot]'), true);
+  assert.equal(isDependabotExempt('dependabot'), false);
+  assert.equal(isDependabotExempt('Dependabot[bot]'), false); // case-sensitive on purpose
+  assert.equal(isDependabotExempt('some-human'), false);
+  assert.equal(isDependabotExempt('renovate[bot]'), false);
+  assert.equal(isDependabotExempt(undefined), false);
+  assert.equal(isDependabotExempt(''), false);
+});
+
+// CLI-level (not just unit-level): this is what the workflow actually
+// invokes, so it's the shape that would have caught the original finding —
+// before this fix, the script took no author argument at all and a
+// Dependabot PR body with no Closes/Refs exited 1 exactly like a human's.
+test('CLI: a dependabot[bot]-authored PR with no Closes/Refs still passes the check', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pr-issue-link-'));
+  try {
+    const bodyFile = join(dir, 'body.txt');
+    // Real shape of a Dependabot PR body (see PR #873, cited in the finding):
+    // no Closes/Refs anywhere.
+    writeFileSync(
+      bodyFile,
+      'Bumps [esbuild](https://github.com/evanw/esbuild) from 0.28.0 to 0.28.1.\n',
+    );
+    const result = spawnSync(process.execPath, [scriptPath, bodyFile, 'dependabot[bot]'], {
+      encoding: 'utf8',
+    });
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The negative control the exemption must not disarm: same body, same
+// script, different (human) author — must still fail. Without this case, a
+// broken exemption that skips the check for EVERY author would pass the
+// test above and go undetected.
+test('CLI: a human-authored PR with no Closes/Refs still fails the check', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pr-issue-link-'));
+  try {
+    const bodyFile = join(dir, 'body.txt');
+    writeFileSync(
+      bodyFile,
+      'Bumps [esbuild](https://github.com/evanw/esbuild) from 0.28.0 to 0.28.1.\n',
+    );
+    const result = spawnSync(process.execPath, [scriptPath, bodyFile, 'some-human'], {
+      encoding: 'utf8',
+    });
+    assert.equal(
+      result.status,
+      1,
+      `expected exit 1, got ${result.status}\nstderr: ${result.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// And a human PR that DOES link an issue must still pass — the exemption
+// path must not have broken the ordinary case.
+test('CLI: a human-authored PR with a Closes link still passes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pr-issue-link-'));
+  try {
+    const bodyFile = join(dir, 'body.txt');
+    writeFileSync(bodyFile, 'Closes #123\n');
+    const result = spawnSync(process.execPath, [scriptPath, bodyFile, 'some-human'], {
+      encoding: 'utf8',
+    });
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

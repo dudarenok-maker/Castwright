@@ -11,7 +11,7 @@ LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
 memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
-attribution — 115 knobs across 12 groups in total. High-risk groups (marked
+attribution — 117 knobs across 12 groups in total. High-risk groups (marked
 with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
@@ -70,6 +70,7 @@ is disabled.
 | Ollama analyzer concurrency (K) | Max analyzer /api/chat calls in flight at once; also set Ollama-side OLLAMA_NUM_PARALLEL >= K | 2 | integer, min 1 | live | high |
 | Ollama warm timeout (ms) | How long to wait for a cold Ollama model to load into VRAM before reporting unreachable | 120000 | integer, min 1000 | live | low |
 | Analyzer eval-rate telemetry | Record per-pass Ollama decode speed (tok/s) to a JSONL log shown in the Admin analyzer-throughput panel | `true` | boolean | live | low |
+| GPU-split detection probe | Enable on-demand nvidia-smi probes to detect whether the analyzer's Ollama model is split across GPUs; cached for 60s. Turn off to skip the diagnostic overhead if not needed. | `true` | boolean | live | low |
 
 ## 2. Analyzer chunking & truncation guards
 
@@ -140,6 +141,7 @@ your own on-disk copy; nothing here changes until you explicitly edit.
 | Phase-1 model override | Drives sentence attribution with a distinct model | (blank) | string | live | medium |
 | Phase-1 minimum lag (chapters) | Min completed Phase-0 chapters before Phase-1 dispatch starts; 0 releases lag | 10 | integer, min 0 | live | medium |
 | Analyzer keep-alive | How long Ollama holds the resident analyzer model warm | `5m` | string (Ollama keep_alive syntax) | live | medium |
+| Expected analyzer GPU | Informational only — declares the GPU you've pinned Ollama to via the OS-level steps, so a detected split that contradicts it is called out by name in Advanced Configuration | (blank) | string | live | low |
 
 ## 5. Voice engine & device
 
@@ -199,8 +201,8 @@ and a resample alone clears it. On by default; turn it off only to isolate a
 suspected false-positive on unusual text, and switch it back on afterwards.
 See [Troubleshooting](Troubleshooting#a-coqui-line-came-out-silent-or-nearly-empty-coqui-degeneracy-guard).
 
-A read-only **Analyzer (Ollama) device** row appears at the end of this
-group when the local analyzer is active — Ollama's device isn't
+A read-only **Analyzer (Ollama) device** row appears in the "Analyzer models & endpoints"
+group (section 4, above) when the local analyzer is active — Ollama's device isn't
 app-pinnable, so it just reports what the daemon is currently doing.
 
 ## 6. Voice batching & throughput

@@ -200,6 +200,19 @@ jobs:
         if: fromJSON(needs.detect.outputs.scopes).step_check_budget_poll || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run check:budget-poll
 
+      # #2434 → #2779: npm audit against the root lockfile, gated so it only
+      # runs on a root package-lock.json diff (or a shared/global change).
+      # leg: audit
+      - name: Root dependency audit
+        if: fromJSON(needs.detect.outputs.scopes).step_audit || fromJSON(needs.detect.outputs.scopes).shared
+        run: npm run audit
+
+      # Sibling to the above, scoped to the server tree's own lockfile.
+      # leg: audit:server
+      - name: Server dependency audit
+        if: fromJSON(needs.detect.outputs.scopes).step_audit_server || fromJSON(needs.detect.outputs.scopes).shared
+        run: npm run audit:server
+
       # No-ops with a banner on a runner without Pester 5 (the GitHub
       # ubuntu image ships pwsh but not Pester 5), exactly as the old
       # `npm run verify` leg did. Kept gated on `test:scripts` so it provides

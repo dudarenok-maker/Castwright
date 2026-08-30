@@ -269,24 +269,13 @@ function externalFilesFloor(): string[] {
   return applyExclusions(withManual, EXTERNAL_FILES_EXCLUSIONS);
 }
 
-let EXTERNAL_FILES_FLOOR: string[] = [];
-try {
-  EXTERNAL_FILES_FLOOR = externalFilesFloor();
-  /* Belt-and-suspenders: externalFilesFloor()'s content filter runs CALL_RE.test()
-     in a loop, which parks lastIndex at a nonzero offset after the last match.
-     Reset here so no later caller of CALL_RE inherits leftover state from the
-     floor-building phase — scanFile() resets on entry too, but a shared g-flagged
-     regex must never be trusted to arrive clean. */
-  CALL_RE.lastIndex = 0;
-} catch (e) {
-  /* The alignment-bug fix in blankCommentsAndStrings() now correctly detects
-     ambiguous regex literals that were previously invisible due to quote-tracking
-     desync. These regexes exist in the codebase and need to be escaped separately
-     (#2799). Allow the test file to load despite these issues so the regression
-     tests for the alignment bug itself can run. */
-  console.warn('externalFilesFloor() found ambiguous regex literals:', e instanceof Error ? e.message : e);
-  CALL_RE.lastIndex = 0;
-}
+const EXTERNAL_FILES_FLOOR: string[] = externalFilesFloor();
+/* Belt-and-suspenders: externalFilesFloor()'s content filter runs CALL_RE.test()
+   in a loop, which parks lastIndex at a nonzero offset after the last match.
+   Reset here so no later caller of CALL_RE inherits leftover state from the
+   floor-building phase — scanFile() resets on entry too, but a shared g-flagged
+   regex must never be trusted to arrive clean. */
+CALL_RE.lastIndex = 0;
 
 /* pipSpawners() was a narrower pip-specific scan over scripts/ and
    server/tts-sidecar/scripts/. It is now superseded by externalFilesFloor()'s

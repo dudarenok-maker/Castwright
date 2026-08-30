@@ -358,7 +358,7 @@ export function parseRegister(markdown) {
   const entries = [];
   for (const cells of yieldDataRowCells(markdown)) {
     const [testCell, fileCell, , , issueCell, quarantinedCell] = cells;
-    const file = fileCell.replace(/`/g, '').trim();
+    const file = fileCell.replaceAll('`', '').trim();
 
     // Skip rows with empty File cells — they can't become entries but must
     // still be counted as unparsed data rows by the guard (Bug A).
@@ -437,7 +437,7 @@ export function countUnparsedDataRows(markdown) {
     const testCell = cells[0];
     const fileCell = cells[1];
     const quarantinedCell = cells[5]; // 6th column, index 5
-    const file = fileCell.replace(/`/g, '').trim();
+    const file = fileCell.replaceAll('`', '').trim();
 
     // Empty File cell is unparsed (Bug A).
     if (!file) {

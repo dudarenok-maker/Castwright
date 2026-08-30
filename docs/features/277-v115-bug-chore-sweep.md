@@ -1140,7 +1140,7 @@ into a quick same-day pick, per #2759's own note — the adversarial-review
 weight the issue asks for should still apply even though it shares a branch
 with lower-stakes items.
 
-### Wave 3 — diff-shaped lane, one file (ready)
+### Wave 3 — diff-shaped lane, one file (in decomposition)
 
 - **#2750** — `SpeakerEngine` never restores its device pin after a
   self-demotion (`server/tts-sidecar/main.py`).
@@ -1150,6 +1150,26 @@ with lower-stakes items.
 Both are `server/tts-sidecar/main.py` — **one lane, not two**, per the Round-1
 Lane-4 rule (files that overlap share a lane regardless of how unrelated the
 defects look).
+
+**In decomposition 2026-08-29.** Both decisions have been taken by the operator;
+both issues are now board Status **In Progress** and carry `area:side` alongside
+their standalone `bug` label. Child issue numbers are not yet assigned.
+
+> **Do not brief either child from its issue body alone.** The chosen options
+> have not been written back — both bodies still end with their original
+> *Decision owed* line enumerating the alternatives, so a cold agent reading only
+> the issue will re-open a settled question. This is the same shape as #2721,
+> where a deferral outlived the decision that closed it. The options differ
+> materially in code, not just in wording: for **#2750**, the teardown-gate fix
+> also has to widen `maybe_free_idle`'s `!= "cuda"` gate (`main.py:8093`, the
+> field the bug corrupts is the one teardown is gated on), the
+> restore-at-demotion fix does not go near it, and the third option changes
+> whether plan
+> [264](264-vram-aware-gpu-placement.md)'s teardown contract (`:526-531`) applies
+> to `SpeakerEngine` at all. For **#2752**, the two options put the wait on
+> opposite sides — a wait-then-evict path inside `unload_base17()` mirroring
+> `unload_design()`/#2070's "design wins" policy, versus refusing admission in
+> `design_voice()` — which decides *which* operation blocks and for how long.
 
 ### Wave 4 — register mechanics (decide #2708 first, then lane)
 
