@@ -130,8 +130,41 @@ def test_poison_load_failure_is_reraised(monkeypatch: pytest.MonkeyPatch):
     assert eng._model is None  # nothing loaded
 
 
+def test_spk_drop_model_locked_restores_device_pin_after_cpu_demotion():
+    """#2750: a cuda->cpu self-demotion in `ensure_loaded` must NOT
+    permanently overwrite an SPK_DEVICE=cuda pin. Before this fix,
+    `_drop_model_locked` left `self.device` at "cpu" forever — the same
+    defect class fixed for WhisperEngine (#2642), CoquiEngine (#1730 gap-3)
+    and KokoroEngine (#2631 review S4)."""
+    eng = main.SpeakerEngine()
+    eng._requested_device = "cuda"
+    eng.device = "cpu"  # simulates the post-demotion state from ensure_loaded
+    eng._model = _FakeModel()
+
+    with eng._infer_lock:
+        dropped = eng._drop_model_locked()
+    assert dropped is True
+    assert eng.device == "cuda"
+
+
+def test_maybe_free_idle_frees_and_restores_pin_on_demoted_engine(monkeypatch: pytest.MonkeyPatch):
+    """#2750: once self-demoted, `self.device` reads "cpu" forever unless
+    `maybe_free_idle`'s device-family gate also admits a demoted engine —
+    otherwise teardown (and the pin restore inside it) can never run."""
+    _stub_torch_cuda(monkeypatch, available=True)
+    eng = main.SpeakerEngine()
+    eng._requested_device = "cuda"
+    eng.device = "cpu"  # demoted: device != _requested_device
+    eng._model = _FakeModel()
+    eng._last_used = time.monotonic() - 10_000  # very idle
+    assert eng.maybe_free_idle(120.0) is True
+    assert eng._model is None
+    assert eng.device == "cuda"  # pin restored
+
+
 def test_maybe_free_idle_noop_on_cpu(monkeypatch: pytest.MonkeyPatch):
     eng = main.SpeakerEngine()
+    eng._requested_device = "cpu"  # pin to cpu; don't inherit from ambient SPK_DEVICE env
     eng.device = "cpu"
     eng._model = _FakeModel()
     eng._last_used = time.monotonic() - 10_000  # very idle
@@ -162,6 +195,33 @@ def test_maybe_free_idle_frees_on_indexed_cuda(monkeypatch: pytest.MonkeyPatch):
     assert eng._model is None
 
 
+def test_maybe_free_idle_not_demoted_on_admitted_indexed_load(monkeypatch: pytest.MonkeyPatch):
+    """#2750: regression guard for family-aware demoted predicate.
+
+    Defensive-correctness test: the demoted computation COULD theoretically
+    diverge between a string-exact check ('cuda' != 'cuda:0' = True) and a
+    family-aware check (cuda_fam == cuda_fam = False) when an indexed device
+    is admitted. However, the gate logic `if not demoted and device_not_cuda:`
+    produces the SAME outcome in all currently reachable states: because device
+    IS cuda (family), the second part of the AND is False regardless of demoted's
+    value. This test cannot currently fail (the demoted flag is never
+    stat-differentiating).
+
+    Kept as documentation that the family-aware fix is correct for any future
+    architectural changes where the divergence could matter.
+    """
+    _stub_torch_cuda(monkeypatch, available=True)
+    eng = main.SpeakerEngine()
+    eng._requested_device = "cuda"  # env-derived, unindexed
+    eng.device = "cuda:0"  # after capacity admission indexing
+    eng._model = _FakeModel()
+    eng._last_used = time.monotonic() - 10_000  # very idle
+    # Evicts because it's idle cuda (demoted flag doesn't gate this path).
+    assert eng.maybe_free_idle(120.0) is True
+    assert eng._model is None
+    assert eng.device == "cuda"  # pin restored to unindexed
+
+
 def test_maybe_free_idle_keeps_recent_model(monkeypatch: pytest.MonkeyPatch):
     _stub_torch_cuda(monkeypatch, available=True)
     eng = main.SpeakerEngine()
@@ -185,6 +245,56 @@ def test_spk_idle_ttl_default_matches_registry():
     # Guard the R2-A invariant: registry sidecar.spkIdleTtl default == sidecar
     # default, or a default-config sidecar silently diverges from the UI.
     assert main._SPK_IDLE_TTL_DEFAULT == 120.0
+
+
+def test_real_cuda_demotion_through_maybe_free_idle(monkeypatch: pytest.MonkeyPatch):
+    """#2750: chain the real cuda->cpu self-demotion from ensure_loaded into
+    maybe_free_idle, asserting the invariant end-to-end: a demoted engine
+    correctly teardown restores the device pin and frees the model.
+
+    This exercises the actual code path (not hand-assigned field values):
+    1. ensure_loaded() triggers real demotion on a cuda load failure
+    2. device is now "cpu" while _requested_device is "cuda"
+    3. maybe_free_idle() detects the demoted state and tears down
+    4. _drop_model_locked() restores device to _requested_device
+
+    If a later change made ensure_loaded record the admitted card into
+    _requested_device as well, demoted would become False and teardown
+    would be unreachable — this test would catch that regression."""
+    calls: list[str] = []
+
+    def from_hparams(**kw):
+        dev = kw["run_opts"]["device"]
+        calls.append(dev)
+        if dev == "cuda":
+            raise RuntimeError("cuDNN library mismatch")  # non-poison, triggers demotion
+        return _FakeModel()
+
+    # Set SPK_DEVICE=cuda so _requested_device will be "cuda" at init time
+    monkeypatch.setenv("SPK_DEVICE", "cuda")
+    _install_speechbrain_stub(monkeypatch, from_hparams=from_hparams)
+    _stub_torch_cuda(monkeypatch, available=True)
+
+    # Create engine — _requested_device will be "cuda" from the env
+    eng = main.SpeakerEngine()
+
+    # Trigger real demotion via ensure_loaded
+    asyncio.run(eng.ensure_loaded())
+
+    # Verify demotion occurred: device is cpu but _requested_device is cuda
+    assert eng.device == "cpu"
+    assert eng._requested_device == "cuda"
+    assert eng._model is not None
+    assert calls == ["cuda", "cpu"]  # tried cuda, fell back to cpu
+
+    # Mark it idle
+    eng._last_used = time.monotonic() - 10_000
+
+    # Call maybe_free_idle — should detect the demoted state and tear down
+    freed = eng.maybe_free_idle(120.0)
+    assert freed is True
+    assert eng._model is None  # model was dropped
+    assert eng.device == "cuda"  # device restored to _requested_device
 
 
 def test_embed_load_poison_is_fenced(monkeypatch: pytest.MonkeyPatch):

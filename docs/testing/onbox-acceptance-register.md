@@ -422,17 +422,25 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 11 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 5 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**63 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-29, merging two independent A102 additions.** 
+> **Last change: 2026-08-29 (PR #2754 review), 62 → 63**, adding row **E101**
+> (#2641 — port-keyed TTS owner notes) — documents the case where two server
+> instances on different ports SHARE ONE `.run/` directory, the mechanism #2641
+> fixes to prevent collision. E10 already mentions port keying but covers a
+> different scenario (two separate checkouts with separate `.run/` dirs, where
+> collision never occurred even before the fix); E101 covers the actual shared-run
+> case now locked down. `next-id: E101` bumped to `E102` in the same change.
+>
+> **Prior change: 2026-08-29, merging two independent A102 additions.**
 > This branch had added row **A102** (analyzer GPU-split warning + expected-device
 > mismatch, #2367, Castwright#2734); `origin/main` had independently added row
 > **A102** (CUDA fallback self-test #2582, PR #2719). Both started from the same
@@ -3686,7 +3694,7 @@ to real output, not about VRAM or a specific card.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E101 -->
+<!-- next-id: E102 -->
 
 ### E1 · ops-16 Pinokio installer ([#822](https://github.com/dudarenok-maker/Castwright/issues/822)) · **macOS is the gap**
 
@@ -4154,7 +4162,7 @@ where dev mode never rebinds — a losing checkout's server exits with an
 actionable `EADDRINUSE` instead), "my config says `LAN_HTTPS=1`" only means
 *this checkout would hold `:8443` if it won the race*, not that it currently
 does. There is no owner-note file for the main server's bound port the way
-`.run/tts.owner.json` exists for the sidecar, so neither script has an
+`.run/tts.owner.<port>.json` exists for the sidecar, so neither script has an
 authoritative source to settle it — the sweep now sweeps nothing for
 `:8443` rather than guess. This is a **coverage tradeoff, not a defect**: an
 orphaned LAN-HTTPS listener with no surviving PID file is no longer
@@ -4176,14 +4184,14 @@ running a live stack is "a real sidecar" in this register's own vocabulary
 worktree, e.g. slot 1: `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`,
 `LOCAL_TTS_PORT=9010`), each with **all three** of Vite, the server, and the
 sidecar live (`npm start` / `npm run dev`) so each checkout owns a
-`tts.owner.json` note. From the worktree, run `npm run stop` and observe
+`tts.owner.<port>.json` note. From the worktree, run `npm run stop` and observe
 **four** things, not just the sidecar pair: (1) the worktree's own sidecar
 (`:9010`) dies; (2) the primary's sidecar (`:9000`) survives; (3) the
 worktree's own Vite (`:5183`) and server (`:8090`) die; (4) the **primary's**
 Vite (`:5173`) and server (`:8080`) survive — this last pair is the one pass
 8 found broken and is the one an operator must not skip. Then repeat after a
-clean shutdown of the worktree's sidecar (so `tts.owner.json` is absent and
-the sweep falls back to `server/.env`/`.env.local`) and confirm the same
+clean shutdown of the worktree's sidecar (so `tts.owner.<port>.json` is absent
+and the sweep falls back to `server/.env`/`.env.local`) and confirm the same
 four-way discrimination holds. **Optionally**, if exercising the LAN-HTTPS
 path too: start the primary with `LAN_HTTPS=1` (so it's listening on
 `:8443`), then from the worktree run `npm run stop` and confirm the
@@ -4208,6 +4216,64 @@ a false "nothing to stop" while a raw exception scrolled past above it.
 this PR's description (§On-box acceptance) and `docs/features/` plan 43's
 stop-script contract, plus `scripts/lib/sidecar-sweep-port.mjs`'s own
 module-level comment for the exact fallback order being exercised.
+
+### E101 · Port-keyed TTS owner notes prevent collision when servers share a run directory (#2641, PR #2754) · **no GPU needed**
+
+Before #2641, the TTS sidecar owner-note file was fixed at `.run/tts.owner.json`
+regardless of which port the sidecar was listening on. When two different server
+instances on different ports both used the same `.run` directory — set via
+`APP_RUN_DIR` environment variable pointing to a shared location — they would
+both try to write to this single fixed filename. Whichever wrote last would
+silently clobber the other's note, losing the ownership information (PID, port,
+lineage). A server reading the note later would find stale or wrong data about
+which sidecar it was supposed to manage.
+
+#2641 fixes this by keying the owner-note filename by port: each sidecar now
+writes to `.run/tts.owner.<port>.json`. When two instances share a `.run`
+directory, each gets its own file. The sidecar-sweep logic that reads owner
+notes to decide which listeners to kill also resolves the port, so it correctly
+discriminates: a sweep from port 8090 reads `tts.owner.8090.json` only and leaves
+`tts.owner.9000.json` untouched.
+
+The claim is never tested by E10 — that row's setup uses **two separate
+checkouts with two separate `.run/` directories**, so the fixed filename never
+collided even before this fix. E10 verifies the sweep correctly uses different
+ports; this row verifies the port-keying prevents collision when the run
+directory **is** shared.
+
+*Needs:* two checkouts of this repo, both with live TTS sidecars and servers on
+**different ports**, both pointing to the **same `.run/` directory**. The most
+straightforward setup: primary checkout at default ports (`PORT=8080`,
+`LOCAL_TTS_PORT=9000`) + worktree at slot 1 (`PORT=8090`, `LOCAL_TTS_PORT=9010`),
+then override both to share one `.run` by setting `APP_RUN_DIR=/abs/path/shared-run-dir` in
+**both** checkouts' `server/.env` before starting, so each server will write its
+owner note there instead of in its own checkout's `.run/`.
+
+Run `npm start` or `npm run dev` in each checkout. From the primary, observe:
+**(1)** `.run/tts.owner.9000.json` exists and contains the primary's sidecar PID;
+**(2)** `.run/tts.owner.9010.json` also exists (written by the worktree's
+sidecar) and contains a different PID. Both files coexist in the shared `.run`
+directory without collision — this is the core fix of #2641. Verify by inspecting
+file contents directly (e.g., `cat /abs/path/shared-run-dir/tts.owner.*.json`);
+the port-keyed naming prevents the overwrite-collision that would have occurred
+before this fix. 
+
+**Note:** Verifying the port-based sweep's behavior in a shared-run-dir configuration
+is not currently a safe on-box test, because the PID file (`.run/tts.pid`) is not
+port-keyed — only the owner notes are. When two servers share a run directory, both
+write to the same `tts.pid`, and whichever started last overwrites the first. Running
+`npm run stop` from either checkout can then kill the wrong process (the one whose
+PID happens to be in the file, not the one whose checkout the stop was issued from),
+defeating the separation the port-keyed owner notes provide. The actual #2641 fix
+(port-keyed owner-note filenames) is verified above; the sweep's correctness in
+this shared-run-dir scenario will require #2641 to be extended to port-key the PID
+files as well.
+
+*Cost:* 5–10 minutes to set up and run. Needs two live sidecars on the same host.
+*Criteria:* this PR's description (§On-box acceptance), the
+`.run/tts.owner.<port>.json` keying in `server/src/tts/sidecar-owner.ts`
+(the Node server that writes owner notes), and `scripts/lib/sidecar-sweep-port.mjs`
+and `.psm1` (the sweep logic that reads notes and falls back to config).
 
 ## Group G — GitHub Actions itself
 
