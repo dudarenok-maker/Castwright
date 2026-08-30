@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { withCapacityRetry, getCapacityWaiterCount, parseNoCapacity } from './capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { setProbeSidecarHealthProvider } from './sidecar-health-gate.js';
@@ -233,6 +233,17 @@ describe('withCapacityRetry', () => {
 });
 
 describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', () => {
+  // #2678 review N5: several tests below register a fake sidecar-health
+  // provider via `setProbeSidecarHealthProvider`. Without a reset, the
+  // "unregistered → fails closed" test a few lines down only passed because
+  // it happens to run FIRST in file/declaration order — a reorder (or a new
+  // test inserted above it) would silently leak a fake provider into it.
+  // Reset to the unregistered state after every test so isolation doesn't
+  // depend on order.
+  afterEach(() => {
+    setProbeSidecarHealthProvider(null);
+  });
+
   it('(1) isDesignResident true throughout → keeps polling past generic maxAttempts, up to the design budget', async () => {
     const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:0'));
     const isDesignResident = vi.fn().mockResolvedValue(true);

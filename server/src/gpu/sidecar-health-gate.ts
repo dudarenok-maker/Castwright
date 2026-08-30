@@ -64,8 +64,14 @@ export interface SidecarHealthSnapshot {
 let provider: (() => Promise<SidecarHealthSnapshot>) | null = null;
 
 /** Registered by routes/sidecar-health.ts at module init with its own
-    `probeSidecarHealth`. */
-export function setProbeSidecarHealthProvider(fn: () => Promise<SidecarHealthSnapshot>): void {
+    `probeSidecarHealth`. Also the test-isolation reset: passing `null`
+    clears back to the unregistered ("nothing known") state, so a test that
+    registers a fake provider can restore fail-closed behaviour afterward
+    instead of leaking it into the next test (order-dependent isolation was
+    the #2678 review N5 finding). */
+export function setProbeSidecarHealthProvider(
+  fn: (() => Promise<SidecarHealthSnapshot>) | null,
+): void {
   provider = fn;
 }
 

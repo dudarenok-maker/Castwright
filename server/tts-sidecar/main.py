@@ -5045,6 +5045,50 @@ def _is_resident(engine_id: str) -> Optional[str]:
     return f"{card['family']}:{index}"
 
 
+def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
+    """Concrete "cuda:N"/"rocm:N" device key for a QwenEngine, valid whenever
+    ANY of its models are resident or in-flight -- the Base 0.6B (`_base is
+    not None`) or the transient VoiceDesign (`_design is not None` or
+    `_design_in_flight.busy`).
+
+    Deliberately NOT `_is_resident("qwen")` / `_engine_actual_card` (#2678
+    review N1): that path resolves a model-presence gate scanning
+    `_model`/`_kokoro`/`_base`/`_tts` and returns None whenever only the
+    VoiceDesign is loaded/in-flight and Base isn't loaded -- exactly the
+    scenario `qwen_design_resident` exists to catch (a resident/in-flight
+    design independent of Base), so gating the design's OWN device on Base's
+    residency disarmed it entirely (also making `/api/sidecar/load`'s
+    noCapacity/design-wait path structurally unreachable, since that route
+    only reaches it when `_base IS None`).
+
+    Qwen keeps ONE engine-wide `_device` shared by both `_base` and
+    `_design` (set by `_ensure_device_resolved`, called by both
+    `_ensure_base_loaded` and `_ensure_design_loaded` before their weights
+    pull begins), so reading it directly answers "which card is Qwen on"
+    from either model's residency without needing Base to be non-None, and
+    is already resolved (not still "auto") well before a cold pull finishes.
+
+    This also correctly reflects an admitted `device=` argument onto a
+    NON-default card (#2678 review N2): `_resolve_torch_device` returns an
+    explicit (non-"auto") pref UNCHANGED, so an admission's concrete
+    "cuda:1" survives resolution intact -- only the unset/env-default "auto"
+    pref resolves via availability (cuda:0 first). Verified against
+    `_resolve_torch_device`'s own source, not assumed."""
+    if not isinstance(qwen, QwenEngine):
+        return None
+    resident = (
+        qwen._base is not None
+        or qwen._design is not None
+        or qwen._design_in_flight.busy
+    )
+    if not resident:
+        return None
+    fam, idx = _parse_device(qwen._device)
+    if fam not in ("cuda", "rocm"):
+        return None
+    return f"{fam}:{idx if idx is not None else 0}"
+
+
 def _same_card(resident: Optional[str], target: str) -> bool:
     """True when a resident engine's device string sits on the same CUDA card
     as `target` (always a concrete "cuda:N" from `_worst_device_key`). cpu / mps
@@ -10064,11 +10108,13 @@ def health() -> dict[str, Any]:
     qwen_loaded = False
     qwen_base17_loaded = False
     qwen_loading = False
+    qwen_design_resident = False
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine):
         qwen_loaded = qwen._base is not None
         qwen_base17_loaded = qwen._base17 is not None
         qwen_loading = qwen._loading
+        qwen_design_resident = qwen._design is not None or qwen._design_in_flight.busy
     # Install-state (distinct from load-state): lets the Node proxy tell
     # "Qwen not installed" apart from "installed but cold", which drives the
     # conditional default (Qwen-when-installed) + the install-check warning.
@@ -10107,10 +10153,7 @@ def health() -> dict[str, Any]:
         "qwen_design_ever_loaded": _QWEN_DESIGN_EVER_LOADED,
         # LIVE counterpart to the latch above -- true only while a VoiceDesign is
         # actually resident or mid-load/mid-design right now.
-        "qwen_design_resident": bool(
-            isinstance(qwen, QwenEngine)
-            and (qwen._design is not None or qwen._design_in_flight.busy)
-        ),
+        "qwen_design_resident": qwen_design_resident,
         # #2678 review finding — the device `qwen_design_resident` above is
         # true on, as a concrete "cuda:N" (or None off a GPU / unresolvable).
         # `_base`/`_design` share one QwenEngine instance and therefore one
@@ -10118,10 +10161,15 @@ def health() -> dict[str, Any]:
         # `qwen_design_resident` is true. Node-side capacity-retry.ts uses it
         # to qualify the design-residency wait extension: a resident design on
         # a DIFFERENT card than the one this admission was denied on can never
-        # free the blocked device, so it must not extend that wait. Reuses
-        # `_is_resident`, the same probe /health's device map already relies
-        # on, rather than re-deriving card placement here.
-        "qwen_device_key": _is_resident("qwen"),
+        # free the blocked device, so it must not extend that wait.
+        #
+        # NOT `_is_resident("qwen")` (#2678 review N1/N2) -- that gates on a
+        # LOADED-MODEL presence scan (`_model`/`_kokoro`/`_base`/`_tts`) that
+        # never checks `_design`, so it returns None whenever only the
+        # VoiceDesign is resident/in-flight and Base isn't loaded, disarming
+        # this field for exactly the scenario it exists to cover. See
+        # `_qwen_resident_device_key`'s own docstring for the full reasoning.
+        "qwen_device_key": _qwen_resident_device_key(qwen),
         "qwen_loading": qwen_loading,
         "qwen_package_installed": qwen_package_installed,
         "qwen_weights_present": qwen_weights_present,
