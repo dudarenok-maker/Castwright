@@ -1403,8 +1403,26 @@ class _VdKokoroArbiter:
     def __init__(self, shares_device: bool = True) -> None:
         self._cv = threading.Condition()
         self._kokoro_in_flight = 0
-        self._design_active = False
+        # REFCOUNT, not a bool (#2809 review pass 3). Designs can overlap: since
+        # #2809 `design_voice()` releases `card_lock` partway through its
+        # `design()` span (once model load finishes, so the GPU forwards run
+        # lock-free), so `card_lock` no longer makes `design()` single-holder and
+        # a second design can enter while the first is still inside. With a bool,
+        # whichever design exited FIRST cleared the flag for the other, admitting
+        # Kokoro onto the card for the rest of the remaining design's forward —
+        # exactly the co-residency this arbiter exists to prevent. Counting
+        # holders makes the exclusion last until the LAST design leaves.
+        # Note this is exclusion bookkeeping only: the concurrent designs' actual
+        # GPU forwards are already serialised by `QwenEngine._synth_lock`, so
+        # refcounting here does not permit any new real GPU concurrency.
+        self._design_active_count = 0
         self._shares_device = shares_device
+
+    @property
+    def _design_active(self) -> bool:
+        """True while at least one design holds the arbiter. Derived from the
+        refcount so existing readers (and tests) keep their boolean contract."""
+        return self._design_active_count > 0
 
     @contextmanager
     def kokoro_synth(self):
@@ -1412,7 +1430,7 @@ class _VdKokoroArbiter:
             yield
             return
         with self._cv:
-            while self._design_active:
+            while self._design_active_count > 0:
                 self._cv.wait()
             self._kokoro_in_flight += 1
         try:
@@ -1428,14 +1446,18 @@ class _VdKokoroArbiter:
             yield
             return
         with self._cv:
+            # Entry gate unchanged: drain in-flight Kokoro synths, then claim.
+            # Deliberately does NOT wait on `_design_active_count` — concurrent
+            # designs are allowed (and `test_two_concurrent_healthy_designs_both_succeed`
+            # pins that); only Kokoro is excluded.
             while self._kokoro_in_flight > 0:
                 self._cv.wait()
-            self._design_active = True
+            self._design_active_count += 1
         try:
             yield
         finally:
             with self._cv:
-                self._design_active = False
+                self._design_active_count -= 1
                 self._cv.notify_all()
 
 
@@ -6755,8 +6777,14 @@ class QwenEngine(Engine):
                             # resident, since the two don't compete for VRAM) but still
                             # inside _VD_KOKORO.design() (#2809: Kokoro stays excluded
                             # for the full design span, including the forwards).
-                            card_lock.release()
+                            # Flag set BEFORE the release, not after: if
+                            # `release()` itself raised, the lock is already
+                            # unlocked (that is the only way it raises), so the
+                            # outer `finally` must NOT try again — a second
+                            # release would raise "release unlocked lock" and
+                            # mask the original error.
                             card_lock_released = True
+                            card_lock.release()
 
                         # Phase boundary: model load above holds card_lock; GPU forwards below
                         # release it but remain inside _VD_KOKORO.design(). `load_ms` isolates
@@ -6826,14 +6854,25 @@ class QwenEngine(Engine):
                     finally:
                         # Pass the in-flight exception through rather than
                         # (None, None, None) — the CM must see it to run any
-                        # exception-aware cleanup, and it can never suppress
-                        # here (#2809 review pass 2).
+                        # exception-aware cleanup (#2809 review pass 2).
+                        # `sys.exc_info()` can in principle report a STALE outer
+                        # exception on the success path (if a caller invoked us
+                        # from inside an `except:` block), but that is both
+                        # unreachable here — every caller arrives via
+                        # `asyncio.to_thread` on a fresh stack — and harmless if
+                        # it were: `design()` is a @contextmanager whose cleanup
+                        # is a plain `finally`, so a thrown-in exception still
+                        # clears the refcount and re-propagates as the same
+                        # object, which `__exit__` returns False for rather than
+                        # raising. Left as-is deliberately; a `try/except` here
+                        # would be error handling for an impossible scenario.
                         design_context.__exit__(*sys.exc_info())
                 finally:
                     # Belt-and-suspenders: card_lock is normally released above,
                     # inside design(), once model load completes. This only fires
-                    # if we never got that far — unload_base17() or
-                    # design_context.__enter__() raised — so card_lock would
+                    # if we never got that far — unload_base17(),
+                    # design_context.__enter__(), or the resident-Kokoro
+                    # _kokoro_eng.unload() raised — so card_lock would
                     # otherwise leak for the process lifetime (card_lock
                     # instances are cached per card index and never recreated,
                     # so a leak wedges every later design AND mint on that card

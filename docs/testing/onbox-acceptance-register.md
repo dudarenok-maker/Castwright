@@ -3356,6 +3356,11 @@ never released.
   forward that a Kokoro request arrives during. Confirm the card never shows the
   Kokoro model and the VoiceDesign 1.7B resident simultaneously — the Kokoro synth
   starts only after the design forward has completed and the arbiter has cleared.
+  **Repeat with TWO designs overlapping** (two characters designed back-to-back so
+  their spans interleave — the bulk "Design full cast" shape). The arbiter
+  refcounts its holders since #2809 pass 3, so Kokoro must stay blocked until the
+  **last** design leaves, not the first: a Kokoro synth admitted while a second
+  design is still forwarding is the exact regression that criterion guards.
 - **A failed base17 eviction does not wedge the card.** (Added by #2809 / PR #2810.)
   Drive a `design_voice()` into the `Base17ContentionTimeoutError` path — start a
   base17 load and trigger a design against it such that the bounded wait expires
