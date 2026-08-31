@@ -34,6 +34,8 @@ import {
   parseNvidiaSmiUtil,
   maxNvidiaSmiUtil,
   gpuContentionFor,
+  siblingContentionFor,
+  SIBLING_CONTENTION_THRESHOLD,
   isVitestPoolCrash,
   branchDiffFiles,
   stagedDiffFiles,
@@ -1216,6 +1218,85 @@ test('detectGpuContention pins the --query-gpu=utilization.gpu flag the parsers 
     /'--query-gpu=utilization\.gpu'/,
     "detectGpuContention must query ONLY utilization.gpu — adding a field (e.g. 'index,') " +
       'shifts the first CSV column the parsers read away from the utilization percentage',
+  );
+});
+
+// --- Sibling-worktree contention guard (2026-09-01) ---------------------
+
+test('siblingContentionFor: busy when at least SIBLING_CONTENTION_THRESHOLD other PIDs are present', () => {
+  assert.deepEqual(siblingContentionFor('4242\n', 111), { busy: true, count: 1 });
+  assert.equal(SIBLING_CONTENTION_THRESHOLD, 1);
+});
+
+test('siblingContentionFor: excludes the caller\'s own PID from the count', () => {
+  // Own verify-cache.mjs process can itself match the 'verify-cache\\.mjs'
+  // filter in the PowerShell probe — must not count itself as a sibling.
+  assert.deepEqual(siblingContentionFor('111\n', 111), { busy: false, count: 0 });
+});
+
+test('siblingContentionFor: idle on empty/unparseable stdout', () => {
+  assert.deepEqual(siblingContentionFor('', 111), { busy: false, count: 0 });
+  assert.deepEqual(siblingContentionFor('\n\n', 111), { busy: false, count: 0 });
+});
+
+test('siblingContentionFor: multiple sibling PIDs across lines all count', () => {
+  assert.deepEqual(siblingContentionFor('111\n4242\n5353\n', 111), { busy: true, count: 2 });
+});
+
+function detectSiblingContentionBody() {
+  const match = src.match(/function detectSiblingContention\(\) \{[\s\S]*?\n\}/);
+  assert.ok(match, "could not locate detectSiblingContention's function body in verify-cache.mjs");
+  return match[0];
+}
+
+test('detectSiblingContention routes through siblingContentionFor, not a hand-rolled count', () => {
+  const body = detectSiblingContentionBody();
+  assert.match(
+    body,
+    /return siblingContentionFor\(r\.stdout, process\.pid\);/,
+    'detectSiblingContention must return siblingContentionFor(r.stdout, process.pid) — the pure ' +
+      'decision seam — so the exclude-self behaviour stays in one place',
+  );
+});
+
+test('detectSiblingContention falls back to busy:false, count:null on probe failure', () => {
+  const body = detectSiblingContentionBody();
+  assert.match(
+    body,
+    /if \(r\.error \|\| r\.status !== 0\) return \{ busy: false, count: null \};/,
+    'detectSiblingContention must fail open (busy:false) on a non-Windows box or a PowerShell error, ' +
+      'mirroring detectGpuContention\'s own fallback',
+  );
+});
+
+// --- Pre-commit --changed-only scoping (2026-09-01) ---------------------
+//
+// The runStepProcess/CHANGED_ONLY_NPM_SCRIPT wiring itself spawns `npm run`,
+// so — like detectGpuContention's own tests above — correctness is pinned by
+// source regex rather than by actually spawning vitest here.
+
+test('CHANGED_ONLY_NPM_SCRIPT maps test/test:server to their :changed npm scripts', () => {
+  const testMatch = src.match(/const CHANGED_ONLY_NPM_SCRIPT = \{[\s\S]*?\};/);
+  assert.ok(testMatch, 'could not locate CHANGED_ONLY_NPM_SCRIPT in verify-cache.mjs');
+  assert.match(testMatch[0], /test: 'test:changed'/);
+  assert.match(testMatch[0], /'test:server': 'test:server:changed'/);
+});
+
+test('runStepProcess keys the retriable-pool-crash lookup on retryKey, not the spawned npm script', () => {
+  const match = src.match(/function runStepProcess\([\s\S]*?\n\}/);
+  assert.ok(match, "could not locate runStepProcess's function body in verify-cache.mjs");
+  const body = match[0];
+  assert.match(
+    body,
+    /RETRIABLE_POOL_STEPS\.has\(retryKey\)/,
+    'runStepProcess must check RETRIABLE_POOL_STEPS against retryKey (the original step name, e.g. ' +
+      "\"test:server\"), not the substituted --changed npm script (\"test:server:changed\") — " +
+      'otherwise a --scope-staged run never retries a fork-pool crash',
+  );
+  assert.match(
+    body,
+    /spawnSync\('npm', \['run', npmScript\]/,
+    'runStepProcess must spawn npmScript (the possibly-substituted script), not retryKey',
   );
 });
 

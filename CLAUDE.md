@@ -893,9 +893,17 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   docs-only commit runs none of them. Sub-5s on a warm cache. Refuses the
   commit if any in-scope spec is red. Sidecar (pytest), Pester scripts,
   Playwright e2e, and typecheck are NOT in pre-commit — they live in
-  pre-push so commits stay snappy. If a co-running GPU generation is detected
-  (nvidia-smi), the runner warns and throttles test concurrency
-  (`LOW_CONCURRENCY=1`); `SKIP_CONTENTION_CHECK=1` disables the probe.
+  pre-push so commits stay snappy. Under `--scope-staged` the `test`/
+  `test:server` steps additionally run vitest's own `--changed HEAD`
+  selection (`test:changed`/`test:server:changed`) instead of the whole
+  suite — a one-file server commit runs only the tests that file's diff
+  touches, not all ~6700. `--scope-branch` (pre-push) and CI still run the
+  full suite, so a change `--changed` misses through an untracked
+  dependency is still caught before merge. If a co-running GPU generation is
+  detected (nvidia-smi) **or a sibling worktree is already running a
+  vitest/verify-cache battery**, the runner warns and throttles test
+  concurrency (`LOW_CONCURRENCY=1`); `SKIP_CONTENTION_CHECK=1` disables both
+  probes.
   `npm run verify:fast` (no scope filter) remains for a manual full fast run.
 - **pre-push** (`.husky/pre-push`): first runs `scripts/guard-protected-push.mjs`,
   which refuses a force-push or deletion of a protected branch (`main`) before
