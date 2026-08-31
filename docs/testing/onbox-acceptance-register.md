@@ -432,7 +432,20 @@ setup rather than repeatedly loading and evicting models.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-30, merging PR #2790's independent A105 addition
+> **Last change: 2026-08-30, no count change.** Row **A24**'s run note (2026-08-26,
+> below) filed [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678) as a
+> design decision owed: should the capacity-admission layer make a Base render wait for
+> a resident VoiceDesign, or evict it? PR
+> [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797) shipped the "wait"
+> choice (`withCapacityRetry`'s extended design-residency wait, qualified by
+> `deviceKey`, plus the caller-abort and `qwenDesignEverLoaded`-confusion fixes found in
+> its own review). The row stays live and owed: the fix is pinned by sidecar-side unit
+> tests against a *simulated* health provider, not a real sidecar with genuine warm
+> VoiceDesign residency, so whether the render now actually waits (rather than the
+> observed `vram-spill` failure) is still unproven on real hardware. See the row body
+> for the updated acceptance criteria.
+>
+> **Prior change: 2026-08-30, merging PR #2790's independent A105 addition
 > with `main`'s independent E101 addition.** This branch
 > (`fix/sidecar-2752-base17-evict-guard`) had added row **A105** (Qwen base17
 > eviction guard, #2752, PR #2790 — itself already reconciled once against
@@ -2255,7 +2268,7 @@ already-analysed workspace, then one chapter re-render.
 > `docs/testing/onbox-sitting-cloning-identity.md` still correctly lists this
 > row for §8.7.
 
-### A24 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070)) · **single 8 GB card**
+### A24 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070), [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678), PR [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797)) · **single 8 GB card; the deviceKey qualification (bullet 5) needs the 2-card boot**
 
 Unit tests (`server/tts-sidecar/tests/test_design_contention.py`) fully pin
 the logic with a simulated `_design_in_flight` claim: `unload_design()` now
@@ -2279,12 +2292,36 @@ flagged.
   synth times out into the new `design_in_flight` 503 rather than hanging
   forever — and that it does so somewhere in the 150s neighbourhood, not
   immediately and not never.
+- **(added post-#2678/PR #2797)** Repeat the 2026-08-26 run-note scenario below —
+  a real single-character voice design mid-flight, an ordinary chapter render for
+  a *different* character on Base 0.6B, same device — and confirm the render now
+  **waits** for `withCapacityRetry`'s extended design-residency budget instead of
+  failing `vram-spill`, and that the design still completes normally afterward.
+- **(added post-#2678/PR #2797, needs the 2-card boot)** Repeat the same scenario
+  with the resident VoiceDesign on one card and the denied Base render on a
+  *different* card. Confirm the wait extension does **not** fire cross-device
+  (PR #2797's `deviceKey`-qualified fix) — the render should fail/retry on its own
+  card's ordinary timeline, not wait out the ~200s design budget for a design it
+  can never actually be unblocked by.
+- **(added post-#2678/PR #2797)** With a caller that carries its own shorter abort
+  budget (e.g. `POST /api/sidecar/load`'s 90s `AbortController`), confirm that if
+  its signal fires while `withCapacityRetry` is still inside the extended
+  design-wait budget, the caller sees the same `NoCapacityError` it would have
+  seen at `designMaxAttempts` — not a raw `AbortError` misread as a generic stuck
+  process. Only a caller opted in via `createHardTimeoutAbortReason()` (currently
+  just `/api/sidecar/load`) gets this conversion (re-review finding N3) — separately
+  confirm a real user Pause or regen-displacement mid-design-wait on the synthesis
+  path still surfaces as a plain, recognisable `AbortError` and is NOT converted to
+  `NoCapacityError`/`vram-spill`.
 
 *Needs:* a live sidecar with Qwen VoiceDesign installed, and a way to trigger
-two overlapping requests (a second browser tab/session is enough). *Criteria:*
+two overlapping requests (a second browser tab/session is enough); the
+cross-device bullet additionally needs the 2-card boot. *Criteria:*
 `unload_design`'s docstring in `server/tts-sidecar/main.py`; the sizing
 rationale is in the `_DESIGN_CONTENTION_WAIT_S_DEFAULT` comment immediately
-above `class QwenEngine`. *Cost:* short — one overlapped request pair.
+above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
+`server/src/gpu/capacity-retry.ts` and PR #2797's description. *Cost:* short
+— one overlapped request pair per bullet.
 
 > **RUN 2026-08-26 (wave 6) — bullet 1's premise did not hold; a real gap found, filed as
 > [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678).** Started a real
@@ -2320,6 +2357,46 @@ above `class QwenEngine`. *Cost:* short — one overlapped request pair.
 > indefinitely with `qwenDesignEverLoaded` never flipping true and no sidecar-side log
 > activity at all, which is plausibly expected (no real audio to derive a reference clip
 > from) rather than the timeout bug bullet 3 is about, but wasn't root-caused this round.
+
+> **FIX SHIPPED 2026-08-30, PR [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797)
+> (closes [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678)) — the design
+> decision above is made: "make the render wait."** `withCapacityRetry`
+> (`server/src/gpu/capacity-retry.ts`) now extends its retry budget to the
+> design-residency window when the sidecar's live health reports a resident
+> VoiceDesign model on the SAME device as the denied request (`deviceKey`-qualified,
+> fixing a first-pass cross-device over-extension found in review), and a caller
+> whose own abort fires mid-extended-wait (e.g. `/api/sidecar/load`'s 90s budget)
+> now surfaces the same `NoCapacityError` it would have hit at `designMaxAttempts`
+> rather than a raw `AbortError`. A further review fix pins that the check keys off
+> the live `qwenDesignResident` flag, not the process-lifetime `qwenDesignEverLoaded`
+> latch, so the extension doesn't wrongly apply to every capacity denial after a
+> box's first-ever design. All of this is proven by Node-side unit tests against a
+> *simulated* health provider (`defaultIsDesignResident`, `capacity-retry.test.ts`) —
+> none of them touch a real sidecar with genuine warm VoiceDesign residency, so
+> **this row stays open**: bullets 4–6 above (added for this fix) are what still needs
+> a real GPU run. Bullet 3 (wedged-design timeout) and the `unknown-male` no-audio
+> hang from the 2026-08-26 run remain unreached/un-root-caused as before — this fix
+> does not touch either.
+
+> **Correction, 2026-08-30 (PR #2797 re-review, rounds 2–3) — both claims above were
+> wrong; genuinely fixed since.** The "deviceKey-qualified" cross-device fix above
+> (`8633e75a`) never actually worked: it read `qwen_device_key` via `_is_resident("qwen")`
+> → `_engine_actual_card`, which resolves a model from
+> `_model`/`_kokoro`/`_base`/`_tts` and never checks `_design` — so the field was
+> `null` whenever only the VoiceDesign was resident/in-flight, exactly the case this
+> row exists to cover, and unconditionally `"cuda:0"` for a loaded Qwen otherwise.
+> Fixed for real in `113379dd`, which reads `QwenEngine._device` directly, guarded by
+> Base-or-design residency, with tests against a genuine `QwenEngine` instance rather
+> than a hand-authored fixture. Separately, the abort→`NoCapacityError` conversion
+> above (`4c4b229b`) was unconditional: `withCapacityRetry`'s `signal` is ALSO the
+> synthesis path's own cancellation signal (a user Pause or a regen displacement), so
+> a pause mid-design-wait was silently converted to a fatal `vram-spill` instead of a
+> clean pause. Fixed in `c2269799` via an opt-in `createHardTimeoutAbortReason()`
+> marker: only `/api/sidecar/load`'s own hard timeout converts; every other abort now
+> passes through as a plain `AbortError`. Both fixes are mutation-verified (reverting
+> either fails its own new test for the exact reason described), but — same as the
+> original fix — only against simulated/unit-level state, not a real sidecar. This row
+> stays open for the same reason as before.
 
 ### A25 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
 

@@ -1,6 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
-import { withCapacityRetry, getCapacityWaiterCount, parseNoCapacity } from './capacity-retry.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import {
+  withCapacityRetry,
+  getCapacityWaiterCount,
+  parseNoCapacity,
+  createHardTimeoutAbortReason,
+} from './capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
+import { setProbeSidecarHealthProvider } from './sidecar-health-gate.js';
 
 /* Free-function contract for the reusable no-capacity retry helper (Task 5,
    #1720). Unlike the old SidecarTtsProvider.postWithCapacityRetry, this
@@ -228,6 +234,432 @@ describe('withCapacityRetry', () => {
 
     expect(calls).toBe(2);
     expect(getCapacityWaiterCount()).toBe(0);
+  });
+});
+
+describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', () => {
+  // #2678 review N5: several tests below register a fake sidecar-health
+  // provider via `setProbeSidecarHealthProvider`. Without a reset, the
+  // "unregistered → fails closed" test a few lines down only passed because
+  // it happens to run FIRST in file/declaration order — a reorder (or a new
+  // test inserted above it) would silently leak a fake provider into it.
+  // Reset to the unregistered state after every test so isolation doesn't
+  // depend on order.
+  afterEach(() => {
+    setProbeSidecarHealthProvider(null);
+  });
+
+  it('(1) isDesignResident true throughout → keeps polling past generic maxAttempts, up to the design budget', async () => {
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:0'));
+    const isDesignResident = vi.fn().mockResolvedValue(true);
+
+    const err = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident,
+      pollMs: 0,
+      maxAttempts: 3,
+      designMaxAttempts: 5,
+    }).then(
+      () => null,
+      (e) => e,
+    );
+
+    expect(err).toBeInstanceOf(NoCapacityError);
+    // 3 generic attempts, then 5 more under the design budget.
+    expect(doPost).toHaveBeenCalledTimes(3 + 5);
+    // Consulted exactly once, at the moment the generic bound was reached.
+    expect(isDesignResident).toHaveBeenCalledTimes(1);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('(2) doPost starts returning ok partway through the extended window → resolves with that response', async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      // 3 generic attempts + 2 more under the design budget, then ok.
+      return calls <= 5 ? noCapacityResponse(4_000, 'cuda:0') : okResponse();
+    });
+    const isDesignResident = vi.fn().mockResolvedValue(true);
+
+    const result = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident,
+      pollMs: 0,
+      maxAttempts: 3,
+      designMaxAttempts: 10,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(6);
+    expect(isDesignResident).toHaveBeenCalledTimes(1);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('(3) isDesignResident false throughout → NoCapacityError still thrown at the ORIGINAL maxAttempts bound', async () => {
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:0'));
+    const isDesignResident = vi.fn().mockResolvedValue(false);
+
+    const err = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident,
+      pollMs: 0,
+      maxAttempts: 3,
+      designMaxAttempts: 100,
+    }).then(
+      () => null,
+      (e) => e,
+    );
+
+    expect(err).toBeInstanceOf(NoCapacityError);
+    expect(doPost).toHaveBeenCalledTimes(3);
+    expect(isDesignResident).toHaveBeenCalledTimes(1);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('(4) isDesignResident rejects → treated as false (fail-closed), thrown at the original bound, no unhandled rejection', async () => {
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:0'));
+    const isDesignResident = vi.fn().mockRejectedValue(new Error('probe exploded'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        isDesignResident,
+        pollMs: 0,
+        maxAttempts: 3,
+        designMaxAttempts: 100,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    expect(doPost).toHaveBeenCalledTimes(3);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('(5) getCapacityWaiterCount() reflects the call as waiting for the entire extended window, then decrements to 0', async () => {
+    expect(getCapacityWaiterCount()).toBe(0);
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls > 3) {
+        // Inside the extended design-budget window — waiter must already be up.
+        expect(getCapacityWaiterCount()).toBe(1);
+      }
+      return calls <= 5 ? noCapacityResponse(4_000, 'cuda:0') : okResponse();
+    });
+
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident: async () => true,
+      pollMs: 0,
+      maxAttempts: 3,
+      designMaxAttempts: 10,
+    });
+
+    expect(calls).toBe(6);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('PR-review finding: caller HARD-TIMEOUT abort mid-design-budget throws NoCapacityError, not a raw AbortError', async () => {
+    /* Simulates /api/sidecar/load's own 90s AbortController firing before the
+       ~200s extended design-wait budget completes. Before the fix, once
+       usingDesignBudget flips true, abortableDelay's rejection (the caller's
+       AbortError) propagated straight out of withCapacityRetry — the route's
+       `e instanceof NoCapacityError` check missed it, and the caller reported
+       a generic "stuck process" timeout instead of the real, well-classified
+       capacity-contention diagnosis.
+
+       Deterministic (no wall-clock race): the caller's AbortController fires
+       on the FIRST doPost call made after the extended design budget has
+       just been committed to (call #3, with maxAttempts:2) — mirroring the
+       real route's 90s ceiling landing partway through the extended window.
+       pollMs:0 keeps every wait a same-tick no-op except the one the abort
+       lands on. The abort is marked via createHardTimeoutAbortReason() —
+       exactly what /api/sidecar/load's route now does (#2678 re-review N3) —
+       so this stays the ONLY abort shape withCapacityRetry converts. */
+    const controller = new AbortController();
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 3) {
+        // The caller's own hard timeout fires here — after usingDesignBudget
+        // has been committed to (set on call #2), but long before this call's
+        // own designMaxAttempts could ever be reached.
+        controller.abort(createHardTimeoutAbortReason('caller timeout'));
+      }
+      return noCapacityResponse(4_000, 'cuda:0');
+    });
+    const isDesignResident = vi.fn().mockResolvedValue(true);
+
+    const err = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident,
+      signal: controller.signal,
+      pollMs: 0,
+      maxAttempts: 2,
+      designMaxAttempts: 1_000,
+    }).then(
+      () => null,
+      (e) => e,
+    );
+
+    expect(err).toBeInstanceOf(NoCapacityError);
+    expect((err as InstanceType<typeof NoCapacityError>).engine).toBe('qwen');
+    expect((err as InstanceType<typeof NoCapacityError>).neededMb).toBe(4_000);
+    expect((err as InstanceType<typeof NoCapacityError>).deviceKey).toBe('cuda:0');
+    expect(calls).toBe(3);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('#2678 re-review N3: a user-pause/regen-displacement abort mid-design-budget passes through as a plain AbortError, not NoCapacityError', async () => {
+    /* Mirrors the previous test exactly, EXCEPT the caller's AbortController
+       fires with the same unmarked shape generation.ts's `chapterCtrl` uses
+       (a bare `.abort()` — see generation.ts's `onParentAbort`/explicit-pause
+       call sites) rather than createHardTimeoutAbortReason(). This is the
+       signal shape a real user Pause or regen displacement produces on the
+       synthesis path (server/src/tts/sidecar.ts shares the SAME
+       withCapacityRetry call with /api/sidecar/load). Before the fix, ANY
+       abort while usingDesignBudget was true — marked or not — was converted
+       to NoCapacityError, which generation.ts's `name === 'AbortError'`
+       pause-detector does not recognise, so it fell through to
+       describeSynthesisError and surfaced as a fatal `vram-spill` instead of
+       a clean pause. The fix must let this unmarked abort through unchanged:
+       a plain AbortError, `.name === 'AbortError'`, not NoCapacityError. */
+    const controller = new AbortController();
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 3) {
+        controller.abort(); // unmarked — exactly what a user Pause produces
+      }
+      return noCapacityResponse(4_000, 'cuda:0');
+    });
+    const isDesignResident = vi.fn().mockResolvedValue(true);
+
+    const err = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      isDesignResident,
+      signal: controller.signal,
+      pollMs: 0,
+      maxAttempts: 2,
+      designMaxAttempts: 1_000,
+    }).then(
+      () => null,
+      (e) => e,
+    );
+
+    expect(err).not.toBeInstanceOf(NoCapacityError);
+    expect((err as { name?: string })?.name).toBe('AbortError');
+    expect(calls).toBe(3);
+    expect(getCapacityWaiterCount()).toBe(0);
+  });
+
+  it('defaultIsDesignResident (via probeSidecarHealthIfRegistered) does not extend the wait when unregistered — same original bound', async () => {
+    // No isDesignResident override, no sidecar-health registration in this
+    // test process → probeSidecarHealthIfRegistered() resolves null →
+    // defaultIsDesignResident fails closed to false.
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:0'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'qwen',
+        capacityProbe: { read: async () => fakeDevices('cuda:0', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    expect(doPost).toHaveBeenCalledTimes(3);
+  });
+
+  it('#2678 review finding: defaultIsDesignResident does NOT extend the wait when the resident design is on a DIFFERENT device than the one denied', async () => {
+    // 2-GPU scenario: VoiceDesign resident on cuda:0, but THIS request was
+    // denied capacity on cuda:1 — a different, unrelated card. Before the
+    // fix, defaultIsDesignResident only read the global `qwenDesignResident`
+    // flag and extended the wait anyway, wasting ~200s on a wait VoiceDesign
+    // freeing cuda:0 could never resolve.
+    setProbeSidecarHealthProvider(async () => ({
+      qwenDesignResident: true,
+      qwenDeviceKey: 'cuda:0',
+    }));
+
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:1'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'coqui',
+        capacityProbe: { read: async () => fakeDevices('cuda:1', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    // No extension: gives up at the ORIGINAL maxAttempts bound, not the
+    // (much larger) design budget.
+    expect(doPost).toHaveBeenCalledTimes(3);
+  });
+
+  it('review finding: default isDesignResident + default describeBlockers share ONE sidecar-health probe on give-up, not two', async () => {
+    // Both isDesignResident (false, so the call proceeds to give up) and
+    // describeBlockers run at the SAME give-up decision, back-to-back, when
+    // both are left at their defaults. Before the fix each called
+    // probeSidecarHealthIfRegistered() independently — two full live
+    // /health round-trips (each with its own timeout and disk-touching side
+    // effects) for one give-up event. After the fix they share one probe.
+    const probe = vi.fn(async () => ({
+      qwenDesignResident: false,
+      qwenDeviceKey: 'cuda:0',
+      modelLoaded: false,
+      kokoroLoaded: false,
+      qwenLoaded: false,
+      qwenBase17Loaded: false,
+    }));
+    setProbeSidecarHealthProvider(probe);
+
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:1'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'coqui',
+        capacityProbe: { read: async () => fakeDevices('cuda:1', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('#2678 review finding: defaultIsDesignResident DOES extend the wait when the resident design is on the SAME device as the one denied', async () => {
+    setProbeSidecarHealthProvider(async () => ({
+      qwenDesignResident: true,
+      qwenDeviceKey: 'cuda:1',
+    }));
+
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:1'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'coqui',
+        capacityProbe: { read: async () => fakeDevices('cuda:1', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+        designMaxAttempts: 5,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    // Extended: 3 generic attempts + 5 more under the design budget.
+    expect(doPost).toHaveBeenCalledTimes(3 + 5);
+  });
+
+  it('#2678 review finding: defaultDescribeBlockers forwards qwenDesignResident into the give-up error', async () => {
+    // Same extended-wait-then-exhausted scenario as above, but this pins that
+    // the FINAL NoCapacityError actually names the resident VoiceDesign as a
+    // blocker — previously describeVramBlockers had no way to hear about it,
+    // so the operator got a generic "free VRAM" message even though a
+    // VoiceDesign was the exact, known cause.
+    setProbeSidecarHealthProvider(async () => ({
+      qwenDesignResident: true,
+      qwenDeviceKey: 'cuda:1',
+    }));
+
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:1'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'coqui',
+        capacityProbe: { read: async () => fakeDevices('cuda:1', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+        designMaxAttempts: 5,
+      }),
+    ).rejects.toMatchObject({
+      blockers: [
+        {
+          model: 'A voice design',
+          remedy: 'Wait for the in-progress voice design to finish — it frees automatically once idle.',
+        },
+      ],
+    });
+  });
+
+  it('#2678 review finding F1: defaultDescribeBlockers does NOT name a design resident on a DIFFERENT device as a blocker', async () => {
+    // Same 2-GPU repro as the isDesignResident test above (design resident on
+    // cuda:0, this request denied on cuda:1) — but this pins the OTHER half:
+    // before the fix, defaultDescribeBlockers forwarded the raw, unqualified
+    // `qwenDesignResident` flag straight into describeVramBlockers regardless
+    // of which device it named, so the final NoCapacityError still told the
+    // operator to "wait for the in-progress voice design to finish" even
+    // though that design runs on an unrelated card and can never free cuda:1.
+    setProbeSidecarHealthProvider(async () => ({
+      qwenDesignResident: true,
+      qwenDeviceKey: 'cuda:0',
+    }));
+
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:1'));
+
+    const err = await withCapacityRetry(doPost, {
+      engine: 'coqui',
+      capacityProbe: { read: async () => fakeDevices('cuda:1', 100) },
+      analyzerEvictWouldHelp: async () => false,
+      pollMs: 0,
+      maxAttempts: 3,
+      designMaxAttempts: 5,
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(NoCapacityError);
+    // No extension (isDesignResident correctly says false for this device)...
+    expect(doPost).toHaveBeenCalledTimes(3);
+    // ...AND no misleading "wait for the voice design" blocker in the error.
+    expect((err as NoCapacityError).blockers).toEqual([]);
+  });
+
+  it('defaultIsDesignResident does NOT extend the wait for qwenDesignEverLoaded — the process-lifetime latch is not current residency', async () => {
+    // qwenDesignEverLoaded is a process-lifetime latch (server/tts-sidecar/main.py):
+    // set once on first design use and never reset. If defaultIsDesignResident
+    // read that field instead of (or in addition to) qwenDesignResident, every
+    // future capacity denial for the rest of the process's life would extend to
+    // the ~200s design budget even with no VoiceDesign resident right now. This
+    // pins the distinction: everLoaded=true, resident=false/absent, matching
+    // deviceKey, must still give up at the ORIGINAL maxAttempts bound.
+    setProbeSidecarHealthProvider(async () => ({
+      qwenDesignEverLoaded: true,
+      qwenDesignResident: false,
+      qwenDeviceKey: 'cuda:1',
+    }));
+
+    const doPost = vi.fn(async () => noCapacityResponse(4_000, 'cuda:1'));
+
+    await expect(
+      withCapacityRetry(doPost, {
+        engine: 'coqui',
+        capacityProbe: { read: async () => fakeDevices('cuda:1', 100) },
+        analyzerEvictWouldHelp: async () => false,
+        pollMs: 0,
+        maxAttempts: 3,
+        designMaxAttempts: 5,
+      }),
+    ).rejects.toBeInstanceOf(NoCapacityError);
+
+    // No extension: gives up at the ORIGINAL maxAttempts bound, not 3 + 5.
+    expect(doPost).toHaveBeenCalledTimes(3);
   });
 });
 

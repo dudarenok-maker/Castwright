@@ -21,7 +21,10 @@ import { getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js
 import { NoCapacityError } from '../tts/tts-errors.js';
 import type { TtsEngine } from '../tts/model-keys.js';
 import { describeVramBlockers, type VramBlocker } from './describe-vram-blockers.js';
-import { probeSidecarHealthIfRegistered } from './sidecar-health-gate.js';
+import {
+  probeSidecarHealthIfRegistered,
+  type SidecarHealthSnapshot,
+} from './sidecar-health-gate.js';
 
 /* Bounded poll for the no-capacity retry loop. GPU_CAPACITY_POLL_MS is the
    wait between admission checks; GPU_CAPACITY_MAX_ATTEMPTS bounds the total
@@ -33,6 +36,20 @@ const GPU_CAPACITY_POLL_MS = (() => {
 const GPU_CAPACITY_MAX_ATTEMPTS = (() => {
   const raw = Number(process.env.GPU_CAPACITY_MAX_ATTEMPTS);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30;
+})();
+
+/* Extended attempt budget that applies ONLY once the generic maxAttempts
+   bound is reached AND the sidecar reports a resident/in-flight VoiceDesign
+   (#2678 Task 3). A real design run legitimately outlasts the normal ~60s
+   admission window — the sidecar's own unload_design() waits up to ~150s for
+   an in-flight design before evicting it (server/tts-sidecar/main.py, see
+   unload_design's header) — so a render blocked behind one should keep
+   waiting rather than surface NoCapacityError. This budget is consulted at
+   most once per call (see the isDesignResident check in withCapacityRetry);
+   it never widens the timeout for a denial that was never design-blocked. */
+const GPU_CAPACITY_DESIGN_MAX_ATTEMPTS = (() => {
+  const raw = Number(process.env.GPU_CAPACITY_DESIGN_MAX_ATTEMPTS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 100; // ~200s on top of the generic ~60s budget above (~258s total wait, not ~200s — see withCapacityRetry's attempt accounting)
 })();
 
 /* GPU-queue status surface (server/src/routes/gpu-queue.ts) — counts ops
@@ -48,6 +65,45 @@ let _capacityWaiters = 0;
     the /api/gpu/queue payload. */
 export function getCapacityWaiterCount(): number {
   return _capacityWaiters;
+}
+
+/* Marker distinguishing "the CALLER's own hard-timeout AbortController fired"
+   (currently only /api/sidecar/load's 90s ceiling, server/src/routes/
+   sidecar-health.ts) from every other reason `opts.signal` can abort for —
+   most importantly a user Pause or a regen-displacement abort on the
+   synthesis path (server/src/routes/generation.ts's `chapterCtrl`), which
+   shares this same `withCapacityRetry` call via server/src/tts/sidecar.ts.
+   Both cases produce a `DOMException(..., 'AbortError')`, so `.name` alone
+   can't tell them apart — only a caller that OPTS IN by aborting with a
+   reason created via `createHardTimeoutAbortReason()` gets converted to
+   `NoCapacityError` below; every other abort (the default, safe case) is
+   rethrown as a plain AbortError so a route's own pause-detection (e.g.
+   generation.ts's `name === 'AbortError'` check) still sees it (#2678
+   re-review N3 — a Pause during the extended design-wait was previously
+   surfacing as a fatal `vram-spill` instead of a clean pause). */
+const HARD_TIMEOUT_ABORT_MARKER = Symbol('capacityRetryHardTimeoutAbort');
+
+/** Creates an abort reason for a caller's own hard-timeout `AbortController`
+    (e.g. /api/sidecar/load's 90s ceiling) that should be converted to
+    `NoCapacityError` if it fires while `withCapacityRetry` is polling on the
+    extended design-wait budget. Keeps `.name === 'AbortError'` so any other
+    code inspecting the error shape (e.g. sidecar-health.ts's own `isTimeout`
+    check) is unaffected — only `withCapacityRetry`'s catch block below reads
+    the marker. Do NOT use this for a signal that can also fire for a user
+    Pause or a regen-displacement (e.g. generation.ts's `chapterCtrl`) — those
+    must remain unmarked so they pass through as a plain AbortError. */
+export function createHardTimeoutAbortReason(message = 'capacity-retry caller timeout'): DOMException {
+  const reason = new DOMException(message, 'AbortError');
+  Object.defineProperty(reason, HARD_TIMEOUT_ABORT_MARKER, { value: true });
+  return reason;
+}
+
+/** Exported so tests can assert the ACTUAL marker-checking logic recognises a
+    given abort reason, rather than only comparing `.name`/`.message` — a
+    same-shape-but-unmarked `DOMException('msg', 'AbortError')` would pass a
+    shape-only comparison while failing this one (#2678 review finding F3). */
+export function isHardTimeoutAbort(reason: unknown): boolean {
+  return typeof reason === 'object' && reason !== null && (reason as Record<symbol, unknown>)[HARD_TIMEOUT_ABORT_MARKER] === true;
 }
 
 export interface CapacityRetryOpts {
@@ -77,8 +133,30 @@ export interface CapacityRetryOpts {
   /** Injected "name what's holding the VRAM" action — defaults to a live
       probe of sidecar health mapped through `describeVramBlockers`
       (./describe-vram-blockers.ts). Folded into `NoCapacityError`'s message
-      when admission finally gives up (#1839). */
-  describeBlockers?: () => Promise<VramBlocker[]>;
+      when admission finally gives up (#1839). Takes the denied request's
+      `deviceKey` so a `qwenDesignResident` blocker on an unrelated card is
+      never named (#2678 review finding F1 — same qualification
+      `isDesignResident` already applies). */
+  describeBlockers?: (deviceKey: string) => Promise<VramBlocker[]>;
+  /** Injected "is a VoiceDesign currently resident/in-flight on the SAME
+      device this admission was denied on" check — defaults to
+      `defaultIsDesignResident`, which reads
+      `probeSidecarHealthIfRegistered()`'s `qwenDesignResident` field
+      qualified against `qwenDeviceKey`. Takes the denied request's
+      `deviceKey` (from the `noCapacity` body) so residency on an unrelated
+      card never extends the wait (#2678 review finding — a resident design
+      on `cuda:0` cannot free capacity denied on `cuda:1`). Consulted at most
+      once per call, only when the generic `maxAttempts` bound has just been
+      reached: `true` extends the wait using `GPU_CAPACITY_DESIGN_MAX_ATTEMPTS`
+      instead of giving up immediately (#2678 Task 3). Fail-closed like
+      `describeBlockers` — an unregistered gate, a probe failure, or a
+      device mismatch all report `false`, never inventing a design
+      blocker. */
+  isDesignResident?: (deviceKey: string) => Promise<boolean>;
+  /** Injected cap on the EXTENDED no-capacity retry attempts used once
+      `isDesignResident` reports true at the generic bound — defaults to
+      `GPU_CAPACITY_DESIGN_MAX_ATTEMPTS`. */
+  designMaxAttempts?: number;
 }
 
 /* Default `describeBlockers` — reads the sidecar health snapshot through the
@@ -87,18 +165,52 @@ export interface CapacityRetryOpts {
    that gate's file header for the full path). Best-effort: an unregistered
    gate or a probe failure both report no blockers rather than turning a
    probe failure into a worse error than the one already being thrown. */
-async function defaultDescribeBlockers(): Promise<VramBlocker[]> {
+async function defaultDescribeBlockers(
+  deviceKey: string,
+  fetchHealth: () => Promise<SidecarHealthSnapshot | null> = probeSidecarHealthIfRegistered,
+): Promise<VramBlocker[]> {
   try {
-    const health = await probeSidecarHealthIfRegistered();
+    const health = await fetchHealth();
     if (!health) return [];
     return describeVramBlockers({
       coquiLoaded: health.modelLoaded,
       kokoroLoaded: health.kokoroLoaded,
       qwenLoaded: health.qwenLoaded,
       qwenBase17Loaded: health.qwenBase17Loaded,
+      // Qualified by deviceKey (#2678 review finding F1), same as
+      // `defaultIsDesignResident` below: `qwenDesignResident` alone is
+      // global, so a design resident on an unrelated card (cuda:0) must not
+      // be named as a blocker for a denial on this device (cuda:1) — it can
+      // never free capacity there.
+      qwenDesignResident: health.qwenDesignResident === true && health.qwenDeviceKey === deviceKey,
     });
   } catch {
     return [];
+  }
+}
+
+/* Default `isDesignResident` — reads the same stateless leaf gate as
+   `defaultDescribeBlockers` (see its header for the import-cycle rationale
+   for going through `sidecar-health-gate.ts` rather than
+   `routes/sidecar-health.ts` directly). Qualified by `deviceKey` (#2678
+   review finding): `qwenDesignResident` alone is global — it says a
+   VoiceDesign is resident SOMEWHERE, not on the card this admission was
+   denied on. A resident design on an unrelated card (a 2-GPU box, VoiceDesign
+   on cuda:0, this request denied on cuda:1) can never free the blocked
+   device, so extending the wait for it just burns another ~200s on top of the
+   ~60s already spent (~258s total) before failing with the same error anyway.
+   Fail-closed: an unregistered gate, a probe failure, a missing field, or a
+   device mismatch all report `false` — this never invents a design blocker
+   that would extend a wait past the normal ~60s budget. */
+async function defaultIsDesignResident(
+  deviceKey: string,
+  fetchHealth: () => Promise<SidecarHealthSnapshot | null> = probeSidecarHealthIfRegistered,
+): Promise<boolean> {
+  try {
+    const health = await fetchHealth();
+    return health?.qwenDesignResident === true && health?.qwenDeviceKey === deviceKey;
+  } catch {
+    return false;
   }
 }
 
@@ -127,10 +239,24 @@ export async function withCapacityRetry(
   const maxAttempts = opts.maxAttempts ?? GPU_CAPACITY_MAX_ATTEMPTS;
   const evictIdleTts = opts.evictIdleTts ?? (async () => false);
   const describeBlockers = opts.describeBlockers ?? defaultDescribeBlockers;
+  const designMaxAttempts = opts.designMaxAttempts ?? GPU_CAPACITY_DESIGN_MAX_ATTEMPTS;
 
   let evicted = false;
   let evictedTts = false;
   let waiting = false;
+  /* Set once the generic maxAttempts bound is reached AND isDesignResident()
+     reported true at that moment — from then on this call is polling on the
+     extended design budget, and isDesignResident is never consulted again
+     (a design that clears mid-wait is caught by doPost returning ok, same as
+     any other retry). designAttempt counts attempts taken under that
+     extended budget, separate from the outer `attempt` which keeps counting
+     for readability but no longer gates anything once this is true. */
+  let usingDesignBudget = false;
+  let designAttempt = 0;
+  /* Last noCapacity body seen, kept so a caller-signal abort that fires
+     mid-design-budget (see the catch block below) can still report the real
+     deviceKey/neededMb instead of inventing one. */
+  let lastNoCap: { neededMb: number; deviceKey: string } | null = null;
   try {
     for (let attempt = 0; ; attempt++) {
       const response = await doPost(opts.signal);
@@ -142,6 +268,7 @@ export async function withCapacityRetry(
         // CALLER applies its own error handling. Return it untouched.
         return response;
       }
+      lastNoCap = noCap;
 
       const devices = await capacityProbe.read({ fresh: true });
       const freeMb =
@@ -162,13 +289,46 @@ export async function withCapacityRetry(
         if (await evictIdleTts()) continue; // immediate retry after freeing VRAM
       }
 
-      if (attempt + 1 >= maxAttempts) {
-        throw new NoCapacityError(
-          opts.engine as TtsEngine,
-          noCap.neededMb,
-          noCap.deviceKey,
-          await describeBlockers(),
-        );
+      if (usingDesignBudget) {
+        designAttempt++;
+        if (designAttempt >= designMaxAttempts) {
+          throw new NoCapacityError(
+            opts.engine as TtsEngine,
+            noCap.neededMb,
+            noCap.deviceKey,
+            await describeBlockers(noCap.deviceKey),
+          );
+        }
+      } else if (attempt + 1 >= maxAttempts) {
+        /* #2678 review finding: isDesignResident and describeBlockers, when
+           both left at their defaults, each independently call
+           probeSidecarHealthIfRegistered() — two full live /health
+           round-trips (each with its own ~2s timeout and disk-touching
+           side effects, e.g. setLastKnownCoquiInstallState) to answer one
+           give-up decision that only needs one snapshot. Share a single
+           probe between them here when both are using their default
+           implementation; an injected override of either still gets its
+           own call, unaffected, so the injection contract for tests that
+           override one or the other independently is unchanged. */
+        let sharedHealth: Promise<SidecarHealthSnapshot | null> | undefined;
+        const fetchHealthOnce = () => (sharedHealth ??= probeSidecarHealthIfRegistered());
+        const designResident = await (
+          opts.isDesignResident
+            ? opts.isDesignResident(noCap.deviceKey)
+            : defaultIsDesignResident(noCap.deviceKey, fetchHealthOnce)
+        ).catch(() => false);
+        if (designResident) {
+          usingDesignBudget = true;
+        } else {
+          throw new NoCapacityError(
+            opts.engine as TtsEngine,
+            noCap.neededMb,
+            noCap.deviceKey,
+            opts.describeBlockers
+              ? await opts.describeBlockers(noCap.deviceKey)
+              : await defaultDescribeBlockers(noCap.deviceKey, fetchHealthOnce),
+          );
+        }
       }
       if (!waiting) {
         waiting = true;
@@ -176,6 +336,38 @@ export async function withCapacityRetry(
       }
       await abortableDelay(pollMs, opts.signal); // bounded wait; rejects if the caller aborts
     }
+  } catch (err) {
+    /* A caller's own hard timeout (e.g. /api/sidecar/load's 90s
+       AbortController) can fire before the EXTENDED design-wait budget
+       completes — that budget runs ~200s past the generic ~60s bound (~258s
+       total), well past a 90s ceiling the caller committed to for an unrelated reason
+       (guarding against a stuck process). Left alone, that produces a raw
+       AbortError, which callers don't recognise as NoCapacityError, so they
+       report "model load is unusually slow or the process is stuck" for
+       what is actually a known, well-classified capacity-contention case.
+       Once this call has committed to the design budget, treat the caller's
+       own signal firing as the equivalent of exhausting that budget: report
+       the same NoCapacityError the caller would have seen at
+       designMaxAttempts, using the last noCapacity body observed.
+
+       Gated on `isHardTimeoutAbort` (#2678 re-review N3): `opts.signal` is
+       ALSO the run's own cancellation signal on the synthesis path (server/
+       src/tts/sidecar.ts → generation.ts's `chapterCtrl`), which aborts for a
+       user Pause or a regen displacement — a case that must surface as a
+       plain AbortError, not this NoCapacityError, so generation.ts's own
+       pause-detector still recognises it. Only a signal aborted via
+       `createHardTimeoutAbortReason()` (currently just /api/sidecar/load's
+       90s ceiling) gets converted; every other abort falls through to the
+       plain `throw err` below. */
+    if (usingDesignBudget && opts.signal?.aborted && isHardTimeoutAbort(opts.signal.reason) && lastNoCap) {
+      throw new NoCapacityError(
+        opts.engine as TtsEngine,
+        lastNoCap.neededMb,
+        lastNoCap.deviceKey,
+        await describeBlockers(lastNoCap.deviceKey),
+      );
+    }
+    throw err;
   } finally {
     if (waiting) _capacityWaiters--;
   }

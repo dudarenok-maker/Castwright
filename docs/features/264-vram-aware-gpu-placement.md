@@ -94,8 +94,19 @@ owner: null
    time per render. This is the flag-OFF safety net (the batch is the throughput
    lever, not concurrent `/synthesize`).
 6. **The wake loop terminates:** the Node poll loop advances `attempt` every
-   iteration, evicts at most once, and throws `NoCapacityError` (a toast, not a
-   hang) at `GPU_CAPACITY_MAX_ATTEMPTS`.
+   iteration (waiting `GPU_CAPACITY_POLL_MS` between attempts), evicts at most
+   once, and throws `NoCapacityError` (a toast, not a hang) once it reaches the
+   generic `GPU_CAPACITY_MAX_ATTEMPTS` bound (default 30, ~60s) — UNLESS a
+   VoiceDesign is resident/in-flight on the SAME device the admission was
+   denied on, in which case the loop extends to the wider
+   `GPU_CAPACITY_DESIGN_MAX_ATTEMPTS` budget (default 100, ~200s more, ~258s
+   total wait) before giving up, since a real design run can legitimately
+   outlast the normal ~60s window (`withCapacityRetry`,
+   `server/src/gpu/capacity-retry.ts`, #2678 Task 3). That extension check is
+   consulted at most once per call and is qualified against the denied
+   request's own device — a resident design on an unrelated card never widens
+   the wait. Either bound is still finite, so the loop always terminates; the
+   design case just terminates later.
 7. **No live consumer of the deleted budget:** grep `server/src` — `gpuSemaphore`,
    `acquireGpuTokenIfOnGpu`, `safeCoexistMb`, `gpu.weight*`, `gpu.vramBudget` have
    only comment/test mentions.

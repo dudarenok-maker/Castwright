@@ -45,18 +45,33 @@ export interface SidecarHealthSnapshot {
       dynamic import reaching into `routes/sidecar-health.ts` directly. Both
       fields are already present on that module's real `SidecarHealthResult`
       (a structural superset of this snapshot), so widening the type here
-      changes no runtime behaviour for the existing `capacity-retry.ts`
-      consumer — it simply ignores the two new optional fields it doesn't
-      read. */
+      changed no runtime behaviour at the time — `capacity-retry.ts` didn't
+      read either field yet. That has since changed (#2678): `capacity-retry.ts`
+      now reads `qwenDesignResident`, qualified against `qwenDeviceKey` below,
+      to decide whether to extend the no-capacity wait. */
   qwenDesignEverLoaded?: boolean;
+  qwenDesignResident?: boolean;
+  /** #2678 review finding — the concrete "cuda:N" card a resident
+      QwenEngine (base or design; they share one `_device`) sits on, or
+      `null`/absent when unresolvable or no engine is resident. Lets a reader
+      qualify `qwenDesignResident` against a specific `deviceKey` rather than
+      treating residency as global — see `capacity-retry.ts`'s
+      `defaultIsDesignResident`. */
+  qwenDeviceKey?: string | null;
   vramReservedMb?: number | null;
 }
 
 let provider: (() => Promise<SidecarHealthSnapshot>) | null = null;
 
 /** Registered by routes/sidecar-health.ts at module init with its own
-    `probeSidecarHealth`. */
-export function setProbeSidecarHealthProvider(fn: () => Promise<SidecarHealthSnapshot>): void {
+    `probeSidecarHealth`. Also the test-isolation reset: passing `null`
+    clears back to the unregistered ("nothing known") state, so a test that
+    registers a fake provider can restore fail-closed behaviour afterward
+    instead of leaking it into the next test (order-dependent isolation was
+    the #2678 review N5 finding). */
+export function setProbeSidecarHealthProvider(
+  fn: (() => Promise<SidecarHealthSnapshot>) | null,
+): void {
   provider = fn;
 }
 
