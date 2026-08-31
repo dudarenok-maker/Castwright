@@ -1403,8 +1403,26 @@ class _VdKokoroArbiter:
     def __init__(self, shares_device: bool = True) -> None:
         self._cv = threading.Condition()
         self._kokoro_in_flight = 0
-        self._design_active = False
+        # REFCOUNT, not a bool (#2809 review pass 3). Designs can overlap: since
+        # #2809 `design_voice()` releases `card_lock` partway through its
+        # `design()` span (once model load finishes, so the GPU forwards run
+        # lock-free), so `card_lock` no longer makes `design()` single-holder and
+        # a second design can enter while the first is still inside. With a bool,
+        # whichever design exited FIRST cleared the flag for the other, admitting
+        # Kokoro onto the card for the rest of the remaining design's forward —
+        # exactly the co-residency this arbiter exists to prevent. Counting
+        # holders makes the exclusion last until the LAST design leaves.
+        # Note this is exclusion bookkeeping only: the concurrent designs' actual
+        # GPU forwards are already serialised by `QwenEngine._synth_lock`, so
+        # refcounting here does not permit any new real GPU concurrency.
+        self._design_active_count = 0
         self._shares_device = shares_device
+
+    @property
+    def _design_active(self) -> bool:
+        """True while at least one design holds the arbiter. Derived from the
+        refcount so existing readers (and tests) keep their boolean contract."""
+        return self._design_active_count > 0
 
     @contextmanager
     def kokoro_synth(self):
@@ -1412,7 +1430,7 @@ class _VdKokoroArbiter:
             yield
             return
         with self._cv:
-            while self._design_active:
+            while self._design_active_count > 0:
                 self._cv.wait()
             self._kokoro_in_flight += 1
         try:
@@ -1428,14 +1446,23 @@ class _VdKokoroArbiter:
             yield
             return
         with self._cv:
+            # Entry gate unchanged: drain in-flight Kokoro synths, then claim.
+            # Deliberately does NOT wait on `_design_active_count` — concurrent
+            # designs are allowed; only Kokoro is excluded. Pinned by
+            # `test_kokoro_stays_excluded_until_the_last_concurrent_design_exits`
+            # (its `b_entered` assertion), NOT by
+            # `test_two_concurrent_healthy_designs_both_succeed` — that one still
+            # passes if this gate also waits on the design count, since its two
+            # designs would simply serialise and both still succeed (#2809 review
+            # pass 4 mutated the gate to confirm exactly that).
             while self._kokoro_in_flight > 0:
                 self._cv.wait()
-            self._design_active = True
+            self._design_active_count += 1
         try:
             yield
         finally:
             with self._cv:
-                self._design_active = False
+                self._design_active_count -= 1
                 self._cv.notify_all()
 
 
@@ -3771,8 +3798,19 @@ def _audio_duration_ms(audio: Any, sample_rate: int) -> float:
 
 def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     """Split a device knob value into (family, index). The single place that
-    understands the cuda:N grammar — every engine routes through it so an indexed
-    pin can't silently degrade. Malformed index ('cuda:x') keeps family, drops index."""
+    understands the cuda:N / rocm:N grammar — every engine routes through it so
+    an indexed pin can't silently degrade. Malformed index ('cuda:x') keeps
+    family, drops index.
+
+    `rocm:N` is handled explicitly, not just `cuda:N`-then-normalised (#2678
+    review N1): admission hands engines an ALREADY-indexed device string, and
+    on a real AMD box that string can itself read `"rocm:N"` directly (not
+    only the torch-native `"cuda:N"` that `_qwen_resident_device_key`
+    normalises via `_cuda_is_rocm()`). Without this branch a `"rocm:0"` input
+    fell through to the final `return (p, None)` with the WHOLE string
+    (`"rocm:0"`) as the family — never splitting the index — so every caller
+    gating on `fam in ("cuda", "rocm")` silently treated a resident ROCm
+    engine as absent."""
     p = (value or "auto").strip().lower()
     if p in ("", "auto"):
         return ("auto", None)
@@ -3781,6 +3819,9 @@ def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     if p.startswith("cuda"):
         _, _, idx = p.partition(":")
         return ("cuda", int(idx) if idx.isdigit() else None)
+    if p.startswith("rocm"):
+        _, _, idx = p.partition(":")
+        return ("rocm", int(idx) if idx.isdigit() else None)
     return (p, None)
 
 
@@ -4047,23 +4088,23 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # buffers for one short sentence), not weight materialisation. No on-box
     # measurement exists yet for this specific figure (the observed 3707 MB
     # that motivated #2094 was the CONTAMINATED cold "asr" learned estimate,
-    # not a warm one) — deliberately conservative rather than measured. Unlike
-    # the OTHER seeds here, this one previously had NO real path to being
-    # learned from: `_observed_mb` reads torch's caching-allocator peak, but
-    # CTranslate2 (faster-whisper's backend) allocates entirely outside it, so
-    # a warm ASR forward measured that way read ~0 (dropped by `record()`'s
-    # `<= 0` guard) and never accumulated real `asr.warm` samples. `reservation()`
-    # now measures ASR specifically via a device-wide free-memory DELTA
-    # (`PlacementController._device_free_mb`) instead, which DOES see
-    # CTranslate2's allocations — guarded against attributing a concurrent
-    # OTHER engine's allocation to ASR (`ledger.engines_holding`) and against
-    # an implausible warm reading above this same cold seed (a resident
-    # forward should never need more than a cold load would). With that fix,
-    # the SAME learning mechanism as every other key here genuinely supersedes
-    # this seed once real `asr.warm` observations accumulate
-    # (`_FOOTPRINT_MIN_SAMPLES`) — see `_device_free_mb`'s docstring for the
-    # residual: a foreign, non-sidecar process on the same card is still
-    # invisible to the ledger-based contamination guard.
+    # not a warm one) — deliberately conservative rather than measured.
+    # #2094 originally routed a warm ASR forward through the same device-wide
+    # free-memory DELTA (`PlacementController._device_free_mb`) the COLD "asr"
+    # key still uses (see there), reasoning that `_observed_mb` (torch's
+    # caching-allocator peak) would read ~0 since CTranslate2 (faster-
+    # whisper's backend) allocates its own weights/buffers entirely outside
+    # torch's allocator. #2682 found that premise didn't hold in practice: the
+    # device-wide delta essentially never returned positive for `asr.warm`
+    # (unlike the genuinely-noisy-but-real cold-load delta), so the learned
+    # estimate could never move off this seed at all — worse than the ~0
+    # `_observed_mb` was expected to give. `reservation()` now measures
+    # `asr.warm` via `_observed_mb` like every other key, on the theory that a
+    # resident forward's OWN torch-side activity (feature extraction,
+    # attention buffers) is enough for the allocator peak to see, even though
+    # CTranslate2's own weights/buffers aren't. The device-wide delta remains
+    # in place for the COLD "asr" key only, where it keeps working as #2094
+    # designed it.
     "asr.warm": 128,
     "spk": 200,
 }
@@ -4683,17 +4724,19 @@ class PlacementController:
         `_observed_mb`/`_reset_peak_mb` above read torch's OWN caching
         allocator peak — which is exactly right for a torch-resident engine
         (Qwen, Coqui, ECAPA), but blind to an allocation torch never sees.
-        faster-whisper's CTranslate2 backend allocates via its own CUDA
-        context, entirely outside torch's allocator, so a warm ASR forward
-        measured via `_observed_mb` reads ~0 (dropped by `record()`'s `<= 0`
-        guard) and a cold one reads whatever residual torch activity happened
-        to be co-resident — this is the root cause `asr.warm` was never
-        expected to learn from, and a plausible source of the contaminated
-        3707 MB `asr` figure that motivated #2094 in the first place.
+        faster-whisper's CTranslate2 backend allocates its weights/buffers via
+        its own CUDA context, entirely outside torch's allocator, so a COLD
+        ASR load measured via `_observed_mb` reads whatever residual torch
+        activity happened to be co-resident — a plausible source of the
+        contaminated 3707 MB `asr` figure that motivated #2094 in the first
+        place. (#2682: a resident "asr.warm" forward is measured via
+        `_observed_mb` instead — see `reservation()`'s `finally` — since its
+        own torch-side activity, unlike CTranslate2's weights, is enough for
+        the allocator peak to see; this method is COLD-`asr`-only now.)
 
         A before/after DELTA of this device-wide free-memory reading — not a
         single snapshot — is what `_resolve_admission`/`reservation()` use for
-        the `asr` engine specifically (see there): it sees ANY allocation on
+        a COLD `asr` load specifically (see there): it sees ANY allocation on
         the device, CTranslate2's included, at the cost of also seeing every
         OTHER engine's. That attribution problem is NOT fully solved here —
         `reservation()`'s ASR branch discards a measurement instead of trusting
@@ -4780,11 +4823,13 @@ class PlacementController:
         `footprints.record()` so the observation lands in the same peak-mb
         bucket (`FootprintTable._key`) the reservation itself was booked
         under. `mem_before_mb` (#2094 review) is the `_device_free_mb`
-        snapshot taken for `engine == "asr"` specifically — `None` for every
-        other engine, and `None` when the snapshot itself failed — so
-        `reservation()` can measure ASR's peak via a device-wide free-memory
-        DELTA instead of torch's allocator, which CTranslate2 (faster-whisper's
-        backend) allocates entirely outside of. `foreign_before` (#2094
+        snapshot taken for a COLD `engine == "asr"` load specifically (#2682
+        narrowed this from ASR generally to cold-only) — `None` for every
+        other engine, for a resident ("asr.warm") ASR forward, and when the
+        snapshot itself failed — so `reservation()` can measure a cold ASR
+        load's peak via a device-wide free-memory DELTA instead of torch's
+        allocator, which CTranslate2 (faster-whisper's backend) allocates its
+        weights entirely outside of. `foreign_before` (#2094
         per-process attribution) is whether `_foreign_pid_holds_device`
         reported (or could not rule out) a non-sidecar process on the device
         at this SAME snapshot point — `False` for every non-ASR engine;
@@ -4845,9 +4890,12 @@ class PlacementController:
             # #2094 review — ASR-specific: snapshot device-wide free VRAM here,
             # at the SAME point `_reset_peak_mb` brackets from, so `reservation()`
             # can pair it with an after-snapshot into a delta. See
-            # `_device_free_mb`'s docstring for why ASR needs this instead of
-            # the torch-allocator peak every other engine uses.
-            if engine == "asr":
+            # `_device_free_mb`'s docstring for why a COLD ASR load needs this
+            # instead of the torch-allocator peak every other engine uses.
+            # `resident` (#2682) is `None` for a cold load — a RESIDENT
+            # ("asr.warm") forward no longer takes this branch; see
+            # `reservation()`'s `finally` for why.
+            if engine == "asr" and resident is None:
                 mem_before_mb = self._device_free_mb(held[0])
                 # #2094 per-process attribution — only bother querying NVML
                 # when the free-mb snapshot itself succeeded; a failed
@@ -4913,8 +4961,9 @@ class PlacementController:
                 # captured BEFORE releasing our own hold (so `engines_holding`
                 # still includes it and the "any OTHER engine" check below is
                 # correct) and BEFORE the generic torch-allocator path runs.
-                # `mem_before_mb` is only ever non-None for engine == "asr"
-                # (see `_resolve_admission`).
+                # `mem_before_mb` is only ever non-None for a COLD ASR load
+                # (see `_resolve_admission`) — #2682 moved the RESIDENT
+                # ("asr.warm") case off this path entirely (below).
                 asr_observed_mb: Optional[int] = None
                 if engine == "asr" and mem_before_mb is not None:
                     mem_after_mb = self._device_free_mb(device_key)
@@ -4932,22 +4981,11 @@ class PlacementController:
                         and not foreign_before
                         and not foreign_after
                     ):
-                        delta = mem_before_mb - mem_after_mb
-                        # Conservative, not optimistic (review): a resident
-                        # ("warm") forward should NEVER need more than a cold
-                        # load would — a delta above the cold seed is almost
-                        # certainly contamination (a foreign, non-ledger
-                        # process on the same card; see #2094's own 3707 MB
-                        # finding) rather than genuine ASR demand, so it's
-                        # discarded rather than trusted. A negative/zero delta
-                        # (the device gained free memory during the op — e.g.
-                        # a concurrent unload elsewhere) is already dropped by
-                        # `record()`'s own `<= 0` guard below; the ceiling
-                        # here only matters for the WARM bucket, where "more
-                        # than a cold load" is the implausible direction.
-                        warm_ceiling = SEED_FOOTPRINTS_MB.get("asr", 0)
-                        if not (resident and warm_ceiling > 0 and delta > warm_ceiling):
-                            asr_observed_mb = delta
+                        # Not capped against a "warm ceiling" here — this
+                        # branch is COLD-only now (#2682), and FootprintTable's
+                        # own p95 windowing is what tames a cold-side outlier,
+                        # matching every other key's "up OR down" learning.
+                        asr_observed_mb = mem_before_mb - mem_after_mb
                     # else: another engine holds a concurrent reservation on
                     # this device, the after-snapshot itself failed, or a
                     # foreign (non-sidecar) PID was seen holding memory on the
@@ -4964,11 +5002,18 @@ class PlacementController:
                 # `resident` (#2094) is the PRE-op snapshot `_resolve_admission`
                 # booked the reservation under — recording under that same key
                 # (not a freshly re-checked residency) keeps the observation in
-                # the bucket its own peak_mb() estimate came from. ASR uses the
-                # free-memory-delta measurement above (or is dropped, per the
-                # guards there); every other engine keeps the torch-allocator
-                # peak unchanged.
-                observed_mb = asr_observed_mb if engine == "asr" else self._observed_mb(device_key)
+                # the bucket its own peak_mb() estimate came from. A COLD ASR
+                # load uses the free-memory-delta measurement above (or is
+                # dropped, per the guards there); a RESIDENT ("asr.warm") ASR
+                # forward and every other engine keep the torch-allocator peak
+                # (#2682 — the device-wide delta essentially never returned a
+                # positive `asr.warm` sample, so it can never learn off its
+                # seed; the torch-allocator peak sees the CTranslate2-backed
+                # forward's own torch-side feature-extraction/attention-buffer
+                # activity instead, matching every other engine's key).
+                observed_mb = (
+                    asr_observed_mb if (engine == "asr" and not resident) else self._observed_mb(device_key)
+                )
                 self.footprints.record(engine, model, cfg, observed_mb or 0, resident)
 
 
@@ -5043,6 +5088,82 @@ def _is_resident(engine_id: str) -> Optional[str]:
         return None
     index = card["index"] if card["index"] is not None else 0
     return f"{card['family']}:{index}"
+
+
+def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
+    """Concrete "cuda:N"/"rocm:N" device key for a QwenEngine, valid whenever
+    ANY of its models are resident or in-flight -- the Base 0.6B (`_base is
+    not None`), the 1.7B-Base (`_base17 is not None`), or the transient
+    VoiceDesign (`_design is not None` or `_design_in_flight.busy`).
+
+    `_base17` residency counts for the same reason `_base` does (#2678 review
+    N3): `_ensure_base17_loaded` mirrors `_ensure_base_loaded` exactly --
+    same `_cold_load_lock`, same `_ensure_device_resolved()` call setting the
+    ONE shared `self._device` before its weights pull -- so a resident-only-
+    `_base17` engine is genuinely on a concrete device, same as a
+    resident-only-`_base` one; the sentinel used elsewhere for this tier is
+    `health()`'s own `qwen_base17_loaded = qwen._base17 is not None`.
+    Omitting it reproduced, for `_base17`, the exact `_engine_actual_card`
+    blindness this function exists to fix for `_base`/`_design`.
+
+    Deliberately NOT `_is_resident("qwen")` / `_engine_actual_card` (#2678
+    review N1): that path resolves a model-presence gate scanning
+    `_model`/`_kokoro`/`_base`/`_tts` and returns None whenever only the
+    VoiceDesign is loaded/in-flight and Base isn't loaded -- exactly the
+    scenario `qwen_design_resident` exists to catch (a resident/in-flight
+    design independent of Base), so gating the design's OWN device on Base's
+    residency disarmed it entirely (also making `/api/sidecar/load`'s
+    noCapacity/design-wait path structurally unreachable, since that route
+    only reaches it when `_base IS None`).
+
+    Qwen keeps ONE engine-wide `_device` shared by both `_base` and
+    `_design` (set by `_ensure_device_resolved`, called by both
+    `_ensure_base_loaded` and `_ensure_design_loaded` before their weights
+    pull begins), so reading it directly answers "which card is Qwen on"
+    from either model's residency without needing Base to be non-None.
+    `_ensure_device_resolved` does run before the weights pull itself
+    starts -- but NOT necessarily before `_design_in_flight.busy` goes
+    True: `design_voice()` claims `_design_in_flight` (its `with
+    self._design_in_flight.claim():`) well before it reaches
+    `_ensure_design_loaded()` -- the Kokoro/base17 eviction and the
+    per-card lock acquire in between can block for real time -- so on a
+    genuinely cold engine (`_device` still at its unresolved
+    `_device_pref`, typically "auto") there IS a real window where `.busy`
+    is already True and `_device` has not yet resolved to a concrete
+    "cuda:N"/"rocm:N". That's handled, not ignored: `_parse_device("auto")`
+    returns `("auto", None)`, `fam` is not in `("cuda", "rocm")` below, and
+    this function correctly returns None for that window -- the fail-closed
+    behaviour this codebase's design principle calls for, not a crash or a
+    stale/wrong device key.
+
+    This also correctly reflects an admitted `device=` argument onto a
+    NON-default card (#2678 review N2): `_resolve_torch_device` returns an
+    explicit (non-"auto") pref UNCHANGED, so an admission's concrete
+    "cuda:1" survives resolution intact -- only the unset/env-default "auto"
+    pref resolves via availability (cuda:0 first). Verified against
+    `_resolve_torch_device`'s own source, not assumed."""
+    if not isinstance(qwen, QwenEngine):
+        return None
+    resident = (
+        qwen._base is not None
+        or qwen._base17 is not None
+        or qwen._design is not None
+        or qwen._design_in_flight.busy
+    )
+    if not resident:
+        return None
+    fam, idx = _parse_device(qwen._device)
+    if fam not in ("cuda", "rocm"):
+        return None
+    # On a ROCm/HIP build torch's own device string still reads "cuda" (HIP
+    # aliases the CUDA API) -- _parse_device has no way to tell them apart,
+    # so normalise the family the same way probe_capacity() does (whose
+    # `kind` field is what PlacementController._device_key's format mirrors)
+    # via the SAME _cuda_is_rocm() check, rather than a second ad hoc test
+    # that could drift from it (#2678 review F2).
+    if fam == "cuda" and _cuda_is_rocm():
+        fam = "rocm"
+    return f"{fam}:{idx if idx is not None else 0}"
 
 
 def _same_card(resident: Optional[str], target: str) -> bool:
@@ -5339,6 +5460,18 @@ class DesignContentionTimeoutError(RuntimeError):
     wedged, not merely slow — the caller should retry the synth shortly."""
 
 
+class Base17ContentionTimeoutError(RuntimeError):
+    """`design_voice()` needed to evict the resident 1.7B-Base model, but a
+    base17 load/mint stayed in flight past `unload_base17()`'s bounded wait.
+
+    Mirrors `DesignContentionTimeoutError`'s "design wins" policy in the same
+    direction, not the reverse: a VoiceDesign load is user-initiated and
+    interactive (someone watching it render in cast review), so it must not
+    be starved waiting on a batch mint. Reaching this error means the base17
+    load outlived even that bounded wait, i.e. it is genuinely wedged, not
+    merely slow — the caller should retry the design shortly."""
+
+
 class Base17UnavailableError(Exception):
     """The 1.7B-Base model can't be used for an anchored mint for a
     deterministic reason the separate VoiceDesign model won't share. The
@@ -5361,11 +5494,22 @@ class Base17UnavailableError(Exception):
 # a design's own request budget would trip on a design that is merely slow,
 # not wedged, defeating the "design wins" policy this exists to implement. A
 # design still running past its OWN budget is wedged, not slow, so only that
-# case reaches the timeout. Not exposed as an env knob (deliberately — see
-# CLAUDE.md's "new env var MUST be a knob" rule this avoids triggering; a
-# fixed conservative bound is simpler and this is the only caller).
+# case reaches the timeout. Not exposed as an env knob (deliberately — a new
+# registry knob needs a Settings row / .env.example line per this repo's
+# CLAUDE.md; a fixed conservative bound is simpler and this is the only caller).
 _DESIGN_CONTENTION_WAIT_S_DEFAULT = 150.0
 _DESIGN_CONTENTION_POLL_S_DEFAULT = 0.5
+
+# #2752 — how long `unload_base17()` waits for an in-flight base17 load/mint
+# to clear before giving up and raising `Base17ContentionTimeoutError`
+# instead of silently nulling `_base17` out from under it. Kept below
+# `_DESIGN_CONTENTION_WAIT_S_DEFAULT`: a plain base17 load/mint is lighter
+# than a full VoiceDesign forward+load, so it doesn't need the same headroom.
+# Not exposed as an env knob (deliberately — a new registry knob needs a
+# Settings row / .env.example line per this repo's CLAUDE.md; a fixed
+# conservative bound is simpler and this is the only caller).
+_BASE17_CONTENTION_WAIT_S_DEFAULT = 60.0
+_BASE17_CONTENTION_POLL_S_DEFAULT = 0.5
 
 
 class QwenEngine(Engine):
@@ -5904,13 +6048,70 @@ class QwenEngine(Engine):
                 raise  # OOM → generic 500, NEVER a fallback
             raise Base17UnavailableError("corrupt") from e
 
-    def unload_base17(self) -> None:
+    def unload_base17(
+        self,
+        wait_seconds: float = 0.0,
+        poll_seconds: float = _BASE17_CONTENTION_POLL_S_DEFAULT,
+    ) -> None:
         """Drop the 1.7B-Base model and free VRAM. Idempotent.
 
         Mirrors `unload` but targets only the 1.7B-Base. Acquires `_synth_lock`
         before nulling — same rationale as `unload` (prevents a concurrent
-        synth forward from seeing a null mid-generate)."""
+        synth forward from seeing a null mid-generate).
+
+        #2752 — mirrors `unload_design()`'s wait-then-evict shape (#2070): a
+        base17 load/mint can be in flight with `_base17` still `None` for the
+        entire load, so an unconditional null here could kill that load's
+        result out from under whatever's waiting on it. This waits (bounded
+        by `wait_seconds`, polling every `poll_seconds`) for `_base17_in_flight`
+        to clear before nulling, rather than nulling it out from under an
+        active forward. The wait is bounded, never unbounded — a genuinely
+        wedged load must not hang the caller forever — so a load still in
+        flight past `wait_seconds` raises `Base17ContentionTimeoutError`
+        instead.
+
+        `wait_seconds` DEFAULTS TO 0.0, unlike `unload_design`'s 150s default —
+        deliberately, not an oversight. The bare call (the `/unload
+        {model:'1.7b'}` Stop route) must stay non-blocking and NEVER raise:
+        #1975 already established that a Stop must always succeed.
+        `maybe_free_idle_base17` does NOT go through this method at all — it
+        nulls `_base17` inline under its own re-validated lock, because a call
+        here would re-acquire the non-reentrant `_synth_lock` and deadlock
+        (see that method's own docstring) — it is unaffected by this default
+        either way. At `wait_seconds <= 0.0` (the bare/Stop-route case), this
+        unconditionally nulls `_base17` without waiting or raising, mirroring
+        the sibling `unload()` method's stop semantics. Only `design_voice()`'s
+        eviction guard opts into the bounded wait, passing
+        `_BASE17_CONTENTION_WAIT_S_DEFAULT`/`_POLL_S_DEFAULT` explicitly,
+        because that call site's whole purpose is to wait for a
+        wedged-looking-but-still-loading base17 rather than race it."""
+        if wait_seconds <= 0.0:
+            # Bare call (Stop route, or idle eviction): never block, never raise.
+            # Unconditionally null the model, matching unload()'s semantics.
+            # The early return below skips `_reclaim_host_and_vram()` on
+            # purpose — nothing was resident, so there's nothing to reclaim.
+            with self._synth_lock:
+                if self._base17 is None:
+                    return
+                self._base17 = None
+            _reclaim_host_and_vram()
+            return
+
+        # Bounded wait for a callee that passed explicit wait_seconds > 0
+        # (currently only design_voice()'s contention guard): wait for the
+        # in-flight load to clear, or raise if it doesn't within the budget.
+        deadline = time.monotonic() + wait_seconds
+        while self._base17_in_flight.busy:
+            if time.monotonic() >= deadline:
+                raise Base17ContentionTimeoutError(
+                    f"Qwen 1.7B-Base has been in flight for over "
+                    f"{wait_seconds:.0f}s — refusing to evict it out from "
+                    "under an active load. Retry the design shortly."
+                )
+            time.sleep(poll_seconds)
         with self._synth_lock:
+            if self._base17 is None:
+                return
             self._base17 = None
         _reclaim_host_and_vram()
 
@@ -6539,106 +6740,240 @@ class QwenEngine(Engine):
                 # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
                 # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
                 # (waits for any in-flight Kokoro synth to drain, blocks new ones),
-                # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
-                # reloads on the next synth (~1s); when no generation ran it isn't
-                # resident, so this is a no-op.
+                # then evict residents to make headroom. Kokoro reloads on the next
+                # synth (~1s); when no generation ran it isn't resident, so its
+                # eviction is a no-op.
                 _kokoro_pre = ENGINES.get("kokoro")
                 if isinstance(_kokoro_pre, KokoroEngine) and _kokoro_pre._kokoro is not None:
                     _phase("freeing-vram")
-                with _VD_KOKORO.design():
-                    _kokoro_eng = ENGINES.get("kokoro")
-                    if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
-                        log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
-                        _kokoro_eng.unload()
-                    # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
-                    # can't co-reside on an 8 GB card. A bulk "Design full cast" run
-                    # interleaves variant mints (which leave _base17 resident) with
-                    # base designs; evict the lingering 1.7B-Base before the
-                    # VoiceDesign load — symmetric with the synth path's
-                    # unload_design() (synthesize/synthesize_batch) and the Kokoro
-                    # evict above. design_voice never uses _base17, so this is safe;
-                    # the idle watchdog would reclaim it eventually, but not within
-                    # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
-                    if self._base17 is not None:
-                        log.info("Evicting resident Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
-                        self.unload_base17()
-                    _phase("loading-model")
-                    # Capacity-aware placement (task 3, vram-aware-placement plan):
-                    # a concrete `device` from an admitted reservation overrides the
-                    # env-derived pref for this design. `device` is threaded straight
-                    # into each ensure call so the set-pref + resolve + load are ONE
-                    # atomic acquisition under that model's own load lock — a
-                    # concurrent design/mint admitted to a DIFFERENT card can't clobber
-                    # `_device_pref` in the gap between set and resolve (the TOCTOU
-                    # this closes). The design load runs first and sets `_device_pref`,
-                    # so the base load inherits the same card; passing it here too is
-                    # belt-and-suspenders for the warm-design / cold-base case. `None`
-                    # leaves `_device_pref` untouched (flag-off byte-for-byte).
-                    self._ensure_design_loaded(device=device)
-                    self._ensure_base_loaded(device=device)
-                    # Phase boundary: everything above is Kokoro-evict + (cold) model
-                    # load; everything below is GPU forwards. `load_ms` isolates the
-                    # cold-start cost (the transient 1.7B VoiceDesign load the operator
-                    # suspects) from the design forward itself.
-                    load_ms = (time.perf_counter() - t0) * 1000.0
-                    # Serialise the GPU forwards against any concurrent synth/design — see
-                    # `_synth_lock` in __init__ (the Base model isn't thread-safe).
-                    with self._synth_lock:
-                        # Capture UNDER the lock instead of silently re-ensuring
-                        # (#2021 — extends #1975's AUDITION-forward pattern to
-                        # this, the heaviest forward in the process:
-                        # `_ensure_design_loaded()` pulls the ~4-5 GB VoiceDesign
-                        # model, the longest possible Stop-blocking pull in
-                        # QwenEngine. Every in-place nuller of `_design`/`_base`
-                        # (the idle watchdog, a concurrent /synthesize's
-                        # unload_design, a full /unload) holds `_synth_lock`, so
-                        # a model ensured before we took the lock may have been
-                        # freed in the gap — raise loud instead of silently
-                        # absorbing that race with an in-lock re-pull that would
-                        # itself hold `_synth_lock` for the whole cold load.
-                        design = self._design
-                        if design is None:
-                            # #2070 fixed the ordinary-synth race this used to
-                            # cover: `unload_design()` now waits (bounded) on
-                            # `_design_in_flight` before nulling `_design`, and
-                            # THIS call is what holds it busy, so a concurrent
-                            # /synthesize's unload_design can no longer land
-                            # here mid-design. What remains is a genuinely
-                            # explicit action — a full /unload landing in the
-                            # gap between `_ensure_design_loaded()` above and
-                            # this lock acquire — which deliberately is NOT
-                            # gated by the design-wins policy (an explicit
-                            # Stop must still be able to free the model). Raise
-                            # loud rather than silently absorbing that race
-                            # with an in-lock re-pull that would itself hold
-                            # `_synth_lock` for the whole cold load.
-                            raise RuntimeError(
-                                "Qwen VoiceDesign model was unloaded before "
-                                "this design could render — reload it and "
-                                "retry."
-                            )
-                        base = self._base
-                        if base is None:
-                            raise RuntimeError(
-                                "Qwen Base model was unloaded before this "
-                                "design could render — reload it and retry."
-                            )
-                        # 1. design a reference clip from the persona instruction.
-                        _phase("designing")
-                        _t = time.perf_counter()
-                        ref_wavs, ref_sr = design.generate_voice_design(
-                            text=ref_text, language=lang, instruct=instruct
-                        )
-                        design_fwd_ms = (time.perf_counter() - _t) * 1000.0
-                        ref_audio = ref_wavs[0]
 
-                        # 2. distil into a reusable clone prompt on the Base model.
-                        _phase("distilling")
-                        _t = time.perf_counter()
-                        prompt = base.create_voice_clone_prompt(
-                            ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                # The 1.7B-Base (~3.4 GB) and the 1.7B VoiceDesign (~3.4-5 GB)
+                # can't co-reside on an 8 GB card. A bulk "Design full cast" run
+                # interleaves variant mints (which leave _base17 resident) with
+                # base designs; evict the lingering 1.7B-Base before the
+                # VoiceDesign load — symmetric with the synth path's
+                # unload_design() (synthesize/synthesize_batch) and the Kokoro
+                # evict above. design_voice never uses _base17, so this is safe;
+                # the idle watchdog would reclaim it eventually, but not within
+                # the seconds-long bulk-loop gap (→ the per-voice recycle storm).
+                #
+                # #2070 review R5 — deliberately OUTSIDE the _VD_KOKORO.design()
+                # block below, not inside it. Since #2070, unload_base17() can wait
+                # up to ~150s for an in-flight base17 load to clear (the design-wins
+                # policy). `_VD_KOKORO.design()` sets `_design_active` for its ENTIRE
+                # span, and `kokoro_synth()` blocks while that's set — so a wait
+                # held inside that block would stall EVERY Kokoro synth for up to
+                # 150s during exactly the bulk "Design full cast" run this eviction
+                # exists to support. Evicting here keeps any such wait off the
+                # arbiter (and the design-active flag) entirely; the only real
+                # ordering requirement — evict-before-load — still holds, since the
+                # VoiceDesign load happens later in this same function, still inside
+                # the block below.
+                #
+                # #2752 — the widened guard (below) includes
+                # `_base17_in_flight.busy`: `_base17` stays `None` for the ENTIRE
+                # duration of a mint/synth load, so an in-flight-but-unassigned
+                # load was previously invisible here (the #1156 OOM shape) —
+                # `design_voice()` proceeded straight into the VoiceDesign load
+                # with both models resident. `unload_base17()` now waits
+                # (bounded) for that load to clear before evicting, same
+                # "design wins" direction as `unload_design()`.
+                #
+                # #2790 — the evict-through-load sequence now holds
+                # `_DEVICE_LEDGER.card_lock()` to prevent a concurrent
+                # `mint_variant()` call from loading base17 in the gap between the
+                # eviction check and the VoiceDesign load. `mint_variant()` already
+                # holds this lock while loading base17 (see line ~7011), so both
+                # paths serialize their check-residency->evict->load sequences on
+                # the same per-card mutex. The lock holds only through model load
+                # (not GPU forwards), to close the race: evict base17 → load
+                # VoiceDesign → (release card_lock) → GPU forwards. A concurrent
+                # mint_variant() can reload base17 after VoiceDesign load finishes,
+                # since VoiceDesign is then resident and doesn't compete for VRAM
+                # with base17 (VoiceDesign is freed after design completes).
+                # card_lock and _VD_KOKORO.design() do NOT nest congruently — one
+                # is not simply "outside" the other. card_lock is acquired BEFORE
+                # design() opens (it must cover the base17 eviction, which per the
+                # #2070 R5 note above has to stay outside design()) and is released
+                # PARTWAY THROUGH design()'s span (once model load finishes, so the
+                # GPU forwards run lock-free). The two spans therefore overlap
+                # without either containing the other, which is why both are driven
+                # manually below rather than as two stacked `with` blocks.
+                # The acquire is bounded (not unbounded) to prevent indefinite hangs
+                # if a concurrent mint_variant() holds the lock for an extended period.
+                card_lock = _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx())
+                if not card_lock.acquire(timeout=_BASE17_CONTENTION_WAIT_S_DEFAULT):
+                    raise Base17ContentionTimeoutError(
+                        f"Could not acquire per-card lock for Qwen design — a concurrent "
+                        f"base17 load/mint or another design's model load has held it for over "
+                        f"{_BASE17_CONTENTION_WAIT_S_DEFAULT:.0f}s. Retry the design shortly."
+                    )
+                # Manually manage _VD_KOKORO.design() and card_lock so their lifetimes can
+                # overlap without nesting congruently: card_lock must be held from acquire
+                # through model load (not GPU forwards, #2790), while _VD_KOKORO.design()
+                # must span model load through GPU forwards (not the base17 eviction wait,
+                # #2070 review R5) — the two release points don't coincide with either
+                # `with` block's natural exit, so both are entered/exited manually with an
+                # explicit `card_lock_released` flag guarding against double-release/no-release
+                # on every raise path (eviction, design-context entry, model load, forwards).
+                card_lock_released = False
+                try:
+                    if self._base17 is not None or self._base17_in_flight.busy:
+                        log.info("Evicting resident/in-flight Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
+                        # Bounded wait, not the 0.0 default — this call's whole
+                        # point is to wait out a still-loading base17 rather
+                        # than race it (see unload_base17's docstring for why
+                        # 0.0 is right everywhere else). Deliberately OUTSIDE
+                        # _VD_KOKORO.design() (#2070 review R5) — this wait can
+                        # run up to _BASE17_CONTENTION_WAIT_S_DEFAULT and holding
+                        # it inside the arbiter would stall every Kokoro synth
+                        # for that long during exactly the bulk "Design full
+                        # cast" run this eviction exists to support. It can also
+                        # RAISE (Base17ContentionTimeoutError) — the outer
+                        # `finally` below is what keeps that from leaking
+                        # card_lock (#2809 review pass 2).
+                        self.unload_base17(
+                            wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT,
+                            poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT,
                         )
-                        distil_ms = (time.perf_counter() - _t) * 1000.0
+
+                    # Enter design context AFTER eviction completes.
+                    # #2070 review R5 — deliberately OUTSIDE the eviction wait,
+                    # not inside it. Manually manage context so design() outlives
+                    # card_lock release: card_lock is released AFTER model load
+                    # (inner finally), design() remains active through GPU forwards
+                    # (outer finally).
+                    design_context = _VD_KOKORO.design()
+                    design_context.__enter__()
+                    try:
+                        _kokoro_eng = ENGINES.get("kokoro")
+                        if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
+                            log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
+                            _kokoro_eng.unload()
+                        _phase("loading-model")
+                        # Capacity-aware placement (task 3, vram-aware-placement plan):
+                        # a concrete `device` from an admitted reservation overrides the
+                        # env-derived pref for this design. `device` is threaded straight
+                        # into each ensure call so the set-pref + resolve + load are ONE
+                        # atomic acquisition under that model's own load lock — a
+                        # concurrent design/mint admitted to a DIFFERENT card can't clobber
+                        # `_device_pref` in the gap between set and resolve (the TOCTOU
+                        # this closes). The design load runs first and sets `_device_pref`,
+                        # so the base load inherits the same card; passing it here too is
+                        # belt-and-suspenders for the warm-design / cold-base case. `None`
+                        # leaves `_device_pref` untouched (flag-off byte-for-byte).
+                        try:
+                            self._ensure_design_loaded(device=device)
+                            self._ensure_base_loaded(device=device)
+                        finally:
+                            # Release card_lock once model load is done — GPU forwards
+                            # below run with the lock released (#2790: a concurrent
+                            # mint_variant() can reload base17 once VoiceDesign is
+                            # resident, since the two don't compete for VRAM) but still
+                            # inside _VD_KOKORO.design() (#2809: Kokoro stays excluded
+                            # for the full design span, including the forwards).
+                            # Flag set BEFORE the release, not after: if
+                            # `release()` itself raised, the lock is already
+                            # unlocked (that is the only way it raises), so the
+                            # outer `finally` must NOT try again — a second
+                            # release would raise "release unlocked lock" and
+                            # mask the original error.
+                            card_lock_released = True
+                            card_lock.release()
+
+                        # Phase boundary: model load above holds card_lock; GPU forwards below
+                        # release it but remain inside _VD_KOKORO.design(). `load_ms` isolates
+                        # the cold-start cost (the transient 1.7B VoiceDesign load the operator
+                        # suspects) from the design forward itself. Card lock release above allows
+                        # concurrent base17 load/mint from mint_variant(), since VoiceDesign resident
+                        # doesn't compete with base17 (design frees VoiceDesign after completion).
+                        load_ms = (time.perf_counter() - t0) * 1000.0
+                        # Serialise the GPU forwards against any concurrent synth/design — see
+                        # `_synth_lock` in __init__ (the Base model isn't thread-safe).
+                        with self._synth_lock:
+                            # Capture UNDER the lock instead of silently re-ensuring
+                            # (#2021 — extends #1975's AUDITION-forward pattern to
+                            # this, the heaviest forward in the process:
+                            # `_ensure_design_loaded()` pulls the ~4-5 GB VoiceDesign
+                            # model, the longest possible Stop-blocking pull in
+                            # QwenEngine. Every in-place nuller of `_design`/`_base`
+                            # (the idle watchdog, a concurrent /synthesize's
+                            # unload_design, a full /unload) holds `_synth_lock`, so
+                            # a model ensured before we took the lock may have been
+                            # freed in the gap — raise loud instead of silently
+                            # absorbing that race with an in-lock re-pull that would
+                            # itself hold `_synth_lock` for the whole cold load.
+                            design = self._design
+                            if design is None:
+                                # #2070 fixed the ordinary-synth race this used to
+                                # cover: `unload_design()` now waits (bounded) on
+                                # `_design_in_flight` before nulling `_design`, and
+                                # THIS call is what holds it busy, so a concurrent
+                                # /synthesize's unload_design can no longer land
+                                # here mid-design. What remains is a genuinely
+                                # explicit action — a full /unload landing in the
+                                # gap between `_ensure_design_loaded()` above and
+                                # this lock acquire — which deliberately is NOT
+                                # gated by the design-wins policy (an explicit
+                                # Stop must still be able to free the model). Raise
+                                # loud rather than silently absorbing that race
+                                # with an in-lock re-pull that would itself hold
+                                # `_synth_lock` for the whole cold load.
+                                raise RuntimeError(
+                                    "Qwen VoiceDesign model was unloaded before "
+                                    "this design could render — reload it and "
+                                    "retry."
+                                )
+                            base = self._base
+                            if base is None:
+                                raise RuntimeError(
+                                    "Qwen Base model was unloaded before this "
+                                    "design could render — reload it and retry."
+                                )
+                            # 1. design a reference clip from the persona instruction.
+                            _phase("designing")
+                            _t = time.perf_counter()
+                            ref_wavs, ref_sr = design.generate_voice_design(
+                                text=ref_text, language=lang, instruct=instruct
+                            )
+                            design_fwd_ms = (time.perf_counter() - _t) * 1000.0
+                            ref_audio = ref_wavs[0]
+
+                            # 2. distil into a reusable clone prompt on the Base model.
+                            _phase("distilling")
+                            _t = time.perf_counter()
+                            prompt = base.create_voice_clone_prompt(
+                                ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                            )
+                            distil_ms = (time.perf_counter() - _t) * 1000.0
+                    finally:
+                        # Pass the in-flight exception through rather than
+                        # (None, None, None) — the CM must see it to run any
+                        # exception-aware cleanup (#2809 review pass 2).
+                        # `sys.exc_info()` can in principle report a STALE outer
+                        # exception on the success path (if a caller invoked us
+                        # from inside an `except:` block), but that is both
+                        # unreachable here — every caller arrives via
+                        # `asyncio.to_thread` on a fresh stack — and harmless if
+                        # it were: `design()` is a @contextmanager whose cleanup
+                        # is a plain `finally`, so a thrown-in exception still
+                        # clears the refcount and re-propagates as the same
+                        # object, which `__exit__` returns False for rather than
+                        # raising. Left as-is deliberately; a `try/except` here
+                        # would be error handling for an impossible scenario.
+                        design_context.__exit__(*sys.exc_info())
+                finally:
+                    # Belt-and-suspenders: card_lock is normally released above,
+                    # inside design(), once model load completes. This only fires
+                    # if we never got that far — unload_base17(),
+                    # design_context.__enter__(), or the resident-Kokoro
+                    # _kokoro_eng.unload() raised — so card_lock would
+                    # otherwise leak for the process lifetime (card_lock
+                    # instances are cached per card index and never recreated,
+                    # so a leak wedges every later design AND mint on that card
+                    # until the sidecar restarts).
+                    if not card_lock_released:
+                        card_lock.release()
 
                 # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
                 os.makedirs(self._voices_dir, exist_ok=True)
@@ -8153,6 +8488,11 @@ class SpeakerEngine:
         if self._model is None:
             return False
         self._model = None
+        # Restore the env pref (mirrors WhisperEngine._drop_model_locked, #2642):
+        # a cuda->cpu self-demotion in ensure_loaded() overwrote self.device with
+        # the fallback card, so a later reload must re-resolve from the ORIGINAL
+        # request, not stick on cpu forever.
+        self.device = self._requested_device
         return True
 
     def _reclaim_after_drop(self) -> None:
@@ -8183,27 +8523,45 @@ class SpeakerEngine:
 
     def maybe_free_idle(self, ttl_seconds: float) -> bool:
         """Free the model once it has idled past the TTL. Reclaims VRAM only on
-        the cuda path — a NO-OP on cpu, where the ~1 s reload churn isn't worth
-        freeing ~80–200 MB of host RAM. No-op while recently used.
+        the cuda path. On cpu, a no-op UNLESS the engine was demoted from cuda
+        (in which case the reload-churn cost is paid). No-op while recently used.
 
-        Cheap, lock-free fast-outs first (cuda-only guard, then nothing
-        loaded / mid-forward / used recently) — skipping the lock matters, a
-        forward can run for seconds and admission must not block on it.
+        Cheap, lock-free fast-outs first (check for model, then demotion/cuda
+        device, then in-flight work, then recency) — skipping the lock matters,
+        a forward can run for seconds and admission must not block on it.
         Re-validated UNDER the lock before dropping (#1894): `embed` claims
         `_in_flight` and refreshes `_last_used` BEFORE taking the lock,
         so a counter that flips to nonzero WHILE this is queued on the lock
         is otherwise invisible to the cheap check above. Calls
         `_drop_model_locked()` directly rather than `unload()` — re-entering
         `_infer_lock` here would self-deadlock.
+
+        Trade-off (#2750): when the device pin is restored from a prior cpu
+        self-demotion, a persistently-failing cuda load will re-attempt cuda
+        capacity reservation on every reload and can return `_no_capacity` → 503
+        under GPU contention, where before it would have silently stayed on cpu.
+        This trade-off was accepted to fix the permanent pin-corruption bug.
         """
-        if _parse_device(self.device)[0] != "cuda" or self._model is None:
+        if self._model is None:
+            return False
+        # #2750: demoted is family-aware (not string-exact) so indexed cuda
+        # (cuda:0) is not confused with a cpu demotion. Currently the demoted
+        # flag's value doesn't change the gate outcome in any reachable state
+        # (when device is cuda, the gate's second part is False regardless);
+        # this is defensive correctness for possible future code paths.
+        demoted = _parse_device(self._requested_device)[0] == "cuda" and _parse_device(self.device)[0] != "cuda"
+        if not demoted and _parse_device(self.device)[0] != "cuda":
             return False
         if self._in_flight.busy:
             return False
         if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
             return False
         with self._infer_lock:
-            if _parse_device(self.device)[0] != "cuda" or self._model is None:
+            if self._model is None:
+                return False
+            # Re-validate demoted under lock (see fast-out comment above).
+            demoted = _parse_device(self._requested_device)[0] == "cuda" and _parse_device(self.device)[0] != "cuda"
+            if not demoted and _parse_device(self.device)[0] != "cuda":
                 return False
             if self._in_flight.busy:
                 return False
@@ -8369,8 +8727,9 @@ async def _stop_asr_idle_watchdog() -> None:
 
 
 # Default seconds of speaker-embed inactivity before the watchdog frees the
-# ECAPA model (cuda path only). Override via SPK_IDLE_TTL. Must match the
-# registry sidecar.spkIdleTtl default (srv-47 R2-A invariant).
+# ECAPA model. Frees on cuda, and also on cpu if the engine was demoted from
+# cuda. Override via SPK_IDLE_TTL. Must match the registry sidecar.spkIdleTtl
+# default (srv-47 R2-A invariant).
 _SPK_IDLE_TTL_DEFAULT = 120.0
 _spk_idle_task: "Optional[asyncio.Task[None]]" = None
 
@@ -8409,10 +8768,10 @@ def _coqui_idle_ttl() -> float:
 
 
 async def _spk_idle_watchdog() -> None:
-    """Free the ECAPA speaker model once it idles past the TTL — reclaims VRAM
-    on the cuda path between chapters without churning it mid-pass (a no-op on
-    cpu). The free runs on a worker thread so the event loop and /health stay
-    live."""
+    """Free the ECAPA speaker model once it idles past the TTL. Reclaims VRAM
+    on the cuda path between chapters without churning it mid-pass. On cpu,
+    skipped unless the engine was demoted from cuda. The free runs on a worker
+    thread so the event loop and /health stay live."""
     ttl = _spk_idle_ttl()
     interval = min(30.0, max(5.0, ttl / 4))
     while True:
@@ -10059,15 +10418,18 @@ def health() -> dict[str, Any]:
     # Qwen load state — its own pair of fields, same pattern as Kokoro, so the
     # Node proxy + useTtsLifecycle hook read every engine's state off one poll.
     # `_base is not None` is "ready to synth" (the resident clone model);
-    # the transient VoiceDesign model isn't surfaced (it's a creation-time detail).
+    # the transient VoiceDesign model's own residency/device are surfaced
+    # separately below (`qwen_design_resident` / `qwen_device_key`, #2678).
     qwen_loaded = False
     qwen_base17_loaded = False
     qwen_loading = False
+    qwen_design_resident = False
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine):
         qwen_loaded = qwen._base is not None
         qwen_base17_loaded = qwen._base17 is not None
         qwen_loading = qwen._loading
+        qwen_design_resident = qwen._design is not None or qwen._design_in_flight.busy
     # Install-state (distinct from load-state): lets the Node proxy tell
     # "Qwen not installed" apart from "installed but cold", which drives the
     # conditional default (Qwen-when-installed) + the install-check warning.
@@ -10104,6 +10466,25 @@ def health() -> dict[str, Any]:
         "qwen_loaded": qwen_loaded,
         "qwen_base17_loaded": qwen_base17_loaded,
         "qwen_design_ever_loaded": _QWEN_DESIGN_EVER_LOADED,
+        # LIVE counterpart to the latch above -- true only while a VoiceDesign is
+        # actually resident or mid-load/mid-design right now.
+        "qwen_design_resident": qwen_design_resident,
+        # #2678 review finding — the device `qwen_design_resident` above is
+        # true on, as a concrete "cuda:N" (or None off a GPU / unresolvable).
+        # `_base`/`_design` share one QwenEngine instance and therefore one
+        # `_device`, so this is equally the design model's card whenever
+        # `qwen_design_resident` is true. Node-side capacity-retry.ts uses it
+        # to qualify the design-residency wait extension: a resident design on
+        # a DIFFERENT card than the one this admission was denied on can never
+        # free the blocked device, so it must not extend that wait.
+        #
+        # NOT `_is_resident("qwen")` (#2678 review N1/N2) -- that gates on a
+        # LOADED-MODEL presence scan (`_model`/`_kokoro`/`_base`/`_tts`) that
+        # never checks `_design`, so it returns None whenever only the
+        # VoiceDesign is resident/in-flight and Base isn't loaded, disarming
+        # this field for exactly the scenario it exists to cover. See
+        # `_qwen_resident_device_key`'s own docstring for the full reasoning.
+        "qwen_device_key": _qwen_resident_device_key(qwen),
         "qwen_loading": qwen_loading,
         "qwen_package_installed": qwen_package_installed,
         "qwen_weights_present": qwen_weights_present,
@@ -10701,6 +11082,17 @@ async def qwen_design_voice(req: Request) -> Response:
                 mint_method,
                 fallback_for,
             )
+    except Base17ContentionTimeoutError as exc:
+        # #2752 finding — design_voice() needed to evict the resident 1.7B-Base
+        # model, but a base17 load/mint stayed in flight past unload_base17()'s
+        # bounded wait. Same non-poisoned, retry-safe 503 shape as the analogous
+        # DesignContentionTimeoutError mapping — this route was missing the arm
+        # entirely and fell into the generic 500 below.
+        log.warning("/qwen/design-voice: base17 contention timeout: %s", exc)
+        return JSONResponse(
+            {"detail": str(exc), "code": "base17_in_flight"},  # exc-text-safe: Base17ContentionTimeoutError message is a curated static template plus a timeout number; never a traceback or third-party string
+            status_code=503,
+        )
     except Exception as e:
         err_str = f"{e}"  # exc-text-safe: err_str is used only for pattern matching (_CUDA_POISON_RE.search) and logging; the response body is hardcoded
         if _CUDA_POISON_RE.search(err_str):

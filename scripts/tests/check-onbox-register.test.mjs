@@ -2390,6 +2390,51 @@ test('--against-published exits 0, with the OK signal, when the saved copy agree
   });
 });
 
+// PR #2798 review round 1/2: checkLiveView strips HTML comments as its first
+// act (stripHtmlComments, called before any parsing), so it is structurally
+// blind to whether a <!-- BEGIN/END GENERATED:... --> marker pair is present,
+// well-formed, or wraps the right value — a dropped or stale marker leaves
+// every existing check green. This PR's own two merge-conflict resolutions
+// hand-edited these exact marker/value pairs; nothing else in the suite would
+// have caught a mismatch. Cross-checks the live-view's embedded marker values
+// against the register's own "## At a glance" table and owed-total prose —
+// an independent computation, not a re-read of the same numbers.
+test('the live-view GENERATED markers exist, are well-formed, and match the register\'s own figures', () => {
+  const glanceTableRowRe = /\|\s*\*\*([A-Z])\*\*\s*\|[^|]*\|\s*(\d+)\s*\|/g;
+  const expectedByGroup = new Map();
+  for (const m of REAL_REGISTER_TEXT.matchAll(glanceTableRowRe)) {
+    expectedByGroup.set(m[1], Number(m[2]));
+  }
+  assert.ok(expectedByGroup.size > 0, 'expected to parse at least one glance-table row from the real register');
+
+  const ownedMatch = REAL_REGISTER_TEXT.match(/\*\*(\d+) owed\.\*\*/);
+  assert.ok(ownedMatch, 'expected an "**N owed.**" prose line in the real register');
+  const expectedOwed = Number(ownedMatch[1]);
+
+  for (const [letter, expectedCount] of expectedByGroup) {
+    const markerRe = new RegExp(
+      `<!-- BEGIN GENERATED:glance:${letter} -->(\\d+)<!-- END GENERATED:glance:${letter} -->`,
+    );
+    const found = REAL_LIVE_VIEW_HTML.match(markerRe);
+    assert.ok(found, `expected exactly one well-formed glance:${letter} marker pair in the live-view HTML`);
+    assert.equal(
+      Number(found[1]),
+      expectedCount,
+      `glance:${letter} marker says ${found[1]}, the register's own glance table says ${expectedCount}`,
+    );
+  }
+
+  const stripMatch = REAL_LIVE_VIEW_HTML.match(
+    /<!-- BEGIN GENERATED:strip -->[\s\S]*?<div class="n owed">(\d+)<\/div>[\s\S]*?<!-- END GENERATED:strip -->/,
+  );
+  assert.ok(stripMatch, 'expected a well-formed BEGIN/END GENERATED:strip pair wrapping the owed stat');
+  assert.equal(
+    Number(stripMatch[1]),
+    expectedOwed,
+    `strip marker's owed figure is ${stripMatch[1]}, the register's own "**N owed.**" prose says ${expectedOwed}`,
+  );
+});
+
 // #2199 review round 4: the ONBOX_TEST_BASELINE_FILE seam (A4/A5) was itself
 // a silent bypass of the guard — a green run with it set was byte-for-byte
 // indistinguishable in the output from a genuine pass. Reachable danger: set

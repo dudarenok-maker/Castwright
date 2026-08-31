@@ -18,7 +18,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { encodePcmToAudio } from '../tts/mp3.js';
-import { buildM4b, ExportIncompleteError } from './build-m4b.js';
+import {
+  buildM4b,
+  buildConcatList,
+  escapeConcatSingleQuotes,
+  ExportIncompleteError,
+} from './build-m4b.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 const toolsPresent = (() => {
@@ -176,6 +181,42 @@ function findAtom(
   }
   return null;
 }
+
+/* Pure string-logic tests — no ffmpeg/ffprobe required. Locks down the
+   ffmpeg concat-demuxer escaping behaviour across the #2764 refactor that
+   split it out of a nested template literal (see spawn-windows-hide.test.ts
+   for why the nesting itself was the problem: it desynced that guard's quote
+   tracking regardless of what the escaping regex contained, hiding the real
+   ffprobe/ffmpeg spawn calls below in this same file from it). These tests
+   exist so a future edit to the escaping logic that changes what gets
+   escaped, or reintroduces the nested-template shape, fails loudly here
+   rather than only showing up as a corrupted concat-list path fed to ffmpeg. */
+describe('concat-list single-quote escaping (#2764 behaviour-preserving refactor)', () => {
+  it('leaves a path with no single quotes untouched', () => {
+    expect(escapeConcatSingleQuotes('/audio/book/chapter-01.mp3')).toBe(
+      '/audio/book/chapter-01.mp3',
+    );
+  });
+
+  it("escapes an embedded single quote as close-quote, escaped-literal-quote, reopen-quote ('\\'')", () => {
+    expect(escapeConcatSingleQuotes("O'Brien's Book/ch01.mp3")).toBe(
+      "O'\\''Brien'\\''s Book/ch01.mp3",
+    );
+  });
+
+  it('escapes multiple embedded single quotes independently', () => {
+    expect(escapeConcatSingleQuotes("a'b'c")).toBe("a'\\''b'\\''c");
+  });
+
+  it("buildConcatList wraps each escaped path in file '<path>' lines, one per line, trailing newline", () => {
+    const result = buildConcatList(["/a/O'Brien.mp3", '/b/plain.mp3']);
+    expect(result).toBe("file '/a/O'\\''Brien.mp3'\n" + "file '/b/plain.mp3'\n");
+  });
+
+  it('buildConcatList of an empty list is just a trailing newline', () => {
+    expect(buildConcatList([])).toBe('\n');
+  });
+});
 
 describeIfTools('buildM4b', () => {
   let tmpRoot: string;

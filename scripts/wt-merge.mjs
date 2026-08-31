@@ -129,7 +129,7 @@ export function defaultIntegrationBranch(now = new Date()) {
 export function parseMergedBranchesFromLog(text) {
   const out = [];
   for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^Merge branch '([^']+)'/);
+    const m = line.match(new RegExp("^Merge branch '([^']+)'"));
     if (m) out.push(m[1]);
   }
   return out;

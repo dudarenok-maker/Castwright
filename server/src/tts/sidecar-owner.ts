@@ -11,7 +11,7 @@
  * the sidecar is killed out from under an in-flight chapter).
  *
  * Fix (Option B, mirroring `listenWithAutoRebind`'s EADDRINUSE handling in
- * crash-logging.ts): the owning server drops a note (.run/tts.owner.json)
+ * crash-logging.ts): the owning server drops a note (.run/tts.owner.<port>.json)
  * recording its pid + parent pid. A second server that finds a LIVE, FOREIGN
  * owner refuses to boot with an actionable message + exit(1) instead of starting
  * a rival supervisor.
@@ -27,7 +27,8 @@
  * on different ports. The port is read once at startup and passed through to
  * both spawn-sidecar.ts and sidecar-owner.ts so they coordinate on the same port.
  */
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createConnection } from 'node:net';
 import { join } from 'node:path';
 
 /** Last invalid LOCAL_TTS_PORT value we logged an error for. Prevents duplicate
@@ -80,7 +81,6 @@ export function resolveSidecarPort(): number {
 function sidecarPort(): number {
   return resolveSidecarPort();
 }
-const OWNER_FILE = 'tts.owner.json';
 
 export interface SidecarOwnerNote {
   /** PID of the server process that owns (supervises) the sidecar. */
@@ -95,16 +95,23 @@ export interface SidecarOwnerNote {
   startedAt: string;
 }
 
-export function sidecarOwnerPath(runDir: string): string {
-  return join(runDir, OWNER_FILE);
+export function sidecarOwnerPath(runDir: string, port: number): string {
+  return join(runDir, `tts.owner.${port}.json`);
+}
+
+/** Legacy fixed-name path (pre-#2641): `.run/tts.owner.json`. Used for
+    cross-version conflict detection — when upgrading from an old version to
+    a port-keyed one, the legacy note must not be missed. Exported for testing. */
+export function legacySidecarOwnerPath(runDir: string): string {
+  return join(runDir, 'tts.owner.json');
 }
 
 /** Read + parse the owner note, or null when absent / unreadable / malformed.
     A note without a valid positive pid is treated as absent. */
-export function readSidecarOwner(runDir: string): SidecarOwnerNote | null {
+export function readSidecarOwner(runDir: string, port: number): SidecarOwnerNote | null {
   let raw: string;
   try {
-    raw = readFileSync(sidecarOwnerPath(runDir), 'utf8');
+    raw = readFileSync(sidecarOwnerPath(runDir, port), 'utf8');
   } catch {
     return null; // absent
   }
@@ -114,7 +121,30 @@ export function readSidecarOwner(runDir: string): SidecarOwnerNote | null {
     return {
       pid: p.pid,
       ppid: typeof p.ppid === 'number' ? p.ppid : -1,
-      port: typeof p.port === 'number' ? p.port : sidecarPort(),
+      port: typeof p.port === 'number' ? p.port : port,
+      startedAt: typeof p.startedAt === 'string' ? p.startedAt : '',
+    };
+  } catch {
+    return null; // corrupt JSON
+  }
+}
+
+/** Read the legacy fixed-name owner note (pre-#2641), or null when absent /
+    unreadable / malformed. Used for cross-version conflict detection. */
+function readLegacySidecarOwner(runDir: string): SidecarOwnerNote | null {
+  let raw: string;
+  try {
+    raw = readFileSync(legacySidecarOwnerPath(runDir), 'utf8');
+  } catch {
+    return null; // absent
+  }
+  try {
+    const p = JSON.parse(raw) as Partial<SidecarOwnerNote>;
+    if (typeof p.pid !== 'number' || !Number.isInteger(p.pid) || p.pid <= 0) return null;
+    return {
+      pid: p.pid,
+      ppid: typeof p.ppid === 'number' ? p.ppid : -1,
+      port: typeof p.port === 'number' ? p.port : 9000,
       startedAt: typeof p.startedAt === 'string' ? p.startedAt : '',
     };
   } catch {
@@ -136,16 +166,144 @@ export function isProcessAlive(pid: number, killFn: typeof process.kill = proces
   }
 }
 
+/** True if some process is currently accepting connections on `port` on this
+    host. Used ONLY to gate safe reaping of a stale owner note (#2792): a dead
+    recorded server pid does NOT prove the port is free, because the sidecar
+    subprocess that server spawned may have survived as an orphan still bound
+    there.
+
+    Connects rather than binds: a bind probe only tests availability of the
+    exact address it binds to, so a probe bound to `127.0.0.1` fails to
+    detect a listener on `0.0.0.0` (wildcard) or another specific interface —
+    measured, not assumed, and reachable via this app's own config
+    (`LOCAL_TTS_HOST`, `start.ps1`/`start.sh`). A connection attempt to
+    `127.0.0.1`, by contrast, succeeds against a listener bound to EITHER
+    `127.0.0.1` or `0.0.0.0` (wildcard binds accept loopback connections
+    too), which covers every host shape this app's sidecar actually uses.
+
+    Fails CLOSED on ambiguity, mirroring `isProcessAlive`'s EPERM-as-alive
+    convention ("err toward refusing rather than stomping" the only record
+    of a possible orphan): only `ECONNREFUSED` — the one error that
+    unambiguously means nothing is listening there — resolves `false`. A
+    timeout, `EHOSTUNREACH`, or any other outcome resolves `true` (treat as
+    listening, leave the note alone) rather than risking a wrong delete. */
+export function isPortListening(port: number, host = '127.0.0.1'): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, host });
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(true)); // ambiguous -- fail closed
+    socket.once('error', (err: NodeJS.ErrnoException) => {
+      finish(err.code !== 'ECONNREFUSED'); // only a refusal proves nothing is listening
+    });
+    socket.setTimeout(1000);
+  });
+}
+
+/** Reap OTHER ports' stale owner notes, safely (#2792). A note is deleted
+    only when BOTH: its recorded pid is no longer alive, AND nothing is
+    actually listening on the port it names. The second check is what makes
+    this safe where the earlier write-side pruning attempt (reverted in
+    #2754) was not — a dead server pid alone does not mean the port is free,
+    since the orphaned sidecar it spawned may still be bound there, and that
+    note is the only record of it. Never touches the note for `currentPort`.
+
+    Re-reads and compares the note immediately before deleting it (mirroring
+    `releaseSidecarOwnership`'s "delete iff we still own it" idiom): the port
+    probe above is the one genuinely slow, awaited step in this function, and
+    a legitimate server can claim that exact port during that window. Without
+    the re-check, this function would delete that FRESH, live claim's note —
+    the same class of harm #2792 exists to prevent, just arriving through a
+    race instead of a bad liveness signal.
+
+    Best-effort: any I/O error on a given note is swallowed and that note is
+    left alone rather than risking a wrong delete. */
+export async function pruneStaleNotesSafely(
+  runDir: string,
+  currentPort: number,
+  aliveFn: (pid: number) => boolean = isProcessAlive,
+  portListeningFn: (port: number) => Promise<boolean> = isPortListening,
+): Promise<void> {
+  let entries: string[];
+  try {
+    entries = readdirSync(runDir);
+  } catch {
+    return; // runDir doesn't exist yet — nothing to prune
+  }
+  const noteFiles = entries.filter((name) => /^tts\.owner\.\d+\.json$/.test(name));
+  for (const fileName of noteFiles) {
+    const match = fileName.match(/^tts\.owner\.(\d+)\.json$/);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (port === currentPort) continue; // about to be/just been overwritten — not this function's job
+
+    const owner = readSidecarOwner(runDir, port);
+    if (!owner) continue; // already gone or unreadable
+    if (aliveFn(owner.pid)) continue; // recorded server still alive — not stale
+
+    try {
+      if (await portListeningFn(port)) continue; // an orphan is still bound there — this note is its only record
+
+      // Re-check immediately before deleting: a legitimate new claim could have
+      // overwritten this note during the async port probe above (TOCTOU).
+      const stillSameOwner = readSidecarOwner(runDir, port);
+      if (
+        !stillSameOwner ||
+        stillSameOwner.pid !== owner.pid ||
+        stillSameOwner.startedAt !== owner.startedAt
+      ) {
+        continue; // the note changed under us — a fresh claim landed, leave it alone
+      }
+      unlinkSync(sidecarOwnerPath(runDir, port));
+    } catch {
+      /* already gone, inaccessible, or the port probe failed — leave the note, best-effort only */
+    }
+  }
+}
+
 export interface ClaimOpts {
   runDir: string;
   pid?: number;
   ppid?: number;
   port?: number;
   nowIso?: () => string;
+  aliveFn?: (pid: number) => boolean;
+  portListeningFn?: (port: number) => Promise<boolean>;
 }
 
+
 /** Write the owner note, claiming sidecar ownership for this server. Creates
-    `runDir` if needed. Port defaults to the resolved sidecar port. */
+    `runDir` if needed. Port defaults to the resolved sidecar port.
+
+    Also cleans up the legacy note (.run/tts.owner.json) if its recorded port
+    matches the port being claimed AND the legacy note's pid is safe to delete
+    (#2754 N3b). This fixes the PID-recycle defect: if an old server crashed
+    with the legacy note still present, and the OS later recycled its PID, the
+    legacy note's stale PID check would block the new owner.
+
+    The legacy note is deleted ONLY if one of these is true:
+    - Its pid is our own pid
+    - Its ppid matches our lineage (same parent, e.g. tsx watch reload)
+    - Its pid is no longer alive
+
+    This check is independent (not derived from findConflictingOwner's side effects),
+    ensuring we never delete a live, foreign legacy owner's only record.
+    Also writes the port-keyed note FIRST, then deletes the legacy note, to avoid
+    losing our ownership record if a crash occurs between the two operations.
+
+    Also fires (fire-and-forget) pruneStaleNotesSafely for OTHER ports' notes
+    (#2792) — a best-effort background reap, gated by both dead-pid AND
+    nothing-listening, so it never destroys an orphan's only record. This is
+    genuinely fire-and-forget: any error is swallowed, and callers do not
+    wait on it, since claimSidecarOwnership's own contract (write the note,
+    decide the fast synchronous return) must not depend on network I/O. */
 export function claimSidecarOwnership(opts: ClaimOpts): void {
   const {
     runDir,
@@ -153,20 +311,56 @@ export function claimSidecarOwnership(opts: ClaimOpts): void {
     ppid = process.ppid,
     port = sidecarPort(),
     nowIso = () => new Date().toISOString(),
+    aliveFn = isProcessAlive,
+    portListeningFn = isPortListening,
   } = opts;
   mkdirSync(runDir, { recursive: true });
+
+  // Write the port-keyed note FIRST, before any cleanup of the legacy note.
+  // This ensures we always have a record of ownership, even if cleanup fails or
+  // a crash occurs during this function.
   const note: SidecarOwnerNote = { pid, ppid, port, startedAt: nowIso() };
-  writeFileSync(sidecarOwnerPath(runDir), JSON.stringify(note), 'utf8');
+  writeFileSync(sidecarOwnerPath(runDir, port), JSON.stringify(note), 'utf8');
+
+  // #2754 N3b: Clean up the legacy note if its port matches AND it's safe to delete.
+  // The legacy note is now superseded by the port-keyed note we just wrote.
+  const legacyOwner = readLegacySidecarOwner(runDir);
+  if (legacyOwner && legacyOwner.port === port) {
+    // Independent safety check: only delete if the legacy note's pid is ours, same lineage, or dead.
+    // This ensures we never delete a live foreign owner's only record, even if findConflictingOwner
+    // didn't perform its full check (e.g., due to early exits on self/lineage paths).
+    const isSafeToDelete =
+      legacyOwner.pid === pid ||
+      (legacyOwner.ppid > 0 && legacyOwner.ppid === ppid) ||
+      !aliveFn(legacyOwner.pid);
+
+    if (isSafeToDelete) {
+      try {
+        unlinkSync(legacySidecarOwnerPath(runDir));
+      } catch {
+        /* already gone or inaccessible — best-effort cleanup */
+      }
+    }
+  }
+
+  // #2792 — best-effort background reap of OTHER ports' stale notes. Never
+  // awaited: a claim must not block on a network probe, and a rejection here
+  // must never surface as an unhandled rejection.
+  void pruneStaleNotesSafely(runDir, port, aliveFn, portListeningFn).catch(() => {});
 }
 
 /** Delete the owner note iff WE still own it (pid matches). A no-op when the
     note is absent or has been taken over by another lineage — safe to call
     unconditionally on shutdown. */
-export function releaseSidecarOwnership(runDir: string, pid: number = process.pid): void {
-  const owner = readSidecarOwner(runDir);
+export function releaseSidecarOwnership(
+  runDir: string,
+  pid: number = process.pid,
+  port: number = sidecarPort(),
+): void {
+  const owner = readSidecarOwner(runDir, port);
   if (owner && owner.pid === pid) {
     try {
-      unlinkSync(sidecarOwnerPath(runDir));
+      unlinkSync(sidecarOwnerPath(runDir, port));
     } catch {
       /* already gone */
     }
@@ -183,16 +377,40 @@ export interface ConflictCheckOpts {
 
 /** A LIVE, FOREIGN owner, or null. Not a conflict when: there is no note; the
     note is our own pid; the note shares our lineage (a `tsx watch` reload — same
-    ppid, new pid); or the recorded owner is dead (stale note). */
+    ppid, new pid); or the recorded owner is dead (stale note).
+
+    Checks both the port-keyed note and the legacy fixed-name note (pre-#2641)
+    to detect conflicts across version upgrades. A legacy note is only a conflict
+    if its recorded port matches the current port. */
 export function findConflictingOwner(opts: ConflictCheckOpts): SidecarOwnerNote | null {
-  const { runDir, pid = process.pid, ppid = process.ppid, port, aliveFn = isProcessAlive } = opts;
-  const owner = readSidecarOwner(runDir);
-  if (!owner) return null;
-  if (owner.pid === pid) return null; // our own note
-  if (owner.ppid > 0 && owner.ppid === ppid) return null; // same stack reloading (tsx watch)
-  // #2632: port must also match — different ports are independent sidecars, not conflicts
-  if (port !== undefined && owner.port !== port) return null;
-  return aliveFn(owner.pid) ? owner : null;
+  const {
+    runDir,
+    pid = process.pid,
+    ppid = process.ppid,
+    port = sidecarPort(),
+    aliveFn = isProcessAlive,
+  } = opts;
+
+  // Check the port-keyed note (current version)
+  const owner = readSidecarOwner(runDir, port);
+  if (owner) {
+    if (owner.pid === pid) return null; // our own note
+    if (owner.ppid > 0 && owner.ppid === ppid) return null; // same stack reloading (tsx watch)
+    if (aliveFn(owner.pid)) return owner;
+  }
+
+  // Check the legacy fixed-name note (pre-#2641 versions) for cross-version conflict detection.
+  // A legacy note is only a conflict if (a) its port field matches our port, and (b) it names
+  // a live process. This handles the upgrade scenario: old server running on port 9000 with
+  // legacy .run/tts.owner.json, new server starting on port 9000 with port-keyed filename.
+  const legacyOwner = readLegacySidecarOwner(runDir);
+  if (legacyOwner && legacyOwner.port === port) {
+    if (legacyOwner.pid === pid) return null; // our own legacy note
+    if (legacyOwner.ppid > 0 && legacyOwner.ppid === ppid) return null; // same stack reloading
+    if (aliveFn(legacyOwner.pid)) return legacyOwner;
+  }
+
+  return null;
 }
 
 export interface EnforceOwnerOpts {
@@ -201,6 +419,7 @@ export interface EnforceOwnerOpts {
   ppid?: number;
   port?: number;
   aliveFn?: (pid: number) => boolean;
+  portListeningFn?: (port: number) => Promise<boolean>;
   log?: (msg: string) => void;
   exit?: (code: number) => void;
   nowIso?: () => string;
@@ -219,21 +438,29 @@ export function enforceSingleSidecarOwner(opts: EnforceOwnerOpts): boolean {
     ppid = process.ppid,
     port = sidecarPort(),
     aliveFn,
+    portListeningFn,
     log = (m) => console.error(m),
     exit = (c) => process.exit(c),
     nowIso,
   } = opts;
   const conflict = findConflictingOwner({ runDir, pid, ppid, port, aliveFn });
   if (conflict) {
+    // #2754 N3a: Determine which file the conflict came from (port-keyed vs legacy)
+    // so the FATAL message names the correct file for deletion.
+    const portKeyedOwner = readSidecarOwner(runDir, port);
+    const conflictPath = portKeyedOwner && portKeyedOwner.pid === conflict.pid
+      ? sidecarOwnerPath(runDir, port)
+      : legacySidecarOwnerPath(runDir);
+
     log(
       `[server] FATAL: another Castwright server (pid ${conflict.pid}) already owns the TTS ` +
         `sidecar on :${conflict.port}. Two servers managing one sidecar fight over it ` +
         `(recycle storm — generation stalls). Stop the other instance first, then restart. ` +
-        `If you are certain no other server is running, delete ${sidecarOwnerPath(runDir)} and retry.`,
+        `If you are certain no other server is running, delete ${conflictPath} and retry.`,
     );
     exit(1);
     return false; // reached only in tests where `exit` does not terminate
   }
-  claimSidecarOwnership({ runDir, pid, ppid, port, nowIso });
+  claimSidecarOwnership({ runDir, pid, ppid, port, nowIso, aliveFn, portListeningFn });
   return true;
 }

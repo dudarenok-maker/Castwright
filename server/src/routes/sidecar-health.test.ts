@@ -53,9 +53,26 @@ import * as supervisorMod from '../tts/sidecar-supervisor.js';
    is a plain passthrough — one doPost call — so every PRE-EXISTING /load
    test in this file keeps exercising exactly the same single-fetch behavior
    it did before this wiring landed. Tests that care about the retry/throw
-   wiring itself override the implementation locally. */
-vi.mock('../gpu/capacity-retry.js', () => ({ withCapacityRetry: vi.fn() }));
-import { withCapacityRetry } from '../gpu/capacity-retry.js';
+   wiring itself override the implementation locally.
+
+   importOriginal-merged (like the coqui-install-detect mock above), NOT a
+   bare replacement object: sidecar-health.ts also imports
+   `createHardTimeoutAbortReason` from this module (#2678 re-review N3) to
+   mark its 90s /load timeout so withCapacityRetry's catch block can
+   recognize it. A bare `{ withCapacityRetry: vi.fn() }` silently drops that
+   export — invisible in every existing test because none of them let the
+   route's real 90s timer actually fire, but a real regression (reviewer pass
+   3, mutation-proven): reverting the route's marked abort back to a bare
+   `controller.abort()` left the full suite green, since the broken export
+   was never exercised either. Re-exporting the REAL (pure, dependency-free)
+   `createHardTimeoutAbortReason` here keeps the marker genuine so a test
+   that lets the timer fire can actually distinguish a marked abort from a
+   bare one. */
+vi.mock('../gpu/capacity-retry.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../gpu/capacity-retry.js')>();
+  return { ...actual, withCapacityRetry: vi.fn() };
+});
+import { withCapacityRetry, createHardTimeoutAbortReason, isHardTimeoutAbort } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 
 function makeApp() {
@@ -232,6 +249,70 @@ describe('GET /api/sidecar/health', () => {
     const res = await request(makeApp()).get('/api/sidecar/health');
     expect(res.body.qwenLoaded).toBe(true);
     expect(res.body.qwenLoading).toBe(false);
+  });
+
+  it('forwards qwen_design_resident as qwenDesignResident (Castwright#2757)', async () => {
+    /* LIVE counterpart to qwenDesignEverLoaded — capacity-retry.ts needs to
+       tell "resident/in-flight right now" apart from "ever loaded". */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['qwen'],
+          qwen_loaded: true,
+          qwen_design_resident: true,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenDesignResident).toBe(true);
+  });
+
+  it('defaults qwenDesignResident=false when the sidecar omits it', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['qwen'], qwen_loaded: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenDesignResident).toBe(false);
+  });
+
+  it('forwards qwen_device_key as qwenDeviceKey (#2678 review finding)', async () => {
+    /* capacity-retry.ts's defaultIsDesignResident needs this to qualify
+       qwenDesignResident against the specific device a request was denied
+       capacity on, rather than treating residency as global. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['qwen'],
+          qwen_loaded: true,
+          qwen_design_resident: true,
+          qwen_device_key: 'cuda:1',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenDeviceKey).toBe('cuda:1');
+  });
+
+  it('defaults qwenDeviceKey=null when the sidecar omits it', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['qwen'], qwen_loaded: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenDeviceKey).toBeNull();
   });
 
   it('coerces missing Qwen load-state fields to safe defaults', async () => {
@@ -592,6 +673,76 @@ describe('POST /api/sidecar/load', () => {
     expect(res.body.error).toMatch(/did not complete within/);
   });
 
+  it('marks the 90s hard-timeout abort so withCapacityRetry can distinguish it from a user Pause (#2678 re-review N3)', async () => {
+    /* The prior "returns 503 + timeout-specific message" test above rejects
+       fetch directly with an AbortError, which never actually lets the
+       route's own setTimeout callback run — so it can't catch a regression
+       in HOW that callback aborts. This test genuinely fires the route's 90s
+       ceiling and inspects what reason ends up on the signal
+       withCapacityRetry receives — the exact seam reviewer pass 3 found was
+       uncovered (reverting sidecar-health.ts's marked abort back to a bare
+       `controller.abort()` left the whole suite green).
+
+       Full `vi.useFakeTimers()` was tried here first and rejected: faking
+       every global timer also stalls Node's own http/net internals that
+       supertest's real request/response round-trip depends on, hanging the
+       test (and leaking fake timers into later tests since the hang skips
+       `vi.useRealTimers()`). Instead, spy on `setTimeout` and intercept ONLY
+       the route's 90s call (LOAD_TIMEOUT_MS === 90_000, matching
+       UNLOAD_TIMEOUT_MS too, but this test only ever hits /load) — firing it
+       on the real event loop with a 0ms delay so the test stays fast without
+       touching any other timer supertest or Express relies on. */
+    let capturedSignal: AbortSignal | undefined;
+    mockWithCapacityRetry.mockImplementation(async (doPost, opts) => {
+      capturedSignal = opts.signal;
+      return doPost(opts.signal);
+    });
+    fetchMock.mockImplementation(
+      (_url: string, init: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          });
+        }),
+    );
+
+    const realSetTimeout = globalThis.setTimeout;
+    const timeoutSpy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(((cb: (...cbArgs: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+        if (ms === 90_000) return realSetTimeout(cb, 0, ...args);
+        return realSetTimeout(cb, ms, ...args);
+      }) as typeof setTimeout);
+
+    try {
+      const res = await request(makeApp()).post('/api/sidecar/load').send({});
+
+      expect(capturedSignal?.aborted).toBe(true);
+      /* Compare against the REAL createHardTimeoutAbortReason's shape (now
+         genuinely re-exported by the fixed mock above) — a bare
+         `controller.abort()` produces a DOMException with the engine's
+         default "This operation was aborted" message, not this one, so this
+         assertion fails against the reverted-route mutation. */
+      const expected = createHardTimeoutAbortReason('Sidecar /load caller timeout');
+      const reason = capturedSignal?.reason as { name?: string; message?: string } | undefined;
+      expect(reason?.name).toBe(expected.name);
+      expect(reason?.message).toBe(expected.message);
+      /* The name/message pair above is trivially reproducible by a bare
+         `new DOMException('Sidecar /load caller timeout', 'AbortError')` that
+         never actually calls createHardTimeoutAbortReason — same shape, no
+         Symbol marker (#2678 review finding F3, mutation-proven: that hand-
+         built mutation left the two assertions above green). Assert the REAL
+         marker-checking function recognises the captured reason so this test
+         proves the mechanism withCapacityRetry's catch block actually relies
+         on, not just a shape comparison. */
+      expect(isHardTimeoutAbort(capturedSignal?.reason)).toBe(true);
+
+      expect(res.status).toBe(503);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it('forwards the engine field through to the sidecar', async () => {
     /* The Kokoro pill posts `{ engine: 'kokoro' }`; the proxy MUST round-
        trip that to the sidecar verbatim, otherwise the sidecar's default
@@ -708,7 +859,29 @@ describe('POST /api/sidecar/load', () => {
 
     expect(res.status).toBe(503);
     expect(res.body.status).toBe('error');
-    expect(res.body.error).toMatch(/no capacity/i);
+    /* #2678 F6 — with no blockers, NoCapacityError falls back to its own
+       generic "not enough GPU memory" message (tts-errors.ts), which this
+       route now forwards verbatim rather than a route-local hardcoded string. */
+    expect(res.body.error).toMatch(/not enough gpu memory/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a voice-design blocker rather than the generic "stop the analyzer" remedy (#2678 F6)', async () => {
+    mockWithCapacityRetry.mockImplementation(async () => {
+      throw new NoCapacityError('coqui', 3_000, 'cuda:0', [
+        {
+          model: 'A voice design',
+          remedy: 'Wait for the in-progress voice design to finish — it frees automatically once idle.',
+        },
+      ]);
+    });
+
+    const res = await request(makeApp()).post('/api/sidecar/load').send({});
+
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('error');
+    expect(res.body.error).toMatch(/voice design/i);
+    expect(res.body.error).not.toMatch(/stop the analyzer/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

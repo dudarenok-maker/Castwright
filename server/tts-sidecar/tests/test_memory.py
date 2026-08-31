@@ -1275,6 +1275,215 @@ def test_health_exposes_qwen_design_ever_loaded(monkeypatch):
     assert body["qwen_design_ever_loaded"] is True  # after a design load
 
 
+def test_health_exposes_qwen_design_resident(monkeypatch):
+    """/health exposes a LIVE `qwen_design_resident` boolean reflecting whether a
+    VoiceDesign is resident or mid-load/mid-design RIGHT NOW, distinct from the
+    process-lifetime `qwen_design_ever_loaded` latch. The loading-window case
+    (`_design is None` but `_design_in_flight` busy) must read True - the latch
+    cannot distinguish it from "never loaded, not loading", which is the whole
+    reason this field exists (#2678)."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    qwen = main.QwenEngine()
+    monkeypatch.setitem(main.ENGINES, "qwen", qwen)
+
+    # Case 1: not resident, not in flight -> False
+    qwen._design = None
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_design_resident"] is False
+
+    # Case 3: the loading window -- `_design is None` but the counter is busy
+    #         -> STILL True. This is the case PR #2745 fixed the race around and
+    #         the latch cannot report; it is the reason this field exists.
+    qwen._design = None
+    with qwen._design_in_flight.claim():
+        with TestClient(main.app) as client:
+            body = client.get("/health").json()
+    assert body["qwen_design_resident"] is True
+
+    # Case 2: a resident design is set (non-None) -> True
+    qwen._design = object()
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_design_resident"] is True
+
+    # Case 4: no QwenEngine instance present (not installed/loaded) -> False, no crash
+    monkeypatch.delitem(main.ENGINES, "qwen", raising=False)
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_design_resident"] is False
+
+
+def test_health_exposes_qwen_device_key(monkeypatch):
+    """/health exposes `qwen_device_key` as the concrete "cuda:N" card the
+    resident QwenEngine (base or design, they share one `_device`) sits on -
+    the piece capacity-retry.ts's design-residency wait extension needs to
+    tell "the resident design is on the SAME card this admission was denied
+    on" apart from "it's resident somewhere, just not here" (#2678 review
+    finding). None when unresolvable / no QwenEngine instance.
+
+    Regression test for #2678 review pass-2 findings N1/N2/N4: exercises the
+    REAL `_qwen_resident_device_key` computation against a genuine QwenEngine
+    instance in each state that matters, rather than monkeypatching
+    `_is_resident` itself (the prior version of this test asserted only the
+    WIRE FORMAT and could not have caught either finding — it kept passing
+    with `_is_resident`/`_engine_actual_card` still broken underneath)."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    qwen = main.QwenEngine()
+    monkeypatch.setitem(main.ENGINES, "qwen", qwen)
+
+    # N1 case 1/structural: Base loaded, no design in play -> reports Base's
+    # own device (the `_engine_actual_card`-only path that worked before).
+    qwen._base = object()
+    qwen._device = "cuda:0"
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_device_key"] == "cuda:0"
+
+    # N1 core scenario: a resident VoiceDesign with Base NOT loaded. Before
+    # the fix, `_is_resident("qwen")` -> `_engine_actual_card` scans only
+    # `_model`/`_kokoro`/`_base`/`_tts` (never `_design`), sees `_base is
+    # None`, and returns None here -- disarming the field for exactly the
+    # case it exists to cover.
+    qwen._base = None
+    qwen._design = object()
+    qwen._device = "cuda:1"
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_device_key"] == "cuda:1"
+
+    # N1 case 2: the design's own cold-load window, ONCE `_device` has
+    # already resolved -- `_design` is still None but `_design_in_flight` is
+    # busy (`_ensure_device_resolved` has run, `_design` hasn't been
+    # assigned yet). Must still report the device, not None.
+    qwen._design = None
+    qwen._device = "cuda:1"
+    with qwen._design_in_flight.claim():
+        with TestClient(main.app) as client:
+            body = client.get("/health").json()
+    assert body["qwen_device_key"] == "cuda:1"
+
+    # F8 (post #2678 review): the EARLIER sub-window of the same cold-load
+    # path, BEFORE `_ensure_device_resolved` has run at all. `design_voice()`
+    # claims `_design_in_flight` (`.busy` -> True) well before it reaches
+    # `_ensure_design_loaded()` -- Kokoro/base17 eviction and a per-card lock
+    # acquire sit in between and can block for real time -- so on a
+    # genuinely cold engine `_device` can still read its unresolved
+    # `_device_pref` ("auto") while `.busy` is already True. This must fail
+    # closed (None), never crash or report a stale/wrong device -- the gap
+    # the previous version of this test (which pre-set `_device` to an
+    # already-resolved "cuda:1" before claiming) could not exercise.
+    qwen._design = None
+    qwen._device = "auto"
+    with qwen._design_in_flight.claim():
+        with TestClient(main.app) as client:
+            body = client.get("/health").json()
+    assert body["qwen_device_key"] is None
+
+    # N2: a real admission onto a non-default card. `_resolve_torch_device`
+    # returns an explicit ("cuda:1") pref unchanged rather than collapsing to
+    # cuda:0 via its "auto" branch -- pin that behaviour end to end through
+    # `_qwen_resident_device_key` too, not just at `_resolve_torch_device`.
+    qwen._base = object()
+    qwen._design = None
+    qwen._device = "cuda:1"
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_device_key"] == "cuda:1"
+
+    # Nothing resident/in-flight -> None, even though `_device` still holds a
+    # stale resolved value from the prior load.
+    qwen._base = None
+    qwen._design = None
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_device_key"] is None
+
+    # No QwenEngine instance present -> None, no crash.
+    monkeypatch.delitem(main.ENGINES, "qwen", raising=False)
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["qwen_device_key"] is None
+
+
+def test_qwen_resident_device_key_direct():
+    """Unit-level pin of `_qwen_resident_device_key` itself (not routed
+    through /health), covering the non-cuda/rocm and malformed-index paths
+    the /health-level test above doesn't exercise."""
+    qwen = main.QwenEngine()
+
+    # Not a QwenEngine at all -> None.
+    assert main._qwen_resident_device_key(object()) is None
+
+    # Resident but on cpu -> None (only cuda/rocm are reportable device keys).
+    qwen._base = object()
+    qwen._device = "cpu"
+    assert main._qwen_resident_device_key(qwen) is None
+
+    # Unindexed "cuda" (no admission, plain env pin) -> defaults to index 0.
+    qwen._device = "cuda"
+    assert main._qwen_resident_device_key(qwen) == "cuda:0"
+
+    # A genuine admitted placement onto a non-default card round-trips intact.
+    qwen._device = "cuda:2"
+    assert main._qwen_resident_device_key(qwen) == "cuda:2"
+
+
+def test_qwen_resident_device_key_reports_rocm_family_on_rocm_box(monkeypatch):
+    """On a ROCm/HIP build, torch's own device string still reads "cuda:N"
+    (HIP aliases the CUDA API) -- `_parse_device` has no way to tell cuda and
+    rocm apart on its own. `_qwen_resident_device_key` must normalise the
+    family the SAME way `probe_capacity` does (`kind = "rocm" if
+    _cuda_is_rocm() else "cuda"`, ~line 3994), which is what
+    `PlacementController._device_key` -- and therefore the `deviceKey` a
+    denied noCapacity admission reports -- is built from. Without this, the
+    Node-side `qwenDeviceKey === deviceKey` comparison in
+    `defaultIsDesignResident` (server/src/gpu/capacity-retry.ts) never
+    matches on a ROCm box: this side reports "cuda:0", the admission layer
+    reports "rocm:0", so the design-wait extension silently never fires
+    (#2678 review F2)."""
+    qwen = main.QwenEngine()
+    qwen._base = object()
+    qwen._device = "cuda:0"
+
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: True)
+
+    assert main._qwen_resident_device_key(qwen) == "rocm:0"
+
+
+def test_qwen_resident_device_key_handles_already_indexed_rocm_device():
+    """Admission hands an engine an ALREADY-resolved device string -- on a
+    real AMD box that string can itself read "rocm:N" directly, not only the
+    torch-native "cuda:N" the sibling test above normalises via
+    `_cuda_is_rocm()`. No `_cuda_is_rocm()` monkeypatch here on purpose: this
+    pins `_parse_device`/`_qwen_resident_device_key` handling a `_device`
+    value that is ALREADY "rocm:0", independent of the cuda->rocm
+    normalisation path (#2678 review N1). Before the fix, `_parse_device`
+    had no "rocm" branch, so "rocm:0" fell through to its final `return (p,
+    None)` with the WHOLE STRING "rocm:0" as the family -- never in
+    ("cuda", "rocm") -- and `_qwen_resident_device_key` returned None."""
+    qwen = main.QwenEngine()
+    qwen._base = object()
+    qwen._device = "rocm:0"
+
+    assert main._qwen_resident_device_key(qwen) == "rocm:0"
+
+
+def test_qwen_resident_device_key_covers_base17_only_residency():
+    """A genuinely resident Qwen engine with ONLY the 1.7B-Base model loaded
+    (not `_base`, not `_design`) must still report a device key -- the same
+    `_engine_actual_card`-style blindness this function was written to fix
+    for `_base`/`_design` (#2678 review N1), reproduced for the `_base17`
+    tier (#2678 review N3). `health()` treats `qwen._base17 is not None` as
+    the residency sentinel for this tier (`qwen_base17_loaded`), so
+    `_qwen_resident_device_key` must too."""
+    qwen = main.QwenEngine()
+    qwen._base17 = object()
+    qwen._device = "cuda:1"
+
+    assert main._qwen_resident_device_key(qwen) == "cuda:1"
+
+
 def test_debug_memory_includes_inflight_synth_top_level_key(monkeypatch):
     """/debug/memory must expose `inflight_synth` as a top-level key (sibling to
     `process`, `gc`, `engines`, `cuda`) so an idle-measurement probe can read the

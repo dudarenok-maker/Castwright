@@ -157,7 +157,10 @@ function thinBacklog(markdown, map, warnings) {
   for (; i < lines.length; i++) {
     const line = lines[i];
 
-    const section = /^##\s+(Must|Should|Could|Won't)\b/.exec(line);
+    // ' (apostrophe escape, not a literal quote char) avoids an
+    // unpaired-quote regex-literal desync in the spawn-windows-hide guard's
+    // blankCommentsAndStrings() (#2747/#2764) — same match, no behaviour change.
+    const section = /^##\s+(Must|Should|Could|Won\u0027t)\b/.exec(line);
     if (section) {
       tier = TIER_FROM_SECTION[section[1]];
       out.push(line);
@@ -184,7 +187,10 @@ function thinBacklog(markdown, map, warnings) {
     let end = i + 1;
     for (; end < lines.length; end++) {
       const b = lines[end];
-      if (/^#{2,4}\s/.test(b) || /^---\s*$/.test(b) || /^_`/.test(b)) break;
+      // Uses a backtick escape (not a literal backtick) to avoid a
+      // regex-literal desync in the spawn-windows-hide guard's
+      // blankCommentsAndStrings() (#2747/#2764) -- same match, no behaviour change.
+      if (/^#{2,4}\s/.test(b) || /^---\s*$/.test(b) || /^_\u0060/.test(b)) break;
     }
     const bodyLines = lines.slice(i + 1, end);
 
