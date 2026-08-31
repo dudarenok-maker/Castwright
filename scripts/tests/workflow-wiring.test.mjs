@@ -1108,9 +1108,13 @@ test('leg-result check: cancelled/failed/skipped bucketing is present and all th
     'no "Check leg results" step found in the verify aggregator job',
   );
 
-  // Mutation proof 1: when a hung apt-get was fixed in mutation/2783-hang-proof,
-  // both the 10s SIGKILL grace period and the 180s timeout itself were verified
-  // to actually fire by running CI. Assert the wrapping is present.
+  // Mutation proof 1: the base `timeout 180` mechanism (SIGTERM at 180s) was
+  // verified to fire via a manually-hung mutation test branch (described in PR
+  // #2796's body). The source-regex test below verifies the `-k 10` (SIGKILL at
+  // 10s grace-period end) flag's *presence* in the code by pattern match, but no
+  // live CI run has yet verified the SIGKILL signal actually fires — that would
+  // require another expensive hang-simulation branch. This assertion guards
+  // against accidental removal of either the timeout or the -k flag.
   // Mutation proof 2: GitHub-cancelled jobs are bucketed distinctly from
   // FAILED/SKIPPED by separate case arms. Assert all three case arms exist so
   // the bucketing logic can't accidentally collapse them.
