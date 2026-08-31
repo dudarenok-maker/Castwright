@@ -30,7 +30,9 @@ runs:
     - name: Resolve runner image identity
       id: image
       shell: bash
-      run: echo "id=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+      run: |
+        set -euo pipefail
+        echo "id=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
 
     - name: Cache ffmpeg apt packages
       id: apt-cache
