@@ -69,7 +69,7 @@ import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 // its ID to collide with. This is a widening of the limitation, not a
 // narrowing one, and is worth saying plainly rather than leaving the old,
 // narrower caveat standing.
-function stripFences(text) {
+export function stripFences(text) {
   const lines = text.split('\n');
   let openFence = null;
   let openFenceLine = null;
