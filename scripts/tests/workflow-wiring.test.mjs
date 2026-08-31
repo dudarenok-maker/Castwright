@@ -1040,3 +1040,77 @@ test('coverage parity: no derived condition silently narrows a leg', () => {
       `ACCEPTED_NARROWINGS with a reason.`,
   );
 });
+
+test('ffmpeg install: timeout wrapping is present with correct bounds on all apt/dpkg commands', () => {
+  const actionPath = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg', 'action.yml');
+  const actionSource = readNormalized(actionPath);
+
+  // Mutation proof: a deliberately-hung install was caught by the 180s timeout
+  // wrapper (PR #2796 mutations). Assert all three apt/dpkg calls carry the
+  // timeout, so a future edit can't drop it without this test failing.
+  const patterns = [
+    /timeout\s+-k\s+10\s+180\s+sudo\s+dpkg\s+-i/,
+    /timeout\s+-k\s+10\s+180\s+sudo\s+apt-get\s+-o\s+Acquire::Retries=3\s+update/,
+    /timeout\s+-k\s+10\s+180\s+sudo\s+apt-get\s+-o\s+Dir::Cache::Archives/,
+  ];
+
+  const missing = [];
+  for (const [idx, pattern] of patterns.entries()) {
+    if (!pattern.test(actionSource)) {
+      missing.push(`pattern ${idx}: ${pattern.source}`);
+    }
+  }
+
+  assert.deepEqual(
+    missing,
+    [],
+    `ffmpeg install action is missing timeout wrapping or has wrong bounds:\n${missing.join('\n')}`,
+  );
+});
+
+test('leg-result check: cancelled/failed/skipped bucketing is present and all three are checked on exit', () => {
+  const jobBlocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const aggregator = jobBlocks.find(([, name]) => name === 'verify');
+  assert.ok(aggregator, 'aggregator job `verify` not found');
+  const [, , body] = aggregator;
+
+  const legCheckBody = body.slice(body.indexOf('- name: Check leg results'));
+  assert.ok(
+    legCheckBody,
+    'no "Check leg results" step found in the verify aggregator job',
+  );
+
+  // Mutation proof 1: when a hung apt-get was fixed in mutation/2783-hang-proof,
+  // both the 10s SIGKILL grace period and the 180s timeout itself were verified
+  // to actually fire by running CI. Assert the wrapping is present.
+  // Mutation proof 2: GitHub-cancelled jobs are bucketed distinctly from
+  // FAILED/SKIPPED by separate case arms. Assert all three case arms exist so
+  // the bucketing logic can't accidentally collapse them.
+  const casesPresent = [
+    /cancelled\)\s+CANCELLED\+=\(/,
+    /failure\)\s+FAILED\+=\(/,
+    /skipped\)\s+SKIPPED\+=\(/,
+  ];
+
+  const missingCases = [];
+  for (const [idx, pattern] of casesPresent.entries()) {
+    if (!pattern.test(legCheckBody)) {
+      missingCases.push(`case ${idx}: ${pattern.source}`);
+    }
+  }
+
+  assert.deepEqual(
+    missingCases,
+    [],
+    `leg-result check is missing case arm(s) for bucketing:\n${missingCases.join('\n')}`,
+  );
+
+  // The final exit condition must gate on ALL THREE arrays, not a subset.
+  // A future edit that drops one of the three (e.g. stops checking CANCELLED)
+  // would fail this assertion.
+  assert.match(
+    legCheckBody,
+    /if\s*\[\s*"\$\{\#CANCELLED\[\@\]\}"\s+-gt\s+0\s*\]\s+\|\|\s+\[\s*"\$\{\#FAILED\[\@\]\}"\s+-gt\s+0\s*\]\s+\|\|\s+\[\s*"\$\{\#SKIPPED\[\@\]\}"\s+-gt\s+0\s*\]/,
+    'exit condition does not check all three arrays (CANCELLED, FAILED, SKIPPED)',
+  );
+});
