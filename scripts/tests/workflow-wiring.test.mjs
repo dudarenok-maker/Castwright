@@ -1092,10 +1092,26 @@ test('ffmpeg install: no bare apt-get install ffmpeg in workflows (use install-f
   for (const workflowFile of workflows) {
     const workflowPath = resolve(workflowDir, workflowFile);
     const workflowSource = readNormalized(workflowPath);
-    // Catch the exact pattern: `sudo apt-get update && sudo apt-get install -y ffmpeg`
-    // (or minor variants like extra/missing spaces or flags). This is the #2449 hang pattern.
-    if (/sudo\s+apt-get\s+update\s*&&\s*sudo\s+apt-get\s+install\s+(-y|.*ffmpeg)/m.test(workflowSource)) {
-      bareInstalls.push(workflowFile);
+    // Catch all forms of the bare ffmpeg-apt-get pattern: single-line with && or ;,
+    // or multi-line run blocks containing apt-get update and apt-get install with ffmpeg.
+    // This catches the #2449 hang pattern in all its forms.
+
+    // Extract each step (indented at 6 spaces: "      - name: ...").
+    // Each step's body continues with 8+ spaces until the next step or end.
+    const steps = [...workflowSource.matchAll(/^      - name: ([^\n]+)\n((?:        [^\n]*\n)*)/gm)];
+
+    for (const [, stepName, stepBody] of steps) {
+      // Skip if this is the approved install-ffmpeg action
+      if (/uses:\s*\.\/\.github\/actions\/install-ffmpeg/.test(stepBody)) {
+        continue;
+      }
+
+      // Check if this step contains the bare pattern: apt-get update, apt-get install, and ffmpeg
+      // This catches: single-line with && or ;, multi-line run blocks, and other variants
+      if (/apt-get\s+update/.test(stepBody) && /apt-get\s+install/.test(stepBody) && /ffmpeg/.test(stepBody)) {
+        bareInstalls.push(workflowFile);
+        break;
+      }
     }
   }
 

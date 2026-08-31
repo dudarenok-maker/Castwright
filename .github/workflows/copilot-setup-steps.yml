@@ -34,9 +34,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install ffmpeg (system dependency)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
 
       - name: Create venv and install sidecar test deps
         run: |
