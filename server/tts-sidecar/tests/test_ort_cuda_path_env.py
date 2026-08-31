@@ -1,0 +1,124 @@
+"""Register row A28 (discharged 2026-08-31 on-box run) -- `onnxruntime.preload_dlls()`
+only preloads the fixed set of DLLs onnxruntime itself links against
+(cublas/cublasLt/cufft/cudart plus a single cudnn entry point). cuDNN 9's own
+"engine" plugin DLLs (`cudnn_engines_tensor_ir64_9.dll` and siblings) are
+dlopened lazily by cuDNN itself, on demand, the first time a real kernel is
+built -- long after `preload_dlls()` has already returned. Confirmed on real
+hardware: `os.add_dll_directory()` (what `preload_dlls()` uses internally)
+does not make these findable; only prepending the directories to the process
+`PATH` env var does. `main._add_nvidia_dll_dirs_to_path()` is the fix.
+
+This suite pins: (1) every `nvidia/<pkg>/bin` directory that exists on disk
+gets prepended to `PATH`, (2) a layout with no `nvidia/` directory at all
+(CPU/AMD/Apple installs) is a harmless no-op, (3) onnxruntime not being
+importable degrades to a no-op rather than raising, and (4) the returned list
+mirrors what was actually prepended (order preserved), so a caller can log it
+accurately.
+"""
+from __future__ import annotations
+
+import os
+import sys
+import types
+from pathlib import Path
+from typing import Any
+
+SIDECAR_ROOT = Path(__file__).resolve().parent.parent
+if str(SIDECAR_ROOT) not in sys.path:
+    sys.path.insert(0, str(SIDECAR_ROOT))
+
+import main  # noqa: E402
+
+
+def _module_with(name: str, **attrs: Any) -> types.ModuleType:
+    mod = types.ModuleType(name)
+    for k, v in attrs.items():
+        setattr(mod, k, v)
+    return mod
+
+
+def _fake_onnxruntime_at(site_packages: Path) -> types.ModuleType:
+    ort_dir = site_packages / "onnxruntime"
+    ort_dir.mkdir(parents=True, exist_ok=True)
+    init_file = ort_dir / "__init__.py"
+    init_file.write_text("")
+    return _module_with("onnxruntime", __file__=str(init_file))
+
+
+def test_prepends_every_nvidia_bin_dir_that_exists(monkeypatch, tmp_path) -> None:
+    site_packages = tmp_path / "site-packages"
+    for pkg in ("cudnn", "cublas", "cufft", "cuda_runtime"):
+        (site_packages / "nvidia" / pkg / "bin").mkdir(parents=True)
+    # A package dir with no bin/ subdirectory must not be included.
+    (site_packages / "nvidia" / "ml_py").mkdir(parents=True)
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", _fake_onnxruntime_at(site_packages))
+    monkeypatch.setenv("PATH", "C:\\pre-existing")
+
+    added = main._add_nvidia_dll_dirs_to_path()
+
+    assert len(added) == 4
+    for pkg in ("cudnn", "cublas", "cufft", "cuda_runtime"):
+        expected = str(site_packages / "nvidia" / pkg / "bin")
+        assert expected in added
+        assert expected in os.environ["PATH"]
+    assert os.environ["PATH"].endswith("C:\\pre-existing"), (
+        "must PREPEND, not replace, the existing PATH"
+    )
+
+
+def test_calling_twice_does_not_grow_path(monkeypatch, tmp_path) -> None:
+    """Real regression, found running this repo's own sidecar test suite: a
+    FastAPI TestClient re-triggers the lifespan (and this function) on every
+    test that instantiates the app, in the same process. Without an
+    idempotence check, PATH grows by the same handful of directories on every
+    call -- across a whole pytest session that overflows Windows' 32767-char
+    environment variable ceiling and raises
+    `ValueError: the environment variable is longer than 32767 characters`."""
+    site_packages = tmp_path / "site-packages"
+    (site_packages / "nvidia" / "cudnn" / "bin").mkdir(parents=True)
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", _fake_onnxruntime_at(site_packages))
+    monkeypatch.setenv("PATH", "C:\\pre-existing")
+
+    first = main._add_nvidia_dll_dirs_to_path()
+    path_after_first = os.environ["PATH"]
+    second = main._add_nvidia_dll_dirs_to_path()
+    path_after_second = os.environ["PATH"]
+
+    assert len(first) == 1
+    assert second == [], "the directory is already on PATH -- nothing left to add"
+    assert path_after_second == path_after_first, "PATH must not grow on a repeat call"
+
+
+def test_no_nvidia_directory_is_a_harmless_noop(monkeypatch, tmp_path) -> None:
+    site_packages = tmp_path / "site-packages"
+    monkeypatch.setitem(sys.modules, "onnxruntime", _fake_onnxruntime_at(site_packages))
+    original_path = "C:\\unchanged"
+    monkeypatch.setenv("PATH", original_path)
+
+    added = main._add_nvidia_dll_dirs_to_path()
+
+    assert added == []
+    assert os.environ["PATH"] == original_path, (
+        "a CPU/AMD/Apple install with no nvidia/ directory must not touch PATH at all"
+    )
+
+
+def test_onnxruntime_not_importable_degrades_to_noop(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "onnxruntime", None)  # forces ImportError on re-import
+
+    added = main._add_nvidia_dll_dirs_to_path()  # must not raise
+
+    assert added == []
+
+
+def test_missing_dunder_file_degrades_to_noop(monkeypatch) -> None:
+    """A frozen/zip-imported onnxruntime with no real `__file__` must not crash
+    startup -- this helper is a nice-to-have, not load-bearing enough to risk
+    the sidecar's whole boot sequence over."""
+    monkeypatch.setitem(sys.modules, "onnxruntime", _module_with("onnxruntime"))
+
+    added = main._add_nvidia_dll_dirs_to_path()  # must not raise
+
+    assert added == []

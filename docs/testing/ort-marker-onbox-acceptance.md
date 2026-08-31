@@ -16,7 +16,7 @@
 > Plan of record: [`docs/features/282-ort-pip-consistency-marker.md`](../features/282-ort-pip-consistency-marker.md)
 > Design of record: [`docs/superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md`](../superpowers/specs/2026-08-07-qwen-ort-namespace-chokepoint-design.md)
 > ("### On-box acceptance" section — the six numbered criteria this sheet mirrors)
-> Register rows: [A28–A30](onbox-acceptance-register.md#group-a--the-gpu-box),
+> Register rows: A28 (discharged 2026-08-31, retired, not reused) and [A29–A30](onbox-acceptance-register.md#group-a--the-gpu-box),
 > [E7](onbox-acceptance-register.md#group-e--not-the-gpu-box),
 > [Blocked — AMD/ROCm](onbox-acceptance-register.md#blocked--hardware-not-available)
 > Issue: [#2192](https://github.com/dudarenok-maker/Castwright/issues/2192)
@@ -153,8 +153,8 @@ check fails on a real dependency gap.
 > Unit tests pin the wiring, but **whether CUDA is genuinely used cannot be
 > proven off-box**: get_available_providers() reports CUDA whether or not any
 > session uses it, which is exactly what hid this. Criteria 1 and 2 still need
-> a real load here and rows A28/A29 stay owed — read the provider off a live
-> Kokoro, not off the available-providers list.
+> a real load here — row A28 is discharged (2026-08-31); row A29 stays owed —
+> read the provider off a live Kokoro, not off the available-providers list.
 >
 > **A CPU session here is not automatically this criterion failing (#2631
 > review N6).** This box's VRAM ledger (`admit()`, `main.py`) is a genuine
