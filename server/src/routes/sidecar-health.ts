@@ -27,7 +27,7 @@ import {
   type SidecarDeviceMap,
 } from '../gpu/engine-device-state.js';
 import { TRACKED_ENGINES } from '../gpu/tracked-engines.js';
-import { withCapacityRetry } from '../gpu/capacity-retry.js';
+import { withCapacityRetry, createHardTimeoutAbortReason } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { setProbeSidecarHealthProvider } from '../gpu/sidecar-health-gate.js';
 
@@ -173,6 +173,18 @@ interface SidecarHealthBody {
      used by the VRAM sampler's clean-process gate. Absent on an older sidecar →
      false / null below. */
   qwen_design_ever_loaded?: boolean;
+  /* LIVE (non-latching) counterpart to `qwen_design_ever_loaded` above —
+     true only while a VoiceDesign is actually resident or mid-load/mid-design
+     RIGHT NOW (`self._design is not None or self._design_in_flight.busy` on
+     the sidecar). Unlike the latch, this resets to false once the design
+     finishes/unloads — used by capacity-retry.ts to tell "in-flight now"
+     apart from "ever loaded". Absent on an older sidecar → false below. */
+  qwen_design_resident?: boolean;
+  /* #2678 review finding — the concrete "cuda:N" card a resident QwenEngine
+     (base or design; they share one `_device`) sits on. Absent on an older
+     sidecar → null below. Reused, not re-derived: the sidecar's own
+     `_is_resident("qwen")` probe (main.py) computes it. */
+  qwen_device_key?: string | null;
   recycle_pending?: boolean;
   committed_mb?: number | null;
   vram_reserved_mb?: number | null;
@@ -363,6 +375,10 @@ export interface SidecarHealthResult {
   qwenBase17Loaded?: boolean;
   qwenBase17WeightsPresent?: boolean;
   qwenDesignEverLoaded?: boolean;
+  qwenDesignResident?: boolean;
+  /* #2678 review finding — forwarded verbatim from qwen_device_key (see
+     SidecarHealthBody above). null on an older sidecar or when unresolvable. */
+  qwenDeviceKey?: string | null;
   qwenLoading?: boolean;
   qwenPackageInstalled?: boolean;
   qwenWeightsPresent?: boolean;
@@ -520,6 +536,8 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       recyclePending: body.recycle_pending === true,
       committedMb: typeof body.committed_mb === 'number' ? body.committed_mb : null,
       qwenDesignEverLoaded: body.qwen_design_ever_loaded === true,
+      qwenDesignResident: body.qwen_design_resident === true,
+      qwenDeviceKey: typeof body.qwen_device_key === 'string' ? body.qwen_device_key : null,
       vramReservedMb:
         typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
       vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
@@ -579,7 +597,12 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
   const url = getResolvedSidecarUrl();
   const target = `${url}/load`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LOAD_TIMEOUT_MS);
+  /* Marked with createHardTimeoutAbortReason() (#2678 re-review N3) so
+     withCapacityRetry's design-budget catch block recognises THIS abort as
+     its own hard timeout and converts it to NoCapacityError — as opposed to
+     an unmarked abort (e.g. a user Pause on the synthesis path), which must
+     pass through unconverted. See capacity-retry.ts's own comment. */
+  const timer = setTimeout(() => controller.abort(createHardTimeoutAbortReason('Sidecar /load caller timeout')), LOAD_TIMEOUT_MS);
   try {
     const engine = (((req.body ?? {}) as { engine?: unknown }).engine as string) || 'coqui';
     const upstream = await withCapacityRetry(
@@ -604,9 +627,17 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
   } catch (e) {
     clearTimeout(timer);
     if (e instanceof NoCapacityError) {
+      /* #2678 review finding (F6) — carry the error's own message through
+         rather than a hardcoded "stop the analyzer" remedy: NoCapacityError's
+         constructor (tts-errors.ts) already folds `blockers` into `.message`,
+         naming whatever is actually holding the VRAM (analyzer, Kokoro, or —
+         since e92cf9bf/ec98bf40 — a resident voice design) with its own
+         actionable remedy, falling back to the generic "free VRAM or attach a
+         second GPU" line only when `blockers` is empty. Mirrors the pattern
+         already used by voice-sample.ts's /synthesize NoCapacityError catch. */
       return res.status(503).json({
         status: 'error',
-        error: 'GPU has no capacity to load this model right now — free VRAM (e.g. stop the analyzer) and retry.',
+        error: e.message,
       });
     }
     const err = e as { name?: string; message?: string; cause?: unknown };

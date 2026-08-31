@@ -39,7 +39,9 @@ function highestSemverTag(tagNames) {
     })
     .filter(Boolean);
   if (parsed.length === 0) return null;
-  parsed.sort((a, b) => b.parts[0] - a.parts[0] || b.parts[1] - a.parts[1] || b.parts[2] - a.parts[2]);
+  parsed.sort(
+    (a, b) => b.parts[0] - a.parts[0] || b.parts[1] - a.parts[1] || b.parts[2] - a.parts[2],
+  );
   return parsed[0].name;
 }
 
@@ -47,7 +49,7 @@ module.exports = { latestReleaseTag, highestSemverTag };
 
 // ---- CLI (acceptance-tested, not unit-tested) ----
 const { execFileSync } = require('node:child_process');
-const { existsSync } = require('node:fs');
+const { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync } = require('node:fs');
 const path = require('node:path');
 // #2216 — scripts/git-env.mjs is ESM; this file is CommonJS
 // ("type": "commonjs" in pinokio-scripts/package.json). `require()` of an
@@ -91,12 +93,153 @@ async function resolveTag() {
     .filter(Boolean);
   const best = highestSemverTag(tags);
   if (!best) {
-    process.stderr.write('GitHub Releases API unreachable and no local vX.Y.Z tag to fall back to.\n');
+    process.stderr.write(
+      'GitHub Releases API unreachable and no local vX.Y.Z tag to fall back to.\n',
+    );
     process.exit(3);
   }
   process.stderr.write(`[resolve-release] API unreachable; falling back to local tag ${best}\n`);
   return best;
 }
+
+const REQUIREMENTS_DIR = path.join('server', 'tts-sidecar', 'requirements');
+
+/**
+ * Force a fresh re-checkout of server/tts-sidecar/requirements/*.txt from the
+ * index. `git checkout <tag>` alone is a no-op for these files on a clone
+ * whose working tree already has stale CRLF bytes: text=auto's clean filter
+ * normalizes CRLF->LF before comparing to the LF blob, so git considers the
+ * file unchanged and never rewrites it on disk (see .gitattributes and
+ * #2588 pass-2/#2596). Deleting the files first removes that "unchanged"
+ * comparison target, so the following checkout re-materializes them from the
+ * index using the .gitattributes eol=lf pin. Scoped to REQUIREMENTS_DIR so it
+ * cannot touch anything else in the tree.
+ *
+ * Deletion is guarded by backup + verify: files are read into memory before
+ * deletion, checkout is verified to succeed, and if it fails the backup is
+ * restored before throwing. This ensures the directory is never left empty
+ * on a restore failure.
+ *
+ * ONE-UPDATE LAG: Because Pinokio loads `resolve-release.js` from the CURRENTLY
+ * checked-out release before the update proceeds, a user updating FROM a release
+ * that predates this function will run the old version (which lacks this call
+ * entirely). The fix only takes effect starting with their NEXT update, once the
+ * version containing this call is itself checked out. See update.js lines 19–28
+ * for the documented mechanism.
+ *
+ * @param {string} [cwd]
+ * @throws {Error} if git checkout fails and recovery fails
+ */
+function renormalizeRequirementsCrlf(cwd = process.cwd()) {
+  const dir = path.join(cwd, REQUIREMENTS_DIR);
+  if (!existsSync(dir)) return;
+
+  // Identify .txt files to be re-normalized
+  const txtFiles = readdirSync(dir).filter((name) => name.endsWith('.txt'));
+  if (txtFiles.length === 0) return;
+
+  // Backup file contents before deletion
+  const backup = {};
+  for (const name of txtFiles) {
+    const filePath = path.join(dir, name);
+    try {
+      backup[name] = readFileSync(filePath);
+    } catch {
+      // If a file can't be read (permissions, in-use, etc.), skip it.
+      // We'll still attempt the checkout; if it fails, we recover what we backed up.
+    }
+  }
+
+  // Delete the .txt files to reset the "unchanged" comparison target
+  for (const name of txtFiles) {
+    try {
+      unlinkSync(path.join(dir, name));
+    } catch {
+      // If deletion fails (e.g., file in use), restore backup immediately
+      for (const [bakName, bakContent] of Object.entries(backup)) {
+        try {
+          writeFileSync(path.join(dir, bakName), bakContent);
+        } catch {
+          /* swallow recovery failures here; will be reported below */
+        }
+      }
+      throw new Error(
+        `Failed to delete requirements file '${name}' during CRLF normalization. ` +
+        `Attempted to restore backup. Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
+      );
+    }
+  }
+
+  // Restore files via git checkout
+  try {
+    execFileSync('git', ['checkout', '--', REQUIREMENTS_DIR], {
+      cwd,
+      stdio: 'inherit',
+      env: scrubGitEnv(),
+      windowsHide: true,
+    });
+  } catch (err) {
+    // git checkout failed. Restore from backup and throw a clear error.
+    if (Object.keys(backup).length > 0) {
+      for (const [name, content] of Object.entries(backup)) {
+        try {
+          writeFileSync(path.join(dir, name), content);
+        } catch {
+          /* swallow recovery failures; will be reported in the error below */
+        }
+      }
+    }
+    throw new Error(
+      `Failed to normalize requirements CRLF via 'git checkout -- ${REQUIREMENTS_DIR}': ` +
+      `${err.message}. Attempted to restore from backup. ` +
+      `Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
+    );
+  }
+
+  // Verify that checkout actually restored the files
+  const restored = readdirSync(dir).filter((name) => name.endsWith('.txt'));
+  if (restored.length === 0) {
+    // Checkout succeeded (didn't throw) but produced no files. Restore backup and error.
+    for (const [name, content] of Object.entries(backup)) {
+      try {
+        writeFileSync(path.join(dir, name), content);
+      } catch {
+        /* swallow recovery failures */
+      }
+    }
+    throw new Error(
+      `git checkout succeeded but no .txt files were restored to ${REQUIREMENTS_DIR}/. ` +
+      `Attempted to restore from backup. Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
+    );
+  }
+
+  // Verify each backed-up file was restored. Only verify files that were
+  // successfully backed up — files that failed to read are not our concern
+  // (e.g., permissions, in-use), as they should be restored by git checkout.
+  // Files that were never in git (untracked) won't come back from 'git checkout --'.
+  // Collect ALL missing files before throwing, so the error names all of them.
+  const missingBackedupFiles = [];
+  for (const name of Object.keys(backup)) {
+    if (!existsSync(path.join(dir, name))) {
+      missingBackedupFiles.push(name);
+      // This file failed to be restored by git checkout. Restore from backup.
+      try {
+        writeFileSync(path.join(dir, name), backup[name]);
+      } catch {
+        /* swallow recovery failures; will be reported in error below */
+      }
+    }
+  }
+  if (missingBackedupFiles.length > 0) {
+    throw new Error(
+      `git checkout succeeded but backed-up file(s) are missing from ${REQUIREMENTS_DIR}/: ` +
+      missingBackedupFiles.join(', ') + '. ' +
+      `Attempted to restore from backup. Please verify ${REQUIREMENTS_DIR}/ files are intact and retry.`
+    );
+  }
+}
+
+module.exports.renormalizeRequirementsCrlf = renormalizeRequirementsCrlf;
 
 async function main() {
   execFileSync('git', ['fetch', '--tags', '--force'], {
@@ -106,7 +249,12 @@ async function main() {
   });
   const tag = await resolveTag();
   process.stderr.write(`[resolve-release] checking out ${tag}\n`);
-  execFileSync('git', ['checkout', tag], { stdio: 'inherit', env: scrubGitEnv(), windowsHide: true });
+  execFileSync('git', ['checkout', tag], {
+    stdio: 'inherit',
+    env: scrubGitEnv(),
+    windowsHide: true,
+  });
+  renormalizeRequirementsCrlf();
   // Guard against a release that predates Pinokio support: git checkout to such a
   // tag would DELETE pinokio-scripts/ from the tree, breaking Start/Stop/Update.
   if (!existsSync('pinokio-scripts/start.js')) {

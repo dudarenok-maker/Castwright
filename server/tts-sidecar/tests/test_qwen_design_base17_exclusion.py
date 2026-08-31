@@ -22,6 +22,7 @@ import sys
 import tempfile
 import types
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -56,10 +57,15 @@ def test_design_voice_evicts_resident_base17(monkeypatch):
 
     # Pretend the 1.7B-Base is resident (left over from a prior mint).
     qeng._base17 = object()
-    evicted = {"called": False}
+    evicted = {"called": False, "wait_seconds": None, "poll_seconds": None}
 
-    def _fake_unload_base17():
+    def _fake_unload_base17(
+        wait_seconds: float = 0.0,
+        poll_seconds: float = main._BASE17_CONTENTION_POLL_S_DEFAULT,
+    ):
         evicted["called"] = True
+        evicted["wait_seconds"] = wait_seconds
+        evicted["poll_seconds"] = poll_seconds
         qeng._base17 = None  # simulate the real unload clearing the model
 
     monkeypatch.setattr(qeng, "unload_base17", _fake_unload_base17)
@@ -88,6 +94,12 @@ def test_design_voice_evicts_resident_base17(monkeypatch):
     qeng.design_voice("qwen-narrator-preview", "A warm voice.", "english", "Hello there.")
 
     assert evicted["called"] is True, "resident 1.7B-Base must be evicted before the VoiceDesign load"
+    assert evicted["wait_seconds"] == main._BASE17_CONTENTION_WAIT_S_DEFAULT, (
+        "unload_base17 must be called with wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT to wait for contention"
+    )
+    assert evicted["poll_seconds"] == main._BASE17_CONTENTION_POLL_S_DEFAULT, (
+        "unload_base17 must be called with poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT"
+    )
     assert captured["base17_resident_during_design"] is False, (
         "1.7B-Base must NOT be resident during the VoiceDesign forward (OOM on 8 GB)"
     )
@@ -171,4 +183,87 @@ def test_mint_variant_evicts_resident_design(monkeypatch):
     assert evicted["called"] is True, "resident VoiceDesign must be evicted before the 1.7B-Base load"
     assert captured["design_resident_at_base17_load"] is False, (
         "VoiceDesign must NOT be resident when the 1.7B-Base loads (OOM on 8 GB)"
+    )
+
+
+def test_design_voice_evicts_base17_outside_kokoro_design_block(monkeypatch):
+    """design_voice must evict resident 1.7B-Base BEFORE entering the
+    _VD_KOKORO.design() block, not inside it. Holding a wait inside the
+    block stalls every Kokoro synth while _design_active is set (see #2752).
+    The eviction-before-load ordering still holds since the VoiceDesign
+    load happens later inside the block.
+
+    This test pin: that the arbiter's _design_active flag is False when
+    base17 eviction runs, proving it happens BEFORE the design block, not
+    inside it. If the eviction were inside the block, _design_active would
+    be True at that moment."""
+    qeng = main.QwenEngine()
+    _quiet_kokoro()
+
+    # Pretend the 1.7B-Base is resident (left over from a prior mint).
+    qeng._base17 = object()
+
+    # Capture the state of the arbiter's flag when eviction runs
+    eviction_state = {"design_active_during_eviction": None, "evicted": False}
+
+    def _fake_unload_base17(
+        wait_seconds: float = 0.0,
+        poll_seconds: float = main._BASE17_CONTENTION_POLL_S_DEFAULT,
+    ):
+        # Capture _VD_KOKORO._design_active at the moment the eviction runs.
+        # If eviction is OUTSIDE the design block (correct), this should be False.
+        # If eviction is INSIDE the block (bug), this would be True.
+        eviction_state["design_active_during_eviction"] = main._VD_KOKORO._design_active
+        eviction_state["evicted"] = True
+        qeng._base17 = None  # simulate the real unload clearing the model
+
+    design_forward_called = {"before_eviction_check": False}
+
+    def _fake_ensure_design_loaded(device=None):
+        # This runs inside the design block, so _design_active should be True here.
+        # Mark that we reached this point to verify the eviction happened first.
+        design_forward_called["before_eviction_check"] = main._VD_KOKORO._design_active
+        if qeng._base17 is not None:
+            raise AssertionError(
+                "Design model load started while 1.7B-Base was still resident! "
+                "Base17 eviction must happen OUTSIDE the design block."
+            )
+
+    monkeypatch.setattr(qeng, "unload_base17", _fake_unload_base17)
+    monkeypatch.setattr(qeng, "_ensure_design_loaded", _fake_ensure_design_loaded)
+
+    class _FakeDesign:
+        def generate_voice_design(self, text, language, instruct):
+            return [np.zeros(10, dtype="float32")], 24000
+
+    class _FakeBase:
+        def create_voice_clone_prompt(self, ref_audio, ref_text):
+            return {"prompt": True}
+
+        def generate_voice_clone(self, text, language, voice_clone_prompt):
+            return [np.zeros(10, dtype="float32")], 24000
+
+    qeng._design = _FakeDesign()
+    qeng._base = _FakeBase()
+    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda device=None: None)
+    qeng._voices_dir = tempfile.mkdtemp()
+
+    # Mock torch before it's imported
+    with mock.patch.dict(sys.modules, {"torch": mock.MagicMock()}):
+        monkeypatch.setattr("torch.save", lambda *a, **k: None)
+        qeng.design_voice("qwen-narrator-preview", "A warm voice.", "english", "Hello there.")
+
+    # The key assertion: eviction must run while the arbiter's flag is False,
+    # proving the eviction happens OUTSIDE the design() context manager, not inside.
+    assert eviction_state["evicted"] is True, (
+        "Base17 eviction must have been called during design_voice()"
+    )
+    assert eviction_state["design_active_during_eviction"] is False, (
+        "Eviction must run BEFORE entering the _VD_KOKORO.design() block "
+        "(where _design_active would be True). If this fails, the eviction "
+        "has regressed to running inside the block, which stalls Kokoro synths."
+    )
+    # Verify the design forward ran inside the block where _design_active is True
+    assert design_forward_called["before_eviction_check"] is True, (
+        "Design model load must run inside the _VD_KOKORO.design() block"
     )

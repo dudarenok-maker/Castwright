@@ -29,7 +29,7 @@ const TIER_FROM_SECTION = { Must: 'must', Should: 'should', Could: 'could' };
 // predates the Android companion area and doesn't; this is a fresh, local
 // copy scoped to just extracting row order, not full item parsing, so it's
 // simpler to keep it self-contained than to reuse that script's parser.
-const LEADING_ID = /^`(fe|srv|side|ops|fs|app)-(\d+)`/;
+const LEADING_ID = /^\u0060(fe|srv|side|ops|fs|app)-(\d+)\u0060/;
 
 function info(msg) { process.stdout.write(`${msg}\n`); }
 // process.exit() truncates pending async stdout writes on POSIX pipes (sync
@@ -74,7 +74,7 @@ export function parseBacklogOrder(markdown) {
       position = 0;
       continue;
     }
-    if (/^##\s+(Won't|Retired numbering)\b/.test(line)) {
+    if (/^##\s+(Won\u0027t|Retired numbering)\b/.test(line)) {
       tier = null;
       continue;
     }

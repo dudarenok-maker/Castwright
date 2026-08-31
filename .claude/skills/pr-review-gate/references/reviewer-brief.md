@@ -54,6 +54,11 @@ recite:
    reused as evidence for another.
 10. **One instance fixed, the class left armed** — sibling call sites, other
     entry points, the second copy.
+11. **A fixture that invents an external tool's output contract** — written
+    from belief rather than from a recorded run, so oracle and code share one
+    wrong shape and the suite is green. Checkable: is the fixture traceable
+    to real output? Red-before/green-after does not settle it — it measures
+    conformance to the fixture (PR #2795 — `npm audit --json`'s `via[]`).
 
 ### Keeping the catalogue current
 

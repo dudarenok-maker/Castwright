@@ -1028,17 +1028,26 @@ def test_unload_base17_is_not_blocked_by_a_cold_load_during_batch_synth(
         except BaseException as e:  # noqa: BLE001 - asserted on below
             batch_errors.append(e)
 
+    stop_errors: list[BaseException] = []
+
+    def run_stop() -> None:
+        try:
+            engine.unload_base17()
+        except BaseException as e:  # noqa: BLE001 - asserted on below
+            stop_errors.append(e)
+
     t = threading.Thread(target=run_batch, daemon=True)
     t.start()
 
     assert entry.wait(5), "the (simulated) cold 1.7B-Base load never started"
 
-    stop = threading.Thread(target=engine.unload_base17, daemon=True)
+    stop = threading.Thread(target=run_stop, daemon=True)
     stop.start()
     stop.join(0.5)
     assert not stop.is_alive(), (
         "unload_base17() was blocked behind the parked cold 1.7B-Base load"
     )
+    assert stop_errors == [], f"unload_base17 raised: {stop_errors!r}"
 
     release.set()
     t.join(5)

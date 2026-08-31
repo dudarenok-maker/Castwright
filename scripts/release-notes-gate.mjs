@@ -157,7 +157,7 @@ export function findMojibake(text) {
    that safe by echoing every marker it honours on every run (pass or fail) —
    see formatHonouredEcho — so an accidental arming is visible, never silent. */
 const ALLOW_MARKER_RE = /<!--[ \t]*release-notes-gate:[ \t]*allow\b([^\n\r]*?)-->/g;
-const ALLOW_LITERAL_RE = /"([^"]*)"/g;
+const ALLOW_LITERAL_RE = new RegExp('"([^"]*)"', 'g');
 
 /** Collect every literal named by an allowlist marker in `text` (markers and
     literals-per-marker are both many-per-file). A marker never spans a line

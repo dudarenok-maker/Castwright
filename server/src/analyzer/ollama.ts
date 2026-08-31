@@ -36,6 +36,7 @@ import { z } from 'zod';
 import { sampleAndRecordVram } from './model-vram-stats.js';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
 import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
+import { detectOllamaGpuSplit } from '../gpu/ollama-gpu-split.js';
 import { getResolvedOllamaUrl, getCachedUserSettings } from '../workspace/user-settings.js';
 import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { configValue } from '../config/resolver.js';
@@ -190,6 +191,12 @@ const DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS = 30;
    whole window). Clamped to 0 on a CPU-only box regardless of the configured
    value. Orthogonal to the per-model map — a deliberate safety rail. */
 const RAM_HEAVY_MODELS = new Set(['qwen3.5:9b']);
+
+/* srv-2367: device-signature ("0,1") of every GPU split already warned about
+   this run, so the warning fires once per distinct split rather than once
+   per chat() call (Stage 1/2 call chat() per chapter — dozens of times per
+   book). A full server restart clears this naturally; no TTL needed. */
+const warnedGpuSplitSignatures = new Set<string>();
 
 /** Strip a trailing ':latest' only (Ollama treats bare == :latest). Leaves real
     tags like 'qwen3.5:9b' untouched. */
@@ -838,6 +845,68 @@ export class OllamaAnalyzer implements Analyzer {
       // Env-gated (Global Constraints) so fetch-count tests can opt out; best-effort.
       if (process.env.CASTWRIGHT_VRAM_SAMPLE !== '0') {
         await sampleAndRecordVram(this.url, this.model, resolveAnalyzerNumCtx());
+      }
+      /* srv-2367: warn once per distinct GPU split that would have fit on a
+         single device — independently best-effort of the VRAM sample above,
+         and never trusting detectOllamaGpuSplit's own never-throws contract
+         blindly from this call site (belt and suspenders). Also warns when
+         expectedDevice is set and the detected placement disagrees. */
+      try {
+        const splitResult = await detectOllamaGpuSplit();
+        const expectedDevice = configValue<string>('analyzer.ollama.expectedDevice');
+
+        /* Check for multi-GPU split that would fit on a single device. Only
+           warn if we have complete data; a split with unavailable VRAM data
+           means we can't confidently assess whether it would fit, so don't
+           suggest a migration that might not actually help. */
+        if (splitResult.split && splitResult.wouldFitSingleDevice && !splitResult.dataUnavailable) {
+          const signature = splitResult.deviceIndices.join(',');
+          if (!warnedGpuSplitSignatures.has(signature)) {
+            warnedGpuSplitSignatures.add(signature);
+            console.warn(
+              `[ollama] analyzer model split across GPUs ${signature} (would fit on a single device) — see docs/local-llm.md "Pinning the analyzer to 100% GPU"`,
+            );
+          }
+        }
+
+        /* Check for expectedDevice mismatch: either a split touching ANY device
+           outside the expected one, or a single device that isn't the expected one.
+           Use .every() semantics (not .includes()): a split that touches ANY
+           device outside expected counts as a mismatch, just like on the frontend.
+           Guard against NaN (non-numeric expectedDevice) to fail safe: a malformed
+           value like 'gpu0' would become NaN and compare false against every device
+           index, producing a bogus always-mismatch warning. Mirror the frontend's
+           !Number.isNaN guard (advanced.tsx line 314/323).
+           Also mirror the frontend's dataUnavailable suppression: when the VRAM data
+           is inconclusive (driver doesn't expose per-process memory), we can't
+           confidently assert a mismatch, so suppress the warning. */
+        if (expectedDevice && splitResult.reachable && !splitResult.dataUnavailable) {
+          const expectedIndex = Number(expectedDevice);
+          if (!Number.isNaN(expectedIndex)) {
+            const isMismatch =
+              (splitResult.split && !splitResult.deviceIndices.every((idx) => idx === expectedIndex)) ||
+              /* Mismatch only fires when there's exactly one resident Ollama process/PID.
+                 With 2+ distinct PIDs on different GPUs (e.g., analyzer + design model),
+                 ambiguous which model expectedDevice refers to, so skip the warning. */
+              (!splitResult.split && splitResult.deviceIndices.length === 1 && splitResult.deviceIndices[0] !== expectedIndex);
+
+            if (isMismatch) {
+              /* Include both the device list and expectedDevice in the signature so
+                 each distinct mismatch state is warned once (rate-limited per
+                 device signature + expected state pair). */
+              const mismatchSignature = `${splitResult.deviceIndices.join(',')}-expected:${expectedDevice}`;
+              if (!warnedGpuSplitSignatures.has(mismatchSignature)) {
+                warnedGpuSplitSignatures.add(mismatchSignature);
+                const deviceDesc = splitResult.deviceIndices.length === 0 ? 'unknown' : splitResult.deviceIndices.join(',');
+                console.warn(
+                  `[ollama] analyzer GPU device mismatch: expected GPU ${expectedDevice}, detected on GPU ${deviceDesc}`,
+                );
+              }
+            }
+          }
+        }
+      } catch {
+        /* best-effort; never let a detector bug surface as an analyzer failure */
       }
       /* fs-analyzer-eval-telemetry: best-effort decode-timing capture, gated
          by the analyzer.evalStats.enabled knob so an operator can disable it.

@@ -282,6 +282,40 @@ describe('reconcileResidentQwenTiers (run-start VRAM hygiene)', () => {
     global.fetch = vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch;
     await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBe(false);
   });
+
+  it('#2790 — checks /unload response status: non-ok (e.g. base17 contention on another tier) does not report success', async () => {
+    /* #2752's regression: if the base17 load is in flight when Stop presses
+       /unload {model:'1.7b'}, unload_base17() raises unhandled → 500 response.
+       The old code caught ALL errors and treated them as success, then told
+       the caller the tier was evicted when it was not. The second-stage
+       reconcile on the Node side compounded this: it checked neither res.ok
+       nor threw on error, so a 500 from the sidecar was silently swallowed,
+       and the caller was told the tier was free when it was not — risking
+       loading two tiers together on an 8 GB card (OOM).
+       This test drops `keep17: true` (so only the 0.6B tier's bare /unload is
+       issued) and has that single call return a non-ok response, confirming
+       the node side now checks res.ok and does not report success when the
+       sidecar returns non-ok — the same check that protects the 1.7B/base17
+       path #2752 actually regressed. */
+    global.fetch = vi
+      .fn()
+      .mockImplementationOnce(async (url: string, _init?: RequestInit) => {
+        if (url.endsWith('/health')) return { ok: true, json: async () => ({ qwen_loaded: true, qwen_base17_loaded: true }) };
+        throw new Error(`unexpected ${url}`);
+      })
+      .mockImplementationOnce(async (_url: string, _init?: RequestInit) => {
+        // The 0.6B /unload (no `model` field — keep17: true drops the 0.6B) returns 500.
+        return { ok: false, status: 500, json: async () => ({}) };
+      })
+      .mockImplementationOnce(async (url: string, _init?: RequestInit) => {
+        // Subsequent /health calls succeed normally
+        if (url.endsWith('/health')) return { ok: true, json: async () => ({ qwen_loaded: true, qwen_base17_loaded: true }) };
+        throw new Error(`unexpected ${url}`);
+      });
+
+    await expect(reconcileResidentQwenTiers({ keep06: false, keep17: true })).resolves.toBe(false);
+    // Caller does NOT get told the tier was evicted
+  });
 });
 
 describe('ensureSidecarEngineReady — withGpuLoad gate', () => {

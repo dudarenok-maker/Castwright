@@ -5,15 +5,19 @@
 # whatever is listening there from a worktree whose own sidecar lives on a
 # different port — typically the PRIMARY checkout's sidecar, mid-generation.
 #
-# The Node server already records the port it actually owns in
-# .run\tts.owner.json (SidecarOwnerNote, server/src/tts/sidecar-owner.ts) the
-# moment it claims ownership, so read THAT first. But the note is absent in
-# three routine states (N29): after a clean shutdown (releaseSidecarOwnership
-# unlinks it), with autoStartSidecar off (the note is never written), or when
-# this checkout's own server\.env sets LOCAL_TTS_PORT but no sidecar has
-# claimed it yet. Falling back to the factory default 9000 there is the one
-# dangerous value — it is guaranteed to belong to a DIFFERENT checkout in
-# exactly those states, and this script force-kills whatever answers on it.
+# The Node server already records the port it actually owns in a port-keyed
+# .run\tts.owner.<port>.json (SidecarOwnerNote, server/src/tts/sidecar-owner.ts)
+# the moment it claims ownership, so read THAT first — glob the run dir for
+# tts.owner.*.json and trust it only when exactly one such file exists (two or
+# more means this run dir is shared across ports, #2641, and neither can be
+# trusted over the other; zero means no sidecar has claimed a note here). But
+# the note is absent in three routine states (N29): after a clean shutdown
+# (releaseSidecarOwnership unlinks it), with autoStartSidecar off (the note is
+# never written), or when this checkout's own server\.env sets LOCAL_TTS_PORT
+# but no sidecar has claimed it yet. Falling back to the factory default 9000
+# there is the one dangerous value — it is guaranteed to belong to a DIFFERENT
+# checkout in exactly those states, and this script force-kills whatever
+# answers on it.
 # So the fallback instead reads LOCAL_TTS_PORT out of THIS checkout's own
 # server\.env (server/src/load-env.ts's source, and the same file
 # wt-new.mjs:166 writes per-worktree) — the port this checkout is actually
@@ -160,18 +164,31 @@ function Get-SidecarSweepPort {
         [string] $RunDir,
         [string] $ServerEnvPath
     )
-    $notePath = Join-Path $RunDir "tts.owner.json"
-    if (Test-Path $notePath) {
+    $noteFiles = @(Get-ChildItem -Path $RunDir -Filter 'tts.owner.*.json' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -cmatch '^tts\.owner\.[0-9]+\.json$' })
+
+    # Exactly one note file: read and use it (if valid).
+    if ($noteFiles.Count -eq 1) {
         try {
-            $note = Get-Content $notePath -Raw -ErrorAction Stop | ConvertFrom-Json
-            if ($note.port -is [int] -or $note.port -is [long] -or $note.port -is [double]) {
+            $note = Get-Content $noteFiles[0].FullName -Raw -ErrorAction Stop | ConvertFrom-Json
+            # Windows PowerShell 5.1's ConvertFrom-Json deserialises every JSON
+            # number as [double] (pwsh7 may give [long]/[int]) — [int]$note.port
+            # on a [double] ROUNDS rather than rejects, so a fractional port
+            # (e.g. a corrupt "9000.5") would silently resolve to 9000, the one
+            # value this resolver must never guess. Mirror .mjs's
+            # Number.isInteger() semantics: a [double] is only accepted when it
+            # has no fractional component.
+            $isWholeNumber = ($note.port -is [int]) -or ($note.port -is [long]) -or
+                (($note.port -is [double]) -and ($note.port -eq [math]::Truncate($note.port)))
+            if ($isWholeNumber) {
                 $port = [int]$note.port
                 if ($port -gt 0 -and $port -lt 65536) { return $port }
             }
         } catch {
-            # Corrupt/unreadable note — fall through to the server\.env fallback.
+            # Unreadable or corrupt — fall through to server\.env fallback.
         }
     }
+    # Zero notes, more than one note, or corrupt: ambiguous or absent — fall back to server\.env.
     if ($ServerEnvPath) { return Get-LocalTtsPortFromServerEnv -ServerEnvPath $ServerEnvPath }
     return $null
 }

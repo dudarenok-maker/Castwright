@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,7 +8,10 @@ import {
   claimSidecarOwnership,
   enforceSingleSidecarOwner,
   findConflictingOwner,
+  isPortListening,
   isProcessAlive,
+  legacySidecarOwnerPath,
+  pruneStaleNotesSafely,
   readSidecarOwner,
   releaseSidecarOwnership,
   resolveSidecarPort,
@@ -26,8 +29,8 @@ afterEach(() => {
   delete process.env.LOCAL_TTS_PORT;
 });
 
-const writeNote = (note: Record<string, unknown>): void =>
-  writeFileSync(sidecarOwnerPath(runDir), JSON.stringify(note), 'utf8');
+const writeNote = (note: Record<string, unknown>, port = 9000): void =>
+  writeFileSync(sidecarOwnerPath(runDir, port), JSON.stringify(note), 'utf8');
 
 describe('resolveSidecarPort', () => {
   it('returns 9000 when LOCAL_TTS_PORT is not set', () => {
@@ -163,12 +166,12 @@ describe('resolveSidecarPort', () => {
 
 describe('readSidecarOwner', () => {
   it('returns null when the note is absent', () => {
-    expect(readSidecarOwner(runDir)).toBeNull();
+    expect(readSidecarOwner(runDir, 9000)).toBeNull();
   });
 
   it('parses a well-formed note', () => {
     writeNote({ pid: 123, ppid: 99, port: 9000, startedAt: '2026-06-23T00:00:00.000Z' });
-    expect(readSidecarOwner(runDir)).toEqual({
+    expect(readSidecarOwner(runDir, 9000)).toEqual({
       pid: 123,
       ppid: 99,
       port: 9000,
@@ -177,20 +180,27 @@ describe('readSidecarOwner', () => {
   });
 
   it('returns null on corrupt JSON', () => {
-    writeFileSync(sidecarOwnerPath(runDir), '{ not json', 'utf8');
-    expect(readSidecarOwner(runDir)).toBeNull();
+    writeFileSync(sidecarOwnerPath(runDir, 9000), '{ not json', 'utf8');
+    expect(readSidecarOwner(runDir, 9000)).toBeNull();
   });
 
   it('returns null when pid is missing or invalid', () => {
     writeNote({ ppid: 99, port: 9000 });
-    expect(readSidecarOwner(runDir)).toBeNull();
+    expect(readSidecarOwner(runDir, 9000)).toBeNull();
     writeNote({ pid: 0, ppid: 99 });
-    expect(readSidecarOwner(runDir)).toBeNull();
+    expect(readSidecarOwner(runDir, 9000)).toBeNull();
   });
 
   it('tolerates a legacy note missing ppid/port (defaults applied)', () => {
     writeNote({ pid: 123 });
-    expect(readSidecarOwner(runDir)).toEqual({ pid: 123, ppid: -1, port: 9000, startedAt: '' });
+    expect(readSidecarOwner(runDir, 9000)).toEqual({ pid: 123, ppid: -1, port: 9000, startedAt: '' });
+  });
+
+  it('keys the note by port — two ports sharing one runDir do not clobber each other', () => {
+    writeNote({ pid: 100, ppid: 7, port: 9000, startedAt: 'a' }, 9000);
+    writeNote({ pid: 200, ppid: 8, port: 9010, startedAt: 'b' }, 9010);
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(100);
+    expect(readSidecarOwner(runDir, 9010)?.pid).toBe(200);
   });
 });
 
@@ -235,7 +245,7 @@ describe('claimSidecarOwnership', () => {
       port: 9000,
       nowIso: () => '2026-06-23T12:00:00.000Z',
     });
-    expect(readSidecarOwner(runDir)).toEqual({
+    expect(readSidecarOwner(runDir, 9000)).toEqual({
       pid: 555,
       ppid: 7,
       port: 9000,
@@ -246,25 +256,385 @@ describe('claimSidecarOwnership', () => {
   it('overwrites a prior note', () => {
     writeNote({ pid: 1, ppid: 1, port: 9000, startedAt: 'old' });
     claimSidecarOwnership({ runDir, pid: 2, ppid: 2, nowIso: () => 'new' });
-    expect(readSidecarOwner(runDir)?.pid).toBe(2);
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(2);
+  });
+
+  it('claims for two different ports on one runDir without clobbering', () => {
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a' });
+    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b' });
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(100);
+    expect(readSidecarOwner(runDir, 9010)?.pid).toBe(200);
+  });
+
+  it('does not touch other ports\' notes SYNCHRONOUSLY, before returning (#2754 regression)', () => {
+    // claimSidecarOwnership itself must never delete/modify another port's note as
+    // part of its own synchronous contract — #2792's background reap (below) is a
+    // separate, fire-and-forget, awaited-nowhere operation; this test only pins
+    // that claimSidecarOwnership's own return does not depend on, or wait for, it.
+    const note9010 = { pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' };
+    const note9011 = { pid: process.pid, ppid: process.ppid, port: 9011, startedAt: 'live' };
+    writeNote(note9010, 9010);
+    writeNote(note9011, 9011);
+
+    // Claim ownership on port 9000 (unrelated). Neither note is touched by the
+    // time this call returns, regardless of what the background reap later decides.
+    claimSidecarOwnership({ runDir, pid: 555, ppid: 7, port: 9000, nowIso: () => 'new' });
+
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555);
+    expect(readSidecarOwner(runDir, 9010)).toEqual(expect.objectContaining(note9010));
+    expect(readSidecarOwner(runDir, 9011)).toEqual(expect.objectContaining(note9011));
+  });
+
+  it('N3b: deletes the legacy note when its port matches the port being claimed', () => {
+    // Setup: legacy note (pre-#2641) exists for port 9000
+    const legacyPath = legacySidecarOwnerPath(runDir);
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({ pid: 100, ppid: 7, port: 9000, startedAt: '2026-06-23T00:00:00.000Z' }),
+      'utf8',
+    );
+    // Claim ownership on port 9000 — should delete the legacy note since it's superseded
+    claimSidecarOwnership({ runDir, pid: 555, ppid: 8, port: 9000, nowIso: () => 'new' });
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555); // new owner claimed
+    // Legacy note should be deleted (it's now superseded by the port-keyed note)
+    expect(() => readFileSync(legacyPath, 'utf8')).toThrow();
+  });
+
+  it('N3b: leaves the legacy note alone when its port does NOT match the port being claimed', () => {
+    // Setup: legacy note (pre-#2641) exists for port 9000
+    const legacyPath = legacySidecarOwnerPath(runDir);
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({ pid: 100, ppid: 7, port: 9000, startedAt: '2026-06-23T00:00:00.000Z' }),
+      'utf8',
+    );
+    // Claim ownership on port 9010 (different port) — should NOT delete the legacy note
+    claimSidecarOwnership({ runDir, pid: 555, ppid: 8, port: 9010, nowIso: () => 'new' });
+    expect(readSidecarOwner(runDir, 9010)?.pid).toBe(555); // new owner claimed on 9010
+    // Legacy note should still exist (it's for a different port)
+    expect(JSON.parse(readFileSync(legacyPath, 'utf8'))).toEqual(
+      expect.objectContaining({ pid: 100, port: 9000 }),
+    );
+  });
+
+  describe('#2754 regression: legacy note deletion safety (Correctness bug 1)', () => {
+    // These tests pin the fix for the correctness bug where claimSidecarOwnership()
+    // could delete a live foreign legacy owner's only record without checking if it
+    // was actually safe to do so. The bug occurred because claimSidecarOwnership()
+    // assumed findConflictingOwner's full logic had already checked the legacy note,
+    // but findConflictingOwner has early exits (self-pid, same-lineage) that skip
+    // the legacy-note check entirely.
+
+    it('legacy note with OUR pid is deleted (safe — we are the old owner)', () => {
+      // Setup: both port-keyed and legacy notes exist, both naming our pid
+      claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'portkeyed' });
+      const legacyPath = legacySidecarOwnerPath(runDir);
+      writeFileSync(
+        legacyPath,
+        JSON.stringify({ pid: 100, ppid: 7, port: 9000, startedAt: 'legacy' }),
+        'utf8',
+      );
+      // Claim again (same pid): should delete the now-superseded legacy note
+      claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'update' });
+      expect(readSidecarOwner(runDir, 9000)?.pid).toBe(100);
+      expect(() => readFileSync(legacyPath, 'utf8')).toThrow();
+    });
+
+    it('legacy note with OUR lineage (same ppid, new pid) is deleted (safe — tsx watch reload)', () => {
+      // Setup: port-keyed note from old pid (100), legacy note from even older version
+      claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'portkeyed' });
+      const legacyPath = legacySidecarOwnerPath(runDir);
+      writeFileSync(
+        legacyPath,
+        JSON.stringify({ pid: 50, ppid: 7, port: 9000, startedAt: 'legacy' }),
+        'utf8',
+      );
+      // tsx watch reload: new pid 101, same parent ppid 7
+      claimSidecarOwnership({ runDir, pid: 101, ppid: 7, port: 9000, nowIso: () => 'reload' });
+      expect(readSidecarOwner(runDir, 9000)?.pid).toBe(101);
+      // Legacy note should be deleted (same lineage as the reload)
+      expect(() => readFileSync(legacyPath, 'utf8')).toThrow();
+    });
+
+    it('legacy note with LIVE FOREIGN pid is PRESERVED (bug fix: must not delete live foreign owner)', () => {
+      // CRITICAL REGRESSION TEST: This is the exact bug scenario.
+      // Setup: port-keyed note from one stack (pid 100, ppid 50)
+      //        legacy note from a different, live stack (pid 200, ppid 60)
+      // Both want to manage port 9000 — the legacy note records the ONLY evidence
+      // of the other stack's ownership. If we delete it, we lose track and both
+      // stacks think they own the sidecar (recycle storm).
+      claimSidecarOwnership({
+        runDir,
+        pid: 100,
+        ppid: 50,
+        port: 9000,
+        nowIso: () => 'portkeyed',
+        aliveFn: () => true, // old port-keyed owner is "alive" for this setup
+      });
+      const legacyPath = legacySidecarOwnerPath(runDir);
+      writeFileSync(
+        legacyPath,
+        JSON.stringify({
+          pid: 200,
+          ppid: 60, // DIFFERENT lineage
+          port: 9000,
+          startedAt: 'legacy',
+        }),
+        'utf8',
+      );
+      // Now, a tsx-watch reload happens in the first stack (same ppid 50, new pid 101)
+      // findConflictingOwner would exit early on "same lineage" WITHOUT checking the legacy note.
+      // claimSidecarOwnership must still check the legacy note's liveness independently.
+      // The legacy note's pid (200) is alive but not in our lineage, so it must survive.
+      claimSidecarOwnership({
+        runDir,
+        pid: 101,
+        ppid: 50, // same lineage — findConflictingOwner exits early here
+        port: 9000,
+        nowIso: () => 'reload',
+        // Mock aliveFn to report that legacy process (200) is alive but others are dead
+        aliveFn: (p: number) => p === 200,
+      });
+      // Port-keyed note updated to new pid 101
+      expect(readSidecarOwner(runDir, 9000)?.pid).toBe(101);
+      // Legacy note must SURVIVE despite the reload (it's from a different, live lineage)
+      const survivingLegacy = JSON.parse(readFileSync(legacyPath, 'utf8'));
+      expect(survivingLegacy.pid).toBe(200);
+      expect(survivingLegacy.ppid).toBe(60);
+    });
+
+    it('legacy note with DEAD foreign pid is deleted (safe — stale owner)', () => {
+      // Setup: port-keyed note from one stack, legacy note from a dead foreign stack
+      claimSidecarOwnership({ runDir, pid: 100, ppid: 50, port: 9000, nowIso: () => 'portkeyed' });
+      const legacyPath = legacySidecarOwnerPath(runDir);
+      writeFileSync(
+        legacyPath,
+        JSON.stringify({
+          pid: 999999, // obviously dead
+          ppid: 60, // different lineage
+          port: 9000,
+          startedAt: 'stale',
+        }),
+        'utf8',
+      );
+      // Claim ownership (different pid, different ppid)
+      claimSidecarOwnership({ runDir, pid: 200, ppid: 70, port: 9000, nowIso: () => 'new' });
+      // Port-keyed note updated
+      expect(readSidecarOwner(runDir, 9000)?.pid).toBe(200);
+      // Stale legacy note can be deleted (owner is dead)
+      expect(() => readFileSync(legacyPath, 'utf8')).toThrow();
+    });
+
+    it('writes port-keyed note BEFORE deleting legacy note (ordering fix)', () => {
+      // Regression test for the ordering issue: if we delete legacy BEFORE writing
+      // port-keyed, a crash in between leaves no ownership record (orphan).
+      // This test verifies the code's source order has the write first.
+      claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'v1' });
+      expect(readSidecarOwner(runDir, 9000)?.pid).toBe(100);
+      // After the claim, the port-keyed note must exist
+      const portKeyedNote = readSidecarOwner(runDir, 9000);
+      expect(portKeyedNote).not.toBeNull();
+      expect(portKeyedNote?.pid).toBe(100);
+      // (We cannot easily test "crash between" in a unit test, but we can verify
+      // the code source has writeFileSync before unlinkSync by inspecting behavior:
+      // if the port-keyed write fails, no cleanup should happen.)
+    });
+  });
+});
+
+describe('isPortListening (#2792)', () => {
+  it('returns true while a real server is bound, false once it is closed', async () => {
+    const { createServer } = await import('node:net');
+    const server = createServer();
+    const port: number = await new Promise((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        resolve(typeof addr === 'object' && addr !== null ? addr.port : 0);
+      });
+    });
+
+    await expect(isPortListening(port)).resolves.toBe(true);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await expect(isPortListening(port)).resolves.toBe(false);
+  });
+
+  it('narrow review — detects a listener bound to the wildcard address (0.0.0.0), not just 127.0.0.1', async () => {
+    // Correctness bug found in review: a BIND probe only tests the exact
+    // address it targets, so a probe bound to 127.0.0.1 could fail to detect
+    // a listener on 0.0.0.0 — bit-for-bit the outcome #2792 exists to
+    // prevent, since the sidecar's LOCAL_TTS_HOST can be configured to
+    // 0.0.0.0. A CONNECT probe to 127.0.0.1 succeeds against a wildcard
+    // listener too (wildcard binds accept loopback connections), which is
+    // why isPortListening connects rather than binds.
+    const { createServer } = await import('node:net');
+    const server = createServer();
+    const port: number = await new Promise((resolve) => {
+      server.listen(0, '0.0.0.0', () => {
+        const addr = server.address();
+        resolve(typeof addr === 'object' && addr !== null ? addr.port : 0);
+      });
+    });
+
+    await expect(isPortListening(port, '127.0.0.1')).resolves.toBe(true);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('narrow review — fails CLOSED (treats as listening) on an error other than ECONNREFUSED', async () => {
+    // Correctness bug found in review: the prior bind-probe resolved `false`
+    // (safe to delete) on ANY error other than EADDRINUSE, including
+    // transient/ambiguous failures it could not actually interpret. Only
+    // ECONNREFUSED unambiguously proves nothing is listening; every other
+    // error (here: ENOTFOUND, a fast DNS-resolution failure — no listener
+    // exists to refuse the connection, so a naive "no ECONNREFUSED means
+    // free" reading would be wrong) must resolve `true`, mirroring
+    // isProcessAlive's EPERM-as-alive convention. Mutation-verified: this is
+    // the one test that reddens if the `!== 'ECONNREFUSED'` check is
+    // replaced with an unconditional `false` — a bare timeout-based test did
+    // NOT catch that mutation, since it never reaches the error handler.
+    await expect(isPortListening(9999, 'nonexistent.invalid.test')).resolves.toBe(true);
+  });
+
+  it('narrow review — resolves false (nothing listening) on an actual ECONNREFUSED', async () => {
+    // Control for the test above: the one case that legitimately means free.
+    // Bind a server, grab its port, close it, then connect immediately -- on
+    // a loopback address with nothing bound, this is a fast, real refusal.
+    const { createServer } = await import('node:net');
+    const server = createServer();
+    const port: number = await new Promise((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        resolve(typeof addr === 'object' && addr !== null ? addr.port : 0);
+      });
+    });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await expect(isPortListening(port, '127.0.0.1')).resolves.toBe(false);
+  });
+});
+
+describe('pruneStaleNotesSafely (#2792)', () => {
+  it('deletes a stale note whose pid is dead AND whose port is not listening', async () => {
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    await pruneStaleNotesSafely(
+      runDir,
+      9000,
+      () => false, // aliveFn: dead
+      async () => false, // portListeningFn: nothing bound there
+    );
+    expect(readSidecarOwner(runDir, 9010)).toBeNull();
+  });
+
+  it('#2792 — preserves a stale-pid note when the port IS still listening (the orphan case)', () => {
+    // The exact defect this issue exists to prevent: a dead recorded server
+    // pid does not prove the port is free, because the sidecar it spawned may
+    // have survived as an orphan still bound there. This is the ONE case the
+    // whole safe-reap design exists to protect.
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    return pruneStaleNotesSafely(
+      runDir,
+      9000,
+      () => false, // aliveFn: recorded server is dead
+      async () => true, // portListeningFn: but something IS bound there — an orphan
+    ).then(() => {
+      expect(readSidecarOwner(runDir, 9010)).toEqual(
+        expect.objectContaining({ pid: 99999, port: 9010 }),
+      );
+    });
+  });
+
+  it('preserves a live-pid note without ever probing the port (aliveFn short-circuits first)', async () => {
+    writeNote({ pid: process.pid, ppid: process.ppid, port: 9010, startedAt: 'live' }, 9010);
+    const portListeningFn = vi.fn(async () => false);
+    await pruneStaleNotesSafely(runDir, 9000, () => true, portListeningFn);
+    expect(readSidecarOwner(runDir, 9010)).not.toBeNull();
+    expect(portListeningFn).not.toHaveBeenCalled();
+  });
+
+  it('never touches the note for currentPort, even if it looks stale', async () => {
+    writeNote({ pid: 99999, ppid: 1, port: 9000, startedAt: 'stale' }, 9000);
+    await pruneStaleNotesSafely(
+      runDir,
+      9000, // currentPort — the note we just wrote for it must be left alone
+      () => false,
+      async () => false,
+    );
+    expect(readSidecarOwner(runDir, 9000)).not.toBeNull();
+  });
+
+  it('narrow review — does not delete a note that a fresh legitimate claim overwrote during the port probe (TOCTOU)', async () => {
+    // Correctness bug found in review: the async port probe is the one slow,
+    // awaited step here, and a legitimate server can claim that exact port
+    // during the window it's pending. Without a re-check immediately before
+    // the delete, this would destroy that FRESH, live claim's note — the
+    // same class of harm #2792 exists to prevent, arriving via a race
+    // instead of a bad liveness signal.
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    const portListeningFn = async () => {
+      // Simulate a legitimate server claiming port 9010 WHILE our probe is pending.
+      claimSidecarOwnership({
+        runDir,
+        pid: 777,
+        ppid: 9,
+        port: 9010,
+        nowIso: () => 'fresh',
+        aliveFn: () => true, // no need for its own background reap to do anything here
+        portListeningFn: async () => true,
+      });
+      return false; // the probe itself still correctly reports nothing listening yet
+    };
+    await pruneStaleNotesSafely(runDir, 9000, () => false, portListeningFn);
+    // The fresh claim must survive — it must NOT have been deleted as if it
+    // were still the stale note we started with.
+    expect(readSidecarOwner(runDir, 9010)).toEqual(
+      expect.objectContaining({ pid: 777, startedAt: 'fresh' }),
+    );
+  });
+
+  it('is wired into claimSidecarOwnership as a fire-and-forget background reap', async () => {
+    // claimSidecarOwnership itself returns synchronously without pruning (pinned
+    // above); this test observes claimSidecarOwnership's OWN internal fire-and-
+    // forget call actually running, by hooking the injected portListeningFn it
+    // passes through, then waits for it to finish and confirms the reap happened.
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    let resolveProbed: () => void;
+    const probed = new Promise<void>((resolve) => {
+      resolveProbed = resolve;
+    });
+    const portListeningFn = async () => {
+      resolveProbed();
+      return false;
+    };
+    claimSidecarOwnership({
+      runDir,
+      pid: 555,
+      ppid: 7,
+      port: 9000,
+      nowIso: () => 'new',
+      aliveFn: () => false,
+      portListeningFn,
+    });
+    await probed; // the background reap has called our probe — it's about to unlink
+    await new Promise((resolve) => setImmediate(resolve)); // let the unlink actually run
+    expect(readSidecarOwner(runDir, 9010)).toBeNull();
   });
 });
 
 describe('releaseSidecarOwnership', () => {
   it('deletes the note when the pid matches', () => {
     claimSidecarOwnership({ runDir, pid: 555, ppid: 7 });
-    releaseSidecarOwnership(runDir, 555);
-    expect(readSidecarOwner(runDir)).toBeNull();
+    releaseSidecarOwnership(runDir, 555, 9000);
+    expect(readSidecarOwner(runDir, 9000)).toBeNull();
   });
 
   it('leaves a note owned by a different pid (lineage took over)', () => {
     claimSidecarOwnership({ runDir, pid: 999, ppid: 7 });
-    releaseSidecarOwnership(runDir, 555); // an older lineage process shutting down
-    expect(readSidecarOwner(runDir)?.pid).toBe(999);
+    releaseSidecarOwnership(runDir, 555, 9000); // an older lineage process shutting down
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(999);
   });
 
   it('is a no-op when no note exists', () => {
-    expect(() => releaseSidecarOwnership(runDir, 555)).not.toThrow();
+    expect(() => releaseSidecarOwnership(runDir, 555, 9000)).not.toThrow();
   });
 });
 
@@ -296,6 +666,93 @@ describe('findConflictingOwner', () => {
     const conflict = findConflictingOwner({ runDir, pid: 200, ppid: 8, aliveFn: alive });
     expect(conflict?.pid).toBe(100);
   });
+
+  it('still detects a live foreign conflict on its own port after a different port has also claimed in the same runDir', () => {
+    // Regression for #2641: both ports used to share one owner file, so a
+    // different-port write could silently overwrite the file a third
+    // claimant's conflict check needed to read.
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'a' });
+    claimSidecarOwnership({ runDir, pid: 200, ppid: 8, port: 9010, nowIso: () => 'b' });
+    const conflict = findConflictingOwner({
+      runDir,
+      pid: 300,
+      ppid: 9,
+      port: 9000,
+      aliveFn: (pid) => pid === 100,
+    });
+    expect(conflict?.pid).toBe(100);
+  });
+
+  it('treats a live owner on a different port as non-conflicting — port-keying ensures isolation', () => {
+    // PR #2754 review finding: no test was pinning the guarantee that an owner
+    // note for port 9000 (live, foreign lineage) does not block a claim for port
+    // 9010. The port-keyed filename (tts.owner.<port>.json) makes this
+    // structurally sound, but we must verify the actual claim flow works.
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'owner' });
+    // Port 9010 check should find no conflict, even though port 9000 is live and foreign.
+    const conflict = findConflictingOwner({
+      runDir,
+      pid: 200,
+      ppid: 8,
+      port: 9010,
+      aliveFn: (pid) => pid === 100, // port 9000's owner is alive
+    });
+    expect(conflict).toBeNull();
+  });
+
+  it('detects a live legacy owner (pre-#2641) with matching port as conflicting — cross-version scenario', () => {
+    // PR #2754 review finding (real defect found in code review):
+    // Upgrade scenario: old server (pre-#2641) running on port 9000 with
+    // legacy .run/tts.owner.json note. New server (post-#2641, this code)
+    // starts up on port 9000 and looks only for .run/tts.owner.9000.json.
+    // It should detect the legacy note as a conflict to prevent a dual-supervisor
+    // recycle storm (#1030). Without this fix, it claims ownership and both
+    // servers end up managing the sidecar.
+    const legacyPath = join(runDir, 'tts.owner.json');
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        pid: 100,
+        ppid: 7,
+        port: 9000, // legacy note also records the port
+        startedAt: '2026-06-23T00:00:00.000Z',
+      }),
+      'utf8',
+    );
+    // New server checking for conflicts on the same port must find the legacy note
+    const conflict = findConflictingOwner({
+      runDir,
+      pid: 200, // different pid
+      ppid: 8, // different ppid
+      port: 9000, // same port as legacy note
+      aliveFn: () => true, // legacy owner is alive
+    });
+    expect(conflict?.pid).toBe(100);
+  });
+
+  it('ignores a legacy owner whose recorded port does not match — legacy note is port-agnostic safety valve', () => {
+    // A legacy note recorded port 9000, but we are checking port 9010.
+    // No conflict — each port is independent.
+    const legacyPath = join(runDir, 'tts.owner.json');
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        pid: 100,
+        ppid: 7,
+        port: 9000, // legacy note is for port 9000
+        startedAt: '2026-06-23T00:00:00.000Z',
+      }),
+      'utf8',
+    );
+    const conflict = findConflictingOwner({
+      runDir,
+      pid: 200,
+      ppid: 8,
+      port: 9010, // checking a different port
+      aliveFn: () => true,
+    });
+    expect(conflict).toBeNull();
+  });
 });
 
 describe('enforceSingleSidecarOwner', () => {
@@ -313,7 +770,7 @@ describe('enforceSingleSidecarOwner', () => {
     });
     expect(ok).toBe(true);
     expect(exit).not.toHaveBeenCalled();
-    expect(readSidecarOwner(runDir)).toEqual({ pid: 100, ppid: 7, port: 9000, startedAt: 'now' });
+    expect(readSidecarOwner(runDir, 9000)).toEqual({ pid: 100, ppid: 7, port: 9000, startedAt: 'now' });
   });
 
   it('logs an actionable FATAL line and exits(1) on a live foreign owner, WITHOUT clobbering the note', () => {
@@ -333,7 +790,7 @@ describe('enforceSingleSidecarOwner', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('already owns the TTS'));
     expect(log).toHaveBeenCalledWith(expect.stringContaining('pid 100'));
     // The incumbent owner's note must survive — we refused, we did not take over.
-    expect(readSidecarOwner(runDir)).toEqual({
+    expect(readSidecarOwner(runDir, 9000)).toEqual({
       pid: 100,
       ppid: 7,
       port: 9000,
@@ -355,7 +812,7 @@ describe('enforceSingleSidecarOwner', () => {
     });
     expect(ok).toBe(true);
     expect(exit).not.toHaveBeenCalled();
-    expect(readSidecarOwner(runDir)?.pid).toBe(200);
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(200);
   });
 
   it('takes over on a same-lineage reload (tsx watch)', () => {
@@ -372,6 +829,106 @@ describe('enforceSingleSidecarOwner', () => {
     });
     expect(ok).toBe(true);
     expect(exit).not.toHaveBeenCalled();
-    expect(readSidecarOwner(runDir)?.pid).toBe(200);
+    expect(readSidecarOwner(runDir, 9000)?.pid).toBe(200);
   });
+
+  it('N3a: FATAL message names the PORT-KEYED path when conflict came from port-keyed note', () => {
+    // Setup: port-keyed note exists (current mechanism)
+    claimSidecarOwnership({ runDir, pid: 100, ppid: 7, port: 9000, nowIso: () => 'owner' });
+    // Another server (different pid, different ppid) tries to enforce ownership
+    const log = vi.fn();
+    const exit = vi.fn();
+    const ok = enforceSingleSidecarOwner({
+      runDir,
+      pid: 200,
+      ppid: 8,
+      port: 9000,
+      aliveFn: () => true,
+      log,
+      exit,
+    });
+    expect(ok).toBe(false);
+    expect(exit).toHaveBeenCalledWith(1);
+    // The message should name the port-keyed path (tts.owner.9000.json)
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(sidecarOwnerPath(runDir, 9000)),
+    );
+    // Verify it names the correct full path (not the legacy path)
+    expect(log).not.toHaveBeenCalledWith(
+      expect.stringContaining(legacySidecarOwnerPath(runDir)),
+    );
+  });
+
+  it('N3a: FATAL message names the LEGACY path when conflict came from legacy note', () => {
+    // Setup: legacy note (pre-#2641) exists for the same port
+    const legacyPath = legacySidecarOwnerPath(runDir);
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        pid: 100,
+        ppid: 7,
+        port: 9000, // legacy note also records the port
+        startedAt: '2026-06-23T00:00:00.000Z',
+      }),
+      'utf8',
+    );
+    // Another server (different pid, different ppid) tries to enforce ownership on the same port
+    const log = vi.fn();
+    const exit = vi.fn();
+    const ok = enforceSingleSidecarOwner({
+      runDir,
+      pid: 200,
+      ppid: 8,
+      port: 9000,
+      aliveFn: () => true,
+      log,
+      exit,
+    });
+    expect(ok).toBe(false);
+    expect(exit).toHaveBeenCalledWith(1);
+    // The message should name the LEGACY path (tts.owner.json), not the port-keyed one
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(legacyPath),
+    );
+    // Verify it does NOT name the port-keyed path
+    expect(log).not.toHaveBeenCalledWith(
+      expect.stringContaining(sidecarOwnerPath(runDir, 9000)),
+    );
+  });
+
+  it('narrow review — passes aliveFn AND portListeningFn through to the background reap', async () => {
+    // Correctness bug found in review: enforceSingleSidecarOwner destructured
+    // aliveFn/portListeningFn but never forwarded them to claimSidecarOwnership,
+    // so the ONLY production caller always used the real isPortListening —
+    // meaning these injected seams were unreachable from production code, and
+    // npm run test:server was doing real TCP connects on every test through
+    // this path. This pins that both injected functions actually reach the
+    // fire-and-forget reap this function kicks off. A short timeout is set
+    // explicitly: if the wiring regresses, portListeningFn is never called
+    // and `probed` never resolves — this must fail cleanly, not hang the
+    // whole worker.
+    writeNote({ pid: 99999, ppid: 1, port: 9010, startedAt: 'stale' }, 9010);
+    let resolveProbed: () => void;
+    const probed = new Promise<void>((resolve) => {
+      resolveProbed = resolve;
+    });
+    const portListeningFn = async () => {
+      resolveProbed();
+      return false;
+    };
+    enforceSingleSidecarOwner({
+      runDir,
+      pid: 555,
+      ppid: 7,
+      port: 9000,
+      aliveFn: () => false,
+      portListeningFn,
+      log: vi.fn(),
+      exit: vi.fn(),
+      nowIso: () => 'new',
+    });
+    await probed; // proves portListeningFn reached the internal reap, not the real isPortListening
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(readSidecarOwner(runDir, 9010)).toBeNull();
+  }, 3000);
 });

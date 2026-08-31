@@ -130,8 +130,10 @@ async function main() {
         await (await fetch(face.woff2Url, { headers: { 'User-Agent': UA } })).arrayBuffer(),
       );
       await writeFile(resolve(OUT_DIR, file), buf);
+      const subsetSuffix = face.subset ? ` / ${face.subset}` : '';
+      const sizeKb = (buf.length / 1024).toFixed(1);
       process.stdout.write(
-        `  ✓ ${file}  (${face.family} ${face.style} ${face.weight}${face.subset ? ` / ${face.subset}` : ''}, ${(buf.length / 1024).toFixed(1)} KB)\n`,
+        `  ✓ ${file}  (${face.family} ${face.style} ${face.weight}${subsetSuffix}, ${sizeKb} KB)\n`,
       );
       generated.push({ ...face, file });
     }

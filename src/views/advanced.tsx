@@ -37,6 +37,7 @@ import type {
   PromptState,
   StaleReason,
   AnalyzerDeviceResponse,
+  AnalyzerGpuSplitResponse,
 } from '../lib/types';
 
 /* #2221 — extracts a displayable message from a rejected restartSidecar
@@ -249,6 +250,7 @@ export function AdvancedView() {
   const [analyzerDevice, setAnalyzerDevice] = useState<AnalyzerDeviceResponse['device'] | null>(
     null,
   );
+  const [gpuSplit, setGpuSplit] = useState<AnalyzerGpuSplitResponse | null>(null);
 
   useEffect(() => {
     dispatch(fetchConfig());
@@ -264,6 +266,22 @@ export function AdvancedView() {
       .getAnalyzerDevice()
       .then((res) => setAnalyzerDevice(res.device))
       .catch(() => setAnalyzerDevice('unreachable'));
+    // #2367 Task 3 — same best-effort contract as the device probe above:
+    // degrade to a "reachable: false" shape rather than throwing into the
+    // view, since a failed split probe must not sink the whole row.
+    api
+      .getAnalyzerGpuSplit()
+      .then((res) => setGpuSplit(res))
+      .catch(() =>
+        setGpuSplit({
+          reachable: false,
+          split: false,
+          deviceIndices: [],
+          totalUsedMb: 0,
+          wouldFitSingleDevice: false,
+          dataUnavailable: false,
+        }),
+      );
   }, [dispatch]);
 
   /* Plan 2 §2.4 — the analyzer-device row is only meaningful when the
@@ -273,6 +291,43 @@ export function AdvancedView() {
      fetchConfig(), rather than adding a second endpoint/state slice for
      the same fact. */
   const analyzerEngine = values['analyzer.engine']?.effective;
+
+  /* #2367 Task 4 — expectedDevice is a declared, advisory expectation (see
+     the knob's help text: this app cannot pin the Ollama daemon's device).
+     A non-empty declaration that the detected split contradicts sharpens
+     Task 3's warning into a named mismatch, independent of whether the
+     split would fit on one device — the operator said "GPU N only", so a
+     split onto any other combination is worth calling out even when it's
+     unavoidable. Distinguish between two distinct cases: (1) a genuine split
+     onto devices that include one outside expectedDevice, and (2) no split,
+     but the single resident device is the wrong one — they need different
+     wording. */
+  const expectedDeviceRaw = values['analyzer.ollama.expectedDevice']?.effective as
+    | string
+    | undefined;
+  const expectedDevice = expectedDeviceRaw?.trim() ?? '';
+  const expectedDeviceNum = expectedDevice === '' ? NaN : Number(expectedDevice);
+
+  // Case 1: Genuine split (split=true) with at least one device not matching
+  const expectedDeviceSplitMismatch =
+    expectedDevice !== '' &&
+    !Number.isNaN(expectedDeviceNum) &&
+    !!gpuSplit &&
+    gpuSplit.split &&
+    gpuSplit.deviceIndices.length > 0 &&
+    !gpuSplit.deviceIndices.every((idx) => idx === expectedDeviceNum);
+
+  // Case 2: No split (split=false), but the single device is wrong
+  // With 2+ resident PIDs (e.g., analyzer + design model), deviceIndices.length > 1,
+  // so expectedDeviceWrongSingle remains false — ambiguous which model expectedDevice
+  // refers to, so we don't show a mismatch warning (fail-closed behavior).
+  const expectedDeviceWrongSingle =
+    expectedDevice !== '' &&
+    !Number.isNaN(expectedDeviceNum) &&
+    !!gpuSplit &&
+    !gpuSplit.split &&
+    gpuSplit.deviceIndices.length === 1 &&
+    gpuSplit.deviceIndices[0] !== expectedDeviceNum;
 
   const handleResetAll = () => {
     if (!window.confirm('Reset all advanced settings to their defaults?')) return;
@@ -498,7 +553,7 @@ export function AdvancedView() {
                       />
                     );
                   })}
-                  {group.id === 'tts-engine' && analyzerEngine === 'local' && (
+                  {group.id === 'analyzer-models' && analyzerEngine === 'local' && (
                     <div className="py-3 border-b border-ink/8">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="text-sm font-medium text-ink flex-1">
@@ -521,6 +576,52 @@ export function AdvancedView() {
                         — not app-pinnable; the analyzer connects to a user/OS-managed Ollama
                         daemon.
                       </p>
+                      {gpuSplit && gpuSplit.dataUnavailable && (
+                        <p className="text-xs text-slate-600 mb-1">
+                          Can't determine GPU split status — your driver doesn't expose per-process GPU
+                          memory. Run{' '}
+                          <code className="text-slate-700 font-mono">nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv</code> to
+                          check if <code className="text-slate-700 font-mono">used_memory</code> shows{' '}
+                          <code className="text-slate-700 font-mono">[N/A]</code> or{' '}
+                          <code className="text-slate-700 font-mono">[Not Supported]</code>.
+                        </p>
+                      )}
+                      {gpuSplit &&
+                        !gpuSplit.dataUnavailable &&
+                        ((gpuSplit.split && gpuSplit.wouldFitSingleDevice) ||
+                          expectedDeviceSplitMismatch ||
+                          expectedDeviceWrongSingle) && (
+                          <p className="text-xs text-amber-800 mb-1">
+                            {expectedDeviceSplitMismatch ? (
+                              <>
+                                Model split across GPUs {gpuSplit.deviceIndices.join(', ')} —
+                                expected GPU {expectedDevice} only. See{' '}
+                                <a href="/docs/local-llm.md" className="underline">
+                                  docs/local-llm.md
+                                </a>
+                                .
+                              </>
+                            ) : expectedDeviceWrongSingle ? (
+                              <>
+                                Analyzer model is on GPU {gpuSplit.deviceIndices[0]} —
+                                expected GPU {expectedDevice} only. See{' '}
+                                <a href="/docs/local-llm.md" className="underline">
+                                  docs/local-llm.md
+                                </a>
+                                .
+                              </>
+                            ) : (
+                              <>
+                                Model split across GPUs {gpuSplit.deviceIndices.join(', ')} despite
+                                fitting on one device — see{' '}
+                                <a href="/docs/local-llm.md" className="underline">
+                                  docs/local-llm.md
+                                </a>
+                                .
+                              </>
+                            )}
+                          </p>
+                        )}
                       <a
                         href="/docs/local-llm.md"
                         className="text-xs text-magenta hover:underline"

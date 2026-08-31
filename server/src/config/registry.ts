@@ -839,7 +839,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'SPK_IDLE_TTL',
     group: 'gpu-lifecycle',
     label: 'Speaker-embed (ECAPA) idle TTL (s)',
-    help: 'Seconds of speaker-embed inactivity before the sidecar frees the ECAPA model. Reclaims VRAM only on SPK_DEVICE=cuda (a no-op on cpu). Values below 5 fall back to the default (120) to avoid reload thrash.',
+    help: 'Seconds of speaker-embed inactivity before the sidecar frees the ECAPA model. Reclaims VRAM only on SPK_DEVICE=cuda; on cpu, skipped unless the engine demoted from cuda (incurring reload thrash). Values below 5 fall back to the default (120) to avoid reload thrash.',
     type: 'integer', min: 0,
     default: 120, // ← _SPK_IDLE_TTL_DEFAULT in tts-sidecar/main.py (Task 4)
     apply: 'restart-sidecar', risk: 'high',
@@ -964,6 +964,17 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Analyzer eval-rate telemetry',
     help: 'Record per-pass Ollama decode speed (tok/s) to a JSONL log shown in '
         + "the Admin analyzer-throughput panel. Best-effort; turn off to disable capture.",
+    type: 'boolean',
+    default: true,
+    apply: 'live', risk: 'low',
+  },
+  {
+    key: 'gpu.split.probe',
+    env: 'CASTWRIGHT_GPU_SPLIT_PROBE',
+    group: 'analyzer-sampling',
+    label: 'GPU-split detection probe',
+    help: 'Enable on-demand nvidia-smi probes to detect whether the analyzer\'s Ollama model is split across multiple GPUs. '
+        + 'Cached for 60s per probe. Default on; turn off to skip the diagnostic overhead if this information is not needed.',
     type: 'boolean',
     default: true,
     apply: 'live', risk: 'low',
@@ -1186,6 +1197,21 @@ export const KNOBS: ConfigKnob[] = [
     type: 'integer', min: 0,
     default: 10, // ← DEFAULT_PHASE1_MIN_LAG_CHAPTERS in analyzer/select-analyzer.ts (line 111)
     apply: 'live', risk: 'medium',
+  },
+  {
+    key: 'analyzer.ollama.expectedDevice',
+    env: 'ANALYZER_EXPECTED_DEVICE',
+    group: 'analyzer-models',
+    label: 'Expected analyzer GPU',
+    help: 'Informational only — this app cannot pin an external Ollama daemon\'s '
+        + 'device (see docs/local-llm.md "Pinning the analyzer to 100% GPU"). '
+        + 'Declare the GPU index you\'ve pinned Ollama to via the OS-level steps '
+        + '(e.g. "0"), and a detected split that contradicts this is called out '
+        + 'explicitly in the Advanced Configuration warning below.',
+    type: 'string',
+    pattern: /^\d*$/,
+    default: '', // no coded default — empty string means "no declared expectation"
+    apply: 'live', risk: 'low',
   },
 
   // ── analyzer-prompts ──────────────────────────────────────────────────────

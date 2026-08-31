@@ -432,7 +432,9 @@ Design rationale:
 - `npm run verify` — full battery: typecheck + all tests + e2e + build. No longer the pre-push default (see "Commit gate") — run manually when you want the full local battery (e.g. before a release cut).
 - `npm run verify:quick` — all tests (no e2e, no typecheck, no build) — alias for `test:all`.
 - `npm run verify:fast` — fast tests only (alias for `test:fast`); a manual full-fast run. NOTE: pre-commit actually gates on `verify:fast:scoped` (the scope-filtered variant), not this — see "Commit gate".
-- `npm run verify:fast:branch` — lint + typecheck + config:check + test:hooks + test + test:server + build, each scope-gated to whether the current branch's diff (vs local `main`) touches its inputs, plus `test:sidecar` scope-gated to `server/tts-sidecar/**`. This is the new pre-push default (see "Commit gate") — the fast, branch-scoped smoke check; cloud `verify.yml` is now the actual enforcement gate for everything else.
+- `npm run verify:fast:branch` — lint + typecheck + config:check + test:hooks + test + test:server + build + test:sidecar + audit + audit:server, each scope-gated to whether the current branch's diff (vs local `main`) touches its inputs. This is the new pre-push default (see "Commit gate") — the fast, branch-scoped smoke check; cloud `verify.yml` is now the actual enforcement gate for everything else.
+- `npm run audit` — npm audit against the root lockfile, gating on any unwaived high/critical severity advisories (threshold `--audit-level=high`). Waivers live in `audit-waivers.json` at repo root with expiry enforcement. Exit codes: 0 = pass, 1 = unwaived high/critical, 2 = expired waiver(s) or bad CLI args, 3 = audit cannot be trusted (npm audit failed, or its output could not be parsed). See `scripts/check-audit.mjs` for scope and mechanics (#2434).
+- `npm run audit:server` — npm audit against the server lockfile, omitting devDependencies (`--omit=dev` for production/runtime scope only), same gate and severity threshold as root. Exits with the same codes as `audit`. Runs in both `verify.yml` and `verify:fast:branch` (root runs full tree, server scope-gated to `server/package-lock.json` changes). **Note:** both audit steps require network access to npm's advisory database — they cannot run offline.
 - `npm run build` — production build into `dist/`.
 - `npm run apk:companion` — build the Android companion APK and drop it at
   `companion/castwright-companion.apk` (the path `GET /api/companion/apk` serves;
@@ -904,9 +906,10 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   [docs/features/163-protected-push-guard.md](docs/features/163-protected-push-guard.md);
   bypass the local hook intentionally with `git push --no-verify`). Then, unless
   the push is docs-only (below), runs `npm run verify:fast:branch` — a fast,
-  branch-diff-scoped subset (lint, typecheck, config:check, test:hooks, test,
-  test:server, build, plus test:sidecar when the diff touches
-  `server/tts-sidecar/**`). Refuses the push if any in-scope step fails. This
+  branch-diff-scoped subset (lint, typecheck, config:check, test:hooks, check:budget-poll, test,
+  test:server, build, test:sidecar, audit, audit:server). Requires npm registry
+  access (unlike other `verify:fast:branch` legs, the audit steps cannot run offline).
+  Refuses the push if any in-scope step fails. This
   replaced running the full `npm run verify` battery on every push (see
   [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md))
   — the heavy legs (e2e, server-slow, scripts, test:pinokio) now run in the
@@ -1026,6 +1029,15 @@ invalid commit messages sail through, pre-push verify never fires. In that case:
    checkout — the cheap alternative to installing. Frontend tooling resolves via
    root alone, so `server/` is easy to forget and fails the server test legs
    with "vitest not found".
+   **For real sidecar/TTS work, also junction `server/tts-sidecar/voices/`**
+   (found 2026-08-31, register row A1) — it holds the actual model weights
+   (Qwen HF cache, Kokoro ONNX, Coqui/XTTS, cloned-voice artifacts) and is
+   git-ignored like `.venv`, but junctioning only `.venv` leaves it absent. A
+   missing `voices/` doesn't 404 cleanly — Kokoro throws `Kokoro model not
+   found` repeatedly at sidecar boot, which can trigger enough restarts to trip
+   the `recycle-storm` circuit breaker mid-chapter, misreporting as a side-11
+   host-memory-leak regression (#399) when the real cause is the missing
+   junction. See [#2811](https://github.com/dudarenok-maker/Castwright/issues/2811).
 3. **Verify both.** `ls -d .husky/_ && git config core.hooksPath`, and for each
    junction `(Get-Item $p -Force).Target` — a relative `..` target resolves
    against the shell's CWD at creation time, not the link's own directory, so an
