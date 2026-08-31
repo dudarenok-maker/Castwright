@@ -75,11 +75,11 @@ runs:
           # This is acceptable: the cache was populated by this same action's prior
           # `apt-get install` run (itself signature-verified), and actions/cache entries
           # are scoped to this repo, not shared across repos.
-          timeout -k 10 180 sudo dpkg -i "$ARCHIVE_DIR"/*.deb
+          sudo timeout -k 10 180 dpkg -i "$ARCHIVE_DIR"/*.deb
         else
           echo "apt cache miss: installing ffmpeg via apt-get"
-          timeout -k 10 180 sudo apt-get -o Acquire::Retries=3 update
-          timeout -k 10 180 sudo apt-get -o Dir::Cache::Archives="$ARCHIVE_DIR" install -y ffmpeg
+          sudo timeout -k 10 180 apt-get -o Acquire::Retries=3 update
+          sudo timeout -k 10 180 apt-get -o Dir::Cache::Archives="$ARCHIVE_DIR" install -y ffmpeg
           sudo rm -rf "$ARCHIVE_DIR/lock" "$ARCHIVE_DIR/partial"
           sudo chown -R "$(id -u):$(id -g)" "$ARCHIVE_DIR"
         fi
