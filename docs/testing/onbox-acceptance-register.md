@@ -3338,12 +3338,20 @@ never released.
   below are deliberately opposite; a pass needs both.) With Kokoro resident, start a
   design run (bulk "Design full cast" or repeated single-character designs), and
   concurrently request a chapter render on a Kokoro voice in the same book.
-  - *Kokoro MUST pause during the VoiceDesign forward.* `_VD_KOKORO.design()` spans
-    model load **through the GPU forwards** since #2809, so a Kokoro sentence
-    overlapping a design forward is expected to block until that forward finishes
-    (seconds, not minutes) — this is the VRAM-exclusion guarantee, not a stall.
-    Before #2809 the arbiter closed before the forwards, and this pause did not
-    happen. A render that sails through a design forward unpaused is a FAILURE here.
+  - *Kokoro MUST pause while any design holds the arbiter.* `_VD_KOKORO.design()`
+    spans model load **through the GPU forwards** since #2809, so a Kokoro sentence
+    overlapping a design is expected to block until the arbiter clears. Before
+    #2809 the arbiter closed before the forwards, and this pause did not happen.
+    **A render that sails through a design forward unpaused is the FAILURE here —
+    the length of the wait is not.** During a bulk run whose design spans overlap
+    back-to-back, the arbiter can stay held for most of the run (measured at
+    #2809 pass 4: Kokoro waited 6.5 s against a 1 s design span, i.e. essentially
+    the whole run), because the refcount only reaches zero when the LAST design
+    leaves and the wait is unbounded. That is the price of the exclusion, not a
+    defect, and serialising designs would not shorten it. Record the wait you
+    observe; only escalate if a chapter render actually FAILS — the ceilings are
+    `SYNTH_CALL_TIMEOUT_MS` (600 s) and `CHAPTER_NO_PROGRESS_MS` (720 s), neither
+    of which has been reached in practice.
   - *Kokoro MUST NOT pause for the base17 eviction wait.* That wait can run up to
     `_BASE17_CONTENTION_WAIT_S_DEFAULT` (~150 s) and stays deliberately OUTSIDE the
     arbiter (#2070 review R5). A Kokoro sentence blocking for tens of seconds while

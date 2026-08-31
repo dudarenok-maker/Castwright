@@ -1448,8 +1448,13 @@ class _VdKokoroArbiter:
         with self._cv:
             # Entry gate unchanged: drain in-flight Kokoro synths, then claim.
             # Deliberately does NOT wait on `_design_active_count` — concurrent
-            # designs are allowed (and `test_two_concurrent_healthy_designs_both_succeed`
-            # pins that); only Kokoro is excluded.
+            # designs are allowed; only Kokoro is excluded. Pinned by
+            # `test_kokoro_stays_excluded_until_the_last_concurrent_design_exits`
+            # (its `b_entered` assertion), NOT by
+            # `test_two_concurrent_healthy_designs_both_succeed` — that one still
+            # passes if this gate also waits on the design count, since its two
+            # designs would simply serialise and both still succeed (#2809 review
+            # pass 4 mutated the gate to confirm exactly that).
             while self._kokoro_in_flight > 0:
                 self._cv.wait()
             self._design_active_count += 1
