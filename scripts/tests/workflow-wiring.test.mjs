@@ -167,10 +167,21 @@ test('leg-result check: needs.json is validated before processing', () => {
   // catch those): the step must validate needs.json is parseable JSON before
   // trying to use it, and must guard the `for job in $(jq ...)` with an
   // explicit error check — not just relying on errexit inside $(...)
+  // Extract just the JSON guard block (from `if ! jq` to matching `fi`) so
+  // the assertion can't accidentally match an unrelated `exit 1` far below
+  // (e.g. in the case statement).
+  const jsonGuardStart = legCheckBody.indexOf('if ! jq -e . needs.json');
+  const jsonGuardEnd = legCheckBody.indexOf('fi', jsonGuardStart);
+  assert.ok(
+    jsonGuardStart !== -1 && jsonGuardEnd !== -1,
+    'JSON guard block not found (expected "if ! jq -e . needs.json ... fi")',
+  );
+  const jsonGuardBlock = legCheckBody.slice(jsonGuardStart, jsonGuardEnd + 2);
+
   assert.match(
-    legCheckBody,
-    /jq\s+(-e|--exit-status)\s+\.\s+needs\.json.*exit\s+1/s,
-    'step does not validate needs.json is valid JSON before processing',
+    jsonGuardBlock,
+    /exit\s+1/,
+    'JSON guard block does not contain "exit 1" to fail closed on invalid JSON',
   );
 
   assert.match(
