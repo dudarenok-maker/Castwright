@@ -1098,9 +1098,9 @@ test('ffmpeg install: no bare apt-get install ffmpeg in workflows (use install-f
 
     // Extract each step (indented at 6 spaces: "      - name: ...").
     // Each step's body continues with 8+ spaces until the next step or end.
-    const steps = [...workflowSource.matchAll(/^      - name: ([^\n]+)\n((?:        [^\n]*\n)*)/gm)];
+    const steps = [...workflowSource.matchAll(/^ {6}- name: ([^\n]+)\n((?: {8}[^\n]*\n)*)/gm)];
 
-    for (const [, stepName, stepBody] of steps) {
+    for (const [, , stepBody] of steps) {
       // Skip if this is the approved install-ffmpeg action
       if (/uses:\s*\.\/\.github\/actions\/install-ffmpeg/.test(stepBody)) {
         continue;
