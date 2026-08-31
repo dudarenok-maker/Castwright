@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="3" data-publish-id="6238092a7384"></div>
+  <div hidden data-published-as="4" data-publish-id="9673112baff8"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -198,7 +198,7 @@
     <!-- BEGIN GENERATED:strip -->
     <div class="stat"><div class="n owed">66</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
-    <div class="stat"><div class="n blk">5</div><div class="l">Blocked</div></div>
+    <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
     <div class="stat"><div class="n">40</div><div class="l">Still owed in A1 (of 60)</div></div>
     <div class="stat"><div class="n">06-01</div><div class="l">Oldest debt</div></div>
@@ -1611,7 +1611,7 @@
 
   <section class="group is-blocked" id="blocked">
     <header>
-      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked — hardware not available <span class="gcount">5 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked — hardware not available <span class="gcount">6 rows</span></h3>
     </header>
     <details class="item">
       <summary><span class="num">—</span><span class="iname">AMD GPU support Phase 2</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
@@ -1650,6 +1650,15 @@
         <p><b>Why this box cannot reach it.</b> Every unit test drives the floor through a mocked <code>spawnSync</code>. Per wave-3 step 7's verification (shared with the ops-36 golden-assembly blocked row, above), this box has no ffmpeg swap available and no container runtime, so there is no way to put a genuinely-below-floor ffmpeg on PATH here.</p>
         <p><b>What would change that.</b> A box or container where ffmpeg can be downgraded to a real pre-floor build — a 22.04 container with archive ffmpeg 4.4 is the cheapest route.</p>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1877">#1877</a> · plan 269</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">—</span><span class="iname">ROCm/AMD admitted device-key normalisation — real GPU engine load</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><b>What is dormant.</b> The VRAM-ledger admission layer (<code>PlacementController.admit()</code>) hands engines a device key like <code>"rocm:N"</code> on a ROCm/AMD box (<code>probe()</code>'s own honest ROCm-vs-CUDA accounting), but a ROCm/HIP torch build only ever understands <code>"cuda:N"</code> at the API level — <code>torch.device("rocm:N")</code> raises. <code>_resolve_torch_device</code> (<code>server/tts-sidecar/main.py</code>) now converts an explicit <code>"rocm:N"</code> to <code>"cuda:N"</code> (index preserved) before it reaches any engine's <code>.to()</code> call, and Coqui's <code>_resolve_runtime_options</code> now calls it unconditionally (not just for <code>"auto"</code>) so an admitted <code>"rocm:N"</code> actually reaches the new branch instead of bypassing it. The unit tests prove the string conversion in isolation against a stubbed <code>torch</code> module — they do not prove a real ROCm/HIP torch build actually accepts the converted <code>"cuda:N"</code> string end to end and loads a real model onto a real AMD card with <code>SEG_CAPACITY_ADMISSION</code> on (the default).</p>
+        <p><b>Why this box cannot reach it.</b> This box is dual-NVIDIA; this will not move until AMD/ROCm hardware exists — same constraint as the AMD GPU support Phase 2 and ORT pip-consistency marker rows above.</p>
+        <p><b>What to observe, once ROCm/AMD hardware is available.</b> With <code>SEG_CAPACITY_ADMISSION</code> on, trigger a GPU engine load (Qwen Base or Coqui/XTTS) that the admission layer places on a ROCm card, and confirm it now succeeds (model resident, synth completes) rather than crashing on <code>torch.device("rocm:N")</code> the way it did before this fix.</p>
+        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2813">#2813</a> · branch <code>fix/sidecar-rocm-device-normalisation</code></p>
       </div>
     </details>
   </section>

@@ -425,7 +425,7 @@ setup rather than repeatedly loading and evicting models.
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
-| — | **Blocked** (hardware absent) | 5 |
+| — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
 **66 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
@@ -5049,6 +5049,34 @@ so there is no way to put a genuinely-below-floor ffmpeg on `PATH` here.
 **3. What would change that.** A box or container where ffmpeg can be
 downgraded to a real pre-floor build — the row itself names a 22.04
 container with archive ffmpeg 4.4 as the cheapest route.
+
+### ROCm/AMD admitted device-key normalisation — real GPU engine load ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), branch `fix/sidecar-rocm-device-normalisation`)
+
+**1. What is dormant.** The VRAM-ledger admission layer (`PlacementController.admit()`)
+hands engines a device key like `"rocm:N"` on a ROCm/AMD box (`probe()`'s own honest
+ROCm-vs-CUDA accounting), but a ROCm/HIP torch build only ever understands `"cuda:N"`
+at the API level — `torch.device("rocm:N")` raises. `_resolve_torch_device`
+(`server/tts-sidecar/main.py`) now converts an explicit `"rocm:N"` to `"cuda:N"`
+(index preserved) before it reaches any engine's `.to()` call, and Coqui's
+`_resolve_runtime_options` now calls it unconditionally (not just for `"auto"`) so
+an admitted `"rocm:N"` actually reaches the new branch instead of bypassing it.
+The unit tests (`test_qwen_device.py::test_rocm_normalises_to_cuda`,
+`test_coqui_device.py::test_admitted_rocm_device_normalises_to_cuda`) prove the
+string conversion in isolation against a stubbed `torch` module — they do not
+prove a real ROCm/HIP torch build actually accepts the converted `"cuda:N"`
+string end to end and loads a real model onto a real AMD card with
+`SEG_CAPACITY_ADMISSION` on (the default).
+
+**2. Why this box cannot reach it.** This box is dual-NVIDIA; this will not move
+until AMD/ROCm hardware exists — same constraint as the AMD GPU support Phase 2 and
+ORT pip-consistency marker rows above.
+
+**3. What to observe, once ROCm/AMD hardware is available.** With
+`SEG_CAPACITY_ADMISSION` on, trigger a GPU engine load (Qwen Base or Coqui/XTTS)
+that the admission layer places on a ROCm card, and confirm it now succeeds
+(model resident, synth completes) rather than crashing on
+`torch.device("rocm:N")` the way it did before this fix. Criteria live in
+issue #2813 and this row.
 
 ---
 
