@@ -184,6 +184,126 @@ def test_design_waits_for_in_flight_kokoro_to_drain():
     assert order == ["kokoro-done", "design-start"]
 
 
+def test_kokoro_stays_excluded_until_the_last_concurrent_design_exits():
+    """#2809 (pass-3 review) — the arbiter must refcount its design holders.
+
+    Two designs CAN overlap: since #2809 `design_voice()` releases `card_lock`
+    partway through its `design()` span (once model load finishes, so the GPU
+    forwards run lock-free), so `card_lock` no longer makes `design()` a single
+    holder. `test_two_concurrent_healthy_designs_both_succeed` pins that
+    designs are allowed to overlap; this test pins what that overlap must NOT
+    cost — with a plain bool, whichever design exits FIRST clears the flag for
+    the other, admitting a Kokoro synth onto the card for the whole remainder of
+    the surviving design's forward. That is precisely the co-residency the
+    arbiter exists to prevent, and register row A105 bullet 4 asserts against.
+
+    Mutation that must fail this (verified) — revert `_design_active_count` to a
+    bool set True on entry and False in the exit `finally`: the Kokoro thread is
+    admitted the moment design A exits, so the `not kokoro_admitted.wait(...)`
+    assertion below flips.
+
+    Driven against a FRESH `_VdKokoroArbiter` rather than the `_VD_KOKORO`
+    singleton, so a leaked count here cannot poison other tests in the session.
+    """
+    arb = _VdKokoroArbiter()
+
+    a_entered = threading.Event()
+    b_entered = threading.Event()
+    a_may_exit = threading.Event()
+    b_may_exit = threading.Event()
+    kokoro_admitted = threading.Event()
+
+    def design_a():
+        with arb.design():
+            a_entered.set()
+            a_may_exit.wait(timeout=5)
+
+    def design_b():
+        with arb.design():
+            b_entered.set()
+            b_may_exit.wait(timeout=5)
+
+    def kokoro():
+        with arb.kokoro_synth():
+            kokoro_admitted.set()
+
+    t_a = threading.Thread(target=design_a, daemon=True)
+    t_b = threading.Thread(target=design_b, daemon=True)
+    t_a.start()
+    t_b.start()
+    try:
+        assert a_entered.wait(2), "design A never entered the arbiter — test bug"
+        assert b_entered.wait(2), (
+            "design B never entered the arbiter — designs must be allowed to "
+            "overlap (the entry gate must not wait on the design count)"
+        )
+        # Design A finishes first. B is still inside its own span.
+        a_may_exit.set()
+        t_a.join(5)
+        assert not t_a.is_alive(), "design A did not exit"
+
+        # A Kokoro synth arriving now must still be BLOCKED — design B's
+        # forward is conceptually still on the card.
+        t_k = threading.Thread(target=kokoro, daemon=True)
+        t_k.start()
+        assert not kokoro_admitted.wait(0.5), (
+            "Kokoro was admitted while design B was still holding the arbiter — "
+            "one design's exit cleared the exclusion for another's still-running "
+            "forward, so both can co-reside on the card (#2809 pass-3 finding)."
+        )
+
+        # Once the LAST design leaves, Kokoro is admitted.
+        b_may_exit.set()
+        t_b.join(5)
+        assert kokoro_admitted.wait(2), (
+            "Kokoro was never admitted after the last design exited — the "
+            "refcount did not drain to zero"
+        )
+        t_k.join(5)
+    finally:
+        a_may_exit.set()
+        b_may_exit.set()
+        t_a.join(5)
+        t_b.join(5)
+
+
+def test_design_refcount_decrements_when_a_design_raises_mid_span():
+    """#2809 (pass-3 review) — a design that raises inside its `design()` span
+    must still decrement the refcount, or the arbiter latches and every later
+    Kokoro synth blocks forever. The decrement lives in the context manager's
+    `finally`, so this pins that it is genuinely a `finally` and not a trailing
+    statement on the happy path.
+    """
+    arb = _VdKokoroArbiter()
+
+    class _Boom(Exception):
+        pass
+
+    with pytest.raises(_Boom):
+        with arb.design():
+            assert arb._design_active_count == 1
+            raise _Boom("forward blew up mid-span")
+
+    assert arb._design_active_count == 0, (
+        "refcount did not drain after a design raised mid-span — the arbiter is "
+        "latched and Kokoro will block forever"
+    )
+    assert arb._design_active is False
+
+    # And prove a Kokoro synth is actually admitted afterwards, rather than
+    # merely that a counter reads zero.
+    admitted = threading.Event()
+
+    def kokoro():
+        with arb.kokoro_synth():
+            admitted.set()
+
+    t = threading.Thread(target=kokoro, daemon=True)
+    t.start()
+    assert admitted.wait(2), "Kokoro still blocked after the failed design"
+    t.join(5)
+
+
 def test_kokoro_blocks_while_design_active():
     arb = _VdKokoroArbiter()
     order = []

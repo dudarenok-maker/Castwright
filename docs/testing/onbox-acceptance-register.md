@@ -3426,6 +3426,16 @@ span to close a race where concurrent `mint_variant()` could reload base17 mid-e
 Unit tests cannot prove VRAM co-residency, eviction ordering, or Stop-button success
 against the real model weights and sidecar lifecycle.
 
+**Extended by #2809 / PR [#2810](https://github.com/dudarenok-maker/Castwright/pull/2810).**
+PR #2790 left `_VD_KOKORO.design()` closing *before* the VoiceDesign GPU forwards, so
+Kokoro was not actually excluded during the forward the exclusion exists for; #2809
+widened the arbiter to span the forwards while keeping `card_lock` released across them
+and the base17 eviction outside the arbiter. That inverts this row's third criterion
+(Kokoro is now *expected* to pause for a design forward) and adds two more — the
+co-residency observation the widening restores, and a lock-leak check for the
+`Base17ContentionTimeoutError` path, where a `card_lock` acquired before the eviction was
+never released.
+
 - **Widened eviction guard prevents OOM in #1156 scenario.** On a single 8 GB GPU,
   start a mint (`mint_variant()`) or a 1.7B synth so base17 begins loading — while
   that load is in flight (`_base17_in_flight.busy`, `_base17` still `None`), trigger a
@@ -3442,16 +3452,57 @@ against the real model weights and sidecar lifecycle.
   base17 1.7B model freed), proving the unconditional null at `wait_seconds<=0`
   succeeded rather than the pass-1 regression (raising `Base17ContentionTimeoutError`
   and freeing nothing).
-- **Bulk design run doesn't stall Kokoro.** With Kokoro resident, start a design run
-  (bulk "Design full cast" or repeated single-character designs), and concurrently
-  request a chapter render on a Kokoro voice in the same book. Confirm the render
-  completes within its normal wall-clock time (not paused/stalled waiting for base17
-  eviction). The eviction-wait moved outside the VoiceDesign block ensures this.
+- **Bulk design run stalls Kokoro for the VoiceDesign forward — and ONLY for that.**
+  (Reworded by #2809 / PR #2810, which corrected the arbiter's scope. The two halves
+  below are deliberately opposite; a pass needs both.) With Kokoro resident, start a
+  design run (bulk "Design full cast" or repeated single-character designs), and
+  concurrently request a chapter render on a Kokoro voice in the same book.
+  - *Kokoro MUST pause while any design holds the arbiter.* `_VD_KOKORO.design()`
+    spans model load **through the GPU forwards** since #2809, so a Kokoro sentence
+    overlapping a design is expected to block until the arbiter clears. Before
+    #2809 the arbiter closed before the forwards, and this pause did not happen.
+    **A render that sails through a design forward unpaused is the FAILURE here —
+    the length of the wait is not.** During a bulk run whose design spans overlap
+    back-to-back, the arbiter can stay held for most of the run (measured at
+    #2809 pass 4: Kokoro waited 6.5 s against a 1 s design span, i.e. essentially
+    the whole run), because the refcount only reaches zero when the LAST design
+    leaves and the wait is unbounded. That is the price of the exclusion, not a
+    defect, and serialising designs would not shorten it. Record the wait you
+    observe; only escalate if a chapter render actually FAILS — the ceilings are
+    `SYNTH_CALL_TIMEOUT_MS` (600 s) and `CHAPTER_NO_PROGRESS_MS` (720 s), neither
+    of which has been reached in practice.
+  - *Kokoro MUST NOT pause for the base17 eviction wait.* That wait can run up to
+    `_BASE17_CONTENTION_WAIT_S_DEFAULT` (~150 s) and stays deliberately OUTSIDE the
+    arbiter (#2070 review R5). A Kokoro sentence blocking for tens of seconds while
+    the log shows only "Evicting resident/in-flight Qwen 1.7B-Base" — with no design
+    forward yet in flight — is a FAILURE.
+- **A VoiceDesign forward and a Kokoro synth never co-reside on the card.**
+  (Added by #2809 / PR #2810 — the property the reworded bullet above exists to
+  protect, observed directly rather than by wall-clock inference.) During the same
+  overlap, sample `nvidia-smi` (or the sidecar's own device log) across a design
+  forward that a Kokoro request arrives during. Confirm the card never shows the
+  Kokoro model and the VoiceDesign 1.7B resident simultaneously — the Kokoro synth
+  starts only after the design forward has completed and the arbiter has cleared.
+  **Repeat with TWO designs overlapping** (two characters designed back-to-back so
+  their spans interleave — the bulk "Design full cast" shape). The arbiter
+  refcounts its holders since #2809 pass 3, so Kokoro must stay blocked until the
+  **last** design leaves, not the first: a Kokoro synth admitted while a second
+  design is still forwarding is the exact regression that criterion guards.
+- **A failed base17 eviction does not wedge the card.** (Added by #2809 / PR #2810.)
+  Drive a `design_voice()` into the `Base17ContentionTimeoutError` path — start a
+  base17 load and trigger a design against it such that the bounded wait expires
+  (lower `_BASE17_CONTENTION_WAIT_S_DEFAULT` if needed to reach it). Confirm the
+  design fails with that error AND that the **next** design and the next
+  `mint_variant()` on the same card still run normally rather than failing/hanging on
+  the per-card lock. `card_lock` instances are cached for the process lifetime, so a
+  leak here is only observable as "every later design on this card fails until the
+  sidecar restarts" — which is exactly what a green next-design proves absent.
 
 *Needs:* single 8 GB GPU card, Qwen base17 weights (`server/tts-sidecar/voices/qwen/base17/`),
-Qwen VoiceDesign 1.7B model, real sidecar, optionally Kokoro resident for the third criterion.
-*Criteria:* the three bullets above — no separate run sheet.
-*Cost:* moderate — three concurrent-load/eviction scenarios + VRAM observation.
+Qwen VoiceDesign 1.7B model, real sidecar, Kokoro resident for the third and fourth criteria.
+*Criteria:* the five bullets above — no separate run sheet.
+*Cost:* moderate — concurrent-load/eviction scenarios + VRAM observation, plus one
+forced-contention run for the lock-leak criterion.
 
 ## Group B — local Ollama analyzer only
 
