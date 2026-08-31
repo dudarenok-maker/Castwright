@@ -15,6 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readdirSync } from 'node:fs';
 import { computeScopes } from '../ci-scope.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
@@ -147,6 +148,75 @@ test('aggregator sentinel: detect is in needs: and its result/ok are checked fir
     sentinelBody,
     /needs\.detect\.outputs\.ok[^\n]*!=\s*"true"/,
     'sentinel does not gate on needs.detect.outputs.ok != "true"',
+  );
+});
+
+test('leg-result check: needs.json is validated before processing', () => {
+  const jobBlocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const aggregator = jobBlocks.find(([, name]) => name === 'verify');
+  assert.ok(aggregator, 'aggregator job `verify` not found');
+  const [, , body] = aggregator;
+
+  const legCheckBody = body.slice(body.indexOf('- name: Check leg results'));
+  assert.ok(
+    legCheckBody,
+    'no "Check leg results" step found in the verify aggregator job',
+  );
+
+  // Guard against jq failures inside command substitutions (set -e does not
+  // catch those): the step must validate needs.json is parseable JSON before
+  // trying to use it, and must guard the `for job in $(jq ...)` with an
+  // explicit error check — not just relying on errexit inside $(...)
+  // Extract just the JSON guard block (from `if ! jq` to matching `fi`) so
+  // the assertion can't accidentally match an unrelated `exit 1` far below
+  // (e.g. in the case statement).
+  const jsonGuardStart = legCheckBody.indexOf('if ! jq -e . needs.json');
+  const jsonGuardEnd = legCheckBody.indexOf('fi', jsonGuardStart);
+  assert.ok(
+    jsonGuardStart !== -1 && jsonGuardEnd !== -1,
+    'JSON guard block not found (expected "if ! jq -e . needs.json ... fi")',
+  );
+  const jsonGuardBlock = legCheckBody.slice(jsonGuardStart, jsonGuardEnd + 2);
+
+  assert.match(
+    jsonGuardBlock,
+    /exit\s+1/,
+    'JSON guard block does not contain "exit 1" to fail closed on invalid JSON',
+  );
+
+  assert.match(
+    legCheckBody,
+    /job_list="\$\(jq\s+-r\s+'keys\[\]'\s+needs\.json\)"\s*\|\|\s*\{/,
+    'step does not guard the jq "keys[]" call with explicit error checking (||)',
+  );
+});
+
+test('leg-result check: case statement has default arm for unrecognized results', () => {
+  const jobBlocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const aggregator = jobBlocks.find(([, name]) => name === 'verify');
+  assert.ok(aggregator, 'aggregator job `verify` not found');
+  const [, , body] = aggregator;
+
+  const legCheckBody = body.slice(body.indexOf('- name: Check leg results'));
+  assert.ok(
+    legCheckBody,
+    'no "Check leg results" step found in the verify aggregator job',
+  );
+
+  // The case statement must have an explicit `success) ;;` arm so unrecognized
+  // results fall into the default `*)` arm, not the success path.
+  assert.match(
+    legCheckBody,
+    /success\)\s*;;/,
+    'case statement is missing explicit `success) ;;` arm',
+  );
+
+  // The case statement must have a default `*)` arm that treats unrecognized
+  // results as failures — deny-list polarity (fail closed on unknown values).
+  assert.match(
+    legCheckBody,
+    /\*\)\s+echo\s+"::warning::[^"]*\$result[^"]*"[^;]*;?\s*FAILED\+=\(/,
+    'case statement is missing default `*)` arm that treats unrecognized results as failures',
   );
 });
 
@@ -980,5 +1050,126 @@ test('coverage parity: no derived condition silently narrows a leg', () => {
     `derivation silently narrowed coverage:\n${regressions.join('\n')}\n\n` +
       `Either widen the step's inputs in verify-cache.mjs, or add an entry to ` +
       `ACCEPTED_NARROWINGS with a reason.`,
+  );
+});
+
+test('ffmpeg install: timeout wrapping is present with correct bounds on all apt/dpkg commands', () => {
+  const actionPath = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg', 'action.yml');
+  const actionSource = readNormalized(actionPath);
+
+  // Mutation proof: a deliberately-hung install was caught by the 180s timeout
+  // wrapper (PR #2796 mutations). Assert all three apt/dpkg calls carry the
+  // timeout, so a future edit can't drop it without this test failing.
+  const patterns = [
+    /sudo\s+timeout\s+-k\s+10\s+180\s+dpkg\s+-i/,
+    /sudo\s+timeout\s+-k\s+10\s+180\s+apt-get\s+-o\s+Acquire::Retries=3\s+update/,
+    /sudo\s+timeout\s+-k\s+10\s+180\s+apt-get\s+-o\s+Dir::Cache::Archives/,
+  ];
+
+  const missing = [];
+  for (const [idx, pattern] of patterns.entries()) {
+    if (!pattern.test(actionSource)) {
+      missing.push(`pattern ${idx}: ${pattern.source}`);
+    }
+  }
+
+  assert.deepEqual(
+    missing,
+    [],
+    `ffmpeg install action is missing timeout wrapping or has wrong bounds:\n${missing.join('\n')}`,
+  );
+});
+
+test('ffmpeg install: no bare apt-get install ffmpeg in workflows (use install-ffmpeg action)', () => {
+  // Issue #2449: unretried `sudo apt-get update && sudo apt-get install -y ffmpeg`
+  // hangs on mirror timeouts and burns entire job timeouts. This regression test
+  // ensures all workflows use the new cached, retried, timeout-bounded
+  // install-ffmpeg composite action instead of the bare pattern.
+  const workflowDir = resolve(repoRoot, '.github', 'workflows');
+  const workflows = readdirSync(workflowDir).filter((f) => f.endsWith('.yml'));
+
+  const bareInstalls = [];
+  for (const workflowFile of workflows) {
+    const workflowPath = resolve(workflowDir, workflowFile);
+    const workflowSource = readNormalized(workflowPath);
+    // Catch all forms of the bare ffmpeg-apt-get pattern: single-line with && or ;,
+    // or multi-line run blocks containing apt-get update and apt-get install with ffmpeg.
+    // This catches the #2449 hang pattern in all its forms.
+
+    // Extract each step (indented at 6 spaces: "      - name: ...").
+    // Each step's body continues with 8+ spaces until the next step or end.
+    const steps = [...workflowSource.matchAll(/^ {6}- name: ([^\n]+)\n((?: {8}[^\n]*\n)*)/gm)];
+
+    for (const [, , stepBody] of steps) {
+      // Skip if this is the approved install-ffmpeg action
+      if (/uses:\s*\.\/\.github\/actions\/install-ffmpeg/.test(stepBody)) {
+        continue;
+      }
+
+      // Check if this step contains the bare pattern: apt-get update, apt-get install, and ffmpeg
+      // This catches: single-line with && or ;, multi-line run blocks, and other variants
+      if (/apt-get\s+update/.test(stepBody) && /apt-get\s+install/.test(stepBody) && /ffmpeg/.test(stepBody)) {
+        bareInstalls.push(workflowFile);
+        break;
+      }
+    }
+  }
+
+  assert.deepEqual(
+    bareInstalls,
+    [],
+    `workflow(s) still contain bare \`sudo apt-get update && sudo apt-get install -y ffmpeg\` pattern. ` +
+      `Replace with \`uses: ./.github/actions/install-ffmpeg\` to ensure caching, retries, and hang timeout:\n${bareInstalls.join('\n')}`,
+  );
+});
+
+test('leg-result check: cancelled/failed/skipped bucketing is present and all three are checked on exit', () => {
+  const jobBlocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const aggregator = jobBlocks.find(([, name]) => name === 'verify');
+  assert.ok(aggregator, 'aggregator job `verify` not found');
+  const [, , body] = aggregator;
+
+  const legCheckBody = body.slice(body.indexOf('- name: Check leg results'));
+  assert.ok(
+    legCheckBody,
+    'no "Check leg results" step found in the verify aggregator job',
+  );
+
+  // Mutation proof 1: the base `timeout 180` mechanism (SIGTERM at 180s) was
+  // verified to fire via a manually-hung mutation test branch (described in PR
+  // #2796's body). The source-regex test above verifies the `-k 10` (SIGKILL at
+  // 10s grace-period end) flag's *presence* in the code by pattern match, but no
+  // live CI run has yet verified the SIGKILL signal actually fires — that would
+  // require another expensive hang-simulation branch. This assertion guards
+  // against accidental removal of either the timeout or the -k flag.
+  // Mutation proof 2: GitHub-cancelled jobs are bucketed distinctly from
+  // FAILED/SKIPPED by separate case arms. Assert all three case arms exist so
+  // the bucketing logic can't accidentally collapse them.
+  const casesPresent = [
+    /cancelled\)\s+CANCELLED\+=\(/,
+    /failure\)\s+FAILED\+=\(/,
+    /skipped\)\s+SKIPPED\+=\(/,
+  ];
+
+  const missingCases = [];
+  for (const [idx, pattern] of casesPresent.entries()) {
+    if (!pattern.test(legCheckBody)) {
+      missingCases.push(`case ${idx}: ${pattern.source}`);
+    }
+  }
+
+  assert.deepEqual(
+    missingCases,
+    [],
+    `leg-result check is missing case arm(s) for bucketing:\n${missingCases.join('\n')}`,
+  );
+
+  // The final exit condition must gate on ALL THREE arrays, not a subset.
+  // A future edit that drops one of the three (e.g. stops checking CANCELLED)
+  // would fail this assertion.
+  assert.match(
+    legCheckBody,
+    /if\s*\[\s*"\$\{#CANCELLED\[@\]\}"\s+-gt\s+0\s*\]\s+\|\|\s+\[\s*"\$\{#FAILED\[@\]\}"\s+-gt\s+0\s*\]\s+\|\|\s+\[\s*"\$\{#SKIPPED\[@\]\}"\s+-gt\s+0\s*\]/,
+    'exit condition does not check all three arrays (CANCELLED, FAILED, SKIPPED)',
   );
 });

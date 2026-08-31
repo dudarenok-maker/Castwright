@@ -298,7 +298,7 @@ jobs:
       # supports: test:server
       - name: Install ffmpeg
         if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
 
       # `--changed <base>` narrows both server configs to diff-affected tests
       # (CI cost round 2). The slow config still serial-runs ONLY the hot files
@@ -417,7 +417,7 @@ jobs:
       # supports: test:e2e
       - name: Install ffmpeg
         if: fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
 
       # supports: test:e2e
       - name: Cache Playwright browsers
@@ -471,7 +471,7 @@ jobs:
       # supports: test:e2e:visual
       - name: Install ffmpeg
         if: fromJSON(needs.detect.outputs.scopes).step_test_e2e_visual || fromJSON(needs.detect.outputs.scopes).shared
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
 
       # supports: test:e2e:visual
       - name: Cache Playwright browsers
@@ -553,10 +553,59 @@ jobs:
         # two — so an upstream `detect` failure (which SKIPS every leg job
         # rather than failing it, since they `needs: detect`) still fails
         # this aggregator instead of silently reporting green.
+        #
+        # `needs.*.result` (expression syntax) only gives the flat list of
+        # results, not which job produced which — so a raw toJSON(needs) dump
+        # was the only way to tell WHICH leg was cancelled vs. genuinely
+        # failed, and a human had to parse that JSON by eye to see it (costing
+        # ~50 minutes on PR #2424, three apt-hang cancellations misread as
+        # real test failures). Bucket by job name via jq instead so the log
+        # itself says which legs were cancelled (likely CI infra) vs. failed.
+        #
+        # ROBUSTNESS GUARD (ops-2449): bash's `set -e` does not trip on
+        # command-substitution failures inside for/while word lists, so a
+        # missing/corrupt needs.json would silently exit 0. Validate JSON after
+        # writing it, and guard each jq call with explicit error checking rather
+        # than relying on errexit inside $(...) command substitutions.
         run: |
-          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" == "true" ]]; then
+          echo '${{ toJSON(needs) }}' > needs.json
+
+          # Fail closed if needs.json is not valid JSON
+          if ! jq -e . needs.json > /dev/null 2>&1; then
+            echo "::error::needs.json is not valid JSON — cannot verify leg results, refusing to report green"
+            cat needs.json
+            exit 1
+          fi
+
+          CANCELLED=()
+          FAILED=()
+          SKIPPED=()
+
+          # Capture the job list and check jq exit code explicitly (errexit
+          # does not catch failures inside command-substitution word lists).
+          job_list="$(jq -r 'keys[]' needs.json)" || {
+            echo "::error::failed to list job keys from needs.json"
+            exit 1
+          }
+
+          for job in $job_list; do
+            result="$(jq -r --arg j "$job" '.[$j].result' needs.json)" || {
+              echo "::error::failed to read result for job '$job'"
+              exit 1
+            }
+            case "$result" in
+              cancelled) CANCELLED+=("$job") ;;
+              failure) FAILED+=("$job") ;;
+              skipped) SKIPPED+=("$job") ;;
+              success) ;;
+              *) echo "::warning::job '$job' has unrecognized result '$result' — treating as failed"; FAILED+=("$job") ;;
+            esac
+          done
+          if [ "${#CANCELLED[@]}" -gt 0 ] || [ "${#FAILED[@]}" -gt 0 ] || [ "${#SKIPPED[@]}" -gt 0 ]; then
             echo "One or more verify legs did not succeed:"
-            echo '${{ toJSON(needs) }}'
+            [ "${#CANCELLED[@]}" -gt 0 ] && echo "CANCELLED (likely CI infra, not a test failure): ${CANCELLED[*]}"
+            [ "${#FAILED[@]}" -gt 0 ] && echo "FAILED: ${FAILED[*]}"
+            [ "${#SKIPPED[@]}" -gt 0 ] && echo "SKIPPED: ${SKIPPED[*]}"
             exit 1
           fi
           echo "All verify legs passed."
