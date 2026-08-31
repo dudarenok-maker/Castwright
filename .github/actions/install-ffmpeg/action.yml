@@ -69,6 +69,10 @@ runs:
         mkdir -p "$ARCHIVE_DIR"
         if [ "${{ steps.apt-cache.outputs.cache-hit }}" = "true" ]; then
           echo "apt cache hit: installing ffmpeg from $ARCHIVE_DIR, skipping apt-get"
+          # dpkg -i skips apt's signature verification that `apt-get install` performs.
+          # This is acceptable: the cache was populated by this same action's prior
+          # `apt-get install` run (itself signature-verified), and actions/cache entries
+          # are scoped to this repo, not shared across repos.
           timeout -k 10 180 sudo dpkg -i "$ARCHIVE_DIR"/*.deb
         else
           echo "apt cache miss: installing ffmpeg via apt-get"
