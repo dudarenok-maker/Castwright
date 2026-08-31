@@ -137,7 +137,7 @@
     "globals": "^17",
     "husky": "^9.1.7",
     "jest-axe": "^11.0.0",
-    "jsdom": "^30",
+    "jsdom": "^29",
     "openapi-typescript": "^7.0.0",
     "picomatch": "^4.0.7",
     "postcss": "^8.5.26",
