@@ -234,6 +234,75 @@ def test_two_kokoro_synths_run_concurrently_when_no_design():
     assert not errors, f"Kokoro synths could not run concurrently: {errors}"
 
 
+def test_overlapping_designs_keep_kokoro_blocked_until_the_last_one_exits():
+    """Two design spans can legitimately overlap: `design_voice()` holds the
+    arbiter across its GPU forwards (#2809) and `mint_variant()` holds it across
+    its own, and `design()` drains only Kokoro — it does NOT exclude another
+    design. So the flag must clear when the LAST span exits, not the first;
+    otherwise the earlier-finishing design releases Kokoro straight into the
+    still-running one's forward, which is the exact co-residency the arbiter
+    exists to prevent."""
+    arb = _VdKokoroArbiter()
+    both_in = threading.Barrier(2, timeout=2)
+    first_exited = threading.Event()
+    second_may_exit = threading.Event()
+    order = []
+    errors = []
+
+    def first():
+        try:
+            with arb.design():
+                both_in.wait()
+            order.append("first-design-done")
+            first_exited.set()
+        except Exception as e:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(e)
+            first_exited.set()
+
+    def second():
+        try:
+            with arb.design():
+                both_in.wait()
+                first_exited.wait(timeout=2)
+                second_may_exit.wait(timeout=2)
+            order.append("second-design-done")
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    def kokoro():
+        first_exited.wait(timeout=2)
+        try:
+            with arb.kokoro_synth():
+                order.append("kokoro-start")
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [threading.Thread(target=f) for f in (first, second, kokoro)]
+    for t in threads:
+        t.start()
+    first_exited.wait(timeout=2)
+    # Give the Kokoro thread a chance to (wrongly) proceed before releasing the
+    # second design — without this window the assertion below could pass simply
+    # by winning a race rather than by the arbiter holding the line.
+    time.sleep(0.1)
+    still_held = arb._design_active
+    leaked = "kokoro-start" in order
+    second_may_exit.set()
+    for t in threads:
+        t.join(timeout=3)
+
+    assert not errors, f"threads raised: {errors}"
+    assert still_held is True, (
+        "the first design's exit cleared the shared flag while a second design "
+        "was still holding the arbiter"
+    )
+    assert not leaked, (
+        "Kokoro was admitted while a second design span was still open — a "
+        "Kokoro synth can now co-reside with a VoiceDesign forward"
+    )
+    assert order == ["first-design-done", "second-design-done", "kokoro-start"]
+
+
 def test_kokoro_synthesize_acquires_the_arbiter(monkeypatch):
     """KokoroEngine.synthesize must run its load+create under the arbiter so a
     concurrent design can't start mid-synth."""

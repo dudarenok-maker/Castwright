@@ -1403,8 +1403,21 @@ class _VdKokoroArbiter:
     def __init__(self, shares_device: bool = True) -> None:
         self._cv = threading.Condition()
         self._kokoro_in_flight = 0
-        self._design_active = False
+        # Depth, not a bool: `design()` drains Kokoro but deliberately does NOT
+        # exclude another design, so two spans overlap routinely — `design_voice()`
+        # holds one across its GPU forwards (#2809) while `mint_variant()` holds
+        # one across its own. A bare flag let the FIRST span to exit clear it out
+        # from under the second, admitting a Kokoro synth into the still-running
+        # forward (the very co-residency this class exists to prevent). Counting
+        # makes the flag clear on the LAST exit.
+        self._design_depth = 0
         self._shares_device = shares_device
+
+    @property
+    def _design_active(self) -> bool:
+        """True while ANY design span is open. Read-only view over the depth
+        counter (deliberately has no setter — the depth is the source of truth)."""
+        return self._design_depth > 0
 
     @contextmanager
     def kokoro_synth(self):
@@ -1430,12 +1443,15 @@ class _VdKokoroArbiter:
         with self._cv:
             while self._kokoro_in_flight > 0:
                 self._cv.wait()
-            self._design_active = True
+            self._design_depth += 1
         try:
             yield
         finally:
             with self._cv:
-                self._design_active = False
+                self._design_depth -= 1
+                # Notify unconditionally: waiters re-check `_design_active` in
+                # their own loop, so a wake-up while another span is still open
+                # is a no-op rather than a lost wake-up if depth just hit 0.
                 self._cv.notify_all()
 
 
@@ -6674,8 +6690,13 @@ class QwenEngine(Engine):
                 # mint_variant() can reload base17 after VoiceDesign load finishes,
                 # since VoiceDesign is then resident and doesn't compete for VRAM
                 # with base17 (VoiceDesign is freed after design completes).
-                # The lock nests outside the _VD_KOKORO.design() block (not inside)
-                # to avoid interfering with the Kokoro arbiter.
+                # The card lock is acquired OUTSIDE the _VD_KOKORO.design() block but
+                # released INSIDE it (see the nested finally below), so the arbiter
+                # stays held through the GPU forwards while the card lock still ends
+                # at model load. Acquiring it outside preserves the global order
+                # card_lock -> arbiter that mint_variant() takes at its single
+                # combined `with` (line ~7052); acquiring it inside would invert that
+                # order between the two paths and deadlock them against each other.
                 # The acquire is bounded (not unbounded) to prevent indefinite hangs
                 # if a concurrent mint_variant() holds the lock for an extended period.
                 card_lock = _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx())
@@ -6685,6 +6706,7 @@ class QwenEngine(Engine):
                         f"base17 load/mint or another design's model load has held it for over "
                         f"{_BASE17_CONTENTION_WAIT_S_DEFAULT:.0f}s. Retry the design shortly."
                     )
+                card_lock_released = False
                 try:
                     if self._base17 is not None or self._base17_in_flight.busy:
                         log.info("Evicting resident/in-flight Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
@@ -6697,6 +6719,15 @@ class QwenEngine(Engine):
                             poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT,
                         )
 
+                    # #2809 — this block must stay open through the GPU forwards
+                    # below, not just the model load. `_design_active` is what makes
+                    # `kokoro_synth()` block, and the contention it exists to prevent
+                    # is a Kokoro synth running DURING the VoiceDesign forward, not
+                    # during its load. #2790 narrowed `card_lock` to end at model load
+                    # (correct) and collapsed this block to the same window with it
+                    # (not correct) — the forwards then ran with `_design_active`
+                    # already cleared. mint_variant() holds the arbiter across its own
+                    # `_synth_lock` forward block for the same reason (line ~7052).
                     with _VD_KOKORO.design():
                         _kokoro_eng = ENGINES.get("kokoro")
                         if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
@@ -6716,75 +6747,89 @@ class QwenEngine(Engine):
                         # leaves `_device_pref` untouched (flag-off byte-for-byte).
                         self._ensure_design_loaded(device=device)
                         self._ensure_base_loaded(device=device)
+
+                        # Phase boundary: everything above was Kokoro-evict + (cold)
+                        # model load under card_lock; everything below is GPU forwards.
+                        # `load_ms` isolates the cold-start cost (the transient 1.7B
+                        # VoiceDesign load the operator suspects) from the design
+                        # forward itself.
+                        #
+                        # The card lock's job ends here (#2790): releasing it lets a
+                        # concurrent base17 load/mint proceed, since a resident
+                        # VoiceDesign doesn't compete with base17 for VRAM (the design
+                        # frees VoiceDesign on completion). The release happens HERE,
+                        # inside the arbiter, rather than in the enclosing `finally` —
+                        # that is what keeps `_design_active` set across the forwards
+                        # below (#2809) while still ending the card lock at model load.
+                        # The enclosing `finally` covers every path that raises before
+                        # reaching this line.
+                        card_lock.release()
+                        card_lock_released = True
+
+                        load_ms = (time.perf_counter() - t0) * 1000.0
+                        # Serialise the GPU forwards against any concurrent synth/design — see
+                        # `_synth_lock` in __init__ (the Base model isn't thread-safe).
+                        with self._synth_lock:
+                            # Capture UNDER the lock instead of silently re-ensuring
+                            # (#2021 — extends #1975's AUDITION-forward pattern to
+                            # this, the heaviest forward in the process:
+                            # `_ensure_design_loaded()` pulls the ~4-5 GB VoiceDesign
+                            # model, the longest possible Stop-blocking pull in
+                            # QwenEngine. Every in-place nuller of `_design`/`_base`
+                            # (the idle watchdog, a concurrent /synthesize's
+                            # unload_design, a full /unload) holds `_synth_lock`, so
+                            # a model ensured before we took the lock may have been
+                            # freed in the gap — raise loud instead of silently
+                            # absorbing that race with an in-lock re-pull that would
+                            # itself hold `_synth_lock` for the whole cold load.
+                            design = self._design
+                            if design is None:
+                                # #2070 fixed the ordinary-synth race this used to
+                                # cover: `unload_design()` now waits (bounded) on
+                                # `_design_in_flight` before nulling `_design`, and
+                                # THIS call is what holds it busy, so a concurrent
+                                # /synthesize's unload_design can no longer land
+                                # here mid-design. What remains is a genuinely
+                                # explicit action — a full /unload landing in the
+                                # gap between `_ensure_design_loaded()` above and
+                                # this lock acquire — which deliberately is NOT
+                                # gated by the design-wins policy (an explicit
+                                # Stop must still be able to free the model). Raise
+                                # loud rather than silently absorbing that race
+                                # with an in-lock re-pull that would itself hold
+                                # `_synth_lock` for the whole cold load.
+                                raise RuntimeError(
+                                    "Qwen VoiceDesign model was unloaded before "
+                                    "this design could render — reload it and "
+                                    "retry."
+                                )
+                            base = self._base
+                            if base is None:
+                                raise RuntimeError(
+                                    "Qwen Base model was unloaded before this "
+                                    "design could render — reload it and retry."
+                                )
+                            # 1. design a reference clip from the persona instruction.
+                            _phase("designing")
+                            _t = time.perf_counter()
+                            ref_wavs, ref_sr = design.generate_voice_design(
+                                text=ref_text, language=lang, instruct=instruct
+                            )
+                            design_fwd_ms = (time.perf_counter() - _t) * 1000.0
+                            ref_audio = ref_wavs[0]
+
+                            # 2. distil into a reusable clone prompt on the Base model.
+                            _phase("distilling")
+                            _t = time.perf_counter()
+                            prompt = base.create_voice_clone_prompt(
+                                ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                            )
+                            distil_ms = (time.perf_counter() - _t) * 1000.0
                 finally:
-                    card_lock.release()
-
-                # Phase boundary: everything above was Kokoro-evict + (cold) model
-                # load under card_lock; everything below is GPU forwards. `load_ms`
-                # isolates the cold-start cost (the transient 1.7B VoiceDesign load
-                # the operator suspects) from the design forward itself. Card lock
-                # is released above to allow concurrent base17 load/mint, since
-                # VoiceDesign resident doesn't compete with base17 (design frees
-                # VoiceDesign after completion).
-                load_ms = (time.perf_counter() - t0) * 1000.0
-                # Serialise the GPU forwards against any concurrent synth/design — see
-                # `_synth_lock` in __init__ (the Base model isn't thread-safe).
-                with self._synth_lock:
-                    # Capture UNDER the lock instead of silently re-ensuring
-                    # (#2021 — extends #1975's AUDITION-forward pattern to
-                    # this, the heaviest forward in the process:
-                    # `_ensure_design_loaded()` pulls the ~4-5 GB VoiceDesign
-                    # model, the longest possible Stop-blocking pull in
-                    # QwenEngine. Every in-place nuller of `_design`/`_base`
-                    # (the idle watchdog, a concurrent /synthesize's
-                    # unload_design, a full /unload) holds `_synth_lock`, so
-                    # a model ensured before we took the lock may have been
-                    # freed in the gap — raise loud instead of silently
-                    # absorbing that race with an in-lock re-pull that would
-                    # itself hold `_synth_lock` for the whole cold load.
-                    design = self._design
-                    if design is None:
-                        # #2070 fixed the ordinary-synth race this used to
-                        # cover: `unload_design()` now waits (bounded) on
-                        # `_design_in_flight` before nulling `_design`, and
-                        # THIS call is what holds it busy, so a concurrent
-                        # /synthesize's unload_design can no longer land
-                        # here mid-design. What remains is a genuinely
-                        # explicit action — a full /unload landing in the
-                        # gap between `_ensure_design_loaded()` above and
-                        # this lock acquire — which deliberately is NOT
-                        # gated by the design-wins policy (an explicit
-                        # Stop must still be able to free the model). Raise
-                        # loud rather than silently absorbing that race
-                        # with an in-lock re-pull that would itself hold
-                        # `_synth_lock` for the whole cold load.
-                        raise RuntimeError(
-                            "Qwen VoiceDesign model was unloaded before "
-                            "this design could render — reload it and "
-                            "retry."
-                        )
-                    base = self._base
-                    if base is None:
-                        raise RuntimeError(
-                            "Qwen Base model was unloaded before this "
-                            "design could render — reload it and retry."
-                        )
-                    # 1. design a reference clip from the persona instruction.
-                    _phase("designing")
-                    _t = time.perf_counter()
-                    ref_wavs, ref_sr = design.generate_voice_design(
-                        text=ref_text, language=lang, instruct=instruct
-                    )
-                    design_fwd_ms = (time.perf_counter() - _t) * 1000.0
-                    ref_audio = ref_wavs[0]
-
-                    # 2. distil into a reusable clone prompt on the Base model.
-                    _phase("distilling")
-                    _t = time.perf_counter()
-                    prompt = base.create_voice_clone_prompt(
-                        ref_audio=(ref_audio, ref_sr), ref_text=ref_text
-                    )
-                    distil_ms = (time.perf_counter() - _t) * 1000.0
+                    # Every path that raises before the in-block release above
+                    # still has to drop the card lock.
+                    if not card_lock_released:
+                        card_lock.release()
 
                 # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
                 os.makedirs(self._voices_dir, exist_ok=True)
