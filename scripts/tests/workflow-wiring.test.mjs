@@ -1110,7 +1110,7 @@ test('leg-result check: cancelled/failed/skipped bucketing is present and all th
   // would fail this assertion.
   assert.match(
     legCheckBody,
-    /if\s*\[\s*"\$\{\#CANCELLED\[\@\]\}"\s+-gt\s+0\s*\]\s+\|\|\s+\[\s*"\$\{\#FAILED\[\@\]\}"\s+-gt\s+0\s*\]\s+\|\|\s+\[\s*"\$\{\#SKIPPED\[\@\]\}"\s+-gt\s+0\s*\]/,
+    /if\s*\[\s*"\$\{#CANCELLED\[@\]\}"\s+-gt\s+0\s*\]\s+\|\|\s+\[\s*"\$\{#FAILED\[@\]\}"\s+-gt\s+0\s*\]\s+\|\|\s+\[\s*"\$\{#SKIPPED\[@\]\}"\s+-gt\s+0\s*\]/,
     'exit condition does not check all three arrays (CANCELLED, FAILED, SKIPPED)',
   );
 });
