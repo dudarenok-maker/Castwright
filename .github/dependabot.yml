@@ -22,7 +22,7 @@
 # - github-actions: `directories` (plural) replaces `directory: "/"`, which
 #   only scans .github/workflows plus a ROOT action.yml/action.yaml. This
 #   repo also has TWO composite actions -- .github/actions/setup/action.yml
-#   (pins actions/setup-node@v6 + actions/cache@v5, consumed by 8 verify.yml
+#   (pins actions/setup-node + actions/cache, consumed by 8 verify.yml
 #   jobs) and .github/actions/install-ffmpeg-windows/action.yml -- that
 #   `directory: "/"` alone would silently leave unbumped. `directories`
 #   supports a glob (e.g. '/.github/actions/*') for the npm/pip ecosystems,
