@@ -213,7 +213,24 @@ def _add_nvidia_dll_dirs_to_path() -> list[str]:
         return []
     if not added:
         return []
-    os.environ["PATH"] = os.pathsep.join(added) + os.pathsep + current_path
+    # An empty pre-existing PATH must not gain a trailing separator: Windows
+    # treats an empty PATH *entry* (not an empty PATH itself) as the current
+    # directory in its DLL search order, so `"<dirs>;" ` (current_path == "")
+    # would silently add CWD to the search path used by every later lazy
+    # LoadLibrary call this function exists to serve.
+    new_path = os.pathsep.join(added) if not current_path else (
+        os.pathsep.join(added) + os.pathsep + current_path
+    )
+    try:
+        os.environ["PATH"] = new_path
+    except Exception:
+        # Genuinely never raises, matching this function's docstring — e.g. a
+        # PATH already near Windows' 32767-char ceiling raises ValueError
+        # here, which a bare `except OSError` does not catch. This function
+        # is called from the FIRST, unguarded lifespan startup handler
+        # (`_startup_ort_cuda_preload`) — a raise here would abort sidecar
+        # boot entirely instead of degrading to the documented harmless no-op.
+        return []
     return added
 
 
@@ -1486,8 +1503,26 @@ class _VdKokoroArbiter:
     def __init__(self, shares_device: bool = True) -> None:
         self._cv = threading.Condition()
         self._kokoro_in_flight = 0
-        self._design_active = False
+        # REFCOUNT, not a bool (#2809 review pass 3). Designs can overlap: since
+        # #2809 `design_voice()` releases `card_lock` partway through its
+        # `design()` span (once model load finishes, so the GPU forwards run
+        # lock-free), so `card_lock` no longer makes `design()` single-holder and
+        # a second design can enter while the first is still inside. With a bool,
+        # whichever design exited FIRST cleared the flag for the other, admitting
+        # Kokoro onto the card for the rest of the remaining design's forward —
+        # exactly the co-residency this arbiter exists to prevent. Counting
+        # holders makes the exclusion last until the LAST design leaves.
+        # Note this is exclusion bookkeeping only: the concurrent designs' actual
+        # GPU forwards are already serialised by `QwenEngine._synth_lock`, so
+        # refcounting here does not permit any new real GPU concurrency.
+        self._design_active_count = 0
         self._shares_device = shares_device
+
+    @property
+    def _design_active(self) -> bool:
+        """True while at least one design holds the arbiter. Derived from the
+        refcount so existing readers (and tests) keep their boolean contract."""
+        return self._design_active_count > 0
 
     @contextmanager
     def kokoro_synth(self):
@@ -1495,7 +1530,7 @@ class _VdKokoroArbiter:
             yield
             return
         with self._cv:
-            while self._design_active:
+            while self._design_active_count > 0:
                 self._cv.wait()
             self._kokoro_in_flight += 1
         try:
@@ -1511,14 +1546,23 @@ class _VdKokoroArbiter:
             yield
             return
         with self._cv:
+            # Entry gate unchanged: drain in-flight Kokoro synths, then claim.
+            # Deliberately does NOT wait on `_design_active_count` — concurrent
+            # designs are allowed; only Kokoro is excluded. Pinned by
+            # `test_kokoro_stays_excluded_until_the_last_concurrent_design_exits`
+            # (its `b_entered` assertion), NOT by
+            # `test_two_concurrent_healthy_designs_both_succeed` — that one still
+            # passes if this gate also waits on the design count, since its two
+            # designs would simply serialise and both still succeed (#2809 review
+            # pass 4 mutated the gate to confirm exactly that).
             while self._kokoro_in_flight > 0:
                 self._cv.wait()
-            self._design_active = True
+            self._design_active_count += 1
         try:
             yield
         finally:
             with self._cv:
-                self._design_active = False
+                self._design_active_count -= 1
                 self._cv.notify_all()
 
 
@@ -3854,8 +3898,19 @@ def _audio_duration_ms(audio: Any, sample_rate: int) -> float:
 
 def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     """Split a device knob value into (family, index). The single place that
-    understands the cuda:N grammar — every engine routes through it so an indexed
-    pin can't silently degrade. Malformed index ('cuda:x') keeps family, drops index."""
+    understands the cuda:N / rocm:N grammar — every engine routes through it so
+    an indexed pin can't silently degrade. Malformed index ('cuda:x') keeps
+    family, drops index.
+
+    `rocm:N` is handled explicitly, not just `cuda:N`-then-normalised (#2678
+    review N1): admission hands engines an ALREADY-indexed device string, and
+    on a real AMD box that string can itself read `"rocm:N"` directly (not
+    only the torch-native `"cuda:N"` that `_qwen_resident_device_key`
+    normalises via `_cuda_is_rocm()`). Without this branch a `"rocm:0"` input
+    fell through to the final `return (p, None)` with the WHOLE string
+    (`"rocm:0"`) as the family — never splitting the index — so every caller
+    gating on `fam in ("cuda", "rocm")` silently treated a resident ROCm
+    engine as absent."""
     p = (value or "auto").strip().lower()
     if p in ("", "auto"):
         return ("auto", None)
@@ -3864,6 +3919,9 @@ def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     if p.startswith("cuda"):
         _, _, idx = p.partition(":")
         return ("cuda", int(idx) if idx.isdigit() else None)
+    if p.startswith("rocm"):
+        _, _, idx = p.partition(":")
+        return ("rocm", int(idx) if idx.isdigit() else None)
     return (p, None)
 
 
@@ -5130,6 +5188,82 @@ def _is_resident(engine_id: str) -> Optional[str]:
         return None
     index = card["index"] if card["index"] is not None else 0
     return f"{card['family']}:{index}"
+
+
+def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
+    """Concrete "cuda:N"/"rocm:N" device key for a QwenEngine, valid whenever
+    ANY of its models are resident or in-flight -- the Base 0.6B (`_base is
+    not None`), the 1.7B-Base (`_base17 is not None`), or the transient
+    VoiceDesign (`_design is not None` or `_design_in_flight.busy`).
+
+    `_base17` residency counts for the same reason `_base` does (#2678 review
+    N3): `_ensure_base17_loaded` mirrors `_ensure_base_loaded` exactly --
+    same `_cold_load_lock`, same `_ensure_device_resolved()` call setting the
+    ONE shared `self._device` before its weights pull -- so a resident-only-
+    `_base17` engine is genuinely on a concrete device, same as a
+    resident-only-`_base` one; the sentinel used elsewhere for this tier is
+    `health()`'s own `qwen_base17_loaded = qwen._base17 is not None`.
+    Omitting it reproduced, for `_base17`, the exact `_engine_actual_card`
+    blindness this function exists to fix for `_base`/`_design`.
+
+    Deliberately NOT `_is_resident("qwen")` / `_engine_actual_card` (#2678
+    review N1): that path resolves a model-presence gate scanning
+    `_model`/`_kokoro`/`_base`/`_tts` and returns None whenever only the
+    VoiceDesign is loaded/in-flight and Base isn't loaded -- exactly the
+    scenario `qwen_design_resident` exists to catch (a resident/in-flight
+    design independent of Base), so gating the design's OWN device on Base's
+    residency disarmed it entirely (also making `/api/sidecar/load`'s
+    noCapacity/design-wait path structurally unreachable, since that route
+    only reaches it when `_base IS None`).
+
+    Qwen keeps ONE engine-wide `_device` shared by both `_base` and
+    `_design` (set by `_ensure_device_resolved`, called by both
+    `_ensure_base_loaded` and `_ensure_design_loaded` before their weights
+    pull begins), so reading it directly answers "which card is Qwen on"
+    from either model's residency without needing Base to be non-None.
+    `_ensure_device_resolved` does run before the weights pull itself
+    starts -- but NOT necessarily before `_design_in_flight.busy` goes
+    True: `design_voice()` claims `_design_in_flight` (its `with
+    self._design_in_flight.claim():`) well before it reaches
+    `_ensure_design_loaded()` -- the Kokoro/base17 eviction and the
+    per-card lock acquire in between can block for real time -- so on a
+    genuinely cold engine (`_device` still at its unresolved
+    `_device_pref`, typically "auto") there IS a real window where `.busy`
+    is already True and `_device` has not yet resolved to a concrete
+    "cuda:N"/"rocm:N". That's handled, not ignored: `_parse_device("auto")`
+    returns `("auto", None)`, `fam` is not in `("cuda", "rocm")` below, and
+    this function correctly returns None for that window -- the fail-closed
+    behaviour this codebase's design principle calls for, not a crash or a
+    stale/wrong device key.
+
+    This also correctly reflects an admitted `device=` argument onto a
+    NON-default card (#2678 review N2): `_resolve_torch_device` returns an
+    explicit (non-"auto") pref UNCHANGED, so an admission's concrete
+    "cuda:1" survives resolution intact -- only the unset/env-default "auto"
+    pref resolves via availability (cuda:0 first). Verified against
+    `_resolve_torch_device`'s own source, not assumed."""
+    if not isinstance(qwen, QwenEngine):
+        return None
+    resident = (
+        qwen._base is not None
+        or qwen._base17 is not None
+        or qwen._design is not None
+        or qwen._design_in_flight.busy
+    )
+    if not resident:
+        return None
+    fam, idx = _parse_device(qwen._device)
+    if fam not in ("cuda", "rocm"):
+        return None
+    # On a ROCm/HIP build torch's own device string still reads "cuda" (HIP
+    # aliases the CUDA API) -- _parse_device has no way to tell them apart,
+    # so normalise the family the same way probe_capacity() does (whose
+    # `kind` field is what PlacementController._device_key's format mirrors)
+    # via the SAME _cuda_is_rocm() check, rather than a second ad hoc test
+    # that could drift from it (#2678 review F2).
+    if fam == "cuda" and _cuda_is_rocm():
+        fam = "rocm"
+    return f"{fam}:{idx if idx is not None else 0}"
 
 
 def _same_card(resident: Optional[str], target: str) -> bool:
@@ -6757,8 +6891,14 @@ class QwenEngine(Engine):
                 # mint_variant() can reload base17 after VoiceDesign load finishes,
                 # since VoiceDesign is then resident and doesn't compete for VRAM
                 # with base17 (VoiceDesign is freed after design completes).
-                # The lock nests outside the _VD_KOKORO.design() block (not inside)
-                # to avoid interfering with the Kokoro arbiter.
+                # card_lock and _VD_KOKORO.design() do NOT nest congruently — one
+                # is not simply "outside" the other. card_lock is acquired BEFORE
+                # design() opens (it must cover the base17 eviction, which per the
+                # #2070 R5 note above has to stay outside design()) and is released
+                # PARTWAY THROUGH design()'s span (once model load finishes, so the
+                # GPU forwards run lock-free). The two spans therefore overlap
+                # without either containing the other, which is why both are driven
+                # manually below rather than as two stacked `with` blocks.
                 # The acquire is bounded (not unbounded) to prevent indefinite hangs
                 # if a concurrent mint_variant() holds the lock for an extended period.
                 card_lock = _DEVICE_LEDGER.card_lock(_qwen_configured_card_idx())
@@ -6768,19 +6908,44 @@ class QwenEngine(Engine):
                         f"base17 load/mint or another design's model load has held it for over "
                         f"{_BASE17_CONTENTION_WAIT_S_DEFAULT:.0f}s. Retry the design shortly."
                     )
+                # Manually manage _VD_KOKORO.design() and card_lock so their lifetimes can
+                # overlap without nesting congruently: card_lock must be held from acquire
+                # through model load (not GPU forwards, #2790), while _VD_KOKORO.design()
+                # must span model load through GPU forwards (not the base17 eviction wait,
+                # #2070 review R5) — the two release points don't coincide with either
+                # `with` block's natural exit, so both are entered/exited manually with an
+                # explicit `card_lock_released` flag guarding against double-release/no-release
+                # on every raise path (eviction, design-context entry, model load, forwards).
+                card_lock_released = False
                 try:
                     if self._base17 is not None or self._base17_in_flight.busy:
                         log.info("Evicting resident/in-flight Qwen 1.7B-Base to free VRAM for VoiceDesign load.")
                         # Bounded wait, not the 0.0 default — this call's whole
                         # point is to wait out a still-loading base17 rather
                         # than race it (see unload_base17's docstring for why
-                        # 0.0 is right everywhere else).
+                        # 0.0 is right everywhere else). Deliberately OUTSIDE
+                        # _VD_KOKORO.design() (#2070 review R5) — this wait can
+                        # run up to _BASE17_CONTENTION_WAIT_S_DEFAULT and holding
+                        # it inside the arbiter would stall every Kokoro synth
+                        # for that long during exactly the bulk "Design full
+                        # cast" run this eviction exists to support. It can also
+                        # RAISE (Base17ContentionTimeoutError) — the outer
+                        # `finally` below is what keeps that from leaking
+                        # card_lock (#2809 review pass 2).
                         self.unload_base17(
                             wait_seconds=_BASE17_CONTENTION_WAIT_S_DEFAULT,
                             poll_seconds=_BASE17_CONTENTION_POLL_S_DEFAULT,
                         )
 
-                    with _VD_KOKORO.design():
+                    # Enter design context AFTER eviction completes.
+                    # #2070 review R5 — deliberately OUTSIDE the eviction wait,
+                    # not inside it. Manually manage context so design() outlives
+                    # card_lock release: card_lock is released AFTER model load
+                    # (inner finally), design() remains active through GPU forwards
+                    # (outer finally).
+                    design_context = _VD_KOKORO.design()
+                    design_context.__enter__()
+                    try:
                         _kokoro_eng = ENGINES.get("kokoro")
                         if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
                             log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
@@ -6797,77 +6962,118 @@ class QwenEngine(Engine):
                         # so the base load inherits the same card; passing it here too is
                         # belt-and-suspenders for the warm-design / cold-base case. `None`
                         # leaves `_device_pref` untouched (flag-off byte-for-byte).
-                        self._ensure_design_loaded(device=device)
-                        self._ensure_base_loaded(device=device)
+                        try:
+                            self._ensure_design_loaded(device=device)
+                            self._ensure_base_loaded(device=device)
+                        finally:
+                            # Release card_lock once model load is done — GPU forwards
+                            # below run with the lock released (#2790: a concurrent
+                            # mint_variant() can reload base17 once VoiceDesign is
+                            # resident, since the two don't compete for VRAM) but still
+                            # inside _VD_KOKORO.design() (#2809: Kokoro stays excluded
+                            # for the full design span, including the forwards).
+                            # Flag set BEFORE the release, not after: if
+                            # `release()` itself raised, the lock is already
+                            # unlocked (that is the only way it raises), so the
+                            # outer `finally` must NOT try again — a second
+                            # release would raise "release unlocked lock" and
+                            # mask the original error.
+                            card_lock_released = True
+                            card_lock.release()
+
+                        # Phase boundary: model load above holds card_lock; GPU forwards below
+                        # release it but remain inside _VD_KOKORO.design(). `load_ms` isolates
+                        # the cold-start cost (the transient 1.7B VoiceDesign load the operator
+                        # suspects) from the design forward itself. Card lock release above allows
+                        # concurrent base17 load/mint from mint_variant(), since VoiceDesign resident
+                        # doesn't compete with base17 (design frees VoiceDesign after completion).
+                        load_ms = (time.perf_counter() - t0) * 1000.0
+                        # Serialise the GPU forwards against any concurrent synth/design — see
+                        # `_synth_lock` in __init__ (the Base model isn't thread-safe).
+                        with self._synth_lock:
+                            # Capture UNDER the lock instead of silently re-ensuring
+                            # (#2021 — extends #1975's AUDITION-forward pattern to
+                            # this, the heaviest forward in the process:
+                            # `_ensure_design_loaded()` pulls the ~4-5 GB VoiceDesign
+                            # model, the longest possible Stop-blocking pull in
+                            # QwenEngine. Every in-place nuller of `_design`/`_base`
+                            # (the idle watchdog, a concurrent /synthesize's
+                            # unload_design, a full /unload) holds `_synth_lock`, so
+                            # a model ensured before we took the lock may have been
+                            # freed in the gap — raise loud instead of silently
+                            # absorbing that race with an in-lock re-pull that would
+                            # itself hold `_synth_lock` for the whole cold load.
+                            design = self._design
+                            if design is None:
+                                # #2070 fixed the ordinary-synth race this used to
+                                # cover: `unload_design()` now waits (bounded) on
+                                # `_design_in_flight` before nulling `_design`, and
+                                # THIS call is what holds it busy, so a concurrent
+                                # /synthesize's unload_design can no longer land
+                                # here mid-design. What remains is a genuinely
+                                # explicit action — a full /unload landing in the
+                                # gap between `_ensure_design_loaded()` above and
+                                # this lock acquire — which deliberately is NOT
+                                # gated by the design-wins policy (an explicit
+                                # Stop must still be able to free the model). Raise
+                                # loud rather than silently absorbing that race
+                                # with an in-lock re-pull that would itself hold
+                                # `_synth_lock` for the whole cold load.
+                                raise RuntimeError(
+                                    "Qwen VoiceDesign model was unloaded before "
+                                    "this design could render — reload it and "
+                                    "retry."
+                                )
+                            base = self._base
+                            if base is None:
+                                raise RuntimeError(
+                                    "Qwen Base model was unloaded before this "
+                                    "design could render — reload it and retry."
+                                )
+                            # 1. design a reference clip from the persona instruction.
+                            _phase("designing")
+                            _t = time.perf_counter()
+                            ref_wavs, ref_sr = design.generate_voice_design(
+                                text=ref_text, language=lang, instruct=instruct
+                            )
+                            design_fwd_ms = (time.perf_counter() - _t) * 1000.0
+                            ref_audio = ref_wavs[0]
+
+                            # 2. distil into a reusable clone prompt on the Base model.
+                            _phase("distilling")
+                            _t = time.perf_counter()
+                            prompt = base.create_voice_clone_prompt(
+                                ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                            )
+                            distil_ms = (time.perf_counter() - _t) * 1000.0
+                    finally:
+                        # Pass the in-flight exception through rather than
+                        # (None, None, None) — the CM must see it to run any
+                        # exception-aware cleanup (#2809 review pass 2).
+                        # `sys.exc_info()` can in principle report a STALE outer
+                        # exception on the success path (if a caller invoked us
+                        # from inside an `except:` block), but that is both
+                        # unreachable here — every caller arrives via
+                        # `asyncio.to_thread` on a fresh stack — and harmless if
+                        # it were: `design()` is a @contextmanager whose cleanup
+                        # is a plain `finally`, so a thrown-in exception still
+                        # clears the refcount and re-propagates as the same
+                        # object, which `__exit__` returns False for rather than
+                        # raising. Left as-is deliberately; a `try/except` here
+                        # would be error handling for an impossible scenario.
+                        design_context.__exit__(*sys.exc_info())
                 finally:
-                    card_lock.release()
-
-                # Phase boundary: everything above was Kokoro-evict + (cold) model
-                # load under card_lock; everything below is GPU forwards. `load_ms`
-                # isolates the cold-start cost (the transient 1.7B VoiceDesign load
-                # the operator suspects) from the design forward itself. Card lock
-                # is released above to allow concurrent base17 load/mint, since
-                # VoiceDesign resident doesn't compete with base17 (design frees
-                # VoiceDesign after completion).
-                load_ms = (time.perf_counter() - t0) * 1000.0
-                # Serialise the GPU forwards against any concurrent synth/design — see
-                # `_synth_lock` in __init__ (the Base model isn't thread-safe).
-                with self._synth_lock:
-                    # Capture UNDER the lock instead of silently re-ensuring
-                    # (#2021 — extends #1975's AUDITION-forward pattern to
-                    # this, the heaviest forward in the process:
-                    # `_ensure_design_loaded()` pulls the ~4-5 GB VoiceDesign
-                    # model, the longest possible Stop-blocking pull in
-                    # QwenEngine. Every in-place nuller of `_design`/`_base`
-                    # (the idle watchdog, a concurrent /synthesize's
-                    # unload_design, a full /unload) holds `_synth_lock`, so
-                    # a model ensured before we took the lock may have been
-                    # freed in the gap — raise loud instead of silently
-                    # absorbing that race with an in-lock re-pull that would
-                    # itself hold `_synth_lock` for the whole cold load.
-                    design = self._design
-                    if design is None:
-                        # #2070 fixed the ordinary-synth race this used to
-                        # cover: `unload_design()` now waits (bounded) on
-                        # `_design_in_flight` before nulling `_design`, and
-                        # THIS call is what holds it busy, so a concurrent
-                        # /synthesize's unload_design can no longer land
-                        # here mid-design. What remains is a genuinely
-                        # explicit action — a full /unload landing in the
-                        # gap between `_ensure_design_loaded()` above and
-                        # this lock acquire — which deliberately is NOT
-                        # gated by the design-wins policy (an explicit
-                        # Stop must still be able to free the model). Raise
-                        # loud rather than silently absorbing that race
-                        # with an in-lock re-pull that would itself hold
-                        # `_synth_lock` for the whole cold load.
-                        raise RuntimeError(
-                            "Qwen VoiceDesign model was unloaded before "
-                            "this design could render — reload it and "
-                            "retry."
-                        )
-                    base = self._base
-                    if base is None:
-                        raise RuntimeError(
-                            "Qwen Base model was unloaded before this "
-                            "design could render — reload it and retry."
-                        )
-                    # 1. design a reference clip from the persona instruction.
-                    _phase("designing")
-                    _t = time.perf_counter()
-                    ref_wavs, ref_sr = design.generate_voice_design(
-                        text=ref_text, language=lang, instruct=instruct
-                    )
-                    design_fwd_ms = (time.perf_counter() - _t) * 1000.0
-                    ref_audio = ref_wavs[0]
-
-                    # 2. distil into a reusable clone prompt on the Base model.
-                    _phase("distilling")
-                    _t = time.perf_counter()
-                    prompt = base.create_voice_clone_prompt(
-                        ref_audio=(ref_audio, ref_sr), ref_text=ref_text
-                    )
-                    distil_ms = (time.perf_counter() - _t) * 1000.0
+                    # Belt-and-suspenders: card_lock is normally released above,
+                    # inside design(), once model load completes. This only fires
+                    # if we never got that far — unload_base17(),
+                    # design_context.__enter__(), or the resident-Kokoro
+                    # _kokoro_eng.unload() raised — so card_lock would
+                    # otherwise leak for the process lifetime (card_lock
+                    # instances are cached per card index and never recreated,
+                    # so a leak wedges every later design AND mint on that card
+                    # until the sidecar restarts).
+                    if not card_lock_released:
+                        card_lock.release()
 
                 # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
                 os.makedirs(self._voices_dir, exist_ok=True)
@@ -10312,15 +10518,18 @@ def health() -> dict[str, Any]:
     # Qwen load state — its own pair of fields, same pattern as Kokoro, so the
     # Node proxy + useTtsLifecycle hook read every engine's state off one poll.
     # `_base is not None` is "ready to synth" (the resident clone model);
-    # the transient VoiceDesign model isn't surfaced (it's a creation-time detail).
+    # the transient VoiceDesign model's own residency/device are surfaced
+    # separately below (`qwen_design_resident` / `qwen_device_key`, #2678).
     qwen_loaded = False
     qwen_base17_loaded = False
     qwen_loading = False
+    qwen_design_resident = False
     qwen = ENGINES.get("qwen")
     if isinstance(qwen, QwenEngine):
         qwen_loaded = qwen._base is not None
         qwen_base17_loaded = qwen._base17 is not None
         qwen_loading = qwen._loading
+        qwen_design_resident = qwen._design is not None or qwen._design_in_flight.busy
     # Install-state (distinct from load-state): lets the Node proxy tell
     # "Qwen not installed" apart from "installed but cold", which drives the
     # conditional default (Qwen-when-installed) + the install-check warning.
@@ -10357,6 +10566,25 @@ def health() -> dict[str, Any]:
         "qwen_loaded": qwen_loaded,
         "qwen_base17_loaded": qwen_base17_loaded,
         "qwen_design_ever_loaded": _QWEN_DESIGN_EVER_LOADED,
+        # LIVE counterpart to the latch above -- true only while a VoiceDesign is
+        # actually resident or mid-load/mid-design right now.
+        "qwen_design_resident": qwen_design_resident,
+        # #2678 review finding — the device `qwen_design_resident` above is
+        # true on, as a concrete "cuda:N" (or None off a GPU / unresolvable).
+        # `_base`/`_design` share one QwenEngine instance and therefore one
+        # `_device`, so this is equally the design model's card whenever
+        # `qwen_design_resident` is true. Node-side capacity-retry.ts uses it
+        # to qualify the design-residency wait extension: a resident design on
+        # a DIFFERENT card than the one this admission was denied on can never
+        # free the blocked device, so it must not extend that wait.
+        #
+        # NOT `_is_resident("qwen")` (#2678 review N1/N2) -- that gates on a
+        # LOADED-MODEL presence scan (`_model`/`_kokoro`/`_base`/`_tts`) that
+        # never checks `_design`, so it returns None whenever only the
+        # VoiceDesign is resident/in-flight and Base isn't loaded, disarming
+        # this field for exactly the scenario it exists to cover. See
+        # `_qwen_resident_device_key`'s own docstring for the full reasoning.
+        "qwen_device_key": _qwen_resident_device_key(qwen),
         "qwen_loading": qwen_loading,
         "qwen_package_installed": qwen_package_installed,
         "qwen_weights_present": qwen_weights_present,

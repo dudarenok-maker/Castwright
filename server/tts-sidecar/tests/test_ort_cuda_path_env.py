@@ -65,6 +65,63 @@ def test_prepends_every_nvidia_bin_dir_that_exists(monkeypatch, tmp_path) -> Non
     assert os.environ["PATH"].endswith("C:\\pre-existing"), (
         "must PREPEND, not replace, the existing PATH"
     )
+    # The returned list must mirror the actual PATH prefix order, not just its
+    # membership -- a caller logs `added` to report what it did, and a caller
+    # that reversed it relative to the real prefix would log something false.
+    assert os.environ["PATH"] == os.pathsep.join(added) + os.pathsep + "C:\\pre-existing"
+
+
+def test_empty_pre_existing_path_gains_no_trailing_separator(monkeypatch, tmp_path) -> None:
+    """An empty PATH entry (not an empty PATH string) is CWD in Windows' DLL
+    search order -- `"<dirs>;"` with nothing after the trailing separator
+    would silently add the current directory to the search path used by
+    every later lazy LoadLibrary call this function exists to serve."""
+    site_packages = tmp_path / "site-packages"
+    (site_packages / "nvidia" / "cudnn" / "bin").mkdir(parents=True)
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", _fake_onnxruntime_at(site_packages))
+    monkeypatch.setenv("PATH", "")
+
+    added = main._add_nvidia_dll_dirs_to_path()
+
+    assert len(added) == 1
+    assert os.environ["PATH"] == added[0], "no trailing separator when PATH was empty"
+    assert not os.environ["PATH"].endswith(os.pathsep)
+
+
+def test_a_path_write_failure_other_than_oserror_does_not_raise(monkeypatch, tmp_path) -> None:
+    """Real regression: `os.environ["PATH"] = ...` raises `ValueError` (not
+    `OSError`) when the resulting value exceeds Windows' 32767-character
+    environment-variable ceiling -- a bare `except OSError` around the write
+    does not catch it. This function is called from the FIRST, unguarded
+    lifespan startup handler (`_startup_ort_cuda_preload`), so an uncaught
+    raise here aborts sidecar boot entirely instead of degrading to the
+    documented harmless no-op."""
+    site_packages = tmp_path / "site-packages"
+    (site_packages / "nvidia" / "cudnn" / "bin").mkdir(parents=True)
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", _fake_onnxruntime_at(site_packages))
+    monkeypatch.setenv("PATH", "C:\\pre-existing")
+
+    real_environ = os.environ
+
+    class _RaisingEnviron:
+        def __getitem__(self, key):
+            return real_environ[key]
+
+        def get(self, key, default=None):
+            return real_environ.get(key, default)
+
+        def __setitem__(self, key, value):
+            if key == "PATH":
+                raise ValueError("the environment variable is longer than 32767 characters")
+            real_environ[key] = value
+
+    monkeypatch.setattr(main.os, "environ", _RaisingEnviron())
+
+    added = main._add_nvidia_dll_dirs_to_path()  # must not raise
+
+    assert added == []
 
 
 def test_calling_twice_does_not_grow_path(monkeypatch, tmp_path) -> None:

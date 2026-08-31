@@ -42,7 +42,7 @@ acceptance criterion.
 
 | # | Criterion (design doc's own wording) | Register row | Status |
 |---|---|---|---|
-| 1 | Fresh NVIDIA bootstrap — marker present at the installed GPU version; `pip check` clean, exit 0; Kokoro reports `CUDAExecutionProvider` | A28 | Owed |
+| 1 | Fresh NVIDIA bootstrap — marker present at the installed GPU version; `pip check` clean, exit 0; Kokoro reports `CUDAExecutionProvider` | A28 | **Discharged, 2026-08-31 — see §10** |
 | 2 | **The reported bug** — Windows + NVIDIA, app running, in-app Qwen3 install completes with no `WinError 5`; GPU Kokoro afterwards | A29 | Owed — this is #2192 itself |
 | 3 | Self-heal on an existing (pre-marker) box | — | **Discharged**, see §5 |
 | 4 | Pinokio update path (`update.js`, the deployment shape that reported the bug) | E7 | Owed |
@@ -114,10 +114,21 @@ this is an environment-wide defect, not specific to the throwaway venv.
 
 > **Superseded note (2026-08-21):** this run predates PR #2576, which resolved the blocking box-level CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap by re-pinning `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`. The criterion outcome recorded above is from 2026-08-20, before that resolution. The shared GPU-provider re-check was re-run against the fixed pin (wave-4 step 8, 2026-08-21) and still fails, but on a new, distinct root cause — the missing `nvidia-cudnn-cu12` dependency (distinct from #2534). See disposition summary (§10) and onbox-acceptance-register.md for full details.
 
-**Disposition:** STILL OWED — marker/pip-check mechanics pass, GPU provider
+**Disposition (as of 2026-08-20):** STILL OWED — marker/pip-check mechanics pass, GPU provider
 check fails on a real dependency gap.
 **Run by:** claude (Castwright#2506, wave 3 step 2, fast-path claim).
 **Date:** 2026-08-20.
+
+> **DISCHARGED 2026-08-31.** `install-ort.mjs`'s `extraRuntimeSteps` gained
+> `nvidia-cufft-cu12`/`nvidia-cuda-runtime-cu12` (missing since the gaps found
+> above and in the 2026-08-23 re-run below) and `NVIDIA_CUDNN_CONSTRAINT`
+> was tightened to `~=9.19.0` to match torch's bundled cuDNN line. A real
+> Kokoro CUDA load now succeeds end-to-end: `Device probe complete:
+> {'kokoro': 'cuda', 'coqui': 'cuda', 'qwen': 'cuda'}`, a real
+> `POST /synthesize` returns real GPU-speed PCM, `/health` reports
+> `cuda_verified: true`. Full account in `onbox-acceptance-register.md`'s
+> row A28 (now discharged/retired) and its changelog. Run by: claude,
+> dudarenok-maker.
 
 > **2026-08-23 re-run (Castwright#2621) — STILL OWED, root cause now identified
 > and it is NOT `install-ort.mjs`.** Marker mechanics and `pip check` still
@@ -763,8 +774,10 @@ Evidence: `docs/testing/onbox-wave5-results/step-ort-c-a40.md`.
 
 _(Update as each remaining criterion runs.)_
 
-- Criterion 1 — fresh NVIDIA bootstrap (A28): **Run 2026-08-20, re-check 2026-08-21 (wave-4 step 8) — STILL OWED.**
-  Wave-3 run: marker/pip-check mechanics pass; GPU provider check fails (CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap, #2534 blocker). Wave-4 re-run (after PR #2576 resolved the blocker): re-ran the GPU-provider check against fixed pin, still fails but on a new root cause — `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by `install-ort.mjs`. Follow-up filed: #2600. See onbox-acceptance-register.md A28 row for full details and evidence.*
+- Criterion 1 — fresh NVIDIA bootstrap (A28): **DISCHARGED 2026-08-31** (was: run
+  2026-08-20, re-check 2026-08-21 wave-4 step 8, then STILL OWED through two more
+  root-cause narrowings on 2026-08-23).
+  Wave-3 run: marker/pip-check mechanics pass; GPU provider check fails (CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap, #2534 blocker). Wave-4 re-run (after PR #2576 resolved the blocker): re-ran the GPU-provider check against fixed pin, still fails but on a new root cause — `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by `install-ort.mjs`. Follow-up filed: #2600. 2026-08-31: `install-ort.mjs` gained the missing `cufft`/`cuda-runtime` pins and a corrected, torch-line-matched cuDNN pin (`~=9.19.0`) — a real Kokoro CUDA load now succeeds end-to-end on this box. See onbox-acceptance-register.md A28 row (now retired) for full details and evidence.*
 - Criterion 2 — the reported bug, in-app Qwen3 install (A29): **STILL OWED — partially run.** Clicking
   Install on Qwen3-TTS Base (0.6B) in Model Manager completed cleanly with no
   `WinError 5`, but follow-on Kokoro GPU-provider check unreachable on this box

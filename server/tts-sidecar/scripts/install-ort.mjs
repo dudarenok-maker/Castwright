@@ -341,17 +341,34 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 // venv with only cuDNN+cublas installed left onnxruntime's own
 // `preload_dlls()` reporting "Failed to load" for both, and real
 // `InferenceSession` construction with `CUDAExecutionProvider` silently fell
-// back to CPU. Installing these two packages (curand/nvjitlink were tried
-// too and confirmed NOT needed — dropped, same N6 reasoning as nvrtc above)
-// fixes it: `preload_dlls()` then reports all expected files resolved under
-// `nvidia/<pkg>/bin`, and a real `InferenceSession` lands
-// `CUDAExecutionProvider` in `get_providers()`. Floor-plus-cap on the 12.8.x
-// line, same N4 reasoning as cublas above: torch/lib's bundled
-// `cufft64_11.dll`/`cudart64_12.dll` report that build line (per the live
-// venv's file version info), so an unpinned/latest install here would risk
-// the same intra-process DLL-version mismatch cublas's own pin exists to
-// avoid.
-const NVIDIA_CUFFT_CONSTRAINT = 'nvidia-cufft-cu12~=11.4.0';
+// back to CPU. Installing these two packages (curand was tried too and
+// confirmed NOT needed — dropped, same N6 reasoning as nvrtc above; nvjitlink
+// is pulled in transitively by cufft's own dependency tree regardless, so
+// it is never pinned directly here either way) fixes it: `preload_dlls()`
+// then reports all expected files resolved under `nvidia/<pkg>/bin`, and a
+// real `InferenceSession` lands `CUDAExecutionProvider` in
+// `get_providers()`.
+//
+// PASS-2 REVIEW FIX (2026-08-31): the first cut of these two pins
+// (`cufft~=11.4.0`, `cuda-runtime~=12.8.0`) was wrong on both counts —
+// `~=11.4.0` was pip-latest-on-install-day, not torch's line, and
+// `~=12.8.0`, while correctly matching torch's cudart build line, EXCLUDED
+// the 12.9.79 version this box's on-box run had actually installed and
+// tested against (a floor-plus-cap pin that admits a version different from
+// the one the "verified end-to-end" claim was measured on is worse than no
+// pin — it looks precise while proving nothing). Re-measured `FileVersion`
+// directly against the live venv's `torch/lib` copies: `cufft64_11.dll`
+// reports **11.3.3** (`...,1133`), not 11.4.x; `cudart64_12.dll` reports
+// **12.8.0** (`...,12080`), confirming that half was already right, just
+// untested at the pinned value. Re-pinned both to torch's actual measured
+// line (`~=11.3.3`, `~=12.8.0`) and re-verified on real hardware at THESE
+// exact resolved versions (`nvidia-cufft-cu12==11.3.3.83`,
+// `nvidia-cuda-runtime-cu12==12.8.90`) — same real Kokoro CUDA
+// session-construction + real-synth check as the cuDNN/cublas pins above,
+// not just a version-string match. Same floor-plus-cap reasoning as cublas's
+// own pin (N4): an unpinned/latest install here would risk the same
+// intra-process DLL-version mismatch cublas's own pin exists to avoid.
+const NVIDIA_CUFFT_CONSTRAINT = 'nvidia-cufft-cu12~=11.3.3';
 const NVIDIA_CUDA_RUNTIME_CONSTRAINT = 'nvidia-cuda-runtime-cu12~=12.8.0';
 
 /**

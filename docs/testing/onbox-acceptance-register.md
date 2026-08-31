@@ -441,8 +441,10 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > 1. `install-ort.mjs`'s `extraRuntimeSteps` was still missing
 >    `nvidia-cufft-cu12`/`nvidia-cuda-runtime-cu12` (wave-5's own validated
 >    "hypothesis 2", 2026-08-23, never shipped) — added, floor-plus-cap
->    `~=11.4.0`/`~=12.8.0` matching torch's bundled DLL build line;
->    `curand`/`nvjitlink` tried and confirmed unneeded.
+>    `~=11.3.3`/`~=12.8.0` matching torch's bundled DLL build line;
+>    `curand` tried and confirmed unneeded, dropped (`nvjitlink` is pulled in
+>    transitively by `cufft`'s own dependency tree regardless, so it was
+>    never pinned directly either way).
 > 2. A newly-found, DISTINCT root cause: cuDNN 9's own lazily-dlopened
 >    "engine" plugin DLLs (`cudnn_engines_tensor_ir64_9.dll` etc.) are never
 >    covered by `onnxruntime.preload_dlls()` (which only preloads the fixed
@@ -466,10 +468,11 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > 'cuda'}` at startup; a real `POST /synthesize` returned 192512 bytes of
 > real PCM (cold 5.5s, warm 0.45s, real VRAM allocated per `nvidia-smi`);
 > `/health` reports `cuda_verified: true` with no false `stale_reason`. Full
-> sidecar pytest suite and full server Vitest suite (1918 tests) both green;
-> one pre-existing, unrelated failure
+> sidecar pytest suite and full server Vitest suite (8180 tests, per `npx
+> vitest list`) both green; one pre-existing, unrelated failure
 > (`test_design_kokoro_exclusion.py::test_design_voice_holds_arbiter_and_evicts_resident_kokoro`)
-> reproduces identically against unmodified `main`, not this row's concern.
+> reproduced against unmodified `main` at the time this row was run and is
+> now fixed on `main` by PR #2810, not this row's concern.
 > This also newly un-blocks **A33**'s remaining bullets (2, 3, and the #2643
 > negative control) — CUDA can now genuinely construct and run on this box,
 > which A33's own 2026-08-27 note recorded as the reason those bullets were
@@ -478,6 +481,19 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > permanently blocked; see A33's own entry. Group A: 40 → 39. `next-id`
 > unaffected (still A106; allocate-once IDs are never reused, so a drop
 > never frees or renumbers a slot).
+>
+> **Prior change: 2026-08-30, no count change.** Row **A24**'s run note (2026-08-26,
+> below) filed [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678) as a
+> design decision owed: should the capacity-admission layer make a Base render wait for
+> a resident VoiceDesign, or evict it? PR
+> [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797) shipped the "wait"
+> choice (`withCapacityRetry`'s extended design-residency wait, qualified by
+> `deviceKey`, plus the caller-abort and `qwenDesignEverLoaded`-confusion fixes found in
+> its own review). The row stays live and owed: the fix is pinned by sidecar-side unit
+> tests against a *simulated* health provider, not a real sidecar with genuine warm
+> VoiceDesign residency, so whether the render now actually waits (rather than the
+> observed `vram-spill` failure) is still unproven on real hardware. See the row body
+> for the updated acceptance criteria.
 >
 > **Prior change: 2026-08-30, merging PR #2790's independent A105 addition
 > with `main`'s independent E101 addition.** This branch
@@ -804,8 +820,8 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **20 of 60 run (2026-07-29, 2026-07-31) · ~40 still owed · 3 run-2 results retracted**
-<!-- stat:a1-still-owed 40 -->
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **23 of 60 run (2026-07-29, 2026-07-31, 2026-08-31) · ~37 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 37 -->
 <!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
@@ -843,7 +859,12 @@ artifacts across 3 locations all gone including both cached mp3s and the
 original recording; wildcard sweep 0 files; entry + `voice.json` survive with
 `revokedAt`), **C-11** (409-with-usage then `{deleted:true}`, entry dir removed,
 both cast slots cascade-cleared), C-19 first half (1.7B tier renders a cloned
-voice; its erasure is covered by C-10).
+voice; its erasure is covered by C-10), **C-02** (revoked voice fails the
+chapter loud in 748ms, zero audio, zero GPU work), **C-03** (a Broken voice
+not speaking in the chapter under render doesn't fail it; the same voice does
+fail the chapter it actually speaks in), **E-03** (revoke racing an in-flight
+Coqui derive: `revokedAt` survives, no orphaned artifact, chapter fails
+naming the character — Run 4, see below).
 
 **Also proven — the wave's central claim, measured not asserted.** A cloned
 voice renders inside a real book: `wren`'s segments re-recorded into Coalfall
@@ -918,7 +939,38 @@ re-segmentation. **The precondition is only "analysis has run since the last
 render."** Full chapter generation is unaffected. No test caught it because none
 asserts which voice reached the provider.
 
-**Still owed (~40), and why:**
+**Run 4 — 2026-08-31, Claude Code, isolated worktree `wt-onbox-a1-wave10`,
+throwaway fixture book (the canonical `the-coalfall-commission.md`, imported
+fresh, not the operator's real book), real Qwen 0.6B + Coqui/XTTS sidecar, no
+mocks.** Three more discharged: **C-02** (revoked voice fails the chapter
+loud with zero audio and zero GPU work — 748ms to failure, `tts.log` delta was
+pure health-check noise), **C-03** (a Broken voice not used in the current
+chapter doesn't fail it, and the *same* voice does fail the chapter where its
+character actually speaks — both halves run on one real render each), and
+**E-03** (revoke landing during an in-flight Coqui derive: `revokedAt`
+survives, no orphaned `voices\xtts\` artifact, chapter fails naming the
+character — one attempt, first try, though the reported reason read
+`(derive-failed)` rather than the sheet's expected `(revoked)` wording; the
+underlying data-integrity guarantees the row cares about held regardless).
+**C-17** was attempted and is **blocked, not failed**: designing a voice
+requires `GEMINI_API_KEY`, which an isolated worktree deliberately never
+carries (CLAUDE.md's "no secrets" worktree rule) — this row needs a session
+with real Gemini credentials, not a fresh worktree.
+**Incidental finding, filed as [#2811](https://github.com/dudarenok-maker/Castwright/issues/2811):**
+the first two C-03 attempts hit a real `errorCode: "recycle-storm"`, initially
+indistinguishable from a side-11 regression — root-caused to this worktree's
+setup being incomplete (`server/tts-sidecar/voices/` was never junctioned
+alongside `.venv`, so Kokoro's missing weights crash-looped the sidecar into
+tripping the recycle-storm breaker mid-chapter). Junctioning `voices/` fixed
+it immediately and reproducibly; CLAUDE.md's worktree checklist updated in the
+same PR. **This means the row's "BLOCKED by the side-11 host-memory leak"
+framing above is likely stale for a *properly-set-up* box** — not
+re-verified at full-book scale this run (only single-chapter renders), so C-02
+above is left as its own row rather than assumed to also clear full-book
+work, but the specific failure mode this run hit was environmental, not
+side-11 recurring.
+
+**Still owed (~37), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
@@ -986,23 +1038,29 @@ asserts which voice reached the provider.
   sticky `coqui_import_ok` reflecting a real import attempt, which is the one
   to read. Note #1963: `models-status`'s `importable` is still the old
   find_spec value.
-- **C-02, D-02 and any full-book work — BLOCKED by the side-11 host-memory
-  leak.** Two full-chapter render attempts died: one at the QA gate (ASR could
+- **C-02 — DISCHARGED, Run 4 (above).** D-02 and full-book work at scale
+  remain unconfirmed (only single-chapter renders proven in Run 4). #1972
+  (the splice attribution defect) is CLOSED (2026-07-31) and #399/side-11
+  itself is CLOSED — Run 4's own `recycle-storm` hit was root-caused to a
+  worktree-setup gap ([#2811](https://github.com/dudarenok-maker/Castwright/issues/2811)),
+  not a live leak. Treat the paragraph below as historical context for how
+  this row was scoped, not a current blocker.
+  <details><summary>Original 2026-07 finding (kept for history)</summary>
+
+  Two full-chapter render attempts died: one at the QA gate (ASR could
   not get VRAM alongside Kokoro), one with `recycle-storm` after the sidecar
   recycled 3× (committed memory peaked at 29,395 MB). The sidecar's own log
   names it: *"expected for the variable-shape leak; the restart ceiling is the
-  real guard"*. **Workaround, qualified since [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972):**
-  the per-character re-record (splice) path renders one character's lines
-  without the full-chapter memory churn — that is how the central claim above
-  was proven — but it now REFUSES on a chapter whose `segments.json` and the
-  current analysis disagree (exactly the shape both fixture books in this run
-  hit). It only stays usable as a workaround when the two agree; when they
-  don't, re-run analysis first (so the splice becomes usable again), or fall
-  back to a full chapter generation — which the side-11 leak still blocks, but
-  which is at least immune to the splice's own attribution defect.
-- **The rest of Section C (18) and Section D (3):** not reached. C-08/C-12
-  (deliberate mid-write sidecar kills) and C-01/E-03 (revoke racing an in-flight
-  derive) are untouched and remain the highest-risk unproven behaviour here.
+  real guard"*. The per-character re-record (splice) path rendered one
+  character's lines without the full-chapter memory churn — that is how the
+  central claim above was proven — but at the time it refused on a chapter
+  whose `segments.json` and the current analysis disagreed (exactly the shape
+  both fixture books in that run hit); #1972 has since closed that refusal.
+  </details>
+- **The rest of Section C (15) and Section D (2):** not reached. C-08/C-12
+  (deliberate mid-write sidecar kills) and C-01 (revoke racing an in-flight
+  Qwen derive) are untouched and remain the highest-risk unproven behaviour
+  here. E-03 (the Coqui equivalent of C-01) is now discharged (Run 4, above).
 - **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
   a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
   / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
@@ -2260,7 +2318,7 @@ already-analysed workspace, then one chapter re-render.
 > `docs/testing/onbox-sitting-cloning-identity.md` still correctly lists this
 > row for §8.7.
 
-### A24 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070)) · **single 8 GB card**
+### A24 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070), [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678), PR [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797)) · **single 8 GB card; the deviceKey qualification (bullet 5) needs the 2-card boot**
 
 Unit tests (`server/tts-sidecar/tests/test_design_contention.py`) fully pin
 the logic with a simulated `_design_in_flight` claim: `unload_design()` now
@@ -2284,12 +2342,36 @@ flagged.
   synth times out into the new `design_in_flight` 503 rather than hanging
   forever — and that it does so somewhere in the 150s neighbourhood, not
   immediately and not never.
+- **(added post-#2678/PR #2797)** Repeat the 2026-08-26 run-note scenario below —
+  a real single-character voice design mid-flight, an ordinary chapter render for
+  a *different* character on Base 0.6B, same device — and confirm the render now
+  **waits** for `withCapacityRetry`'s extended design-residency budget instead of
+  failing `vram-spill`, and that the design still completes normally afterward.
+- **(added post-#2678/PR #2797, needs the 2-card boot)** Repeat the same scenario
+  with the resident VoiceDesign on one card and the denied Base render on a
+  *different* card. Confirm the wait extension does **not** fire cross-device
+  (PR #2797's `deviceKey`-qualified fix) — the render should fail/retry on its own
+  card's ordinary timeline, not wait out the ~200s design budget for a design it
+  can never actually be unblocked by.
+- **(added post-#2678/PR #2797)** With a caller that carries its own shorter abort
+  budget (e.g. `POST /api/sidecar/load`'s 90s `AbortController`), confirm that if
+  its signal fires while `withCapacityRetry` is still inside the extended
+  design-wait budget, the caller sees the same `NoCapacityError` it would have
+  seen at `designMaxAttempts` — not a raw `AbortError` misread as a generic stuck
+  process. Only a caller opted in via `createHardTimeoutAbortReason()` (currently
+  just `/api/sidecar/load`) gets this conversion (re-review finding N3) — separately
+  confirm a real user Pause or regen-displacement mid-design-wait on the synthesis
+  path still surfaces as a plain, recognisable `AbortError` and is NOT converted to
+  `NoCapacityError`/`vram-spill`.
 
 *Needs:* a live sidecar with Qwen VoiceDesign installed, and a way to trigger
-two overlapping requests (a second browser tab/session is enough). *Criteria:*
+two overlapping requests (a second browser tab/session is enough); the
+cross-device bullet additionally needs the 2-card boot. *Criteria:*
 `unload_design`'s docstring in `server/tts-sidecar/main.py`; the sizing
 rationale is in the `_DESIGN_CONTENTION_WAIT_S_DEFAULT` comment immediately
-above `class QwenEngine`. *Cost:* short — one overlapped request pair.
+above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
+`server/src/gpu/capacity-retry.ts` and PR #2797's description. *Cost:* short
+— one overlapped request pair per bullet.
 
 > **RUN 2026-08-26 (wave 6) — bullet 1's premise did not hold; a real gap found, filed as
 > [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678).** Started a real
@@ -2325,6 +2407,46 @@ above `class QwenEngine`. *Cost:* short — one overlapped request pair.
 > indefinitely with `qwenDesignEverLoaded` never flipping true and no sidecar-side log
 > activity at all, which is plausibly expected (no real audio to derive a reference clip
 > from) rather than the timeout bug bullet 3 is about, but wasn't root-caused this round.
+
+> **FIX SHIPPED 2026-08-30, PR [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797)
+> (closes [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678)) — the design
+> decision above is made: "make the render wait."** `withCapacityRetry`
+> (`server/src/gpu/capacity-retry.ts`) now extends its retry budget to the
+> design-residency window when the sidecar's live health reports a resident
+> VoiceDesign model on the SAME device as the denied request (`deviceKey`-qualified,
+> fixing a first-pass cross-device over-extension found in review), and a caller
+> whose own abort fires mid-extended-wait (e.g. `/api/sidecar/load`'s 90s budget)
+> now surfaces the same `NoCapacityError` it would have hit at `designMaxAttempts`
+> rather than a raw `AbortError`. A further review fix pins that the check keys off
+> the live `qwenDesignResident` flag, not the process-lifetime `qwenDesignEverLoaded`
+> latch, so the extension doesn't wrongly apply to every capacity denial after a
+> box's first-ever design. All of this is proven by Node-side unit tests against a
+> *simulated* health provider (`defaultIsDesignResident`, `capacity-retry.test.ts`) —
+> none of them touch a real sidecar with genuine warm VoiceDesign residency, so
+> **this row stays open**: bullets 4–6 above (added for this fix) are what still needs
+> a real GPU run. Bullet 3 (wedged-design timeout) and the `unknown-male` no-audio
+> hang from the 2026-08-26 run remain unreached/un-root-caused as before — this fix
+> does not touch either.
+
+> **Correction, 2026-08-30 (PR #2797 re-review, rounds 2–3) — both claims above were
+> wrong; genuinely fixed since.** The "deviceKey-qualified" cross-device fix above
+> (`8633e75a`) never actually worked: it read `qwen_device_key` via `_is_resident("qwen")`
+> → `_engine_actual_card`, which resolves a model from
+> `_model`/`_kokoro`/`_base`/`_tts` and never checks `_design` — so the field was
+> `null` whenever only the VoiceDesign was resident/in-flight, exactly the case this
+> row exists to cover, and unconditionally `"cuda:0"` for a loaded Qwen otherwise.
+> Fixed for real in `113379dd`, which reads `QwenEngine._device` directly, guarded by
+> Base-or-design residency, with tests against a genuine `QwenEngine` instance rather
+> than a hand-authored fixture. Separately, the abort→`NoCapacityError` conversion
+> above (`4c4b229b`) was unconditional: `withCapacityRetry`'s `signal` is ALSO the
+> synthesis path's own cancellation signal (a user Pause or a regen displacement), so
+> a pause mid-design-wait was silently converted to a fatal `vram-spill` instead of a
+> clean pause. Fixed in `c2269799` via an opt-in `createHardTimeoutAbortReason()`
+> marker: only `/api/sidecar/load`'s own hard timeout converts; every other abort now
+> passes through as a plain `AbortError`. Both fixes are mutation-verified (reverting
+> either fails its own new test for the exact reason described), but — same as the
+> original fix — only against simulated/unit-level state, not a real sidecar. This row
+> stays open for the same reason as before.
 
 ### A25 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
 
@@ -3205,6 +3327,16 @@ span to close a race where concurrent `mint_variant()` could reload base17 mid-e
 Unit tests cannot prove VRAM co-residency, eviction ordering, or Stop-button success
 against the real model weights and sidecar lifecycle.
 
+**Extended by #2809 / PR [#2810](https://github.com/dudarenok-maker/Castwright/pull/2810).**
+PR #2790 left `_VD_KOKORO.design()` closing *before* the VoiceDesign GPU forwards, so
+Kokoro was not actually excluded during the forward the exclusion exists for; #2809
+widened the arbiter to span the forwards while keeping `card_lock` released across them
+and the base17 eviction outside the arbiter. That inverts this row's third criterion
+(Kokoro is now *expected* to pause for a design forward) and adds two more — the
+co-residency observation the widening restores, and a lock-leak check for the
+`Base17ContentionTimeoutError` path, where a `card_lock` acquired before the eviction was
+never released.
+
 - **Widened eviction guard prevents OOM in #1156 scenario.** On a single 8 GB GPU,
   start a mint (`mint_variant()`) or a 1.7B synth so base17 begins loading — while
   that load is in flight (`_base17_in_flight.busy`, `_base17` still `None`), trigger a
@@ -3221,16 +3353,57 @@ against the real model weights and sidecar lifecycle.
   base17 1.7B model freed), proving the unconditional null at `wait_seconds<=0`
   succeeded rather than the pass-1 regression (raising `Base17ContentionTimeoutError`
   and freeing nothing).
-- **Bulk design run doesn't stall Kokoro.** With Kokoro resident, start a design run
-  (bulk "Design full cast" or repeated single-character designs), and concurrently
-  request a chapter render on a Kokoro voice in the same book. Confirm the render
-  completes within its normal wall-clock time (not paused/stalled waiting for base17
-  eviction). The eviction-wait moved outside the VoiceDesign block ensures this.
+- **Bulk design run stalls Kokoro for the VoiceDesign forward — and ONLY for that.**
+  (Reworded by #2809 / PR #2810, which corrected the arbiter's scope. The two halves
+  below are deliberately opposite; a pass needs both.) With Kokoro resident, start a
+  design run (bulk "Design full cast" or repeated single-character designs), and
+  concurrently request a chapter render on a Kokoro voice in the same book.
+  - *Kokoro MUST pause while any design holds the arbiter.* `_VD_KOKORO.design()`
+    spans model load **through the GPU forwards** since #2809, so a Kokoro sentence
+    overlapping a design is expected to block until the arbiter clears. Before
+    #2809 the arbiter closed before the forwards, and this pause did not happen.
+    **A render that sails through a design forward unpaused is the FAILURE here —
+    the length of the wait is not.** During a bulk run whose design spans overlap
+    back-to-back, the arbiter can stay held for most of the run (measured at
+    #2809 pass 4: Kokoro waited 6.5 s against a 1 s design span, i.e. essentially
+    the whole run), because the refcount only reaches zero when the LAST design
+    leaves and the wait is unbounded. That is the price of the exclusion, not a
+    defect, and serialising designs would not shorten it. Record the wait you
+    observe; only escalate if a chapter render actually FAILS — the ceilings are
+    `SYNTH_CALL_TIMEOUT_MS` (600 s) and `CHAPTER_NO_PROGRESS_MS` (720 s), neither
+    of which has been reached in practice.
+  - *Kokoro MUST NOT pause for the base17 eviction wait.* That wait can run up to
+    `_BASE17_CONTENTION_WAIT_S_DEFAULT` (~150 s) and stays deliberately OUTSIDE the
+    arbiter (#2070 review R5). A Kokoro sentence blocking for tens of seconds while
+    the log shows only "Evicting resident/in-flight Qwen 1.7B-Base" — with no design
+    forward yet in flight — is a FAILURE.
+- **A VoiceDesign forward and a Kokoro synth never co-reside on the card.**
+  (Added by #2809 / PR #2810 — the property the reworded bullet above exists to
+  protect, observed directly rather than by wall-clock inference.) During the same
+  overlap, sample `nvidia-smi` (or the sidecar's own device log) across a design
+  forward that a Kokoro request arrives during. Confirm the card never shows the
+  Kokoro model and the VoiceDesign 1.7B resident simultaneously — the Kokoro synth
+  starts only after the design forward has completed and the arbiter has cleared.
+  **Repeat with TWO designs overlapping** (two characters designed back-to-back so
+  their spans interleave — the bulk "Design full cast" shape). The arbiter
+  refcounts its holders since #2809 pass 3, so Kokoro must stay blocked until the
+  **last** design leaves, not the first: a Kokoro synth admitted while a second
+  design is still forwarding is the exact regression that criterion guards.
+- **A failed base17 eviction does not wedge the card.** (Added by #2809 / PR #2810.)
+  Drive a `design_voice()` into the `Base17ContentionTimeoutError` path — start a
+  base17 load and trigger a design against it such that the bounded wait expires
+  (lower `_BASE17_CONTENTION_WAIT_S_DEFAULT` if needed to reach it). Confirm the
+  design fails with that error AND that the **next** design and the next
+  `mint_variant()` on the same card still run normally rather than failing/hanging on
+  the per-card lock. `card_lock` instances are cached for the process lifetime, so a
+  leak here is only observable as "every later design on this card fails until the
+  sidecar restarts" — which is exactly what a green next-design proves absent.
 
 *Needs:* single 8 GB GPU card, Qwen base17 weights (`server/tts-sidecar/voices/qwen/base17/`),
-Qwen VoiceDesign 1.7B model, real sidecar, optionally Kokoro resident for the third criterion.
-*Criteria:* the three bullets above — no separate run sheet.
-*Cost:* moderate — three concurrent-load/eviction scenarios + VRAM observation.
+Qwen VoiceDesign 1.7B model, real sidecar, Kokoro resident for the third and fourth criteria.
+*Criteria:* the five bullets above — no separate run sheet.
+*Cost:* moderate — concurrent-load/eviction scenarios + VRAM observation, plus one
+forced-contention run for the lock-leak criterion.
 
 ## Group B — local Ollama analyzer only
 

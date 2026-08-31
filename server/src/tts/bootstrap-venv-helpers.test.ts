@@ -70,7 +70,7 @@ describe('installForProfile — Auto + CPU fallback (AMD phase 2)', () => {
     // install-ort.mjs's own comment on NVIDIA_CUDNN_CONSTRAINT for the real
     // torch-breaking regression an unpinned `~=9.0` caused on real hardware.
     expect(joined[4]).toBe(
-      'install nvidia-cudnn-cu12~=9.19.0 nvidia-cublas-cu12~=12.8.0 nvidia-cufft-cu12~=11.4.0 nvidia-cuda-runtime-cu12~=12.8.0',
+      'install nvidia-cudnn-cu12~=9.19.0 nvidia-cublas-cu12~=12.8.0 nvidia-cufft-cu12~=11.3.3 nvidia-cuda-runtime-cu12~=12.8.0',
     );
     expect(pip.calls).toHaveLength(5);
   });

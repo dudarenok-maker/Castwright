@@ -43,12 +43,32 @@ export interface VramBlockerHealth {
   kokoroLoaded?: boolean;
   qwenLoaded?: boolean;
   qwenBase17Loaded?: boolean;
+  /** Unlike the resident-model flags above, a VoiceDesign IS worth naming:
+      while it's genuinely IN-FLIGHT (a design forward actively computing),
+      there is no auto-evict for it at all — same as Kokoro/Coqui/Qwen base
+      being mid-forward. Once it's merely RESIDENT-AND-IDLE, the sidecar's
+      own admission ladder auto-evicts it immediately (ttl 0) as a side
+      effect of the *next* admission attempt on that card
+      (`_idle_evict_steps` in main.py) — but that's a side effect of a later
+      retry, not of the request that has already been denied, so "wait it
+      out" is still the whole correct remedy either way: either the
+      in-flight design finishes, or the next retry's own admission ladder
+      sweeps the idle one. So unlike Qwen base/Coqui/Kokoro this is the one
+      blocker where "wait it out" is the whole remedy, not noise on top of
+      an action already taken (#2678). */
+  qwenDesignResident?: boolean;
 }
 
 export function describeVramBlockers(health: VramBlockerHealth): VramBlocker[] {
   const out: VramBlocker[] = [];
   if (health.kokoroLoaded) {
     out.push({ model: 'Kokoro', remedy: 'Turn off "Preload Kokoro at startup" in settings.' });
+  }
+  if (health.qwenDesignResident) {
+    out.push({
+      model: 'A voice design',
+      remedy: 'Wait for the in-progress voice design to finish — it frees automatically once idle.',
+    });
   }
   return out;
 }

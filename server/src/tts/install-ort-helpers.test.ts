@@ -49,7 +49,7 @@ describe('planOrtSwap', () => {
         'install',
         'nvidia-cudnn-cu12~=9.19.0',
         'nvidia-cublas-cu12~=12.8.0',
-        'nvidia-cufft-cu12~=11.4.0',
+        'nvidia-cufft-cu12~=11.3.3',
         'nvidia-cuda-runtime-cu12~=12.8.0',
       ],
     ]);
@@ -74,7 +74,7 @@ describe('planOrtSwap', () => {
         'install',
         'nvidia-cudnn-cu12~=9.19.0',
         'nvidia-cublas-cu12~=12.8.0',
-        'nvidia-cufft-cu12~=11.4.0',
+        'nvidia-cufft-cu12~=11.3.3',
         'nvidia-cuda-runtime-cu12~=12.8.0',
       ],
     ]);
