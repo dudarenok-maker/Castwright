@@ -34,7 +34,7 @@ owner: null
 ## Invariants to preserve
 
 - The `verify` job `name:` stays exactly `npm run verify` (branch-protection required check) — untouched here.
-- Server `@types/node` deliberately stays on major 20 (encodes the Node-20.6 min-runtime floor so server code can't reach for Node-21+ APIs); NOT aligned up to root's `@types/node@25`. Surfaced, intentionally not changed.
+- Server `@types/node` deliberately stays on major 20 (encodes the Node-20.6 min-runtime floor so server code can't reach for Node-21+ APIs); NOT aligned up to root's `@types/node@26`. Surfaced, intentionally not changed.
 - The Python sidecar compat pins (`transformers<5.0`, `kokoro-onnx<0.5`, `onnxruntime-gpu<2.0`) are deliberate and out of scope.
 
 ## srv-4 re-audit result (2026-06-01)
