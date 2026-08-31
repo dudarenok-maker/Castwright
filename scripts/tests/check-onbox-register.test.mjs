@@ -1788,6 +1788,149 @@ test("#2272: dischargingIds has no effect on the default direction:'both' compar
 });
 
 // ---------------------------------------------------------------------------
+// #2599/A41: per-row content hashing for `--against-published`. A row can
+// keep the same ID and the same per-group count while its own BODY TEXT
+// silently regresses on the published page (PR #2578 review rounds 13-18 —
+// caught only by manual byte-diffing, because nothing mechanical compared
+// row content). Design decision: dudarenok-maker/Castwright#2599 comment
+// 5484697345 — hash each row's body, keyed by ID, comparing only IDs present
+// on BOTH sides.
+//
+// This compares the TRACKED local live view (`options.trackedLiveViewHtml`)
+// against the PUBLISHED snapshot (`checkLiveView`'s second argument) — NOT
+// the register. The register and its HTML twin are deliberately different
+// documents that only have to agree on structure, not row wording — hashing
+// the real committed register against the real committed live view produces
+// a mismatch for nearly every row even in a healthy state (this was checked
+// against this repo's own files while building this check, and is why the
+// end-to-end CLI tests further down, which read both real files, would
+// otherwise turn permanently red). The tracked live view and a snapshot of
+// what's actually live, by contrast, ARE supposed to carry the same row
+// content whenever nothing has changed — see `parseLiveViewRowBodies`'s own
+// header for the fuller account.
+//
+// A row ID tracked-only (edited locally, not yet published) is tolerated —
+// the normal pre-publish state. A row ID published-only is untouched by
+// this check (existing discharge handling decides it).
+// ---------------------------------------------------------------------------
+
+// A controllable set of `<details class="item">` / `<div class="body">` rows
+// for one glance-table group — real live-view row markup, since that is the
+// one shape `parseLiveViewRowBodies` reads (mirrors the tracked
+// live-view.html and every real `--against-published` snapshot;
+// `buildLiveView`/`buildSingleGroupLiveView` above deliberately skip it,
+// which is also why none of the tests using them exercise this check at
+// all).
+function buildRowContentLiveView(rows) {
+  const detailsBlocks = rows
+    .map(
+      ({ id, body }) => `    <details class="item">
+      <summary><span class="num">${id}</span><span class="iname">t</span></summary>
+      <div class="body">
+        <p>${body}</p>
+      </div>
+    </details>`,
+    )
+    .join('\n');
+  return `<title>On-box acceptance register — Castwright</title>
+
+  <div class="strip">
+    <div class="n owed">${rows.length}</div><div class="l">Owed</div>
+  </div>
+
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>${rows.length}</td></tr>
+    </tbody>
+  </table>
+
+  <section class="group" id="ga">
+    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">${rows.length} rows</span></h3>
+${detailsBlocks}
+  </section>
+`;
+}
+
+test('#2599: identical row body content (tracked vs published) passes, no content-drift error', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: 'Shared content, unchanged.' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Shared content, unchanged.' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+  });
+  assert.deepEqual(errors, []);
+});
+
+// Mutation-provable: same ID, same per-group count (both sides have exactly
+// one row, A1) — only the row's own body text differs between the tracked
+// copy and the published copy. This is the exact A41 regression shape the
+// whole-page diff this replaces could never catch.
+test('#2599: a row whose ID and count match but body content differs is caught, naming the row', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: 'Shared content, unchanged.' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Shared content, MUTATED on the live page.' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+  });
+  assert.deepEqual(errors, ['row A1: content differs between local and published']);
+});
+
+test('#2599: a row present only in the tracked live view (not yet published) is tolerated, not reported as content drift', () => {
+  const workingRegister = buildMultiGroupRegister([{ letter: 'A', rowNumbers: [1, 2] }]);
+  const baselineRegister = buildMultiGroupRegister([{ letter: 'A', rowNumbers: [1, 2] }]);
+  // A2 is new, about to be published for the first time — the published
+  // copy only has A1. It has no published-side body to compare against at
+  // all.
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: 'Body text.' },
+    { id: 'A2', body: 'New row, not yet published.' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([{ id: 'A1', body: 'Body text.' }]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+  });
+  assert.ok(
+    !errors.some((e) => e.includes('content differs')),
+    `a tracked-only row must not be reported as content drift, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// `trackedLiveViewHtml` is opt-in: a caller that never passes it (as none of
+// the OTHER extraOnly tests in this file do) gets no content-drift checking
+// at all, rather than an error about a missing argument — most direct
+// `checkLiveView` callers have no tracked copy to compare and nothing this
+// sub-check needs from them.
+test('#2599: omitting trackedLiveViewHtml skips the content-drift check entirely', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Whatever this says is irrelevant here.' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+  });
+  assert.deepEqual(errors, []);
+});
+
+// ---------------------------------------------------------------------------
 // #2272 review finding 1: a discharge that removes a group's LAST row makes
 // the whole group vanish from the working register (not just one row within
 // a group the register still has) — a shape the per-row `extra`/`staleExtra`

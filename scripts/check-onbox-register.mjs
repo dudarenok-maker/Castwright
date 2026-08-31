@@ -29,6 +29,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { scrubGitEnv } from './git-env.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
@@ -239,6 +240,57 @@ export function parseAllRowHeadings(strippedText) {
     found.push({ id: `${match[1]}${match[2]}` });
   }
   return found;
+}
+
+// #2599/A41: per-row content hashing for `--against-published`. Row PROSE is
+// not expected to be word-for-word identical between the markdown register
+// and its hand-authored HTML twin — they are deliberately different
+// documents that only have to agree on structure (this file's own header;
+// `checkLiveView`'s 'both'-direction comment) — so hashing markdown text
+// against HTML text produces a mismatch for nearly every row even in a
+// healthy, nothing-wrong state (confirmed against this repo's own committed
+// register + live view while building this check). The two documents that
+// ARE supposed to carry byte-for-byte the same row content are the TRACKED
+// `docs/testing/onbox-acceptance-register-live-view.html` and whatever is
+// actually live: "the published page IS the tracked live-view.html's own
+// content, wrapped in a publish skeleton" (this file's own header, on why
+// `--against-published` reuses `checkLiveView` rather than a second
+// comparator). So this check hashes the TRACKED copy's row content against
+// the PUBLISHED SNAPSHOT's row content, both HTML, both read with the same
+// extraction — not the register at all. `options.trackedLiveViewHtml` is the
+// CLI's local, currently-committed copy of the live view; see the CLI layer
+// for where it's read from disk.
+//
+// Splits on each `<details class="item">` row wrapper (the one shape the
+// tracked live view and every `--against-published` snapshot both use — see
+// `parseLiveViewSections`'s own header for the section-level version of this
+// same split-and-scan approach), reads the row ID from its `<span
+// class="num">`, and hashes only the `<div class="body">...</div>` content —
+// not the `<summary>` (ID/title/risk badge), which drifting on its own is a
+// cosmetic rename, not the A41 content-regression shape this exists to
+// catch. A row whose ID isn't a plain `<Letter><N>` (the Blocked/Unconfirmed
+// sections use `—`) is skipped, the same convention `parseLiveViewSections`
+// already filters on. A block with no matching `<div class="body">...</div>`
+// (an extraction failure, e.g. the markup changed) is skipped rather than
+// hashed as empty text, which would otherwise read as "drifted" against any
+// non-empty counterpart.
+export function parseLiveViewRowBodies(liveViewHtml) {
+  const bodies = new Map();
+  const blocks = liveViewHtml.split(/<details\b[^>]*\bclass="item"[^>]*>/).slice(1);
+  for (const block of blocks) {
+    const idMatch = block.match(/<span class="num">([^<]*)<\/span>/);
+    if (!idMatch) continue;
+    const id = idMatch[1].trim();
+    if (!/^[A-Z]\d+$/.test(id)) continue;
+    const bodyMatch = block.match(/<div class="body">([\s\S]*?)<\/div>\s*<\/details>/);
+    if (!bodyMatch) continue;
+    bodies.set(id, htmlCellText(bodyMatch[1]));
+  }
+  return bodies;
+}
+
+function hashRowContent(plainText) {
+  return createHash('sha256').update(plainText).digest('hex');
 }
 
 // Runs all checks and returns a list of human-readable error strings — empty
@@ -649,6 +701,16 @@ export const CANNOT_VERIFY_BASELINE_ERROR =
 // independently-typed strings that could drift apart.
 export const DISCHARGE_NAME_ERROR_PREFIX = '--discharging named ';
 
+// #2599/A41: the prefix every per-row content-drift error starts with —
+// mirroring DISCHARGE_NAME_ERROR_PREFIX just above for the same reason: one
+// error per drifted row ID, so an identity match (like
+// CANNOT_VERIFY_BASELINE_ERROR) can't cover them, and the CLI layer needs to
+// route this class to its OWN remedy rather than the structural "BEHIND"
+// framing below — a row whose content merely drifted isn't "live-only, merge
+// it in", it's "reconcile which side is actually correct", a different fix
+// entirely.
+export const ROW_CONTENT_DRIFT_ERROR_PREFIX = 'row ';
+
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
 //
@@ -735,7 +797,7 @@ export const DISCHARGE_NAME_ERROR_PREFIX = '--discharging named ';
 export function checkLiveView(
   markdownText,
   rawLiveViewHtml,
-  { direction = 'both', baselineText, dischargingIds = [] } = {},
+  { direction = 'both', baselineText, dischargingIds = [], trackedLiveViewHtml } = {},
 ) {
   const errors = [];
   const dischargingSet = new Set(dischargingIds);
@@ -1073,6 +1135,40 @@ export function checkLiveView(
             'the row is genuinely absent from the register you are about to publish AND ' +
             'still present on the baseline.',
         );
+      }
+    }
+  }
+
+  // #2599/A41: row content drift — a row present in BOTH the TRACKED local
+  // live view and the PUBLISHED snapshot (this is not about presence, which
+  // the checks above already cover) whose body text hash differs. Design
+  // decision, dudarenok-maker/Castwright#2599 comment 5484697345: per-row
+  // hashing, not a whole-page diff — a whole-page diff would flag on every
+  // ordinary content update or legitimate concurrent addition (e.g. #2588's
+  // A48), which is exactly the false-positive shape `extraOnly` already
+  // exists to avoid for structural drift. Compares TRACKED html against
+  // PUBLISHED html, not the register — see `parseLiveViewRowBodies`'s own
+  // header for why. Scoped to 'extraOnly' AND to callers that actually pass
+  // `trackedLiveViewHtml` — this is the pre-publish comparison the row-
+  // content regression (PR #2578 review rounds 13-18, manually byte-diffed
+  // because nothing mechanical caught it) actually needs; the tracked-pair
+  // 'both' comparison was never the gap this closes, and a caller with no
+  // tracked copy to compare (most direct `checkLiveView` unit tests) has
+  // nothing for this sub-check to do.
+  // - A row ID tracked-only (edited locally, not yet on the published page)
+  //   is tolerated — the normal pre-publish state, same mechanism as the
+  //   #2199/#2272 presence checks above, not a new tolerance rule.
+  // - A row ID published-only is untouched by this loop entirely — the
+  //   existing discharge handling above already decides whether that's
+  //   reported.
+  if (direction === 'extraOnly' && typeof trackedLiveViewHtml === 'string') {
+    const trackedRowBodies = parseLiveViewRowBodies(stripHtmlComments(trackedLiveViewHtml));
+    const publishedRowBodies = parseLiveViewRowBodies(liveViewHtml);
+    for (const [id, trackedBody] of trackedRowBodies) {
+      const publishedBody = publishedRowBodies.get(id);
+      if (publishedBody === undefined) continue;
+      if (hashRowContent(trackedBody) !== hashRowContent(publishedBody)) {
+        errors.push(`${ROW_CONTENT_DRIFT_ERROR_PREFIX}${id}: content differs between local and published`);
       }
     }
   }
@@ -1444,10 +1540,17 @@ function runCheckOnboxRegisterCli() {
       }
       console.error(failureMessage);
     }
+    // #2599/A41: the row-content-drift sub-check inside `checkLiveView`
+    // compares this TRACKED, currently-committed copy of the live view
+    // against the published snapshot — not the register — see
+    // `parseLiveViewRowBodies`'s own header for why. Read the same way the
+    // no-flag path below reads it.
+    const trackedLiveViewHtml = read(LIVE_VIEW);
     const publishedErrors = checkLiveView(text, publishedHtml, {
       direction: 'extraOnly',
       baselineText: baseline.text,
       dischargingIds,
+      trackedLiveViewHtml,
     });
     // The fail-closed "cannot verify" case (#2199) does not mean the
     // register IS behind (that's unknown), so it gets its own label rather
@@ -1476,9 +1579,19 @@ function runCheckOnboxRegisterCli() {
     const dischargeNameErrors = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(DISCHARGE_NAME_ERROR_PREFIX));
+    // #2599/A41: content-drift errors are their own class — see
+    // ROW_CONTENT_DRIFT_ERROR_PREFIX's own comment for why they can't share
+    // the structural BEHIND bucket's remedy.
+    const contentDriftErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX));
     const behindErrors = cannotVerify
       ? []
-      : publishedErrors.filter((e) => !e.startsWith(DISCHARGE_NAME_ERROR_PREFIX));
+      : publishedErrors.filter(
+          (e) =>
+            !e.startsWith(DISCHARGE_NAME_ERROR_PREFIX) &&
+            !e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX),
+        );
 
     let publishedFailed = false;
     if (cannotVerify) {
@@ -1493,6 +1606,21 @@ function runCheckOnboxRegisterCli() {
         console.error(
           'Fix the --discharging value(s) named above — each error explains why that ID ' +
             "didn't match — then re-run this command against the SAME saved copy from step 1.",
+        );
+      }
+      if (contentDriftErrors.length > 0) {
+        publishedFailed =
+          report(
+            `${publishedPath} (the currently-PUBLISHED page, fetched just now) has row content ` +
+              `that differs from ${REGISTER}`,
+            contentDriftErrors,
+          ) || publishedFailed;
+        console.error(
+          'Do not publish until this is reconciled. Each row named above has the same ID on ' +
+            'both sides but different body text — check which side is actually correct (the ' +
+            'live page may have been hand-edited or reverted independently of this register, ' +
+            'or this register may simply not have caught up with it yet) and update the other ' +
+            'side to match before re-running this command against the SAME saved copy from step 1.',
         );
       }
       if (behindErrors.length > 0) {
