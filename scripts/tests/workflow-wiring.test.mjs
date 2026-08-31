@@ -1137,7 +1137,7 @@ test('leg-result check: cancelled/failed/skipped bucketing is present and all th
 
   // Mutation proof 1: the base `timeout 180` mechanism (SIGTERM at 180s) was
   // verified to fire via a manually-hung mutation test branch (described in PR
-  // #2796's body). The source-regex test below verifies the `-k 10` (SIGKILL at
+  // #2796's body). The source-regex test above verifies the `-k 10` (SIGKILL at
   // 10s grace-period end) flag's *presence* in the code by pattern match, but no
   // live CI run has yet verified the SIGKILL signal actually fires — that would
   // require another expensive hang-simulation branch. This assertion guards
