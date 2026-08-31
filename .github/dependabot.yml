@@ -54,6 +54,16 @@ updates:
         applies-to: security-updates
         patterns:
           - '*'
+    # Held back — bumping any of these breaks npm ci with an ERESOLVE
+    # conflict against a peer that has no compatible release yet. Without
+    # this, the weekly root-npm sweep re-proposes them and fails the same
+    # way every time (#2806 -> #2816). Remove an entry once its tracking
+    # issue closes.
+    ignore:
+      - dependency-name: 'eslint' # #711 — eslint-plugin-jsx-a11y@6.10.2 caps eslint peer at ^9
+      - dependency-name: '@eslint/js' # #711 — same eslint-10 block
+      - dependency-name: 'typescript' # #1477 — typescript-eslint@8.68.0 caps typescript peer at <6.1.0
+      - dependency-name: 'jsdom' # #2823 — v30 narrows engines.node past this repo's floor
 
   - package-ecosystem: 'npm'
     directory: '/server'
