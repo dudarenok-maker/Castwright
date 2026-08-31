@@ -1050,9 +1050,9 @@ test('ffmpeg install: timeout wrapping is present with correct bounds on all apt
   // wrapper (PR #2796 mutations). Assert all three apt/dpkg calls carry the
   // timeout, so a future edit can't drop it without this test failing.
   const patterns = [
-    /timeout\s+-k\s+10\s+180\s+sudo\s+dpkg\s+-i/,
-    /timeout\s+-k\s+10\s+180\s+sudo\s+apt-get\s+-o\s+Acquire::Retries=3\s+update/,
-    /timeout\s+-k\s+10\s+180\s+sudo\s+apt-get\s+-o\s+Dir::Cache::Archives/,
+    /sudo\s+timeout\s+-k\s+10\s+180\s+dpkg\s+-i/,
+    /sudo\s+timeout\s+-k\s+10\s+180\s+apt-get\s+-o\s+Acquire::Retries=3\s+update/,
+    /sudo\s+timeout\s+-k\s+10\s+180\s+apt-get\s+-o\s+Dir::Cache::Archives/,
   ];
 
   const missing = [];
