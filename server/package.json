@@ -25,14 +25,14 @@
     "express": "^5.1.0",
     "express-rate-limit": "^8.6.2",
     "franc": "^6.2.0",
-    "multer": "^2.1.1",
+    "multer": "^2.3.0",
     "nanoid": "^6.0.1",
     "pdf-parse": "^2.4.5",
     "sharp": "^0.35.4",
     "undici": "^8.3.0",
     "yauzl": "^3.3.0",
     "yazl": "^3.3.1",
-    "zod": "^4.0.0"
+    "zod": "^4.5.1"
   },
   "overrides": {
     "adm-zip": ">=0.6.0"
@@ -40,7 +40,7 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/multer": "^2.2.0",
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.4.0",
     "@types/picomatch": "^4.0.3",
     "@types/supertest": "^7.2.1",
     "@types/yauzl": "^3.3.0",
@@ -48,7 +48,7 @@
     "std-env": "^4.2.0",
     "supertest": "^7.2.2",
     "tsx": "^4.23.12",
-    "typescript": "^6.0.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   }
 }
