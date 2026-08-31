@@ -105,7 +105,7 @@ jobs:
       ok: ${{ steps.changes.outputs.ok }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Full history so the scope detector can diff the PR head against
           # its base commit. A shallow clone wouldn't have the base reachable.
@@ -144,7 +144,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node + deps
         uses: ./.github/actions/setup
@@ -243,7 +243,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Full history: `vitest run --changed <base>` below needs the BASE
           # commit reachable in the local git object DB — a shallow (depth-1)
@@ -283,7 +283,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Full history: `vitest run --changed <base>` below needs the BASE
           # commit reachable in the local git object DB — a shallow (depth-1)
@@ -348,7 +348,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Every other job uses this; without it this job relies on whatever Node
       # ubuntu-latest happens to ship and pins no version. `npm run
@@ -360,7 +360,7 @@ jobs:
       # supports: test:sidecar
       - name: Setup Python
         if: fromJSON(needs.detect.outputs.scopes).step_test_sidecar || fromJSON(needs.detect.outputs.scopes).shared
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -408,7 +408,7 @@ jobs:
         shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node + deps
         uses: ./.github/actions/setup
@@ -423,7 +423,7 @@ jobs:
       - name: Cache Playwright browsers
         if: fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
         id: playwright-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
@@ -462,7 +462,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node + deps
         uses: ./.github/actions/setup
@@ -477,7 +477,7 @@ jobs:
       - name: Cache Playwright browsers
         if: fromJSON(needs.detect.outputs.scopes).step_test_e2e_visual || fromJSON(needs.detect.outputs.scopes).shared
         id: playwright-cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
@@ -508,7 +508,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node + deps
         uses: ./.github/actions/setup

@@ -440,6 +440,67 @@ def test_design_voice_card_lock_acquire_is_bounded() -> None:
         holder.join(5)
 
 
+def test_card_lock_released_when_base17_eviction_raises() -> None:
+    """#2809 (pass-2 review) — `design_voice()` must not leak `card_lock` when
+    the base17 eviction raises.
+
+    `unload_base17(wait_seconds > 0)` raises `Base17ContentionTimeoutError` by
+    design — that is its documented bounded-wait failure mode, and
+    `design_voice()` is the only caller that opts into it (#2752 / #1156). The
+    call sits between `card_lock.acquire()` and the `finally` that releases it,
+    so a release-`finally` that does not span it leaks the lock. `card_lock`
+    instances are cached per card index for the PROCESS lifetime
+    (`_DeviceLedger.card_lock`), so a leaked one wedges every subsequent
+    `design_voice()` (bounded acquire → `Base17ContentionTimeoutError`) and
+    every `mint_variant()` (unbounded acquire → hang) on that card until the
+    sidecar restarts.
+
+    Mutation that must fail this (verified) — replace the outer
+    `finally: if not card_lock_released: card_lock.release()` with a no-op
+    (`pass`), i.e. leave the only release inside the post-eviction `try`: the
+    final `lock.locked()` assertion below flips to `True`.
+    """
+    engine = main.QwenEngine()
+    _quiet_kokoro()
+
+    card_idx = main._qwen_configured_card_idx()
+    lock = main._DEVICE_LEDGER.card_lock(card_idx)
+    assert not lock.locked(), (
+        "card_lock was already held before this test ran — an earlier test "
+        "leaked it (which is exactly the defect under test)."
+    )
+
+    # Force the eviction branch, then make the eviction take its own documented
+    # bounded-wait failure path.
+    engine._base17 = _FakeBase17Model()
+
+    def _raise_contention(*_args, **_kwargs):
+        raise main.Base17ContentionTimeoutError(
+            "simulated bounded-wait timeout on an in-flight base17 load"
+        )
+
+    engine.unload_base17 = _raise_contention  # type: ignore[method-assign]
+
+    with mock.patch.dict(sys.modules, {"torch": mock.MagicMock()}):
+        with pytest.raises(main.Base17ContentionTimeoutError):
+            engine.design_voice(
+                voice_id="__leak_probe_voice__",
+                instruct="A warm voice.",
+                language="en",
+                calibration_text="Hello there.",
+            )
+
+    assert not lock.locked(), (
+        "card_lock is still held after design_voice() failed in the base17 "
+        "eviction — it is cached for the process lifetime, so this wedges "
+        "every later design and mint on this card until sidecar restart."
+    )
+    # And prove it is genuinely re-acquirable by a later caller, not merely
+    # reporting an unlocked flag.
+    assert lock.acquire(timeout=1.0), "card_lock could not be re-acquired"
+    lock.release()
+
+
 def test_two_concurrent_healthy_designs_both_succeed() -> None:
     """#2790 — Two concurrent, healthy (non-wedged) design_voice() calls should
     both succeed, even if one takes longer than the other. Before the fix,
@@ -452,17 +513,27 @@ def test_two_concurrent_healthy_designs_both_succeed() -> None:
     not GPU forwards) allows concurrent designs to both complete successfully.
 
     Mutation that must fail this — broaden the card_lock scope to include GPU
-    forwards (revert the narrowing): design B will timeout after 60s while
-    design A is still running its GPU forwards, causing the assertion below
-    to fail.
+    forwards (revert the narrowing): design B will timeout while design A is
+    still running its GPU forwards, causing the assertion below to fail.
+
+    The two timings below are what make that mutation detectable, and both
+    matter (#2809 pass-1 review — this test previously could NOT fail under
+    the mutation its own docstring names). The acquire bound is
+    `_BASE17_CONTENTION_WAIT_S_DEFAULT`, 60s in production; A's fake forward
+    used to sleep 0.1s against it, i.e. B waited ~0.15s of a 60s budget and
+    never timed out no matter how broad the lock was. So: scale the bound down
+    to 0.3s (mirroring the sibling `test_design_voice_card_lock_acquire_is_bounded`,
+    which monkeypatches the same constant for the same reason) and lengthen A's
+    forward to 2.0s so it comfortably outlives the bound.
     """
     engine = main.QwenEngine()
     _quiet_kokoro()
 
     class _FakeDesignForConcurrentTest:
         def generate_voice_design(self, text, language, instruct):
-            # Simulate a slow forward pass (scaled for test)
-            time.sleep(0.1)
+            # Simulate a slow forward pass. MUST outlast the scaled-down
+            # acquire bound below, or the broadened-lock mutation is invisible.
+            time.sleep(2.0)
             return [np.zeros(10, dtype="float32")], 24000
 
     class _FakeBaseForConcurrentTest:
@@ -506,8 +577,11 @@ def test_two_concurrent_healthy_designs_both_succeed() -> None:
         except Exception as e:
             results["design_b"] = f"failed: {e}"
 
-    # Mock necessary dependencies
-    with mock.patch.dict(sys.modules, {"torch": mock.MagicMock()}):
+    # Mock necessary dependencies. The scaled-down acquire bound is patched on
+    # `main` (not per-thread) so both design threads read it — 0.3s against A's
+    # 2.0s forward, so a card_lock still held across that forward times B out.
+    with mock.patch.object(main, "_BASE17_CONTENTION_WAIT_S_DEFAULT", 0.3), \
+            mock.patch.dict(sys.modules, {"torch": mock.MagicMock()}):
         engine._voices_dir = tempfile.mkdtemp()
 
         # Mock ensure calls to control timing
