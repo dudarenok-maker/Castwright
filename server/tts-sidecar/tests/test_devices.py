@@ -361,6 +361,49 @@ def test_is_resident_stays_none_when_unknown_and_no_gpu_intent(monkeypatch):
     assert main._is_resident("kokoro") is None
 
 
+def test_is_resident_retags_to_rocm_on_a_rocm_box(monkeypatch):
+    """#2813 review finding 2: a loaded engine's own `self._device`/`.device`
+    is now ALWAYS normalised to torch-native "cuda:N" (this PR's fix —
+    torch/CT2/speechbrain don't understand "rocm:N" — so it can never
+    literally hold "rocm:N" any more, the way it used to before #2813). On a
+    real ROCm box, `_engine_actual_card`'s `family` therefore reads "cuda"
+    even for a genuinely ROCm-resident engine — but the admission ledger's
+    own candidate keys (`PlacementController._device_key`) are "rocm:N"
+    there, so an un-retagged "cuda:N" residency key could never match one:
+    a resident engine's OWN next admission would report permanent
+    `noCapacity` against the very card it is already loaded on."""
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: True)
+    monkeypatch.setattr(main, "_engine_actual_card",
+        lambda e: {"family": "cuda", "index": 0, "fell_back": False})
+    eng = types.SimpleNamespace(_device="cuda:0")
+    monkeypatch.setitem(main.ENGINES, "coqui", eng)
+    assert main._is_resident("coqui") == "rocm:0"
+
+
+def test_is_resident_unknown_fallback_retags_to_rocm_on_a_rocm_box(monkeypatch):
+    """Companion to the test above, for the "unknown" actual-card fallback
+    branch (#2647): the intent-derived key must be retagged too, not just
+    the main branch."""
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: True)
+    monkeypatch.setattr(main, "_engine_actual_card",
+        lambda e: {"family": "unknown", "index": None, "fell_back": False})
+    eng = types.SimpleNamespace(_device="cuda:0")
+    monkeypatch.setitem(main.ENGINES, "kokoro", eng)
+    assert main._is_resident("kokoro") == "rocm:0"
+
+
+def test_is_resident_stays_cuda_on_a_real_cuda_box(monkeypatch):
+    """Companion control: the retag must not fire on a genuinely NVIDIA box
+    — the overwhelming majority of installs — so a resident engine's key
+    stays exactly "cuda:N", unchanged, when `_cuda_is_rocm()` is False."""
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: False)
+    monkeypatch.setattr(main, "_engine_actual_card",
+        lambda e: {"family": "cuda", "index": 0, "fell_back": False})
+    eng = types.SimpleNamespace(_device="cuda:0")
+    monkeypatch.setitem(main.ENGINES, "coqui", eng)
+    assert main._is_resident("coqui") == "cuda:0"
+
+
 def test_build_gpus_payload_no_unindexed_entry_when_bucket_empty(monkeypatch):
     """A fully-indexed box (no -1 bucket) sees no synthetic entry — additive only."""
     monkeypatch.setattr(main, "_enumerate_cuda_devices",

@@ -432,7 +432,27 @@ setup rather than repeatedly loading and evicting models.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-30, no count change.** Row **A24**'s run note (2026-08-26,
+> **Last change: 2026-09-01, 66 owed (no change) — Blocked 5 → 6.** Added a new
+> Blocked-section row, **ROCm/AMD admitted device-key normalisation — real GPU
+> engine load, pinned or unpinned**
+> ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), PR
+> [#2835](https://github.com/dudarenok-maker/Castwright/pull/2835)): the
+> VRAM-ledger admission layer hands engines a `"rocm:N"` device key on a
+> ROCm/AMD box that no torch/CTranslate2/speechbrain call understands, and
+> separately an operator's config-validated `"cuda:N"` pin could never match
+> that same ledger's own `"rocm:N"`-keyed candidates — both seams fixed
+> (`_normalise_rocm_device_key` forward, `_report_rocm_device_key` reverse)
+> across `_resolve_torch_device`, `_ct2_kwargs`, `_spk_run_device`,
+> `WhisperEngine._ensure_loaded`, `SpeakerEngine.ensure_loaded`,
+> `_engine_env_pin` and `_is_resident` — but unprovable on this box
+> (dual-NVIDIA, no ROCm hardware), so it lands Blocked rather than Group A.
+> The pinned-device half was found and fixed in the same PR's own `pr-review-
+> gate` pass 1, which is also why the row's title and body were widened after
+> first being added (originally covered only the unpinned crash). **66 owed**
+> is unaffected — Blocked/Unconfirmed rows are excluded from that arithmetic
+> by design (see the group table above).
+>
+> **Prior change: 2026-08-30, no count change.** Row **A24**'s run note (2026-08-26,
 > below) filed [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678) as a
 > design decision owed: should the capacity-admission layer make a Base render wait for
 > a resident VoiceDesign, or evict it? PR
@@ -5050,33 +5070,45 @@ so there is no way to put a genuinely-below-floor ffmpeg on `PATH` here.
 downgraded to a real pre-floor build — the row itself names a 22.04
 container with archive ffmpeg 4.4 as the cheapest route.
 
-### ROCm/AMD admitted device-key normalisation — real GPU engine load ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), branch `fix/sidecar-rocm-device-normalisation`)
+### ROCm/AMD admitted device-key normalisation — real GPU engine load, pinned or unpinned ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), branch `fix/sidecar-rocm-device-normalisation`, PR review pass 1)
 
 **1. What is dormant.** The VRAM-ledger admission layer (`PlacementController.admit()`)
 hands engines a device key like `"rocm:N"` on a ROCm/AMD box (`probe()`'s own honest
 ROCm-vs-CUDA accounting), but a ROCm/HIP torch build only ever understands `"cuda:N"`
-at the API level — `torch.device("rocm:N")` raises. `_resolve_torch_device`
-(`server/tts-sidecar/main.py`) now converts an explicit `"rocm:N"` to `"cuda:N"`
-(index preserved) before it reaches any engine's `.to()` call, and Coqui's
-`_resolve_runtime_options` now calls it unconditionally (not just for `"auto"`) so
-an admitted `"rocm:N"` actually reaches the new branch instead of bypassing it.
-The unit tests (`test_qwen_device.py::test_rocm_normalises_to_cuda`,
-`test_coqui_device.py::test_admitted_rocm_device_normalises_to_cuda`) prove the
-string conversion in isolation against a stubbed `torch` module — they do not
-prove a real ROCm/HIP torch build actually accepts the converted `"cuda:N"`
-string end to end and loads a real model onto a real AMD card with
-`SEG_CAPACITY_ADMISSION` on (the default).
+at the API level — `torch.device("rocm:N")` raises, and CTranslate2/speechbrain
+likewise have no `"rocm"` device. Two directions, both now closed in
+`server/tts-sidecar/main.py`. Forward (an admitted key reaching a real device call):
+`_resolve_torch_device`, `_ct2_kwargs`, `_spk_run_device`, `WhisperEngine._ensure_loaded`,
+and `SpeakerEngine.ensure_loaded` all convert an explicit `"rocm:N"` to `"cuda:N"`
+(index preserved) via the shared `_normalise_rocm_device_key` helper before it reaches
+`.to()`/`WhisperModel(...)`/`EncoderClassifier(...)`; Coqui's `_resolve_runtime_options`
+calls the resolver unconditionally (not just for `"auto"`) so an admitted value
+actually reaches it. Reverse (an operator's pin matching the ledger's own candidate
+keys): config validation only ever lets an operator set an indexed pin as `"cuda:N"`
+— never `"rocm:N"` — so `_engine_env_pin` and `_is_resident` now re-tag their output
+back to `"rocm:N"` via the shared `_report_rocm_device_key` helper before `admit()`
+compares it against a probed candidate, or a pinned/resident engine on a real ROCm
+box would report permanent `noCapacity` even with room free on its own card. The unit
+tests (`test_qwen_device.py`, `test_coqui_device.py`, `test_device_parse.py`,
+`test_devices.py`, `test_placement.py`, `test_transcribe_embed_admission.py`) prove
+every conversion in isolation against stubbed `torch`/`_cuda_is_rocm` — they do not
+prove a real ROCm/HIP torch build, CTranslate2, and speechbrain actually accept the
+converted values end to end and load real models onto a real AMD card with
+`SEG_CAPACITY_ADMISSION` on (the default), pinned or unpinned.
 
 **2. Why this box cannot reach it.** This box is dual-NVIDIA; this will not move
 until AMD/ROCm hardware exists — same constraint as the AMD GPU support Phase 2 and
 ORT pip-consistency marker rows above.
 
 **3. What to observe, once ROCm/AMD hardware is available.** With
-`SEG_CAPACITY_ADMISSION` on, trigger a GPU engine load (Qwen Base or Coqui/XTTS)
-that the admission layer places on a ROCm card, and confirm it now succeeds
-(model resident, synth completes) rather than crashing on
-`torch.device("rocm:N")` the way it did before this fix. Criteria live in
-issue #2813 and this row.
+`SEG_CAPACITY_ADMISSION` on, trigger a GPU engine load on each of the five engines
+(Qwen Base, Coqui/XTTS, Whisper `/transcribe`, the SPK `/embed` speaker-embed, and
+Kokoro if it ever gains a GPU placement) that the admission layer places on a ROCm
+card, and confirm each now succeeds (model resident, synth/transcribe/embed
+completes) rather than crashing on an unconverted `"rocm:N"`. Repeat with an explicit
+`*_DEVICE=cuda:N` pin set on at least one engine (e.g. `COQUI_DEVICE=cuda:0`) and
+confirm it actually admits onto that card rather than reporting permanent
+`noCapacity`. Criteria live in issue #2813 and this row.
 
 ---
 

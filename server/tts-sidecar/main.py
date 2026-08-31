@@ -3903,7 +3903,16 @@ def _read_device_env(var_name: str) -> Optional[str]:
 
 
 def _engine_env_pin(engine_id: str) -> Optional[str]:
-    """Concrete device key an engine's env pins it to, or None for auto/unset/cpu."""
+    """Concrete device key an engine's env pins it to, or None for auto/unset/cpu.
+
+    Config validation (`server/src/config/registry.ts`) only ever lets an
+    operator legally set an indexed pin as "cuda:N" -- never "rocm:N" -- so
+    `fam` here always reads "cuda" on a real ROCm box too. Re-tagged to
+    "rocm:N" via `_report_rocm_device_key` before returning (#2813 review
+    finding 2): the admission ledger's own candidate keys
+    (`PlacementController._device_key`, built from `probe_capacity()`'s
+    `kind`) are "rocm:N" on that box, and a pin left at "cuda:N" can never
+    match one -- every pinned engine would report permanent `noCapacity`."""
     env_var = {
         "coqui": "COQUI_DEVICE",
         "kokoro": "KOKORO_DEVICE",
@@ -3915,7 +3924,7 @@ def _engine_env_pin(engine_id: str) -> Optional[str]:
         return None
     fam, idx = _parse_device(_read_device_env(env_var))
     if fam in ("cuda", "rocm") and idx is not None:
-        return f"{fam}:{idx}"
+        return _report_rocm_device_key(f"{fam}:{idx}")
     return None
 
 
@@ -5076,7 +5085,16 @@ def _is_resident(engine_id: str) -> Optional[str]:
     unwinds. This is the best remaining evidence of where the weights
     actually live. This keeps `PlacementController` booking VRAM against the right card instead
     of silently dropping the constraint and admitting a second heavy engine
-    onto a card that is already full."""
+    onto a card that is already full.
+
+    Re-tagged via `_report_rocm_device_key` before returning (#2813 review
+    finding 2): `card["family"]`/`intent_fam` read "cuda" even on a real
+    ROCm box now that an engine's own `self._device`/`.device` is always
+    normalised to torch-native "cuda:N" (never a literal "rocm:N" string
+    any more), but the admission ledger's own candidate keys are "rocm:N"
+    there -- an un-retagged "cuda:N" residency key could never match one,
+    so a genuinely resident engine would still report permanent
+    `noCapacity` on its own next admission."""
     named: dict[str, Any] = dict(ENGINES)
     named["asr"] = ASR
     named["spk"] = SPK
@@ -5090,10 +5108,10 @@ def _is_resident(engine_id: str) -> Optional[str]:
         if card["family"] == "unknown":
             intent_fam, intent_idx = _parse_device(getattr(engine, "_device", None))
             if intent_fam in ("cuda", "rocm"):
-                return f"{intent_fam}:{intent_idx if intent_idx is not None else 0}"
+                return _report_rocm_device_key(f"{intent_fam}:{intent_idx if intent_idx is not None else 0}")
         return None
     index = card["index"] if card["index"] is not None else 0
-    return f"{card['family']}:{index}"
+    return _report_rocm_device_key(f"{card['family']}:{index}")
 
 
 def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
@@ -5144,10 +5162,19 @@ def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
 
     This also correctly reflects an admitted `device=` argument onto a
     NON-default card (#2678 review N2): `_resolve_torch_device` returns an
-    explicit (non-"auto") pref UNCHANGED, so an admission's concrete
-    "cuda:1" survives resolution intact -- only the unset/env-default "auto"
-    pref resolves via availability (cuda:0 first). Verified against
-    `_resolve_torch_device`'s own source, not assumed."""
+    explicit (non-"auto") "cuda:N" pref unchanged, so an admission's
+    concrete "cuda:1" survives resolution intact -- only the unset/
+    env-default "auto" pref resolves via availability (cuda:0 first).
+    **Updated for #2813**: `_resolve_torch_device` now converts an explicit
+    "rocm:N" pref to "cuda:N" too (a ROCm/HIP torch build only understands
+    "cuda:N" at the `.to()` level), so `qwen._device` itself is NEVER
+    literally "rocm:N" post-resolution any more -- it reads "cuda:N" even
+    on a genuinely ROCm-admitted load. The `_report_rocm_device_key` re-tag
+    below is what restores the "rocm:N" identity for the ledger's own
+    reporting/matching vocabulary; this function's return value still
+    reflects the admitted card correctly, just via that re-tag rather than
+    a literal pass-through. Verified against `_resolve_torch_device`'s own
+    source, not assumed."""
     if not isinstance(qwen, QwenEngine):
         return None
     resident = (
@@ -5161,15 +5188,11 @@ def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
     fam, idx = _parse_device(qwen._device)
     if fam not in ("cuda", "rocm"):
         return None
-    # On a ROCm/HIP build torch's own device string still reads "cuda" (HIP
-    # aliases the CUDA API) -- _parse_device has no way to tell them apart,
-    # so normalise the family the same way probe_capacity() does (whose
-    # `kind` field is what PlacementController._device_key's format mirrors)
-    # via the SAME _cuda_is_rocm() check, rather than a second ad hoc test
-    # that could drift from it (#2678 review F2).
-    if fam == "cuda" and _cuda_is_rocm():
-        fam = "rocm"
-    return f"{fam}:{idx if idx is not None else 0}"
+    # Re-tag cuda -> rocm via the shared _report_rocm_device_key helper (the
+    # #2678 review F2 idiom, extracted by #2813 review finding 2 so every
+    # re-tag site shares ONE _cuda_is_rocm() check instead of a second ad
+    # hoc test that could drift from it).
+    return _report_rocm_device_key(f"{fam}:{idx if idx is not None else 0}")
 
 
 def _same_card(resident: Optional[str], target: str) -> bool:
@@ -5317,11 +5340,54 @@ def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     return [{"device_id": index} if p == "CUDAExecutionProvider" else {} for p in providers]
 
 
+def _normalise_rocm_device_key(value: Optional[str]) -> Optional[str]:
+    """Convert an explicit 'rocm:N' device key to 'cuda:N' (index preserved)
+    -- the single normalisation every consumer of an ADMITTED device value
+    needs before it reaches a real device call, since none of torch,
+    CTranslate2, or speechbrain understand 'rocm:N' at the API level
+    (#2813). This is the SAME conversion `_resolve_torch_device` applies to
+    its own explicit (non-'auto') pref -- extracted here so `_ct2_kwargs`,
+    `_spk_run_device`, and the WhisperEngine/SpeakerEngine load chokepoints
+    can reuse it directly rather than each growing a second ad hoc check
+    (review finding 1: those three call sites received the identical
+    admitted 'rocm:N' this normalisation exists to close, but none of them
+    routed through it). Any other value (cuda:N, cpu, auto, mps, an
+    already-'cuda:N' key, None) is returned unchanged."""
+    fam, idx = _parse_device(value)
+    if fam == "rocm":
+        return f"cuda:{idx if idx is not None else 0}"
+    return value
+
+
+def _report_rocm_device_key(value: Optional[str]) -> Optional[str]:
+    """Re-tag a torch-native 'cuda:N' device key as 'rocm:N' (index
+    preserved) for the admission ledger's own honest ROCm-vs-CUDA reporting
+    vocabulary -- `probe_capacity()`'s `kind` field, the format
+    `PlacementController._device_key`'s candidate keys already use. Every
+    function that FEEDS `admit()`/`reservation()` a residency or pin key
+    (`_is_resident`, `_engine_env_pin`) must return its answer in that same
+    vocabulary, or it can never match a probed 'rocm:N' candidate -- a real
+    ROCm box then reports permanent `noCapacity` for a resident OR pinned
+    engine alike (#2813 review finding 2). This is the exact reverse
+    direction of `_normalise_rocm_device_key` above. Extracted from
+    `_qwen_resident_device_key`'s original inline check (#2678 review F2) so
+    every re-tag site shares ONE `_cuda_is_rocm()` call rather than a second
+    ad hoc test that could drift from it. Any other value (cpu, auto, mps,
+    an already-'rocm:N' key, None) is returned unchanged."""
+    fam, idx = _parse_device(value)
+    if fam == "cuda" and _cuda_is_rocm():
+        return f"rocm:{idx if idx is not None else 0}"
+    return value
+
+
 def _spk_run_device(value: Optional[str]) -> str:
     """speechbrain run_opts device. speechbrain accepts the full 'cuda:N' form
     (unlike CT2), so 'cuda:1' stays 'cuda:1'; 'cuda' stays 'cuda'; anything
-    else → 'cpu'."""
-    family, index = _parse_device(value)
+    else → 'cpu'. An admitted 'rocm:N' is normalised to 'cuda:N' first
+    (#2813 review finding 1) -- speechbrain, like torch, has no 'rocm'
+    device of its own; ROCm hardware is driven through the same 'cuda:N'
+    string HIP masquerades as."""
+    family, index = _parse_device(_normalise_rocm_device_key(value))
     if family == "cuda":
         return f"cuda:{index}" if index is not None else "cuda"
     return "cpu" if family in ("cpu", "auto") else family
@@ -5329,8 +5395,11 @@ def _spk_run_device(value: Optional[str]) -> str:
 
 def _ct2_kwargs(device: str, compute_type: str) -> dict:
     """CTranslate2 WhisperModel kwargs. CT2 wants device='cuda' + a separate
-    device_index (it RAISES on 'cuda:1'); cpu/auto → device='cpu'."""
-    family, index = _parse_device(device)
+    device_index (it RAISES on 'cuda:1'); cpu/auto → device='cpu'. An
+    admitted 'rocm:N' is normalised to 'cuda:N' first (#2813 review finding
+    1) -- CT2 has no 'rocm' device at all, and would otherwise be handed the
+    literal string 'rocm', which it does not recognise either."""
+    family, index = _parse_device(_normalise_rocm_device_key(device))
     dev = "cuda" if family == "cuda" else ("cpu" if family in ("cpu", "auto") else family)
     kw: dict = {"device": dev, "compute_type": compute_type}
     if family == "cuda" and index is not None:
@@ -5358,21 +5427,16 @@ def _resolve_torch_device(pref: str, torch_module: Any) -> str:
     availability. An explicit value (e.g. 'cuda:1', 'cpu', 'mps') is returned
     unchanged so multi-GPU pins and forced devices are respected.
 
-    An explicit 'rocm:N' is converted to 'cuda:N' (#2813): the admission
-    layer's own accounting vocabulary distinguishes ROCm from real CUDA
-    (`probe()`'s `kind`, mirrored back by `_qwen_resident_device_key` via
-    `_cuda_is_rocm()`), but a ROCm/HIP torch build masquerades as CUDA at the
-    API level -- `torch.device()` only ever understands 'cuda:N', never
-    'rocm:N' -- so an admitted 'rocm:N' has to be re-tagged before it reaches
-    a real `.to()` call. Same family/index split, then re-tag idiom as
-    `_qwen_resident_device_key`'s reverse-direction conversion, just applied
-    the other way."""
+    An explicit 'rocm:N' is converted to 'cuda:N' (#2813) via the shared
+    `_normalise_rocm_device_key` helper: the admission layer's own
+    accounting vocabulary distinguishes ROCm from real CUDA (`probe()`'s
+    `kind`, mirrored back by `_report_rocm_device_key`), but a ROCm/HIP
+    torch build masquerades as CUDA at the API level -- `torch.device()`
+    only ever understands 'cuda:N', never 'rocm:N' -- so an admitted
+    'rocm:N' has to be re-tagged before it reaches a real `.to()` call."""
     p = (pref or "auto").strip().lower()
     if p != "auto":
-        fam, idx = _parse_device(p)
-        if fam == "rocm":
-            return f"cuda:{idx if idx is not None else 0}"
-        return pref
+        return _normalise_rocm_device_key(pref)
     if torch_module.cuda.is_available():
         return "cuda:0"
     backends = getattr(torch_module, "backends", None)
@@ -8108,8 +8172,11 @@ class WhisperEngine:
         # rather than the route pre-mutating the shared `self._device` before an
         # unlocked load, where a concurrent multi-GPU first cold-load admitted to
         # another card could clobber it. `None` keeps the env-derived default
-        # byte-for-byte.
-        dev = device if device is not None else self._device
+        # byte-for-byte. Normalised here (#2813 review finding 1) so an admitted
+        # "rocm:N" is "cuda:N" before it reaches `_compute_type`/`_ct2_kwargs`
+        # (also self-normalising, but the chokepoint is here so `self._device`
+        # below, and the cuda-family checks that read it, see the same value).
+        dev = _normalise_rocm_device_key(device if device is not None else self._device)
         try:
             from faster_whisper import WhisperModel  # type: ignore
             _record_whisper_import_result(True)
@@ -8430,8 +8497,16 @@ class SpeakerEngine:
             # UNDER the load lock, threaded in as a parameter — not mutated by
             # the route before the lock, where a concurrent multi-GPU first
             # cold-load could clobber it. `None` keeps the env-derived default.
+            # Normalised here (#2813 review finding 1): an admitted "rocm:N"
+            # is "cuda:N" before it reaches `self.device` — the cuda-presence
+            # guard and the cpu-demotion fallback just below are both gated on
+            # `family == "cuda"`, and were silently skipped for a raw "rocm:N"
+            # (no such gate ever fires, so ECAPA's bare `raise` reached /embed
+            # unfiltered), same as `_spk_run_device` (also self-normalising,
+            # but the chokepoint is here so `self.device` and both gates below
+            # see the same normalised value).
             if device is not None:
-                self.device = device
+                self.device = _normalise_rocm_device_key(device)
             # srv-47: a requested cuda device that isn't actually present
             # degrades to cpu rather than crashing.  Use _parse_device so an
             # indexed pin (cuda:1) is treated the same as plain 'cuda'.
