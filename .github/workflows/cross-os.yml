@@ -152,7 +152,7 @@ jobs:
         uses: ./.github/actions/setup
 
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
 
       - name: Cache Playwright browsers
         id: playwright-cache

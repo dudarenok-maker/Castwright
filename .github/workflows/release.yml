@@ -58,7 +58,7 @@ jobs:
       # run when ffmpeg isn't on PATH — the MP3 encoder in
       # `server/src/tts/mp3.ts` shells out to it; the e2e audio paths need it too.
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
 
       # `npm run verify` runs the e2e suite, which needs the chromium engine.
       - name: Install Playwright chromium
@@ -138,7 +138,7 @@ jobs:
         uses: ./.github/actions/setup
 
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
 
       - name: Cache Playwright browsers
         id: playwright-cache
@@ -270,7 +270,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        uses: ./.github/actions/install-ffmpeg
       - name: Quarantine lane
         run: npm run test:quarantine
 

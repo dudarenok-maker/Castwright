@@ -15,6 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readdirSync } from 'node:fs';
 import { computeScopes } from '../ci-scope.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
@@ -1065,6 +1066,33 @@ test('ffmpeg install: timeout wrapping is present with correct bounds on all apt
     missing,
     [],
     `ffmpeg install action is missing timeout wrapping or has wrong bounds:\n${missing.join('\n')}`,
+  );
+});
+
+test('ffmpeg install: no bare apt-get install ffmpeg in workflows (use install-ffmpeg action)', () => {
+  // Issue #2449: unretried `sudo apt-get update && sudo apt-get install -y ffmpeg`
+  // hangs on mirror timeouts and burns entire job timeouts. This regression test
+  // ensures all workflows use the new cached, retried, timeout-bounded
+  // install-ffmpeg composite action instead of the bare pattern.
+  const workflowDir = resolve(repoRoot, '.github', 'workflows');
+  const workflows = readdirSync(workflowDir).filter((f) => f.endsWith('.yml'));
+
+  const bareInstalls = [];
+  for (const workflowFile of workflows) {
+    const workflowPath = resolve(workflowDir, workflowFile);
+    const workflowSource = readNormalized(workflowPath);
+    // Catch the exact pattern: `sudo apt-get update && sudo apt-get install -y ffmpeg`
+    // (or minor variants like extra/missing spaces or flags). This is the #2449 hang pattern.
+    if (/sudo\s+apt-get\s+update\s*&&\s*sudo\s+apt-get\s+install\s+(-y|.*ffmpeg)/m.test(workflowSource)) {
+      bareInstalls.push(workflowFile);
+    }
+  }
+
+  assert.deepEqual(
+    bareInstalls,
+    [],
+    `workflow(s) still contain bare \`sudo apt-get update && sudo apt-get install -y ffmpeg\` pattern. ` +
+      `Replace with \`uses: ./.github/actions/install-ffmpeg\` to ensure caching, retries, and hang timeout:\n${bareInstalls.join('\n')}`,
   );
 });
 
