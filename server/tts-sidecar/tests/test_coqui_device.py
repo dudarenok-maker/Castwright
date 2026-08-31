@@ -155,6 +155,26 @@ def test_auto_cuda_available_now_resolves_to_indexed_cuda_zero(monkeypatch):
     assert opts["deepspeed"] is True
 
 
+def test_admitted_rocm_device_normalises_to_cuda(monkeypatch):
+    """#2813: an admitted device can arrive as an explicit 'rocm:N' (the
+    admission ledger's own honest ROCm-vs-CUDA accounting vocabulary), not
+    just 'auto'. Before the fix, `_resolve_runtime_options` only called
+    `_resolve_torch_device` when `device == "auto"`, so an explicit
+    'rocm:0' bypassed the resolver entirely and would still reach a real
+    torch.device()/.to() call unconverted, crashing on a ROCm/HIP build
+    where torch only understands 'cuda:N'. This proves the call is now
+    unconditional and the returned device is 'cuda:0', not 'rocm:0'."""
+    monkeypatch.setenv("COQUI_DEVICE", "rocm:0")
+    monkeypatch.delenv("COQUI_HALF", raising=False)
+    monkeypatch.delenv("COQUI_DEEPSPEED", raising=False)
+    eng = main.CoquiEngine()
+    opts = eng._resolve_runtime_options(_torch_stub(cuda_available=True))
+    assert opts["device"] == "cuda:0"
+    # cuda family, so fp16/deepspeed default on same as any other cuda device.
+    assert opts["half"] is True
+    assert opts["deepspeed"] is True
+
+
 # ── admitted-device consistency: self._device tracks the resolved card while
 #    resident, and is restored to the pref on unload (#1730 gap 3) ────────────
 

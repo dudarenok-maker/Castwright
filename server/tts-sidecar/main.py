@@ -1780,8 +1780,14 @@ class CoquiEngine(Engine):
         env-derived `self._device` for THIS cold load. `None` (the default)
         leaves env resolution byte-for-byte unchanged."""
         device = device_override if device_override is not None else self._device
-        if device == "auto":
-            device = _resolve_torch_device(device, torch_module)
+        # Unconditional, not just for "auto" (#2813): an admitted device can
+        # arrive as an explicit "rocm:N" (the admission ledger's own honest
+        # ROCm-vs-CUDA accounting vocabulary — see _resolve_torch_device's
+        # docstring), which still needs normalising to "cuda:N" before it
+        # reaches a real torch.device()/.to() call below. _resolve_torch_device
+        # already passes every other explicit value ("cuda:1", "cpu", "mps")
+        # through unchanged, so this is behaviour-preserving for those.
+        device = _resolve_torch_device(device, torch_module)
         # On CUDA (any index — cuda, cuda:0, cuda:1, …), default both extras ON
         # (the whole point of the GPU path). On CPU, force them OFF: torch raises
         # on fp16 ops on CPU, and deepspeed-inference is a CUDA-only runtime.
@@ -5350,9 +5356,22 @@ def _resolve_torch_device(pref: str, torch_module: Any) -> str:
 
     'auto' (the default) picks cuda:0 -> mps (Apple Silicon) -> cpu by
     availability. An explicit value (e.g. 'cuda:1', 'cpu', 'mps') is returned
-    unchanged so multi-GPU pins and forced devices are respected."""
+    unchanged so multi-GPU pins and forced devices are respected.
+
+    An explicit 'rocm:N' is converted to 'cuda:N' (#2813): the admission
+    layer's own accounting vocabulary distinguishes ROCm from real CUDA
+    (`probe()`'s `kind`, mirrored back by `_qwen_resident_device_key` via
+    `_cuda_is_rocm()`), but a ROCm/HIP torch build masquerades as CUDA at the
+    API level -- `torch.device()` only ever understands 'cuda:N', never
+    'rocm:N' -- so an admitted 'rocm:N' has to be re-tagged before it reaches
+    a real `.to()` call. Same family/index split, then re-tag idiom as
+    `_qwen_resident_device_key`'s reverse-direction conversion, just applied
+    the other way."""
     p = (pref or "auto").strip().lower()
     if p != "auto":
+        fam, idx = _parse_device(p)
+        if fam == "rocm":
+            return f"cuda:{idx if idx is not None else 0}"
         return pref
     if torch_module.cuda.is_available():
         return "cuda:0"
