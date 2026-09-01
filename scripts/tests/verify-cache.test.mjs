@@ -31,9 +31,12 @@ import {
   selectStepFiles,
   stepTouchedByDiff,
   computeShared,
+  diffSafeForChangedOnly,
   parseNvidiaSmiUtil,
   maxNvidiaSmiUtil,
   gpuContentionFor,
+  siblingContentionFor,
+  SIBLING_CONTENTION_THRESHOLD,
   isVitestPoolCrash,
   branchDiffFiles,
   stagedDiffFiles,
@@ -1216,6 +1219,181 @@ test('detectGpuContention pins the --query-gpu=utilization.gpu flag the parsers 
     /'--query-gpu=utilization\.gpu'/,
     "detectGpuContention must query ONLY utilization.gpu — adding a field (e.g. 'index,') " +
       'shifts the first CSV column the parsers read away from the utilization percentage',
+  );
+});
+
+// --- Sibling-worktree contention guard (2026-09-01) ---------------------
+
+test('siblingContentionFor: busy when at least SIBLING_CONTENTION_THRESHOLD other PIDs are present', () => {
+  assert.deepEqual(siblingContentionFor('4242\n', 111), { busy: true, count: 1 });
+  assert.equal(SIBLING_CONTENTION_THRESHOLD, 1);
+});
+
+test('siblingContentionFor: excludes the caller\'s own PID from the count', () => {
+  // Own verify-cache.mjs process can itself match the 'verify-cache\\.mjs'
+  // filter in the PowerShell probe — must not count itself as a sibling.
+  assert.deepEqual(siblingContentionFor('111\n', 111), { busy: false, count: 0 });
+});
+
+test('siblingContentionFor: idle on empty/unparseable stdout', () => {
+  assert.deepEqual(siblingContentionFor('', 111), { busy: false, count: 0 });
+  assert.deepEqual(siblingContentionFor('\n\n', 111), { busy: false, count: 0 });
+});
+
+test('siblingContentionFor: multiple sibling PIDs across lines all count', () => {
+  assert.deepEqual(siblingContentionFor('111\n4242\n5353\n', 111), { busy: true, count: 2 });
+});
+
+function detectSiblingContentionBody() {
+  const match = src.match(/function detectSiblingContention\(\) \{[\s\S]*?\n\}/);
+  assert.ok(match, "could not locate detectSiblingContention's function body in verify-cache.mjs");
+  return match[0];
+}
+
+test('detectSiblingContention routes through siblingContentionFor, not a hand-rolled count', () => {
+  const body = detectSiblingContentionBody();
+  assert.match(
+    body,
+    /return siblingContentionFor\(r\.stdout, process\.pid\);/,
+    'detectSiblingContention must return siblingContentionFor(r.stdout, process.pid) — the pure ' +
+      'decision seam — so the exclude-self behaviour stays in one place',
+  );
+});
+
+test('detectSiblingContention falls back to busy:false, count:null on probe failure', () => {
+  const body = detectSiblingContentionBody();
+  assert.match(
+    body,
+    /if \(r\.error \|\| r\.status !== 0\) return \{ busy: false, count: null \};/,
+    'detectSiblingContention must fail open (busy:false) on a non-Windows box or a PowerShell error, ' +
+      'mirroring detectGpuContention\'s own fallback',
+  );
+});
+
+// --- Pre-commit --changed-only scoping (2026-09-01) ---------------------
+//
+// The runStepProcess/CHANGED_ONLY_NPM_SCRIPT wiring itself spawns `npm run`,
+// so — like detectGpuContention's own tests above — correctness is pinned by
+// source regex rather than by actually spawning vitest here.
+
+test('CHANGED_ONLY_NPM_SCRIPT maps test/test:server to their :changed npm scripts', () => {
+  const testMatch = src.match(/const CHANGED_ONLY_NPM_SCRIPT = \{[\s\S]*?\};/);
+  assert.ok(testMatch, 'could not locate CHANGED_ONLY_NPM_SCRIPT in verify-cache.mjs');
+  assert.match(testMatch[0], /test: 'test:changed'/);
+  assert.match(testMatch[0], /'test:server': 'test:server:changed'/);
+});
+
+test('runStepProcess keys the retriable-pool-crash lookup on retryKey, not the spawned npm script', () => {
+  const match = src.match(/function runStepProcess\([\s\S]*?\n\}/);
+  assert.ok(match, "could not locate runStepProcess's function body in verify-cache.mjs");
+  const body = match[0];
+  assert.match(
+    body,
+    /RETRIABLE_POOL_STEPS\.has\(retryKey\)/,
+    'runStepProcess must check RETRIABLE_POOL_STEPS against retryKey (the original step name, e.g. ' +
+      "\"test:server\"), not the substituted --changed npm script (\"test:server:changed\") — " +
+      'otherwise a --scope-staged run never retries a fork-pool crash',
+  );
+  assert.match(
+    body,
+    /spawnSync\('npm', \['run', npmScript\]/,
+    'runStepProcess must spawn npmScript (the possibly-substituted script), not retryKey',
+  );
+});
+
+function runPipelineLoopBody() {
+  const match = src.match(
+    /if \(action === 'skip'\) \{[\s\S]*?const changedOnlyScript =[\s\S]*?\n {2}\}\n {2}return 0;/,
+  );
+  assert.ok(match, "could not locate runPipeline's per-step loop body in verify-cache.mjs");
+  return match[0];
+}
+
+// Review finding (blocking, PR #2839 pass 1): a shared-scope diff (e.g. a
+// root package-lock.json-only change) previously still got the --changed
+// substitution, and `--changed` against a file no test's own dependency
+// graph reaches selects ZERO tests and exits 0 via vitest's
+// `passWithNoTests` — reporting [pass] having tested nothing.
+//
+// Review finding (significant, PR #2839 pass 2): computeShared/scopeShared
+// only catches the ROOT manifest/lockfile — a step's OWN extraFiles or the
+// SERVER lockfile (server/package-lock.json, server/tsconfig.json, etc.)
+// are the identical shape one level down. Review finding (significant, PR
+// #2839 pass 3): even an extraFiles/lockfile exclusion list left a THIRD
+// spelling armed — root-level config files matched only via `test:server`'s
+// own `globs` (eslint.config.mjs, playwright.config.ts), and non-JS assets
+// under a step's primary source glob (src/styles.css, read by its guard
+// tests via readFileSync, not imported). `diffSafeForChangedOnly` (pinned
+// separately below) closes all three at once via a positive allowlist
+// instead of chasing further exclusions. scopeDiff !== null closes a fourth
+// case: an uncertain diff (git failure) must not be treated as "safe to
+// narrow" either.
+test('the --changed-only substitution requires scopeStaged, !scopeShared, a known diff, AND diffSafeForChangedOnly', () => {
+  const body = runPipelineLoopBody();
+  assert.match(
+    body,
+    /flags\.scopeStaged\s*&&\s*\n\s*!scopeShared\s*&&\s*\n\s*scopeDiff !== null\s*&&\s*\n\s*diffSafeForChangedOnly\(step, scopeDiff\)\s*\n\s*\?\s*CHANGED_ONLY_NPM_SCRIPT\[step\.name\]\s*\n\s*:\s*undefined/,
+    'a shared-scope diff, an uncertain diff, or a diff touching anything outside the step\'s own ' +
+      'primary source tree must all run that step\'s FULL script — --changed against any of them ' +
+      'would otherwise silently select and run zero tests',
+  );
+});
+
+// Review finding (significant, PR #2839 pass 3): live against real commits
+// on this branch — eslint.config.mjs (commits 2b010fb1/b07b3bb2) is in
+// test:server's `globs` scope but reaches no test via vitest's own
+// dependency graph; `npx vitest related eslint.config.mjs --run` selects
+// zero files. Same for src/styles.css against the frontend `test` step
+// (commit 8ce2aa30): its two guard tests (styles-neutrals.test.ts,
+// dark-mode-css.test.ts) read it via readFileSync, not import.
+test('diffSafeForChangedOnly: true only for a path under the step\'s primary source root with a safe extension', () => {
+  const testServerStep = { name: 'test:server' };
+  assert.equal(diffSafeForChangedOnly(testServerStep, ['server/src/foo.ts']), true);
+  assert.equal(
+    diffSafeForChangedOnly(testServerStep, ['eslint.config.mjs']),
+    false,
+    'a root-level config file matched only via globs, not the primary source root, must not narrow',
+  );
+
+  const testStep = { name: 'test' };
+  assert.equal(diffSafeForChangedOnly(testStep, ['src/App.tsx']), true);
+  assert.equal(
+    diffSafeForChangedOnly(testStep, ['src/styles.css']),
+    false,
+    'a non-JS/TS asset under the primary source root (read via readFileSync by its guard tests, ' +
+      'not imported) must not narrow — being under src/ alone is not sufficient',
+  );
+});
+
+test('diffSafeForChangedOnly: false for a step this map has no source root for', () => {
+  assert.equal(diffSafeForChangedOnly({ name: 'lint' }, ['src/foo.ts']), false);
+});
+
+test('diffSafeForChangedOnly: mixed diff — one unsafe file anywhere fails the whole diff', () => {
+  const testServerStep = { name: 'test:server' };
+  assert.equal(
+    diffSafeForChangedOnly(testServerStep, ['server/src/foo.ts', 'server/package-lock.json']),
+    false,
+  );
+});
+
+test('diffSafeForChangedOnly: true (vacuous) on an empty diff', () => {
+  assert.equal(diffSafeForChangedOnly({ name: 'test:server' }, []), true);
+});
+
+// Review finding (blocking, PR #2839 pass 1): the verify-cache key is the
+// step's FULL declared-input hash regardless of what actually ran, so
+// caching a --changed-only (narrower) pass under that hash let a later
+// --scope-branch/CI run with no new diff read [cached] and silently skip a
+// full run that never happened — deleting the full-suite safety net
+// pre-push and CI both depend on.
+test('a --changed-only pass is never written to the verify-cache — only a full run is', () => {
+  const body = runPipelineLoopBody();
+  assert.match(
+    body,
+    /if \(fileList !== null && !changedOnlyScript\) \{/,
+    'the cache.steps[step.name] write must be gated on !changedOnlyScript — a --changed-narrowed ' +
+      'pass must not be cached under the full step\'s input hash',
   );
 });
 

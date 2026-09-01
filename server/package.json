@@ -11,6 +11,8 @@
     "pretest": "node ../scripts/preflight-ffmpeg.cjs",
     "audit": "node ../scripts/check-audit.mjs --omit-dev",
     "test": "vitest run",
+    "pretest:changed": "node ../scripts/preflight-ffmpeg.cjs",
+    "test:changed": "vitest run --changed HEAD",
     "test:slow": "vitest run --config vitest.config.slow.ts",
     "test:golden": "vitest run --config vitest.config.golden.ts",
     "test:watch": "vitest"
