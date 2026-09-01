@@ -508,6 +508,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > permanently blocked; see A33's own entry. Group A: 40 → 39. `next-id`
 > unaffected (still A106; allocate-once IDs are never reused, so a drop
 > never frees or renumbers a slot).
+>
 > **Prior change: 2026-09-01, 66 owed (no change) — Blocked 5 → 6.** Added a new
 > Blocked-section row, **ROCm/AMD admitted device-key normalisation — real GPU
 > engine load, pinned/resident, and idle-eviction**

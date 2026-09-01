@@ -238,8 +238,8 @@ def _add_nvidia_dll_dirs_to_path() -> list[str]:
     # guarantee `install-ort.mjs` depends on: the pre-existing late entry
     # would still win dll-search-order precedence. Prepending `candidates`
     # again in that case produces a harmless duplicate further back in the
-    # string (the design's own accepted tradeoff -- see the docstring), but
-    # guarantees this call's copy is the one a bare-name load resolves to.
+    # string -- an accepted tradeoff of this design, not documented elsewhere
+    # -- but guarantees this call's copy is the one a bare-name load resolves to.
     joined_candidates = os.pathsep.join(candidates)
     if current_path == joined_candidates or current_path.startswith(
         joined_candidates + os.pathsep

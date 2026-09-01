@@ -126,17 +126,26 @@ def test_a_failing_startup_handler_aborts_boot_and_skips_the_rest(monkeypatch):
 
 
 def test_startup_ort_cuda_preload_is_actually_wired_into_the_real_lifespan(monkeypatch):
-    """Pass-3 review finding: `_install_recorders` monkeypatches
-    `_startup_ort_cuda_preload` itself (it is a member of `EXPECTED_STARTUP`),
-    so `test_lifespan_runs_startup_then_shutdown_in_the_registered_order`
-    never actually executes that handler's body -- deleting the real call
-    site (`await _startup_ort_cuda_preload()` in `main._lifespan`) would leave
-    every test in this file green. This test leaves `_startup_ort_cuda_preload`
-    itself UNPATCHED and instead patches the two functions ITS body calls
-    (`_add_nvidia_dll_dirs_to_path`, `_preload_ort_cuda_dlls`) with recorders,
-    then drives the real lifespan and asserts both actually ran, in the order
-    the handler's own docstring says is load-bearing (the PATH prepend must
-    happen before the DLL preload)."""
+    """Pass-4 review correction: an earlier version of this docstring claimed
+    deleting the real call site (`await _startup_ort_cuda_preload()` in
+    `main._lifespan`) would leave every OTHER test in this file green -- wrong;
+    mutation-tested, that deletion already fails four existing tests (they
+    assert `_startup_ort_cuda_preload` itself was among the calls the lifespan
+    made, which a deleted call site breaks regardless of what runs inside it).
+
+    The actual gap this test closes is narrower and different: every other
+    test in this file monkeypatches `_startup_ort_cuda_preload` itself (it is
+    a member of `EXPECTED_STARTUP`), so none of them ever execute its real
+    BODY -- a version of `_startup_ort_cuda_preload` that called its two
+    sub-functions in the wrong order, or dropped one of them, would still
+    satisfy every existing test unchanged. This test leaves
+    `_startup_ort_cuda_preload` itself UNPATCHED and instead patches the two
+    functions ITS body calls (`_add_nvidia_dll_dirs_to_path`,
+    `_preload_ort_cuda_dlls`) with recorders, then drives the real lifespan and
+    asserts both actually ran, in the order `_startup_ort_cuda_preload`'s own
+    docstring says is load-bearing (the PATH prepend runs first,
+    unconditionally, so `_preload_ort_cuda_dlls`'s bare-name PATH fallback can
+    also find these directories)."""
     calls: list[str] = []
 
     def _fake_add_nvidia_dll_dirs_to_path() -> list[str]:
@@ -161,9 +170,8 @@ def test_startup_ort_cuda_preload_is_actually_wired_into_the_real_lifespan(monke
     asyncio.run(_run_lifespan([]))
 
     assert calls == ["_add_nvidia_dll_dirs_to_path", "_preload_ort_cuda_dlls"], (
-        "_startup_ort_cuda_preload must actually run its two real steps, in "
-        "this order, when the real lifespan executes -- if this assertion "
-        "can't be reached, the call site in main._lifespan was removed"
+        "_startup_ort_cuda_preload's real BODY must call its two steps, in "
+        "this exact order, when the real (unpatched) lifespan runs it"
     )
 
 

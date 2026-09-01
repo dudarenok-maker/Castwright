@@ -193,9 +193,21 @@ def test_calling_twice_does_not_grow_path(monkeypatch, tmp_path) -> None:
     idempotence check, PATH grows by the same handful of directories on every
     call -- across a whole pytest session that overflows Windows' 32767-char
     environment variable ceiling and raises
-    `ValueError: the environment variable is longer than 32767 characters`."""
+    `ValueError: the environment variable is longer than 32767 characters`.
+
+    Pass-4 review finding: a single-directory fixture cannot tell the real
+    idempotence guard (a whole-string PREFIX comparison of `candidates` in
+    ORDER) from the membership check it replaced -- with one candidate, the
+    two are indistinguishable, so a regression that broke ordering (e.g. the
+    check comparing against `candidates` in one order while the write uses
+    another) would leave this test green while genuinely growing PATH
+    unboundedly on repeated calls with multiple candidates. Uses the same
+    four-package fixture as `test_prepends_every_nvidia_bin_dir_that_exists`
+    so an ordering mismatch between the check and the write is caught here,
+    not just assumed absent."""
     site_packages = tmp_path / "site-packages"
-    (site_packages / "nvidia" / "cudnn" / "bin").mkdir(parents=True)
+    for pkg in ("cudnn", "cublas", "cufft", "cuda_runtime"):
+        (site_packages / "nvidia" / pkg / "bin").mkdir(parents=True)
 
     monkeypatch.setitem(sys.modules, "onnxruntime", _fake_onnxruntime_at(site_packages))
     monkeypatch.setenv("PATH", "C:\\pre-existing")
@@ -204,10 +216,18 @@ def test_calling_twice_does_not_grow_path(monkeypatch, tmp_path) -> None:
     path_after_first = os.environ["PATH"]
     second = main._add_nvidia_dll_dirs_to_path()
     path_after_second = os.environ["PATH"]
+    third = main._add_nvidia_dll_dirs_to_path()
+    path_after_third = os.environ["PATH"]
 
-    assert len(first) == 1
-    assert second == [], "the directory is already on PATH -- nothing left to add"
+    assert len(first) == 4
+    assert second == [], "the directories are already on PATH -- nothing left to add"
+    assert third == [], "still nothing left to add on a third repeat call"
     assert path_after_second == path_after_first, "PATH must not grow on a repeat call"
+    assert path_after_third == path_after_first, (
+        "PATH must not grow on a THIRD call either -- a two-call check alone "
+        "cannot distinguish a genuine fixed point from an ordering mismatch "
+        "that happens to cancel out exactly once"
+    )
 
 
 def test_late_pre_existing_entry_still_gets_reprepended(monkeypatch, tmp_path) -> None:
