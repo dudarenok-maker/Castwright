@@ -31,6 +31,7 @@ import {
   selectStepFiles,
   stepTouchedByDiff,
   computeShared,
+  diffAvoidsUntrackedStepInputs,
   parseNvidiaSmiUtil,
   maxNvidiaSmiUtil,
   gpuContentionFor,
@@ -1313,14 +1314,52 @@ function runPipelineLoopBody() {
 // substitution, and `--changed` against a file no test's own dependency
 // graph reaches selects ZERO tests and exits 0 via vitest's
 // `passWithNoTests` — reporting [pass] having tested nothing.
-test('the --changed-only substitution requires BOTH scopeStaged AND !scopeShared', () => {
+//
+// Review finding (significant, PR #2839 pass 2): computeShared/scopeShared
+// only catches the ROOT manifest/lockfile — a step's OWN extraFiles or the
+// SERVER lockfile (server/package-lock.json, server/tsconfig.json, etc.)
+// are the identical shape one level down, closed by
+// diffAvoidsUntrackedStepInputs (pinned separately below). scopeDiff !== null
+// closes the third case: an uncertain diff (git failure) must not be
+// treated as "safe to narrow" either.
+test('the --changed-only substitution requires scopeStaged, !scopeShared, a known diff, AND diffAvoidsUntrackedStepInputs', () => {
   const body = runPipelineLoopBody();
   assert.match(
     body,
-    /flags\.scopeStaged\s*&&\s*!scopeShared\s*\?\s*CHANGED_ONLY_NPM_SCRIPT\[step\.name\]\s*:\s*undefined/,
-    'a shared-scope diff (root manifest/lockfile/.github/actions/**) must run every step\'s FULL ' +
-      'script — --changed against it would otherwise silently select and run zero tests',
+    /flags\.scopeStaged\s*&&\s*\n\s*!scopeShared\s*&&\s*\n\s*scopeDiff !== null\s*&&\s*\n\s*diffAvoidsUntrackedStepInputs\(step, scopeDiff\)\s*\n\s*\?\s*CHANGED_ONLY_NPM_SCRIPT\[step\.name\]\s*\n\s*:\s*undefined/,
+    'a shared-scope diff, an uncertain diff, or a diff touching a step\'s own extraFiles/server ' +
+      'lockfile must all run that step\'s FULL script — --changed against any of them would ' +
+      'otherwise silently select and run zero tests',
   );
+});
+
+// Review finding (significant, PR #2839 pass 2): a diff confined to
+// server/package-lock.json, server/tsconfig.json, or any other file a step
+// reaches ONLY via extraFiles/the server lockfile (not its own globs) still
+// got the --changed substitution even after the scopeShared fix, because
+// computeShared only checks the ROOT manifest/lockfile. `--changed` against
+// such a file selects zero tests (it matches no forceRerunTrigger and no
+// test imports it) and exits 0 via vitest's passWithNoTests.
+test('diffAvoidsUntrackedStepInputs: false when the diff touches a step\'s extraFiles entry', () => {
+  const step = { inputs: { globs: ['src/**'], extraFiles: ['index.html'] } };
+  assert.equal(diffAvoidsUntrackedStepInputs(step, ['index.html']), false);
+  assert.equal(diffAvoidsUntrackedStepInputs(step, ['src/foo.ts']), true);
+});
+
+test('diffAvoidsUntrackedStepInputs: false when the diff touches server/package-lock.json and the step has includeLockfiles: [\'server\']', () => {
+  const step = { inputs: { globs: ['server/src/**'], includeLockfiles: ['server'] } };
+  assert.equal(diffAvoidsUntrackedStepInputs(step, ['server/package-lock.json']), false);
+  assert.equal(diffAvoidsUntrackedStepInputs(step, ['server/src/foo.ts']), true);
+});
+
+test('diffAvoidsUntrackedStepInputs: server/package-lock.json in the diff is fine for a step that does NOT include the server lockfile', () => {
+  const step = { inputs: { globs: ['src/**'] } };
+  assert.equal(diffAvoidsUntrackedStepInputs(step, ['server/package-lock.json']), true);
+});
+
+test('diffAvoidsUntrackedStepInputs: true (vacuous) on an empty diff', () => {
+  const step = { inputs: { globs: ['src/**'], extraFiles: ['index.html'], includeLockfiles: ['server'] } };
+  assert.equal(diffAvoidsUntrackedStepInputs(step, []), true);
 });
 
 // Review finding (blocking, PR #2839 pass 1): the verify-cache key is the

@@ -860,6 +860,33 @@ export function stepTouchedByDiff(step, diffFiles) {
   return false;
 }
 
+// Is a --changed HEAD-only run of this step trustworthy for this diff?
+// Review finding (PR #2839 pass 2): `computeShared` only catches the ROOT
+// package.json/package-lock.json — it says nothing about a step's OWN
+// `extraFiles` (config files, docs, fixtures a test reads at runtime with
+// no module-graph edge — the whole reason `extraFiles` exists) or the
+// SERVER lockfile via `includeLockfiles`. None of those are things vitest's
+// own `--changed` dependency-graph walk can be trusted to map onto affected
+// tests — `server/package-lock.json`, `server/tsconfig.json`, `index.html`
+// all bypassed `computeShared` and got --changed-narrowed anyway, and none
+// of them are covered by vitest's own `forceRerunTriggers` either, so a
+// diff confined to one of them selected and ran ZERO tests via vitest's
+// `passWithNoTests`. A file in the diff that this step doesn't even claim
+// as relevant (matches neither globs, extraFiles, nor the lockfile) plays
+// no role here either way — this is purely "does the diff contain a file
+// this step reaches ONLY through a non-source channel", not a scope check
+// (that's `stepTouchedByDiff` above).
+export function diffAvoidsUntrackedStepInputs(step, diffFiles) {
+  const extras = new Set((step.inputs.extraFiles ?? []).map(toPosix));
+  const serverLockfileArmed = (step.inputs.includeLockfiles ?? []).includes('server');
+  for (const f of diffFiles) {
+    const p = toPosix(f);
+    if (extras.has(p)) return false;
+    if (serverLockfileArmed && p === 'server/package-lock.json') return false;
+  }
+  return true;
+}
+
 // Files staged for commit. Returns POSIX paths, or null if git fails (→ caller
 // disables the scope filter and runs everything; never skip on uncertainty).
 // Exported (#2216) so its scrub (repo-location vars only — see gitEnv() below)
@@ -1400,13 +1427,22 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
     }
 
     // --changed HEAD only ever substitutes on an UNSHARED --scope-staged run
-    // (pre-commit, one narrow diff) — never on a shared-scope diff (review
-    // finding: a root-manifest/lockfile change that touches every step but
-    // matches no test file's own dependency graph would otherwise run
-    // vitest's `--changed` against nothing, exit 0 via `passWithNoTests`,
-    // and report [pass] having run zero tests).
+    // (pre-commit, one narrow diff) whose diff is known (scopeDiff !== null)
+    // and avoids every one of THIS step's non-source inputs — never on a
+    // shared-scope diff, an uncertain diff, or one touching an extraFiles
+    // entry / the server lockfile (review findings: a root-manifest/lockfile
+    // change touches every step but matches no test file's own dependency
+    // graph; a step's OWN extraFiles/server-lockfile inputs are the same
+    // shape one level down — see diffAvoidsUntrackedStepInputs). Any of
+    // these would otherwise run vitest's `--changed` against nothing, exit 0
+    // via `passWithNoTests`, and report [pass] having run zero tests.
     const changedOnlyScript =
-      flags.scopeStaged && !scopeShared ? CHANGED_ONLY_NPM_SCRIPT[step.name] : undefined;
+      flags.scopeStaged &&
+      !scopeShared &&
+      scopeDiff !== null &&
+      diffAvoidsUntrackedStepInputs(step, scopeDiff)
+        ? CHANGED_ONLY_NPM_SCRIPT[step.name]
+        : undefined;
     if (changedOnlyScript) {
       console.log(`[run] ${step.name} (--changed HEAD only)`);
     } else {

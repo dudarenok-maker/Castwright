@@ -899,10 +899,13 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   selection (`test:changed`/`test:server:changed`) instead of the whole
   suite — a one-file server commit runs only the tests that file's diff
   touches, not all ~6700. Applies only to an UNSHARED `--scope-staged` diff
-  — a shared-scope change (root manifest/lockfile/`.github/actions/**`) still
-  runs every step's full script, since `--changed` against a file no test's
-  dependency graph actually reaches would otherwise exit 0 having run zero
-  tests. A `--changed`-only pass is also never written to the verify-cache
+  that avoids the step's own non-source inputs — a shared-scope change (root
+  manifest/lockfile/`.github/actions/**`), or one touching a step's own
+  `extraFiles` entry or the server lockfile (`diffAvoidsUntrackedStepInputs`
+  — `server/package-lock.json`, `server/tsconfig.json`, `index.html`, etc.),
+  still runs every step's full script, since `--changed` against a file no
+  test's dependency graph actually reaches would otherwise exit 0 having run
+  zero tests. A `--changed`-only pass is also never written to the verify-cache
   (only a full run is), so it cannot leave behind a cache entry a later
   `--scope-branch`/CI run would read as `[cached]` and skip. `--scope-branch`
   (pre-push) always runs the full suite — the narrowing above never applies

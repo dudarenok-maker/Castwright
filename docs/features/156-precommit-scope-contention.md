@@ -47,9 +47,11 @@ so they fan out at full concurrency into a starved box.
   manually. The vitest configs honor it: frontend caps its pool to half the
   cores (otherwise untouched — plan 45 left it uncapped), and the server drops
   `maxForks` 2 → 1. Disable the probe with `SKIP_CONTENTION_CHECK=1`.
-- **Pre-push unchanged.** Pre-push still runs the FULL `npm run verify` battery,
-  preserving the "local is the full coverage net, CI is the scoped one"
-  invariant.
+- **Pre-push unchanged.** Pre-push still runs the FULL `npm run verify:fast:branch`
+  battery (not bare `npm run verify` — corrected 2026-09-01, review finding on
+  #2839: this line was stale even before the --changed addendum below, which
+  only ever fixed its CI-vs-pre-push clause, not this one), preserving the
+  "local is the full coverage net, CI is the scoped one" invariant.
 
 ### 2026-09-01 addendum (#2834)
 
@@ -79,6 +81,17 @@ so they fan out at full concurrency into a starved box.
   `docs/features/118-ci-cost-round-2.md`) — pre-push's full local run, not
   CI, is the actual full-suite gate before merge, and was already the actual
   gate before this addendum too.
+- **`computeShared` alone under-covers "shared" for the --changed substitution
+  (review finding, PR #2839 pass 2).** It only catches the ROOT
+  package.json/package-lock.json/`.github/actions/**` — a step's OWN
+  `extraFiles` (config files, docs, fixtures a test reads at runtime) or the
+  SERVER lockfile via `includeLockfiles: ['server']` are the identical shape
+  one level down: `server/package-lock.json`, `server/tsconfig.json`,
+  `index.html` all bypassed `computeShared` and got --changed-narrowed
+  anyway, selecting and running ZERO tests. `diffAvoidsUntrackedStepInputs`
+  closes this — the substitution additionally requires that no file in the
+  diff is one of the CURRENT step's own `extraFiles` entries or (when that
+  step declares `includeLockfiles: ['server']`) `server/package-lock.json`.
 
 ## Invariants
 
