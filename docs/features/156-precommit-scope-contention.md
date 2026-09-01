@@ -88,10 +88,27 @@ so they fan out at full concurrency into a starved box.
   SERVER lockfile via `includeLockfiles: ['server']` are the identical shape
   one level down: `server/package-lock.json`, `server/tsconfig.json`,
   `index.html` all bypassed `computeShared` and got --changed-narrowed
-  anyway, selecting and running ZERO tests. `diffAvoidsUntrackedStepInputs`
-  closes this — the substitution additionally requires that no file in the
-  diff is one of the CURRENT step's own `extraFiles` entries or (when that
-  step declares `includeLockfiles: ['server']`) `server/package-lock.json`.
+  anyway, selecting and running ZERO tests.
+- **Excluding known-bad categories was still not enough — a third spelling of
+  the same gap (review finding, PR #2839 pass 3, live against real commits on
+  this branch).** `test:server`'s own `globs` include root-level `*.{mjs,ts}`
+  and `scripts/**` — files genuinely in this step's declared scope, matched
+  neither by `extraFiles` nor a lockfile, but that vitest's own `--changed`
+  selection still cannot reach: `eslint.config.mjs` (commits `2b010fb1`/
+  `b07b3bb2` touch only this file) selects zero test files under
+  `vitest related`. Separately, `src/styles.css` sitting UNDER the frontend
+  `test` step's own primary source glob (`src/**`) is unsafe too — its two
+  guard tests (`styles-neutrals.test.ts`, `dark-mode-css.test.ts`) read it via
+  `readFileSync`, not import, so being under `src/` is not sufficient on its
+  own. Three rounds each narrowing a scope-based exclusion list converged on
+  the conclusion that exclusion lists are the wrong shape for this check:
+  `diffSafeForChangedOnly` replaces every exclusion attempt above with one
+  POSITIVE allowlist — every file in the diff must sit under the step's own
+  primary source root (`src/**` for `test`, `server/src/**` for
+  `test:server`) AND carry a TS/TSX/JS source extension. Narrower than
+  "matches this step's scope" (a config-only or CSS-only commit now runs the
+  full suite rather than being narrowed), which is the deliberate trade: the
+  one guarantee that actually matters is never silently running zero tests.
 
 ## Invariants
 

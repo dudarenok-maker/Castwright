@@ -861,30 +861,43 @@ export function stepTouchedByDiff(step, diffFiles) {
 }
 
 // Is a --changed HEAD-only run of this step trustworthy for this diff?
-// Review finding (PR #2839 pass 2): `computeShared` only catches the ROOT
-// package.json/package-lock.json — it says nothing about a step's OWN
-// `extraFiles` (config files, docs, fixtures a test reads at runtime with
-// no module-graph edge — the whole reason `extraFiles` exists) or the
-// SERVER lockfile via `includeLockfiles`. None of those are things vitest's
-// own `--changed` dependency-graph walk can be trusted to map onto affected
-// tests — `server/package-lock.json`, `server/tsconfig.json`, `index.html`
-// all bypassed `computeShared` and got --changed-narrowed anyway, and none
-// of them are covered by vitest's own `forceRerunTriggers` either, so a
-// diff confined to one of them selected and ran ZERO tests via vitest's
-// `passWithNoTests`. A file in the diff that this step doesn't even claim
-// as relevant (matches neither globs, extraFiles, nor the lockfile) plays
-// no role here either way — this is purely "does the diff contain a file
-// this step reaches ONLY through a non-source channel", not a scope check
-// (that's `stepTouchedByDiff` above).
-export function diffAvoidsUntrackedStepInputs(step, diffFiles) {
-  const extras = new Set((step.inputs.extraFiles ?? []).map(toPosix));
-  const serverLockfileArmed = (step.inputs.includeLockfiles ?? []).includes('server');
-  for (const f of diffFiles) {
+//
+// History (both rounds found LIVE, not hypothetical, against real commits on
+// this branch): pass 2 (PR #2839) found `computeShared` only catches the ROOT
+// package.json/package-lock.json, missing a step's OWN `extraFiles` (config
+// files, docs, fixtures a test reads at runtime with no module-graph edge —
+// the whole reason `extraFiles` exists) and the SERVER lockfile via
+// `includeLockfiles`. Pass 3 then found the SAME shape at a third spelling:
+// `test:server`'s `globs` themselves include root-level `*.{mjs,ts}` and
+// `scripts/**` — real, matched-in-scope files (eslint.config.mjs,
+// playwright.config.ts) that vitest's own `--changed` selection still can't
+// reach, because "in this step's declared scope" and "in vitest's own
+// selectable dependency graph" are different questions the STEPS table
+// conflates. A fourth instance (`src/styles.css`, read via `readFileSync` by
+// its guard tests, not imported) showed even a path UNDER a step's primary
+// source glob isn't safe if it's not TS/TSX/JS source.
+//
+// Rather than chase a fifth spelling of "this file isn't really reachable",
+// this is a POSITIVE allowlist: the diff is safe to narrow only if EVERY
+// file sits under this step's own primary source root (`src/` for `test`,
+// `server/src/` for `test:server` — never a glob, an extraFile, a lockfile,
+// or any other declared input) AND carries a TS/TSX/JS source extension.
+// That is deliberately narrower than "matches this step's scope" — it trades
+// away narrowing for anything outside the primary source tree (a config-only
+// or CSS-only commit now runs the full suite) for the one guarantee that
+// actually matters: never silently running zero tests.
+const CHANGED_ONLY_SOURCE_ROOT = { test: 'src/', 'test:server': 'server/src/' };
+const CHANGED_ONLY_SAFE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
+
+export function diffSafeForChangedOnly(step, diffFiles) {
+  const root = CHANGED_ONLY_SOURCE_ROOT[step.name];
+  if (!root) return false; // only test/test:server are ever substituted
+  return diffFiles.every((f) => {
     const p = toPosix(f);
-    if (extras.has(p)) return false;
-    if (serverLockfileArmed && p === 'server/package-lock.json') return false;
-  }
-  return true;
+    if (!p.startsWith(root)) return false;
+    const dot = p.lastIndexOf('.');
+    return dot !== -1 && CHANGED_ONLY_SAFE_EXTENSIONS.has(p.slice(dot));
+  });
 }
 
 // Files staged for commit. Returns POSIX paths, or null if git fails (→ caller
@@ -1428,19 +1441,18 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
 
     // --changed HEAD only ever substitutes on an UNSHARED --scope-staged run
     // (pre-commit, one narrow diff) whose diff is known (scopeDiff !== null)
-    // and avoids every one of THIS step's non-source inputs — never on a
-    // shared-scope diff, an uncertain diff, or one touching an extraFiles
-    // entry / the server lockfile (review findings: a root-manifest/lockfile
-    // change touches every step but matches no test file's own dependency
-    // graph; a step's OWN extraFiles/server-lockfile inputs are the same
-    // shape one level down — see diffAvoidsUntrackedStepInputs). Any of
-    // these would otherwise run vitest's `--changed` against nothing, exit 0
-    // via `passWithNoTests`, and report [pass] having run zero tests.
+    // and is CONFINED to this step's own primary source tree with a safe
+    // extension (see diffSafeForChangedOnly's own header — three rounds of
+    // review found progressively narrower live gaps in scope-based checks,
+    // which is why this is a positive allowlist, not an exclusion list).
+    // `!scopeShared` is redundant with that allowlist today (nothing shared
+    // — root manifest, .github/actions/** — can ever sit under src/ or
+    // server/src/) but kept as cheap, self-documenting defense in depth.
     const changedOnlyScript =
       flags.scopeStaged &&
       !scopeShared &&
       scopeDiff !== null &&
-      diffAvoidsUntrackedStepInputs(step, scopeDiff)
+      diffSafeForChangedOnly(step, scopeDiff)
         ? CHANGED_ONLY_NPM_SCRIPT[step.name]
         : undefined;
     if (changedOnlyScript) {

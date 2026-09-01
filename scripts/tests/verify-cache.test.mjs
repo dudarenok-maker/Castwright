@@ -31,7 +31,7 @@ import {
   selectStepFiles,
   stepTouchedByDiff,
   computeShared,
-  diffAvoidsUntrackedStepInputs,
+  diffSafeForChangedOnly,
   parseNvidiaSmiUtil,
   maxNvidiaSmiUtil,
   gpuContentionFor,
@@ -1318,48 +1318,67 @@ function runPipelineLoopBody() {
 // Review finding (significant, PR #2839 pass 2): computeShared/scopeShared
 // only catches the ROOT manifest/lockfile — a step's OWN extraFiles or the
 // SERVER lockfile (server/package-lock.json, server/tsconfig.json, etc.)
-// are the identical shape one level down, closed by
-// diffAvoidsUntrackedStepInputs (pinned separately below). scopeDiff !== null
-// closes the third case: an uncertain diff (git failure) must not be
-// treated as "safe to narrow" either.
-test('the --changed-only substitution requires scopeStaged, !scopeShared, a known diff, AND diffAvoidsUntrackedStepInputs', () => {
+// are the identical shape one level down. Review finding (significant, PR
+// #2839 pass 3): even an extraFiles/lockfile exclusion list left a THIRD
+// spelling armed — root-level config files matched only via `test:server`'s
+// own `globs` (eslint.config.mjs, playwright.config.ts), and non-JS assets
+// under a step's primary source glob (src/styles.css, read by its guard
+// tests via readFileSync, not imported). `diffSafeForChangedOnly` (pinned
+// separately below) closes all three at once via a positive allowlist
+// instead of chasing further exclusions. scopeDiff !== null closes a fourth
+// case: an uncertain diff (git failure) must not be treated as "safe to
+// narrow" either.
+test('the --changed-only substitution requires scopeStaged, !scopeShared, a known diff, AND diffSafeForChangedOnly', () => {
   const body = runPipelineLoopBody();
   assert.match(
     body,
-    /flags\.scopeStaged\s*&&\s*\n\s*!scopeShared\s*&&\s*\n\s*scopeDiff !== null\s*&&\s*\n\s*diffAvoidsUntrackedStepInputs\(step, scopeDiff\)\s*\n\s*\?\s*CHANGED_ONLY_NPM_SCRIPT\[step\.name\]\s*\n\s*:\s*undefined/,
-    'a shared-scope diff, an uncertain diff, or a diff touching a step\'s own extraFiles/server ' +
-      'lockfile must all run that step\'s FULL script — --changed against any of them would ' +
-      'otherwise silently select and run zero tests',
+    /flags\.scopeStaged\s*&&\s*\n\s*!scopeShared\s*&&\s*\n\s*scopeDiff !== null\s*&&\s*\n\s*diffSafeForChangedOnly\(step, scopeDiff\)\s*\n\s*\?\s*CHANGED_ONLY_NPM_SCRIPT\[step\.name\]\s*\n\s*:\s*undefined/,
+    'a shared-scope diff, an uncertain diff, or a diff touching anything outside the step\'s own ' +
+      'primary source tree must all run that step\'s FULL script — --changed against any of them ' +
+      'would otherwise silently select and run zero tests',
   );
 });
 
-// Review finding (significant, PR #2839 pass 2): a diff confined to
-// server/package-lock.json, server/tsconfig.json, or any other file a step
-// reaches ONLY via extraFiles/the server lockfile (not its own globs) still
-// got the --changed substitution even after the scopeShared fix, because
-// computeShared only checks the ROOT manifest/lockfile. `--changed` against
-// such a file selects zero tests (it matches no forceRerunTrigger and no
-// test imports it) and exits 0 via vitest's passWithNoTests.
-test('diffAvoidsUntrackedStepInputs: false when the diff touches a step\'s extraFiles entry', () => {
-  const step = { inputs: { globs: ['src/**'], extraFiles: ['index.html'] } };
-  assert.equal(diffAvoidsUntrackedStepInputs(step, ['index.html']), false);
-  assert.equal(diffAvoidsUntrackedStepInputs(step, ['src/foo.ts']), true);
+// Review finding (significant, PR #2839 pass 3): live against real commits
+// on this branch — eslint.config.mjs (commits 2b010fb1/b07b3bb2) is in
+// test:server's `globs` scope but reaches no test via vitest's own
+// dependency graph; `npx vitest related eslint.config.mjs --run` selects
+// zero files. Same for src/styles.css against the frontend `test` step
+// (commit 8ce2aa30): its two guard tests (styles-neutrals.test.ts,
+// dark-mode-css.test.ts) read it via readFileSync, not import.
+test('diffSafeForChangedOnly: true only for a path under the step\'s primary source root with a safe extension', () => {
+  const testServerStep = { name: 'test:server' };
+  assert.equal(diffSafeForChangedOnly(testServerStep, ['server/src/foo.ts']), true);
+  assert.equal(
+    diffSafeForChangedOnly(testServerStep, ['eslint.config.mjs']),
+    false,
+    'a root-level config file matched only via globs, not the primary source root, must not narrow',
+  );
+
+  const testStep = { name: 'test' };
+  assert.equal(diffSafeForChangedOnly(testStep, ['src/App.tsx']), true);
+  assert.equal(
+    diffSafeForChangedOnly(testStep, ['src/styles.css']),
+    false,
+    'a non-JS/TS asset under the primary source root (read via readFileSync by its guard tests, ' +
+      'not imported) must not narrow — being under src/ alone is not sufficient',
+  );
 });
 
-test('diffAvoidsUntrackedStepInputs: false when the diff touches server/package-lock.json and the step has includeLockfiles: [\'server\']', () => {
-  const step = { inputs: { globs: ['server/src/**'], includeLockfiles: ['server'] } };
-  assert.equal(diffAvoidsUntrackedStepInputs(step, ['server/package-lock.json']), false);
-  assert.equal(diffAvoidsUntrackedStepInputs(step, ['server/src/foo.ts']), true);
+test('diffSafeForChangedOnly: false for a step this map has no source root for', () => {
+  assert.equal(diffSafeForChangedOnly({ name: 'lint' }, ['src/foo.ts']), false);
 });
 
-test('diffAvoidsUntrackedStepInputs: server/package-lock.json in the diff is fine for a step that does NOT include the server lockfile', () => {
-  const step = { inputs: { globs: ['src/**'] } };
-  assert.equal(diffAvoidsUntrackedStepInputs(step, ['server/package-lock.json']), true);
+test('diffSafeForChangedOnly: mixed diff — one unsafe file anywhere fails the whole diff', () => {
+  const testServerStep = { name: 'test:server' };
+  assert.equal(
+    diffSafeForChangedOnly(testServerStep, ['server/src/foo.ts', 'server/package-lock.json']),
+    false,
+  );
 });
 
-test('diffAvoidsUntrackedStepInputs: true (vacuous) on an empty diff', () => {
-  const step = { inputs: { globs: ['src/**'], extraFiles: ['index.html'], includeLockfiles: ['server'] } };
-  assert.equal(diffAvoidsUntrackedStepInputs(step, []), true);
+test('diffSafeForChangedOnly: true (vacuous) on an empty diff', () => {
+  assert.equal(diffSafeForChangedOnly({ name: 'test:server' }, []), true);
 });
 
 // Review finding (blocking, PR #2839 pass 1): the verify-cache key is the
