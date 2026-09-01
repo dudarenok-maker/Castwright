@@ -3288,3 +3288,123 @@ test('htmlCellText: handles simple tags correctly', () => {
 test('htmlCellText: collapses whitespace after tag stripping', () => {
   assert.equal(htmlCellText('<b>  hello   world  </b>'), 'hello world');
 });
+
+// ---------------------------------------------------------------------------
+// #2599/A41: parseLiveViewRowBodies extraction-failure handling. A silent skip
+// when markup changes (e.g. <div class="body"> → <div class="body is-open">)
+// turns the whole check into a vacuous pass over fewer rows. These errors must
+// surface explicitly rather than silently dropping rows.
+// ---------------------------------------------------------------------------
+
+test('#2599/A41: missing row-ID marker is an extraction error, not a silent skip', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // A row block with no <span class="num"> — the ID cannot be extracted.
+  const malformedLiveView = `<title>On-box acceptance register — Castwright</title>
+  <div class="strip"><div class="n owed">1</div><div class="l">Owed</div></div>
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>1</td></tr>
+    </tbody>
+  </table>
+  <section class="group" id="ga">
+    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">1 rows</span></h3>
+    <details class="item">
+      <summary><!-- Missing <span class="num">A1</span> here --><span class="iname">t</span></summary>
+      <div class="body"><p>Row content</p></div>
+    </details>
+  </section>`;
+  const errors = checkLiveView(workingRegister, malformedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml: malformedLiveView,
+  });
+  assert.ok(
+    errors.some((e) => e.includes('could not extract row ID')),
+    `expected an extraction error for missing row ID, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('#2599/A41: malformed body-div markup is an extraction error, not a silent skip', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // The <div class="body"> is changed to <div class="body is-open"> — the
+  // closing tag regex no longer matches, so the body content cannot be extracted.
+  const malformedLiveView = `<title>On-box acceptance register — Castwright</title>
+  <div class="strip"><div class="n owed">1</div><div class="l">Owed</div></div>
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>1</td></tr>
+    </tbody>
+  </table>
+  <section class="group" id="ga">
+    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">1 rows</span></h3>
+    <details class="item">
+      <summary><span class="num">A1</span><span class="iname">t</span></summary>
+      <div class="body is-open"><p>Row content changed by markup</p></div>
+    </details>`;
+  const errors = checkLiveView(workingRegister, malformedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml: malformedLiveView,
+  });
+  assert.ok(
+    errors.some((e) => e.includes('Row A1') && e.includes('could not extract body content')),
+    `expected an extraction error for row A1 body, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('#2599/A41: when both tracked and published fail extraction, all errors surface', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Both copies have malformed markup — both should report errors.
+  const malformedTracked = `<title>On-box acceptance register — Castwright</title>
+  <div class="strip"><div class="n owed">1</div><div class="l">Owed</div></div>
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>1</td></tr>
+    </tbody>
+  </table>
+  <section class="group" id="ga">
+    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">1 rows</span></h3>
+    <details class="item">
+      <summary><span class="num">A1</span><span class="iname">t</span></summary>
+      <div class="body broken"><p>Malformed tracked</p></div>
+    </details>
+  </section>`;
+  const malformedPublished = `<title>On-box acceptance register — Castwright</title>
+  <div class="strip"><div class="n owed">1</div><div class="l">Owed</div></div>
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>1</td></tr>
+    </tbody>
+  </table>
+  <section class="group" id="ga">
+    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">1 rows</span></h3>
+    <details class="item">
+      <summary><span class="num">A1</span><span class="iname">t</span></summary>
+      <div class="body broken"><p>Malformed published</p></div>
+    </details>
+  </section>`;
+  const errors = checkLiveView(workingRegister, malformedPublished, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml: malformedTracked,
+  });
+  // Should have extraction errors reported from both the tracked and published
+  // parses (they both have malformed markup). Since both are malformed with the
+  // same ID, we expect at least two errors (one from each parse).
+  assert.ok(
+    errors.length >= 2,
+    `expected at least 2 extraction errors (one per malformed copy), got ${errors.length}: ${JSON.stringify(errors)}`,
+  );
+  // Most specifically, should have extraction errors for row A1 body.
+  assert.ok(
+    errors.some((e) => e.includes('Row A1') && e.includes('could not extract body content')),
+    `expected Row A1 body-extraction errors, got: ${JSON.stringify(errors)}`,
+  );
+});

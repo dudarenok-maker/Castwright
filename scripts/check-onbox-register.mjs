@@ -271,22 +271,39 @@ export function parseAllRowHeadings(strippedText) {
 // catch. A row whose ID isn't a plain `<Letter><N>` (the Blocked/Unconfirmed
 // sections use `—`) is skipped, the same convention `parseLiveViewSections`
 // already filters on. A block with no matching `<div class="body">...</div>`
-// (an extraction failure, e.g. the markup changed) is skipped rather than
-// hashed as empty text, which would otherwise read as "drifted" against any
-// non-empty counterpart.
+// (an extraction failure, e.g. the markup changed) is an error rather than
+// silently skipped — a silent skip would mean comparing fewer rows than the
+// page carries and reporting a vacuous pass.
+//
+// Returns { bodies, errors: [] } on success, or { bodies, errors } when
+// extraction failures occur. Errors are surface-level extraction problems
+// (missing markup markers, malformed rows) — not structural issues like
+// missing sections, which are handled by checkLiveView's own checks.
 export function parseLiveViewRowBodies(liveViewHtml) {
   const bodies = new Map();
+  const errors = [];
   const blocks = liveViewHtml.split(/<details\b[^>]*\bclass="item"[^>]*>/).slice(1);
-  for (const block of blocks) {
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
+    const block = blocks[blockIndex];
     const idMatch = block.match(/<span class="num">([^<]*)<\/span>/);
-    if (!idMatch) continue;
+    if (!idMatch) {
+      errors.push(
+        `Row block ${blockIndex + 1}: could not extract row ID from <span class="num">. The markup may be missing or malformed.`,
+      );
+      continue;
+    }
     const id = idMatch[1].trim();
     if (!/^[A-Z]\d+$/.test(id)) continue;
     const bodyMatch = block.match(/<div class="body">([\s\S]*?)<\/div>\s*<\/details>/);
-    if (!bodyMatch) continue;
+    if (!bodyMatch) {
+      errors.push(
+        `Row ${id}: could not extract body content from <div class="body">. The markup may be missing or malformed (e.g., class attribute was modified).`,
+      );
+      continue;
+    }
     bodies.set(id, htmlCellText(bodyMatch[1]));
   }
-  return bodies;
+  return { bodies, errors };
 }
 
 function hashRowContent(plainText) {
@@ -1185,12 +1202,21 @@ export function checkLiveView(
   // Fail closed when the baseline isn't available: skip content hashing
   // rather than treating "baseline unknown" as "no drift".
   if (direction === 'extraOnly' && typeof trackedLiveViewHtml === 'string') {
-    const trackedRowBodies = parseLiveViewRowBodies(stripHtmlComments(trackedLiveViewHtml));
-    const publishedRowBodies = parseLiveViewRowBodies(liveViewHtml);
+    const { bodies: trackedRowBodies, errors: trackedErrors } = parseLiveViewRowBodies(
+      stripHtmlComments(trackedLiveViewHtml),
+    );
+    const { bodies: publishedRowBodies, errors: publishedErrors } = parseLiveViewRowBodies(liveViewHtml);
     let baselineRowBodies = null;
+    let baselineErrors = [];
     if (typeof baselineLiveViewText === 'string') {
-      baselineRowBodies = parseLiveViewRowBodies(stripHtmlComments(baselineLiveViewText));
+      const result = parseLiveViewRowBodies(stripHtmlComments(baselineLiveViewText));
+      baselineRowBodies = result.bodies;
+      baselineErrors = result.errors;
     }
+    // Report all extraction failures from the three parses. These are errors rather
+    // than skips: a row that couldn't be extracted means the check compared fewer
+    // rows than the page actually carries and silently reported fewer, a vacuous pass.
+    errors.push(...trackedErrors, ...publishedErrors, ...baselineErrors);
     for (const [id, trackedBody] of trackedRowBodies) {
       const publishedBody = publishedRowBodies.get(id);
       if (publishedBody === undefined) continue;
