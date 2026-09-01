@@ -23,7 +23,7 @@ contention, `scripts/verify-cache.mjs`'s `MAX_POOL_ATTEMPTS`) as a plausible
 independent or compounding cause of "70-80 minutes." This spec does not
 resolve which explanation is right — see Decision B for how that's handled.
 
-Four problems, addressed together because they're all "tests take too long
+Five problems, addressed together because they're all "tests take too long
 or fail for reasons unrelated to the change":
 
 1. **Local volume** — pre-push runs far more tests locally than the diff
@@ -36,6 +36,10 @@ or fail for reasons unrelated to the change":
 4. **GPU/hardware coverage must not quietly ride along** — none of the above
    may be read as "CI now covers everything"; CI never has and still won't
    run anything GPU/hardware-dependent.
+5. **No fast manual loop for "I'm only working in one subsystem"** — even
+   with A1's automated narrowing, a developer who wants a quick local check
+   of just the area they're touching has no way to do that short of the full
+   leg or hand-typing a `vitest run <path>` invocation.
 
 ## Prior art, and two rounds of adversarial review
 
@@ -294,6 +298,55 @@ reasonable stopping point before fixed per-shard cost dominates; exact number
 confirmed with a real timing comparison during implementation, the same
 method the original 4-way split's comment cites.
 
+### E — manual subsystem-scoped npm scripts (developer convenience, not part of the gate)
+
+Separate from, and doesn't touch, A1/A2's automated `--changed` gate.
+Measured `test:server`'s 7730 tests by top-level subdirectory: `routes`
+2527/146 files, `tts` 1688/122, `analyzer` 1299/73, `workspace` 758/57 — those
+four alone are 81% of the leg, with everything else under 450 each. Frontend
+`test`'s 4769 by top-level subdirectory: `components` 1192/112, `store`
+1130/52, `lib` 1046/102, `views` 828/29.
+
+Add named npm scripts that just narrow `vitest run` to one subdirectory, for
+a developer who knows they're only touching one subsystem and wants a fast
+local sanity check without waiting on the full leg or reasoning about
+whether `--changed` will narrow for their diff:
+
+```
+"test:server:routes":    "npm --prefix server run test -- server/src/routes",
+"test:server:tts":       "npm --prefix server run test -- server/src/tts",
+"test:server:analyzer":  "npm --prefix server run test -- server/src/analyzer",
+"test:server:workspace": "npm --prefix server run test -- server/src/workspace",
+"test:components": "vitest run src/components",
+"test:store":       "vitest run src/store",
+"test:lib":         "vitest run src/lib",
+"test:views":       "vitest run src/views",
+```
+
+The server-side scripts are safe against A1's nested-npm forwarding hazard
+(Decision A1's "Invocation — corrected" note) because the path is baked into
+the script definition itself, not appended by a caller at invocation time —
+there's no outer `--` trying to reach through two levels of npm, just one
+literal command line, the same shape the existing (working) `test:server`
+definition already uses. Because these invoke the server's real `test`
+script by name, `pretest`'s ffmpeg preflight still runs automatically via
+npm's normal lifecycle-script convention — nothing to wire separately.
+
+**Deliberately not added to `STEPS[]`, not scope-gated, not cached, not part
+of any hook.** These are opt-in, manual, developer-run commands — exactly
+the same status `npm run verify:fast` or `npm run test:all` already have.
+No safety guarantee is being made about what they cover (a routes/ change
+that breaks something in workspace/ or store/ isn't caught by
+`test:server:routes` alone — that's what the full leg, `--changed`, and CI
+are for); they exist purely to make the common "I'm working in one area,
+give me a fast local loop" case fast, which the incident report's overall
+"tests take too long" complaint was also partly about.
+
+Only the four biggest subdirectories per leg are wired — the rest are
+already small enough (under ~450 tests, most under 200) that running the
+full leg or a plain `vitest run server/src/<dir>` by hand is fine without a
+named script. Not wired preemptively for the smaller ones.
+
 ## Testing
 
 - `scripts/tests/verify-cache.test.mjs`: source-regex cases (mirroring
@@ -319,6 +372,10 @@ method the original 4-way split's comment cites.
   proper subset and exits nonzero on a genuine failure.
 - `.github/workflows/verify.yml`'s e2e shard change: verified by a manual
   `gh workflow run` dispatch, confirming 8 shard jobs appear and complete.
+- Decision E's scripts: no automated test (they carry no correctness
+  guarantee to pin — see Decision E's own note). Verified by running each
+  once locally and confirming it selects only its subdirectory's tests.
+  CLAUDE.md's Commands section gets a bullet listing them.
 
 ## Out of scope
 
