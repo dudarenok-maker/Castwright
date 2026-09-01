@@ -1326,25 +1326,60 @@ export function findUnclassifiedRunSheetMentions(registerRows) {
 
 /**
  * Subject numbers found in the same discharge-word CLAUSE as a mention,
- * anywhere in one row's own body text — reuses the exact clause-bounding
- * `idSpecificAnnotationPresent` uses (DISCHARGE_ANNOTATION_REGEX +
- * clauseBounds), just scanning for subject-number tokens instead of ID
- * tokens, because it answers a different question: not "does this discharge
- * note excuse a specific ID" but "does this row's OWN section document which
- * subject(s) it used to track before discharging / being re-minted for
- * different work". This is the register's own record of a row's history —
- * the only place that history can live, since a re-minted row's CURRENT
- * heading (`issues`) only ever reflects what it tracks NOW.
+ * anywhere in one row's own body text — reuses the exact clause-bounding,
+ * proximity-capping, and polarity-checking logic `idSpecificAnnotationPresent`
+ * uses (DISCHARGE_ANNOTATION_REGEX + clauseBounds + ID_PROXIMITY_CHARS), just
+ * scanning for subject-number tokens instead of ID tokens, because it answers
+ * a different question: not "does this discharge note excuse a specific ID"
+ * but "does this row's OWN section document which subject(s) it used to track
+ * before discharging / being re-minted for different work". This is the
+ * register's own record of a row's history — the only place that history can
+ * live, since a re-minted row's CURRENT heading (`issues`) only ever reflects
+ * what it tracks NOW.
+ *
+ * Pass-11 review of PR #2846 (finding #1, CRITICAL): polarity-check the
+ * discharge word — "NOT discharged" (and similar negated contexts like "is
+ * why A16 below is not fully discharged") must not match as affirmative
+ * discharges. The fix checks for polarity-negating words (like "NOT", "no ")
+ * in close proximity before the discharge word, and applies the same
+ * ID_PROXIMITY_CHARS cap that `idSpecificAnnotationPresent` uses so a
+ * subject number far from its discharge word (>120 chars) is not incorrectly
+ * attributed to a row that merely MENTIONS it in passing (e.g. in discussion
+ * of another row's history).
  */
 function dischargedSubjectsMentionedIn(rowBodyText) {
   const scanText = stripInlineCodeSpans(rowBodyText);
-  const dischargeRe = new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi');
+  const dischargeMatches = [
+    ...scanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
+  ];
   const subjects = new Set();
-  let dm;
-  while ((dm = dischargeRe.exec(scanText))) {
-    const { start, end } = clauseBounds(rowBodyText, dm.index);
-    for (const subject of extractSubjectNumbers(rowBodyText.slice(start, end))) {
-      subjects.add(subject);
+  for (const dm of dischargeMatches) {
+    // Polarity check: scan backwards from the discharge word to look for
+    // negation markers ("NOT" or "no") that would negate it. Bound the scan
+    // to ~30 chars back to avoid matching unrelated negations far away.
+    // Match "NOT" or "no" as complete words (both word-boundary checks so
+    // "now" and "note" don't falsely match).
+    const polarityScanStart = Math.max(0, dm.index - 30);
+    const polarityContext = scanText.slice(polarityScanStart, dm.index);
+    if (/\bNOT\b|\bno\b/i.test(polarityContext)) {
+      // This discharge word is negated, skip it.
+      continue;
+    }
+
+    const { start, end } = clauseBounds(scanText, dm.index);
+    // Scan for subject numbers in the clause, applying proximity cap.
+    // Use scanText (not rowBodyText) so indices are consistent.
+    // Extract text for the clause and scan it, adjusting indices back.
+    const clauseText = scanText.slice(start, end);
+    for (const smatch of clauseText.matchAll(SUBJECT_NUMBER_REGEX)) {
+      const subject = Number(smatch[1] ?? smatch[2]);
+      // Measure character distance from discharge word center to subject center.
+      // smatch.index is relative to clauseText, so convert to full scanText coords.
+      const dischargeCenter = dm.index + dm[0].length / 2;
+      const subjectIndex = start + smatch.index + (smatch[0].length / 2);
+      if (Math.abs(subjectIndex - dischargeCenter) <= ID_PROXIMITY_CHARS) {
+        subjects.add(subject);
+      }
     }
   }
   return subjects;

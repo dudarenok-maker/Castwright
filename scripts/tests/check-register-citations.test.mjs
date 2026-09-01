@@ -1424,6 +1424,82 @@ test('checkConflictingSubjects: control — a genuine per-ID positional heading 
 // citationShapedLineIds — the function Check C itself uses — so the two
 // could silently disagree. ---
 
+// --- #2721: dischargedSubjectsMentionedIn must apply proximity cap + polarity check ---
+//
+// Real bug: dischargedSubjectsMentionedIn scanned for discharge words anywhere
+// in a clause and extracted subject numbers from the same clause, without
+// checking (a) proximity (120-char cap like idSpecificAnnotationPresent uses),
+// (b) polarity (negated "NOT discharged" got treated as affirmative), or (c)
+// that the discharge actually concerns THIS row's subject. Measured: A1's row
+// body mentions "— NOT discharged" in discussing A16's discharge history —
+// A16 mentions #1969 there — so A1's dischargedSubjectsMentionedIn returned
+// {1969}, falsely excusing A1 when cited for #1969 (which A36 actually owns).
+// Citing A1 for #1969 should still fire wrongId (fatal), not annotatedDischarge
+// (non-fatal).
+
+test('checkConflictingSubjects: negated discharge prose ("NOT discharged") in another row\'s history does NOT match as an affirmative discharge in this row (#2721)', () => {
+  const registerText = `# Register
+
+## Group A
+
+### A36 · Voice work (#1969)
+
+Body.
+
+### A1 · Unrelated work (#2040)
+
+[#1969] is why A16 below is not fully discharged — A16 cannot close yet.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Some section (#1969)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  // A1 citing #1969 should fire wrongId (FATAL), not annotatedDischarge,
+  // because A1's own row body never affirmatively discharges #1969. The
+  // "NOT discharged" language in A1's body text is about A16's history, not
+  // A1's own discharge of #1969.
+  assert.equal(wrongId.length, 1);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
+  assert.match(wrongId[0], /cited A1 for #1969/);
+  assert.match(wrongId[0], /A36/); // names the legitimate owner
+});
+
+test('checkConflictingSubjects: control — an affirmative discharge of a subject in THIS row\'s own body still resolves non-fatal (#2721)', () => {
+  // Paired control: when A1 once tracked a subject and documents discharging
+  // it in its OWN row body (without negation), citing A1 for that subject
+  // should be annotatedDischarge (non-fatal), not wrongId (fatal) — because
+  // A1's own row documents the history. A1's heading currently tracks #2040
+  // (re-minted for new work), but its body documents discharging #1969,
+  // which is now owned by A36.
+  const registerText = `# Register
+
+## Group A
+
+### A36 · Voice work (#1969)
+
+Body.
+
+### A1 · Earlier work on subject 1969, now re-minted for new work (#2040)
+
+This row's earlier work on #1969 is now discharged and resolved.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Some section (#1969)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  // A1 citing #1969 should now be annotatedDischarge (non-fatal) because
+  // A1's own row body affirmatively discharges #1969 — it's history, not a
+  // mistake. The subject is still live (A36 owns it now), so not fatal.
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 1);
+  assert.match(annotatedDischarge[0], /cited A1 for #1969/);
+  assert.match(annotatedDischarge[0], /A36/); // names the current owner
+});
+
 test('measureWrongIdEligibleLines: agrees with checkConflictingSubjects about which lines are eligible (finding Z)', () => {
   const { rows } = parseRegisterRows(buildRegister());
   const files = new Map([
