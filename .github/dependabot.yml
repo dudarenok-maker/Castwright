@@ -21,9 +21,10 @@
 #   catch-all the validator accepts, uniformly for prod and dev batches.
 # - github-actions: `directories` (plural) replaces `directory: "/"`, which
 #   only scans .github/workflows plus a ROOT action.yml/action.yaml. This
-#   repo also has TWO composite actions -- .github/actions/setup/action.yml
-#   (pins actions/setup-node@v6 + actions/cache@v5, consumed by 8 verify.yml
-#   jobs) and .github/actions/install-ffmpeg-windows/action.yml -- that
+#   repo also has THREE composite actions -- .github/actions/setup/action.yml
+#   (pins actions/setup-node + actions/cache, consumed by 8 verify.yml
+#   jobs), .github/actions/install-ffmpeg/action.yml, and
+#   .github/actions/install-ffmpeg-windows/action.yml -- that
 #   `directory: "/"` alone would silently leave unbumped. `directories`
 #   supports a glob (e.g. '/.github/actions/*') for the npm/pip ecosystems,
 #   but GitHub's own docs list only `directory: "/"` for github-actions
@@ -54,6 +55,16 @@ updates:
         applies-to: security-updates
         patterns:
           - '*'
+    # Held back — bumping any of these breaks npm ci with an ERESOLVE
+    # conflict against a peer that has no compatible release yet. Without
+    # this, the weekly root-npm sweep re-proposes them and fails the same
+    # way every time (#2806 -> #2816). Remove an entry once its tracking
+    # issue closes.
+    ignore:
+      - dependency-name: 'eslint' # #711 — eslint-plugin-jsx-a11y@6.10.2 caps eslint peer at ^9
+      - dependency-name: '@eslint/js' # #711 — same eslint-10 block
+      - dependency-name: 'typescript' # #1477 — typescript-eslint@8.68.0 caps typescript peer at <6.1.0
+      - dependency-name: 'jsdom' # #2823 — v30 narrows engines.node past this repo's floor
 
   - package-ecosystem: 'npm'
     directory: '/server'
@@ -75,8 +86,9 @@ updates:
   - package-ecosystem: 'github-actions'
     directories:
       - '/'
-      - '/.github/actions/setup'
+      - '/.github/actions/install-ffmpeg'
       - '/.github/actions/install-ffmpeg-windows'
+      - '/.github/actions/setup'
     schedule:
       interval: 'weekly'
     open-pull-requests-limit: 5

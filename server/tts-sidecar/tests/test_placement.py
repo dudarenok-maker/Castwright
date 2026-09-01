@@ -1414,6 +1414,59 @@ def test_engine_env_pin_cuda_without_index_returns_none(monkeypatch):
     assert main._engine_env_pin("qwen") is None
 
 
+def test_engine_env_pin_retags_to_rocm_on_a_rocm_box(monkeypatch):
+    """#2813 review finding 2: config validation only ever lets an operator
+    set an indexed pin as "cuda:N" (registry.ts rejects "rocm:N" outright),
+    so on a real ROCm box `_engine_env_pin` used to hand `admit()` a
+    "cuda:N" pin that could never match the ledger's own "rocm:N"-keyed
+    candidates (`PlacementController._device_key`, built from
+    `probe_capacity()`'s `kind`) -- every pinned engine got permanent
+    `noCapacity`, from the very first request, with no recovery path. The
+    operator-set value must still be "cuda:N" (unchanged, still the only
+    legal input); `_engine_env_pin`'s OWN return value is what re-tags it to
+    "rocm:N" for matching purposes."""
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: True)
+    monkeypatch.setenv("COQUI_DEVICE", "cuda:0")
+    assert main._engine_env_pin("coqui") == "rocm:0"
+
+
+def test_engine_env_pin_stays_cuda_on_a_real_cuda_box(monkeypatch):
+    """Companion control: the retag above must not fire on a genuinely
+    NVIDIA box -- the overwhelming majority of installs -- so a pin stays
+    exactly "cuda:N", unchanged, when `_cuda_is_rocm()` is False."""
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: False)
+    monkeypatch.setenv("COQUI_DEVICE", "cuda:0")
+    assert main._engine_env_pin("coqui") == "cuda:0"
+
+
+def test_admit_pinned_rocm_box_actually_admits(monkeypatch):
+    """End-to-end repro of #2813 review finding 2, mirroring the reviewer's
+    own simulated-ROCm-probe repro: a pin can never match a probed candidate
+    unless BOTH sides speak the same vocabulary. Before the fix, `pinned`
+    ("cuda:0") and the probe's candidate keys ("rocm:0"/"rocm:1") never
+    agreed, `_gpu_candidates` returned [], and `admit()` reported
+    `noCapacity` even with 22 GB free on the pinned card -- permanently,
+    since a never-resident engine can never migrate off `pinned` on its own
+    next attempt either. After the fix, the pin is retagged before
+    `_gpu_candidates` filters on it, so a roomy pinned card actually admits."""
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: True)
+    monkeypatch.setenv("COQUI_DEVICE", "cuda:0")
+    pinned = main._engine_env_pin("coqui")
+    devices = [
+        {"kind": "rocm", "index": 0, "label": "g0", "totalMb": 24000, "freeMb": 22000},
+        {"kind": "rocm", "index": 1, "label": "g1", "totalMb": 24000, "freeMb": 22000},
+    ]
+    pc = make(devices, peak=3584)
+
+    async def body():
+        return await pc.admit(
+            "coqui", model="xtts_v2", cfg=None, cpu_capable=False, heavy=True, pinned=pinned
+        )
+
+    adm = asyncio.run(body())
+    assert adm == {"device": "rocm:0"}
+
+
 # --- engine attribution on the reservation ledger (#1920B) ------------------
 
 
