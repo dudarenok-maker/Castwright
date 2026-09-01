@@ -635,10 +635,10 @@ test('scrubGitEnv strips every git repository-discovery override, preserves GIT_
 });
 
 // Case-insensitivity regression for THIS file's own cleanGitEnv(), the same
-// trap scrubGitEnv() was hardened against below (#2175 review, Finding 1).
+// trap scrubGitEnv() was hardened against above (#2175 review, Finding 1).
 // cleanGitEnv() hand-rolls its own filter rather than delegating to
 // scrubGitEnv() (it must also strip GIT_INDEX_FILE, which scrubGitEnv()
-// deliberately preserves — see the #2216 note below), so it needs its own
+// deliberately preserves — see the #2216 note above), so it needs its own
 // case-insensitive regression. Deliberately mixed-case-only: cannot pass
 // against a `key.startsWith('GIT_')` filter.
 test('cleanGitEnv strips a git env override regardless of stored casing', () => {
@@ -649,12 +649,15 @@ test('cleanGitEnv strips a git env override regardless of stored casing', () => 
     }
     process.env.git_dir = '/decoy/.git';
     process.env.Git_Index_File = '/decoy/.git/index';
-    process.env.PATH = saved.PATH ?? saved.Path;
 
     const cleaned = cleanGitEnv();
     assert.equal(cleaned.git_dir, undefined);
     assert.equal(cleaned.Git_Index_File, undefined);
-    assert.ok(cleaned.PATH ?? cleaned.Path);
+    // Non-GIT_ keys are untouched — spot-check against whichever casing this
+    // OS actually stores the PATH var under (Windows: "Path").
+    const pathKey = Object.keys(cleaned).find((k) => k.toUpperCase() === 'PATH');
+    assert.ok(pathKey, 'PATH must survive the scrub');
+    assert.equal(cleaned[pathKey], saved[pathKey]);
   } finally {
     for (const key of Object.keys(process.env)) delete process.env[key];
     Object.assign(process.env, saved);
@@ -745,7 +748,7 @@ test('createAnnotatedTag resolves repoRoot even with an inherited GIT_DIR pointi
   writeFileSync(notes, '# v9.9.8\n\nFixes:\n- the GIT_DIR leak\n');
   const savedGitEnv = {};
   for (const key of Object.keys(process.env)) {
-    if (key.startsWith('GIT_')) {
+    if (key.toUpperCase().startsWith('GIT_')) {
       savedGitEnv[key] = process.env[key];
       delete process.env[key];
     }
@@ -1198,7 +1201,7 @@ test('createAnnotatedTag strips a BOM even when called directly, bypassing pre-f
     writeBOMFile(notes, '# v9.9.9\n\nFixes:\n- the bug\n');
     const savedGitEnv = {};
     for (const key of Object.keys(process.env)) {
-      if (key.startsWith('GIT_')) {
+      if (key.toUpperCase().startsWith('GIT_')) {
         savedGitEnv[key] = process.env[key];
         delete process.env[key];
       }
