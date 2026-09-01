@@ -42,10 +42,15 @@ const MOJIBAKE_EM_DASH = 'â€”'; // should decode to U+2014 —, standalone 
 // which child processes inherit. Without sanitising, the test's `git commit`
 // would write into the PARENT worktree's git instead of the temp fixture —
 // silently creating bogus commits on whatever branch invoked the hook.
+// Case-insensitive match: Windows preserves whatever casing a var was stored
+// under while lookup is case-insensitive, and git honours a lowercase
+// `git_dir` identically to `GIT_DIR` — see git-env.mjs's scrubGitEnv() header
+// for the same trap. A `startsWith('GIT_')` filter alone leaves a `git_dir`
+// (or similar) survivor that still redirects the throwaway repo's commits.
 function cleanGitEnv() {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_')) delete env[key];
+    if (key.toUpperCase().startsWith('GIT_')) delete env[key];
   }
   return env;
 }
@@ -627,6 +632,33 @@ test('scrubGitEnv strips every git repository-discovery override, preserves GIT_
   assert.equal(scrubbed.GIT_AUTHOR_NAME, 'Someone');
   // Deliberately preserved — see the #2216 correction above.
   assert.equal(scrubbed.GIT_INDEX_FILE, '/decoy/.git/index');
+});
+
+// Case-insensitivity regression for THIS file's own cleanGitEnv(), the same
+// trap scrubGitEnv() was hardened against below (#2175 review, Finding 1).
+// cleanGitEnv() hand-rolls its own filter rather than delegating to
+// scrubGitEnv() (it must also strip GIT_INDEX_FILE, which scrubGitEnv()
+// deliberately preserves — see the #2216 note below), so it needs its own
+// case-insensitive regression. Deliberately mixed-case-only: cannot pass
+// against a `key.startsWith('GIT_')` filter.
+test('cleanGitEnv strips a git env override regardless of stored casing', () => {
+  const saved = { ...process.env };
+  try {
+    for (const key of Object.keys(process.env)) {
+      if (key.toUpperCase().startsWith('GIT_')) delete process.env[key];
+    }
+    process.env.git_dir = '/decoy/.git';
+    process.env.Git_Index_File = '/decoy/.git/index';
+    process.env.PATH = saved.PATH ?? saved.Path;
+
+    const cleaned = cleanGitEnv();
+    assert.equal(cleaned.git_dir, undefined);
+    assert.equal(cleaned.Git_Index_File, undefined);
+    assert.ok(cleaned.PATH ?? cleaned.Path);
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
 });
 
 // #2175 review, Finding 1 — Windows env lookup is case-insensitive, but
