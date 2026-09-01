@@ -992,20 +992,104 @@ test('checkConflictingSubjects: control — a GENUINELY WRONG multi-ID heading s
   assert.match(wrongId[0], /cited A1 for #1001/);
 });
 
-test('checkConflictingSubjects: warns (unknownSubject, non-fatal) when the paired subject number maps to NO current register row at all', () => {
-  const { rows } = parseRegisterRows(buildRegister());
+test('checkConflictingSubjects: warns (unknownSubject, non-fatal) when the cited id itself carries no subject metadata at all (structural gap)', () => {
+  // #2721/#2833 split the old single `unknownSubject` bucket by cause — see
+  // recordSubjectConflict's own comment. This is the A3-shaped real case
+  // that STAYS non-fatal: A9's own register heading carries no issue/PR
+  // number at all (21 of 65 real rows are this shape), so there's nothing on
+  // A9's own row to confirm OR contradict the citation's claimed subject
+  // with — a permanent structural gap, not a proven-wrong citation.
+  const text = `# Register
+
+## Group A
+
+### A9 · Untracked-subject row, no issue/PR number in its own heading
+
+Body.
+`;
+  const { rows } = parseRegisterRows(text);
   const files = new Map([
-    // #9999 is in no register heading — a "Criteria source:" line naming A1
+    // #9999 is in no register heading — a "Criteria source:" line naming A9
     // for it must still warn rather than silently pass, but as the
     // exploratory/non-fatal `unknownSubject` class, not `wrongId`.
-    ['docs/bar.md', '> **Criteria source:** `onbox-acceptance-register.md` A1 for #9999.\n'],
+    ['docs/bar.md', '> **Criteria source:** `onbox-acceptance-register.md` A9 for #9999.\n'],
   ]);
-  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
   assert.equal(wrongId.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
   assert.equal(unknownSubject.length, 1);
-  assert.match(unknownSubject[0], /A1/);
+  assert.match(unknownSubject[0], /A9/);
   assert.match(unknownSubject[0], /9999/);
   assert.match(unknownSubject[0], /does not appear in any current register row heading/);
+});
+
+test('checkConflictingSubjects: fires (wrongId, FATAL) when the cited id now tracks a DIFFERENT, known subject and the citation is unannotated — full discharge (#2721/#2833)', () => {
+  // A19/A31/A34-shaped real corpus case (see recordSubjectConflict's own
+  // comment): under stable, allocate-once IDs (#2717), an id that currently
+  // tracks OTHER known subjects proves — from the register's own text alone
+  // — that it moved on since this citation was written. A1 legitimately owns
+  // only #1000 today; citing it for a subject (#9999) the register has never
+  // heard of, with no discharge annotation nearby, is unambiguous dangling,
+  // the same class as a uniform ID shift across headings. Mutation-provable:
+  // deleting the `row.issues.size > 0` branch (reverting to the pre-#2721
+  // behaviour) turns this red -> green (fatal -> non-fatal), i.e. this test
+  // fails without the widening and passes with it.
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Some stale section (#9999)\n\nBody, no discharge wording anywhere.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /cited A1 for #9999/);
+  assert.match(wrongId[0], /1000/); // names what A1 tracks now
+});
+
+test('checkConflictingSubjects: control — the SAME shape stays non-fatal (annotatedDischarge) when self-annotated as discharged', () => {
+  // A19/A31's real shape: the file already documents its own staleness
+  // ("Register row: A1 — discharged ...") — historical record per this
+  // repo's "annotate, don't renumber" convention, not a live defect, same
+  // philosophy as Check A's annotated bucket.
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    [
+      'docs/bar.md',
+      '### A1 · Some stale section (#9999)\n\n' +
+        '> **Register row: A1 — discharged 2026-08-26, row removed from the register**\n',
+    ],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 1);
+  assert.match(annotatedDischarge[0], /A1/);
+  assert.match(annotatedDischarge[0], /9999/);
+});
+
+test('checkConflictingSubjects: an untracked "PR #nnnn" companion beside an owned issue number is silently correct, not even a warning (#2721/#2833)', () => {
+  // A32's real shape: the register's own A1 (standing in for A32) heading
+  // tracks only its issue (#1000, standing in for #2310), never its fixing
+  // PR — no matter how buildLegitimateSubjectMap is written, the register's
+  // OWN text never carries the PR number, so this can never be "fixed" by
+  // widening the map itself (see recordSubjectConflict's own comment).
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([['docs/bar.md', '### A1 · Some section (#1000, PR #9998)\n\nBody.\n']]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
+});
+
+test('checkConflictingSubjects: the "PR #nnnn" companion exemption also applies within a positional multi-ID segment', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '### A1 + A2 · Title one (#1000, PR #9998) + Title two (#1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
 });
 
 // --- Pass-9 review of PR #2630 (finding X): the multi-ID exemption
@@ -1022,15 +1106,21 @@ test('checkConflictingSubjects: a THIRD subject that NEITHER cited id owns still
   // are individually correct. Injecting a THIRD, unrelated subject (#9999,
   // owned by neither) into A1's own segment must still fire against A1 —
   // the old rule exempted A1 from #9999 too, purely because A1 owns #1000
-  // elsewhere on the same line.
+  // elsewhere on the same line. #2721/#2833: "still fires" is now the
+  // widened, more precise `wrongId` — A1's OWN row tracks #1000, which
+  // proves (from the register's own text) that #9999 isn't legitimately
+  // A1's either — rather than the old, less precise `unknownSubject`. #9999
+  // carries no "PR #" marker tying it to #1000, so the companion exemption
+  // (see the "PR #nnnn" tests above) does not apply here either.
   const files = new Map([
     ['docs/bar.md', '### A1 + A2 · Title one (#1000, #9999) + Title two (#1001)\n\nBody.\n'],
   ]);
-  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
-  assert.equal(unknownSubject.length, 1); // #9999 is in no register heading at all
-  assert.match(unknownSubject[0], /A1/);
-  assert.match(unknownSubject[0], /9999/);
-  assert.equal(wrongId.length, 0);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
+  assert.equal(wrongId.length, 1); // #9999 is in no register heading, and A1 tracks other work
+  assert.match(wrongId[0], /A1/);
+  assert.match(wrongId[0], /9999/);
 });
 
 test('checkConflictingSubjects: a SINGLE-ID heading with an unrelated "see also" subject still fires against that subject (finding X)', () => {
