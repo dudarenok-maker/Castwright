@@ -412,6 +412,20 @@ setup rather than repeatedly loading and evicting models.
 > available **to this run**," never "does not exist" — leave the actual
 > existence question to whoever runs from an environment that can see it.
 
+> **Currently outstanding, 2026-09-01: the ROCm/AMD row below (`#2813`, PR
+> #2835) is committed here and in the live-view `.html` but not yet on the
+> published page.** Checking the live page at merge time found it already
+> carrying a different in-flight lane's unpublished-elsewhere content (a
+> "wave 10" set of changes, 65 owed vs. this repo's 66) — `origin/main` didn't
+> have that content either, so it was a pre-merge publish from an unmerged
+> branch, not a stale fetch. Publishing over it would have discarded that
+> lane's work per the "residual hazard" section above, so it was deliberately
+> deferred rather than forced. The PR body and issue #2813 also note this, but
+> both stop being actively read once the issue closes — this line is the
+> durable pointer. **Whoever next runs the four-step publish procedure above
+> clears this note along with the debt: reconcile against whatever is live at
+> that point, publish, then delete this paragraph.**
+
 ---
 
 ## At a glance

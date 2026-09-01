@@ -392,7 +392,7 @@ export const KNOBS: ConfigKnob[] = [
     //   - "rocm" is a DERIVED REPORTING label, never a valid OPERATOR input.
     //     On AMD, HIP aliases the CUDA API, so the runtime device string an
     //     operator must set is STILL "cuda"/"cuda:<n>" — `_torch_is_hip`
-    //     (:10174) and `_normalize_device_family` (:10198) exist
+    //     (:10217) and `_normalize_device_family` (:10241) exist
     //     specifically to re-label an already-"cuda" value as "rocm" for
     //     HONEST REPORTING after the fact (`scripts/accelerator-profile.mjs`'s
     //     runtimeBackend doc comment says the same: "we REPORT 'rocm' for

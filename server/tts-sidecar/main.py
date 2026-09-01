@@ -5101,8 +5101,12 @@ def _is_resident(engine_id: str) -> Optional[str]:
     `family` isn't literally "auto" (the `intent_device = resolved_device`
     branch), so a Kokoro engine admitted onto "rocm:N" keeps that literal
     string. Harmless today only because `_report_rocm_device_key` is
-    idempotent on an already-"rocm:N" input (it reads that family, sees the
-    box genuinely is ROCm, and returns it unchanged) -- not because Kokoro
+    idempotent on an already-"rocm:N" input -- NOT via a conditional check of
+    the actual hardware, but because its `fam == "cuda" and _cuda_is_rocm()`
+    guard short-circuits on the family test alone: a "rocm:N" input parses to
+    `fam == "rocm"`, so the guard is already False and `_cuda_is_rocm()` is
+    never even called; the value is returned unchanged unconditionally, not
+    because the box was re-confirmed to be ROCm. Not because Kokoro
     was normalised. This is currently unreachable in shipping regardless
     (the amd accelerator profile has no CUDA ORT provider for a Kokoro
     index to attach to), which is the only reason relying on that

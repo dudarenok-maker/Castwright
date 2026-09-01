@@ -106,8 +106,8 @@ describe('resolver precedence', () => {
        - "rocm" is a DERIVED REPORTING label, never a valid OPERATOR input.
          On AMD, HIP aliases the CUDA API, so the runtime device string an
          operator must actually set is STILL "cuda"/"cuda:<n>" —
-         `_torch_is_hip` (main.py:10187) and `_normalize_device_family`
-         (main.py:10211) exist specifically to re-label an ALREADY-"cuda"
+         `_torch_is_hip` (main.py:10217) and `_normalize_device_family`
+         (main.py:10241) exist specifically to re-label an ALREADY-"cuda"
          value as "rocm" for honest reporting after the fact
          (`scripts/accelerator-profile.mjs`'s `runtimeBackend` doc comment:
          "we REPORT 'rocm' for honesty; the sidecar still uses
@@ -127,7 +127,7 @@ describe('resolver precedence', () => {
          crashed every GPU engine load on a real AMD box (`SPK_DEVICE=rocm`
          hit `EncoderClassifier(run_opts={"device":"rocm"})` -> RuntimeError,
          with `SpeakerEngine.ensure_loaded`'s demote-to-cpu path gated on
-         family=="cuda" (main.py:8542) so it hit `else: raise` with NO
+         family=="cuda" (main.py:8571-8576) so it hit `else: raise` with NO
          fallback — every `/embed` 500s; `ASR_DEVICE=rocm` crashed
          `WhisperModel(device="rocm")` the same way, since CTranslate2 has
          no "rocm" device at all) — #2813 fixed the class by converting it
@@ -175,7 +175,7 @@ describe('resolver precedence', () => {
       expect(coerceAndValidate(knob, 'MPS').ok).toBe(false);
     });
 
-    it.each(KNOBS)('%s rejects bare "rocm" — it is a DERIVED reporting label (main.py:10187, :10211), never a valid OPERATOR input; the AMD device string an operator sets is still "cuda"', (key) => {
+    it.each(KNOBS)('%s rejects bare "rocm" — it is a DERIVED reporting label (main.py:10217, :10241), never a valid OPERATOR input; the AMD device string an operator sets is still "cuda"', (key) => {
       const knob = getKnob(key)!;
       expect(coerceAndValidate(knob, 'rocm').ok).toBe(false);
       expect(coerceAndValidate(knob, 'ROCM').ok).toBe(false);
