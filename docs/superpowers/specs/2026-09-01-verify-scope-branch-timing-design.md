@@ -91,6 +91,17 @@ because the reasoning matters for what shipped:
   now-small residual risk. **Dropped.** In its place: round 2 also surfaced a
   real, small, pre-existing CI bug independent of this whole allowlist
   question — see Decision A2.
+- **Round 3 found the round-2 `docs/**` widening itself unsafe**: a live
+  counterexample (`src/lib/wiki-links.test.ts`, which reads `docs/wiki/*.md`
+  at runtime with no `forceRerunTriggers` protection) means the widened
+  allowlist could silently skip that guard test on an ordinary
+  `src/`+`docs/wiki/` diff — and, measured per leg rather than combined, the
+  widening's benefit was 3/60 for `test:server` and **zero** for `test`, the
+  leg with the hole. **Reverted** — see Decision A1's current text, which is
+  back to PR #2839's original strict allowlist. Round 3 also found the
+  round-2 A2 fix didn't cover its own worked example and was actually a
+  class of at least three related gaps; A2 below reflects that — filed as a
+  named design decision rather than fixed this round.
 
 ## Decision
 
@@ -102,19 +113,30 @@ diffSafeForChangedOnly(step, scopeDiff)`) to also fire under
 `flags.scopeBranch`, for both `CHANGED_ONLY_NPM_SCRIPT` entries — `test`
 (frontend) and `test:server`.
 
-**`diffSafeForChangedOnly` gets a second allowed category.** Alongside the
-existing "every file under the step's own source root with a safe
-extension" rule, a file matching `docs/**` or the root `RELEASE_NOTES.md` is
-also allowed, unconditionally, on either scoping path (staged or branch) —
-confirmed by measurement to raise the real-world hit rate (0/60 → 3/60 for
-`test:server` over the last 60 merged branches) and confirmed safe by a
-repo-wide grep: no file under `src/**` or `server/src/**`'s own test suites
-reads anything under `docs/` at runtime. (The one file in the repo that does,
-`scripts/tests/release-notes-gate.test.mjs`, belongs to `test:hooks`, a
-different step this substitution never touches.) At least one file in the
-diff must still be a real, safe-extension source file under the step's own
-root — an all-docs diff never reaches this function, because
-`stepTouchedByDiff` already filters the step out of scope entirely upstream.
+**`diffSafeForChangedOnly` allowlist widening — dropped.** An earlier
+version of this spec widened the allowlist to also tolerate `docs/**` and
+`RELEASE_NOTES.md`, on the strength of a grep claiming no `src/**`/
+`server/src/**` test reads a `docs/` path at runtime. **Round 3 review found
+that claim false, with a live counterexample**: `src/lib/wiki-links.test.ts`
+`readFileSync`/`existsSync`-es every page under `docs/wiki/*.md` at runtime,
+and the root `vitest.config.ts`'s `forceRerunTriggers` has no `docs/` entry
+protecting it — so a normal diff touching both `src/**` and `docs/wiki/**`
+would narrow via `--changed`, skip `wiki-links.test.ts` (the guard whose
+entire job is catching a deleted/renamed wiki page), and report green. The
+earlier grep that claimed safety didn't actually check `forceRerunTriggers`
+coverage, only "does anything read `docs/`" — the real invariant is "is this
+`docs/` path covered by the relevant vitest config's `forceRerunTriggers`,"
+which is unstated, unenforced, and false here. Compounding this: re-measured
+per leg rather than combined, the widening's benefit is **3/60 for
+`test:server`, 0/60 for `test`** — the frontend leg that has the hole gets
+zero benefit from the widening that opens it. **Reverted.** The allowlist
+stays exactly PR #2839's original: every file in the diff under the step's
+own source root (`src/**`/`server/src/**`) with a safe extension, no second
+category. This gives up the small `test:server` gain (3/60 → back to 0/60)
+in exchange for not shipping a known, demonstrated silent-coverage-loss
+regression. Revisiting a docs exemption later would need to key off actual
+`forceRerunTriggers` coverage per config, not a point-in-time grep — a
+real design question, not reopened here.
 
 **Base SHA, not `HEAD`.** The staged-scope substitution reuses the static
 npm scripts `test:changed`/`test:server:changed` (`vitest run --changed
@@ -139,9 +161,13 @@ an uncommitted edit outside the allowlist (e.g. to `server/vitest.config.ts`)
 would be invisible to the allowlist check but present in vitest's actual
 selection — reopening the exact "diff touches this step but isn't
 `--changed`-reachable" hazard the allowlist exists to close. Fixed by
-checking `git status --porcelain` for the step's own tree alongside the
-committed diff before allowing substitution; a dirty tree in scope forces the
-full run, same conservative default as everywhere else in this design.
+checking `git status --porcelain` **repo-wide, not scoped to the step's
+source tree** — round 3 review caught that the obvious narrower reading
+("just check `server/src/`") misses the actual worked example, an
+uncommitted edit to `server/vitest.config.ts`, which sits outside
+`server/src/` entirely. Any uncommitted change anywhere forces the full run;
+simplest correct rule, same conservative default as everywhere else in this
+design.
 
 **Invocation — bypasses npm-script nesting.** `runStepProcess` gains a
 direct-invocation mode: spawn `npx vitest run --changed <sha>` with `cwd` set
@@ -165,27 +191,34 @@ directly instead of via npm's lifecycle-script convention.
 **Cache-write gate.** Unchanged in shape: a `--changed`-only pass (staged or
 branch) is never written to the verify-cache; only a full run is.
 
-### A2 — fix CI's `shared`-scope diffs actually forcing a full run (found in passing)
+### A2 — CI's zero-test-selection hazard: real, but a class, not a single bug — filed, not fixed this round
 
-Not a new mechanism — a pre-existing bug, unrelated to A1's allowlist,
-surfaced while reading `verify.yml` for this spec. `verify.yml`'s `test`/
-`test:server` step bodies decide narrowed-vs-full only on whether `$BASE` is
-set (`if [ -n "$BASE" ]; then --changed; else full; fi` — `$BASE` is only
-empty on `workflow_dispatch`). The `shared` scope boolean
-(`needs.detect.outputs.scopes.shared`, from `computeShared` — true for a
-root-manifest/lockfile/`.github/actions/**` change) controls whether the
-**job step runs at all**, but never reaches this narrowed-vs-full choice
-**inside** the step body — so a `shared`-scope PR (e.g. touching only
-`server/package-lock.json`) still runs `--changed "$BASE"`, and neither
-`package-lock.json` nor `.github/actions/**` appears in
-`server/vitest.config.ts`'s `forceRerunTriggers`, so that `--changed` call
-can select zero tests and report green. Fix: thread the same `shared`
-boolean already available in `needs.detect.outputs.scopes` into the step
-body's condition — `shared` (or an empty `$BASE`) → full run; otherwise
-`--changed "$BASE"`, unchanged from today. One conditional per affected step
-(`test`, `test:server`/`test:server-slow`'s shared body). This is a defect
-fix with one correct outcome, not a design decision, so it's fixed here
-rather than filed.
+An earlier version of this spec proposed a one-line fix: thread `shared`
+into `verify.yml`'s `test`/`test:server` step bodies so a `shared`-scope
+diff forces a full run instead of still trying `--changed "$BASE"`. Real bug
+(`verify.yml`'s step bodies decide narrowed-vs-full only on whether `$BASE`
+is set, never on `shared`), but **round 3 review found the proposed fix
+doesn't cover its own worked example**: `server/package-lock.json` is not
+`shared` scope (`computeShared` only matches the root lockfile/manifest and
+`.github/actions/**`) — it reaches `step_test_server` through a separate
+`includeLockfiles` branch, so a `server/package-lock.json`-only diff stays
+narrowed under the proposed fix and can still select zero tests. Review
+found a third instance too: an `e2e/**`-only diff schedules the frontend
+step (via `step_test_e2e`) which then runs `--changed "$BASE"` over a diff
+with no frontend module-graph edge at all. Three known instances of "this
+diff is in scope for a CI step, but nothing guarantees `--changed` selects
+anything real" — `shared`, `server/package-lock.json`, and cross-leg
+triggers — and the correct unifying rule (something like "narrow only when
+every touched file is covered by that config's own `forceRerunTriggers`")
+is a real design decision spanning both vitest configs, not a mechanical
+one-liner. Per CLAUDE.md's incidental-findings rule, this is the one class
+of finding that's filed rather than fixed in the same round — it needs a
+design pass, and the decision it's waiting on is named here: *what property
+of a diff actually guarantees `--changed <base>` selects a correct,
+non-empty test set for a given vitest config, given that config's own
+`forceRerunTriggers` list.* File as its own issue at implementation time;
+until it ships, this pre-existing hazard is unchanged by anything else in
+this spec — no worse than before, just not closed by A1 either.
 
 ### B — widen `file-lock.test.ts`'s confirmed-thin margins, as a no-regret hardening
 
@@ -193,9 +226,14 @@ Not claimed to be proven-confirmed as this specific incident's root cause —
 no failure log from the three runs was captured, and the repo separately
 documents fork-pool crashes retrying the whole step up to 3x under
 contention (`MAX_POOL_ATTEMPTS`) as a plausible independent or compounding
-cause that this fix does not touch. Shipped anyway because the fragility is
-real and unambiguous on its own terms, independent of whether it explains
-this incident.
+cause that this fix does not touch. Round 3 review additionally couldn't
+confirm actual fragility under measurement (no repro attempted, no jitter
+figure captured) and notes the acquisition timer is armed synchronously
+while the holder's timer is armed a microtask later, so the vulnerable
+window is narrower than "20ms is thin" suggests. Shipped anyway as a cheap
+(~+1.5s total), directionally-correct hardening — not because it's been
+proven to be this incident's cause, and that distinction is kept explicit
+rather than claimed as a confirmed fix.
 
 **Scope, corrected to the three tests that actually race.**
 `server/src/workspace/file-lock.test.ts`'s `withKeyLock acquisition timeout
@@ -203,16 +241,21 @@ this incident.
 actually race a short timeout against a real, finishing holder:
 
 - `'does not poison the key after a timeout...'` — 20ms waiter budget vs.
-  150ms holder.
+  150ms holder. **This test has a second timing pair** (a later `2000`ms
+  budget racing the same holder, lines ~140-143) — widening the holder to
+  ~700ms shrinks that second pair's own headroom from ~1850ms to ~1300ms;
+  still comfortable, but not "only the first pair changes," and an
+  implementer widening mechanically must account for both.
 - `'does not let a later caller barge past a still-running holder...'` —
   20ms vs. 200ms holder.
 - `'leaves exactly one chains entry after a timeout...'` — 20ms vs. 150ms
   holder.
 
-The other two in the same block are **not** touched: `'throws instead of
-hanging when acquisition deadlocks...'` and the `withKeyLock typed timeout
-error` block's test race a 20/50ms timeout against a holder that **never
-releases** — there's no finishing-holder deadline to jitter past, so no
+The other two tests in the same `describe` block (`'throws instead of
+hanging when acquisition deadlocks...'`, at line 82) plus the separate
+`withKeyLock typed timeout error` block's test (a different `describe`, line
+224) are **not** touched — both race a 20/50ms timeout against a holder that
+**never releases** — there's no finishing-holder deadline to jitter past, so no
 amount of contention flips their outcome, and the typed-error test asserts
 the literal constant (`timeoutMs).toBe(20)`, message `'timed out after
 20ms'`) that a mechanical margin-widening pass would otherwise break.
@@ -279,10 +322,12 @@ below — sidecar's weights-gated tests were already opt-in before this spec.
 
 `.github/workflows/verify.yml`'s `e2e` job shards `test:e2e` 4-way today
 (`matrix.shard: [1, 2, 3, 4]`, `--shard=${{ matrix.shard }}/4`), cutting a
-~16 min unsharded run to ~4 min/shard. Raise it to **8-way**: matrix array →
-`[1, 2, 3, 4, 5, 6, 7, 8]`, both `--shard=N/4` references (the `test:e2e`
-step only — `test:e2e:visual` isn't sharded today and stays that way) → `/8`,
-job name label → `/8`. Standard GitHub-hosted runners are free/uncapped for
+~16 min unsharded run to ~4 min/shard. Raise it to **8-way**: three live
+sites, corrected from an earlier draft that miscounted them as four — the
+matrix array → `[1, 2, 3, 4, 5, 6, 7, 8]`, the single `--shard=N/4` reference
+in the `test:e2e` step → `/8` (`test:e2e:visual` isn't sharded today and
+stays that way), and the job `name:` label → `/8`. Standard GitHub-hosted
+runners are free/uncapped for
 this public repo, so the real constraint is fixed per-shard cost that
 doesn't shrink with more shards: `playwright.config.ts`'s `chromium` project
 depends on the `warmup` project (Vite transform-cache warm-up), and
@@ -350,9 +395,10 @@ named script. Not wired preemptively for the smaller ones.
 ## Testing
 
 - `scripts/tests/verify-cache.test.mjs`: source-regex cases (mirroring
-  PR #2839's staged-scope tests) for the widened gate condition, the
-  `docs/**`/`RELEASE_NOTES.md` allowlist addition, the dirty-working-tree
-  check, and the cache-write exclusion for branch-scope changed-only passes.
+  PR #2839's staged-scope tests) for the widened-to-branch-scope gate
+  condition (the allowlist itself is unchanged from PR #2839 — no new case
+  needed there), the repo-wide dirty-working-tree check, and the cache-write
+  exclusion for branch-scope changed-only passes.
   **Additionally** — a source-regex test can't catch a broken invocation,
   only a missing one (round 1's finding) — add a test that actually spawns
   the new direct-invocation path against a small disposable fixture repo (not
@@ -360,10 +406,6 @@ named script. Not wired preemptively for the smaller ones.
   `detectSiblingContention`'s process-count probe if this test ever ran
   inside a `test:hooks`-style pre-commit leg) confirming it forwards
   `--changed` correctly and actually narrows the selection.
-- `.github/workflows/verify.yml`'s A2 fix: no unit test (workflow YAML) —
-  verified by a manual `gh workflow run verify.yml --ref <branch>` dispatch
-  against a deliberately root-lockfile-only diff, confirming the full suite
-  runs rather than a narrowed `--changed` pass.
 - `server/src/workspace/file-lock.test.ts`: no new test cases for the three
   widened pairs — existing assertions unchanged, only the millisecond
   constants widen, each with a short comment recording the new absolute gap.
@@ -380,18 +422,23 @@ named script. Not wired preemptively for the smaller ones.
 ## Out of scope
 
 - Auditing all 141 `setTimeout`-in-server-test occurrences for margin safety
-  — only the three confirmed fragile-race-under-`retry:0` pairs are in
-  scope; the rest is covered by rerunning the repo's own `retryHazardReporter`
-  survey instead of a fresh manual sweep.
+  — round 3 found `retryHazardReporter` structurally can't see the `{ retry:
+  0 }` population Decision B targets (it only reports tests *rescued* by
+  `retry: 1`), so it's not offered as a substitute survey. The repo has
+  exactly four `{ retry: 0 }` blocks total (three in `file-lock.test.ts`, one
+  in `design-lock.test.ts`), already read in full for this spec — that is
+  the actual scope, not a sampled subset of 141.
 - Any change to the production `withKeyLock`/`file-lock.ts` timeout values —
   test-fragility fix, not a behavior change.
 - `cast-lock.test.ts`, `design-lock.test.ts` — confirmed not to share the
   fragile shape; not touched.
 - Forcing CI's own `--changed` narrowing onto the strict
-  `diffSafeForChangedOnly` allowlist (the original Decision A2) — dropped
-  after measurement showed it would regress CI's current, looser, working
-  narrowing far more than the ~5%-hit-rate local change's residual risk
-  justifies. `test:server-slow`'s CI narrowing is likewise unchanged.
+  `diffSafeForChangedOnly` allowlist — dropped after measurement showed it
+  would regress CI's current, looser, working narrowing far more than the
+  local change's residual risk justifies (see Prior art's round-2 note).
+  Fixing CI's actual zero-test-selection hazard (of which `test:server-slow`
+  sharing `test:server`'s step body is one instance) is Decision A2, filed
+  as a design-pass item this round rather than fixed.
 - Extending the `--changed`-substitution mechanism to any step besides
   `test`/`test:server` — `test:sidecar` evaluated and deliberately deferred,
   see Decision C.
