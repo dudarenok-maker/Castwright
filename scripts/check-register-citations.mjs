@@ -1687,6 +1687,7 @@ export function isLikelyBinaryFile(absPath) {
 const SELF_REFERENTIAL_PATHS = new Set([
   'scripts/check-register-citations.mjs',
   'scripts/tests/check-register-citations.test.mjs',
+  'scripts/tests/check-onbox-register.test.mjs',
 ]);
 
 export function runCheckRegisterCitationsCli(options = {}) {
