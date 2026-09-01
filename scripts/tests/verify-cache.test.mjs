@@ -1300,6 +1300,45 @@ test('runStepProcess keys the retriable-pool-crash lookup on retryKey, not the s
   );
 });
 
+function runPipelineLoopBody() {
+  const match = src.match(
+    /if \(action === 'skip'\) \{[\s\S]*?const changedOnlyScript =[\s\S]*?\n {2}\}\n {2}return 0;/,
+  );
+  assert.ok(match, "could not locate runPipeline's per-step loop body in verify-cache.mjs");
+  return match[0];
+}
+
+// Review finding (blocking, PR #2839 pass 1): a shared-scope diff (e.g. a
+// root package-lock.json-only change) previously still got the --changed
+// substitution, and `--changed` against a file no test's own dependency
+// graph reaches selects ZERO tests and exits 0 via vitest's
+// `passWithNoTests` — reporting [pass] having tested nothing.
+test('the --changed-only substitution requires BOTH scopeStaged AND !scopeShared', () => {
+  const body = runPipelineLoopBody();
+  assert.match(
+    body,
+    /flags\.scopeStaged\s*&&\s*!scopeShared\s*\?\s*CHANGED_ONLY_NPM_SCRIPT\[step\.name\]\s*:\s*undefined/,
+    'a shared-scope diff (root manifest/lockfile/.github/actions/**) must run every step\'s FULL ' +
+      'script — --changed against it would otherwise silently select and run zero tests',
+  );
+});
+
+// Review finding (blocking, PR #2839 pass 1): the verify-cache key is the
+// step's FULL declared-input hash regardless of what actually ran, so
+// caching a --changed-only (narrower) pass under that hash let a later
+// --scope-branch/CI run with no new diff read [cached] and silently skip a
+// full run that never happened — deleting the full-suite safety net
+// pre-push and CI both depend on.
+test('a --changed-only pass is never written to the verify-cache — only a full run is', () => {
+  const body = runPipelineLoopBody();
+  assert.match(
+    body,
+    /if \(fileList !== null && !changedOnlyScript\) \{/,
+    'the cache.steps[step.name] write must be gated on !changedOnlyScript — a --changed-narrowed ' +
+      'pass must not be cached under the full step\'s input hash',
+  );
+});
+
 // --- Branch-diff scope filter (verify/CI rebalance, 2026-07-06) --------
 
 function gitAt(cwd, args) {

@@ -51,6 +51,35 @@ so they fan out at full concurrency into a starved box.
   preserving the "local is the full coverage net, CI is the scoped one"
   invariant.
 
+### 2026-09-01 addendum (#2834)
+
+- **Sibling-worktree contention guard.** The GPU probe above missed the more
+  common local cause: another worktree's own `vitest`/`verify-cache.mjs`
+  process already running (observed: six worktrees running full `test:server`
+  at once). `detectSiblingContention()` enumerates other matching node
+  processes via `Get-CimInstance` (excluding this process's own PID) and
+  throttles to `LOW_CONCURRENCY=1` the same soft way the GPU probe does.
+- **`--changed HEAD`-only test/test:server on an UNSHARED `--scope-staged`
+  diff.** The scope filter above is step-granular, not file-granular — any
+  touched file under a step's globs still reran that step's WHOLE suite. Under
+  `--scope-staged` only, and only when `computeShared` is false, `test`/
+  `test:server` now run `test:changed`/`test:server:changed`
+  (`vitest run --changed HEAD`) instead. A shared-scope diff (root
+  manifest/lockfile/`.github/actions/**`) still runs the full script —
+  `--changed` against a file no test's dependency graph reaches would
+  otherwise select zero tests and exit 0. **Never cached as a full run**: a
+  `--changed`-only pass's `cache.steps` write is skipped entirely, because the
+  cache key is the step's full declared-input hash — caching a narrower run
+  under that hash let a later `--scope-branch`/CI run with no new diff read
+  `[cached]` and silently skip a full run that never happened (an actual bug,
+  caught in review before merge, not a design choice).
+- **The "CI is the scoped one" line above is corrected, not new**: CI already
+  narrowed its own PR runs via `vitest run --changed <PR base>` before this
+  addendum (`.github/workflows/verify.yml`'s Frontend/Server test legs,
+  `docs/features/118-ci-cost-round-2.md`) — pre-push's full local run, not
+  CI, is the actual full-suite gate before merge, and was already the actual
+  gate before this addendum too.
+
 ## Invariants
 
 1. A staged diff touching only files outside a step's `inputs.globs` /

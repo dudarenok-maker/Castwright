@@ -1399,7 +1399,14 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
       continue;
     }
 
-    const changedOnlyScript = flags.scopeStaged ? CHANGED_ONLY_NPM_SCRIPT[step.name] : undefined;
+    // --changed HEAD only ever substitutes on an UNSHARED --scope-staged run
+    // (pre-commit, one narrow diff) — never on a shared-scope diff (review
+    // finding: a root-manifest/lockfile change that touches every step but
+    // matches no test file's own dependency graph would otherwise run
+    // vitest's `--changed` against nothing, exit 0 via `passWithNoTests`,
+    // and report [pass] having run zero tests).
+    const changedOnlyScript =
+      flags.scopeStaged && !scopeShared ? CHANGED_ONLY_NPM_SCRIPT[step.name] : undefined;
     if (changedOnlyScript) {
       console.log(`[run] ${step.name} (--changed HEAD only)`);
     } else {
@@ -1414,7 +1421,13 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
     const dt = Date.now() - t0;
     if (code === 0) {
       console.log(`[pass] ${step.name} (took ${formatSecs(dt)})`);
-      if (fileList !== null) {
+      // A --changed-only pass covers a NARROWER set of tests than currentHash's
+      // declared inputs claim to have verified — caching it under the full
+      // step's hash would let a later --scope-branch/CI run (no diff since,
+      // same hash) read [cached] and skip a full run that never actually
+      // happened (review finding: this silently removed the full-suite net
+      // pre-push and CI both depend on). Only a full run is cache-worthy.
+      if (fileList !== null && !changedOnlyScript) {
         cache.steps[step.name] = {
           inputHash: currentHash,
           lastGreenAt: new Date().toISOString(),
