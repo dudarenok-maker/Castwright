@@ -259,22 +259,23 @@ comparison, see the edge list above). The merge step that closes this, run
        from your branch, only from `main`.
    - **A row's content has drifted** (#2599/A41) — the row exists, with the
      SAME ID, on both the tracked `.html` and the currently-published page,
-     but its own body text hashes differently. This is a DIFFERENT check
-     from the BEHIND check above: it compares your local, currently-committed
+     but its own body text hashes differently from the published version AND
+     from `origin/main`'s baseline copy. This is a DIFFERENT check from the
+     BEHIND check above: it compares your local, currently-committed
      `docs/testing/onbox-acceptance-register-live-view.html` against the
      published snapshot, not the register — hashing the register's markdown
      against the published HTML would flag almost every row, since the two
      are deliberately different documents that only have to agree on
-     structure, not wording. A drifted row means the published page's row
-     content no longer matches what this repo's tracked copy says it should
-     be — either your own uncommitted/unpublished edit (expected, and about
-     to be published, in which case proceed) or an independent revert or
-     hand-edit on the far end that never went through this repo at all (the
-     A41 incident this check exists to catch: PR #2578 review rounds 13-18
-     caught it only by manually byte-diffing the two files, because nothing
-     mechanical compared row content before this). Read the named row(s) and
-     decide which case applies before publishing — the command cannot tell
-     the two apart on its own.
+     structure, not wording. The check disambiguates via the baseline: if
+     your local copy matches `origin/main`'s copy, the edit is already
+     committed to this branch and pending publish (expected, and about to be
+     published, so proceed); if the published version matches `origin/main`'s
+     baseline but your local doesn't, the live page reverted or was
+     hand-edited independently — the A41 incident this check exists to
+     catch: PR #2578 review rounds 13-18 caught it only by manually
+     byte-diffing the two files, because nothing mechanical compared row
+     content before this. A reported drift failure indicates the latter, a
+     genuine defect that needs investigation before publishing.
 
    **Known limitation:** a row that's live and still genuinely owed but was
    never actually merged into `main` at all (e.g. published straight from a

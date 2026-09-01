@@ -794,10 +794,22 @@ export const ROW_CONTENT_DRIFT_ERROR_PREFIX = 'row ';
 //     Name the ID of the row you discharged. Under stable row IDs that is
 //     exactly the ID that disappears from the live page — IDs are never
 //     reused, so nothing shifts.
+//
+//     #2599/A41: `options.baselineLiveViewText` is origin/main's copy of the
+//     live-view.html for content-hashing disambiguation. The tracked local
+//     copy may have legitimate pending-publish edits (steps already committed
+//     to the branch but not yet published), which would hash differently from
+//     the published version even though no drift occurred. Comparing against
+//     the baseline disambiguates: if tracked matches baseline, the local edit
+//     is not drift (already committed); if published matches baseline but
+//     tracked doesn't, that's the genuine defect (live page reverted). When
+//     the baseline can't be resolved, content hashing is skipped rather than
+//     using a missing baseline as "no drift" — matching the fail-closed
+//     approach the register-side baseline already uses.
 export function checkLiveView(
   markdownText,
   rawLiveViewHtml,
-  { direction = 'both', baselineText, dischargingIds = [], trackedLiveViewHtml } = {},
+  { direction = 'both', baselineText, dischargingIds = [], trackedLiveViewHtml, baselineLiveViewText } = {},
 ) {
   const errors = [];
   const dischargingSet = new Set(dischargingIds);
@@ -1161,14 +1173,60 @@ export function checkLiveView(
   // - A row ID published-only is untouched by this loop entirely — the
   //   existing discharge handling above already decides whether that's
   //   reported.
+  //
+  // #2599: Use baselineLiveViewText (origin/main's copy) to disambiguate
+  // legitimate pending-publish edits from genuine drift. When tracked and
+  // published content differ:
+  // - If tracked matches baseline → the edit is already committed to the
+  //   branch, a legitimate pending-publish state — not drift, don't report.
+  // - If published matches baseline but tracked doesn't → the tracked copy
+  //   has unilateral edits not in origin/main, while the published page
+  //   remains at baseline (unchanged or reverted) — genuine drift, report it.
+  // Fail closed when the baseline isn't available: skip content hashing
+  // rather than treating "baseline unknown" as "no drift".
   if (direction === 'extraOnly' && typeof trackedLiveViewHtml === 'string') {
     const trackedRowBodies = parseLiveViewRowBodies(stripHtmlComments(trackedLiveViewHtml));
     const publishedRowBodies = parseLiveViewRowBodies(liveViewHtml);
+    let baselineRowBodies = null;
+    if (typeof baselineLiveViewText === 'string') {
+      baselineRowBodies = parseLiveViewRowBodies(stripHtmlComments(baselineLiveViewText));
+    }
     for (const [id, trackedBody] of trackedRowBodies) {
       const publishedBody = publishedRowBodies.get(id);
       if (publishedBody === undefined) continue;
-      if (hashRowContent(trackedBody) !== hashRowContent(publishedBody)) {
-        errors.push(`${ROW_CONTENT_DRIFT_ERROR_PREFIX}${id}: content differs between local and published`);
+      const trackedHash = hashRowContent(trackedBody);
+      const publishedHash = hashRowContent(publishedBody);
+      if (trackedHash !== publishedHash) {
+        // Hashes differ between tracked and published. Disambiguate using the baseline.
+        if (baselineRowBodies === null) {
+          // No baseline — fail closed, skip this check.
+          continue;
+        }
+        const baselineBody = baselineRowBodies.get(id);
+        if (baselineBody === undefined) {
+          // Baseline has no entry for this row — a new row was added
+          // tracked-locally. This is not drift, it's a pre-publish pending add.
+          continue;
+        }
+        const baselineHash = hashRowContent(baselineBody);
+        if (trackedHash === baselineHash) {
+          // Tracked matches baseline — the edit is already committed to the
+          // branch (either on origin/main already, or committed on this branch
+          // and now being published). This is a legitimate pending-publish
+          // state, not drift. Skip it.
+          continue;
+        }
+        if (publishedHash === baselineHash) {
+          // Published matches baseline (unchanged since origin/main), but
+          // tracked differs — genuine drift. The tracked copy has unilateral
+          // edits that never made it to the live page.
+          errors.push(
+            `${ROW_CONTENT_DRIFT_ERROR_PREFIX}${id}: content differs between local and published`,
+          );
+        }
+        // If trackedHash !== baselineHash AND publishedHash !== baselineHash,
+        // both differ from baseline — can't tell which is the source of truth,
+        // so skip (fail closed).
       }
     }
   }
@@ -1275,6 +1333,44 @@ export function resolveBaselineText(repoRoot, registerPath, gitRunner = runGitCo
     return { text: null, failedStep: 'show' };
   }
   return { text: showResult.stdout, failedStep: null };
+}
+
+// #2599/A41: fetches both the register and live-view.html baselines from
+// origin/main in one flow. Does a single `git fetch`, then parses the SHA
+// once, and reads both files from it. Returns `{ registerText, liveViewText,
+// failedStep }` — either both texts succeed (failedStep: null), or both are
+// null on any failure (failedStep names the step that failed). This keeps the
+// two reads synchronized on the same commit, and avoids a second
+// fetch+parse that would reopen the residual race `resolveBaselineText`'s own
+// hardening already addresses.
+export function resolveBaselineTexts(
+  repoRoot,
+  registerPath,
+  liveViewPath,
+  gitRunner = runGitCommand,
+) {
+  const fetchResult = gitRunner(['fetch', 'origin', 'main'], repoRoot);
+  if (fetchResult.error || fetchResult.status !== 0) {
+    return { registerText: null, liveViewText: null, failedStep: 'fetch' };
+  }
+  const revParseResult = gitRunner(['rev-parse', 'FETCH_HEAD'], repoRoot);
+  if (revParseResult.error || revParseResult.status !== 0) {
+    return { registerText: null, liveViewText: null, failedStep: 'show' };
+  }
+  const fetchedSha = revParseResult.stdout.trim();
+  const registerResult = gitRunner(['show', `${fetchedSha}:${registerPath}`], repoRoot);
+  if (registerResult.error || registerResult.status !== 0) {
+    return { registerText: null, liveViewText: null, failedStep: 'show' };
+  }
+  const liveViewResult = gitRunner(['show', `${fetchedSha}:${liveViewPath}`], repoRoot);
+  if (liveViewResult.error || liveViewResult.status !== 0) {
+    return { registerText: null, liveViewText: null, failedStep: 'show' };
+  }
+  return {
+    registerText: registerResult.stdout,
+    liveViewText: liveViewResult.stdout,
+    failedStep: null,
+  };
 }
 
 // process.exit() terminates before Node flushes pending async stdout/stderr
@@ -1494,7 +1590,8 @@ function runCheckOnboxRegisterCli() {
     if (baselineFileOverride) {
       try {
         baseline = {
-          text: readFileSync(resolve(baselineFileOverride), 'utf8'),
+          registerText: readFileSync(resolve(baselineFileOverride), 'utf8'),
+          liveViewText: null,
           failedStep: null,
         };
       } catch {
@@ -1505,14 +1602,14 @@ function runCheckOnboxRegisterCli() {
         // runs when the TEST-ONLY override is set). Test-only path, but it's
         // the first message a future agent debugging a red test would read,
         // and it was actively wrong about what happened.
-        baseline = { text: null, failedStep: 'override' };
+        baseline = { registerText: null, liveViewText: null, failedStep: 'override' };
       }
     } else {
-      baseline = resolveBaselineText(repoRoot, REGISTER);
+      baseline = resolveBaselineTexts(repoRoot, REGISTER, LIVE_VIEW);
     }
     if (baseline.failedStep) {
       // Named explicitly, distinct from checkLiveView's generic "cannot
-      // verify" error below (which fires too, since baseline.text is null) —
+      // verify" error below (which fires too, since baseline texts are null) —
       // this line is what tells the operator WHICH git call to retry.
       let failureMessage;
       if (baseline.failedStep === 'fetch') {
@@ -1528,10 +1625,10 @@ function runCheckOnboxRegisterCli() {
           'TEST-ONLY baseline-injection seam, not git (no `git fetch` or `git show` ran). ' +
           'Check the path exists and is readable, then try again.';
       } else {
-        // Covers BOTH a `git rev-parse FETCH_HEAD` failure and a `git show
-        // <sha>:<path>` failure — resolveBaselineText folds them into one
+        // Covers BOTH a `git rev-parse FETCH_HEAD` failure and `git show`
+        // failures for either file — resolveBaselineTexts folds them into one
         // `failedStep` (see that function's own comment for why), so this
-        // message deliberately doesn't claim it was specifically `git show`.
+        // message deliberately doesn't claim it was specifically which `show`.
         failureMessage =
           'Resolving what the fetch just wrote (`git rev-parse FETCH_HEAD` or `git show`) ' +
           'failed even though the preceding `git fetch origin main` just succeeded — the ' +
@@ -1548,9 +1645,10 @@ function runCheckOnboxRegisterCli() {
     const trackedLiveViewHtml = read(LIVE_VIEW);
     const publishedErrors = checkLiveView(text, publishedHtml, {
       direction: 'extraOnly',
-      baselineText: baseline.text,
+      baselineText: baseline.registerText,
       dischargingIds,
       trackedLiveViewHtml,
+      baselineLiveViewText: baseline.liveViewText,
     });
     // The fail-closed "cannot verify" case (#2199) does not mean the
     // register IS behind (that's unknown), so it gets its own label rather

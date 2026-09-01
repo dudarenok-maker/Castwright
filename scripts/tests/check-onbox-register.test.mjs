@@ -1872,20 +1872,29 @@ test('#2599: identical row body content (tracked vs published) passes, no conten
 // Mutation-provable: same ID, same per-group count (both sides have exactly
 // one row, A1) — only the row's own body text differs between the tracked
 // copy and the published copy. This is the exact A41 regression shape the
-// whole-page diff this replaces could never catch.
+// whole-page diff this replaces could never catch. With the baseline
+// available, this represents a genuine drift: tracked has new content not
+// in the baseline, published matches the baseline. The fix disambiguates
+// using the baseline live-view HTML.
 test('#2599: a row whose ID and count match but body content differs is caught, naming the row', () => {
   const workingRegister = buildSingleGroupRegister('A', [1]);
   const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Baseline and published both have the original content. Tracked has
+  // different content that never made it to the live page — genuine drift.
+  const baselineLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Original content.' },
+  ]);
   const trackedLiveViewHtml = buildRowContentLiveView([
-    { id: 'A1', body: 'Shared content, unchanged.' },
+    { id: 'A1', body: 'Tracked local content, different from published.' },
   ]);
   const publishedLiveView = buildRowContentLiveView([
-    { id: 'A1', body: 'Shared content, MUTATED on the live page.' },
+    { id: 'A1', body: 'Original content.' },
   ]);
   const errors = checkLiveView(workingRegister, publishedLiveView, {
     direction: 'extraOnly',
     baselineText: baselineRegister,
     trackedLiveViewHtml,
+    baselineLiveViewText: baselineLiveView,
   });
   assert.deepEqual(errors, ['row A1: content differs between local and published']);
 });
@@ -1928,6 +1937,95 @@ test('#2599: omitting trackedLiveViewHtml skips the content-drift check entirely
     baselineText: baselineRegister,
   });
   assert.deepEqual(errors, []);
+});
+
+// #2599/A41: Content-hashing baseline disambiguation tests. A row's content
+// may differ between tracked and published for two reasons: (1) a legitimate
+// pending-publish edit already committed to origin/main (or this branch before
+// publishing), or (2) a genuine revert/hand-edit on the live page. The
+// baseline (origin/main's copy) disambiguates: if tracked matches the
+// baseline, the edit is already committed (pending publish), not drift.
+test('#2599: a legitimate pending-publish edit (local matches baseline) does not fail', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Baseline and tracked BOTH have the edited content (already committed to
+  // origin/main or this branch). Published still has the OLD content (not
+  // yet published — this is what "pending publish" means).
+  const baselineLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Edited content, already on origin/main.' },
+  ]);
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: 'Edited content, already on origin/main.' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Old content, not yet published.' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: baselineLiveView,
+  });
+  assert.deepEqual(
+    errors,
+    [],
+    `a legitimate pending-publish edit should not fail, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// Genuine drift: the live page was reverted or hand-edited. Tracked differs
+// from published AND from baseline — that is drift. Tracked is new content
+// NOT in the baseline; published reverted to baseline content.
+test('#2599: a genuine revert (published matches baseline, local differs) fails', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Baseline and published both have the same content; tracked has new content
+  // not in the baseline — the tracked edit was never published, or was
+  // published and then reverted on the live page.
+  const baselineLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Baseline content.' },
+  ]);
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: 'Unilateral edit on this machine, never on the live page.' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Baseline content.' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: baselineLiveView,
+  });
+  assert.deepEqual(
+    errors,
+    ['row A1: content differs between local and published'],
+    `a genuine revert should fail, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// Baseline not available — fail closed, skip the content-hashing check.
+test('#2599: missing baseline live-view skips content-hashing, does not fail', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Tracked and published differ, but no baseline is available.
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: 'Edited content.' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Original content.' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: null, // No baseline
+  });
+  assert.deepEqual(
+    errors,
+    [],
+    `missing baseline should skip content-hashing, not fail, got: ${JSON.stringify(errors)}`,
+  );
 });
 
 // ---------------------------------------------------------------------------
