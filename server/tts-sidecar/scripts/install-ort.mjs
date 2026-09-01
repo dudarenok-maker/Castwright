@@ -380,13 +380,38 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 // NOT pin here, including from `nvidia-cuda-nvrtc-cu12` and
 // `nvidia-nvjitlink-cu12` (both pulled in only transitively, by cufft's own
 // dependency tree — see the N6 note above for why they're deliberately not
-// pinned directly). Checked on-box: those transitively-resolved versions
-// (`nvidia-cuda-nvrtc-cu12`/`nvidia-nvjitlink-cu12` at 12.9.86) DO match
-// torch's own bundled `nvrtc64_120_0.dll`/`nvJitLink_120_0.dll`
-// (`FileVersion` 6.14.11.9000 on both sides) — so mechanism B is not
-// currently exposed, but nothing pins that agreement the way
-// NVIDIA_CUDNN_CONSTRAINT etc. pin the packages this file DOES own. Re-check
-// this comment, not just the four constants below, on any future torch bump.
+// pinned directly). Re-check this comment, not just the four constants
+// below, on any future torch bump.
+//
+// PASS-3 REVIEW NOTE (2026-09-01): the prior version of this note checked
+// only ONE basename pair and generalised from it. Re-measured `FileVersion`
+// directly, on the live venv, for THREE basenames mechanism B can shadow:
+//   - `nvrtc64_120_0.dll` / `nvJitLink_120_0.dll` (from
+//     `nvidia-cuda-nvrtc-cu12`/`nvidia-nvjitlink-cu12`): torch's own
+//     `torch/lib` copies and the `nvidia/*/bin` copies both report
+//     `FileVersion` 6.14.11.9000 — these two agree, so mechanism B is not
+//     currently exposed for them.
+//   - `cublas64_12.dll` / `cublasLt64_12.dll` (from
+//     `NVIDIA_CUBLAS_CONSTRAINT` above, `~=12.8.0`): torch's `torch/lib`
+//     copies report `6,14,11,1284` (12.8.4); the `nvidia/cublas/bin` copies
+//     this file installs report `6,14,11,1285` (12.8.5). These DO differ —
+//     same-minor, so low practical risk, but the `~=12.8.0` pin permits any
+//     12.8.x and does not itself guarantee agreement with torch's specific
+//     build the way `NVIDIA_CUDNN_CONSTRAINT`'s tighter `~=9.19.0` does.
+//   - `cudnn64_9.dll` from `ctranslate2` (faster-whisper's own bundled
+//     copy, `server/tts-sidecar/.venv/Lib/site-packages/ctranslate2/`):
+//     reports `9.10.2.21`. The `nvidia/cudnn/bin/cudnn64_9.dll` this file
+//     installs (per `NVIDIA_CUDNN_CONSTRAINT`, `~=9.19.0`) reports
+//     `9.19.0.56` — a CROSS-MINOR gap (9.10 → 9.19) WIDER than the 9.25→9.19
+//     gap this PR exists to fix. Whisper/ASR is the one engine the on-box
+//     `Device probe complete: {'kokoro': 'cuda', 'coqui': 'cuda', 'qwen':
+//     'cuda'}` run backing this PR did NOT exercise (ASR is off unless
+//     `SEG_ASR_ENABLED`), so this shadow is unconfirmed either way in
+//     practice — filed as #2845 rather than assumed benign.
+// All three shadows pre-date this PR (this PR only widens which of them
+// `_add_nvidia_dll_dirs_to_path()`'s PATH prepend can newly reach); nothing
+// here pins cross-mechanism agreement the way `NVIDIA_CUDNN_CONSTRAINT` etc.
+// pin the packages this file DOES own.
 const NVIDIA_CUFFT_CONSTRAINT = 'nvidia-cufft-cu12~=11.3.3';
 const NVIDIA_CUDA_RUNTIME_CONSTRAINT = 'nvidia-cuda-runtime-cu12~=12.8.0';
 

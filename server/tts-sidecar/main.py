@@ -192,6 +192,33 @@ def _add_nvidia_dll_dirs_to_path() -> list[str]:
     if not os.path.isdir(nvidia_root):
         return []
     current_path = os.environ.get("PATH", "")
+    try:
+        pkg_names = sorted(os.listdir(nvidia_root))
+    except OSError as e:
+        # `nvidia_root` passed `os.path.isdir` a few lines above, so reaching
+        # this `except` means the directory EXISTS and could not be read (a
+        # tightened ACL, a transient I/O error on a redirected profile) --
+        # a genuine failure of this mechanism, not one of the healthy no-op
+        # reasons (`onnxruntime` not importable, no `nvidia/` dir at all).
+        # Silently returning the same `[]` as those healthy cases would be
+        # byte-identical to them -- the one condition where this mechanism
+        # actually failed would be the one condition nothing reports, exactly
+        # the silent-CPU-fallback bug this function exists to close (same
+        # reasoning as the PATH-write failure below).
+        log.warning(
+            "[ort-preload] failed to list %s (%s) -- cuDNN's lazily-dlopened "
+            "engine DLLs may not be found; the CUDA execution provider may "
+            "silently fall back to CPU.",
+            nvidia_root,
+            e,
+        )
+        return []
+    candidates = [
+        os.path.join(nvidia_root, pkg_name, "bin") for pkg_name in pkg_names
+    ]
+    candidates = [d for d in candidates if os.path.isdir(d)]
+    if not candidates:
+        return []
     # Idempotence (found via a real regression, not speculatively): the docstring's
     # "once at lifespan startup" is a PRODUCTION assumption -- a test harness that
     # spins up the FastAPI app's lifespan repeatedly in one process (many sidecar
@@ -199,27 +226,26 @@ def _add_nvidia_dll_dirs_to_path() -> list[str]:
     # by the same handful of directories on every call, unbounded across a whole
     # pytest session, until Windows' 32767-character env var ceiling raises
     # `ValueError: the environment variable is longer than 32767 characters` --
-    # observed for real running this repo's own sidecar test suite. Comparing
-    # against PATH's existing entries (not a separate "already ran" flag) also
-    # handles a directory some OTHER mechanism already added -- for the exact
-    # string this function itself would produce. This is a raw string-set
-    # comparison, not a normalised one: PATH is case-insensitive on Windows
-    # and tolerant of a trailing separator or quoting, none of which this
-    # check accounts for, so a differently-spelled pre-existing entry (a
-    # different case, a trailing backslash, a quoted form) is not recognised
-    # as the same directory and gets a harmless duplicate added once. Bounded
-    # and cheap either way -- this is not the growth this guard exists to stop.
-    existing_dirs = set(current_path.split(os.pathsep))
-    added: list[str] = []
-    try:
-        for pkg_name in sorted(os.listdir(nvidia_root)):
-            bin_dir = os.path.join(nvidia_root, pkg_name, "bin")
-            if os.path.isdir(bin_dir) and bin_dir not in existing_dirs:
-                added.append(bin_dir)
-    except OSError:
+    # observed for real running this repo's own sidecar test suite.
+    #
+    # This checks the PATH *prefix*, not membership anywhere in PATH: a
+    # membership-only check (an earlier version of this guard) cannot tell a
+    # genuine repeat call by this exact function -- `candidates`, in this
+    # order, already sitting at the very front of PATH -- from a same- or
+    # differently-spelled entry for one of these directories sitting further
+    # BACK in PATH (a system CUDA toolkit install, say). Skipping in the
+    # latter case would silently defeat the "ahead of torch" ordering
+    # guarantee `install-ort.mjs` depends on: the pre-existing late entry
+    # would still win dll-search-order precedence. Prepending `candidates`
+    # again in that case produces a harmless duplicate further back in the
+    # string (the design's own accepted tradeoff -- see the docstring), but
+    # guarantees this call's copy is the one a bare-name load resolves to.
+    joined_candidates = os.pathsep.join(candidates)
+    if current_path == joined_candidates or current_path.startswith(
+        joined_candidates + os.pathsep
+    ):
         return []
-    if not added:
-        return []
+    added = candidates
     # An empty pre-existing PATH must not gain a trailing separator: Windows
     # treats an empty PATH *entry* (not an empty PATH itself) as the current
     # directory in its DLL search order, so `"<dirs>;" ` (current_path == "")

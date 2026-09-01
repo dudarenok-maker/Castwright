@@ -143,6 +143,49 @@ def test_a_path_write_failure_other_than_oserror_does_not_raise(monkeypatch, tmp
     )
 
 
+def test_nvidia_root_enumeration_failure_is_logged_not_silent(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    """`nvidia_root` passes `os.path.isdir` before this function ever tries to
+    list it, so a real `OSError` from `os.listdir` (a tightened ACL, a
+    transient I/O error on a redirected profile) means the directory EXISTS
+    and could not be enumerated -- a genuine failure of this mechanism, not
+    one of the healthy no-op reasons this function also returns `[]` for.
+    Pass-3 review finding: an earlier version of this guard swallowed this
+    exact `OSError` silently, byte-identical to a healthy `[]`, reopening the
+    A28 silent-CPU-fallback bug for this specific failure mode. The `caplog`
+    assertion (not just `added == []`) proves the warning branch was actually
+    reached, mirroring `test_a_path_write_failure_other_than_oserror_does_not_raise`."""
+    site_packages = tmp_path / "site-packages"
+    (site_packages / "nvidia").mkdir(parents=True)
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", _fake_onnxruntime_at(site_packages))
+    monkeypatch.setenv("PATH", "C:\\pre-existing")
+
+    real_listdir = os.listdir
+
+    def _raising_listdir(path):
+        if os.path.basename(os.path.normpath(path)) == "nvidia":
+            raise PermissionError("[Errno 13] Permission denied")
+        return real_listdir(path)
+
+    monkeypatch.setattr(main.os, "listdir", _raising_listdir)
+
+    with caplog.at_level(logging.WARNING, logger="sidecar"):
+        added = main._add_nvidia_dll_dirs_to_path()  # must not raise
+
+    assert added == []
+    assert os.environ["PATH"] == "C:\\pre-existing", "PATH must be untouched on enumeration failure"
+    assert any(
+        r.levelno == logging.WARNING and "failed to list" in r.message
+        for r in caplog.records
+    ), (
+        "an nvidia/ enumeration failure must be logged loudly -- silently "
+        "returning the same [] as a healthy no-op reopens the exact "
+        "silent-CPU-fallback bug this function exists to close"
+    )
+
+
 def test_calling_twice_does_not_grow_path(monkeypatch, tmp_path) -> None:
     """Real regression, found running this repo's own sidecar test suite: a
     FastAPI TestClient re-triggers the lifespan (and this function) on every
@@ -165,6 +208,36 @@ def test_calling_twice_does_not_grow_path(monkeypatch, tmp_path) -> None:
     assert len(first) == 1
     assert second == [], "the directory is already on PATH -- nothing left to add"
     assert path_after_second == path_after_first, "PATH must not grow on a repeat call"
+
+
+def test_late_pre_existing_entry_still_gets_reprepended(monkeypatch, tmp_path) -> None:
+    """Pass-3 review finding: a membership-only idempotence check treats a
+    pre-existing LATE entry for the same directory as "already handled" and
+    skips re-adding it -- silently defeating the "ahead of torch" ordering
+    guarantee `install-ort.mjs` depends on (a bare-name load would still
+    resolve to whatever sits ahead of the late entry, e.g. a system CUDA
+    toolkit install). The guard must check PATH's *prefix*, not membership
+    anywhere in it: only a genuine repeat call by this exact function (the
+    candidate directories already sitting, in order, at the very front of
+    PATH) is a true no-op."""
+    site_packages = tmp_path / "site-packages"
+    cudnn_bin = site_packages / "nvidia" / "cudnn" / "bin"
+    cudnn_bin.mkdir(parents=True)
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", _fake_onnxruntime_at(site_packages))
+    # The same directory already sits LATE in PATH (behind an unrelated
+    # entry) -- not at the front, so this is not the idempotent-repeat case.
+    monkeypatch.setenv("PATH", "C:\\CUDA\\v12.4\\bin" + os.pathsep + str(cudnn_bin))
+
+    added = main._add_nvidia_dll_dirs_to_path()
+
+    assert added == [str(cudnn_bin)], (
+        "a late pre-existing entry must still be prepended, not skipped, or "
+        "the ahead-of-torch ordering guarantee is silently lost"
+    )
+    assert os.environ["PATH"].split(os.pathsep)[0] == str(cudnn_bin), (
+        "the directory must end up FIRST on PATH, not merely present"
+    )
 
 
 def test_no_nvidia_directory_is_a_harmless_noop(monkeypatch, tmp_path) -> None:

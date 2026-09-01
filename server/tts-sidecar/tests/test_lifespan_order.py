@@ -125,6 +125,55 @@ def test_a_failing_startup_handler_aborts_boot_and_skips_the_rest(monkeypatch):
     assert calls == EXPECTED_STARTUP[: EXPECTED_STARTUP.index("_start_asr_idle_watchdog") + 1]
 
 
+def test_startup_ort_cuda_preload_is_actually_wired_into_the_real_lifespan(monkeypatch):
+    """Pass-3 review finding: `_install_recorders` monkeypatches
+    `_startup_ort_cuda_preload` itself (it is a member of `EXPECTED_STARTUP`),
+    so `test_lifespan_runs_startup_then_shutdown_in_the_registered_order`
+    never actually executes that handler's body -- deleting the real call
+    site (`await _startup_ort_cuda_preload()` in `main._lifespan`) would leave
+    every test in this file green. This test leaves `_startup_ort_cuda_preload`
+    itself UNPATCHED and instead patches the two functions ITS body calls
+    (`_add_nvidia_dll_dirs_to_path`, `_preload_ort_cuda_dlls`) with recorders,
+    then drives the real lifespan and asserts both actually ran, in the order
+    the handler's own docstring says is load-bearing (the PATH prepend must
+    happen before the DLL preload)."""
+    calls: list[str] = []
+
+    def _fake_add_nvidia_dll_dirs_to_path() -> list[str]:
+        calls.append("_add_nvidia_dll_dirs_to_path")
+        return []
+
+    def _fake_preload_ort_cuda_dlls() -> str:
+        calls.append("_preload_ort_cuda_dlls")
+        return ""
+
+    monkeypatch.setattr(main, "_add_nvidia_dll_dirs_to_path", _fake_add_nvidia_dll_dirs_to_path)
+    monkeypatch.setattr(main, "_preload_ort_cuda_dlls", _fake_preload_ort_cuda_dlls)
+    # Every OTHER startup/shutdown handler is still monkeypatched to a no-op
+    # recorder so this test isn't also exercising watchdogs, device probes,
+    # etc. -- only `_startup_ort_cuda_preload` itself is left real.
+    for name in EXPECTED_STARTUP + EXPECTED_SHUTDOWN:
+        if name == "_startup_ort_cuda_preload":
+            continue
+        assert callable(getattr(main, name)), name
+        monkeypatch.setattr(main, name, _make_noop_recorder())
+
+    asyncio.run(_run_lifespan([]))
+
+    assert calls == ["_add_nvidia_dll_dirs_to_path", "_preload_ort_cuda_dlls"], (
+        "_startup_ort_cuda_preload must actually run its two real steps, in "
+        "this order, when the real lifespan executes -- if this assertion "
+        "can't be reached, the call site in main._lifespan was removed"
+    )
+
+
+def _make_noop_recorder():
+    async def _recorder() -> None:
+        return None
+
+    return _recorder
+
+
 def test_shutdown_still_runs_when_the_serving_phase_raises(monkeypatch):
     # Starlette's `_DefaultLifespan.__aexit__` ignored its exc_info and ran
     # `Router.shutdown()` unconditionally, so a lifespan task cancelled while
