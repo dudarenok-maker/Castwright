@@ -635,7 +635,7 @@ test('scrubGitEnv strips every git repository-discovery override, preserves GIT_
 });
 
 // Case-insensitivity regression for THIS file's own cleanGitEnv(), the same
-// trap scrubGitEnv() was hardened against above (#2175 review, Finding 1).
+// trap scrubGitEnv() was hardened against below (#2175 review, Finding 1).
 // cleanGitEnv() hand-rolls its own filter rather than delegating to
 // scrubGitEnv() (it must also strip GIT_INDEX_FILE, which scrubGitEnv()
 // deliberately preserves — see the #2216 note above), so it needs its own

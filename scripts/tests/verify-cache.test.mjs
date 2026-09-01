@@ -1399,20 +1399,29 @@ test('a --changed-only pass is never written to the verify-cache — only a full
 
 // --- Branch-diff scope filter (verify/CI rebalance, 2026-07-06) --------
 
+// Strip ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX (and anything
+// else GIT_-prefixed) before spawning: when this suite runs inside a real git
+// hook (pre-commit calls `npm run verify:fast:scoped` -> `npm run
+// test:hooks`), git sets these in the process env for the hook, and without
+// stripping them these fixture commands would operate on the REAL repo
+// instead of the throwaway `cwd`. Case-insensitive match: Windows preserves
+// whatever casing a var was stored under while lookup is case-insensitive,
+// and git honours a lowercase `git_dir` identically to `GIT_DIR` — a
+// destructure keyed on the canonical uppercase names alone (the pre-#2841
+// shape here) leaves a differently-cased survivor that still redirects these
+// fixture commands at the real repo. Demonstrated live: an ambient lowercase
+// `git_dir` flipped a real checkout's `core.bare` from false to true via
+// `makeGitFixture()`'s `git init` below.
+function cleanGitEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase().startsWith('GIT_')) delete env[key];
+  }
+  return env;
+}
+
 function gitAt(cwd, args) {
-  // Strip ambient GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX before
-  // spawning: when this suite runs inside a real git hook (pre-commit calls
-  // `npm run verify:fast:scoped` -> `npm run test:hooks`), git sets these in
-  // the process env for the hook, and without stripping them these fixture
-  // commands would operate on the REAL repo instead of the throwaway `cwd`.
-  const {
-    GIT_DIR: _GIT_DIR,
-    GIT_WORK_TREE: _GIT_WORK_TREE,
-    GIT_INDEX_FILE: _GIT_INDEX_FILE,
-    GIT_PREFIX: _GIT_PREFIX,
-    ...cleanEnv
-  } = process.env;
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanEnv });
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() });
   if (r.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
   }
@@ -1432,6 +1441,31 @@ function makeGitFixture() {
   gitAt(dir, ['commit', '-q', '-m', 'base']);
   return dir;
 }
+
+// #2841 review round 2 — this file's own git-env scrub was a hardcoded-
+// uppercase object destructure, the same case-sensitivity gap already fixed
+// in bump-version.test.mjs and release-body.test.mjs, but spelled
+// differently enough to survive a grep for `startsWith('GIT_')`. Mirrors
+// those files' regression test directly against the local helper.
+// Deliberately mixed-case-only: cannot pass against a destructure keyed on
+// canonical uppercase names alone.
+test('cleanGitEnv strips a git env override regardless of stored casing', () => {
+  const saved = { ...process.env };
+  try {
+    for (const key of Object.keys(process.env)) {
+      if (key.toUpperCase().startsWith('GIT_')) delete process.env[key];
+    }
+    process.env.git_dir = '/decoy/.git';
+    process.env.Git_Index_File = '/decoy/.git/index';
+
+    const cleaned = cleanGitEnv();
+    assert.equal(cleaned.git_dir, undefined);
+    assert.equal(cleaned.Git_Index_File, undefined);
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+});
 
 test('branchDiffFiles: returns files changed since branching off main', () => {
   const dir = makeGitFixture();
@@ -1581,17 +1615,10 @@ test('stagedDiffFiles: honours an ambient GIT_INDEX_FILE pointing at a temporary
   // a `git commit -a` / `git commit -- <path>` invocation, where the temp
   // index reflects the files that invocation is actually committing.
   writeFileSync(join(repoDir, 'via-temp-index.txt'), 'temp', 'utf8');
-  const {
-    GIT_DIR: _GIT_DIR,
-    GIT_WORK_TREE: _GIT_WORK_TREE,
-    GIT_INDEX_FILE: _GIT_INDEX_FILE,
-    GIT_PREFIX: _GIT_PREFIX,
-    ...cleanEnv
-  } = process.env;
   const populateTempIndex = spawnSync('git', ['add', 'via-temp-index.txt'], {
     cwd: repoDir,
     encoding: 'utf8',
-    env: { ...cleanEnv, GIT_INDEX_FILE: tempIndexPath },
+    env: { ...cleanGitEnv(), GIT_INDEX_FILE: tempIndexPath },
   });
   assert.equal(populateTempIndex.status, 0, populateTempIndex.stderr);
 
