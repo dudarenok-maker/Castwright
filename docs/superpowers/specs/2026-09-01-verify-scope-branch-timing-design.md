@@ -12,243 +12,264 @@ the branch diff touches any file in that leg's tree — the full battery,
 currently 8000+ tests for `test:server` alone, no `--changed` narrowing. On a
 box running several concurrent worktree test batteries this took 70-80
 minutes and failed three times in a row, each time on a different
-timing-sensitive lock test unrelated to the diff being pushed. Root cause of
-the failures, confirmed by rerunning the flagged tests in isolation (they
-passed clean): `server/src/workspace/file-lock.test.ts` races real
-`setTimeout` calls with thin margins (e.g. a 20ms lock-acquisition-timeout
-budget racing a 150-200ms holder) to assert ordering, and 39+ concurrent
-node/python processes on the box introduced enough scheduler jitter to
-occasionally flip that ordering.
+timing-sensitive lock test unrelated to the diff being pushed.
+`server/src/workspace/file-lock.test.ts` has confirmed-fragile pairs — a
+20ms lock-acquisition-timeout budget racing a 150-200ms holder to assert
+ordering — that are unambiguously too thin to survive real scheduler jitter,
+regardless of whether they were this specific incident's proximate cause; no
+failure log from the three runs was captured, and the repo separately
+documents fork-pool crashes (which retry the *entire* step up to 3x under
+contention, `scripts/verify-cache.mjs`'s `MAX_POOL_ATTEMPTS`) as a plausible
+independent or compounding cause of "70-80 minutes." This spec does not
+resolve which explanation is right — see Decision B for how that's handled.
 
 Four problems, addressed together because they're all "tests take too long
 or fail for reasons unrelated to the change":
 
 1. **Local volume** — pre-push runs far more tests locally than the diff
    could possibly affect, for every leg that can be diff-scoped.
-2. **Fragility** — a handful of tests assert real-wall-clock ordering with
-   margins too thin to survive this box's actual contention.
+2. **Fragility** — `file-lock.test.ts` has real-wall-clock-ordering pairs
+   with margins too thin to survive contention, independent of whether
+   they're proven to have caused this specific incident.
 3. **Cloud e2e wall-clock** — separately raised: the e2e leg (the dominant
    single cost in cloud CI) is sharded 4-way today and can be sharded further.
 4. **GPU/hardware coverage must not quietly ride along** — none of the above
-   may be read as "CI now covers everything," because CI never has and still
-   won't run anything GPU/hardware-dependent.
+   may be read as "CI now covers everything"; CI never has and still won't
+   run anything GPU/hardware-dependent.
 
-## Prior art this builds on, and what pass-1 review found wrong about it
+## Prior art, and two rounds of adversarial review
 
 PR #2839 (merged, `main@75a86ed8`) added `--changed HEAD`-based narrowing to
 **pre-commit** (`--scope-staged`) for the `test`/`test:server` legs, gated by
 a positive allowlist (`diffSafeForChangedOnly`, `scripts/verify-cache.mjs`)
 requiring every file in the diff sit under the step's own primary source root
-(`src/**`, `server/src/**`) with a safe TS/JS extension — any diff outside
-that (config, CSS, docs, mixed scope) falls back to a full run. It did **not**
-extend the same substitution to `--scope-branch` (pre-push).
+(`src/**`, `server/src/**`) with a safe TS/JS extension. It did not extend
+the substitution to `--scope-branch` (pre-push).
 
-Cloud CI (`.github/workflows/verify.yml`) already narrows on every PR push:
-`npx vitest run --changed "$BASE"` for `test`/`test:server`/
-`test:server-slow`, falling back to an unscoped `vitest run` only when the
-diff hits `shared` scope (root manifest/lockfile). **A draft of this spec
-claimed CI's narrowing meant CI could serve as "the authoritative full-suite
-gate" once pre-push stopped being one — an adversarial review pass (Opus)
-caught that this contradicts itself and, more importantly, contradicts
-CLAUDE.md's actual documented invariant**: pre-push's unscoped run is
-currently the *only* full-suite gate before merge, precisely because CI
-already narrows. Retiring it without anything replacing its guarantee is a
-real coverage regression, not a wash — and the review found a second,
-independent problem: CI's own narrowing has no `diffSafeForChangedOnly`-style
-allowlist, so it carries the identical "diff touches this step but
-`--changed`'s dependency graph can't reach it" hazard PR #2839 hardened
-against locally. That gap was tolerable while pre-push's full run backstopped
-it; it stops being tolerable the moment CI becomes the only full-suite gate
-left.
+This spec went through two independent Opus review rounds before this
+version. Both found real defects; the second round additionally **measured**
+the design's core premise against this repo's actual git history rather than
+asserting it, and that measurement changed the design materially. Summary,
+because the reasoning matters for what shipped:
 
-**Resolution (owner decision, this round):** accept that no unscoped
-`test`/`test:server` run gates merge day-to-day once this ships — the
-twice-weekly `cross-os.yml` cron and `release.yml`'s full `npm run verify`
-remain the periodic backstops for the residual "reached by a non-import edge"
-class — **on the condition that CI's own `--changed` narrowing gets the same
-`diffSafeForChangedOnly` allowlist protection local narrowing has**, so the
-gate CI is now solely responsible for is exactly as safe as the one it
-replaces, just relocated. This is Decision A's second half, not a separate
-follow-up.
-
-The review pass also caught that the originally-proposed invocation mechanism
-for branch-scope narrowing doesn't work at all (see Decision A below), that
-two of the three "same-shape" test files named for Decision B don't actually
-share the fragile pattern, that the proposed 10x-margin-ratio heuristic
-optimizes the wrong quantity, and several stale counts. All incorporated
-below; none of the numbers or file lists in this version are carried over
-unverified from the draft.
+- **Round 1** found the originally-proposed invocation
+  (`npm run test:server -- --changed <sha>`) doesn't work — `test:server` is
+  `npm --prefix server run test`, a *nested* npm call, so the outer `--`
+  never reaches the inner vitest; the SHA lands as a positional filename
+  filter and the run fails with "No test files found." Fixed below by
+  bypassing npm-script indirection and spawning the underlying command
+  directly, the same shape CI's own step already uses.
+- **Round 2 measured** `diffSafeForChangedOnly`'s real-world hit rate: **0 of
+  the last 60 merged branches, 1 of 1360 real push-states**, because
+  CLAUDE.md's own Before-shipping checklist mandates a
+  `docs/release-notes-next.md`/plan-doc touch on nearly every non-trivial PR,
+  which disqualifies the whole branch under the original allowlist. Owner
+  decision: widen the allowlist to also tolerate `docs/**` and
+  `RELEASE_NOTES.md` alongside real source changes — verified safe (grepped
+  the whole repo for any `test`/`test:server`-scoped file reading a `docs/`
+  path at runtime; the one hit, `scripts/tests/release-notes-gate.test.mjs`,
+  lives under a different step entirely and is unaffected) — then
+  **re-measured**: 0/60 → 3/60 (5%) for `test:server`. Real, but modest — the
+  remaining disqualifying files in the same 60 branches (`server/tts-sidecar/
+  main.py`, `openapi.yaml`+`api-types.ts` co-changes, cross-cutting
+  `scripts/**`) are files that *should* disqualify narrowing, not artifacts
+  of an overly strict allowlist, so this isn't pushed further.
+- That measurement changes the shape of the whole spec: since local narrowing
+  fires on only ~5% of real branches, pre-push keeps running the **full**
+  suite on the other ~95%, same as today. The coverage exposure from giving
+  up pre-push's blanket full-run guarantee is therefore small and bounded,
+  not the wholesale policy reversal an earlier draft treated it as — which
+  in turn means the earlier plan to force CI's own narrowing onto the same
+  *strict* allowlist (so CI could serve as full replacement backstop) is the
+  wrong fix: CI's current narrowing is looser (governed only by `shared`
+  scope) and already works in production on far more PRs than 5%; forcing it
+  onto the strict allowlist would regress CI's own performance to chase a
+  now-small residual risk. **Dropped.** In its place: round 2 also surfaced a
+  real, small, pre-existing CI bug independent of this whole allowlist
+  question — see Decision A2.
 
 ## Decision
 
-### A — extend `--changed` narrowing to `--scope-branch`, and give CI's own narrowing the same safety allowlist
+### A1 — extend `--changed` narrowing to `--scope-branch`, with a widened allowlist
 
-**A1 — pre-push.** Widen the existing substitution gate in `runPipeline`
-(`scripts/verify-cache.mjs`, currently `flags.scopeStaged && !scopeShared &&
-scopeDiff !== null && diffSafeForChangedOnly(step, scopeDiff)`) to also fire
-under `flags.scopeBranch`, for both `CHANGED_ONLY_NPM_SCRIPT` entries — `test`
-(frontend) and `test:server`. The allowlist itself needs no change: any diff
-outside `src/**`/`server/src/**` with a safe extension still runs the full
-suite locally on either scoping path. Reviewer's question worth stating
-plainly: this narrowing only fires when the *entire* branch diff since
-merge-base sits under one safe root — a branch that also touches a config
-file, doc, or crosses both `src/` and `server/src/` still gets the full local
-run, same as today. That's expected, not a bug; the volume win applies to the
-(common, not universal) case of a branch confined to one tree.
+Widen the substitution gate in `runPipeline` (`scripts/verify-cache.mjs`,
+currently `flags.scopeStaged && !scopeShared && scopeDiff !== null &&
+diffSafeForChangedOnly(step, scopeDiff)`) to also fire under
+`flags.scopeBranch`, for both `CHANGED_ONLY_NPM_SCRIPT` entries — `test`
+(frontend) and `test:server`.
+
+**`diffSafeForChangedOnly` gets a second allowed category.** Alongside the
+existing "every file under the step's own source root with a safe
+extension" rule, a file matching `docs/**` or the root `RELEASE_NOTES.md` is
+also allowed, unconditionally, on either scoping path (staged or branch) —
+confirmed by measurement to raise the real-world hit rate (0/60 → 3/60 for
+`test:server` over the last 60 merged branches) and confirmed safe by a
+repo-wide grep: no file under `src/**` or `server/src/**`'s own test suites
+reads anything under `docs/` at runtime. (The one file in the repo that does,
+`scripts/tests/release-notes-gate.test.mjs`, belongs to `test:hooks`, a
+different step this substitution never touches.) At least one file in the
+diff must still be a real, safe-extension source file under the step's own
+root — an all-docs diff never reaches this function, because
+`stepTouchedByDiff` already filters the step out of scope entirely upstream.
 
 **Base SHA, not `HEAD`.** The staged-scope substitution reuses the static
 npm scripts `test:changed`/`test:server:changed` (`vitest run --changed
 HEAD`), correct there because pre-commit's diff is uncommitted changes vs.
 `HEAD`. At push time everything is committed, so `--changed HEAD` would
 select nothing. Branch scope instead needs `--changed
-<merge-base-with-main>`, mirroring CI's own `$BASE`. `branchDiffFiles`
-(`scripts/verify-cache.mjs`) already computes this merge-base internally
-(one `git merge-base` spawn, then one `git diff` spawn) to produce its file
-list; it's refactored to also return that SHA so `runPipeline` reuses the
-exact one already used to decide scope, rather than a second,
-independently-timed `git merge-base` call — this doesn't reduce today's git
-spawn count (still two), it just avoids adding a third.
+<merge-base-with-main>`, the same shape CI's own `$BASE` uses (not the exact
+same SHA — CI diffs against the fetched PR base, `branchDiffFiles` diffs
+against local `main`; direction is fail-safe, a stale local `main` only
+widens the diff and makes narrowing less likely, never silently more).
+`branchDiffFiles` (`scripts/verify-cache.mjs`) already computes this
+merge-base internally (one `git merge-base` spawn, then one `git diff` spawn)
+to produce its file list; it's refactored to also return that SHA so
+`runPipeline` reuses the one already used to decide scope. Its existing
+callers/contract (it's independently exported and unit-tested) are preserved
+— the return shape gains the SHA, doesn't lose the file list.
 
-**Invocation — corrected.** The draft proposed `npm run test:server --
---changed <sha>`, assuming npm forwards `--changed` into the underlying
-vitest call. **It doesn't, on this leg**: `test:server` is `npm --prefix
-server run test` — a *nested* npm invocation — so the outer `--` is consumed
-by the *outer* npm and never reaches the inner one; the SHA lands as a bare
-positional argument to `vitest run`, which then tries to match it as a
-filename filter and exits 1 with "No test files found." (Verified against
-this repo's actual `package.json`/`server/package.json` scripts, not assumed.)
-The frontend `test` script has no such nesting and the naive form would have
-worked for it alone — which is exactly the kind of asymmetry that's easy to
-miss if only one leg gets manually tried. Fix: bypass the npm-script
-indirection for the branch-scope path entirely and spawn the underlying
-command directly, the same shape CI's own step already runs successfully —
-`npx vitest run --changed <sha>` with `cwd` set to the step's own directory
-(`server/` for `test:server`, repo root for `test`). `runStepProcess` gains a
-`directInvocation` mode alongside the existing npm-script mode so
-`retryKey`/pool-crash-retry logic (keyed on `step.name`, unaffected by which
-invocation shape ran) stays untouched.
+**Working-tree vs. committed diff.** `vitest --changed <sha>` diffs against
+the *working tree*, not just `HEAD`. `branchDiffFiles`'s scope decision is
+based on committed changes only. Pre-push does not require a clean tree, so
+an uncommitted edit outside the allowlist (e.g. to `server/vitest.config.ts`)
+would be invisible to the allowlist check but present in vitest's actual
+selection — reopening the exact "diff touches this step but isn't
+`--changed`-reachable" hazard the allowlist exists to close. Fixed by
+checking `git status --porcelain` for the step's own tree alongside the
+committed diff before allowing substitution; a dirty tree in scope forces the
+full run, same conservative default as everywhere else in this design.
+
+**Invocation — bypasses npm-script nesting.** `runStepProcess` gains a
+direct-invocation mode: spawn `npx vitest run --changed <sha>` with `cwd` set
+to the step's own directory (`server/` for `test:server`, repo root for
+`test`), pinned to the local binary (`<cwd>/node_modules/.bin/vitest`,
+falling back to `npx` only if that path doesn't exist) rather than bare
+`npx vitest`, so a missing/un-junctioned `node_modules` fails loudly with
+"vitest not found" as documented, instead of `npx` silently resolving a
+different version from the registry. `retryKey` stays `step.name`, so the
+existing fork-pool-crash retry logic (keyed on `step.name`, not on which
+invocation shape ran) is untouched.
+
+**The server suite's `pretest` preflight must not be silently dropped.**
+`server/package.json` runs `node ../scripts/preflight-ffmpeg.cjs` as
+`pretest`/`pretest:changed` before every existing `test:server` invocation
+path. Bypassing the npm-script wrapper for direct invocation would silently
+skip it. The direct-invocation path runs the same preflight script itself,
+first, before spawning vitest — same check, same failure shape, just called
+directly instead of via npm's lifecycle-script convention.
 
 **Cache-write gate.** Unchanged in shape: a `--changed`-only pass (staged or
 branch) is never written to the verify-cache; only a full run is.
 
-**A2 — CI's own `--changed` gets the allowlist too.** `scripts/ci-scope.mjs`
-today emits one boolean per step (`step_test_server`, etc. — "does this leg's
-scope intersect the diff at all") via `stepTouchedByDiff`, consumed by
-`verify.yml`'s `if:` conditions to decide whether a job step *runs*; the
-`--changed "$BASE"` vs. full-`vitest run` choice *inside* an in-scope step is
-then hardcoded inline in the workflow YAML, keyed only on `shared`. Add a
-second boolean per changed-only-eligible step —
-`step_test_server_changed_safe: diffSafeForChangedOnly(testServerStep,
-files)`, `step_test_changed_safe` likewise — computed in `ci-scope.mjs` from
-the same `files` list already diffed against the PR base, using the same
-exported `diffSafeForChangedOnly` function Decision A1 uses locally (single
-source of truth, no duplicated logic). `verify.yml`'s `test`/`test:server`
-step bodies gain a third branch: `shared` → full run (unchanged); else
-`changed_safe` → `--changed "$BASE"` (unchanged shape, now gated); else → full
-run (new — today this case silently narrows). `workflow_dispatch` and the
-`ci-scope.mjs` crash fail-safe already default every scope boolean to `true`,
-which correctly forces the full-run branch here too (a `true` scope with an
-unset/`undefined` `changed_safe` boolean must read as "not safe" — verified
-by how the new field composes with the existing `allTrue()`/fail-safe paths,
-pinned by a test rather than inspection alone).
+### A2 — fix CI's `shared`-scope diffs actually forcing a full run (found in passing)
 
-**Docs.** CLAUDE.md's Commit gate section and `docs/features/
-156-precommit-scope-contention.md` currently state, as a decision, that
-pre-push's unscoped run is deliberately the full local safety net *because*
-CI narrows its own runs (plan 156's own acceptance item: "Pre-push runs the
-full battery; only pre-commit is scope-filtered"). That decision is reversed,
-not reframed — plan 156 gets a dated addendum recording the reversal and its
-reasoning (the same treatment its 2026-09-01 addendum from PR #2839 already
-used), and its acceptance criteria are updated to match, not left stale next
-to contradicting prose. Replacement invariant, stated plainly: local runs
-(pre-commit and pre-push) narrow via `--changed` whenever the diff is
-confined to source; CI's own narrowing now carries the identical allowlist
-protection (A2); the twice-weekly cross-OS cron and release-time full
-`verify` are the periodic backstops for the narrow residual class no
-`--changed`-based mechanism can close by construction (a source-only diff
-that reaches a test through a non-import runtime edge). **None of this
-extends to GPU/hardware-dependent testing** — `test:golden-audio` and any
-weights-gated `test:sidecar` case were never run in CI (GitHub-hosted runners
-have no GPU) and are unaffected by any of A1/A2; they remain opt-in, run
-locally on demand via their existing flags, exactly as documented today. This
-line is added explicitly to CLAUDE.md's Commit gate section so "CI is now the
-full-suite gate" can't be misread as "CI covers hardware-dependent behavior
-too" — it never did.
+Not a new mechanism — a pre-existing bug, unrelated to A1's allowlist,
+surfaced while reading `verify.yml` for this spec. `verify.yml`'s `test`/
+`test:server` step bodies decide narrowed-vs-full only on whether `$BASE` is
+set (`if [ -n "$BASE" ]; then --changed; else full; fi` — `$BASE` is only
+empty on `workflow_dispatch`). The `shared` scope boolean
+(`needs.detect.outputs.scopes.shared`, from `computeShared` — true for a
+root-manifest/lockfile/`.github/actions/**` change) controls whether the
+**job step runs at all**, but never reaches this narrowed-vs-full choice
+**inside** the step body — so a `shared`-scope PR (e.g. touching only
+`server/package-lock.json`) still runs `--changed "$BASE"`, and neither
+`package-lock.json` nor `.github/actions/**` appears in
+`server/vitest.config.ts`'s `forceRerunTriggers`, so that `--changed` call
+can select zero tests and report green. Fix: thread the same `shared`
+boolean already available in `needs.detect.outputs.scopes` into the step
+body's condition — `shared` (or an empty `$BASE`) → full run; otherwise
+`--changed "$BASE"`, unchanged from today. One conditional per affected step
+(`test`, `test:server`/`test:server-slow`'s shared body). This is a defect
+fix with one correct outcome, not a design decision, so it's fixed here
+rather than filed.
 
-### B — widen the real-timer margins that made this fail
+### B — widen `file-lock.test.ts`'s confirmed-thin margins, as a no-regret hardening
 
-`quarantinedIt` (`server/src/test-utils/quarantine.ts`) skips in **both**
-gating lanes — local and CI. Wrong tool: these tests are correct and pass
-reliably in isolation, so quarantining would silently drop real coverage from
-CI forever to solve a problem that's purely about this box's local
-contention. Fix the fragility instead.
+Not claimed to be proven-confirmed as this specific incident's root cause —
+no failure log from the three runs was captured, and the repo separately
+documents fork-pool crashes retrying the whole step up to 3x under
+contention (`MAX_POOL_ATTEMPTS`) as a plausible independent or compounding
+cause that this fix does not touch. Shipped anyway because the fragility is
+real and unambiguous on its own terms, independent of whether it explains
+this incident.
 
-**Scope — corrected.** `server/src/workspace/file-lock.test.ts` is the only
-confirmed instance: several tests in its two `{ retry: 0 }` `describe` blocks
-race a short lock-acquisition-timeout budget (20ms) against a longer holder
-(30-200ms) to assert relative ordering. **The draft also named
-`cast-lock.test.ts` and `server/src/tts/design-lock.test.ts` as same-shape
-siblings; review read both in full and found neither shares the pattern** —
-`cast-lock.test.ts`'s timers are failure sentinels (a 2000ms/1000ms ceiling
-racing critical sections that finish in ~0ms, three orders of magnitude of
-headroom, the opposite of thin) and its 2000ms sentinel is *deliberately*
-calibrated to fire well before the production `withKeyLock` 10s budget — its
-own comment says so; `design-lock.test.ts` orders exclusively via explicit
-promise gates, not competing timers, and doesn't call `withKeyLock` at all
-(`design-lock.ts` has its own separate lock map). **Both are dropped from
-this fix's scope entirely** — touching either would violate "Surgical
-changes," and mechanically widening `cast-lock.test.ts`'s sentinel past the
-production 10s budget it's deliberately calibrated under would change what
-failure mode the test actually observes.
+**Scope, corrected to the three tests that actually race.**
+`server/src/workspace/file-lock.test.ts`'s `withKeyLock acquisition timeout
+(#2260)` `describe` block (`{ retry: 0 }`) has five tests; only three
+actually race a short timeout against a real, finishing holder:
 
-**The fix is an absolute-margin floor, not a ratio.** The draft's "~10x
-headroom" framing is wrong on its own evidence: the existing 20ms-vs-200ms
-pair is already a 10x ratio and it's one of the ones that flaked, while a
-20ms-vs-30ms pair (a 1.5x ratio, comfortably passing in the same file today
-because nothing times out on that path) shows ratio isn't the load-bearing
-quantity — the *absolute* gap between "when the short timer fires" and "when
-the long one finishes" is what has to survive scheduler jitter. Target: widen
-each racing pair so the absolute gap is at least ~500ms (this box's observed
-contention window under 39+ concurrent processes gave no precise jitter
-figure, so 500ms is a deliberately generous floor, not a measured one) —
-e.g. a 20ms timeout racing a 150ms holder becomes something like a 50ms
-timeout racing a 600ms+ holder. Tuned per test during implementation; each
-widened pair gets a short comment recording the new absolute gap and that
-it's deliberate, matching this file's existing comment-heavy convention.
+- `'does not poison the key after a timeout...'` — 20ms waiter budget vs.
+  150ms holder.
+- `'does not let a later caller barge past a still-running holder...'` —
+  20ms vs. 200ms holder.
+- `'leaves exactly one chains entry after a timeout...'` — 20ms vs. 150ms
+  holder.
 
-**Search predicate for "did we miss another instance," corrected.** Not "any
-competing real `setTimeout`" (a repo-wide grep on that shape returns 141
-occurrences across 52 files, mostly plain "wait long enough" delays with no
-race and no jitter sensitivity). The predicate that actually explains why
-this file's failures were *visible* rather than silently rescued is
-**"competing real timers asserting ordering, inside a `{ retry: 0 }` block"**
-— vitest's suite-wide `retry: 1` (`#2028`'s documented reason `file-lock.
-test.ts` itself opts out of it) would otherwise absorb a one-off jitter flake
-silently. If implementation finds another file matching that narrower
-predicate, it's fixed in the same round per CLAUDE.md's incidental-findings
-rule; a file with the broader "has a setTimeout" shape but ordinary retry
-semantics is not in scope.
+The other two in the same block are **not** touched: `'throws instead of
+hanging when acquisition deadlocks...'` and the `withKeyLock typed timeout
+error` block's test race a 20/50ms timeout against a holder that **never
+releases** — there's no finishing-holder deadline to jitter past, so no
+amount of contention flips their outcome, and the typed-error test asserts
+the literal constant (`timeoutMs).toBe(20)`, message `'timed out after
+20ms'`) that a mechanical margin-widening pass would otherwise break.
+`'does not fire for legitimate contention comfortably under budget'` (20ms
+hold vs. 500ms budget) already has enough headroom and isn't touched either.
 
-**What this does not do.** No switch to `vi.useFakeTimers()`. Higher blast
-radius than this incident calls for; worth revisiting only if margin-widening
-turns out not to hold up.
+`cast-lock.test.ts` and `design-lock.test.ts` were considered in an earlier
+draft and dropped after being read in full: neither races two competing real
+timers for an ordering assertion. `cast-lock.test.ts`'s timers are failure
+sentinels (a 2000ms/1000ms ceiling racing critical sections that finish in
+~0ms — three orders of magnitude of headroom, the opposite of thin) and its
+2000ms sentinel is deliberately calibrated, by its own comment, to fire
+before the production `withKeyLock` 10s budget; widening it would falsify
+that relationship. `design-lock.test.ts` orders via explicit promise gates
+against its own separate lock map (`design-lock.ts`, not `withKeyLock`) — its
+few `setTimeout` uses are 5ms macrotask-flush ticks, not races. Neither is
+touched.
+
+**Fix is an absolute-gap floor, not a ratio.** A 20ms-vs-200ms pair is
+already a 10x ratio and it's one of the three that's fragile — ratio isn't
+the load-bearing quantity, the *absolute* gap between "when the short timer
+could plausibly fire under jitter" and "when the long one finishes" is.
+Target ≥500ms of absolute gap for each of the three pairs (a deliberately
+generous floor — this box's actual jitter under the reported 39+-process
+contention was never measured, so it's chosen with margin rather than
+tightly calibrated), e.g. 20ms→50ms budget racing 150ms→700ms holder. Total
+added wall-clock to the file: roughly +1.5s across the three widened
+`await`s, serial, negligible.
+
+**Search for other instances — corrected to the predicate that actually
+explains why this file's failures were visible.** Not "any competing real
+`setTimeout`" (141 occurrences across 52 files repo-wide, almost all plain
+"wait long enough" delays with no race). The reason these three tests'
+failures would surface as loud, specific red rather than being silently
+absorbed is that their `describe` block opts out of the suite-wide `retry: 1`
+(`{ retry: 0 }`, `#2028`'s documented reason: this file's module-level
+`chains` state must never be silently rescued by a retry). The repo already
+has the right instrument for finding this class rather than a fresh manual
+grep: `server/vitest.config.ts`'s `retryHazardReporter` flags exactly the
+"passed only because the suite-wide retry rescued it" case, and the file
+records a prior `--retry=0` survey having been run across the suite. Rerun
+that survey (or read its most recent output if still current) as part of
+implementation to enumerate any other genuinely-masked-by-retry timing races,
+rather than trusting a narrower manual grep to be exhaustive. Anything it
+turns up in this same fragile-race shape is fixed in the same round per
+CLAUDE.md's incidental-findings rule.
+
+**What this does not do.** No switch to `vi.useFakeTimers()` — higher blast
+radius than this fix calls for.
 
 ### C — `test:sidecar` (pytest): investigated, deliberately out of scope
 
-Considered for the same narrowing since it's the third locally-gating test
-leg. Sized it first: `server/tts-sidecar/tests/` has **1120** `test_*`
-functions across **83** files — an order of magnitude smaller than
-`test:server`'s 8000+, and the CI-gating tier is CPU-only/mocked (SKIPs+exits
-0 on an unbootstrapped venv per CLAUDE.md), so it isn't the leg producing
-70-80 minute runs or the lock-timing failures this incident is about. Unlike
+`server/tts-sidecar/tests/` has **1136** `test_`-prefixed functions (`def
+test_`/`async def test_`) across **83** files — an order of magnitude
+smaller than `test:server`'s 8000+, and the CI-gating tier is
+CPU-only/mocked, so it isn't the leg producing 70-80 minute runs. Unlike
 vitest, pytest has no built-in `--changed`-equivalent; the closest analogues
-(`pytest-testmon`, `pytest-picked`) are new dependencies with their own
-correctness model, meriting their own evaluation rather than a small
-extension of this spec's vitest-specific mechanism. Left for a future round
-if `test:sidecar` itself ever becomes the bottleneck. This decision is
-unrelated to, and doesn't affect, the GPU/hardware carve-out in Decision A's
-Docs subsection — sidecar's weights-gated tests were already opt-in before
-this spec and stay that way regardless of C's outcome.
+(`pytest-testmon`, `pytest-picked`) are new dependencies meriting their own
+evaluation. Left for a future round if `test:sidecar` itself ever becomes the
+bottleneck. Unrelated to, and doesn't affect, the GPU/hardware carve-out
+below — sidecar's weights-gated tests were already opt-in before this spec.
 
 ### D — increase cloud e2e sharding
 
@@ -256,65 +277,72 @@ this spec and stay that way regardless of C's outcome.
 (`matrix.shard: [1, 2, 3, 4]`, `--shard=${{ matrix.shard }}/4`), cutting a
 ~16 min unsharded run to ~4 min/shard. Raise it to **8-way**: matrix array →
 `[1, 2, 3, 4, 5, 6, 7, 8]`, both `--shard=N/4` references (the `test:e2e`
-step only — `test:e2e:visual` in the neighboring job isn't sharded today and
-stays that way, out of scope) → `/8`, job name label → `/8`. Standard
-GitHub-hosted runners are free/uncapped for this public repo, so the real
-constraint is fixed per-shard cost that doesn't shrink with more shards —
-**corrected from the draft**, that cost isn't just checkout/setup/Playwright
-cache: `playwright.config.ts`'s `chromium` project depends on a `warmup`
-project (the Vite transform-cache warm-up in `e2e/warmup.setup.ts`), and
+step only — `test:e2e:visual` isn't sharded today and stays that way) → `/8`,
+job name label → `/8`. Standard GitHub-hosted runners are free/uncapped for
+this public repo, so the real constraint is fixed per-shard cost that
+doesn't shrink with more shards: `playwright.config.ts`'s `chromium` project
+depends on the `warmup` project (Vite transform-cache warm-up), and
 `webServer.reuseExistingServer: !CI` means every shard boots its own Vite dev
-server — both run once per shard and double when shards double. Spec count
-corrected too: `e2e/**/*.spec.ts` is **137** files, not ~110, so 8-way is
-~17/shard, not ~14. 8-way is still a reasonable stopping point before
-per-shard fixed cost dominates, but the exact number is a tuning call to
-confirm with a real timing comparison during implementation, the same method
-the existing 4-way split's own comment cites — not something pinned exactly
-here.
+server — both run once per shard and double when shards double. `e2e/**/
+*.spec.ts` is **137** files (not the ~110 the job's own 2026-07-10 comment
+cites), so 8-way lands at ~17/shard. **Also fixed in the same diff**: two
+further prose comments in `verify.yml` (the job's rationale block, and its
+own header comment) that repeat both the stale `4`-way figure and the stale
+`~110 spec files` count — a comment the change makes false is a chore this
+repo's own rules already say is owed, not a separate follow-up. 8-way is a
+reasonable stopping point before fixed per-shard cost dominates; exact number
+confirmed with a real timing comparison during implementation, the same
+method the original 4-way split's comment cites.
 
 ## Testing
 
 - `scripts/tests/verify-cache.test.mjs`: source-regex cases (mirroring
-  PR #2839's staged-scope tests) pinning the widened gate condition and the
-  cache-write exclusion for branch-scope changed-only passes. **Additionally
-  — the review's strongest finding was that source-regex tests can't catch a
-  broken invocation, only a missing one**: add at least one test that
-  actually spawns the new direct-invocation path (`npx vitest run --changed
-  <sha>` with `cwd` set appropriately) against a disposable fixture — enough
-  to prove the command as constructed actually forwards `--changed` and
-  actually selects a subset, not just that the source text mentions the right
-  strings. This is new territory for this file's existing "no process
-  execution" convention and is called out explicitly rather than silently
-  matching the old style.
-- `scripts/ci-scope.mjs`'s existing test file: cases for the new
-  `*_changed_safe` fields — safe diff, diff outside the allowlist, empty
-  diff, and `workflow_dispatch`/fail-safe paths (must read as "not safe",
-  pinned directly rather than inferred).
-- `server/src/workspace/file-lock.test.ts`: no new test cases — existing
-  assertions unchanged, only the millisecond constants widen, each with a
-  comment recording the new absolute gap.
+  PR #2839's staged-scope tests) for the widened gate condition, the
+  `docs/**`/`RELEASE_NOTES.md` allowlist addition, the dirty-working-tree
+  check, and the cache-write exclusion for branch-scope changed-only passes.
+  **Additionally** — a source-regex test can't catch a broken invocation,
+  only a missing one (round 1's finding) — add a test that actually spawns
+  the new direct-invocation path against a small disposable fixture repo (not
+  this repo's own tree, to avoid the spawned vitest itself tripping
+  `detectSiblingContention`'s process-count probe if this test ever ran
+  inside a `test:hooks`-style pre-commit leg) confirming it forwards
+  `--changed` correctly and actually narrows the selection.
+- `.github/workflows/verify.yml`'s A2 fix: no unit test (workflow YAML) —
+  verified by a manual `gh workflow run verify.yml --ref <branch>` dispatch
+  against a deliberately root-lockfile-only diff, confirming the full suite
+  runs rather than a narrowed `--changed` pass.
+- `server/src/workspace/file-lock.test.ts`: no new test cases for the three
+  widened pairs — existing assertions unchanged, only the millisecond
+  constants widen, each with a short comment recording the new absolute gap.
 - Manual: run the new direct-invocation command for both `test` and
-  `test:server` against a real narrow branch locally, confirm each selects a
+  `test:server` against a real narrow branch locally, confirm it selects a
   proper subset and exits nonzero on a genuine failure.
-- `.github/workflows/verify.yml`'s e2e shard change and the A2 `changed_safe`
-  branching: no unit test for the workflow YAML itself — verified by a
-  manual `gh workflow run verify.yml --ref <branch>` dispatch, reading the
-  job list (8 shard jobs, each completing) and confirming a
-  known-`changed_safe`-diff PR actually took the narrowed path in the logs.
+- `.github/workflows/verify.yml`'s e2e shard change: verified by a manual
+  `gh workflow run` dispatch, confirming 8 shard jobs appear and complete.
 
 ## Out of scope
 
 - Auditing all 141 `setTimeout`-in-server-test occurrences for margin safety
-  — only the confirmed lock-ordering-race-under-`retry:0` shape is in scope.
+  — only the three confirmed fragile-race-under-`retry:0` pairs are in
+  scope; the rest is covered by rerunning the repo's own `retryHazardReporter`
+  survey instead of a fresh manual sweep.
 - Any change to the production `withKeyLock`/`file-lock.ts` timeout values —
   test-fragility fix, not a behavior change.
 - `cast-lock.test.ts`, `design-lock.test.ts` — confirmed not to share the
   fragile shape; not touched.
-- Extending the `--changed`-substitution *mechanism* to any step besides
-  `test`/`test:server` (local or CI) — `test:sidecar` evaluated and
-  deliberately deferred, see Decision C.
+- Forcing CI's own `--changed` narrowing onto the strict
+  `diffSafeForChangedOnly` allowlist (the original Decision A2) — dropped
+  after measurement showed it would regress CI's current, looser, working
+  narrowing far more than the ~5%-hit-rate local change's residual risk
+  justifies. `test:server-slow`'s CI narrowing is likewise unchanged.
+- Extending the `--changed`-substitution mechanism to any step besides
+  `test`/`test:server` — `test:sidecar` evaluated and deliberately deferred,
+  see Decision C.
 - Sharding `test:e2e:visual`, or changing its `--workers=1` anti-flake
   constraint.
 - Any change to GPU/hardware-dependent test tooling (`test:golden-audio`,
-  weights-gated sidecar tests, the on-box acceptance register) — explicitly
-  unaffected, see Decision A's Docs subsection.
+  weights-gated sidecar tests, the on-box acceptance register) — never ran in
+  CI, unaffected by anything in this spec, stays local-only.
+- Determining, retroactively, which mechanism (timing fragility vs. fork-pool
+  crash retries) actually caused the reported three-failure incident — no
+  log was captured; Decision B ships as a no-regret hardening regardless.
