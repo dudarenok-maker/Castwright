@@ -431,6 +431,20 @@ setup rather than repeatedly loading and evicting models.
 > available **to this run**," never "does not exist" — leave the actual
 > existence question to whoever runs from an environment that can see it.
 
+> **Currently outstanding, 2026-09-01: the ROCm/AMD row below (`#2813`, PR
+> #2835) is committed here and in the live-view `.html` but not yet on the
+> published page.** Checking the live page at merge time found it already
+> carrying a different in-flight lane's unpublished-elsewhere content (a
+> "wave 10" set of changes, 65 owed vs. this repo's 66) — `origin/main` didn't
+> have that content either, so it was a pre-merge publish from an unmerged
+> branch, not a stale fetch. Publishing over it would have discarded that
+> lane's work per the "residual hazard" section above, so it was deliberately
+> deferred rather than forced. The PR body and issue #2813 also note this, but
+> both stop being actively read once the issue closes — this line is the
+> durable pointer. **Whoever next runs the four-step publish procedure above
+> clears this note along with the debt: reconcile against whatever is live at
+> that point, publish, then delete this paragraph.**
+
 ---
 
 ## At a glance
@@ -444,14 +458,39 @@ setup rather than repeatedly loading and evicting models.
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
-| — | **Blocked** (hardware absent) | 5 |
+| — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
 **66 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-30, no count change.** Row **A24**'s run note (2026-08-26,
+> **Last change: 2026-09-01, 66 owed (no change) — Blocked 5 → 6.** Added a new
+> Blocked-section row, **ROCm/AMD admitted device-key normalisation — real GPU
+> engine load, pinned/resident, and idle-eviction**
+> ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), PR
+> [#2835](https://github.com/dudarenok-maker/Castwright/pull/2835)): the
+> VRAM-ledger admission layer hands engines a `"rocm:N"` device key on a
+> ROCm/AMD box that no torch/CTranslate2/speechbrain call understands;
+> separately an operator's config-validated `"cuda:N"` pin (or a resident
+> engine's own device string) could never match that same ledger's own
+> `"rocm:N"`-keyed candidates; and separately again, the idle-eviction
+> ladder's own card-comparison (`_same_card`) required `"cuda"` on both
+> sides it compares, so it could never match a probe-native `"rocm:N"`
+> target either — three seams, all fixed (`_normalise_rocm_device_key`
+> forward, `_report_rocm_device_key` reverse, both reused at `_same_card`
+> too) across `_resolve_torch_device`, `_ct2_kwargs`, `_spk_run_device`,
+> `WhisperEngine._ensure_loaded`, `SpeakerEngine.ensure_loaded`,
+> `_engine_env_pin`, `_is_resident`, and `_same_card` — but unprovable on
+> this box (dual-NVIDIA, no ROCm hardware), so it lands Blocked rather than
+> Group A. The pinned-device half was found and fixed in the same PR's own
+> `pr-review-gate` pass 1, and the idle-eviction half in pass 2, which is
+> also why the row's title and body were widened twice after first being
+> added (originally covered only the unpinned crash). **66 owed** is
+> unaffected — Blocked/Unconfirmed rows are excluded from that arithmetic
+> by design (see the group table above).
+>
+> **Prior change: 2026-08-30, no count change.** Row **A24**'s run note (2026-08-26,
 > below) filed [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678) as a
 > design decision owed: should the capacity-admission layer make a Base render wait for
 > a resident VoiceDesign, or evict it? PR
@@ -5068,6 +5107,59 @@ so there is no way to put a genuinely-below-floor ffmpeg on `PATH` here.
 **3. What would change that.** A box or container where ffmpeg can be
 downgraded to a real pre-floor build — the row itself names a 22.04
 container with archive ffmpeg 4.4 as the cheapest route.
+
+### ROCm/AMD admitted device-key normalisation — real GPU engine load, pinned/resident, and idle-eviction ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), branch `fix/sidecar-rocm-device-normalisation`, PR review passes 1–2)
+
+**1. What is dormant.** The VRAM-ledger admission layer (`PlacementController.admit()`)
+hands engines a device key like `"rocm:N"` on a ROCm/AMD box (`probe()`'s own honest
+ROCm-vs-CUDA accounting), but a ROCm/HIP torch build only ever understands `"cuda:N"`
+at the API level — `torch.device("rocm:N")` raises, and CTranslate2/speechbrain
+likewise have no `"rocm"` device. Three seams of the same two-vocabulary split, all
+now closed in `server/tts-sidecar/main.py`. **Forward** (an admitted key reaching a
+real device call): `_resolve_torch_device`, `_ct2_kwargs`, `_spk_run_device`,
+`WhisperEngine._ensure_loaded`, and `SpeakerEngine.ensure_loaded` all convert an
+explicit `"rocm:N"` to `"cuda:N"` (index preserved) via the shared
+`_normalise_rocm_device_key` helper before it reaches
+`.to()`/`WhisperModel(...)`/`EncoderClassifier(...)`; Coqui's `_resolve_runtime_options`
+calls the resolver unconditionally (not just for `"auto"`) so an admitted value
+actually reaches it. **Reverse** (an operator's pin, or a resident engine's own
+device string, matching the ledger's own candidate keys): config validation only
+ever lets an operator set an indexed pin as `"cuda:N"` — never `"rocm:N"` — and a
+resident engine's `self._device` is now (per the forward fix) always `"cuda:N"`
+too, so `_engine_env_pin` and `_is_resident` re-tag their output back to `"rocm:N"`
+via the shared `_report_rocm_device_key` helper before `admit()` compares it
+against a probed candidate, or a pinned OR resident engine on a real ROCm box would
+report permanent `noCapacity` even with room free on its own card. **Idle-eviction**
+(review pass 2): `_same_card`, the comparison every `_idle_evict_steps` step is
+built from, required family `"cuda"` on BOTH the resident engine's device string
+AND the probe-derived eviction target — but the target is always probe-native
+(`"rocm:N"` on a ROCm box), so the entire eviction ladder silently emptied and every
+admission that needed an eviction to fit fell straight to `noCapacity` instead of
+freeing an idle engine; `_same_card` now normalises both sides via the shared
+`_normalise_rocm_device_key` helper before comparing. The unit tests
+(`test_qwen_device.py`, `test_coqui_device.py`, `test_device_parse.py`,
+`test_devices.py`, `test_placement.py`, `test_transcribe_embed_admission.py`) prove
+every conversion in isolation against stubbed `torch`/`_cuda_is_rocm` — they do not
+prove a real ROCm/HIP torch build, CTranslate2, and speechbrain actually accept the
+converted values end to end, load real models onto a real AMD card, and correctly
+evict an idle one to make room, with `SEG_CAPACITY_ADMISSION` on (the default).
+
+**2. Why this box cannot reach it.** This box is dual-NVIDIA; this will not move
+until AMD/ROCm hardware exists — same constraint as the AMD GPU support Phase 2 and
+ORT pip-consistency marker rows above.
+
+**3. What to observe, once ROCm/AMD hardware is available.** With
+`SEG_CAPACITY_ADMISSION` on, trigger a GPU engine load on each of the five engines
+(Qwen Base, Coqui/XTTS, Whisper `/transcribe`, the SPK `/embed` speaker-embed, and
+Kokoro if it ever gains a GPU placement) that the admission layer places on a ROCm
+card, and confirm each now succeeds (model resident, synth/transcribe/embed
+completes) rather than crashing on an unconverted `"rocm:N"`. Repeat with an explicit
+`*_DEVICE=cuda:N` pin set on at least one engine (e.g. `COQUI_DEVICE=cuda:0`) and
+confirm it actually admits onto that card rather than reporting permanent
+`noCapacity`. Then fill the card with an idle-but-resident engine and admit a
+different, heavier engine that needs the freed VRAM to fit — confirm the eviction
+ladder actually runs and frees it, rather than reporting `noCapacity` with an idle
+model sitting unused on the same card. Criteria live in issue #2813 and this row.
 
 ---
 

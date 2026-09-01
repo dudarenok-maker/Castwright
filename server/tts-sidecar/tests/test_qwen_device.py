@@ -29,6 +29,16 @@ def test_explicit_passes_through(explicit):
     assert _resolve_torch_device(explicit, _torch(cuda=True, mps=True)) == explicit
 
 
+@pytest.mark.parametrize("rocm,cuda", [("rocm:0", "cuda:0"), ("rocm:1", "cuda:1")])
+def test_rocm_normalises_to_cuda(rocm, cuda):
+    """#2813: the admission ledger's own ROCm-vs-CUDA accounting vocabulary
+    (`probe()`'s `kind`) hands engines an explicit 'rocm:N' — but a ROCm/HIP
+    torch build only ever understands 'cuda:N' at the API level, so the
+    admitted value must be re-tagged (index preserved) before any .to()
+    call, not passed through unchanged like other explicit values."""
+    assert _resolve_torch_device(rocm, _torch(cuda=True, mps=False)) == cuda
+
+
 def test_design_first_load_resolves_device(monkeypatch):
     """design_voice loads VoiceDesign BEFORE base; the design path must resolve
     'auto' to a concrete device before .to(), else it crashes with .to('auto')."""
