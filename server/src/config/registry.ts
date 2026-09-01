@@ -389,29 +389,39 @@ export const KNOBS: ConfigKnob[] = [
     // /^(cpu|auto|mps|rocm|cuda|cuda:\d+)$/i, reasoning that main.py treats
     // "mps"/"rocm" as first-class INPUT device families. That was wrong and
     // was reverted — checked directly against main.py, not merely asserted:
-    //   - "rocm" is a DERIVED REPORTING label, never a valid input. On AMD,
-    //     HIP aliases the CUDA API, so the runtime device string an operator
-    //     must set is STILL "cuda"/"cuda:<n>" — `_torch_is_hip` (:9100-9103)
-    //     and `_normalize_device_family` (:9124-9134) exist specifically to
-    //     re-label an already-"cuda" value as "rocm" for HONEST REPORTING
-    //     after the fact (`scripts/accelerator-profile.mjs`'s runtimeBackend
-    //     doc comment says the same: "we REPORT 'rocm' for honesty; the
-    //     sidecar still uses device='cuda'"). Nothing upstream of
-    //     `_parse_device` ever PRODUCES family "rocm" from a real input —
-    //     the `fam in ("cuda","rocm")` checks scattered through main.py
-    //     (`_engine_env_pin` :3367, :10712, :10787) are written
-    //     symmetrically as if a user could type "rocm", but no code path
-    //     ever does that translation, so that arm is unreachable dead code.
-    //     Typing "rocm" literally, which the widened pattern let through,
-    //     reaches `_parse_device`'s catch-all as an OPAQUE family string
-    //     "rocm" — not the honest-reporting kind — and gets handed to
-    //     torch/speechbrain verbatim: `SPK_DEVICE=rocm` crashes
-    //     `EncoderClassifier(run_opts={"device":"rocm"})`, and
-    //     `SpeakerEngine.ensure_loaded`'s cuda-load-failure demote path is
-    //     gated on family=="cuda" (:7540), so a "rocm" load failure hits
-    //     `else: raise` with NO cpu fallback — every `/embed` 500s.
-    //     `ASR_DEVICE=rocm` crashes `WhisperModel(device="rocm")` the same
-    //     way; CTranslate2 has no "rocm" device at all.
+    //   - "rocm" is a DERIVED REPORTING label, never a valid OPERATOR input.
+    //     On AMD, HIP aliases the CUDA API, so the runtime device string an
+    //     operator must set is STILL "cuda"/"cuda:<n>" — `_torch_is_hip`
+    //     (:10217) and `_normalize_device_family` (:10241) exist
+    //     specifically to re-label an already-"cuda" value as "rocm" for
+    //     HONEST REPORTING after the fact (`scripts/accelerator-profile.mjs`'s
+    //     runtimeBackend doc comment says the same: "we REPORT 'rocm' for
+    //     honesty; the sidecar still uses device='cuda'"). This pattern is
+    //     therefore still correct as-is — an operator never needs to type
+    //     "rocm" — but the paragraph that used to follow this one was wrong,
+    //     and #2813 (PR #2835) is the proof: it claimed nothing upstream of
+    //     `_parse_device` ever PRODUCES family "rocm" from a real input, so
+    //     the `fam in ("cuda","rocm")` checks scattered through main.py were
+    //     "unreachable dead code." They are not. The VRAM-ledger admission
+    //     layer (`PlacementController.admit()`) hands engines an admitted
+    //     device key built from `probe_capacity()`'s own `kind` field, which
+    //     genuinely IS "rocm:N" on a ROCm/HIP box (`probe_capacity` at
+    //     :4041's `kind = "rocm" if _cuda_is_rocm() else "cuda"`, :4050) — a real,
+    //     internal producer this validated ENV KNOB never sees, but every
+    //     engine's cold-load path does. Before #2813, that "rocm:N" reached
+    //     torch/CTranslate2/speechbrain unconverted and crashed every GPU
+    //     engine load on a real AMD box; #2813 fixed the class by converting
+    //     it to "cuda:N" at every consumer (`_resolve_torch_device`,
+    //     `_ct2_kwargs`, `_spk_run_device`, `WhisperEngine._ensure_loaded`,
+    //     `SpeakerEngine.ensure_loaded`) via the shared
+    //     `_normalise_rocm_device_key` helper, and fixed the reverse
+    //     mismatch (an operator's validated "cuda:N" pin never matching the
+    //     ledger's own "rocm:N" candidate keys, permanent `noCapacity`) by
+    //     re-tagging `_engine_env_pin`'s and `_is_resident`'s output back to
+    //     "rocm:N" via the shared `_report_rocm_device_key` helper. This
+    //     knob's OWN pattern needed no change either way — the fix lives
+    //     entirely sidecar-side, converting between the two vocabularies at
+    //     their seams, not in what an operator is allowed to type here.
     //   - "mps" IS a real torch device (Apple Silicon), but ONLY for
     //     PyTorch-backed engines (Coqui/Qwen). CTranslate2 (Whisper's
     //     backend) has no Metal/MPS backend, so `ASR_DEVICE=mps` would
