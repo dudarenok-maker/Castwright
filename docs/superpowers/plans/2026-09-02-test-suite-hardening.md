@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript/Vitest (frontend + server), GitHub Actions YAML, npm scripts, Playwright.
 
-**Spec:** `docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md` (HEAD `72e25bd3` at plan-writing time) — read Decisions A, B, D, E and the "Shipping notes" section before starting; this plan pulls exact values from it but the spec has the full rationale and review history behind each one.
+**Spec:** `docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md` — the spec and this plan were shipped to `main` together via PR #2849 (docs-only, exempt from the review gate) before implementation starts, specifically so `scripts/wt-new.mjs`'s default `--from main` in Task 1 actually has both documents to check out. If for any reason PR #2849 has NOT merged yet when you start Task 1, stop and merge it first (or pass `--from docs/docs-verify-scope-branch-timing-design` to `wt-new.mjs`) — do not proceed against a worktree missing the spec. Read Decisions A, B, D, E and the "Shipping notes" section before starting; this plan pulls exact values from it but the spec has the full rationale and review history behind each one.
 
 ## Global Constraints
 
@@ -16,10 +16,11 @@
 - Every widened/changed value must come from the spec verbatim — do not re-derive or "improve" a number while implementing (e.g. don't retune Decision B's margins beyond what's specified; don't pick a different shard count for Decision D).
 - `cast-lock.test.ts` and `design-lock.test.ts` are explicitly NOT touched (spec, Decision B) — do not "helpfully" apply the same widening pattern there.
 - `test:e2e:visual` is explicitly NOT sharded further and its `--workers=1` constraint is NOT touched (spec, Decision D / Out of scope).
-- Decision A (CI's zero-test-selection hazard) is NOT implemented by this plan — filed as its own issue only (Task 1, sub-step 4). Do not attempt to fix it here; it needs a design pass the spec explicitly deferred.
+- Decision A (CI's zero-test-selection hazard) is NOT implemented by this plan — filed as its own issue only (Task 1, **Step 5**). Do not attempt to fix it here; it needs a design pass the spec explicitly deferred.
 - Decision C (sidecar pytest scoping) requires no action at all — nothing to file, nothing to implement.
-- Every commit message follows CONTRIBUTING.md's `<type>(<scope>): <subject>` convention. These are `test`/`ci`/`chore` scoped changes — no `feat`/`fix`, since nothing here is new user-visible behavior or a bug fix.
-- CLAUDE.md's Before-shipping checklist steps 5 (release notes, both files) and 6 (issue linkage, `Closes #NN` in the PR body) apply — both are explicit tasks below, not left implicit.
+- **Tasks run strictly in the order below (1→2→3→4→5).** Each task's own scope-verification step (e.g. "confirm only these files changed") assumes every prior task is already committed — that's what keeps `git status`/`git diff` checks meaningful, not an independent guarantee restated per task.
+- Every commit message follows CONTRIBUTING.md's `<type>(<scope>): <subject>` convention, and **scope is mandatory for every type except `chore`** (verified against `scripts/validate-commit-msg.mjs`) — a bare `ci:`/`test:`/`docs:` with no `(scope)` is rejected by the commit-msg hook. Allowed scopes: `frontend|server|sidecar|app|scripts|e2e|mocks|openapi|docs|deps|ci|ops`. Each task below already specifies the exact valid `type(scope):` to use — don't substitute a different one (in particular, `release-notes` is NOT an allowed scope; Task 5 uses `docs(docs):`).
+- CLAUDE.md's Before-shipping checklist steps 5 (release notes, both files) and 6 (issue linkage, `Closes #NN` in the PR body) apply and are explicit tasks below. Steps 1 (new `docs/features/` regression plan), 3 (on-box acceptance), 4 (`docs/features/INDEX.md`), and 8 (plan status → `stable` + archive) are explicitly **waived, not silently skipped**: nothing here is cross-cutting or hardware-dependent enough to need a `docs/features/` plan (this repo's own rule: "Small/localized items skip the plan doc"), and the `docs/superpowers/plans/` convention this plan itself uses has no archive step — that's a `docs/features/*` convention, not applicable here.
 
 ---
 
@@ -30,6 +31,8 @@
 
 **Interfaces:**
 - Produces: a working, hook-gated worktree at a path this plan calls `$WORKTREE` for the rest of its tasks, on branch `$BRANCH`; four GitHub issue numbers (`$ISSUE_B`, `$ISSUE_D`, `$ISSUE_E`, `$ISSUE_A`) referenced by later tasks and by the final PR body.
+
+Issue titles below use plain descriptive text, not CONTRIBUTING.md's `<prefix>-<n> — <what>` backlog-item shape — that shape is for `docs/BACKLOG.md`-rendered items, and CLAUDE.md is explicit that `type:chore` issues (all four of these) never render there and don't need it.
 
 - [ ] **Step 1: Cut the worktree and branch**
 
@@ -287,7 +290,7 @@ git -C $WORKTREE diff main -- server/src/workspace/file-lock.test.ts
 cd $WORKTREE/server && npx vitest run src/workspace/file-lock.test.ts
 ```
 
-Expected: all tests in the file pass, same pass count as before the edit (no test added or removed, only constants changed).
+Expected: all tests in the file pass, 0 failures (no test was added or removed, only constants changed, so there's nothing to compare a "before" count against — just confirm the file is fully green).
 
 - [ ] **Step 7: Commit**
 
@@ -430,13 +433,13 @@ Change the trailing `/4` to `/8`:
 
 - [ ] **Step 5: Confirm `test:e2e:visual`'s job is untouched**
 
-Grep the file to confirm no other `/4` or `[1, 2, 3, 4]` reference was accidentally changed:
+Grep narrowly — the `e2e-visual` job's own comment block legitimately says "shard" several times in prose (describing how it now runs concurrently with the sharded `e2e` job), so a bare `shard` grep will false-positive there. Check only the mechanical sites:
 
 ```bash
-grep -n "shard\|/4\b" $WORKTREE/.github/workflows/verify.yml
+grep -n "matrix:\|shard: \[\|--shard=" $WORKTREE/.github/workflows/verify.yml
 ```
 
-Only the `e2e` job's three sites (now `/8`) should reference sharding. The `test:e2e:visual` job must still show no `matrix:`/`shard` at all — confirm it wasn't touched.
+Expected: exactly the three sites this task just changed (the matrix array, the `--shard=` argument) plus the job `name:` label (not matched by this grep, already confirmed visually in Step 3) — all now `/8`. No `matrix:`/`shard: [...]`/`--shard=` should appear anywhere near `test:e2e:visual`'s job definition; if one does, something was touched that shouldn't have been.
 
 - [ ] **Step 6: Validate the YAML is well-formed**
 
@@ -451,24 +454,26 @@ cd $WORKTREE && node -e "require('js-yaml').load(require('fs').readFileSync('.gi
 ```bash
 git -C $WORKTREE add .github/workflows/verify.yml
 git -C $WORKTREE commit -m "$(cat <<'EOF'
-ci: increase e2e Playwright sharding from 4-way to 8-way
+ci(e2e): increase e2e Playwright sharding from 4-way to 8-way
 
 Also fixes two stale prose comments (verify.yml's header block and the e2e
 job's own rationale comment) that still cited the old 4-way figure and a
 ~110-spec-files estimate -- actual is 137. Per docs/superpowers/specs/
 2026-09-01-verify-scope-branch-timing-design.md Decision D; see that
 section for the cost caveats (unconditional per-shard checkout/setup
-overhead, unverified concurrent-job-slot ceiling) worth watching after
-this ships.
+overhead, unverified concurrent-job-slot ceiling) that the Ship section's
+timing dispatch is meant to actually check, not just watch after the fact.
 
 Refs #ISSUE_D_NUMBER
 EOF
 )"
 ```
 
+(Note the `ci(e2e):` type/scope — a bare `ci:` with no scope is rejected by this repo's commit-msg hook, since scope is mandatory for every type except `chore`.)
+
 Replace `#ISSUE_D_NUMBER` with the actual `$ISSUE_D` issue number from Task 1.
 
-**Note:** this task cannot be locally test-run end-to-end (it's cloud CI config) — the actual verification (8 shard jobs appear and complete) happens via a manual `gh workflow run` dispatch after the PR is pushed, covered in the final "Ship" section below, not as a task step here.
+**Note:** this task cannot be locally test-run end-to-end (it's cloud CI config). The spec conditions the 8-way number itself on "a real timing comparison during implementation, the same method the original 4-way split's comment cites" — that comparison is NOT optional post-ship monitoring, it's part of discharging this task, and it happens in the "Ship" section below (the manual `gh workflow run` dispatch step) since it requires the branch to actually be pushed to run cloud CI.
 
 ---
 
@@ -490,33 +495,38 @@ Find the `"scripts"` block's `test:server-slow` line (currently):
     "test:server-slow": "npm --prefix server run test:slow",
 ```
 
-Add the 8 new scripts immediately after it (before `"test:scripts"`):
+Add the 8 new scripts immediately after it (before `"test:scripts"`). Note: NOT column-aligned (unlike this plan's own prose elsewhere) — `package.json` is not in `.prettierignore`, and `npm run lint` doesn't catch JSON formatting, so a column-aligned block would ship a latent Prettier diff nothing in this repo's CI flags. Use plain single-space-after-colon formatting matching the rest of the file:
 
 ```json
     "test:server-slow": "npm --prefix server run test:slow",
-    "test:server:routes":    "npm --prefix server run test -- src/routes",
-    "test:server:tts":       "npm --prefix server run test -- src/tts",
-    "test:server:analyzer":  "npm --prefix server run test -- src/analyzer",
+    "test:server:routes": "npm --prefix server run test -- src/routes",
+    "test:server:tts": "npm --prefix server run test -- src/tts",
+    "test:server:analyzer": "npm --prefix server run test -- src/analyzer",
     "test:server:workspace": "npm --prefix server run test -- src/workspace",
     "test:components": "vitest run src/components",
-    "test:store":       "vitest run src/store",
-    "test:lib":         "vitest run src/lib",
-    "test:views":       "vitest run src/views",
+    "test:store": "vitest run src/store",
+    "test:lib": "vitest run src/lib",
+    "test:views": "vitest run src/views",
 ```
 
-(Match the existing file's actual indentation/quoting style exactly — `npm run format:check` will catch a mismatch if Prettier disagrees with manual spacing; run `npm run format` on just this file if needed before committing, or just match the two-space JSON indent already used throughout the file.)
+- [ ] **Step 2: Confirm each of the 8 scripts selects the right files — with `npx vitest list`, not a full run**
 
-- [ ] **Step 2: Run each of the 8 scripts and confirm it selects real tests**
-
-This is the step that matters most — round 4 of the spec's own review found a real path bug here (`server/src/routes` instead of the correct `src/routes`, since `npm --prefix server` already sets `cwd=server/`) that inspection alone missed and only running the command caught. Do not skip this by "it looks right."
+This is the step that matters most — round 4 of the spec's own review found a real path bug here (`server/src/routes` instead of the correct `src/routes`, since `npm --prefix server` already sets `cwd=server/`) that inspection alone missed and only running the command caught. Do not skip this by "it looks right." But also don't fully execute all 8 — between them they select roughly 10,500 tests (the spec's own measured totals), which on this repo's documented contention-prone box could take as long as the entire rest of this plan. Use the same lightweight instrument the spec itself used to derive its numbers — `vitest list`, which resolves the file selection without running anything:
 
 ```bash
-cd $WORKTREE && npm run test:server:routes -- --reporter=verbose 2>&1 | tail -20
+cd $WORKTREE/server && npx vitest list src/routes --filesOnly | wc -l   # expect 138
+npx vitest list src/tts --filesOnly | wc -l                             # expect 123
+npx vitest list src/analyzer --filesOnly | wc -l                        # expect 73
+npx vitest list src/workspace --filesOnly | wc -l                       # expect 57
+cd $WORKTREE && npx vitest list src/components --filesOnly | wc -l      # expect 112
+npx vitest list src/store --filesOnly | wc -l                           # expect 52
+npx vitest list src/lib --filesOnly | wc -l                             # expect 102
+npx vitest list src/views --filesOnly | wc -l                           # expect 29
 ```
 
-Expected: a real test run, NOT "No test files found, exiting with code 1". Repeat for `test:server:tts`, `test:server:analyzer`, `test:server:workspace`, `test:components`, `test:store`, `test:lib`, `test:views` — each must select a nonzero number of real test files matching its subdirectory. For the server-side four, additionally confirm the selected file count is in the right ballpark (spec's measured figures: routes 138 files, tts 123, analyzer 73, workspace 57) — a wildly different count (e.g. 0, or the whole suite) means the path is still wrong.
+Each must match its expected count exactly (these are the spec's own measured, verified-correct numbers) — 0, or the full suite's file count, means the path is still wrong. This doesn't run the scripts themselves (their exact `npm run test:server:routes` invocation isn't exercised by `npx vitest list`), so pick ONE of the 8 (`test:server:routes` is a reasonable choice — it exercises the nested `npm --prefix server run test -- <path>` shape the round-4 bug lived in) and actually run it once, letting it complete, purely to confirm the full `npm run` invocation chain (including `pretest`'s ffmpeg preflight) works end to end — the other 7 are covered by the `vitest list` check plus the shared mechanism this one run proves.
 
-If any of the 8 fails this check, the fix is almost certainly the same class of bug the spec's round 4 already found once — double-check the path is relative to the correct `cwd` for that invocation (server-relative for the four `npm --prefix server` ones, repo-root-relative for the four bare `vitest run` ones) rather than assuming the string in this plan is already correct without running it.
+If any of the 8 fails the `vitest list` check, the fix is almost certainly the same class of bug the spec's round 4 already found once — double-check the path is relative to the correct `cwd` for that invocation (server-relative for the four `npm --prefix server` ones, repo-root-relative for the four bare `vitest run` ones) rather than assuming the string in this plan is already correct without checking it.
 
 - [ ] **Step 3: Add the CLAUDE.md Commands-section bullet**
 
@@ -529,7 +539,7 @@ Find (`CLAUDE.md`, in the Commands section, immediately after the `test:server-s
 Add a new bullet immediately after it:
 
 ```markdown
-- `npm run test:server:routes` / `:tts` / `:analyzer` / `:workspace` and `npm run test:components` / `:store` / `:lib` / `:views` — opt-in, manual, subsystem-scoped test runs (`vitest run <subdir>` under the hood) for a fast local loop when you know you're only touching one area. Not part of the automated verify pipeline — not in `STEPS[]`, not cached, not gated by any hook, and carry no coverage guarantee (a `routes/` change that breaks something in `workspace/` isn't caught by `test:server:routes` alone). The four server-side ones cover 76.9% of `test:server` by test count; the four frontend ones cover most of `test`'s largest directories. See `docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md` Decision E.
+- `npm run test:server:routes` / `:tts` / `:analyzer` / `:workspace` and `npm run test:components` / `:store` / `:lib` / `:views` — opt-in, manual, subsystem-scoped test runs (`vitest run <subdir>` under the hood) for a fast local loop when you know you're only touching one area. Not part of the automated verify pipeline — not in `STEPS[]`, not cached, not gated by any hook, and carry no coverage guarantee (a `routes/` change that breaks something in `workspace/` isn't caught by `test:server:routes` alone). The four server-side scripts cover 76.9% of `test:server` by test count (`test:server:routes` selects 138 files, not the 146 a raw file search under `server/src/routes/` would find — 8 are in `vitest.config.slow.ts`'s `SLOW_FILES` and excluded from `test:server` itself, so this matches, not a gap); the four frontend scripts cover 86.3% of `test` by test count. See `docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md` Decision E.
 ```
 
 - [ ] **Step 4: Confirm the diff is scoped to exactly these two files**
@@ -573,7 +583,9 @@ Replace `#ISSUE_E_NUMBER` with the actual `$ISSUE_E` issue number from Task 1.
 
 - [ ] **Step 1: Append the technical entry to `docs/release-notes-next.md`**
 
-Find the end of the "### Test harness & suite hygiene" section (the last bullet currently ends with `.gitignore` did not cover `.env.bak`...` — find that section's last line and append after it, still inside the same `###` section, before the next `##`/`###` heading).
+Find the "### Test harness & suite hygiene" heading (`grep -n '^### Test harness' docs/release-notes-next.md`) — this is the LAST heading in the file, and its section runs from there to end-of-file (confirm with `grep -n '^## \|^### '` and checking nothing follows it), so "append after the section's last bullet" means append at the very end of the file, not immediately after any one named bullet — the section has many bullets in it, don't search for a specific one that may not be the true last line. Add a blank line, then the new bullet, at the end of the file.
+
+**Encoding note:** this repo's own history records Windows PowerShell 5.1 writing cp1252 instead of UTF-8 when text containing non-ASCII characters (the bullet below has `≥`, `→`, and em-dashes) is appended via shell redirection — corrupting exactly this kind of file. Use an editor/file-write tool that writes UTF-8 directly (the Edit/Write tool, not `Add-Content`/`>>` from PowerShell) for both this file and `RELEASE_NOTES.md` below.
 
 Append:
 
@@ -602,7 +614,7 @@ Confirm each diff is a single new bullet appended in the right section — nothi
 ```bash
 git -C $WORKTREE add docs/release-notes-next.md RELEASE_NOTES.md
 git -C $WORKTREE commit -m "$(cat <<'EOF'
-docs(release-notes): add v1.15.0 entries for test-suite hardening
+docs(docs): add v1.15.0 entries for test-suite hardening
 
 Technical register entry under Test harness & suite hygiene, plus a
 matching brand-voice line in RELEASE_NOTES.md, for the file-lock.test.ts
@@ -614,13 +626,15 @@ EOF
 
 ---
 
-## Ship (not a task — controlling-thread work per CLAUDE.md's Execution model phase 3)
+## Ship (not a task — deliberately controlling-thread work, per CLAUDE.md's Execution model phase 3, "the mandatory gate is phase 3's, not this one")
+
+This section is intentionally NOT dispatched as a subagent task — CLAUDE.md's own Execution model reserves shipping (PR, review gate, merge) for the controlling thread, distinct from the per-task implementer/reviewer subagents Tasks 1-5 use.
 
 Once Tasks 1-5 are all committed:
 
 1. **Run `npm run verify:fast:branch`** locally in `$WORKTREE` and confirm it's green (Decision B's file is under `test:server`'s scope, so this exercises the widened tests for real).
 2. **Push the branch** and open the PR. PR title must match the commit-convention subject format (this is a multi-scope change — `test`/`ci`/`chore` — so title it something like `chore(ops): widen timing margins, shard e2e, add dev-loop scripts`). PR body: `Closes #<ISSUE_B>`, `Closes #<ISSUE_D>`, `Closes #<ISSUE_E>` (three separate `Closes` lines so all three auto-close on merge) — do NOT close `$ISSUE_A`, it stays open. Link the spec doc in the body.
 3. **Cloud `verify.yml`** runs automatically and is the required check — confirm green, including watching the e2e job specifically since this PR changes its shard count.
-4. **Mandatory `pr-review-gate` pass** — per CLAUDE.md's Before-shipping checklist step 10 and the `pr-review-gate` skill. This PR is multi-scope (`test`+`ci`+`chore` in one PR), which the review-depth ladder maps to `high` depth regardless of any individual commit's size — dispatch accordingly, not at `low`/`medium`.
-5. **Manually dispatch `gh workflow run verify.yml --ref <branch>`** once on the pushed branch specifically to observe the e2e job's 8 shards appear and complete (Task 3's own verification step, which can't run locally) — this is in addition to, not instead of, the PR's automatic CI run.
+4. **Discharge Decision D's own stated condition — a real timing comparison, not just "it completed."** Manually dispatch `gh workflow run verify.yml --ref <branch>` once on the pushed branch. Once it completes, pull each of the 8 `e2e` shard jobs' durations (`gh run view <run-id> --json jobs` or the Actions UI) and compare against the known 4-way baseline (~4 min/shard, per the pre-existing workflow comment this task updated). This is the comparison the spec's Decision D explicitly conditions the "8" number on — record the actual per-shard durations in the PR description or a PR comment so the number is traceable, not just asserted. If shards are queuing rather than running in parallel (visible as jobs sitting `queued` well past when 8 concurrent runners should have picked them up), that's the concurrent-job-slot ceiling the spec flagged as a risk — surface it before merging, don't silently accept degraded wall-clock.
+5. **Mandatory `pr-review-gate` pass** — per CLAUDE.md's Before-shipping checklist step 10 and the `pr-review-gate` skill. This PR is multi-scope (`test`+`ci`+`chore` in one PR), which the review-depth ladder maps to `high` depth regardless of any individual commit's size — dispatch accordingly, not at `low`/`medium`.
 6. Once findings are triaged and CI + review are both green: merge via "Create a merge commit" per CLAUDE.md's Branching workflow. Tear down the worktree (junctions first, if any — `wt-new.mjs` real-installs `node_modules` rather than junctioning, so this worktree's `node_modules`/`server/node_modules` are real directories, not junctions; a plain `git worktree remove` after deleting the directory is sufficient, no junction-deletion-first step needed. Verify with `Test-Path` before assuming.)
