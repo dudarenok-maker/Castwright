@@ -201,7 +201,14 @@ def _add_nvidia_dll_dirs_to_path() -> list[str]:
     # `ValueError: the environment variable is longer than 32767 characters` --
     # observed for real running this repo's own sidecar test suite. Comparing
     # against PATH's existing entries (not a separate "already ran" flag) also
-    # correctly handles a directory some OTHER mechanism already added.
+    # handles a directory some OTHER mechanism already added -- for the exact
+    # string this function itself would produce. This is a raw string-set
+    # comparison, not a normalised one: PATH is case-insensitive on Windows
+    # and tolerant of a trailing separator or quoting, none of which this
+    # check accounts for, so a differently-spelled pre-existing entry (a
+    # different case, a trailing backslash, a quoted form) is not recognised
+    # as the same directory and gets a harmless duplicate added once. Bounded
+    # and cheap either way -- this is not the growth this guard exists to stop.
     existing_dirs = set(current_path.split(os.pathsep))
     added: list[str] = []
     try:
@@ -223,13 +230,30 @@ def _add_nvidia_dll_dirs_to_path() -> list[str]:
     )
     try:
         os.environ["PATH"] = new_path
-    except Exception:
+    except Exception as e:
         # Genuinely never raises, matching this function's docstring — e.g. a
         # PATH already near Windows' 32767-char ceiling raises ValueError
         # here, which a bare `except OSError` does not catch. This function
         # is called from the FIRST, unguarded lifespan startup handler
         # (`_startup_ort_cuda_preload`) — a raise here would abort sidecar
         # boot entirely instead of degrading to the documented harmless no-op.
+        #
+        # Pass-2 review finding: degrading here must not also mean degrading
+        # SILENTLY. The caller's `if added:` gate (`_startup_ort_cuda_preload`)
+        # only logs on a truthy return, so an unlogged `[]` here is
+        # byte-identical to every OTHER reason this function returns `[]` (no
+        # `nvidia/` directory, nothing new to add, onnxruntime not
+        # importable) — the one condition where this mechanism actually
+        # failed would be the one condition nothing reports, silently
+        # reopening the exact A28 bug this function exists to close.
+        log.warning(
+            "[ort-preload] failed to write PATH with %d nvidia/<pkg>/bin director%s (%s) -- "
+            "cuDNN's lazily-dlopened engine DLLs may not be found; the CUDA execution "
+            "provider may silently fall back to CPU.",
+            len(added),
+            "y" if len(added) == 1 else "ies",
+            e,
+        )
         return []
     return added
 

@@ -349,7 +349,7 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 // real `InferenceSession` lands `CUDAExecutionProvider` in
 // `get_providers()`.
 //
-// PASS-2 REVIEW FIX (2026-08-31): the first cut of these two pins
+// PASS-1 REVIEW FIX (2026-08-31): the first cut of these two pins
 // (`cufft~=11.4.0`, `cuda-runtime~=12.8.0`) was wrong on both counts —
 // `~=11.4.0` was pip-latest-on-install-day, not torch's line, and
 // `~=12.8.0`, while correctly matching torch's cudart build line, EXCLUDED
@@ -368,6 +368,25 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 // not just a version-string match. Same floor-plus-cap reasoning as cublas's
 // own pin (N4): an unpinned/latest install here would risk the same
 // intra-process DLL-version mismatch cublas's own pin exists to avoid.
+//
+// PASS-2 REVIEW NOTE (2026-08-31): the shadowing risk above is scoped to
+// mechanism A only — `onnxruntime.preload_dlls()`'s own fixed DLL list,
+// which is what every comment on this page has described so far. Since this
+// same fix, a SECOND, broader mechanism is also in force:
+// `main._add_nvidia_dll_dirs_to_path()` puts every `nvidia/<pkg>/bin`
+// directory ahead of torch on the process `PATH`, so ANY bare-name load —
+// not just the ones `preload_dlls()` itself makes — now resolves to this
+// installer's copy first. That covers several DLL basenames this file does
+// NOT pin here, including from `nvidia-cuda-nvrtc-cu12` and
+// `nvidia-nvjitlink-cu12` (both pulled in only transitively, by cufft's own
+// dependency tree — see the N6 note above for why they're deliberately not
+// pinned directly). Checked on-box: those transitively-resolved versions
+// (`nvidia-cuda-nvrtc-cu12`/`nvidia-nvjitlink-cu12` at 12.9.86) DO match
+// torch's own bundled `nvrtc64_120_0.dll`/`nvJitLink_120_0.dll`
+// (`FileVersion` 6.14.11.9000 on both sides) — so mechanism B is not
+// currently exposed, but nothing pins that agreement the way
+// NVIDIA_CUDNN_CONSTRAINT etc. pin the packages this file DOES own. Re-check
+// this comment, not just the four constants below, on any future torch bump.
 const NVIDIA_CUFFT_CONSTRAINT = 'nvidia-cufft-cu12~=11.3.3';
 const NVIDIA_CUDA_RUNTIME_CONSTRAINT = 'nvidia-cuda-runtime-cu12~=12.8.0';
 

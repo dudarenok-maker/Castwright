@@ -76,8 +76,10 @@ acceptance criterion.
    at the version `onnxruntime-gpu` actually installed.
 3. Run `pip check` inside that venv.
 4. **Start the sidecar and read the `[ort-preload]` lines it logs at startup
-   before doing anything else** (#2600, PR #2617 — see the register's A28 note
-   for the full list of the six possible lines). Note which one fired: a plain
+   before doing anything else** (#2600, PR #2617 — `main._preload_ort_cuda_dlls`'s
+   own docstring carries the full list of the six possible lines; A28, which used
+   to hold this pointer, discharged 2026-08-31 and was removed from the register).
+   Note which one fired: a plain
    "loaded ... all N expected files were found under nvidia/<pkg>/bin" success,
    the WARNING variant naming fewer than the full count (PATH/torch fallback,
    not this installer's own runtime), `failed`, `torch-skip`, `no-cuda-build`,

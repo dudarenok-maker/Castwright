@@ -17,6 +17,7 @@ accurately.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import types
@@ -89,14 +90,23 @@ def test_empty_pre_existing_path_gains_no_trailing_separator(monkeypatch, tmp_pa
     assert not os.environ["PATH"].endswith(os.pathsep)
 
 
-def test_a_path_write_failure_other_than_oserror_does_not_raise(monkeypatch, tmp_path) -> None:
+def test_a_path_write_failure_other_than_oserror_does_not_raise(monkeypatch, tmp_path, caplog) -> None:
     """Real regression: `os.environ["PATH"] = ...` raises `ValueError` (not
     `OSError`) when the resulting value exceeds Windows' 32767-character
     environment-variable ceiling -- a bare `except OSError` around the write
     does not catch it. This function is called from the FIRST, unguarded
     lifespan startup handler (`_startup_ort_cuda_preload`), so an uncaught
     raise here aborts sidecar boot entirely instead of degrading to the
-    documented harmless no-op."""
+    documented harmless no-op.
+
+    Pass-2 review finding: degrading must not also mean degrading SILENTLY.
+    The caller (`_startup_ort_cuda_preload`) only logs on a truthy return, so
+    an unlogged `[]` here is byte-identical to every other reason this
+    function returns `[]` -- the one condition where the mechanism actually
+    failed would be the one condition nothing reports. A guard that only
+    asserted `added == []` would still pass if a future edit short-circuited
+    BEFORE the write ever ran, without ever exercising this branch -- the
+    `caplog` assertion is what proves the guard itself was reached."""
     site_packages = tmp_path / "site-packages"
     (site_packages / "nvidia" / "cudnn" / "bin").mkdir(parents=True)
 
@@ -119,9 +129,18 @@ def test_a_path_write_failure_other_than_oserror_does_not_raise(monkeypatch, tmp
 
     monkeypatch.setattr(main.os, "environ", _RaisingEnviron())
 
-    added = main._add_nvidia_dll_dirs_to_path()  # must not raise
+    with caplog.at_level(logging.WARNING, logger="sidecar"):
+        added = main._add_nvidia_dll_dirs_to_path()  # must not raise
 
     assert added == []
+    assert any(
+        r.levelno == logging.WARNING and "failed to write PATH" in r.message
+        for r in caplog.records
+    ), (
+        "a PATH-write failure must be logged loudly -- silently returning the "
+        "same [] as a healthy no-op reopens the exact silent-CPU-fallback bug "
+        "this function exists to close"
+    )
 
 
 def test_calling_twice_does_not_grow_path(monkeypatch, tmp_path) -> None:
