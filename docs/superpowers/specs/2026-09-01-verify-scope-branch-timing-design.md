@@ -2,28 +2,36 @@
 status: draft
 ---
 
-# Pre-push `--changed` scoping and lock-test timing margins
+# Local test scope, timing-margin fragility, and cloud e2e sharding
 
 ## Problem
 
 Pre-push (`npm run verify:fast:branch`, `.husky/pre-push`) runs `test:server`
-unscoped whenever the branch diff touches any server file — the full battery,
-currently 8000+ tests, no `--changed` narrowing. On a box running several
-concurrent worktree test batteries this took 70-80 minutes and failed three
-times in a row, each time on a different timing-sensitive lock test unrelated
-to the diff being pushed. Root cause of the failures, confirmed by rerunning
-the flagged tests in isolation (they passed clean): `server/src/workspace/
-file-lock.test.ts` races real `setTimeout` calls with thin margins (e.g. a
-20ms lock-acquisition-timeout budget racing a 150-200ms holder) to assert
-ordering, and 39+ concurrent node/python processes on the box introduced
-enough scheduler jitter to occasionally flip that ordering.
+(and, on a frontend-touching diff, the frontend `test` leg) unscoped whenever
+the branch diff touches any file in that leg's tree — the full battery,
+currently 8000+ tests for `test:server` alone, no `--changed` narrowing. On a
+box running several concurrent worktree test batteries this took 70-80
+minutes and failed three times in a row, each time on a different
+timing-sensitive lock test unrelated to the diff being pushed. Root cause of
+the failures, confirmed by rerunning the flagged tests in isolation (they
+passed clean): `server/src/workspace/file-lock.test.ts` races real
+`setTimeout` calls with thin margins (e.g. a 20ms lock-acquisition-timeout
+budget racing a 150-200ms holder) to assert ordering, and 39+ concurrent
+node/python processes on the box introduced enough scheduler jitter to
+occasionally flip that ordering.
 
-Two independent problems, one incident:
+Three problems, addressed together because they're all "tests take too long
+or fail for reasons unrelated to the change":
 
-1. **Volume** — pre-push runs far more tests locally than the diff could
-   possibly affect.
+1. **Local volume** — pre-push runs far more tests locally than the diff
+   could possibly affect, for every leg that can be diff-scoped, not only
+   `test:server`.
 2. **Fragility** — a handful of tests assert real-wall-clock ordering with
    margins too thin to survive this box's actual contention.
+3. **Cloud e2e wall-clock** — separately raised: the e2e leg (the dominant
+   single cost in cloud CI) is sharded 4-way today and can be sharded further
+   for a straightforward wall-clock win, independent of the local-scoping
+   fix.
 
 ## Prior art this builds on
 
@@ -44,15 +52,20 @@ CI already does for the same diff.
 
 ## Decision
 
-### A — extend `--changed` narrowing to `--scope-branch`
+### A — extend `--changed` narrowing to `--scope-branch`, for every leg it already covers
 
 Widen the existing substitution gate in `runPipeline` (`scripts/
 verify-cache.mjs`, currently `flags.scopeStaged && !scopeShared && scopeDiff
 !== null && diffSafeForChangedOnly(step, scopeDiff)`) to also fire under
-`flags.scopeBranch`. The allowlist (`diffSafeForChangedOnly`) is generic over
-`diffFiles` and needs no change — the same conservative default holds: any
-diff outside `src/**`/`server/src/**` with a safe extension still runs the
-full suite locally, on both scoping paths.
+`flags.scopeBranch`. This is generic over `CHANGED_ONLY_NPM_SCRIPT`'s two
+existing entries — **`test` (frontend) and `test:server` both** — so the
+frontend leg gets the identical fix, not just the server one; the incident's
+symptom happened to be `test:server` because that's the 8000+-test leg, but
+the mechanism and this fix apply to both equally. The allowlist
+(`diffSafeForChangedOnly`) is generic over `diffFiles` and needs no change —
+the same conservative default holds: any diff outside `src/**`/`server/src/**`
+with a safe extension still runs the full suite locally, on both scoping
+paths, for either leg.
 
 **Base SHA, not `HEAD`.** The staged-scope substitution reuses the static
 npm scripts `test:changed`/`test:server:changed` (`vitest run --changed
@@ -135,6 +148,46 @@ need to get right across every existing case, including the deliberately
 incident calls for. Worth revisiting only if margin-widening turns out not to
 hold up.
 
+### C — `test:sidecar` (pytest): investigated, deliberately out of scope
+
+Considered for the same `--changed`-style narrowing since it's the third
+locally-gating test leg (`verify:fast:branch` runs it alongside `test`/
+`test:server`). Sized it first rather than assuming: `server/tts-sidecar/
+tests/` has ~900 `test_*` functions across ~75 files — roughly a ninth of
+`test:server`'s volume — and the CI-gating tier is CPU-only/mocked (no real
+model load; per CLAUDE.md's own description it SKIPs+exits 0 on an
+unbootstrapped venv), so it isn't the leg producing 70-80 minute runs or the
+lock-timing failures this incident is about. Unlike vitest, pytest has no
+built-in `--changed`-equivalent flag; the closest analogues
+(`pytest-testmon`, `pytest-picked`) are new dependencies with their own
+correctness model (coverage-based or git-diff-based test selection) that
+would need their own evaluation, not a small extension of the mechanism this
+spec already built for vitest. Given the volume here doesn't justify it,
+that evaluation is left for a future round if `test:sidecar` itself ever
+becomes the bottleneck — named explicitly here so its absence is a decision,
+not an oversight.
+
+### D — increase cloud e2e sharding
+
+`.github/workflows/verify.yml`'s `e2e` job shards `test:e2e` 4-way today
+(`matrix.shard: [1, 2, 3, 4]`, `--shard=${{ matrix.shard }}/4`) — per the
+job's own comment, this was the dominant single leg in the whole workflow at
+~16 min unsharded, cut to ~4 min/shard by the existing 4-way split. Raise it
+to **8-way**: change the matrix array to `[1, 2, 3, 4, 5, 6, 7, 8]` and both
+`--shard=N/4` references (the `test:e2e` step; `test:e2e:visual` in the
+neighboring job is unaffected — it already runs `--workers=1` for a different
+reason and is not sharded today, out of scope here) to `/8`, and the job
+name label (`E2E (chromium) — shard ${{ matrix.shard }}/4` → `/8`). Standard
+GitHub-hosted runners are free/uncapped for this public repo (per the
+2026-07-06 CI-rebalance design CLAUDE.md already documents), so the only real
+cost is fixed per-job overhead (checkout, Node setup, Playwright browser
+cache/install) that doesn't shrink with more shards — 8-way is a reasonable
+stopping point for ~110 spec files (roughly 14/shard) before that overhead
+starts to dominate the per-shard wall-clock; the exact number is a tuning
+call to confirm with a real timing comparison during implementation (same
+method the existing comment cites for the original 4-way split), not
+something this spec can pin exactly without running it.
+
 ## Testing
 
 - `scripts/tests/verify-cache.test.mjs`: new cases pinning the branch-scope
@@ -148,9 +201,14 @@ hold up.
   self-documenting via a short comment at each widened pair, matching this
   file's existing comment-heavy convention, so a future reader knows the
   headroom is deliberate and not an arbitrary number.
-- Manual: run `npm run test:server -- --changed <some-older-sha>` locally
-  once implemented, confirm it selects a proper subset and exits nonzero on a
-  genuine failure (not just `passWithNoTests`-style silent 0).
+- Manual: run `npm run test:server -- --changed <some-older-sha>` and the
+  frontend equivalent locally once implemented, confirm each selects a proper
+  subset and exits nonzero on a genuine failure (not just
+  `passWithNoTests`-style silent 0).
+- `.github/workflows/verify.yml`'s e2e shard change: no unit test (it's CI
+  config) — verified by a manual `gh workflow run verify.yml --ref <branch>`
+  dispatch and reading the run's job list, confirming 8 shard jobs appear and
+  each completes, before merge.
 
 ## Out of scope
 
@@ -158,5 +216,8 @@ hold up.
   only the confirmed lock-ordering-race shape is in scope this round.
 - Any change to the production `withKeyLock`/`file-lock.ts` timeout values —
   this is a test-fragility fix, not a behavior change.
-- Extending `--changed` substitution to any step besides `test`/`test:server`
-  (unchanged from PR #2839's scope).
+- Extending the `--changed`-substitution *mechanism* to any step besides
+  `test`/`test:server` (unchanged from PR #2839's scope) — `test:sidecar` was
+  evaluated and deliberately deferred, see Decision C.
+- Sharding `test:e2e:visual`, or changing its `--workers=1` anti-flake
+  constraint.
