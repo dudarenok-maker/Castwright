@@ -1736,7 +1736,7 @@ function runCheckOnboxRegisterCli() {
         publishedFailed =
           report(
             `${publishedPath} (the currently-PUBLISHED page, fetched just now) has row content ` +
-              `that differs from ${REGISTER}`,
+              `that differs from ${LIVE_VIEW}`,
             contentDriftErrors,
           ) || publishedFailed;
         console.error(
