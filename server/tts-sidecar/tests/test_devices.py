@@ -551,6 +551,26 @@ def test_same_card_normalises_and_rejects_off_card():
     assert main._same_card(None, "cuda:0") is False
 
 
+def test_same_card_matches_a_rocm_native_target():
+    """#2813 review finding 7: `target` is ALWAYS a probe-derived key
+    (`_worst_device_key`/`_device_key`), which reads "rocm:N" on a ROCm/HIP
+    box — but a resident engine's own device string is torch-native
+    "cuda:N" (this PR's own forward fix guarantees it always is, except the
+    documented Kokoro exception). Before the fix, `_same_card`'s hard
+    `family != "cuda"` gate rejected a "rocm:N" target outright, so it could
+    NEVER match ANY resident engine on a real ROCm box — the entire
+    idle-eviction ladder silently emptied and every admission needing an
+    eviction fell straight to `noCapacity`. Index preservation and the
+    off-card/family-mismatch rejections above must hold in both directions."""
+    assert main._same_card("cuda:0", "rocm:0") is True
+    assert main._same_card("cuda:1", "rocm:1") is True
+    assert main._same_card("cuda:0", "rocm:1") is False
+    assert main._same_card("rocm:0", "cuda:0") is True  # Kokoro's own exception (finding 9)
+    assert main._same_card("rocm:0", "rocm:0") is True
+    assert main._same_card("cpu", "rocm:0") is False
+    assert main._same_card(None, "rocm:0") is False
+
+
 class _FakeEvictQwen(main.QwenEngine):
     """QwenEngine stand-in whose idle-evict methods just record they were
     called (real QwenEngine() construction is cheap — no model I/O). Both the
@@ -684,6 +704,28 @@ def test_idle_evict_unindexed_cuda_is_card_zero(monkeypatch):
     names, freed = _run("cuda:0", "qwen")
     assert freed is True
     assert (qwen.design_freed, qwen.base17_freed, asr.freed, spk.freed) == (1, 1, 1, 1)
+
+
+def test_idle_evict_frees_engines_against_a_rocm_native_target(monkeypatch):
+    """#2813 review finding 7, end-to-end mirror of the reviewer's own
+    repro: `_idle_evict_steps` is always called with a PROBE-derived target
+    (`_worst_device_key`), which reads "rocm:N" on a ROCm/HIP box, while a
+    resident engine's own device string is torch-native "cuda:0" (this PR's
+    forward fix). Before the fix, `_same_card`'s hard "cuda"-only gate meant
+    the ladder was silently empty for EVERY resident engine on that
+    hardware -- an admission that could have been rescued by freeing an
+    idle model fell straight to `noCapacity` instead. Qwen/SPK genuinely
+    resident on card 0 (torch-native "cuda:0"); admitting against the
+    probe's own "rocm:0" target must still find and free them."""
+    qwen, asr, spk, coqui = _wire_evict_engines(monkeypatch, "cuda:0", "cuda:1", "cuda:0")
+    names, freed = _run("rocm:0", "qwen")
+    assert "qwen.design" in names and "qwen.base17" in names
+    assert "spk" in names
+    assert "asr" not in names  # resident on the OTHER card — still correctly excluded
+    assert freed is True
+    assert (qwen.design_freed, qwen.base17_freed) == (1, 1)
+    assert spk.freed == 1
+    assert asr.freed == 0
 
 
 def test_idle_evict_frees_an_idle_coqui_on_the_target_card(monkeypatch):

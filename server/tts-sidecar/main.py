@@ -5089,12 +5089,24 @@ def _is_resident(engine_id: str) -> Optional[str]:
 
     Re-tagged via `_report_rocm_device_key` before returning (#2813 review
     finding 2): `card["family"]`/`intent_fam` read "cuda" even on a real
-    ROCm box now that an engine's own `self._device`/`.device` is always
-    normalised to torch-native "cuda:N" (never a literal "rocm:N" string
-    any more), but the admission ledger's own candidate keys are "rocm:N"
-    there -- an un-retagged "cuda:N" residency key could never match one,
-    so a genuinely resident engine would still report permanent
-    `noCapacity` on its own next admission."""
+    ROCm box for every engine whose `self._device`/`.device` is normalised
+    to torch-native "cuda:N" (Coqui, Qwen, ASR, SPK -- all route an admitted
+    device through `_normalise_rocm_device_key` before publishing it), and
+    the admission ledger's own candidate keys are "rocm:N" there -- an
+    un-retagged "cuda:N" residency key could never match one, so a
+    genuinely resident engine would still report permanent `noCapacity` on
+    its own next admission. **Exception (#2813 review finding 9):** Kokoro
+    does NOT route through that normalisation -- `KokoroEngine._ensure_loaded`
+    publishes `self._device` straight from the admitted value whenever
+    `family` isn't literally "auto" (the `intent_device = resolved_device`
+    branch), so a Kokoro engine admitted onto "rocm:N" keeps that literal
+    string. Harmless today only because `_report_rocm_device_key` is
+    idempotent on an already-"rocm:N" input (it reads that family, sees the
+    box genuinely is ROCm, and returns it unchanged) -- not because Kokoro
+    was normalised. This is currently unreachable in shipping regardless
+    (the amd accelerator profile has no CUDA ORT provider for a Kokoro
+    index to attach to), which is the only reason relying on that
+    idempotence hasn't mattered yet."""
     named: dict[str, Any] = dict(ENGINES)
     named["asr"] = ASR
     named["spk"] = SPK
@@ -5196,17 +5208,30 @@ def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
 
 
 def _same_card(resident: Optional[str], target: str) -> bool:
-    """True when a resident engine's device string sits on the same CUDA card
-    as `target` (always a concrete "cuda:N" from `_worst_device_key`). cpu / mps
-    / auto / unparseable never match — an engine that isn't on the target card
-    holds no VRAM there, so evicting it couldn't help the admitting op. Unindexed
-    "cuda" normalises to card 0 (torch's default). This is `shares_device`'s
-    card-comparison tail without its auto-resolution / torch import: both inputs
-    here are already concrete (a resident engine's device + a probed device key),
-    so the "auto -> cuda:0" resolution `shares_device` does is unwanted, and the
-    hot admission path shouldn't import torch just to compare two strings."""
-    fam_r, idx_r = _parse_device(resident)
-    fam_t, idx_t = _parse_device(target)
+    """True when a resident engine's device string sits on the same card as
+    `target` (a probed device key from `_worst_device_key`/`_device_key` --
+    "cuda:N" on an NVIDIA box, "rocm:N" on a ROCm/HIP box, per
+    `probe_capacity()`'s own `kind`). cpu / mps / auto / unparseable never
+    match — an engine that isn't on the target card holds no VRAM there, so
+    evicting it couldn't help the admitting op. Unindexed "cuda"/"rocm"
+    normalises to card 0 (torch's default). This is `shares_device`'s
+    card-comparison tail without its auto-resolution / torch import: both
+    inputs here are already concrete (a resident engine's device + a probed
+    device key), so the "auto -> cuda:0" resolution `shares_device` does is
+    unwanted, and the hot admission path shouldn't import torch just to
+    compare two strings.
+
+    Both sides are normalised to the torch-native "cuda:N" family via the
+    shared `_normalise_rocm_device_key` helper before comparing (#2813
+    review finding 7): `target` is ALWAYS probe-native, so on a ROCm box it
+    reads "rocm:N" while a resident engine's own device string is (with one
+    documented exception, Kokoro -- see `_is_resident`'s docstring) always
+    "cuda:N" post-#2813 -- an un-normalised comparison could therefore never
+    match on that hardware, no matter how the eviction ladder was called,
+    silently emptying every `_idle_evict_steps` step and sending every
+    admission that needed an eviction straight to `noCapacity` instead."""
+    fam_r, idx_r = _parse_device(_normalise_rocm_device_key(resident))
+    fam_t, idx_t = _parse_device(_normalise_rocm_device_key(target))
     if fam_r != "cuda" or fam_t != "cuda":
         return False
     return (idx_r or 0) == (idx_t or 0)
@@ -5351,8 +5376,17 @@ def _normalise_rocm_device_key(value: Optional[str]) -> Optional[str]:
     can reuse it directly rather than each growing a second ad hoc check
     (review finding 1: those three call sites received the identical
     admitted 'rocm:N' this normalisation exists to close, but none of them
-    routed through it). Any other value (cuda:N, cpu, auto, mps, an
-    already-'cuda:N' key, None) is returned unchanged."""
+    routed through it). Every value outside the 'rocm' family (cuda:N, cpu,
+    auto, mps, an already-'cuda:N' key, None) is returned unchanged --
+    EXCEPT a bare, unindexed 'rocm' (no ':N'), which becomes 'cuda:0', not
+    'rocm' unchanged (#2813 review finding 10): index 0 is torch's own
+    default card, the same substitution `_resolve_torch_device`'s 'auto'
+    branch and `_same_card`'s unindexed-'cuda' handling both already make.
+    Unreachable at every current call site (each formats an indexed key
+    before calling this, and config validation never lets an unindexed
+    'rocm' reach the sidecar in the first place) -- documented here because
+    a future caller passing a bare family string gets card 0 silently
+    substituted, not a pass-through."""
     fam, idx = _parse_device(value)
     if fam == "rocm":
         return f"cuda:{idx if idx is not None else 0}"
@@ -5372,8 +5406,17 @@ def _report_rocm_device_key(value: Optional[str]) -> Optional[str]:
     direction of `_normalise_rocm_device_key` above. Extracted from
     `_qwen_resident_device_key`'s original inline check (#2678 review F2) so
     every re-tag site shares ONE `_cuda_is_rocm()` call rather than a second
-    ad hoc test that could drift from it. Any other value (cpu, auto, mps,
-    an already-'rocm:N' key, None) is returned unchanged."""
+    ad hoc test that could drift from it. Every value outside the 'cuda'
+    family (cpu, auto, mps, an already-'rocm:N' key, None) is returned
+    unchanged -- EXCEPT a bare, unindexed 'cuda' (no ':N') OR an unresolved
+    'cuda-uuid:<uuid>' on a genuinely ROCm box, either of which becomes
+    'rocm:0', not passed through as-is (#2813 review finding 10): both
+    parse to family 'cuda' with no index, and index 0 is torch's own
+    default card, the same substitution `_normalise_rocm_device_key` above
+    makes in the opposite direction. Unreachable at every current call
+    site (each formats an indexed key before calling this) -- documented
+    here because a future caller passing an unindexed or unresolved value
+    gets card 0 silently substituted, not a pass-through."""
     fam, idx = _parse_device(value)
     if fam == "cuda" and _cuda_is_rocm():
         return f"rocm:{idx if idx is not None else 0}"

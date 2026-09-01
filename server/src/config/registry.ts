@@ -406,7 +406,7 @@ export const KNOBS: ConfigKnob[] = [
     //     layer (`PlacementController.admit()`) hands engines an admitted
     //     device key built from `probe_capacity()`'s own `kind` field, which
     //     genuinely IS "rocm:N" on a ROCm/HIP box (`probe_capacity` at
-    //     :4032's `kind = "rocm" if _cuda_is_rocm() else "cuda"`) — a real,
+    //     :4041's `kind = "rocm" if _cuda_is_rocm() else "cuda"`, :4050) — a real,
     //     internal producer this validated ENV KNOB never sees, but every
     //     engine's cold-load path does. Before #2813, that "rocm:N" reached
     //     torch/CTranslate2/speechbrain unconverted and crashed every GPU
