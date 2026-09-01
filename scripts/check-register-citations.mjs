@@ -220,6 +220,22 @@
 //      real corpus cases (A19/A31 annotated-non-fatal, A34 unannotated-fatal,
 //      A3 structural-gap-non-fatal) that motivated the split.
 //
+//      #2832's verify pass on #2721/#2833's own attempt found a THIRD gap in
+//      the same territory: a subject that loses only ONE of several rows —
+//      not a full discharge — still has a live row elsewhere, so citing the
+//      discharged/re-minted sibling isn't a stale citation at all, but the
+//      pre-#2842 code fired `wrongId` on it unconditionally (case (a) above,
+//      "legitimately maps to a DIFFERENT set of IDs", didn't distinguish a
+//      historically-legitimate sibling from a genuinely wrong id). #2721/
+//      #2842 fixed this in `buildLegitimateSubjectMap` itself, which now
+//      returns both the current subject->id map AND a historical one built
+//      from each row's OWN body text (a discharge/re-mint annotation naming
+//      a subject there is the register's own record of that row's history —
+//      see `dischargedSubjectsMentionedIn`'s own comment). `wrongId` still
+//      fires for an id with no such record, whether or not the subject has a
+//      live row elsewhere — only a documented historical tie downgrades it
+//      to `annotatedDischarge`.
+//
 // Frozen paths are excluded from all three checks — see isFrozenPath's own
 // comment for why each one is frozen. This script's own source, its own test
 // fixtures, and the sibling `check-onbox-register.mjs` checker's test
@@ -369,7 +385,7 @@ function extractSubjectNumbers(text) {
 // real register heading, "(#1976, PR [#1993](...))"). A citation can use this
 // convention even when the REGISTER's own row heading for that id doesn't
 // (a plan link stands in for the PR instead, as A32's real register heading
-// does) — in which case the PR number can never appear in `legitimate` no
+// does) — in which case the PR number can never appear in `legitimateMap` no
 // matter how `buildLegitimateSubjectMap` is written, because the register's
 // own heading text never carries it. Deliberately narrower than "any other
 // subject on the same line/segment": pass-9 finding X's own pinned tests
@@ -628,7 +644,8 @@ function extractRunSheetMentions(rowBody) {
  * an ID-shaped heading.
  *
  * @returns {{ rows: Map<string, { title: string, issues: Set<number>,
- *   runSheetPaths: Set<string>, mentionedRunSheetPaths: Set<string> }> }}
+ *   runSheetPaths: Set<string>, mentionedRunSheetPaths: Set<string>,
+ *   bodyText: string }> }}
  */
 export function parseRegisterRows(text) {
   const stripped = stripFences(text);
@@ -656,6 +673,7 @@ export function parseRegisterRows(text) {
         issues,
         runSheetPaths: new Set(owned),
         mentionedRunSheetPaths: new Set(mentioned),
+        bodyText: rowBody,
       });
     }
   }
@@ -1307,17 +1325,72 @@ export function findUnclassifiedRunSheetMentions(registerRows) {
 // --- Check C: one subject, conflicting IDs -------------------------------
 
 /**
- * Builds subject-number -> legitimate-ID-set from the register's own rows.
+ * Subject numbers found in the same discharge-word CLAUSE as a mention,
+ * anywhere in one row's own body text — reuses the exact clause-bounding
+ * `idSpecificAnnotationPresent` uses (DISCHARGE_ANNOTATION_REGEX +
+ * clauseBounds), just scanning for subject-number tokens instead of ID
+ * tokens, because it answers a different question: not "does this discharge
+ * note excuse a specific ID" but "does this row's OWN section document which
+ * subject(s) it used to track before discharging / being re-minted for
+ * different work". This is the register's own record of a row's history —
+ * the only place that history can live, since a re-minted row's CURRENT
+ * heading (`issues`) only ever reflects what it tracks NOW.
  */
-function buildLegitimateSubjectMap(registerRows) {
-  const map = new Map();
-  for (const [id, row] of registerRows) {
-    for (const subject of row.issues) {
-      if (!map.has(subject)) map.set(subject, new Set());
-      map.get(subject).add(id);
+function dischargedSubjectsMentionedIn(rowBodyText) {
+  const scanText = stripInlineCodeSpans(rowBodyText);
+  const dischargeRe = new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi');
+  const subjects = new Set();
+  let dm;
+  while ((dm = dischargeRe.exec(scanText))) {
+    const { start, end } = clauseBounds(rowBodyText, dm.index);
+    for (const subject of extractSubjectNumbers(rowBodyText.slice(start, end))) {
+      subjects.add(subject);
     }
   }
-  return map;
+  return subjects;
+}
+
+/**
+ * Builds the register's own answer to two questions `recordSubjectConflict`
+ * needs — both derived from `registerRows`, so it never has to reach back
+ * into `registerRows` itself (#2721/#2842: the previous version left that
+ * reach-around AS a special case bolted onto `recordSubjectConflict`, rather
+ * than folding it in here):
+ *
+ *   - `ownersOf(subject)`: which row IDs the register's CURRENT headings say
+ *     legitimately own this subject (unchanged from before this fix — a
+ *     subject CAN legitimately span two rows at once).
+ *   - `historicalOwnersOf(subject)`: which row IDs the register's own text
+ *     documents as having ONCE legitimately owned this subject, via a
+ *     discharge/re-mint annotation in THAT ROW'S OWN body text (see
+ *     `dischargedSubjectsMentionedIn`) — this is what lets
+ *     `recordSubjectConflict` tell "this ID owned the subject once, before
+ *     its own row discharged or was re-minted for other work" apart from "this
+ *     ID never had anything to do with the subject at all", the distinction
+ *     #2832's verify pass found missing (#2721/#2842).
+ *   - `currentSubjectsOf(id)`: the subject set `id`'s row currently carries,
+ *     i.e. what it tracks NOW if it moved on — used only for message text and
+ *     for telling a re-minted row (carries other subject metadata) apart from
+ *     a row that never carried any (the 21-of-65 structural gap).
+ */
+function buildLegitimateSubjectMap(registerRows) {
+  const current = new Map();
+  const historical = new Map();
+  for (const [id, row] of registerRows) {
+    for (const subject of row.issues) {
+      if (!current.has(subject)) current.set(subject, new Set());
+      current.get(subject).add(id);
+    }
+    for (const subject of dischargedSubjectsMentionedIn(row.bodyText)) {
+      if (!historical.has(subject)) historical.set(subject, new Set());
+      historical.get(subject).add(id);
+    }
+  }
+  return {
+    ownersOf: (subject) => current.get(subject),
+    historicalOwnersOf: (subject) => historical.get(subject),
+    currentSubjectsOf: (id) => registerRows.get(id)?.issues,
+  };
 }
 
 // Pass-6 review of PR #2630 (finding D): the character-window approach this
@@ -1454,29 +1527,54 @@ function headingTitleSegments(line) {
 /**
  * Records one id/subject pairing's verdict — shared by the positional
  * (`headingTitleSegments`) and non-positional paths in `checkConflictingSubjects`
- * so both produce identically-worded messages.
+ * so both produce identically-worded messages. Never reaches into
+ * `registerRows` directly — `legitimateMap` (`buildLegitimateSubjectMap`'s
+ * return value) is the single source of truth for every register-derived
+ * question this function asks (#2721/#2842 — see that function's own
+ * comment for why the previous version's direct `registerRows.get(id)`
+ * reach-around was itself the defect #2832's verify pass found).
  *
- * #2721/#2833 widened the "subject not in any current heading" branch, which
- * used to be a single non-fatal `unknownSubject` bucket regardless of cause.
- * Two real corpus shapes turned out to need different treatment, discriminated
- * by `id`'s OWN current row (`registerRows.get(id).issues`):
+ * TWO branches, by whether the subject currently has ANY legitimate owner:
  *
- *   - EMPTY (the id has never carried subject metadata in the register at
- *     all, e.g. a plan-only row like A3 — 21 of 65 real rows are this shape):
- *     this citation's subject can never be confirmed OR refuted from the
- *     register's own text. Stays `unknownSubject`, exploratory/opt-in — the
- *     permanent coverage gap this file's header comment already documents.
- *   - NON-EMPTY, and doesn't include this subject: the register's OWN text
- *     proves `id` currently tracks DIFFERENT work than this citation claims.
- *     Under stable, allocate-once IDs (#2717), that is only possible because
- *     the subject's row discharged and `id` was later re-minted for
- *     unrelated work — unambiguous dangling, same as a uniform ID shift
- *     across headings. Fatal `wrongId`, UNLESS a discharge annotation naming
- *     THIS id sits near the citation (`idSpecificAnnotationPresent`, the
- *     same mechanism Check A uses) — a file that already documents its own
- *     staleness ("Register row: A19 — discharged ...") is historical record,
- *     not a live defect, the same philosophy as Check A's annotated bucket.
- *     Printed non-fatal into `annotatedDischarge` instead.
+ * `legitimateMap.ownersOf(subject)` is EMPTY/undefined — the subject doesn't
+ * appear in any current register-row heading at all. #2721/#2833 widened
+ * this from a single non-fatal `unknownSubject` bucket into three, by what
+ * `id`'s own row proves:
+ *
+ *   - `legitimateMap.historicalOwnersOf(subject)` includes `id` — `id`'s own
+ *     row documents (a discharge/re-mint annotation naming this subject in
+ *     its own body text) that IT used to legitimately own this subject.
+ *     Non-fatal, `annotatedDischarge`.
+ *   - `legitimateMap.currentSubjectsOf(id)` is non-empty (and the above
+ *     didn't already match) — the register's OWN text proves `id` currently
+ *     tracks DIFFERENT, known work, but nothing on `id`'s own row explains
+ *     THIS subject specifically. Under stable, allocate-once IDs (#2717),
+ *     that is only possible because the subject's row discharged and `id`
+ *     was later re-minted for unrelated work — unambiguous dangling, same as
+ *     a uniform ID shift across headings. Fatal `wrongId`, UNLESS a discharge
+ *     annotation naming THIS id sits near the CITATION itself
+ *     (`idSpecificAnnotationPresent`, the same mechanism Check A uses — a
+ *     file that documents its own staleness, e.g. "Register row: A19 —
+ *     discharged...", is historical record, not a live defect). Printed
+ *     non-fatal into `annotatedDischarge` instead.
+ *   - Neither — `id` itself carries no subject metadata to compare against
+ *     either (a plan-only row like A3, 21 of 65 real rows). A structural
+ *     coverage gap, not a proven-wrong citation. Stays `unknownSubject`,
+ *     exploratory/opt-in.
+ *
+ * `legitimateMap.ownersOf(subject)` is NON-EMPTY but doesn't include `id` —
+ * the subject still has a live row, just not via this id. Before #2721/#2842
+ * this was unconditionally fatal, which could not tell "genuinely wrong id,
+ * never owned this subject" (the uniform-ID-shift class PR #2630 exists to
+ * catch) apart from "this id owned the subject once too, before its own row
+ * discharged/was re-minted, but the subject still has a live sibling row" —
+ * a multi-row subject losing one of its rows, not leaving the register.
+ * `legitimateMap.historicalOwnersOf(subject)` is exactly that distinction:
+ * when it includes `id`, non-fatal (`annotatedDischarge`) regardless of
+ * whether the CITATION itself is annotated — the register's own row already
+ * documents the history, which is the ground truth this whole file is built
+ * on. When it doesn't, `id` has no register-text tie to this subject at all:
+ * fatal `wrongId`, unchanged from before.
  *
  * `isOwnedPrCompanion` is a THIRD, narrower exemption checked first: `subject`
  * was introduced by an explicit "PR #nnnn" marker (`extractPrSubjectNumbers`)
@@ -1486,7 +1584,7 @@ function headingTitleSegments(line) {
  * recorded, not a citation defect, so nothing is printed. Measured real case:
  * A32's own citation pairs its tracked issue #2310 with its fixing PR #2316,
  * which the register's A32 heading never mentions (it links a design plan
- * instead) — #2316 can never appear in `legitimate` no matter how
+ * instead) — #2316 can never appear in `legitimateMap` no matter how
  * `buildLegitimateSubjectMap` is written, because the register's own row
  * heading text doesn't carry it. Deliberately gated on the "PR #" marker,
  * not mere same-line/segment presence — see `extractPrSubjectNumbers`'s own
@@ -1498,30 +1596,43 @@ function recordSubjectConflict(
   lineIndex,
   id,
   subject,
-  legitimate,
-  registerRows,
+  legitimateMap,
   lines,
   isOwnedPrCompanion,
   wrongId,
   unknownSubject,
   annotatedDischarge,
 ) {
-  const legitimateIds = legitimate.get(subject);
+  const legitimateIds = legitimateMap.ownersOf(subject);
+  const historicalIds = legitimateMap.historicalOwnersOf(subject);
+  const idHistoricallyOwnedThisSubject = historicalIds?.has(id) ?? false;
+
   if (!legitimateIds) {
     if (isOwnedPrCompanion) return;
-    const row = registerRows.get(id);
-    if (row && row.issues.size > 0) {
-      const currentSubjects = [...row.issues].sort((a, b) => a - b).join('/');
+    const currentSubjects = legitimateMap.currentSubjectsOf(id);
+    if (idHistoricallyOwnedThisSubject) {
+      const currentSubjectsText =
+        currentSubjects && currentSubjects.size > 0
+          ? `, but ${id} now tracks #${[...currentSubjects].sort((a, b) => a - b).join('/')}`
+          : '';
+      annotatedDischarge.push(
+        `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}${currentSubjectsText} — ` +
+          `${id}'s own row documents that #${subject} discharged — annotated as discharged, not failing`,
+      );
+      return;
+    }
+    if (currentSubjects && currentSubjects.size > 0) {
+      const currentSubjectsText = [...currentSubjects].sort((a, b) => a - b).join('/');
       if (idSpecificAnnotationPresent(enclosingSectionText(lines, lineIndex), id)) {
         annotatedDischarge.push(
           `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but ${id} now tracks ` +
-            `#${currentSubjects} (#${subject}'s row has discharged and ${id} was re-minted) — ` +
+            `#${currentSubjectsText} (#${subject}'s row has discharged and ${id} was re-minted) — ` +
             `annotated as discharged, not failing`,
         );
       } else {
         wrongId.push(
           `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but #${subject} does not ` +
-            `appear in any current register row heading and ${id} now tracks #${currentSubjects} ` +
+            `appear in any current register row heading and ${id} now tracks #${currentSubjectsText} ` +
             `instead — #${subject}'s row has fully discharged and ${id} was re-minted for different work`,
         );
       }
@@ -1537,9 +1648,23 @@ function recordSubjectConflict(
         `verify ${id} still applies`,
     );
   } else if (!legitimateIds.has(id)) {
-    // The subject's ID set is known and doesn't include this ID —
-    // unambiguously wrong, the four-wrong-headings class PR #2630 exists to
-    // catch. Fatal.
+    // The subject's ID set is known and doesn't include this ID. Before
+    // #2721/#2842 this was unconditionally fatal — but a subject can lose
+    // ONE of several rows without leaving the register: if `id`'s own row
+    // documents (via a discharge/re-mint annotation naming this subject)
+    // that it once legitimately owned this subject too, the sibling row(s)
+    // in `legitimateIds` prove the subject is still live, so this is history,
+    // not drift. Genuinely unrelated ids (the four-wrong-headings class PR
+    // #2630 exists to catch) have no such record and stay fatal.
+    if (idHistoricallyOwnedThisSubject) {
+      annotatedDischarge.push(
+        `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but the register's #${subject} ` +
+          `now maps to ${[...legitimateIds].sort().join('/')} — ${id}'s own row documents that it once ` +
+          `tracked #${subject} too, before discharging/being re-minted, and #${subject} still has a ` +
+          `live row elsewhere — annotated as discharged, not failing`,
+      );
+      return;
+    }
     wrongId.push(
       `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but the register's #${subject} ` +
         `maps to ${[...legitimateIds].sort().join('/')}, not ${id}`,
@@ -1548,7 +1673,7 @@ function recordSubjectConflict(
 }
 
 export function checkConflictingSubjects(fileTexts, registerRows) {
-  const legitimate = buildLegitimateSubjectMap(registerRows);
+  const legitimateMap = buildLegitimateSubjectMap(registerRows);
   const wrongId = [];
   const unknownSubject = [];
   const annotatedDischarge = [];
@@ -1596,14 +1721,13 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
             // unrelated subject in the same segment" still fires below.
             const isOwnedPrCompanion =
               prSubjects.has(subject) &&
-              [...ownSubjects].some((s) => s !== subject && legitimate.get(s)?.has(id));
+              [...ownSubjects].some((s) => s !== subject && legitimateMap.ownersOf(s)?.has(id));
             recordSubjectConflict(
               filePath,
               i,
               id,
               subject,
-              legitimate,
-              registerRows,
+              legitimateMap,
               lines,
               isOwnedPrCompanion,
               wrongId,
@@ -1657,7 +1781,7 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
       for (const id of citedIds) {
         if (!registerRows.has(id)) continue; // Check A's territory, not this one.
         const ownsAnySubjectHere = [...nearbySubjects].some((subject) =>
-          legitimate.get(subject)?.has(id),
+          legitimateMap.ownersOf(subject)?.has(id),
         );
         if (ownsAnySubjectHere && rowIds.length >= 2) continue;
         // #2721/#2833: a "PR #nnnn"-marked companion is exempted from the new
@@ -1670,14 +1794,13 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
         for (const subject of nearbySubjects) {
           const isOwnedPrCompanion =
             prSubjectsOnLine.has(subject) &&
-            [...nearbySubjects].some((s) => s !== subject && legitimate.get(s)?.has(id));
+            [...nearbySubjects].some((s) => s !== subject && legitimateMap.ownersOf(s)?.has(id));
           recordSubjectConflict(
             filePath,
             i,
             id,
             subject,
-            legitimate,
-            registerRows,
+            legitimateMap,
             lines,
             isOwnedPrCompanion,
             wrongId,

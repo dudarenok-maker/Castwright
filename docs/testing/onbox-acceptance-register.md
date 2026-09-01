@@ -376,26 +376,30 @@ setup rather than repeatedly loading and evicting models.
 > floor, not history, so a re-minted ID looks identical to a fresh one. And
 > `check-register-citations.mjs` still does not close the gap reliably, even
 > after #2721/#2833 widened Check C's fatal `wrongId` half to also cover a
-> *last-row* discharge (a subject with NO live row left at all, not just a
-> partially-discharged multi-row one): `wrongId` only ever triggers when the
-> stale citation sits on one of Check C's two surfaces (an anchored
-> `### <ID> · …` heading or a `Criteria source:` line) with the subject on
-> that *same* line, **and** the re-minted id's *own current* register row
-> carries subject metadata of its own to contradict it with — an id that has
-> never carried a subject number at all (a plan-only row, a real, permanent
-> gap covering 21 of 65 rows today) still can't be told apart from a fresh
-> mint. A prose-idiom `row A22` citation fires nothing either way, since
-> Check C doesn't read that surface at all. And a re-mint that is
-> *self-annotated* as discharged near the citation (this repo's own
-> "annotate, don't renumber" convention) is deliberately treated as
-> historical record, not a live defect, and prints non-fatal instead of
-> failing the gate — an annotation is not an escape hatch from the rule
-> above, it only changes whether a genuine re-mint is reported as `wrongId`
-> or as a printed, non-fatal note. **You cannot rely on a check to stop
-> you.** If `wrongId` does fire after a re-mint, the fix is to undo the
-> re-mint — never to edit the cited heading to match the new ID, which is
-> exactly the corruption this design exists to prevent. The rule above is
-> the only guard.
+> *last-row* discharge (a subject with NO live row left at all), and #2721/
+> #2842 widened it again to cover a *partially*-discharged multi-row subject
+> too (one row re-minted while a sibling row for the same subject stays
+> live): `wrongId` only ever triggers when the stale citation sits on one of
+> Check C's two surfaces (an anchored `### <ID> · …` heading or a
+> `Criteria source:` line) with the subject on that *same* line, **and**
+> the re-minted id's *own current* register row carries subject metadata of
+> its own to contradict it with — an id that has never carried a subject
+> number at all (a plan-only row, a real, permanent gap covering 21 of 65
+> rows today) still can't be told apart from a fresh mint. A prose-idiom
+> `row A22` citation fires nothing either way, since Check C doesn't read
+> that surface at all. And a re-mint that is *self-annotated* as discharged
+> — either near the citation itself, or (since #2721/#2842) in the re-minted
+> row's *own* section of this register, naming the subject it moved on from
+> — (this repo's own "annotate, don't renumber" convention) is deliberately
+> treated as historical record, not a live defect, and prints non-fatal
+> instead of failing the gate — an annotation is not an escape hatch from
+> the rule above, it only changes whether a genuine re-mint is reported as
+> `wrongId` or as a printed, non-fatal note; a re-mint with NEITHER kind of
+> annotation is still fatal even when a sibling row for the same subject
+> survives. **You cannot rely on a check to stop you.** If `wrongId` does
+> fire after a re-mint, the fix is to undo the re-mint — never to edit the
+> cited heading to match the new ID, which is exactly the corruption this
+> design exists to prevent. The rule above is the only guard.
 
 > **How this register goes stale, and how to check.** Its first version was built
 > by reading plan headers and issue bodies at face value, and three entries were

@@ -1067,6 +1067,105 @@ test('checkConflictingSubjects: control — the SAME shape stays non-fatal (anno
   assert.match(annotatedDischarge[0], /9999/);
 });
 
+// --- #2721/#2842 (rework of #2833's own #2832-FAIL'd attempt): a subject
+// still has a LIVE sibling row after one of its rows discharges/is
+// re-minted for other work — citing the discharged/re-minted sibling must
+// NOT be fatal, because the subject itself hasn't left the register. This is
+// the `legitimateMap.ownersOf(subject)` NON-EMPTY branch of
+// `recordSubjectConflict`, distinguished from a genuinely wrong/mechanically
+// -shifted id by `legitimateMap.historicalOwnersOf(subject)` — built from a
+// discharge/re-mint annotation naming the subject in the CITED id's OWN row
+// body (`dischargedSubjectsMentionedIn`), not from anything near the
+// citation itself.
+
+function buildMultiRowDischargeRegister({ includeLiveSibling }) {
+  const liveSibling = includeLiveSibling
+    ? `### A22 · Live sibling row for the same subject (#2040)\n\nBody.\n\n`
+    : '';
+  return `# Register
+
+## Group A
+
+${liveSibling}### A34 · Re-minted for new work (#2350)
+
+This row's earlier work on #2040 discharged; A34 was re-minted for this new work.
+`;
+}
+
+test('checkConflictingSubjects: does NOT fire (wrongId, non-fatal) citing a re-minted sibling id, unannotated at the citation, when the subject still has a live row elsewhere (#2721/#2842)', () => {
+  // Reproduction from #2842's own issue body: subject #2040 owned by live
+  // row A22 and re-minted row A34 (A34's OWN row documents its #2040 history,
+  // but its current heading tracks #2350 instead). Citing A34 for #2040, with
+  // NO discharge annotation anywhere near the citation itself, must NOT be
+  // fatal — the subject still has a live row (A22), only one of its rows
+  // has moved on. Mutation-provable: reverting `recordSubjectConflict`'s
+  // `else if (!legitimateIds.has(id))` branch to the pre-#2842 unconditional
+  // `wrongId.push` (deleting the `idHistoricallyOwnedThisSubject` check)
+  // turns this red (wrongId.length === 1) -> this test is the one that pins
+  // it green.
+  const { rows } = parseRegisterRows(buildMultiRowDischargeRegister({ includeLiveSibling: true }));
+  const files = new Map([
+    ['docs/bar.md', '### A34 · Some citing section (#2040)\n\nBody, no discharge wording anywhere.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 1);
+  assert.match(annotatedDischarge[0], /A34/);
+  assert.match(annotatedDischarge[0], /2040/);
+  assert.match(annotatedDischarge[0], /A22/); // names the still-live sibling
+});
+
+test('checkConflictingSubjects: control — the SAME shape stays non-fatal even when the subject\'s LAST live row ALSO discharges (full discharge, #2721/#2842)', () => {
+  // Paired control for the test above, per #2842's checklist item 3(b-
+  // control): drop A22 entirely, so #2040 no longer has ANY live row.
+  // A34's own row still documents that IT once tracked #2040 — that
+  // self-annotation is real regardless of whether a sibling survives, so
+  // this stays annotatedDischarge (not failing), matching the pre-existing
+  // "self-annotated discharge" philosophy this PR does not regress.
+  const { rows } = parseRegisterRows(buildMultiRowDischargeRegister({ includeLiveSibling: false }));
+  const files = new Map([
+    ['docs/bar.md', '### A34 · Some citing section (#2040)\n\nBody, no discharge wording anywhere.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 1);
+  assert.match(annotatedDischarge[0], /A34/);
+  assert.match(annotatedDischarge[0], /2040/);
+});
+
+test('checkConflictingSubjects: control — a genuinely unrelated id with NO historical tie to the subject still fires (wrongId, FATAL) even though the subject has a live sibling row (#2721/#2842)', () => {
+  // The multi-row-live-sibling exemption above must not become a blanket
+  // "subject has a live row somewhere -> never fatal" rule — that would gut
+  // the mechanical-ID-shift class PR #2630 exists to catch. A99 is a real
+  // register row (so Check A doesn't already own this citation), but its own
+  // body never mentions #2040 anywhere, discharged or otherwise — nothing in
+  // the register's own text ties it to this subject, so it must still fire.
+  const text = `# Register
+
+## Group A
+
+### A22 · Live row for the subject (#2040)
+
+Body.
+
+### A99 · Unrelated row tracking different work (#3000)
+
+Plain body text about this row's own work, nothing else.
+`;
+  const { rows } = parseRegisterRows(text);
+  const files = new Map([
+    ['docs/bar.md', '### A99 · Wrong citation (#2040)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /cited A99 for #2040/);
+  assert.match(wrongId[0], /A22/); // names the legitimate owner
+});
+
 test('checkConflictingSubjects: an untracked "PR #nnnn" companion beside an owned issue number is silently correct, not even a warning (#2721/#2833)', () => {
   // A32's real shape: the register's own A1 (standing in for A32) heading
   // tracks only its issue (#1000, standing in for #2310), never its fixing
