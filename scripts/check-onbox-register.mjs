@@ -258,22 +258,25 @@ export function parseAllRowHeadings(strippedText) {
 // comparator). So this check hashes the TRACKED copy's row content against
 // the PUBLISHED SNAPSHOT's row content, both HTML, both read with the same
 // extraction — not the register at all. `options.trackedLiveViewHtml` is the
-// CLI's local, currently-committed copy of the live view; see the CLI layer
-// for where it's read from disk.
+// CLI's local, working-tree copy of the live view (including any uncommitted
+// edits in the publish workflow); see the CLI layer for where it's read from
+// disk.
 //
 // Splits on each `<details class="item">` row wrapper (the one shape the
 // tracked live view and every `--against-published` snapshot both use — see
 // `parseLiveViewSections`'s own header for the section-level version of this
 // same split-and-scan approach), reads the row ID from its `<span
-// class="num">`, and hashes only the `<div class="body">...</div>` content —
-// not the `<summary>` (ID/title/risk badge), which drifting on its own is a
-// cosmetic rename, not the A41 content-regression shape this exists to
-// catch. A row whose ID isn't a plain `<Letter><N>` (the Blocked/Unconfirmed
-// sections use `—`) is skipped, the same convention `parseLiveViewSections`
-// already filters on. A block with no matching `<div class="body">...</div>`
-// (an extraction failure, e.g. the markup changed) is an error rather than
-// silently skipped — a silent skip would mean comparing fewer rows than the
-// page carries and reporting a vacuous pass.
+// class="num">`, and hashes both the `<summary>` content (ID/title/risk badge)
+// and the `<div class="body">...</div>` content. The summary is included to
+// catch drifts in the risk badge or title, which are part of the row's
+// documented state — a stale risk badge is a content regression like a changed
+// body paragraph. A row whose ID isn't a plain `<Letter><N>` (the
+// Blocked/Unconfirmed sections use `—`) is skipped, the same convention
+// `parseLiveViewSections` already filters on. A block with no matching
+// `<summary>...</summary>` or `<div class="body">...</div>` (an extraction
+// failure, e.g. the markup changed) is an error rather than silently skipped —
+// a silent skip would mean comparing fewer rows than the page carries and
+// reporting a vacuous pass.
 //
 // Returns { bodies, errors: [] } on success, or { bodies, errors } when
 // extraction failures occur. Errors are surface-level extraction problems
@@ -294,6 +297,13 @@ export function parseLiveViewRowBodies(liveViewHtml) {
     }
     const id = idMatch[1].trim();
     if (!/^[A-Z]\d+$/.test(id)) continue;
+    const summaryMatch = block.match(/<summary>([\s\S]*?)<\/summary>/);
+    if (!summaryMatch) {
+      errors.push(
+        `Row ${id}: could not extract summary content from <summary>. The markup may be missing or malformed.`,
+      );
+      continue;
+    }
     const bodyMatch = block.match(/<div class="body">([\s\S]*?)<\/div>\s*<\/details>/);
     if (!bodyMatch) {
       errors.push(
@@ -301,7 +311,9 @@ export function parseLiveViewRowBodies(liveViewHtml) {
       );
       continue;
     }
-    bodies.set(id, htmlCellText(bodyMatch[1]));
+    const summaryText = htmlCellText(summaryMatch[1]);
+    const bodyText = htmlCellText(bodyMatch[1]);
+    bodies.set(id, summaryText + '\n' + bodyText);
   }
   return { bodies, errors };
 }
@@ -725,8 +737,9 @@ export const DISCHARGE_NAME_ERROR_PREFIX = '--discharging named ';
 // route this class to its OWN remedy rather than the structural "BEHIND"
 // framing below — a row whose content merely drifted isn't "live-only, merge
 // it in", it's "reconcile which side is actually correct", a different fix
-// entirely.
-export const ROW_CONTENT_DRIFT_ERROR_PREFIX = 'row ';
+// entirely. The prefix is deliberately distinctive to avoid accidental
+// collision with other error strings that might happen to start with 'row '.
+export const ROW_CONTENT_DRIFT_ERROR_PREFIX = 'row-content-drift: ';
 
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
@@ -1664,10 +1677,10 @@ function runCheckOnboxRegisterCli() {
       console.error(failureMessage);
     }
     // #2599/A41: the row-content-drift sub-check inside `checkLiveView`
-    // compares this TRACKED, currently-committed copy of the live view
-    // against the published snapshot — not the register — see
-    // `parseLiveViewRowBodies`'s own header for why. Read the same way the
-    // no-flag path below reads it.
+    // compares this TRACKED, working-tree copy of the live view (including
+    // any uncommitted edits mid-publish) against the published snapshot — not
+    // the register — see `parseLiveViewRowBodies`'s own header for why. Read
+    // the same way the no-flag path below reads it.
     const trackedLiveViewHtml = read(LIVE_VIEW);
     const publishedErrors = checkLiveView(text, publishedHtml, {
       direction: 'extraOnly',

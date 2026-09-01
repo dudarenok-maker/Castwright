@@ -13,6 +13,7 @@ import {
   checkLiveView,
   resolveBaselineText,
   CANNOT_VERIFY_BASELINE_ERROR,
+  ROW_CONTENT_DRIFT_ERROR_PREFIX,
   stripHtmlComments,
   htmlCellText,
   ALLOCATION_FLOOR,
@@ -1824,8 +1825,8 @@ test("#2272: dischargingIds has no effect on the default direction:'both' compar
 function buildRowContentLiveView(rows) {
   const detailsBlocks = rows
     .map(
-      ({ id, body }) => `    <details class="item">
-      <summary><span class="num">${id}</span><span class="iname">t</span></summary>
+      ({ id, body, risk }) => `    <details class="item">
+      <summary><span class="num">${id}</span><span class="iname">t</span><span class="risk">${risk ?? 'default'}</span></summary>
       <div class="body">
         <p>${body}</p>
       </div>
@@ -1896,7 +1897,7 @@ test('#2599: a row whose ID and count match but body content differs is caught, 
     trackedLiveViewHtml,
     baselineLiveViewText: baselineLiveView,
   });
-  assert.deepEqual(errors, ['row A1: content differs between local and published']);
+  assert.deepEqual(errors, [`${ROW_CONTENT_DRIFT_ERROR_PREFIX}A1: content differs between local and published`]);
 });
 
 test('#2599: a row present only in the tracked live view (not yet published) is tolerated, not reported as content drift', () => {
@@ -1999,7 +2000,7 @@ test('#2599: a genuine revert (published matches baseline, local differs) fails'
   });
   assert.deepEqual(
     errors,
-    ['row A1: content differs between local and published'],
+    [`${ROW_CONTENT_DRIFT_ERROR_PREFIX}A1: content differs between local and published`],
     `a genuine revert should fail, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -2025,6 +2026,39 @@ test('#2599: missing baseline live-view skips content-hashing, does not fail', (
     errors,
     [],
     `missing baseline should skip content-hashing, not fail, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// #2599/A41: the summary element (title/risk badge) is now included in the
+// content hash, so a stale risk badge is caught as drift, same as a changed
+// body paragraph. Regression test for Finding 3: ensure a row with unchanged
+// body but different risk badge between tracked and published (with matching
+// baseline) is caught as genuine drift.
+test('#2599: a row whose body is unchanged but risk badge differs is caught as content drift', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // All three have the same body content, but the summary/risk badge differs:
+  // baseline and published have 'default', tracked has 'stale-badge'.
+  const sharedBody = 'Shared body content.';
+  const baselineLiveView = buildRowContentLiveView([
+    { id: 'A1', body: sharedBody, risk: 'default' },
+  ]);
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: sharedBody, risk: 'stale-badge' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: sharedBody, risk: 'default' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: baselineLiveView,
+  });
+  assert.deepEqual(
+    errors,
+    [`${ROW_CONTENT_DRIFT_ERROR_PREFIX}A1: content differs between local and published`],
+    `a stale risk badge should be caught as content drift, got: ${JSON.stringify(errors)}`,
   );
 });
 

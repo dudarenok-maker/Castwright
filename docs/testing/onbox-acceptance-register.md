@@ -261,21 +261,21 @@ comparison, see the edge list above). The merge step that closes this, run
      SAME ID, on both the tracked `.html` and the currently-published page,
      but its own body text hashes differently from the published version AND
      from `origin/main`'s baseline copy. This is a DIFFERENT check from the
-     BEHIND check above: it compares your local, currently-committed
-     `docs/testing/onbox-acceptance-register-live-view.html` against the
-     published snapshot, not the register — hashing the register's markdown
-     against the published HTML would flag almost every row, since the two
-     are deliberately different documents that only have to agree on
-     structure, not wording. The check disambiguates via the baseline: if
-     your local copy matches `origin/main`'s copy, the edit is already
-     committed to this branch and pending publish (expected, and about to be
-     published, so proceed); if the published version matches `origin/main`'s
-     baseline but your local doesn't, the live page reverted or was
-     hand-edited independently — the A41 incident this check exists to
-     catch: PR #2578 review rounds 13-18 caught it only by manually
-     byte-diffing the two files, because nothing mechanical compared row
-     content before this. A reported drift failure indicates the latter, a
-     genuine defect that needs investigation before publishing.
+     BEHIND check above: it compares your local, working-tree copy of
+     `docs/testing/onbox-acceptance-register-live-view.html` (including any
+     uncommitted edits mid-publish) against the published snapshot, not the
+     register — hashing the register's markdown against the published HTML
+     would flag almost every row, since the two are deliberately different
+     documents that only have to agree on structure, not wording. The check
+     disambiguates via the baseline: if your local copy matches
+     `origin/main`'s copy, the edit is already committed to this branch and
+     pending publish (expected, and about to be published, so proceed); if the
+     published version matches `origin/main`'s baseline but your local doesn't,
+     the live page reverted or was hand-edited independently — the A41
+     incident this check exists to catch: PR #2578 review rounds 13-18 caught
+     it only by manually byte-diffing the two files, because nothing mechanical
+     compared row content before this. A reported drift failure indicates the
+     latter, a genuine defect that needs investigation before publishing.
 
    **Known limitation:** a row that's live and still genuinely owed but was
    never actually merged into `main` at all (e.g. published straight from a
