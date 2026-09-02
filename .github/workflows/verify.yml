@@ -40,7 +40,9 @@ name: Verify
 # fixed cost — checkout, setup, the warmup project, a fresh Vite dev server —
 # doesn't shrink with more shards, so the wall-clock win is sub-linear).
 # Measured outcome (2026-09-02, run 33631470487): 8-way average ~228s/shard,
-# slowest shard ~358s (worse than old 4-way baseline of ~240s), no queuing.
+# slowest shard ~358s. Real 4-way baseline (runs 33572155392 and 33496342069):
+# slowest shards ~559s and ~516s respectively. This is a real 31–36% improvement
+# in wall-clock time (which is set by the slowest shard), with no queuing.
 # See docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md
 # Decision D. Visual baselines were pulled into
 # their own job in the same change: they used to run as a serial step after
@@ -405,7 +407,8 @@ jobs:
   # itself — same anti-flake guarantee, less wall-clock (sub-linear: fixed
   # per-shard cost — checkout, setup, the warmup project, a fresh Vite dev
   # server — doesn't shrink with more shards). Measured: 8-way average ~228s/
-  # shard, slowest ~358s (worse than 4-way's ~240s baseline), no queuing.
+  # shard, slowest ~358s. Real recent 4-way runs' slowest shards were ~516–559s
+  # (runs 33496342069 and 33572155392), a real 31–36% improvement in wall-clock.
   e2e:
     name: E2E (chromium) — shard ${{ matrix.shard }}/8
     needs: detect
