@@ -1461,6 +1461,11 @@ test('cleanGitEnv strips a git env override regardless of stored casing', () => 
     const cleaned = cleanGitEnv();
     assert.equal(cleaned.git_dir, undefined);
     assert.equal(cleaned.Git_Index_File, undefined);
+    // Non-GIT_ keys are untouched — spot-check against whichever casing this
+    // OS actually stores the PATH var under (Windows: "Path").
+    const pathKey = Object.keys(cleaned).find((k) => k.toUpperCase() === 'PATH');
+    assert.ok(pathKey, 'PATH must survive the scrub');
+    assert.equal(cleaned[pathKey], saved[pathKey]);
   } finally {
     for (const key of Object.keys(process.env)) delete process.env[key];
     Object.assign(process.env, saved);

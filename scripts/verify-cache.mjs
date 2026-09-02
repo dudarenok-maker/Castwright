@@ -957,8 +957,11 @@ export function stagedDiffFiles(cwd) {
 // `null`) would NOT trip verify-cache's "diff failed, run everything" safety
 // branch. See scripts/tests/verify-cache.test.mjs for the behavioural proof.
 function gitEnv() {
-  const { GIT_PREFIX: _GIT_PREFIX, ...cleanEnv } = scrubGitEnv();
-  return cleanEnv;
+  const env = scrubGitEnv();
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === 'GIT_PREFIX') delete env[key];
+  }
+  return env;
 }
 
 export function branchDiffFiles(cwd) {
