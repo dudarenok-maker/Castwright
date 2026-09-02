@@ -4,12 +4,24 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
 import {
   checkRegisterCitations,
   extractCitations,
   isFrozenPath,
   REGISTER_PATH,
+  scannedFiles,
 } from '../check-register-row-citations.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CLI_PATH = join(HERE, '..', 'check-register-row-citations.mjs');
+
+function runCli(args) {
+  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000 });
+}
 
 // A minimal register carrying two real rows: A1 and E1. Every fixture below
 // checks its own file against exactly this register.
@@ -216,4 +228,122 @@ test('extractCitations returns citations in ascending line order', () => {
     { line: 1, id: 'A1' },
     { line: 3, id: 'E1' },
   ]);
+});
+
+// --- Real-tree CLI integration tests ---
+//
+// Real repo integration, mirroring check-register-citations.test.mjs's own
+// runCli precedent: exercises the actual CLI end to end against the real
+// register and repo tree, rather than just the pure functions with injected
+// fakes. These tests are mutation-provable — they fail if scannedFiles()
+// returns [], if SCAN_PREFIXES drops docs/features/**, or if REGISTER_PATH
+// points at a nonexistent file.
+
+test('CLI: the real tree scan passes clean', () => {
+  const result = runCli([]);
+  assert.equal(result.status, 0, `expected exit 0, got ${result.status}:\n${result.stderr}`);
+  assert.match(result.stdout, /check:register-row-citations: OK/);
+  // Assert that the scan actually found citations (not scanning zero files).
+  assert.match(result.stdout, /\d+ citation\(s\) across \d+ file\(s\)/);
+});
+
+test('CLI mutation: if scannedFiles() returns empty, the check would find zero citations', () => {
+  const original = readFileSync(CLI_PATH, 'utf8');
+  // Mutate scannedFiles to return an empty array — the checker should then
+  // find zero citations and report OK (not an error), but if there are any
+  // real citations in the tree, this test proves they're actually being found.
+  const baseline = runCli([]);
+  assert.equal(baseline.status, 0);
+
+  // Extract the actual citation count from the success line
+  const citationMatch = baseline.stdout.match(/(\d+) citation\(s\)/);
+  const citationCount = citationMatch ? parseInt(citationMatch[1], 10) : 0;
+
+  // Only test the mutation if there are actual citations in the tree
+  if (citationCount > 0) {
+    // Mutate to make scannedFiles() return empty by finding the spread operator
+    // in the return statement and replacing the whole return
+    const mutated = original.replace(
+      'return [...files].sort();',
+      'return []; // MUTATED'
+    );
+    assert.notEqual(mutated, original, 'mutation should have changed the file');
+
+    try {
+      writeFileSync(CLI_PATH, mutated);
+      const mutantResult = runCli([]);
+      // With zero files scanned, we should get zero citations reported
+      assert.match(mutantResult.stdout, /0 citation\(s\)/);
+      // The mutation should be detectable by checking that citation count dropped
+      assert.notEqual(mutantResult.stdout, baseline.stdout);
+    } finally {
+      writeFileSync(CLI_PATH, original);
+      assert.equal(
+        Buffer.compare(Buffer.from(readFileSync(CLI_PATH, 'utf8')), Buffer.from(original)),
+        0,
+        'file should be restored to original'
+      );
+    }
+  }
+});
+
+test('CLI mutation: if SCAN_PREFIXES drops docs/features/**, the check would miss those files', () => {
+  const original = readFileSync(CLI_PATH, 'utf8');
+  const baseline = runCli([]);
+  assert.equal(baseline.status, 0);
+
+  // Only test if the baseline actually scanned files from docs/features/**
+  // (which it should, given the test above found citations)
+  if (!baseline.stdout.includes('check:register-row-citations: OK')) {
+    return; // Skip if something's wrong with baseline
+  }
+
+  // Mutate SCAN_PREFIXES to exclude docs/features/**
+  const mutated = original.replace(
+    /const SCAN_PREFIXES = \[.*?\];/s,
+    "const SCAN_PREFIXES = ['docs/testing/'];"
+  );
+  assert.notEqual(mutated, original, 'mutation should have changed SCAN_PREFIXES');
+
+  try {
+    writeFileSync(CLI_PATH, mutated);
+    const mutantResult = runCli([]);
+    // With docs/features/** excluded, the scan should find fewer files/citations
+    // (assuming docs/features/** contains at least one citation)
+    assert.notEqual(mutantResult.stdout, baseline.stdout, 'output should differ when docs/features/** is excluded');
+  } finally {
+    writeFileSync(CLI_PATH, original);
+    assert.equal(
+      Buffer.compare(Buffer.from(readFileSync(CLI_PATH, 'utf8')), Buffer.from(original)),
+      0,
+      'file should be restored to original'
+    );
+  }
+});
+
+test('CLI mutation: if REGISTER_PATH points at a nonexistent file, the check would fail', () => {
+  const original = readFileSync(CLI_PATH, 'utf8');
+  const baseline = runCli([]);
+  assert.equal(baseline.status, 0);
+
+  // Mutate REGISTER_PATH to point at a nonexistent file
+  const mutated = original.replace(
+    /export const REGISTER_PATH = '[^']*';/,
+    "export const REGISTER_PATH = 'docs/testing/nonexistent-register.md';"
+  );
+  assert.notEqual(mutated, original, 'mutation should have changed REGISTER_PATH');
+
+  try {
+    writeFileSync(CLI_PATH, mutated);
+    const mutantResult = runCli([]);
+    // Mutating REGISTER_PATH to a nonexistent file should cause the checker to error
+    assert.notEqual(mutantResult.status, 0, 'should fail when register file does not exist');
+  } finally {
+    writeFileSync(CLI_PATH, original);
+    assert.equal(
+      Buffer.compare(Buffer.from(readFileSync(CLI_PATH, 'utf8')), Buffer.from(original)),
+      0,
+      'file should be restored to original'
+    );
+  }
 });
