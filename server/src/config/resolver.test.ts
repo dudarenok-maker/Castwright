@@ -98,30 +98,49 @@ describe('resolver precedence', () => {
 
   /* #2224 — a pass in this same review round widened this pattern to also
      accept "mps"/"rocm", reasoning from `_engine_env_pin`'s
-     `fam in ("cuda","rocm")` check (main.py:3367) that main.py treats them
+     `fam in ("cuda","rocm")` check (main.py:3905) that main.py treats them
      as first-class INPUT device families. That reasoning was wrong and was
      reverted (checked directly against main.py, not merely asserted) — this
      suite pins the CORRECTED grammar and asserts the wrongly-widened forms
      are REJECTED, so the same mistake can't quietly land again:
-       - "rocm" is a DERIVED REPORTING label, never a valid input. On AMD,
-         HIP aliases the CUDA API, so the runtime device string an operator
-         must actually set is STILL "cuda"/"cuda:<n>" — `_torch_is_hip`
-         (main.py:9100-9103) and `_normalize_device_family`
-         (main.py:9124-9134) exist specifically to re-label an ALREADY-
-         "cuda" value as "rocm" for honest reporting after the fact
+       - "rocm" is a DERIVED REPORTING label, never a valid OPERATOR input.
+         On AMD, HIP aliases the CUDA API, so the runtime device string an
+         operator must actually set is STILL "cuda"/"cuda:<n>" —
+         `_torch_is_hip` (main.py:10217) and `_normalize_device_family`
+         (main.py:10241) exist specifically to re-label an ALREADY-"cuda"
+         value as "rocm" for honest reporting after the fact
          (`scripts/accelerator-profile.mjs`'s `runtimeBackend` doc comment:
          "we REPORT 'rocm' for honesty; the sidecar still uses
-         device='cuda'"). Nothing upstream of `_parse_device` ever PRODUCES
-         family "rocm" from a real input, so the `in ("cuda","rocm")` checks
-         scattered through main.py are unreachable dead code for that arm.
-         Typing "rocm" literally reaches `_parse_device`'s catch-all as an
-         OPAQUE family string — not the honest-reporting kind — and crashes
-         both engines: `SPK_DEVICE=rocm` hits `EncoderClassifier(run_opts=
-         {"device":"rocm"})` -> RuntimeError, and `SpeakerEngine.
-         ensure_loaded`'s demote-to-cpu path is gated on family=="cuda"
-         (main.py:7540), so it hits `else: raise` with NO fallback — every
-         `/embed` 500s. `ASR_DEVICE=rocm` crashes `WhisperModel(device=
-         "rocm")` the same way (CTranslate2 has no "rocm" device at all).
+         device='cuda'"). This pattern is therefore still correct as-is.
+         **Corrected (#2813, PR #2835 review):** the paragraph that used to
+         follow this one claimed nothing upstream of `_parse_device` ever
+         PRODUCES family "rocm" from a real input, so the `in
+         ("cuda","rocm")` checks scattered through main.py were unreachable
+         dead code. They are not — #2813 is direct proof: the VRAM-ledger
+         admission layer (`PlacementController.admit()`) hands engines an
+         admitted device key built from `probe_capacity()`'s own `kind`
+         field, which genuinely IS "rocm:N" on a ROCm/HIP box
+         (main.py:4041's `kind = "rocm" if _cuda_is_rocm() else "cuda"`,
+         :4050) — a real, internal producer this validated ENV KNOB never
+         sees, but every engine's cold-load path does. Before #2813, that
+         "rocm:N" reached torch/CTranslate2/speechbrain unconverted and
+         crashed every GPU engine load on a real AMD box (`SPK_DEVICE=rocm`
+         hit `EncoderClassifier(run_opts={"device":"rocm"})` -> RuntimeError,
+         with `SpeakerEngine.ensure_loaded`'s demote-to-cpu path gated on
+         family=="cuda" (main.py:8571-8576) so it hit `else: raise` with NO
+         fallback — every `/embed` 500s; `ASR_DEVICE=rocm` crashed
+         `WhisperModel(device="rocm")` the same way, since CTranslate2 has
+         no "rocm" device at all) — #2813 fixed the class by converting it
+         to "cuda:N" at every consumer via the shared
+         `_normalise_rocm_device_key` helper, and fixed the reverse mismatch
+         (an operator's validated "cuda:N" pin never matching the ledger's
+         own "rocm:N" candidate keys, permanent `noCapacity`) by re-tagging
+         `_engine_env_pin`'s/`_is_resident`'s output via the shared
+         `_report_rocm_device_key` helper. This knob's OWN pattern needed no
+         change either way — the fix lives entirely sidecar-side, not in
+         what an operator is allowed to type here, which is exactly why this
+         suite's assertions below are unaffected by #2813 and still pin the
+         correct, unwidened grammar.
        - "mps" IS a real torch device (Apple Silicon), but only for
          PyTorch-backed engines. CTranslate2 (Whisper's backend) has no
          Metal/MPS backend, so `ASR_DEVICE=mps` would crash `WhisperModel
@@ -156,7 +175,7 @@ describe('resolver precedence', () => {
       expect(coerceAndValidate(knob, 'MPS').ok).toBe(false);
     });
 
-    it.each(KNOBS)('%s rejects bare "rocm" — it is a DERIVED reporting label (main.py:9100-9103, :9124-9134), never a valid input; the AMD device string is "cuda"', (key) => {
+    it.each(KNOBS)('%s rejects bare "rocm" — it is a DERIVED reporting label (main.py:10217, :10241), never a valid OPERATOR input; the AMD device string an operator sets is still "cuda"', (key) => {
       const knob = getKnob(key)!;
       expect(coerceAndValidate(knob, 'rocm').ok).toBe(false);
       expect(coerceAndValidate(knob, 'ROCM').ok).toBe(false);

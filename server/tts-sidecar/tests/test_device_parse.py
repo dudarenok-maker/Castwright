@@ -16,6 +16,16 @@ def test_ct2_kwargs_splits_index():
     assert main._ct2_kwargs("cuda", "int8_float16") == {"device": "cuda", "compute_type": "int8_float16"}
     assert main._ct2_kwargs("cpu", "int8") == {"device": "cpu", "compute_type": "int8"}
 
+def test_ct2_kwargs_normalises_admitted_rocm():
+    """#2813 review finding 1: an admitted device can arrive as an explicit
+    'rocm:N' from the VRAM-ledger admission layer. Before the fix,
+    `_ct2_kwargs('rocm:0', ...)` returned `{"device": "rocm", ...}` --
+    CTranslate2 has no 'rocm' device at all, so every `/transcribe` on a
+    ROCm box would 500. Index preservation and the compute_type pass-through
+    both still hold post-normalisation."""
+    assert main._ct2_kwargs("rocm:0", "int8_float16") == {"device": "cuda", "device_index": 0, "compute_type": "int8_float16"}
+    assert main._ct2_kwargs("rocm:1", "int8_float16") == {"device": "cuda", "device_index": 1, "compute_type": "int8_float16"}
+
 def test_whisper_compute_type_honours_indexed_cuda(monkeypatch):
     monkeypatch.delenv("ASR_COMPUTE_TYPE", raising=False)
     monkeypatch.setenv("ASR_DEVICE", "cuda:1")
@@ -25,6 +35,15 @@ def test_spk_run_device():
     assert main._spk_run_device("cuda:1") == "cuda:1"
     assert main._spk_run_device("cuda") == "cuda"
     assert main._spk_run_device("cpu") == "cpu"
+
+def test_spk_run_device_normalises_admitted_rocm():
+    """#2813 review finding 1: an admitted device can arrive as an explicit
+    'rocm:N'. Before the fix, `_spk_run_device('rocm:0')` returned the
+    OPAQUE string 'rocm' (the `family in ("cpu","auto")` else-branch just
+    returns `family` verbatim) -- speechbrain's `EncoderClassifier` has no
+    'rocm' device and raises on it, same as CT2 for Whisper."""
+    assert main._spk_run_device("rocm:0") == "cuda:0"
+    assert main._spk_run_device("rocm:1") == "cuda:1"
 
 def test_spk_indexed_cuda_degrades_when_no_gpu(monkeypatch):
     """SPK_DEVICE=cuda:1 with no CUDA must degrade to cpu, not crash on the

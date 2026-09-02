@@ -155,6 +155,53 @@ def test_auto_cuda_available_now_resolves_to_indexed_cuda_zero(monkeypatch):
     assert opts["deepspeed"] is True
 
 
+def test_admitted_rocm_device_normalises_to_cuda(monkeypatch):
+    """#2813: an admitted device can arrive as an explicit 'rocm:N' (the
+    admission ledger's own honest ROCm-vs-CUDA accounting vocabulary), not
+    just 'auto'. Before the fix, `_resolve_runtime_options` only called
+    `_resolve_torch_device` when `device == "auto"`, so an explicit
+    'rocm:0' bypassed the resolver entirely and would still reach a real
+    torch.device()/.to() call unconverted, crashing on a ROCm/HIP build
+    where torch only understands 'cuda:N'. This proves the call is now
+    unconditional and the returned device is 'cuda:0', not 'rocm:0'."""
+    monkeypatch.setenv("COQUI_DEVICE", "rocm:0")
+    monkeypatch.delenv("COQUI_HALF", raising=False)
+    monkeypatch.delenv("COQUI_DEEPSPEED", raising=False)
+    eng = main.CoquiEngine()
+    opts = eng._resolve_runtime_options(_torch_stub(cuda_available=True))
+    assert opts["device"] == "cuda:0"
+    # cuda family, so fp16/deepspeed default on same as any other cuda device.
+    assert opts["half"] is True
+    assert opts["deepspeed"] is True
+
+
+def test_admitted_rocm_device_override_normalises_to_cuda(monkeypatch):
+    """#2813 review finding 4: the test above sets COQUI_DEVICE (the env
+    path, `self._device`) but calls `_resolve_runtime_options` with NO
+    `device_override` — so it never actually exercises the parameter the
+    VRAM-ledger admission layer uses (`grep -rn device_override
+    server/tts-sidecar/tests/` returned zero hits before this test). A
+    plausible future "an admitted device is already concrete" optimisation
+    — `device = device_override if device_override is not None else
+    _resolve_torch_device(self._device, torch_module)` — would reintroduce
+    the shipped bug in full and leave every existing rocm test green,
+    because none of them drive `device_override`. This proves the
+    ADMITTED-device path specifically: COQUI_DEVICE stays at its ordinary
+    default ('cpu'), and 'rocm:0' arrives only via `device_override`, the
+    same way `/synthesize`'s capacity-admission wrap actually calls this
+    method."""
+    monkeypatch.delenv("COQUI_DEVICE", raising=False)
+    monkeypatch.delenv("COQUI_HALF", raising=False)
+    monkeypatch.delenv("COQUI_DEEPSPEED", raising=False)
+    eng = main.CoquiEngine()
+    opts = eng._resolve_runtime_options(
+        _torch_stub(cuda_available=True), device_override="rocm:0"
+    )
+    assert opts["device"] == "cuda:0"
+    assert opts["half"] is True
+    assert opts["deepspeed"] is True
+
+
 # ── admitted-device consistency: self._device tracks the resolved card while
 #    resident, and is restored to the pref on unload (#1730 gap 3) ────────────
 

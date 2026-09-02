@@ -336,6 +336,7 @@ Design rationale:
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
 - `npm run test:server` — Vitest single-run for the server (parallel, excludes the 10 hot files routed to `test:server-slow`).
+- `npm run test:changed` / `npm run test:server:changed` — `vitest run --changed HEAD` for the frontend/server suites respectively, selecting only tests vitest's own dependency graph says the diff (staged + unstaged, vs `HEAD`) affects. Not run standalone in practice — these back pre-commit's `--scope-staged` narrowing (see "Commit gate") — but usable directly for a quick local check.
 - `npm run test:server-slow` — Vitest single-run for 10 timeout-prone server test files (analyzer/gemini, a parsers PDF test, and routes tests), pinned to one fork via `server/vitest.config.slow.ts`. Runs in the cloud `verify.yml` battery and the full local `npm run verify`, not in pre-push `verify:fast:branch` or `verify:fast` pre-commit. See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
 - `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
   (log rotation/pruning). Requires Pester >= 5.0; install once with
@@ -893,9 +894,37 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   docs-only commit runs none of them. Sub-5s on a warm cache. Refuses the
   commit if any in-scope spec is red. Sidecar (pytest), Pester scripts,
   Playwright e2e, and typecheck are NOT in pre-commit — they live in
-  pre-push so commits stay snappy. If a co-running GPU generation is detected
-  (nvidia-smi), the runner warns and throttles test concurrency
-  (`LOW_CONCURRENCY=1`); `SKIP_CONTENTION_CHECK=1` disables the probe.
+  pre-push so commits stay snappy. Under `--scope-staged` the `test`/
+  `test:server` steps additionally run vitest's own `--changed HEAD`
+  selection (`test:changed`/`test:server:changed`) instead of the whole
+  suite — a one-file server commit runs only the tests that file's diff
+  touches, not all ~6700. Applies only to an UNSHARED `--scope-staged` diff
+  that is CONFINED to the step's own primary source root with a safe
+  extension (`diffSafeForChangedOnly` — `src/**` for `test`,
+  `server/src/**` for `test:server`, `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`/
+  `.mts`/`.cts` only) — a positive allowlist, not an exclusion list, after
+  three review rounds each found a narrower live gap in "matches this step's
+  declared scope" (a shared root-manifest/lockfile change; a step's own
+  `extraFiles`/server lockfile; a root-level config file matched only via
+  `globs`; a non-JS asset like `src/styles.css` read by its guard tests via
+  `readFileSync`, not import). Any diff outside that allowlist still runs
+  every step's full script, since `--changed` against a file no test's
+  dependency graph actually reaches would otherwise exit 0 having run
+  zero tests. A `--changed`-only pass is also never written to the verify-cache
+  (only a full run is), so it cannot leave behind a cache entry a later
+  `--scope-branch`/CI run would read as `[cached]` and skip. `--scope-branch`
+  (pre-push) always runs the full suite — the narrowing above never applies
+  there — so a change `--changed` misses through an untracked dependency is
+  still caught before merge. (Cloud CI narrows its own PR runs via
+  `vitest run --changed <PR base>` independently — see `verify.yml`'s
+  Frontend/Server test legs — a pre-existing, deliberate design predating
+  this pre-commit optimisation and unrelated to it; pre-push's full local
+  run is the actual full-suite gate before merge, not CI.) If a co-running
+  GPU generation is
+  detected (nvidia-smi) **or a sibling worktree is already running a
+  vitest/verify-cache battery**, the runner warns and throttles test
+  concurrency (`LOW_CONCURRENCY=1`); `SKIP_CONTENTION_CHECK=1` disables both
+  probes.
   `npm run verify:fast` (no scope filter) remains for a manual full fast run.
 - **pre-push** (`.husky/pre-push`): first runs `scripts/guard-protected-push.mjs`,
   which refuses a force-push or deletion of a protected branch (`main`) before

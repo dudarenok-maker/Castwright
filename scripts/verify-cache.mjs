@@ -860,6 +860,46 @@ export function stepTouchedByDiff(step, diffFiles) {
   return false;
 }
 
+// Is a --changed HEAD-only run of this step trustworthy for this diff?
+//
+// History (both rounds found LIVE, not hypothetical, against real commits on
+// this branch): pass 2 (PR #2839) found `computeShared` only catches the ROOT
+// package.json/package-lock.json, missing a step's OWN `extraFiles` (config
+// files, docs, fixtures a test reads at runtime with no module-graph edge —
+// the whole reason `extraFiles` exists) and the SERVER lockfile via
+// `includeLockfiles`. Pass 3 then found the SAME shape at a third spelling:
+// `test:server`'s `globs` themselves include root-level `*.{mjs,ts}` and
+// `scripts/**` — real, matched-in-scope files (eslint.config.mjs,
+// playwright.config.ts) that vitest's own `--changed` selection still can't
+// reach, because "in this step's declared scope" and "in vitest's own
+// selectable dependency graph" are different questions the STEPS table
+// conflates. A fourth instance (`src/styles.css`, read via `readFileSync` by
+// its guard tests, not imported) showed even a path UNDER a step's primary
+// source glob isn't safe if it's not TS/TSX/JS source.
+//
+// Rather than chase a fifth spelling of "this file isn't really reachable",
+// this is a POSITIVE allowlist: the diff is safe to narrow only if EVERY
+// file sits under this step's own primary source root (`src/` for `test`,
+// `server/src/` for `test:server` — never a glob, an extraFile, a lockfile,
+// or any other declared input) AND carries a TS/TSX/JS source extension.
+// That is deliberately narrower than "matches this step's scope" — it trades
+// away narrowing for anything outside the primary source tree (a config-only
+// or CSS-only commit now runs the full suite) for the one guarantee that
+// actually matters: never silently running zero tests.
+const CHANGED_ONLY_SOURCE_ROOT = { test: 'src/', 'test:server': 'server/src/' };
+const CHANGED_ONLY_SAFE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
+
+export function diffSafeForChangedOnly(step, diffFiles) {
+  const root = CHANGED_ONLY_SOURCE_ROOT[step.name];
+  if (!root) return false; // only test/test:server are ever substituted
+  return diffFiles.every((f) => {
+    const p = toPosix(f);
+    if (!p.startsWith(root)) return false;
+    const dot = p.lastIndexOf('.');
+    return dot !== -1 && CHANGED_ONLY_SAFE_EXTENSIONS.has(p.slice(dot));
+  });
+}
+
 // Files staged for commit. Returns POSIX paths, or null if git fails (→ caller
 // disables the scope filter and runs everything; never skip on uncertainty).
 // Exported (#2216) so its scrub (repo-location vars only — see gitEnv() below)
@@ -1039,6 +1079,54 @@ function detectGpuContention() {
   return gpuContentionFor(r.stdout);
 }
 
+// A co-running vitest/verify-cache battery from a SIBLING worktree is a
+// documented cause of "Worker exited unexpectedly" fork-pool crashes even
+// when the GPU is idle — the GPU probe above catches a generation run, not
+// this. Observed 2026-09-01: six worktrees each running a full test:server
+// battery concurrently (docs/features/archive/45-vitest-pool-tuning.md,
+// [[r_vitest_pool_crash_low_concurrency]]/[[r_wedged_precommit_pileup]] in
+// working-practice notes). Same soft throttle as the GPU guard: warn + dial
+// down LOW_CONCURRENCY, never block.
+//
+// Threshold is 1 (any OTHER matching process) rather than a higher count:
+// the crashes in the record above were reported with as few as two
+// concurrent full batteries, not just under heavy pileups.
+export const SIBLING_CONTENTION_THRESHOLD = 1;
+
+// Pure decision seam, mirrors gpuContentionFor: given raw PID-list stdout
+// (one PID per line, as emitted by the PowerShell probe below) and this
+// process's own PID, decide contention. Unit-testable without spawning
+// PowerShell.
+export function siblingContentionFor(stdout, ownPid) {
+  if (!stdout) return { busy: false, count: 0 };
+  const count = stdout
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => Number.parseInt(s, 10))
+    .filter((pid) => Number.isFinite(pid) && pid !== ownPid).length;
+  return { busy: count >= SIBLING_CONTENTION_THRESHOLD, count };
+}
+
+// Returns { busy, count }. PowerShell absent / errors (non-Windows CI
+// runners) → { busy:false, count:null } — same fallback shape as
+// detectGpuContention. Cheap (~150-300ms): one Get-CimInstance query.
+function detectSiblingContention() {
+  const r = spawnSync(
+    'powershell',
+    [
+      '-NoProfile',
+      '-Command',
+      "(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | " +
+        "Where-Object { $_.CommandLine -match 'vitest|verify-cache\\.mjs' } | " +
+        'Select-Object -ExpandProperty ProcessId) -join "`n"',
+    ],
+    { encoding: 'utf8', timeout: 5000, windowsHide: true },
+  );
+  if (r.error || r.status !== 0) return { busy: false, count: null };
+  return siblingContentionFor(r.stdout, process.pid);
+}
+
 // Tool fingerprints — strings that change when the relevant tool's
 // availability or version changes. Used to invalidate the cache when a user
 // installs Pester or bootstraps the pytest venv after a previous skip.
@@ -1156,12 +1244,32 @@ export function isVitestPoolCrash(stderr) {
   );
 }
 
-/** Run one pipeline step (`npm run <name>`) and return its exit code. Retriable
+// Pre-commit (--scope-staged) only: for these two steps, run vitest's own
+// `--changed` selection against HEAD instead of the full suite. A step still
+// runs in full under --scope-branch (pre-push) and in CI — this is a
+// pre-commit-speed optimisation layered on TOP of the existing whole-step
+// cache/scope skip above, not a replacement for it: that skip is all-or-
+// nothing per step (any touched file under the step's globs reruns the WHOLE
+// suite), which is what turns a one-file server commit into a multi-minute
+// (or, under sibling contention, multi-hour) run. `--changed HEAD` picks up
+// staged AND unstaged changes vs HEAD, which covers the staged diff
+// --scope-staged itself is already keyed on. The retry-crash lookup in
+// RETRIABLE_POOL_STEPS still keys on the ORIGINAL step name (`retryKey`
+// below) — a narrower `--changed` run is exactly as crash-prone as a full one.
+const CHANGED_ONLY_NPM_SCRIPT = {
+  test: 'test:changed',
+  'test:server': 'test:server:changed',
+};
+
+/** Run one pipeline step (`npm run <npmScript>`) and return its exit code. Retriable
     pool steps stream stdout LIVE but CAPTURE stderr so a fork-pool crash can be
-    detected and the step retried; every other step inherits both streams unchanged. */
-function runStepProcess(stepName, { cwd, env }) {
+    detected and the step retried; every other step inherits both streams unchanged.
+    `retryKey` is the step's cache/identity name, used to look up
+    RETRIABLE_POOL_STEPS/isVitestPoolCrash — it can differ from `npmScript` when
+    CHANGED_ONLY_NPM_SCRIPT substitutes a different underlying script. */
+function runStepProcess(npmScript, { cwd, env, retryKey = npmScript }) {
   const runOnce = (capture) => {
-    const r = spawnSync('npm', ['run', stepName], {
+    const r = spawnSync('npm', ['run', npmScript], {
       cwd,
       shell: true,
       env,
@@ -1174,7 +1282,7 @@ function runStepProcess(stepName, { cwd, env }) {
     if (stderr) process.stderr.write(stderr); // captured stderr isn't echoed live — surface it
     return { code: r.status ?? 1, stderr };
   };
-  if (!RETRIABLE_POOL_STEPS.has(stepName)) return runOnce(false).code;
+  if (!RETRIABLE_POOL_STEPS.has(retryKey)) return runOnce(false).code;
   let lastRes = null;
   for (let attempt = 1; attempt <= MAX_POOL_ATTEMPTS; attempt += 1) {
     const res = runOnce(true);
@@ -1184,7 +1292,7 @@ function runStepProcess(stepName, { cwd, env }) {
     }
     if (attempt < MAX_POOL_ATTEMPTS) {
       console.log(
-        `[retry] ${stepName} — vitest fork-pool crash ("Worker exited unexpectedly"), not a test failure; re-running (attempt ${attempt + 1} of ${MAX_POOL_ATTEMPTS})`,
+        `[retry] ${retryKey} — vitest fork-pool crash ("Worker exited unexpectedly"), not a test failure; re-running (attempt ${attempt + 1} of ${MAX_POOL_ATTEMPTS})`,
       );
     }
   }
@@ -1216,6 +1324,18 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
     const { busy, util } = detectGpuContention();
     if (busy) {
       console.log(`[contention] GPU busy (~${util}% util) — a generation run may be active.`);
+      console.log(
+        '[contention] Throttling test concurrency (LOW_CONCURRENCY=1). Set SKIP_CONTENTION_CHECK=1 to disable.',
+      );
+      env.LOW_CONCURRENCY = '1';
+    }
+  }
+  if (!env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
+    const { busy, count } = detectSiblingContention();
+    if (busy) {
+      console.log(
+        `[contention] ${count} sibling vitest/verify-cache process(es) already running — likely another worktree's test battery.`,
+      );
       console.log(
         '[contention] Throttling test concurrency (LOW_CONCURRENCY=1). Set SKIP_CONTENTION_CHECK=1 to disable.',
       );
@@ -1319,13 +1439,43 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
       continue;
     }
 
-    console.log(`[run] ${step.name}`);
+    // --changed HEAD only ever substitutes on an UNSHARED --scope-staged run
+    // (pre-commit, one narrow diff) whose diff is known (scopeDiff !== null)
+    // and is CONFINED to this step's own primary source tree with a safe
+    // extension (see diffSafeForChangedOnly's own header — three rounds of
+    // review found progressively narrower live gaps in scope-based checks,
+    // which is why this is a positive allowlist, not an exclusion list).
+    // `!scopeShared` is redundant with that allowlist today (nothing shared
+    // — root manifest, .github/actions/** — can ever sit under src/ or
+    // server/src/) but kept as cheap, self-documenting defense in depth.
+    const changedOnlyScript =
+      flags.scopeStaged &&
+      !scopeShared &&
+      scopeDiff !== null &&
+      diffSafeForChangedOnly(step, scopeDiff)
+        ? CHANGED_ONLY_NPM_SCRIPT[step.name]
+        : undefined;
+    if (changedOnlyScript) {
+      console.log(`[run] ${step.name} (--changed HEAD only)`);
+    } else {
+      console.log(`[run] ${step.name}`);
+    }
     const t0 = Date.now();
-    const code = runStepProcess(step.name, { cwd, env });
+    const code = runStepProcess(changedOnlyScript ?? step.name, {
+      cwd,
+      env,
+      retryKey: step.name,
+    });
     const dt = Date.now() - t0;
     if (code === 0) {
       console.log(`[pass] ${step.name} (took ${formatSecs(dt)})`);
-      if (fileList !== null) {
+      // A --changed-only pass covers a NARROWER set of tests than currentHash's
+      // declared inputs claim to have verified — caching it under the full
+      // step's hash would let a later --scope-branch/CI run (no diff since,
+      // same hash) read [cached] and skip a full run that never actually
+      // happened (review finding: this silently removed the full-suite net
+      // pre-push and CI both depend on). Only a full run is cache-worthy.
+      if (fileList !== null && !changedOnlyScript) {
         cache.steps[step.name] = {
           inputHash: currentHash,
           lastGreenAt: new Date().toISOString(),
