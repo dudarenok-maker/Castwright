@@ -34,7 +34,7 @@ name: Verify
 # E2E ITSELF IS SHARDED (2026-07-10, raised to 8-way 2026-09): a live timing
 # comparison showed the functional e2e battery (137 spec files, CI-pinned to
 # workers=1 to avoid in-job Vite dev-server contention) was the dominant leg
-# at ~16 min, dwarfing every other job. `--shard=N/8` splits it across 8
+# at ~16 min (measured 2026-07-10 when the battery was ~110 files; now 137), dwarfing every other job. `--shard=N/8` splits it across 8
 # matrix jobs, each its own runner/dev-server — the workers=1 anti-flake
 # guarantee still holds PER SHARD, just with less work per shard (per-shard
 # fixed cost — checkout, setup, the warmup project, a fresh Vite dev server —
