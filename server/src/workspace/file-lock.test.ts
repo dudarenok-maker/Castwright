@@ -122,15 +122,19 @@ describe('withKeyLock acquisition timeout (#2260)', { retry: 0 }, () => {
        coverage. */
     const holder = withKeyLock(key, async () => {
       order.push('first-start');
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 700));
       order.push('first-end');
       return 'first-done';
     });
 
-    /* Comfortably shorter than the holder's 150ms hold, so this one times out
-       while the holder is still running. */
+    /* Comfortably shorter than the holder's 700ms hold, so this one times out
+       while the holder is still running. 700ms/50ms is a ~650ms absolute
+       gap -- widened from 150ms/20ms (an ~130ms gap) as cheap, no-regret
+       insurance per docs/superpowers/specs/2026-09-01-verify-scope-branch-
+       timing-design.md Decision B; not a claim these margins were ever
+       provably flippable. */
     await expect(
-      withKeyLock(key, async () => 'never', 20),
+      withKeyLock(key, async () => 'never', 50),
     ).rejects.toThrow(/unpoisoned-key/);
 
     /* A fresh acquisition of the SAME key, started after the timeout above
@@ -158,13 +162,15 @@ describe('withKeyLock acquisition timeout (#2260)', { retry: 0 }, () => {
     const order: string[] = [];
     const holder = withKeyLock(key, async () => {
       order.push('a-start');
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 750));
       order.push('a-end');
     });
 
-    /* Times out well before the holder's 200ms hold ends. */
+    /* Times out well before the holder's 750ms hold ends -- a ~700ms
+       absolute gap, widened from 200ms/20ms (an ~180ms gap) per Decision B,
+       same no-regret-insurance rationale as the test above. */
     await expect(
-      withKeyLock(key, async () => { order.push('b-ran'); }, 20),
+      withKeyLock(key, async () => { order.push('b-ran'); }, 50),
     ).rejects.toThrow(/mutex-key/);
 
     /* Started immediately after the waiter's rejection -- the holder is
@@ -201,9 +207,12 @@ describe('withKeyLock acquisition timeout (#2260)', { retry: 0 }, () => {
     const before = __chainsSizeForTest();
 
     const holder = withKeyLock(key, async () => {
-      await new Promise((r) => setTimeout(r, 150));
+      /* 700ms/50ms is a ~650ms absolute gap, widened from 150ms/20ms per
+         Decision B -- same no-regret-insurance rationale as the two tests
+         above in this file. */
+      await new Promise((r) => setTimeout(r, 700));
     });
-    await expect(withKeyLock(key, async () => 'never', 20)).rejects.toThrow(/chains-accounting-key/);
+    await expect(withKeyLock(key, async () => 'never', 50)).rejects.toThrow(/chains-accounting-key/);
     await holder;
 
     /* The holder has finished and still did not reclaim the timed-out
