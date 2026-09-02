@@ -1191,6 +1191,30 @@ test('checkConflictingSubjects: the "PR #nnnn" companion exemption also applies 
   assert.equal(annotatedDischarge.length, 0);
 });
 
+test('checkConflictingSubjects: the "PR #nnnn" companion exemption applies in the second branch (non-segmented path) when the subject exists but is owned by a different ID (#2721/finding 3)', () => {
+  // Regression test for the bug fixed in PR #2846 finding 3: isOwnedPrCompanion
+  // was only checked in the `if (!legitimateIds)` branch, not in the `else if
+  // (!legitimateIds.has(id))` branch. This test constructs a citation that
+  // would fall into the SECOND branch:
+  //   - #1001 legitimately exists and is owned by A2 (so legitimateIds != null)
+  //   - The cited ID is A1, which is NOT in legitimateIds (so !legitimateIds.has(A1))
+  //   - But A1 owns #1000 on the same line, and #1001 is marked with "PR #"
+  //   - So isOwnedPrCompanion should be true
+  //   - This should NOT fire any error (exempt as a PR companion)
+  //
+  // Before the fix, this fired a wrongId because the isOwnedPrCompanion check
+  // was only in the first branch. After the fix, it's checked first and
+  // exempts this citation.
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Title (#1000, PR #1001)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0, 'PR companion should not fire wrongId');
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
+});
+
 // --- Pass-9 review of PR #2630 (finding X): the multi-ID exemption
 // (finding R) exempted an id from EVERY subject on its line once it
 // legitimately owned ANY subject on that line — silencing a genuinely wrong

@@ -1638,12 +1638,16 @@ function recordSubjectConflict(
   unknownSubject,
   annotatedDischarge,
 ) {
+  // `isOwnedPrCompanion` is checked first, as its docstring claims — a PR
+  // companion citation is exempt regardless of which branch it would
+  // otherwise have taken, so check it unconditionally before any other logic.
+  if (isOwnedPrCompanion) return;
+
   const legitimateIds = legitimateMap.ownersOf(subject);
   const historicalIds = legitimateMap.historicalOwnersOf(subject);
   const idHistoricallyOwnedThisSubject = historicalIds?.has(id) ?? false;
 
   if (!legitimateIds) {
-    if (isOwnedPrCompanion) return;
     const currentSubjects = legitimateMap.currentSubjectsOf(id);
     if (idHistoricallyOwnedThisSubject) {
       const currentSubjectsText =
