@@ -140,7 +140,11 @@ describe('withKeyLock acquisition timeout (#2260)', { retry: 0 }, () => {
     /* A fresh acquisition of the SAME key, started after the timeout above
        already threw and returned, must still queue behind the still-running
        holder and succeed once it finishes -- neither barge past it (Finding
-       1's mutual-exclusion break) nor hang forever (Trap 2's poisoning). */
+       1's mutual-exclusion break) nor hang forever (Trap 2's poisoning).
+       This 2000ms budget's own headroom against the holder above was cut
+       from ~1870ms to ~1350ms when that holder widened 150ms->700ms
+       (Decision B) -- still ~3x the required wait, a deliberate trade, not
+       an oversight. */
     const result = await withKeyLock(key, async () => {
       order.push('third-start');
       return 'ok-after-timeout';
