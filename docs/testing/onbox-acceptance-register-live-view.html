@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="7" data-publish-id="015d8c705e90"></div>
+  <div hidden data-published-as="7" data-publish-id="a026010bd649"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">66</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">65</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->40<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->39<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->2<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->4<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->3<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">40 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">39 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -636,23 +636,6 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A28</span><span class="iname">ORT marker — fresh NVIDIA bootstrap</span><span class="risk low">Design doc criterion 1</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>A from-scratch <code>bootstrap-venv.mjs</code> run is unit-tested at the seam, but a real pip venv&#39;s version string, real PEP-427 directory escaping, and a real <code>pip check</code>/Kokoro provider report have never confirmed the write lands correctly on a genuinely fresh box — every other row here starts from an already-bootstrapped or deliberately broken venv.</p>
-        <ul>
-          <li>Wipe (or freshly clone into) the sidecar venv and run a genuine from-scratch bootstrap on the nvidia profile.</li>
-          <li>Inspect <code>site-packages</code> for <code>onnxruntime-&lt;version&gt;.dist-info</code> at the installed GPU version.</li>
-          <li>Run <code>pip check</code> — expect exit 0. Load Kokoro and confirm <code>CUDAExecutionProvider</code>.</li>
-        </ul>
-        <div class="flag"><b>Wave-3 step 2, 2026-08-20 — STILL OWED, blocker now fixed.</b> Ran a genuine from-scratch bootstrap against a throwaway venv (live venv untouched, byte-verified). Marker present at correct version and <code>pip check</code> exit 0 — both <b>DISCHARGED</b>. Kokoro reporting <code>CUDAExecutionProvider</code> — <b>failed</b>: providers list includes it, but constructing a session errors (<code>Error 126</code>) and silently falls back to CPU. Root cause was box-level: this box has CUDA 12.4 system-wide while <code>onnxruntime-gpu</code> 1.27 needed CUDA 13.x/cuDNN 9.x runtime libraries. <b>This blocking dependency is now fixed by PR #2576</b>, which re-pinned <code>ONNXRUNTIME_GPU_CONSTRAINT</code> to <code>≥1.26,&lt;1.27</code> (CUDA-12 line). <code>docs/testing/onbox-wave3-results/step-2-ort-marker.md</code>.</div>
-
-        <div class="flag"><b>Wave-4 step 8, 2026-08-21 — STILL OWED, re-run after #2534's fix.</b> Re-ran the Kokoro GPU-provider check against <code>onnxruntime-gpu</code> 1.26.0 (the version PR #2576's re-pin resolves to). <code>get_available_providers()</code> still lists <code>CUDAExecutionProvider</code>, but actual <code>InferenceSession</code> construction still falls back to <code>CPUExecutionProvider</code>. <b>This is not the #2534 defect recurring:</b> the root cause is now confirmed as a <i>different</i>, more specific gap — <code>onnxruntime-gpu</code> 1.26.0's wheel metadata requires <code>nvidia-cudnn-cu12~=9.0</code> only via its optional <code>[cudnn]</code> extra, which <code>install-ort.mjs</code> never requests. Zero discharges this run. See <code>docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md</code> for full evidence. <b>Follow-up filed:</b> <a href="https://github.com/dudarenok-maker/Castwright/issues/2600">#2600</a> — <code>install-ort.mjs</code> never requests the cuDNN 12 runtime that <code>onnxruntime-gpu 1.26.x</code> requires for CUDA execution (distinct from #2534).</div>
-        <div class="flag"><b>2026-08-23 re-run (Castwright#2621) — STILL OWED, root cause now identified and it is NOT <code>install-ort.mjs</code>.</b> Marker mechanics and <code>pip check</code> still DISCHARGE cleanly. Round 1 (fix as shipped) reproduced the <code>[ort-preload]</code> <b>failed</b> line — <code>cufft64_11.dll</code>/<code>cudart64_12.dll</code> could not load from anywhere on this box. Round 2, installing the <code>[cuda]</code> extras into the same throwaway venv, produced a clean <code>preload_dlls()</code> success — all 11 expected files resolved under <code>nvidia/&lt;pkg&gt;/bin</code> — confirming hypothesis 2 fixes the DLL-search problem completely. But Kokoro <b>still</b> fell back to CPU, silently. Isolated the cause: a raw <code>InferenceSession</code> genuinely runs on CUDA on this box once <code>preload_dlls()</code> has run, but <code>kokoro-onnx==0.5.0</code>'s own auto-detect (<code>importlib.util.find_spec("onnxruntime-gpu")</code>) is always <code>None</code> — the <code>onnxruntime-gpu</code> pip distribution installs into the <code>onnxruntime</code> import namespace, not a separately-importable module — so <code>kokoro_onnx.Kokoro()</code> always constructs with <code>providers=["CPUExecutionProvider"]</code> explicitly; CUDA is never offered to onnxruntime at all. A third, distinct root cause from #2534 and #2600, inside <code>kokoro-onnx</code>'s own provider auto-detection. Reported as a finding, not fixed. <code>docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md</code>.</div>
-
-        <p class="src">The existing NVIDIA dev box, willingness to rebuild the venv · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 1</p>
-      </div>
-    </details>
-    <details class="item">
       <summary><span class="num">A29</span><span class="iname">ORT marker — the reported bug: in-app Qwen3 install</span><span class="risk hot">This IS #2192</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Design doc criterion 2 — <b>this is #2192 itself</b>, the alpha tester&#39;s exact scenario, with the app running. Every other row proves a mechanism; this one is the acceptance criterion the issue was actually filed against, and it has not been separately re-confirmed since the fix landed.</p>
@@ -717,6 +700,7 @@
       <summary><span class="num">A33</span><span class="iname">Kokoro's silent-CPU-fallback alarm fires on a genuine CUDA→CPU fallback, and stays quiet on a ledger-admitted CPU placement and under kokoro-onnx API drift</span><span class="risk">3 of 5 checks confirmed</span><span class="chev">›</span></summary>
       <div class="body">
         <div class="flag"><b>PARTIALLY run 2026-08-27 (wave 8).</b> Bullet 1 (genuine fallback under a real missing-cuDNN gap) confirmed exactly: <code>gpus[idx:-1].resident[]</code> carried <code>{"engine":"kokoro","actual_card":null,"stale_reason":"cpu_fallback"}</code>. Bullet 3 (API-drift) confirmed via a temporary one-line edit (reverted immediately): with session introspection forced unavailable, the resident entry showed no <code>stale_reason</code> at all — no false-positive claim. The #2643 real-<code>/synthesize</code>-path bullet confirmed directly via a genuine synth call. <b>Not testable on this box:</b> the contended-admission vs. idle-GPU-placement pair and its negative control — Kokoro's CUDA execution provider cannot construct a session here at all, regardless of contention, so "admission chose CPU" and "the engine can never place on GPU" are indistinguishable on this hardware.</div>
+        <div class="flag"><b>Update 2026-08-31 (wave 10, claude) — the blocking premise above no longer holds; bullets 2/3 are reachable now, not run this round.</b> A28's discharge fixed the real root cause: this box's <code>nvidia-cudnn-cu12</code> was both missing two DLL-search-path packages (<code>cufft</code>/<code>cuda-runtime</code>) AND, once those were added, ABI-mismatched against torch's bundled cuDNN. Both are now fixed and verified end-to-end (a real <code>POST /synthesize</code> with no <code>KOKORO_DEVICE</code> pin lands on <code>cuda:0</code> for real, confirmed via <code>nvidia-smi</code> and <code>/health</code>'s <code>cuda_verified: true</code>). So "on this hardware it cannot, ever" is no longer accurate. Bullets 2 (deliberate VRAM-ledger admission onto CPU under contention vs. the positive-control genuine-GPU-placement case) and 3's #2643 negative control were NOT run this round — this only removes the blocker. Next session: load Qwen and/or Coqui first to consume the 8 GB card's headroom, then trigger a Kokoro load and confirm the resident entry carries no <code>stale_reason</code>.</div>
         <p><a href="https://github.com/dudarenok-maker/Castwright/issues/2647">#2647</a>: <code>_engine_actual_card</code>'s <code>fell_back</code> flag (#2631 review B3, the silent-CPU-fallback badge behind <code>/health</code>'s <code>stale_reason: 'cpu_fallback'</code>) compared this load's outcome against <code>_requested_device</code> — written once at <code>__init__</code> from the <code>KOKORO_DEVICE</code> env pin and never touched again. On the shipped default (no <code>KOKORO_DEVICE</code> set), that field reads <code>"auto"</code> forever, even for a load the VRAM-ledger admission itself steered onto a concrete <code>cuda:N</code> for capacity reasons — so <code>fell_back</code> could never be <code>True</code> on any default install, the exact regression #2636 introduced. Fixed by comparing against <code>_device</code> instead — this load's own intent, which an admitted <code>device=</code> argument overwrites before the load runs. A companion fix makes <code>_resolved_device</code> use <code>None</code>, not <code>"cpu"</code>, as its "not known yet" sentinel, so a kokoro-onnx API-drift session-read failure reports an honest <code>unknown</code> card instead of a confident false <code>cpu</code>. <b>Ratified behaviour decision:</b> when the VRAM ledger deliberately admits a load onto CPU under contention while <code>KOKORO_DEVICE=cuda:N</code>, <code>fell_back</code> stays <code>False</code> — admission is compliance with a capacity decision, not a silent fallback; <code>/health</code>'s <code>devices.kokoro</code> still reports the real session device either way, so the operator can always see the CPU placement even when the alarm itself stays quiet. Unit tests pin all three branches against synthetic engine doubles; none of them can prove the alarm against a REAL ORT session, a REAL VRAM-ledger admission, or a REAL kokoro-onnx import.</p>
         <p><b>#2643 follow-up (still unproven on real hardware, folded into this same row rather than a new one):</b> the fix above compared intent against <code>_device</code>, but nothing ever resolved the literal string <code>"auto"</code> into a concrete card before that comparison — so on the SHIPPED DEFAULT, <code>fell_back</code> stayed dead on every path that actually matters: <code>KokoroEngine.synthesize</code> (every real generation), the <code>PRELOAD_KOKORO</code> warm-up path, and the admission-off <code>/load</code> branch, none of which ever pass a <code>device=</code> argument or need <code>KOKORO_DEVICE</code> set. #2643 resolves <code>"auto"</code> into the concrete device the load is actually attempting (derived from the exact provider list about to build the ORT session, so it cannot itself change placement) and publishes that as intent. When no usable CUDA build/device exists, the resolved intent is <code>cpu</code> — landing on cpu is then not a fallback, since nothing ever asked for cuda. The fourth bullet below is the acceptance criterion specific to this path; the first three bullets above only ever drove an explicit <code>KOKORO_DEVICE</code> pin or a VRAM-ledger admission, neither of which the actual regression lived on.</p>
         <ul>

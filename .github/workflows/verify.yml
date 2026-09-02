@@ -31,12 +31,20 @@ name: Verify
 # all run concurrently; end-to-end time collapses to roughly the slowest
 # single leg instead of their sum.
 #
-# E2E ITSELF IS SHARDED (2026-07-10): a live timing comparison showed the
-# functional e2e battery (~110 spec files, CI-pinned to workers=1 to avoid
-# in-job Vite dev-server contention) was the dominant leg at ~16 min, dwarfing
-# every other job. `--shard=N/4` splits it across 4 matrix jobs, each its own
-# runner/dev-server — the workers=1 anti-flake guarantee still holds PER
-# SHARD, just with 4x less work per shard. Visual baselines were pulled into
+# E2E ITSELF IS SHARDED (2026-07-10, raised to 8-way 2026-09): a live timing
+# comparison showed the functional e2e battery (137 spec files, CI-pinned to
+# workers=1 to avoid in-job Vite dev-server contention) was the dominant leg
+# at ~16 min (measured 2026-07-10 when the battery was ~110 files; now 137), dwarfing every other job. `--shard=N/8` splits it across 8
+# matrix jobs, each its own runner/dev-server — the workers=1 anti-flake
+# guarantee still holds PER SHARD, just with less work per shard (per-shard
+# fixed cost — checkout, setup, the warmup project, a fresh Vite dev server —
+# doesn't shrink with more shards, so the wall-clock win is sub-linear).
+# Measured outcome (2026-09-02, run 33631470487): 8-way average ~228s/shard,
+# slowest shard ~358s. Real 4-way baseline (runs 33572155392 and 33496342069):
+# slowest shards ~559s and ~516s respectively. This is a real 31–36% improvement
+# in wall-clock time (which is set by the slowest shard), with no queuing.
+# See docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md
+# Decision D. Visual baselines were pulled into
 # their own job in the same change: they used to run as a serial step after
 # test:e2e in the same job specifically to avoid racing test:e2e's dev server
 # — moot once e2e lives in separate shard jobs, so visual now runs concurrently
@@ -389,23 +397,27 @@ jobs:
         if: fromJSON(needs.detect.outputs.scopes).step_test_sidecar || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run test:sidecar -- --require-venv
 
-  # E2E functional battery (~110 spec files) is the long pole of the whole
+  # E2E functional battery (137 spec files) is the long pole of the whole
   # workflow — CI intentionally pins Playwright to `workers: 1` (playwright.
   # config.ts) so parallel Chromium instances can't thundering-herd the
   # single Vite dev server WITHIN one job. That constraint is per-job, not
-  # global: `--shard=N/4` below splits the spec list across 4 independent
+  # global: `--shard=N/8` below splits the spec list across 8 independent
   # matrix jobs, each on its own runner with its own dev server (no shared
   # process to contend over), while every shard still runs serially inside
-  # itself — same anti-flake guarantee, ~4x less wall-clock.
+  # itself — same anti-flake guarantee, less wall-clock (sub-linear: fixed
+  # per-shard cost — checkout, setup, the warmup project, a fresh Vite dev
+  # server — doesn't shrink with more shards). Measured: 8-way average ~228s/
+  # shard, slowest ~358s. Real recent 4-way runs' slowest shards were ~516–559s
+  # (runs 33496342069 and 33572155392), a real 31–36% improvement in wall-clock.
   e2e:
-    name: E2E (chromium) — shard ${{ matrix.shard }}/4
+    name: E2E (chromium) — shard ${{ matrix.shard }}/8
     needs: detect
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -441,7 +453,7 @@ jobs:
       # leg: test:e2e
       - name: E2E (chromium)
         if: fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
-        run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
+        run: npm run test:e2e -- --shard=${{ matrix.shard }}/8
 
   # Visual snapshots split out from the functional battery above (2026-07-10)
   # — they were previously a serial step in the same job so they couldn't

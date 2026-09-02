@@ -144,6 +144,146 @@ def _measure_nvidia_dll_provenance(onnxruntime) -> Optional[tuple]:
         return None
 
 
+def _add_nvidia_dll_dirs_to_path() -> list[str]:
+    """Castwright#2752-followup / register row A28 (discharged 2026-08-31 on-box run):
+    `onnxruntime.preload_dlls()` (below) only preloads the FIXED set of DLLs
+    onnxruntime itself links against (cublas/cublasLt/cufft/cudart plus the
+    single `cudnn64_9.dll` entry point) -- it does NOT cover cuDNN 9's own
+    "engine" plugin DLLs (`cudnn_engines_tensor_ir64_9.dll`,
+    `cudnn_engines_precompiled64_9.dll`, etc.), which cuDNN itself dlopens
+    lazily, on demand, the FIRST time a real kernel (e.g. a Conv op) is
+    actually built -- long after `preload_dlls()` has already run and
+    returned. Confirmed on real hardware: even with `preload_dlls()` reporting
+    a clean load and a real `InferenceSession` correctly reporting
+    `CUDAExecutionProvider` in `get_providers()`, the first real Kokoro
+    `create()` call still raised `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED` /
+    "Could not locate cudnn_engines_tensor_ir64_9.dll" and onnxruntime silently
+    retried the failing node on CPU -- so `_cuda_selftest_or_warn` above still
+    reported CUDA as "landed" (session-construction-level) even though actual
+    inference was silently falling back per-node.
+
+    `os.add_dll_directory()` (what `preload_dlls()` itself uses internally)
+    does NOT fix this -- confirmed on the same box: cuDNN's own lazy loader
+    does not honour `AddDllDirectory`-registered search paths, only the
+    process `PATH` environment variable. Prepending every `nvidia/<pkg>/bin`
+    directory to `PATH` (not just calling `add_dll_directory` on them) is the
+    one mechanism that lets a LATER, lazy `LoadLibrary` call from inside
+    cuDNN itself find these engine DLLs. `PATH` is a process-wide env var, so
+    doing this once at startup (before anything is loaded, same ordering
+    constraint `_preload_ort_cuda_dlls` documents) covers every later lazy
+    load for the rest of the process lifetime -- unlike `add_dll_directory`,
+    there is no "only during this one call" scoping to worry about here.
+
+    Pure discovery + a single `os.environ` mutation; never raises (a missing
+    onnxruntime, or a site-packages layout with no `nvidia/` directory at all,
+    just returns an empty list -- the CPU/AMD/Apple case where this is a
+    harmless no-op). Returns the list of directories actually prepended, for
+    logging/testing.
+    """
+    try:
+        import onnxruntime  # type: ignore
+    except Exception:
+        return []
+    try:
+        site_packages = os.path.dirname(os.path.dirname(os.path.abspath(onnxruntime.__file__)))
+    except Exception:
+        return []
+    nvidia_root = os.path.join(site_packages, "nvidia")
+    if not os.path.isdir(nvidia_root):
+        return []
+    current_path = os.environ.get("PATH", "")
+    try:
+        pkg_names = sorted(os.listdir(nvidia_root))
+    except OSError as e:
+        # `nvidia_root` passed `os.path.isdir` a few lines above, so reaching
+        # this `except` means the directory EXISTS and could not be read (a
+        # tightened ACL, a transient I/O error on a redirected profile) --
+        # a genuine failure of this mechanism, not one of the healthy no-op
+        # reasons (`onnxruntime` not importable, no `nvidia/` dir at all).
+        # Silently returning the same `[]` as those healthy cases would be
+        # byte-identical to them -- the one condition where this mechanism
+        # actually failed would be the one condition nothing reports, exactly
+        # the silent-CPU-fallback bug this function exists to close (same
+        # reasoning as the PATH-write failure below).
+        log.warning(
+            "[ort-preload] failed to list %s (%s) -- cuDNN's lazily-dlopened "
+            "engine DLLs may not be found; the CUDA execution provider may "
+            "silently fall back to CPU.",
+            nvidia_root,
+            e,
+        )
+        return []
+    candidates = [
+        os.path.join(nvidia_root, pkg_name, "bin") for pkg_name in pkg_names
+    ]
+    candidates = [d for d in candidates if os.path.isdir(d)]
+    if not candidates:
+        return []
+    # Idempotence (found via a real regression, not speculatively): the docstring's
+    # "once at lifespan startup" is a PRODUCTION assumption -- a test harness that
+    # spins up the FastAPI app's lifespan repeatedly in one process (many sidecar
+    # tests do, via TestClient) calls this every time. Without a guard, PATH grows
+    # by the same handful of directories on every call, unbounded across a whole
+    # pytest session, until Windows' 32767-character env var ceiling raises
+    # `ValueError: the environment variable is longer than 32767 characters` --
+    # observed for real running this repo's own sidecar test suite.
+    #
+    # This checks the PATH *prefix*, not membership anywhere in PATH: a
+    # membership-only check (an earlier version of this guard) cannot tell a
+    # genuine repeat call by this exact function -- `candidates`, in this
+    # order, already sitting at the very front of PATH -- from a same- or
+    # differently-spelled entry for one of these directories sitting further
+    # BACK in PATH (a system CUDA toolkit install, say). Skipping in the
+    # latter case would silently defeat the "ahead of torch" ordering
+    # guarantee `install-ort.mjs` depends on: the pre-existing late entry
+    # would still win dll-search-order precedence. Prepending `candidates`
+    # again in that case produces a harmless duplicate further back in the
+    # string -- an accepted tradeoff of this design, not documented elsewhere
+    # -- but guarantees this call's copy is the one a bare-name load resolves to.
+    joined_candidates = os.pathsep.join(candidates)
+    if current_path == joined_candidates or current_path.startswith(
+        joined_candidates + os.pathsep
+    ):
+        return []
+    added = candidates
+    # An empty pre-existing PATH must not gain a trailing separator: Windows
+    # treats an empty PATH *entry* (not an empty PATH itself) as the current
+    # directory in its DLL search order, so `"<dirs>;" ` (current_path == "")
+    # would silently add CWD to the search path used by every later lazy
+    # LoadLibrary call this function exists to serve.
+    new_path = os.pathsep.join(added) if not current_path else (
+        os.pathsep.join(added) + os.pathsep + current_path
+    )
+    try:
+        os.environ["PATH"] = new_path
+    except Exception as e:
+        # Genuinely never raises, matching this function's docstring — e.g. a
+        # PATH already near Windows' 32767-char ceiling raises ValueError
+        # here, which a bare `except OSError` does not catch. This function
+        # is called from the FIRST, unguarded lifespan startup handler
+        # (`_startup_ort_cuda_preload`) — a raise here would abort sidecar
+        # boot entirely instead of degrading to the documented harmless no-op.
+        #
+        # Pass-2 review finding: degrading here must not also mean degrading
+        # SILENTLY. The caller's `if added:` gate (`_startup_ort_cuda_preload`)
+        # only logs on a truthy return, so an unlogged `[]` here is
+        # byte-identical to every OTHER reason this function returns `[]` (no
+        # `nvidia/` directory, nothing new to add, onnxruntime not
+        # importable) — the one condition where this mechanism actually
+        # failed would be the one condition nothing reports, silently
+        # reopening the exact A28 bug this function exists to close.
+        log.warning(
+            "[ort-preload] failed to write PATH with %d nvidia/<pkg>/bin director%s (%s) -- "
+            "cuDNN's lazily-dlopened engine DLLs may not be found; the CUDA execution "
+            "provider may silently fall back to CPU.",
+            len(added),
+            "y" if len(added) == 1 else "ies",
+            e,
+        )
+        return []
+    return added
+
+
 def _preload_ort_cuda_dlls() -> str:
     """#2600 (review finding 1, PR #2617): installing `nvidia-cudnn-cu12` (see
     install-ort.mjs's `extraRuntimeSteps`) lands the cuDNN DLLs on disk but does
@@ -174,8 +314,8 @@ def _preload_ort_cuda_dlls() -> str:
     components entirely — so the ~1.30 GB `extraRuntimeSteps` installs under
     `site-packages/nvidia/...` is never even looked at; on this box that path
     resolved 11 of 12 DLLs from `<torch>/lib` and 0 from `nvidia/`, which is the
-    same "torch/lib, not the installed cuDNN" shape register row A28 already
-    recorded as not fixing the bug. Passing `directory=""` (falsy, but not
+    same "torch/lib, not the installed cuDNN" shape register row A28 (now
+    discharged) had recorded as not fixing the bug. Passing `directory=""` (falsy, but not
     `None`) skips the `torch/lib` branch and, per the same source, joins the
     FULL relative path under site-packages instead — i.e. it looks under
     `nvidia/<pkg>/bin/` exactly where `extraRuntimeSteps` installs.
@@ -252,15 +392,15 @@ def _preload_ort_cuda_dlls() -> str:
         # `directory`. If it ever fires here, preload_dlls() looked at
         # nothing at all and torch's own bundled DLLs are what the CUDA
         # execution provider will find -- the exact "torch/lib, not the
-        # installed cuDNN" shape register row A28 recorded as NOT fixing the
-        # bug. That is a distinct, worse outcome than a genuine preload and
-        # must not be folded into "preloaded".
+        # installed cuDNN" shape register row A28 (now discharged) had
+        # recorded as NOT fixing the bug. That is a distinct, worse outcome
+        # than a genuine preload and must not be folded into "preloaded".
         log.warning(
             "[ort-preload] onnxruntime.preload_dlls() skipped its own DLL search because "
             "torch was already imported (see lines above) -- it fell back to torch's "
             "bundled CUDA/cuDNN DLLs instead of the ones this installer places under "
-            "nvidia/<pkg>/bin, which register row A28 already recorded as not fixing the "
-            "CUDA-fallback bug."
+            "nvidia/<pkg>/bin, which register row A28 (discharged) had recorded as not fixing "
+            "the CUDA-fallback bug."
         )
         return "torch-skip"
     if not output and not getattr(onnxruntime, "cuda_version", ""):
@@ -307,7 +447,7 @@ def _preload_ort_cuda_dlls() -> str:
                 "DLLs, but only %d of %d expected files were found under nvidia/<pkg>/bin -- "
                 "the rest resolved via preload_dlls()'s bare-name PATH fallback (e.g. a "
                 "system CUDA toolkit or torch's own bundled DLLs), not the installer's own "
-                "runtime -- see register row A28's Named assumption.",
+                "runtime -- see discharged register row A28's Named assumption.",
                 found,
                 total,
             )
@@ -317,7 +457,17 @@ def _preload_ort_cuda_dlls() -> str:
 async def _startup_ort_cuda_preload() -> None:
     """Lifespan wrapper around `_preload_ort_cuda_dlls` — same async-wrapper
     shape `_startup_cuda_env_shadow_check` uses around its own sync helper,
-    further down this module."""
+    further down this module.
+
+    `_add_nvidia_dll_dirs_to_path()` runs FIRST, and unconditionally (it is a
+    superset fix -- prepending `PATH` never hurts a CPU/AMD/Apple install
+    where `nvidia/` doesn't exist, and `_preload_ort_cuda_dlls()`'s own
+    `preload_dlls()` call benefits too, since its bare-name PATH fallback loop
+    can now also find these directories, not just cuDNN's later lazy
+    engine-DLL loads)."""
+    added = _add_nvidia_dll_dirs_to_path()
+    if added:
+        log.info("[ort-preload] added %d nvidia/<pkg>/bin dir(s) to PATH: %s", len(added), added)
     _preload_ort_cuda_dlls()
 
 

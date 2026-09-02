@@ -45,6 +45,14 @@
     "test:server": "npm --prefix server run test",
     "test:server:changed": "npm --prefix server run test:changed",
     "test:server-slow": "npm --prefix server run test:slow",
+    "test:server:routes": "npm --prefix server run test -- src/routes",
+    "test:server:tts": "npm --prefix server run test -- src/tts",
+    "test:server:analyzer": "npm --prefix server run test -- src/analyzer",
+    "test:server:workspace": "npm --prefix server run test -- src/workspace",
+    "test:components": "vitest run src/components",
+    "test:store": "vitest run src/store",
+    "test:lib": "vitest run src/lib",
+    "test:views": "vitest run src/views",
     "test:scripts": "node scripts/run-powershell.mjs scripts/tests/run.ps1",
     "test:sidecar": "node scripts/run-sidecar-tests.mjs",
     "test:hooks": "node scripts/run-hooks-tests.mjs",
@@ -157,6 +165,7 @@
     "js-yaml": "^4.2.0",
     "openapi-typescript": {
       "typescript": "$typescript"
-    }
+    },
+    "browserslist": "^4.28.8"
   }
 }
