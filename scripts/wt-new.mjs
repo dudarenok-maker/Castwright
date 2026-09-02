@@ -222,6 +222,9 @@ export function renderLaunchBlock({ worktreePath, branch, ports, slot, install }
     `Next steps — paste into a new terminal:`,
     ``,
     `  cd "${winPath}"`,
+    `  # Doing real sidecar/TTS work? Junction .venv AND voices/ from the primary`,
+    `  # checkout first — see CLAUDE.md "Worktree setup" step 2. A missing`,
+    `  # voices/ junction misreports as recycle-storm (#2811), not a missing-weights error.`,
   ];
   if (install === false) {
     lines.push(`  npm install                  # root deps + husky hooks (skipped: --no-install)`);

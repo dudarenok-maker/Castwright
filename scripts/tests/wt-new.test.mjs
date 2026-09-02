@@ -371,6 +371,18 @@ test('renderLaunchBlock omits npm install when install=true (auto-installed)', (
   assert.match(block, /npm run dev/);
 });
 
+test('renderLaunchBlock reminds about the .venv AND voices/ junctions for sidecar/TTS work (#2811)', () => {
+  const block = renderLaunchBlock({
+    worktreePath: 'C:/Claude/Projects/wt-foo',
+    branch: 'feat/server-foo',
+    ports: computePorts(1),
+    slot: 1,
+    install: true,
+  });
+  assert.match(block, /\.venv/);
+  assert.match(block, /voices\//);
+});
+
 test('renderLaunchBlock includes both npm install lines when install=false', () => {
   const block = renderLaunchBlock({
     worktreePath: 'C:/Claude/Projects/wt-foo',
