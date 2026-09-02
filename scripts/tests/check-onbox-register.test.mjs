@@ -15,6 +15,7 @@ import {
   CANNOT_VERIFY_BASELINE_ERROR,
   ROW_CONTENT_DRIFT_ERROR_PREFIX,
   EXTRACTION_ERROR_PREFIX,
+  THREE_WAY_CONTENT_WARNING_PREFIX,
   stripHtmlComments,
   htmlCellText,
   ALLOCATION_FLOOR,
@@ -3561,6 +3562,68 @@ test('--against-published: CLI correctly wires trackedLiveViewHtml into the cont
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// #2837 Finding 1: 3-way content disagreement (all three differ) is ordinary
+// for multi-step publishes but hash-only comparison can't tell from genuine
+// conflicts. Must report as advisory warning, not hard-block. Test that the
+// warning is returned and is marked as such (not a hard drift error).
+test('#2837: 3-way content disagreement (all three differ) returns warning, not error', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // All three have different content: the classic 34/61 multi-step scenario.
+  // Baseline has v0, published has v0 (unchanged), tracked has v1 (first edit).
+  // Then before merging, tracked changes to v2 (second edit). Now all three differ.
+  const v0Content = 'Original baseline content (v0).';
+  const v1Content = 'First edit (v1), published.';
+  const v2Content = 'Second edit (v2), tracked local.';
+
+  const baselineLiveView = buildRowContentLiveView([{ id: 'A1', body: v0Content }]);
+  const publishedLiveView = buildRowContentLiveView([{ id: 'A1', body: v1Content }]);
+  const trackedLiveViewHtml = buildRowContentLiveView([{ id: 'A1', body: v2Content }]);
+
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: baselineLiveView,
+  });
+
+  // Should contain a 3-way warning, not a drift error.
+  assert.ok(
+    errors.some((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX)),
+    `expected a 3-way warning, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX)),
+    `should not have a drift error for 3-way case, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// #2837 Finding 4: extraction errors must be tagged with their source so the
+// CLI can attribute them correctly (tracked vs published vs baseline).
+test('#2837: extraction errors from tracked copy are tagged [tracked]', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  // Tracked live view has malformed HTML (missing the body div's class attribute,
+  // which parseLiveViewRowBodies requires to find it).
+  const normalHtml = buildRowContentLiveView([{ id: 'A1', body: 'Normal content' }]);
+  const corruptedTrackedHtml = normalHtml.replace(
+    /<div class="body">/g,
+    '<div>',
+  );
+  const publishedLiveView = buildRowContentLiveView([{ id: 'A1', body: 'Normal' }]);
+
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: workingRegister,
+    trackedLiveViewHtml: corruptedTrackedHtml,
+  });
+
+  const trackedErrors = errors.filter((e) => e.includes('[tracked]'));
+  assert.ok(
+    trackedErrors.length > 0,
+    `expected extraction error tagged [tracked], got: ${JSON.stringify(errors)}`,
+  );
 });
 
 // #2599 review round 2: the polarity of the tracked/published/baseline

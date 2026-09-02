@@ -748,6 +748,16 @@ export const ROW_CONTENT_DRIFT_ERROR_PREFIX = 'row-content-drift: ';
 // or merge rows. Routed to its own bucket in the CLI, not the BEHIND bucket.
 export const EXTRACTION_ERROR_PREFIX = 'extraction-error: ';
 
+// #2837 Finding 1: the prefix for 3-way content-difference warnings. A 3-way
+// disagreement between tracked, published, and baseline is ordinarily just a
+// multi-step pending-publish (edit, publish, then edit again before merging) —
+// hash-only comparison cannot distinguish this common shape from a genuine
+// conflict. These are reported as visible warnings (never silent), but do NOT
+// block the publish (do not add to the errors array that drives exit 1). The
+// operator can reconcile manually if needed, but an ordinary multi-step publish
+// must not hard-fail.
+export const THREE_WAY_CONTENT_WARNING_PREFIX = 'three-way-warning: ';
+
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
 //
@@ -837,11 +847,21 @@ export const EXTRACTION_ERROR_PREFIX = 'extraction-error: ';
 //     copy may have legitimate pending-publish edits (steps already committed
 //     to the branch but not yet published), which would hash differently from
 //     the published version even though no drift occurred. Comparing against
-//     the baseline disambiguates: if tracked matches baseline, the local edit
-//     is not drift (already committed); if published matches baseline but
-//     tracked doesn't, that's the genuine defect (live page reverted). When
-//     the baseline can't be resolved, content hashing is skipped rather than
-//     using a missing baseline as "no drift" — matching the fail-closed
+//     the baseline disambiguates three cases:
+//     - If tracked matches baseline but published differs → genuine drift:
+//       the published page was reverted or hand-edited independently, so it
+//       now differs from the merged baseline. Report this as an error.
+//     - If published matches baseline but tracked differs → ordinary
+//       pending-publish: the tracked copy has uncommitted local edits ahead
+//       of origin/main, but the live page hasn't changed yet (still at
+//       baseline). This is the normal pre-merge state — don't report.
+//     - If all three differ → unresolvable 3-way conflict: cannot tell which
+//       is correct from hashes alone. Ordinarily this is just a multi-step
+//       edit (publish, then edit again before merging), but hash-only
+//       comparison cannot distinguish from a genuine conflict. Report as an
+//       advisory warning, not a hard error (see THREE_WAY_CONTENT_WARNING_PREFIX).
+//     When the baseline can't be resolved, content hashing is skipped rather
+//     than using a missing baseline as "no drift" — matching the fail-closed
 //     approach the register-side baseline already uses.
 export function checkLiveView(
   markdownText,
@@ -1241,7 +1261,13 @@ export function checkLiveView(
     // Report all extraction failures from the three parses. These are errors rather
     // than skips: a row that couldn't be extracted means the check compared fewer
     // rows than the page actually carries and silently reported fewer, a vacuous pass.
-    errors.push(...trackedErrors, ...publishedErrors, ...baselineErrors);
+    // Tag each with its source so the CLI can correctly attribute the error to
+    // the right file (tracked local working tree, published live page, or baseline
+    // origin/main copy) — this determines the remedy message shown to the operator.
+    const taggedTrackedErrors = trackedErrors.map((e) => `${EXTRACTION_ERROR_PREFIX}[tracked] ${e.substring(EXTRACTION_ERROR_PREFIX.length)}`);
+    const taggedPublishedErrors = publishedErrors.map((e) => `${EXTRACTION_ERROR_PREFIX}[published] ${e.substring(EXTRACTION_ERROR_PREFIX.length)}`);
+    const taggedBaselineErrors = baselineErrors.map((e) => `${EXTRACTION_ERROR_PREFIX}[baseline] ${e.substring(EXTRACTION_ERROR_PREFIX.length)}`);
+    errors.push(...taggedTrackedErrors, ...taggedPublishedErrors, ...taggedBaselineErrors);
     for (const [id, trackedBody] of trackedRowBodies) {
       const publishedBody = publishedRowBodies.get(id);
       if (publishedBody === undefined) continue;
@@ -1281,10 +1307,17 @@ export function checkLiveView(
         }
         // If trackedHash !== baselineHash AND publishedHash !== baselineHash,
         // all three differ from each other — can't tell which is the source
-        // of truth. 3-way disagreement. Fail closed by flagging as error:
-        // this is an unresolvable conflict that must be investigated.
+        // of truth. This is ordinarily NOT a conflict: it's just a multi-step
+        // edit before merge (publish v1, then edit to v2 locally before merging).
+        // Hash-only comparison has no way to establish that published is a
+        // checkpoint on the SAME edit trajectory as tracked, vs. a truly
+        // independent third version. So report this as an ADVISORY WARNING
+        // (visible but non-blocking) rather than a hard failure — see
+        // THREE_WAY_CONTENT_WARNING_PREFIX. The operator can reconcile
+        // manually if the content actually looks wrong, but an ordinary
+        // multi-step-publish must not hard-fail the gate.
         errors.push(
-          `${ROW_CONTENT_DRIFT_ERROR_PREFIX}${id}: content differs in three-way comparison (local vs published vs origin/main) — cannot verify which version is correct`,
+          `${THREE_WAY_CONTENT_WARNING_PREFIX}${id}: content differs in three-way comparison (local vs published vs origin/main) — this is usually an ordinary multi-step edit before merging, not investigated further; if this row's content seems wrong, check manually`,
         );
       }
     }
@@ -1754,13 +1787,23 @@ function runCheckOnboxRegisterCli() {
     const extractionErrors = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(EXTRACTION_ERROR_PREFIX));
+    // #2837 Finding 1: 3-way content-difference warnings are advisory, not
+    // blocking. Extract them so they don't count as errors for the gate, but
+    // still print them visibly so the operator sees them. A multi-step
+    // pending-publish (edit, publish, edit again before merge) looks like a
+    // 3-way disagreement to hash-only comparison, but is ordinarily not a
+    // conflict — the operator can investigate manually if needed.
+    const threeWayWarnings = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX));
     const behindErrors = cannotVerify
       ? []
       : publishedErrors.filter(
           (e) =>
             !e.startsWith(DISCHARGE_NAME_ERROR_PREFIX) &&
             !e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX) &&
-            !e.startsWith(EXTRACTION_ERROR_PREFIX),
+            !e.startsWith(EXTRACTION_ERROR_PREFIX) &&
+            !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX),
         );
 
     let publishedFailed = false;
@@ -1794,17 +1837,54 @@ function runCheckOnboxRegisterCli() {
         );
       }
       if (extractionErrors.length > 0) {
-        publishedFailed =
-          report(
-            `${publishedPath} has malformed or unreadable HTML markup`,
-            extractionErrors,
-          ) || publishedFailed;
+        // #2837 Finding 4: tag each extraction error with its source file so
+        // the remedy message correctly identifies which copy is broken.
+        const trackedExtErrors = extractionErrors.filter((e) => e.includes('[tracked]'));
+        const publishedExtErrors = extractionErrors.filter((e) => e.includes('[published]'));
+        const baselineExtErrors = extractionErrors.filter((e) => e.includes('[baseline]'));
+
+        if (trackedExtErrors.length > 0) {
+          publishedFailed =
+            report(
+              `Your local ${LIVE_VIEW} (working-tree copy) has malformed or unreadable HTML markup`,
+              trackedExtErrors,
+            ) || publishedFailed;
+        }
+        if (publishedExtErrors.length > 0) {
+          publishedFailed =
+            report(
+              `${publishedPath} (the currently-PUBLISHED page) has malformed or unreadable HTML markup`,
+              publishedExtErrors,
+            ) || publishedFailed;
+        }
+        if (baselineExtErrors.length > 0) {
+          publishedFailed =
+            report(
+              `origin/main's ${LIVE_VIEW} (baseline copy) has malformed or unreadable HTML markup`,
+              baselineExtErrors,
+            ) || publishedFailed;
+        }
         console.error(
           'Do not publish. The HTML structure is corrupted or missing expected elements. ' +
-            'Each error above explains what was unreadable. Check that all <details class="item">, ' +
-            '<span class="num">, <summary>, and <div class="body"> elements are present and ' +
-            'correctly formed. This likely means the live page was hand-edited or corrupted.',
+            'Each error above explains what was unreadable and which file is broken. Check that all ' +
+            '<details class="item">, <span class="num">, <summary>, and <div class="body"> elements ' +
+            'are present and correctly formed in the identified file(s).',
         );
+      }
+      if (threeWayWarnings.length > 0) {
+        // #2837 Finding 1: Print 3-way warnings visibly but do not set
+        // publishedFailed — these are advisory, not blocking. Ordinary
+        // multi-step publishes (edit, publish, edit again before merge) trigger
+        // them; hash-only comparison cannot distinguish from genuine conflicts.
+        console.warn(
+          '\n⚠️  Three-way content differences detected (not blocking, but check if wrong):',
+        );
+        for (const warning of threeWayWarnings) {
+          const idMatch = warning.match(new RegExp(`^${THREE_WAY_CONTENT_WARNING_PREFIX}([A-Z]\\d+):`));
+          const id = idMatch ? idMatch[1] : 'unknown';
+          const message = warning.substring(THREE_WAY_CONTENT_WARNING_PREFIX.length);
+          console.warn(`  ${id}: ${message}`);
+        }
       }
       if (behindErrors.length > 0) {
         const behindFailed = report(

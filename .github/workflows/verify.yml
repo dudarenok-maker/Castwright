@@ -145,6 +145,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Full history: `npm run test:hooks` runs the onbox-register replay
+          # test which needs 25 commits of git history via `git log -25 --`.
+          # A shallow (depth-1) clone wouldn't have them, and the test would
+          # silently iterate over nothing, appearing to pass while providing
+          # no actual coverage.
+          fetch-depth: 0
 
       - name: Setup Node + deps
         uses: ./.github/actions/setup
