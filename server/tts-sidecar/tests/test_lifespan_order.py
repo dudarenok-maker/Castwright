@@ -125,6 +125,63 @@ def test_a_failing_startup_handler_aborts_boot_and_skips_the_rest(monkeypatch):
     assert calls == EXPECTED_STARTUP[: EXPECTED_STARTUP.index("_start_asr_idle_watchdog") + 1]
 
 
+def test_startup_ort_cuda_preload_is_actually_wired_into_the_real_lifespan(monkeypatch):
+    """Pass-4 review correction: an earlier version of this docstring claimed
+    deleting the real call site (`await _startup_ort_cuda_preload()` in
+    `main._lifespan`) would leave every OTHER test in this file green -- wrong;
+    mutation-tested, that deletion already fails four existing tests (they
+    assert `_startup_ort_cuda_preload` itself was among the calls the lifespan
+    made, which a deleted call site breaks regardless of what runs inside it).
+
+    The actual gap this test closes is narrower and different: every other
+    test in this file monkeypatches `_startup_ort_cuda_preload` itself (it is
+    a member of `EXPECTED_STARTUP`), so none of them ever execute its real
+    BODY -- a version of `_startup_ort_cuda_preload` that called its two
+    sub-functions in the wrong order, or dropped one of them, would still
+    satisfy every existing test unchanged. This test leaves
+    `_startup_ort_cuda_preload` itself UNPATCHED and instead patches the two
+    functions ITS body calls (`_add_nvidia_dll_dirs_to_path`,
+    `_preload_ort_cuda_dlls`) with recorders, then drives the real lifespan and
+    asserts both actually ran, in the order `_startup_ort_cuda_preload`'s own
+    docstring says is load-bearing (the PATH prepend runs first,
+    unconditionally, so `_preload_ort_cuda_dlls`'s bare-name PATH fallback can
+    also find these directories)."""
+    calls: list[str] = []
+
+    def _fake_add_nvidia_dll_dirs_to_path() -> list[str]:
+        calls.append("_add_nvidia_dll_dirs_to_path")
+        return []
+
+    def _fake_preload_ort_cuda_dlls() -> str:
+        calls.append("_preload_ort_cuda_dlls")
+        return ""
+
+    monkeypatch.setattr(main, "_add_nvidia_dll_dirs_to_path", _fake_add_nvidia_dll_dirs_to_path)
+    monkeypatch.setattr(main, "_preload_ort_cuda_dlls", _fake_preload_ort_cuda_dlls)
+    # Every OTHER startup/shutdown handler is still monkeypatched to a no-op
+    # recorder so this test isn't also exercising watchdogs, device probes,
+    # etc. -- only `_startup_ort_cuda_preload` itself is left real.
+    for name in EXPECTED_STARTUP + EXPECTED_SHUTDOWN:
+        if name == "_startup_ort_cuda_preload":
+            continue
+        assert callable(getattr(main, name)), name
+        monkeypatch.setattr(main, name, _make_noop_recorder())
+
+    asyncio.run(_run_lifespan([]))
+
+    assert calls == ["_add_nvidia_dll_dirs_to_path", "_preload_ort_cuda_dlls"], (
+        "_startup_ort_cuda_preload's real BODY must call its two steps, in "
+        "this exact order, when the real (unpatched) lifespan runs it"
+    )
+
+
+def _make_noop_recorder():
+    async def _recorder() -> None:
+        return None
+
+    return _recorder
+
+
 def test_shutdown_still_runs_when_the_serving_phase_raises(monkeypatch):
     # Starlette's `_DefaultLifespan.__aexit__` ignored its exc_info and ran
     # `Router.shutdown()` unconditionally, so a lifespan task cancelled while
