@@ -305,15 +305,15 @@ last, alone, since it deliberately crashes the sidecar twice.
     and confirm the rendered output is equivalent by ear.
     - Result:
 
-### (discharged, was A34) · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398)
+### A34 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398)
 
 > **Register row: A34 — discharged, pre-2026-08-26 numbering; that ID has
 > since been re-minted for unrelated work (`characterId` drift, #2584/#2040)
 > in the current register.** Section kept below for historical run record
-> only, per this pack's own convention (see the file header). Re-anchored
-> off the bare `A34` heading token by #2721/#2833 so `check-register-
-> citations.mjs`'s widened `wrongId` check does not misread this historical
-> section as a live citation of the current A34 row.
+> only, per this pack's own convention (see the file header). Discharge
+> annotation documents the staleness for `check-register-citations.mjs`'s
+> Check C so this historical section is not misread as a live citation
+> of the current A34 row.
 
 > **Criteria source:** `onbox-acceptance-register.md` A41 — full scenario
 > text already spelled out there (`:2473-2496`), cited not restated except
