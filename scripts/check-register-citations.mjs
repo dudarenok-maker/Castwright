@@ -1326,9 +1326,9 @@ export function findUnclassifiedRunSheetMentions(registerRows) {
 
 /**
  * Subject numbers found in the same discharge-word CLAUSE as a mention,
- * anywhere in one row's own body text — reuses the exact clause-bounding,
- * proximity-capping, and polarity-checking logic `idSpecificAnnotationPresent`
- * uses (DISCHARGE_ANNOTATION_REGEX + clauseBounds + ID_PROXIMITY_CHARS), just
+ * anywhere in one row's own body text — reuses the exact clause-bounding and
+ * proximity-capping logic `idSpecificAnnotationPresent` uses
+ * (DISCHARGE_ANNOTATION_REGEX + clauseBounds + ID_PROXIMITY_CHARS), just
  * scanning for subject-number tokens instead of ID tokens, because it answers
  * a different question: not "does this discharge note excuse a specific ID"
  * but "does this row's OWN section document which subject(s) it used to track
@@ -1340,12 +1340,23 @@ export function findUnclassifiedRunSheetMentions(registerRows) {
  * Pass-11 review of PR #2846 (finding #1, CRITICAL): polarity-check the
  * discharge word — "NOT discharged" (and similar negated contexts like "is
  * why A16 below is not fully discharged") must not match as affirmative
- * discharges. The fix checks for polarity-negating words (like "NOT", "no ")
- * in close proximity before the discharge word, and applies the same
- * ID_PROXIMITY_CHARS cap that `idSpecificAnnotationPresent` uses so a
- * subject number far from its discharge word (>120 chars) is not incorrectly
- * attributed to a row that merely MENTIONS it in passing (e.g. in discussion
- * of another row's history).
+ * discharges. This is a polarity check `idSpecificAnnotationPresent` itself
+ * does NOT have (it is unconcerned with polarity, since it only answers
+ * whether a discharge word and a specific ID token co-occur in a clause, not
+ * what either one asserts) — added here, scoped to `clauseBounds`, because
+ * this function's answer of "did this row historically track this subject"
+ * is exactly the kind of claim a negated sentence can falsify. Pass-15
+ * review (finding new-B, SIGNIFICANT): the negation-word set is deliberately
+ * broad (NOT/no/never/isn't/aren't/wasn't/weren't/hasn't/haven't/cannot/
+ * can't/an "un-" prefix fused to the discharge word/"far from"/"nothing"),
+ * since the first cut (just "NOT"/"no") missed most real negation phrasings.
+ * Also applies the same ID_PROXIMITY_CHARS cap `idSpecificAnnotationPresent`
+ * uses so a subject number far from its discharge word (>120 chars) is not
+ * incorrectly attributed to a row that merely MENTIONS it in passing (e.g.
+ * in discussion of another row's history), and (pass-15, finding new-A)
+ * excludes a harvested number that `extractPrSubjectNumbers` identifies as a
+ * "PR #nnnn" reference rather than a genuine subject number, the same
+ * PR-vs-subject distinction the file already makes elsewhere.
  */
 function dischargedSubjectsMentionedIn(rowBodyText) {
   const scanText = stripInlineCodeSpans(rowBodyText);
@@ -1354,25 +1365,48 @@ function dischargedSubjectsMentionedIn(rowBodyText) {
   ];
   const subjects = new Set();
   for (const dm of dischargeMatches) {
-    // Polarity check: scan backwards from the discharge word to look for
-    // negation markers ("NOT" or "no") that would negate it. Bound the scan
-    // to ~30 chars back to avoid matching unrelated negations far away.
-    // Match "NOT" or "no" as complete words (both word-boundary checks so
-    // "now" and "note" don't falsely match).
-    const polarityScanStart = Math.max(0, dm.index - 30);
-    const polarityContext = scanText.slice(polarityScanStart, dm.index);
-    if (/\bNOT\b|\bno\b/i.test(polarityContext)) {
+    // Get clause bounds first so we can use them for both polarity and subject scanning.
+    const { start, end } = clauseBounds(scanText, dm.index);
+
+    // Polarity check: scan within the same clause as the discharge word to look for
+    // negation markers that would negate it. Bound the scan to the clause bounds
+    // (not a flat window) to avoid matching unrelated negations across clause/list-item boundaries.
+    // Recognize a broad set of negation patterns:
+    // - "NOT", "no" (complete words)
+    // - "never", "isn't", "aren't", "wasn't", "weren't" (contractions)
+    // - "hasn't (been)", "haven't (been)" (auxiliary verbs with "have")
+    // - "cannot be", "can't be" (modal verbs)
+    // - "far from" (degree modifier)
+    // - "nothing" followed (in the same clause) by "is" (negating existential)
+    const polarityContext = scanText.slice(start, dm.index);
+    // Apostrophes are '-escaped (not literal) so this regex literal
+    // doesn't desync spawn-windows-hide.test.ts's quote-tracking scanner —
+    // see that guard's own regexLiteralDesyncsQuoteTracking comment.
+    const hasNegationWord =
+      /\b(?:NOT|no|never|isn\u0027t|aren\u0027t|wasn\u0027t|weren\u0027t|hasn\u0027t|haven\u0027t|cannot|can\u0027t|far\s+from|nothing)\b/i.test(
+        polarityContext,
+      );
+    // Also check if the discharge word itself is prefixed with "un-" (e.g., "undischarged", "un-discharged")
+    const isUnPrefixed = /un-?discharged\b/i.test(scanText.slice(Math.max(0, dm.index - 10), dm.index + dm[0].length));
+    if (hasNegationWord || isUnPrefixed) {
       // This discharge word is negated, skip it.
       continue;
     }
 
-    const { start, end } = clauseBounds(scanText, dm.index);
     // Scan for subject numbers in the clause, applying proximity cap.
     // Use scanText (not rowBodyText) so indices are consistent.
     // Extract text for the clause and scan it, adjusting indices back.
     const clauseText = scanText.slice(start, end);
+    // Extract PR-marked subject numbers to exclude them from genuine subject
+    // references (#2721 new-A: "PR #nnnn" is a reference to the PR itself, not a
+    // subject the row discharged).
+    const prSubjects = extractPrSubjectNumbers(clauseText);
     for (const smatch of clauseText.matchAll(SUBJECT_NUMBER_REGEX)) {
       const subject = Number(smatch[1] ?? smatch[2]);
+      // Skip numbers that are marked with "PR #" — they reference a PR, not a subject.
+      if (prSubjects.has(subject)) {
+        continue;
+      }
       // Measure character distance from discharge word center to subject center.
       // smatch.index is relative to clauseText, so convert to full scanText coords.
       const dischargeCenter = dm.index + dm[0].length / 2;

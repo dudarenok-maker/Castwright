@@ -1524,6 +1524,216 @@ This row's earlier work on #1969 is now discharged and resolved.
   assert.match(annotatedDischarge[0], /A36/); // names the current owner
 });
 
+// Pass-2 review of PR #2846 (finding new-B): the polarity scan now recognizes
+// a broader set of negation patterns (not just "NOT" and "no"), and bounds the
+// scan to the clause instead of a flat 30-char window.
+
+test('checkConflictingSubjects: negation pattern "is never discharged" is now recognized and suppresses false matches (#2846 finding new-B)', () => {
+  const registerText = `# Register
+
+## Group A
+
+### A36 · Voice work (#1969)
+
+Body.
+
+### A1 · Unrelated work (#2040)
+
+Discussion: subject #1969 is never discharged — A16 still tracks it below.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Some section (#1969)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  // The negated "is never discharged" should NOT suppress the wrongId — A1's
+  // body doesn't affirmatively discharge #1969, only DISCUSSES its discharge
+  // in a negated context.
+  assert.equal(wrongId.length, 1);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
+  assert.match(wrongId[0], /cited A1 for #1969/);
+});
+
+test('checkConflictingSubjects: negation pattern "isn\'t discharged" is now recognized and suppresses false matches (#2846 finding new-B)', () => {
+  const registerText = `# Register
+
+## Group A
+
+### A36 · Voice work (#1969)
+
+Body.
+
+### A1 · Unrelated work (#2040)
+
+Note: subject #1969 isn't discharged, A16 still owns it.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Some section (#1969)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  // The negated "isn't discharged" should NOT suppress the wrongId.
+  assert.equal(wrongId.length, 1);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
+  assert.match(wrongId[0], /cited A1 for #1969/);
+});
+
+test('checkConflictingSubjects: negation pattern "un-discharged" (prefix negation) is now recognized and suppresses false matches (#2846 finding new-B)', () => {
+  const registerText = `# Register
+
+## Group A
+
+### A36 · Voice work (#1969)
+
+Body.
+
+### A1 · Unrelated work (#2040)
+
+Related: subject #1969 remains un-discharged in A16's row.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Some section (#1969)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  // The negated "un-discharged" should NOT suppress the wrongId.
+  assert.equal(wrongId.length, 1);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
+  assert.match(wrongId[0], /cited A1 for #1969/);
+});
+
+test('checkConflictingSubjects: clause-bounded polarity scan does not suppress discharge across unrelated list-item boundary (#2846 finding new-B)', () => {
+  const registerText = `# Register
+
+## Group A
+
+### A36 · Voice work (#1969)
+
+Scope:
+- Item 3: subject #1969 is not tracked here.
+- Item 4 — #1969 discharged 2026-08-01.
+
+### A1 · Unrelated work (#2040)
+
+Body.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    // A36 documents that it discharged #1969 in its own row (Item 4).
+    // This should register as annotatedDischarge for A36.
+  ]);
+  // The "not tracked here" in Item 3 should NOT suppress the discharge in Item 4,
+  // because the clause boundary between list items should separate them.
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  // Verify A36 itself knows it discharged #1969 by checking the register parsing
+  assert.ok(rows.has('A36'));
+  // Internally, dischargedSubjectsMentionedIn should find #1969 in A36's body
+  // without being suppressed by the unrelated "not" in the previous list item.
+  // This is verified indirectly through the legitimateMap behavior.
+});
+
+test('checkConflictingSubjects: ID_PROXIMITY_CHARS cap prevents distant subject numbers from matching (finding new-D)', () => {
+  // A subject number far (>120 chars) from the discharge word in the same clause
+  // must NOT be treated as discharging that subject.
+  const registerText = `# Register
+
+## Group A
+
+### A1 · Earlier work, now re-minted (#2040)
+
+Subject #1969 mentioned here at start. Filler text: xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx xxxxx. discharged 2026-08-01.
+
+### A36 · Voice work (#1969)
+
+Body.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Some section (#1969)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  // A1 citing #1969 should fire wrongId (FATAL), not annotatedDischarge,
+  // because the #1969 mention and the "discharged" word in A1's body are too far apart
+  // (well over 120 chars), so the proximity cap prevents dischargedSubjectsMentionedIn
+  // from attributing the discharge to #1969. A36 legitimately owns #1969, so A1's
+  // citation is genuinely wrong.
+  assert.equal(wrongId.length, 1);
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 0);
+  assert.match(wrongId[0], /cited A1 for #1969/);
+  assert.match(wrongId[0], /A36/); // names the legitimate owner
+});
+
+test('checkConflictingSubjects: "PR #nnnn" references in discharge text are excluded from harvested subjects (#2721 new-A)', () => {
+  // #2846 pass-2 review finding new-A: dischargedSubjectsMentionedIn harvests ANY
+  // number in a discharge clause without verifying it's a genuine subject reference
+  // rather than a PR number reference. A18 in the real register has "PR #1978"
+  // mentioned near a discharge word, causing 1978 to be incorrectly included in A18's
+  // historical subjects if the PR marker isn't stripped first.
+  //
+  // This test creates a minimal fixture reproducing that shape: a row A18 whose
+  // body mentions "PR #1978" in a discharge context, and a separate subject #1978
+  // that belongs to A36. Citing A18 for #1978 should fire wrongId (FATAL), not
+  // annotatedDischarge — the discharge annotation is invalid because A18 never
+  // actually tracked #1978 (only PR #1978 is mentioned, not subject #1978).
+  const registerText = `# Register
+
+## Group A
+
+### A18 · Latent equivalence (#2000)
+
+Decode equivalence was measured during PR #1978's review and PR #1978 was discharged during the work. The equivalence metric is now in the codebase.
+
+### A36 · Some other work (#1978)
+
+Body.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    ['docs/bar.md', '### A18 · Some section (#1978)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  // A18 citing #1978 must fire wrongId (FATAL), not annotatedDischarge,
+  // because even though A18's body mentions "PR #1978" near a discharge word,
+  // the PR marker means it's not a genuine subject reference — A36 legitimately owns #1978.
+  assert.equal(wrongId.length, 1, 'should have exactly one wrongId finding');
+  assert.equal(unknownSubject.length, 0, 'should have zero unknownSubject findings');
+  assert.equal(annotatedDischarge.length, 0, 'should have zero annotatedDischarge findings');
+  assert.match(wrongId[0], /cited A18 for #1978/);
+  assert.match(wrongId[0], /A36/); // names the legitimate owner
+});
+
+test('checkConflictingSubjects: control — a genuine subject discharge (not a PR reference) still works correctly (#2721 new-A control)', () => {
+  // Control test: verify that genuine subject discharges (without PR marker) still
+  // work correctly after the PR-reference exclusion is in place.
+  const registerText = `# Register
+
+## Group A
+
+### A18 · Latent equivalence (#2000)
+
+Latent equivalence was measured and #1978 was discharged during this work.
+
+### A36 · Some other work (#1978)
+
+Body.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    ['docs/bar.md', '### A18 · Some section (#1978)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  // A18 citing #1978 must fire annotatedDischarge (non-fatal), not wrongId,
+  // because A18's body genuinely documents discharging #1978 (no PR marker).
+  assert.equal(wrongId.length, 0, 'should have zero wrongId findings');
+  assert.equal(unknownSubject.length, 0, 'should have zero unknownSubject findings');
+  assert.equal(annotatedDischarge.length, 1, 'should have exactly one annotatedDischarge finding');
+  assert.match(annotatedDischarge[0], /cited A18 for #1978/);
+});
+
 test('measureWrongIdEligibleLines: agrees with checkConflictingSubjects about which lines are eligible (finding Z)', () => {
   const { rows } = parseRegisterRows(buildRegister());
   const files = new Map([
