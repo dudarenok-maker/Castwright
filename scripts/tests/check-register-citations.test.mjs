@@ -1605,34 +1605,35 @@ Related: subject #1969 remains un-discharged in A16's row.
   assert.match(wrongId[0], /cited A1 for #1969/);
 });
 
-test('checkConflictingSubjects: clause-bounded polarity scan does not suppress discharge across unrelated list-item boundary (#2846 finding new-B)', () => {
+test('checkConflictingSubjects: clause-bounded polarity scan does not suppress a genuine discharge across an unrelated list-item boundary (#2846 finding new-B)', () => {
   const registerText = `# Register
 
 ## Group A
 
 ### A36 · Voice work (#1969)
 
-Scope:
-- Item 3: subject #1969 is not tracked here.
-- Item 4 — #1969 discharged 2026-08-01.
+Body.
 
 ### A1 · Unrelated work (#2040)
 
-Body.
+- 3: not tracked.
+- 4: #1969 discharged.
 `;
   const { rows } = parseRegisterRows(registerText);
   const files = new Map([
-    // A36 documents that it discharged #1969 in its own row (Item 4).
-    // This should register as annotatedDischarge for A36.
+    ['docs/bar.md', '### A1 · Some section (#1969)\n\nBody.\n'],
   ]);
-  // The "not tracked here" in Item 3 should NOT suppress the discharge in Item 4,
-  // because the clause boundary between list items should separate them.
+  // Item 3's unrelated "not" sits within the OLD flat 30-char polarity window
+  // of Item 4's discharge word (measured: 24 chars) but across a list-item
+  // clause boundary — it must not bleed across that boundary and suppress
+  // Item 4's genuine, unnegated discharge (the false-CLOSED direction of a
+  // flat, un-clause-bounded polarity window). A1's own row DOES document
+  // discharging #1969, so citing A1 for #1969 should resolve non-fatal.
   const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
-  // Verify A36 itself knows it discharged #1969 by checking the register parsing
-  assert.ok(rows.has('A36'));
-  // Internally, dischargedSubjectsMentionedIn should find #1969 in A36's body
-  // without being suppressed by the unrelated "not" in the previous list item.
-  // This is verified indirectly through the legitimateMap behavior.
+  assert.equal(wrongId.length, 0, "the genuine discharge in Item 4 must not be suppressed by Item 3's unrelated negation");
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 1);
+  assert.match(annotatedDischarge[0], /cited A1 for #1969/);
 });
 
 test('checkConflictingSubjects: ID_PROXIMITY_CHARS cap prevents distant subject numbers from matching (finding new-D)', () => {
