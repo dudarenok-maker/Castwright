@@ -223,11 +223,13 @@ def test_calling_twice_does_not_grow_path(monkeypatch, tmp_path) -> None:
     assert second == [], "the directories are already on PATH -- nothing left to add"
     assert third == [], "still nothing left to add on a third repeat call"
     assert path_after_second == path_after_first, "PATH must not grow on a repeat call"
-    assert path_after_third == path_after_first, (
-        "PATH must not grow on a THIRD call either -- a two-call check alone "
-        "cannot distinguish a genuine fixed point from an ordering mismatch "
-        "that happens to cancel out exactly once"
-    )
+    # Pass-5 review correction: a third call adds no discriminating power over
+    # the second -- `_add_nvidia_dll_dirs_to_path` is a pure function of
+    # (PATH, the on-disk `nvidia/` layout), neither of which this test
+    # mutates between calls, so a genuine fixed point at call 2 is a fixed
+    # point at every later call by construction. Kept only as a cheap,
+    # literal restatement of that property, not as extra mutation coverage.
+    assert path_after_third == path_after_first, "PATH must not grow on a THIRD call either"
 
 
 def test_late_pre_existing_entry_still_gets_reprepended(monkeypatch, tmp_path) -> None:
@@ -239,24 +241,38 @@ def test_late_pre_existing_entry_still_gets_reprepended(monkeypatch, tmp_path) -
     toolkit install). The guard must check PATH's *prefix*, not membership
     anywhere in it: only a genuine repeat call by this exact function (the
     candidate directories already sitting, in order, at the very front of
-    PATH) is a true no-op."""
+    PATH) is a true no-op.
+
+    Pass-5 review finding: a single-directory fixture cannot distinguish the
+    real whole-prefix check from one that only inspects `candidates[0]` --
+    with one candidate the two degenerate to the same test. Uses the same
+    four-package fixture as `test_calling_twice_does_not_grow_path`, with only
+    the alphabetically-FIRST package (`cudnn`) pre-existing, late, in PATH --
+    a check that only looked at the first candidate would wrongly treat this
+    as the idempotent-repeat case and skip re-adding the other three."""
     site_packages = tmp_path / "site-packages"
+    for pkg in ("cudnn", "cublas", "cufft", "cuda_runtime"):
+        (site_packages / "nvidia" / pkg / "bin").mkdir(parents=True)
     cudnn_bin = site_packages / "nvidia" / "cudnn" / "bin"
-    cudnn_bin.mkdir(parents=True)
 
     monkeypatch.setitem(sys.modules, "onnxruntime", _fake_onnxruntime_at(site_packages))
-    # The same directory already sits LATE in PATH (behind an unrelated
-    # entry) -- not at the front, so this is not the idempotent-repeat case.
+    # Only cudnn's directory (alphabetically first) already sits LATE in PATH
+    # (behind an unrelated entry) -- not at the front, and not joined with the
+    # other three candidates, so this is not the idempotent-repeat case.
     monkeypatch.setenv("PATH", "C:\\CUDA\\v12.4\\bin" + os.pathsep + str(cudnn_bin))
 
     added = main._add_nvidia_dll_dirs_to_path()
 
-    assert added == [str(cudnn_bin)], (
+    assert len(added) == 4, (
+        "all four candidates must be (re-)prepended -- a guard that only "
+        "checked the first candidate against PATH would wrongly skip here"
+    )
+    assert str(cudnn_bin) in added, (
         "a late pre-existing entry must still be prepended, not skipped, or "
         "the ahead-of-torch ordering guarantee is silently lost"
     )
-    assert os.environ["PATH"].split(os.pathsep)[0] == str(cudnn_bin), (
-        "the directory must end up FIRST on PATH, not merely present"
+    assert os.environ["PATH"].split(os.pathsep)[0] == added[0], (
+        "the directories must end up FIRST on PATH, not merely present"
     )
 
 

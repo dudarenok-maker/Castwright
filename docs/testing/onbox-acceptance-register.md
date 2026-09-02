@@ -445,6 +445,31 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > are never reused, so a drop never frees or renumbers a slot, and a
 > Blocked-section addition doesn't consume a live-group id).
 >
+> **Prior change: 2026-09-01, 66 owed (no change) — Blocked 5 → 6.** Added a new
+> Blocked-section row, **ROCm/AMD admitted device-key normalisation — real GPU
+> engine load, pinned/resident, and idle-eviction**
+> ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), PR
+> [#2835](https://github.com/dudarenok-maker/Castwright/pull/2835)): the
+> VRAM-ledger admission layer hands engines a `"rocm:N"` device key on a
+> ROCm/AMD box that no torch/CTranslate2/speechbrain call understands;
+> separately an operator's config-validated `"cuda:N"` pin (or a resident
+> engine's own device string) could never match that same ledger's own
+> `"rocm:N"`-keyed candidates; and separately again, the idle-eviction
+> ladder's own card-comparison (`_same_card`) required `"cuda"` on both
+> sides it compares, so it could never match a probe-native `"rocm:N"`
+> target either — three seams, all fixed (`_normalise_rocm_device_key`
+> forward, `_report_rocm_device_key` reverse, both reused at `_same_card`
+> too) across `_resolve_torch_device`, `_ct2_kwargs`, `_spk_run_device`,
+> `WhisperEngine._ensure_loaded`, `SpeakerEngine.ensure_loaded`,
+> `_engine_env_pin`, `_is_resident`, and `_same_card` — but unprovable on
+> this box (dual-NVIDIA, no ROCm hardware), so it lands Blocked rather than
+> Group A. The pinned-device half was found and fixed in the same PR's own
+> `pr-review-gate` pass 1, and the idle-eviction half in pass 2, which is
+> also why the row's title and body were widened twice after first being
+> added (originally covered only the unpinned crash). **66 owed** is
+> unaffected — Blocked/Unconfirmed rows are excluded from that arithmetic
+> by design (see the group table above).
+>
 > **Prior change: 2026-08-31 (wave 10, claude), 66 → 65.** Row **A28** (ORT
 > marker — fresh NVIDIA bootstrap, #2192) fully discharged and dropped —
 > **A28 is retired, not reused** (allocate-once). The row's long-outstanding
@@ -494,31 +519,6 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > permanently blocked; see A33's own entry. Group A: 40 → 39. `next-id`
 > unaffected (still A106; allocate-once IDs are never reused, so a drop
 > never frees or renumbers a slot).
->
-> **Prior change: 2026-09-01, 66 owed (no change) — Blocked 5 → 6.** Added a new
-> Blocked-section row, **ROCm/AMD admitted device-key normalisation — real GPU
-> engine load, pinned/resident, and idle-eviction**
-> ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), PR
-> [#2835](https://github.com/dudarenok-maker/Castwright/pull/2835)): the
-> VRAM-ledger admission layer hands engines a `"rocm:N"` device key on a
-> ROCm/AMD box that no torch/CTranslate2/speechbrain call understands;
-> separately an operator's config-validated `"cuda:N"` pin (or a resident
-> engine's own device string) could never match that same ledger's own
-> `"rocm:N"`-keyed candidates; and separately again, the idle-eviction
-> ladder's own card-comparison (`_same_card`) required `"cuda"` on both
-> sides it compares, so it could never match a probe-native `"rocm:N"`
-> target either — three seams, all fixed (`_normalise_rocm_device_key`
-> forward, `_report_rocm_device_key` reverse, both reused at `_same_card`
-> too) across `_resolve_torch_device`, `_ct2_kwargs`, `_spk_run_device`,
-> `WhisperEngine._ensure_loaded`, `SpeakerEngine.ensure_loaded`,
-> `_engine_env_pin`, `_is_resident`, and `_same_card` — but unprovable on
-> this box (dual-NVIDIA, no ROCm hardware), so it lands Blocked rather than
-> Group A. The pinned-device half was found and fixed in the same PR's own
-> `pr-review-gate` pass 1, and the idle-eviction half in pass 2, which is
-> also why the row's title and body were widened twice after first being
-> added (originally covered only the unpinned crash). **66 owed** is
-> unaffected — Blocked/Unconfirmed rows are excluded from that arithmetic
-> by design (see the group table above).
 >
 > **Prior change: 2026-08-30, no count change.** Row **A24**'s run note (2026-08-26,
 > below) filed [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678) as a
