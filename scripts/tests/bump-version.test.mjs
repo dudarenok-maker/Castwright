@@ -42,10 +42,15 @@ const MOJIBAKE_EM_DASH = 'â€”'; // should decode to U+2014 —, standalone 
 // which child processes inherit. Without sanitising, the test's `git commit`
 // would write into the PARENT worktree's git instead of the temp fixture —
 // silently creating bogus commits on whatever branch invoked the hook.
+// Case-insensitive match: Windows preserves whatever casing a var was stored
+// under while lookup is case-insensitive, and git honours a lowercase
+// `git_dir` identically to `GIT_DIR` — see git-env.mjs's scrubGitEnv() header
+// for the same trap. A `startsWith('GIT_')` filter alone leaves a `git_dir`
+// (or similar) survivor that still redirects the throwaway repo's commits.
 function cleanGitEnv() {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_')) delete env[key];
+    if (key.toUpperCase().startsWith('GIT_')) delete env[key];
   }
   return env;
 }
@@ -629,6 +634,36 @@ test('scrubGitEnv strips every git repository-discovery override, preserves GIT_
   assert.equal(scrubbed.GIT_INDEX_FILE, '/decoy/.git/index');
 });
 
+// Case-insensitivity regression for THIS file's own cleanGitEnv(), the same
+// trap scrubGitEnv() was hardened against below (#2175 review, Finding 1).
+// cleanGitEnv() hand-rolls its own filter rather than delegating to
+// scrubGitEnv() (it must also strip GIT_INDEX_FILE, which scrubGitEnv()
+// deliberately preserves — see the #2216 note above), so it needs its own
+// case-insensitive regression. Deliberately mixed-case-only: cannot pass
+// against a `key.startsWith('GIT_')` filter.
+test('cleanGitEnv strips a git env override regardless of stored casing', () => {
+  const saved = { ...process.env };
+  try {
+    for (const key of Object.keys(process.env)) {
+      if (key.toUpperCase().startsWith('GIT_')) delete process.env[key];
+    }
+    process.env.git_dir = '/decoy/.git';
+    process.env.Git_Index_File = '/decoy/.git/index';
+
+    const cleaned = cleanGitEnv();
+    assert.equal(cleaned.git_dir, undefined);
+    assert.equal(cleaned.Git_Index_File, undefined);
+    // Non-GIT_ keys are untouched — spot-check against whichever casing this
+    // OS actually stores the PATH var under (Windows: "Path").
+    const pathKey = Object.keys(cleaned).find((k) => k.toUpperCase() === 'PATH');
+    assert.ok(pathKey, 'PATH must survive the scrub');
+    assert.equal(cleaned[pathKey], saved[pathKey]);
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, saved);
+  }
+});
+
 // #2175 review, Finding 1 — Windows env lookup is case-insensitive, but
 // `{ ...process.env }` snapshots whatever casing the OS happened to store a
 // variable under. A `delete out[key]` keyed on the canonical uppercase name
@@ -713,7 +748,7 @@ test('createAnnotatedTag resolves repoRoot even with an inherited GIT_DIR pointi
   writeFileSync(notes, '# v9.9.8\n\nFixes:\n- the GIT_DIR leak\n');
   const savedGitEnv = {};
   for (const key of Object.keys(process.env)) {
-    if (key.startsWith('GIT_')) {
+    if (key.toUpperCase().startsWith('GIT_')) {
       savedGitEnv[key] = process.env[key];
       delete process.env[key];
     }
@@ -1166,7 +1201,7 @@ test('createAnnotatedTag strips a BOM even when called directly, bypassing pre-f
     writeBOMFile(notes, '# v9.9.9\n\nFixes:\n- the bug\n');
     const savedGitEnv = {};
     for (const key of Object.keys(process.env)) {
-      if (key.startsWith('GIT_')) {
+      if (key.toUpperCase().startsWith('GIT_')) {
         savedGitEnv[key] = process.env[key];
         delete process.env[key];
       }

@@ -165,6 +165,7 @@
     "js-yaml": "^4.2.0",
     "openapi-typescript": {
       "typescript": "$typescript"
-    }
+    },
+    "browserslist": "^4.28.8"
   }
 }
