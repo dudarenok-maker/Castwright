@@ -11,9 +11,10 @@ import { tmpdir } from 'node:os';
 import {
   checkRegister,
   checkLiveView,
-  resolveBaselineText,
+  resolveBaselineTexts,
   CANNOT_VERIFY_BASELINE_ERROR,
   ROW_CONTENT_DRIFT_ERROR_PREFIX,
+  EXTRACTION_ERROR_PREFIX,
   stripHtmlComments,
   htmlCellText,
   ALLOCATION_FLOOR,
@@ -1880,10 +1881,11 @@ test('#2599: identical row body content (tracked vs published) passes, no conten
 test('#2599: a row whose ID and count match but body content differs is caught, naming the row', () => {
   const workingRegister = buildSingleGroupRegister('A', [1]);
   const baselineRegister = buildSingleGroupRegister('A', [1]);
-  // Baseline and published both have the original content. Tracked has
-  // different content that never made it to the live page — genuine drift.
+  // Genuine A41-style drift: tracked matches baseline (already merged to
+  // origin/main), but published still carries the old, stale content — the
+  // live page was never updated to match.
   const baselineLiveView = buildRowContentLiveView([
-    { id: 'A1', body: 'Original content.' },
+    { id: 'A1', body: 'Tracked local content, different from published.' },
   ]);
   const trackedLiveViewHtml = buildRowContentLiveView([
     { id: 'A1', body: 'Tracked local content, different from published.' },
@@ -1942,24 +1944,26 @@ test('#2599: omitting trackedLiveViewHtml skips the content-drift check entirely
 
 // #2599/A41: Content-hashing baseline disambiguation tests. A row's content
 // may differ between tracked and published for two reasons: (1) a legitimate
-// pending-publish edit already committed to origin/main (or this branch before
-// publishing), or (2) a genuine revert/hand-edit on the live page. The
-// baseline (origin/main's copy) disambiguates: if tracked matches the
-// baseline, the edit is already committed (pending publish), not drift.
-test('#2599: a legitimate pending-publish edit (local matches baseline) does not fail', () => {
+// local edit not yet merged to origin/main (pending publish), or (2) a genuine
+// revert/hand-edit on the live page. The baseline (origin/main's copy)
+// disambiguates: if published matches the baseline while tracked differs, the
+// edit is a local pending-publish, not drift.
+test('#2599: a legitimate pending-publish edit (published matches baseline) does not fail', () => {
   const workingRegister = buildSingleGroupRegister('A', [1]);
   const baselineRegister = buildSingleGroupRegister('A', [1]);
-  // Baseline and tracked BOTH have the edited content (already committed to
-  // origin/main or this branch). Published still has the OLD content (not
-  // yet published — this is what "pending publish" means).
+  // Baseline and published both have the SAME OLD content (main hasn't changed).
+  // Tracked has the NEW content (local edit not yet on origin/main). This is
+  // a legitimate pending-publish state — published matches baseline, tracked is ahead.
+  const oldContent = 'Old content from origin/main.';
+  const newContent = 'New local edit, not yet on origin/main.';
   const baselineLiveView = buildRowContentLiveView([
-    { id: 'A1', body: 'Edited content, already on origin/main.' },
+    { id: 'A1', body: oldContent },
   ]);
   const trackedLiveViewHtml = buildRowContentLiveView([
-    { id: 'A1', body: 'Edited content, already on origin/main.' },
+    { id: 'A1', body: newContent },
   ]);
   const publishedLiveView = buildRowContentLiveView([
-    { id: 'A1', body: 'Old content, not yet published.' },
+    { id: 'A1', body: oldContent },
   ]);
   const errors = checkLiveView(workingRegister, publishedLiveView, {
     direction: 'extraOnly',
@@ -1974,23 +1978,25 @@ test('#2599: a legitimate pending-publish edit (local matches baseline) does not
   );
 });
 
-// Genuine drift: the live page was reverted or hand-edited. Tracked differs
-// from published AND from baseline — that is drift. Tracked is new content
-// NOT in the baseline; published reverted to baseline content.
-test('#2599: a genuine revert (published matches baseline, local differs) fails', () => {
+// Genuine drift (A41): a fix was merged to origin/main, but the live page was
+// independently reverted to stale content. Tracked matches baseline (fix on main),
+// published differs from both (live was reverted). This is drift and must be flagged.
+test('#2599: a genuine revert (published differs from baseline/tracked) fails', () => {
   const workingRegister = buildSingleGroupRegister('A', [1]);
   const baselineRegister = buildSingleGroupRegister('A', [1]);
-  // Baseline and published both have the same content; tracked has new content
-  // not in the baseline — the tracked edit was never published, or was
-  // published and then reverted on the live page.
+  // Baseline and tracked both have the FIXED content (already on origin/main).
+  // Published has the OLD content (the live page was reverted/hand-edited).
+  // This is genuine A41-style drift.
+  const fixedContent = 'Fixed content, merged to origin/main.';
+  const oldContent = 'Old content, published was reverted.';
   const baselineLiveView = buildRowContentLiveView([
-    { id: 'A1', body: 'Baseline content.' },
+    { id: 'A1', body: fixedContent },
   ]);
   const trackedLiveViewHtml = buildRowContentLiveView([
-    { id: 'A1', body: 'Unilateral edit on this machine, never on the live page.' },
+    { id: 'A1', body: fixedContent },
   ]);
   const publishedLiveView = buildRowContentLiveView([
-    { id: 'A1', body: 'Baseline content.' },
+    { id: 'A1', body: oldContent },
   ]);
   const errors = checkLiveView(workingRegister, publishedLiveView, {
     direction: 'extraOnly',
@@ -2037,17 +2043,19 @@ test('#2599: missing baseline live-view skips content-hashing, does not fail', (
 test('#2599: a row whose body is unchanged but risk badge differs is caught as content drift', () => {
   const workingRegister = buildSingleGroupRegister('A', [1]);
   const baselineRegister = buildSingleGroupRegister('A', [1]);
-  // All three have the same body content, but the summary/risk badge differs:
-  // baseline and published have 'default', tracked has 'stale-badge'.
+  // All three have the same body content, but the summary/risk badge differs.
+  // Genuine drift: tracked matches baseline (already merged — 'current' is
+  // the correct, already-committed badge), but published still shows the
+  // stale badge that was never updated on the live page.
   const sharedBody = 'Shared body content.';
   const baselineLiveView = buildRowContentLiveView([
-    { id: 'A1', body: sharedBody, risk: 'default' },
+    { id: 'A1', body: sharedBody, risk: 'current' },
   ]);
   const trackedLiveViewHtml = buildRowContentLiveView([
-    { id: 'A1', body: sharedBody, risk: 'stale-badge' },
+    { id: 'A1', body: sharedBody, risk: 'current' },
   ]);
   const publishedLiveView = buildRowContentLiveView([
-    { id: 'A1', body: sharedBody, risk: 'default' },
+    { id: 'A1', body: sharedBody, risk: 'stale-badge' },
   ]);
   const errors = checkLiveView(workingRegister, publishedLiveView, {
     direction: 'extraOnly',
@@ -2260,7 +2268,7 @@ test('#2272 review finding 1: a whole-group BEHIND verdict with no --discharging
 // real (but deliberately unreachable) `git fetch`.
 // ---------------------------------------------------------------------------
 
-test('resolveBaselineText: fetch, then rev-parse FETCH_HEAD, then show <sha>, in that order, on success', () => {
+test('resolveBaselineTexts: fetch, then rev-parse FETCH_HEAD, then show <sha> for both files, in that order, on success', () => {
   const calls = [];
   const fakeRunner = (args, cwd) => {
     calls.push({ args, cwd });
@@ -2269,19 +2277,26 @@ test('resolveBaselineText: fetch, then rev-parse FETCH_HEAD, then show <sha>, in
       return { status: 0, stdout: 'deadbeefcafe\n', stderr: '', error: undefined };
     }
     if (args[0] === 'show') {
-      return { status: 0, stdout: 'FAKE REGISTER TEXT', stderr: '', error: undefined };
+      // Return different content for the register vs live-view file
+      if (args[1].includes('onbox-acceptance-register.md')) {
+        return { status: 0, stdout: 'FAKE REGISTER TEXT', stderr: '', error: undefined };
+      } else if (args[1].includes('onbox-acceptance-register-live-view.html')) {
+        return { status: 0, stdout: 'FAKE LIVEVIEW TEXT', stderr: '', error: undefined };
+      }
+      return { status: 0, stdout: 'FAKE TEXT', stderr: '', error: undefined };
     }
     throw new Error(`unexpected git subcommand in test: ${args[0]}`);
   };
-  const result = resolveBaselineText(
+  const result = resolveBaselineTexts(
     '/fake/repo',
     'docs/testing/onbox-acceptance-register.md',
+    'docs/testing/onbox-acceptance-register-live-view.html',
     fakeRunner,
   );
   assert.deepEqual(
     calls.map((c) => c.args[0]),
-    ['fetch', 'rev-parse', 'show'],
-    'expected fetch, then rev-parse, then show, in that order',
+    ['fetch', 'rev-parse', 'show', 'show'],
+    'expected fetch, then rev-parse, then show (register), then show (live-view), in that order',
   );
   assert.deepEqual(calls[0].args, ['fetch', 'origin', 'main']);
   assert.deepEqual(calls[1].args, ['rev-parse', 'FETCH_HEAD']);
@@ -2293,13 +2308,22 @@ test('resolveBaselineText: fetch, then rev-parse FETCH_HEAD, then show <sha>, in
     'show',
     'deadbeefcafe:docs/testing/onbox-acceptance-register.md',
   ]);
+  assert.deepEqual(calls[3].args, [
+    'show',
+    'deadbeefcafe:docs/testing/onbox-acceptance-register-live-view.html',
+  ]);
   assert.equal(calls[0].cwd, '/fake/repo');
   assert.equal(calls[1].cwd, '/fake/repo');
   assert.equal(calls[2].cwd, '/fake/repo');
-  assert.deepEqual(result, { text: 'FAKE REGISTER TEXT', failedStep: null });
+  assert.equal(calls[3].cwd, '/fake/repo');
+  assert.deepEqual(result, {
+    registerText: 'FAKE REGISTER TEXT',
+    liveViewText: 'FAKE LIVEVIEW TEXT',
+    failedStep: null,
+  });
 });
 
-test('resolveBaselineText: whitespace/newline around the rev-parsed SHA is trimmed before the show', () => {
+test('resolveBaselineTexts: whitespace/newline around the rev-parsed SHA is trimmed before the show calls', () => {
   // Real `git rev-parse` output ends with a trailing newline — asserting
   // this explicitly pins that the SHA is trimmed, not concatenated as-is
   // (which would produce an invalid `<sha>\n:<path>` show argument).
@@ -2311,8 +2335,10 @@ test('resolveBaselineText: whitespace/newline around the rev-parsed SHA is trimm
     if (args[0] === 'show') return { status: 0, stdout: 'TEXT', stderr: '' };
     throw new Error(`unexpected git subcommand in test: ${args[0]}`);
   };
-  resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
+  // Both show calls (register and liveview) should use the trimmed SHA
   assert.deepEqual(calls[2], ['show', 'abc123:reg.md']);
+  assert.deepEqual(calls[3], ['show', 'abc123:live.html']);
 });
 
 // #2199 review round 3 (A1): `git fetch origin main` only GUARANTEES it
@@ -2325,7 +2351,7 @@ test('resolveBaselineText: whitespace/newline around the rev-parsed SHA is trimm
 // asserting on the LITERAL show args — a regression back to `origin/main:`
 // would pass every other test in this file (they never touch the real,
 // possibly-narrowly-configured origin) but must fail this one.
-test("resolveBaselineText: never references origin/main directly at any step, so a narrowed remote refspec can't serve a stale ref (A1)", () => {
+test("resolveBaselineTexts: never references origin/main directly at any step, so a narrowed remote refspec can't serve a stale ref (A1)", () => {
   const calls = [];
   const fakeRunner = (args) => {
     calls.push(args);
@@ -2334,31 +2360,33 @@ test("resolveBaselineText: never references origin/main directly at any step, so
     if (args[0] === 'show') return { status: 0, stdout: 'FRESH', stderr: '' };
     throw new Error(`unexpected git subcommand in test: ${args[0]}`);
   };
-  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  const result = resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
   assert.deepEqual(calls[1], ['rev-parse', 'FETCH_HEAD']);
   assert.deepEqual(calls[2], ['show', 'cafef00d:reg.md']);
+  assert.deepEqual(calls[3], ['show', 'cafef00d:live.html']);
   for (const call of calls) {
     assert.ok(
       !call.some((arg) => typeof arg === 'string' && arg.includes('origin/main')),
       `no git call may ever reference origin/main directly, got: ${JSON.stringify(call)}`,
     );
   }
-  assert.equal(result.text, 'FRESH');
+  assert.equal(result.registerText, 'FRESH');
+  assert.equal(result.liveViewText, 'FRESH');
 });
 
-test('resolveBaselineText: a failing fetch (non-zero exit) short-circuits before show ever runs', () => {
+test('resolveBaselineTexts: a failing fetch (non-zero exit) short-circuits before show ever runs', () => {
   const calls = [];
   const fakeRunner = (args) => {
     calls.push(args[0]);
     if (args[0] === 'fetch') return { status: 1, stdout: '', stderr: 'fake fetch failure' };
     return { status: 0, stdout: 'should never be reached', stderr: '' };
   };
-  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
-  assert.deepEqual(result, { text: null, failedStep: 'fetch' });
+  const result = resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
+  assert.deepEqual(result, { registerText: null, liveViewText: null, failedStep: 'fetch' });
   assert.deepEqual(calls, ['fetch'], 'show must not run after a failed fetch');
 });
 
-test('resolveBaselineText: a spawn error on fetch (e.g. git missing, or a timeout) is also a fetch failure', () => {
+test('resolveBaselineTexts: a spawn error on fetch (e.g. git missing, or a timeout) is also a fetch failure', () => {
   // Node's spawnSync sets `result.error` (not just a non-zero `status`) both
   // when the executable can't be spawned at all (ENOENT) and when its own
   // `timeout` option fires — this fixture models either, since the
@@ -2371,12 +2399,12 @@ test('resolveBaselineText: a spawn error on fetch (e.g. git missing, or a timeou
     }
     return { status: 0, stdout: 'should never be reached', stderr: '' };
   };
-  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
-  assert.deepEqual(result, { text: null, failedStep: 'fetch' });
+  const result = resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
+  assert.deepEqual(result, { registerText: null, liveViewText: null, failedStep: 'fetch' });
   assert.deepEqual(calls, ['fetch']);
 });
 
-test('resolveBaselineText: a failing show (after a successful fetch + rev-parse) is reported as a show failure, not a fetch failure', () => {
+test('resolveBaselineTexts: a failing show (after a successful fetch + rev-parse) is reported as a show failure, not a fetch failure', () => {
   const calls = [];
   const fakeRunner = (args) => {
     calls.push(args[0]);
@@ -2385,18 +2413,18 @@ test('resolveBaselineText: a failing show (after a successful fetch + rev-parse)
     if (args[0] === 'show') return { status: 128, stdout: '', stderr: 'fake show failure' };
     throw new Error(`unexpected git subcommand in test: ${args[0]}`);
   };
-  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
-  assert.deepEqual(result, { text: null, failedStep: 'show' });
-  assert.deepEqual(
-    calls,
-    ['fetch', 'rev-parse', 'show'],
-    'show must still run after a successful fetch + rev-parse',
+  const result = resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
+  assert.deepEqual(result, { registerText: null, liveViewText: null, failedStep: 'show' });
+  // Both register and liveview show calls are attempted, so we see up to 4 calls total
+  assert.ok(
+    calls.includes('show'),
+    'show must run after a successful fetch + rev-parse',
   );
 });
 
-test('resolveBaselineText: a failing rev-parse (after a successful fetch) is also reported as a "show" failure, and the show never runs', () => {
+test('resolveBaselineTexts: a failing rev-parse (after a successful fetch) is also reported as a "show" failure, and the show never runs', () => {
   // #2199 review round 5 (optional hardening): rev-parse and show are folded
-  // into the same failedStep, deliberately — see resolveBaselineText's own
+  // into the same failedStep, deliberately — see resolveBaselineTexts's own
   // comment for why. This pins that folding, and that a rev-parse failure
   // still short-circuits before an invalid `undefined:<path>` show is ever
   // attempted.
@@ -2409,8 +2437,8 @@ test('resolveBaselineText: a failing rev-parse (after a successful fetch) is als
     }
     return { status: 0, stdout: 'should never be reached', stderr: '' };
   };
-  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
-  assert.deepEqual(result, { text: null, failedStep: 'show' });
+  const result = resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
+  assert.deepEqual(result, { registerText: null, liveViewText: null, failedStep: 'show' });
   assert.deepEqual(calls, ['fetch', 'rev-parse'], 'show must not run after a failed rev-parse');
 });
 
@@ -3355,7 +3383,7 @@ test('#2599/A41: missing row-ID marker is an extraction error, not a silent skip
     trackedLiveViewHtml: malformedLiveView,
   });
   assert.ok(
-    errors.some((e) => e.includes('could not extract row ID')),
+    errors.some((e) => e.startsWith(EXTRACTION_ERROR_PREFIX) && e.includes('could not extract row ID')),
     `expected an extraction error for missing row ID, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -3385,7 +3413,7 @@ test('#2599/A41: malformed body-div markup is an extraction error, not a silent 
     trackedLiveViewHtml: malformedLiveView,
   });
   assert.ok(
-    errors.some((e) => e.includes('Row A1') && e.includes('could not extract body content')),
+    errors.some((e) => e.startsWith(EXTRACTION_ERROR_PREFIX) && e.includes('Row A1') && e.includes('could not extract body content')),
     `expected an extraction error for row A1 body, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -3438,7 +3466,7 @@ test('#2599/A41: when both tracked and published fail extraction, all errors sur
   );
   // Most specifically, should have extraction errors for row A1 body.
   assert.ok(
-    errors.some((e) => e.includes('Row A1') && e.includes('could not extract body content')),
+    errors.some((e) => e.startsWith(EXTRACTION_ERROR_PREFIX) && e.includes('Row A1') && e.includes('could not extract body content')),
     `expected Row A1 body-extraction errors, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -3446,64 +3474,149 @@ test('#2599/A41: when both tracked and published fail extraction, all errors sur
 // #2599 Finding A: Regression test for the content-drift failure banner naming the correct file.
 // The banner should name the LIVE_VIEW file (what was actually diffed), not the REGISTER file.
 test('--against-published: content-drift error banner names the live-view.html file, not the register', () => {
-  const originalTracked = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
+  const originalLiveView = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
+  // Genuine A41-style drift under the corrected model: tracked matches the
+  // baseline (this edit is already merged to origin/main) while published
+  // still carries the OLD, stale content — the live page never caught up.
+  const modifiedLiveView = originalLiveView.replace(
+    /<p>([^<]+)<\/p>/,
+    '<p>Modified content for testing drift detection</p>',
+  );
+  // Hermetic test — use temp files for all three inputs, never the real
+  // tracked repo file (see #2599 review round 2: writing to the real file
+  // directly is unsafe and non-hermetic).
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-cli-test-'));
   try {
-    // Modify the tracked file to have different content than the real file
-    // This will cause content drift when compared against a saved copy matching the real version
-    const modifiedTracked = originalTracked.replace(
-      /<p>([^<]+)<\/p>/,
-      '<p>Modified content for testing drift detection</p>',
-    );
-    writeFileSync(REAL_LIVE_VIEW_PATH, modifiedTracked, 'utf8');
-    // Use the real current version as the published file (what's supposedly live)
-    // Since git fetch will return the real version, and we modified the tracked,
-    // the check will see drift
-    withHermeticBaseline(originalTracked, REAL_REGISTER_TEXT, (publishedPath) => {
-      const r = runCli(['--against-published', publishedPath]);
-      assert.equal(r.status, 1, `expected exit 1 for content drift, got ${r.status}. stderr: ${r.stderr}`);
-      // The fix for Finding A: banner should say "differs from" the live-view HTML path
-      assert.ok(
-        r.stderr.includes('onbox-acceptance-register-live-view.html'),
-        `expected banner to name the live-view.html file, got stderr: ${r.stderr}`,
-      );
-      // Verify it mentions content differs
-      assert.ok(
-        r.stderr.includes('content differs') || r.stderr.includes('row'),
-        `expected error to mention content differs or name a row, got stderr: ${r.stderr}`,
-      );
+    const publishedPath = join(dir, 'published.html');
+    const baselinePath = join(dir, 'baseline.md');
+    const baselineLiveViewPath = join(dir, 'baseline-liveview.html');
+    const trackedLiveViewPath = join(dir, 'tracked-liveview.html');
+    writeFileSync(publishedPath, originalLiveView, 'utf8');
+    writeFileSync(baselinePath, REAL_REGISTER_TEXT, 'utf8');
+    writeFileSync(baselineLiveViewPath, modifiedLiveView, 'utf8');
+    writeFileSync(trackedLiveViewPath, modifiedLiveView, 'utf8');
+
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_BASELINE_LIVEVIEW_FILE: baselineLiveViewPath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedLiveViewPath,
     });
+
+    assert.equal(r.status, 1, `expected exit 1 for content drift, got ${r.status}. stderr: ${r.stderr}`);
+    // The fix for Finding A: banner should say "differs from" the live-view HTML path
+    assert.ok(
+      r.stderr.includes('onbox-acceptance-register-live-view.html'),
+      `expected banner to name the live-view.html file, got stderr: ${r.stderr}`,
+    );
+    // Verify it mentions content differs (for the drift case)
+    assert.ok(
+      r.stderr.includes('content differs') || r.stderr.includes('row-content-drift'),
+      `expected error to mention content differs, got stderr: ${r.stderr}`,
+    );
   } finally {
-    writeFileSync(REAL_LIVE_VIEW_PATH, originalTracked, 'utf8');
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
 // #2599 Finding B: Regression test for CLI-level wiring of trackedLiveViewHtml.
 // This test verifies the CLI properly passes the tracked live view to the content-drift check.
-// Mutation test: if the line passing trackedLiveViewHtml at line 1676 is commented out, this should fail.
+// Mutation test: if the line passing trackedLiveViewHtml is commented out, this should fail.
 test('--against-published: CLI correctly wires trackedLiveViewHtml into the content-drift check', () => {
-  const originalTracked = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
+  const originalContent = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
+  // Genuine A41-style drift: tracked matches baseline (already merged to
+  // origin/main), but published still carries the old, stale content.
+  const modifiedContent = originalContent.replace(
+    /<p>([^<]+)<\/p>/,
+    '<p>Test-modified content to trigger drift detection</p>',
+  );
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-cli-test-'));
   try {
-    // Modify the tracked file to create drift
-    const modifiedTracked = originalTracked.replace(
-      /<p>([^<]+)<\/p>/,
-      '<p>Test-modified content to trigger drift detection</p>',
-    );
-    writeFileSync(REAL_LIVE_VIEW_PATH, modifiedTracked, 'utf8');
-    // Use the unmodified version as the published baseline
-    withHermeticBaseline(originalTracked, REAL_REGISTER_TEXT, (publishedPath) => {
-      const r = runCli(['--against-published', publishedPath]);
-      // Should fail due to content drift between tracked (modified) and published (original)
-      assert.equal(r.status, 1, `expected exit 1, got ${r.status}. stderr: ${r.stderr}`);
-      // Verify trackedLiveViewHtml was wired correctly by checking the error is reported
-      // If the wiring at line 1676 is deleted, this check won't report drift
-      const hasContentDriftError =
-        r.stderr.includes('content differs') || r.stderr.includes('row') || r.stderr.includes('differs');
-      assert.ok(
-        hasContentDriftError || r.status === 1,
-        `expected content drift to be detected when trackedLiveViewHtml is wired, got: ${r.stderr}`,
-      );
+    const publishedPath = join(dir, 'published.html');
+    const baselinePath = join(dir, 'baseline.md');
+    const baselineLiveViewPath = join(dir, 'baseline-live.html');
+    const trackedLiveViewPath = join(dir, 'tracked-live.html');
+    writeFileSync(publishedPath, originalContent, 'utf8');
+    writeFileSync(baselinePath, REAL_REGISTER_TEXT, 'utf8');
+    writeFileSync(baselineLiveViewPath, modifiedContent, 'utf8');
+    writeFileSync(trackedLiveViewPath, modifiedContent, 'utf8');
+
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_BASELINE_LIVEVIEW_FILE: baselineLiveViewPath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedLiveViewPath,
     });
+
+    // tracked (modified) matches baseline (also modified) — genuine drift,
+    // since published still carries the stale, original content. If
+    // trackedLiveViewHtml were not actually wired into the check (the CLI
+    // silently reading the real on-disk file instead of this override),
+    // the real on-disk file would almost certainly not equal `modifiedContent`
+    // byte-for-byte, changing the verdict — this asserts the specific,
+    // non-vacuous outcome the wiring is responsible for.
+    assert.equal(r.status, 1, `expected exit 1 for genuine content drift, got ${r.status}. stderr: ${r.stderr}`);
+    assert.ok(
+      r.stderr.includes('row-content-drift'),
+      `expected a row-content-drift error, got stderr: ${r.stderr}`,
+    );
   } finally {
-    writeFileSync(REAL_LIVE_VIEW_PATH, originalTracked, 'utf8');
+    rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// #2599 review round 2: the polarity of the tracked/published/baseline
+// disambiguation was inverted in an earlier fix — every ordinary publish
+// (tracked ahead of an unmerged baseline, published still at baseline)
+// hard-failed as if it were genuine drift. Unit-test fixtures alone didn't
+// catch this because a fixture that's WRITTEN to assert "not drift" can
+// itself encode the wrong scenario, same as this file's own
+// pre-existing fixtures did. The only test that actually caught the
+// inversion replayed REAL commit history and measured a concrete
+// false-positive rate (14/25). This test keeps that replay as a permanent
+// regression check: replay the last N real commits that touched the
+// live-view file as ordinary, unmerged, pre-publish edits, and assert none
+// of them ever hard-fail as content drift.
+const REPO_ROOT = join(HERE, '..', '..');
+test('#2599 review round 2: replaying real live-view.html history as ordinary pending-publishes never hard-fails', () => {
+  const lvRelPath = 'docs/testing/onbox-acceptance-register-live-view.html';
+  const regRelPath = 'docs/testing/onbox-acceptance-register.md';
+  const commits = spawnSync(
+    'git',
+    ['-C', REPO_ROOT, 'log', '--format=%H', '-25', '--', lvRelPath],
+    { encoding: 'utf8' },
+  ).stdout.trim().split('\n').filter(Boolean);
+  assert.ok(commits.length > 0, 'fixture assumption: real commit history exists for the live-view file');
+
+  function show(ref, path) {
+    const r = spawnSync('git', ['-C', REPO_ROOT, 'show', `${ref}:${path}`], { encoding: 'utf8' });
+    return r.status === 0 ? r.stdout : null;
+  }
+
+  const falsePositives = [];
+  for (const commit of commits) {
+    const oldLiveView = show(`${commit}~1`, lvRelPath);
+    const newLiveView = show(commit, lvRelPath);
+    const oldRegister = show(`${commit}~1`, regRelPath);
+    const newRegister = show(commit, regRelPath);
+    if (oldLiveView === null || newLiveView === null || oldRegister === null || newRegister === null) continue;
+    // Replay as the ordinary pre-merge publish shape: tracked = the new
+    // commit's content (just committed locally), baseline = the OLD content
+    // (not yet merged to origin/main), published = the OLD content (the
+    // live page, unchanged so far).
+    const errors = checkLiveView(newRegister, oldLiveView, {
+      direction: 'extraOnly',
+      baselineText: oldRegister,
+      trackedLiveViewHtml: newLiveView,
+      baselineLiveViewText: oldLiveView,
+    });
+    const driftErrors = errors.filter((e) => e.includes('row-content-drift'));
+    if (driftErrors.length > 0) {
+      falsePositives.push({ commit: commit.slice(0, 8), driftErrors });
+    }
+  }
+
+  assert.deepEqual(
+    falsePositives,
+    [],
+    `${falsePositives.length}/${commits.length} ordinary-publish replays hard-failed as content drift: ${JSON.stringify(falsePositives, null, 2)}`,
+  );
 });
