@@ -230,6 +230,98 @@ test('extractCitations returns citations in ascending line order', () => {
   ]);
 });
 
+test('an unterminated fence in the register is a fatal error', () => {
+  const registerWithUnteminatedFence = `# Register
+
+## At a glance
+
+| | | |
+|---|---|---|
+| **A** | 1 |
+
+**1 owed.**
+
+## Group A
+
+<!-- next-id: A101 -->
+
+### A1 · a thing
+
+\`\`\`
+Some fenced content that is never closed
+`;
+  const files = {
+    [REGISTER_PATH]: registerWithUnteminatedFence,
+  };
+  const { error, failures, citationCount } = checkRegisterCitations({
+    files: [REGISTER_PATH],
+    readFile: fakeReadFile(files),
+  });
+  assert.ok(error !== null, 'error should not be null');
+  assert.match(error, /Unterminated fenced code block/);
+  assert.match(error, new RegExp(REGISTER_PATH));
+  assert.deepEqual(failures, []);
+  assert.equal(citationCount, 0);
+});
+
+test('an unterminated fence in a scanned file is a fatal error', () => {
+  const scannedFileWithUnteminatedFence = `# Plan
+
+Some documentation.
+
+\`\`\`
+Code that is never closed
+
+See row A99 for details.
+`;
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': scannedFileWithUnteminatedFence,
+  };
+  const { error, failures, citationCount } = checkRegisterCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  assert.ok(error !== null, 'error should not be null');
+  assert.match(error, /Unterminated fenced code block/);
+  assert.match(error, /docs\/testing\/plan\.md/);
+  // The citation A99 after the unterminated fence should not be detected
+  // because everything after the fence is blanked out
+  assert.deepEqual(failures, []);
+  assert.equal(citationCount, 0);
+});
+
+test('a dead citation placed after an unterminated fence is NOT silently swallowed when the fix is present', () => {
+  // This test documents the failure mode that the fix prevents.
+  // Before the fix: the unterminated fence is silently ignored, everything
+  // after it is blanked out, and row A99 citation is never extracted or
+  // checked, so the check returns "OK" with zero citations.
+  // After the fix: the unterminated fence is detected and reported as an error.
+  const scannedFileWithFenceAndDeadCitation = `# Plan
+
+Normal prose.
+
+\`\`\`
+This fence is never closed
+
+And after it, here is a citation: row A99 for details.
+`;
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/features/plan.md': scannedFileWithFenceAndDeadCitation,
+  };
+  const { error, failures } = checkRegisterCitations({
+    files: [REGISTER_PATH, 'docs/features/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // The fix ensures we catch the unterminated fence as an error
+  assert.ok(
+    error !== null,
+    'Should report unterminated fence as error (not silently pass with zero citations)'
+  );
+  assert.deepEqual(failures, [], 'No citations should be extracted from after the fence');
+});
+
 // --- Real-tree CLI integration tests ---
 //
 // Real repo integration, mirroring check-register-citations.test.mjs's own

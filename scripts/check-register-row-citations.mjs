@@ -187,7 +187,12 @@ function rowIdAtLine(strippedText, lineNumber) {
 // Runs the check over `files` (defaults to `scannedFiles()`), resolving each
 // citation against the register's current row headings. `readFile` is
 // injectable so tests never touch the real filesystem or `git ls-files`.
-// Returns `{ failures, annotated, checkedFiles, citationCount }` --
+// Returns `{ error, failures, annotated, checkedFiles, citationCount }` --
+// `error` is a non-null string when an unterminated fence is found (in either
+// the register or any scanned file), which is a fatal check condition matching
+// the ops-44/#1913 precedent of bailing on truncated reads rather than
+// reporting "no errors" over missing content (see check-onbox-register.mjs's
+// own handling for the same).
 // `failures` is `{ file, line, id }[]`, empty when every recognized citation
 // either resolves or carries a same-line discharge/removal annotation (see
 // this file's header); `annotated` is the same shape, for citations that
@@ -196,17 +201,35 @@ export function checkRegisterCitations({
   files = scannedFiles(),
   readFile = (relPath) => readNormalized(join(repoRoot(), relPath)),
 } = {}) {
-  const { text: strippedRegisterText } = stripFences(readFile(REGISTER_PATH));
+  const registerFenceCheck = stripFences(readFile(REGISTER_PATH));
+  if (registerFenceCheck.unterminatedFenceLine !== null) {
+    return {
+      error: `Unterminated fenced code block opened at line ${registerFenceCheck.unterminatedFenceLine} in ${REGISTER_PATH} — everything after it was ignored.`,
+      failures: [],
+      annotated: [],
+      checkedFiles: 0,
+      citationCount: 0,
+    };
+  }
+  const { text: strippedRegisterText } = registerFenceCheck;
   const validIds = new Set(parseAllRowHeadings(strippedRegisterText).map((r) => r.id));
 
   const failures = [];
   const annotated = [];
+  const fileErrors = [];
   let citationCount = 0;
   for (const relPath of files) {
     const normalizedPath = relPath.replace(/\\/g, '/');
     if (isFrozenPath(normalizedPath)) continue;
     const isRegisterItself = normalizedPath === REGISTER_PATH;
-    const { text: strippedText } = stripFences(readFile(relPath));
+    const fenceCheck = stripFences(readFile(relPath));
+    if (fenceCheck.unterminatedFenceLine !== null) {
+      fileErrors.push(
+        `Unterminated fenced code block opened at line ${fenceCheck.unterminatedFenceLine} in ${normalizedPath} — everything after it was ignored.`
+      );
+      continue;
+    }
+    const { text: strippedText } = fenceCheck;
     const lines = strippedText.split('\n');
     for (const { line, id } of extractCitations(strippedText)) {
       citationCount++;
@@ -219,7 +242,19 @@ export function checkRegisterCitations({
       failures.push({ file: normalizedPath, line, id });
     }
   }
-  return { failures, annotated, checkedFiles: files.length, citationCount };
+
+  // If any files had unterminated fences, report them as a fatal error
+  if (fileErrors.length > 0) {
+    return {
+      error: fileErrors.join('\n'),
+      failures: [],
+      annotated: [],
+      checkedFiles: files.length,
+      citationCount,
+    };
+  }
+
+  return { error: null, failures, annotated, checkedFiles: files.length, citationCount };
 }
 
 // --- CLI --------------------------------------------------------------
@@ -237,7 +272,11 @@ class CliExitError extends Error {
 }
 
 export function runCheckRegisterRowCitationsCli() {
-  const { failures, annotated, checkedFiles, citationCount } = checkRegisterCitations();
+  const { error, failures, annotated, checkedFiles, citationCount } = checkRegisterCitations();
+  if (error !== null) {
+    console.error(`check:register-row-citations: ${error}`);
+    throw new CliExitError(1);
+  }
   if (annotated.length > 0) {
     console.log(
       `check:register-row-citations: ${annotated.length} citation(s) name a discharged/removed ` +
