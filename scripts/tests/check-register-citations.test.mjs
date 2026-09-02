@@ -996,7 +996,7 @@ test('checkConflictingSubjects: warns (unknownSubject, non-fatal) when the cited
   // #2721/#2833 split the old single `unknownSubject` bucket by cause — see
   // recordSubjectConflict's own comment. This is the A3-shaped real case
   // that STAYS non-fatal: A9's own register heading carries no issue/PR
-  // number at all (21 of 65 real rows are this shape), so there's nothing on
+  // number at all (15 of 66 real rows are this shape), so there's nothing on
   // A9's own row to confirm OR contradict the citation's claimed subject
   // with — a permanent structural gap, not a proven-wrong citation.
   const text = `# Register
@@ -1603,6 +1603,63 @@ Related: subject #1969 remains un-discharged in A16's row.
   assert.equal(unknownSubject.length, 0);
   assert.equal(annotatedDischarge.length, 0);
   assert.match(wrongId[0], /cited A1 for #1969/);
+});
+
+test('checkConflictingSubjects: a distant, unrelated negation in the SAME paragraph does not suppress a genuine discharge (#2846 finding new-G)', () => {
+  // clauseBounds doesn't treat ". " as a boundary, so this whole sentence
+  // pair is one "clause" — but the negation-to-discharge distance (47
+  // chars, measured) exceeds POLARITY_PROXIMITY_CHARS (30), so it must not
+  // suppress the genuine, unnegated discharge later in the same paragraph.
+  const registerText = `# Register
+
+## Group A
+
+### A36 · Voice work (#1969)
+
+Body.
+
+### A1 · Unrelated work (#2040)
+
+The repair rewrote metadata, not the audio bytes on disk. Subject #1969 was discharged.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Some section (#1969)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0, 'the genuine discharge must not be suppressed by a distant, unrelated "not"');
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 1);
+  assert.match(annotatedDischarge[0], /cited A1 for #1969/);
+});
+
+test('checkConflictingSubjects: "no longer exists" (itself an affirmative discharge phrase) does not falsely negate a LATER discharge word (#2846 finding new-G)', () => {
+  // DISCHARGE_ANNOTATION_REGEX treats "no longer exists" as its OWN
+  // affirmative discharge phrase. A bare \bno\b polarity check would
+  // misread that "no" as negating a later, unrelated "discharged" match in
+  // the same paragraph — the negative lookahead (?!\s+longer\s+exists?)
+  // excludes it.
+  const registerText = `# Register
+
+## Group A
+
+### A36 · Voice work (#1969)
+
+Body.
+
+### A1 · Unrelated work (#2040)
+
+Group Q no longer exists. Subject #1969 was discharged then.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const files = new Map([
+    ['docs/bar.md', '### A1 · Some section (#1969)\n\nBody.\n'],
+  ]);
+  const { wrongId, unknownSubject, annotatedDischarge } = checkConflictingSubjects(files, rows);
+  assert.equal(wrongId.length, 0, 'the genuine discharge must not be suppressed by "no" inside "no longer exists"');
+  assert.equal(unknownSubject.length, 0);
+  assert.equal(annotatedDischarge.length, 1);
+  assert.match(annotatedDischarge[0], /cited A1 for #1969/);
 });
 
 test('checkConflictingSubjects: clause-bounded polarity scan does not suppress a genuine discharge across an unrelated list-item boundary (#2846 finding new-B)', () => {

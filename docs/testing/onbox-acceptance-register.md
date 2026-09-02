@@ -384,7 +384,7 @@ setup rather than repeatedly loading and evicting models.
 > `Criteria source:` line) with the subject on that *same* line, **and**
 > the re-minted id's *own current* register row carries subject metadata of
 > its own to contradict it with — an id that has never carried a subject
-> number at all (a plan-only row, a real, permanent gap covering 21 of 65
+> number at all (a plan-only row, a real, permanent gap covering 15 of 66
 > rows today) still can't be told apart from a fresh mint. A prose-idiom
 > `row A22` citation fires nothing either way, since Check C doesn't read
 > that surface at all. And a re-mint that is *self-annotated* as discharged

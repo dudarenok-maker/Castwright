@@ -113,7 +113,7 @@
 //      the moment a subject's row discharges: the subject's citations start
 //      rotting from that moment, so failing open here (as an earlier version
 //      of this check did) silences the check exactly when it is needed.
-//      Note: 21 of 65 real register rows carry no issue/PR number in their
+//      Note: 15 of 66 real register rows carry no issue/PR number in their
 //      heading at all (they cite a plan number instead), so this check's
 //      ground truth is thin for roughly a third of the register — those rows
 //      can never be cross-checked in either direction, a real coverage gap,
@@ -155,8 +155,8 @@
 //        (checkConflictingSubjects' `unknownSubject`) stays EXPLORATORY,
 //        OPT-IN, NEVER FATAL — pass `--strict` to see it; skipped and
 //        printed nothing without the flag, same as the whole check used to
-//        be. This is the genuinely thinner ground truth: 21 of the
-//        register's 65 real rows carry no issue/PR number in their heading
+//        be. This is the genuinely thinner ground truth: 15 of the
+//        register's 66 real rows carry no issue/PR number in their heading
 //        at all (they cite a plan number instead, so those rows can never be
 //        cross-checked in either direction — a real, permanent coverage
 //        gap), a "Register row(s):" list is still not scanned by this
@@ -167,7 +167,7 @@
 //        structural subject-set mismatch, not a wrong citation; and a row
 //        whose OWN register heading carries no issue number, so its subject
 //        can never appear in the legitimate-subject map either way — the
-//        21-of-65 gap from the other direction). Neither is a wrong
+//        15-of-66 gap from the other direction). Neither is a wrong
 //        citation, so failing on either would be a false positive; that is
 //        why this half is not promoted alongside `wrongId`.
 //
@@ -214,7 +214,7 @@
 //      id already documents the staleness (`annotatedDischarge`, non-fatal,
 //      always printed, same philosophy as Check A's annotated bucket). A
 //      subject cited against an id that carries NO subject metadata at all
-//      (the 21-of-65-rows structural gap) still can't be confirmed or
+//      (the 15-of-66-rows structural gap) still can't be confirmed or
 //      refuted either way, and stays in the plain `unknownSubject` bucket.
 //      See `recordSubjectConflict`'s own comment for the exact rule and the
 //      real corpus cases (A19/A31 annotated-non-fatal, A34 unannotated-fatal,
@@ -1368,22 +1368,32 @@ function dischargedSubjectsMentionedIn(rowBodyText) {
     // Get clause bounds first so we can use them for both polarity and subject scanning.
     const { start, end } = clauseBounds(scanText, dm.index);
 
-    // Polarity check: scan within the same clause as the discharge word to look for
-    // negation markers that would negate it. Bound the scan to the clause bounds
-    // (not a flat window) to avoid matching unrelated negations across clause/list-item boundaries.
-    // Recognize a broad set of negation patterns:
-    // - "NOT", "no" (complete words)
+    // Polarity check: scan for negation markers that would negate the
+    // discharge word. Bound the scan to BOTH the same clause (not a flat
+    // window, so an unrelated negation across a clause/list-item boundary
+    // cannot bleed in -- pass-15/new-B) AND a proximity cap of its own
+    // (pass-16/new-G: clause-bounding alone is too wide -- a "clause" here
+    // is a full paragraph, since CLAUSE_BOUNDARY_REGEX does not treat ". "
+    // as a boundary, and the register's real affirmative discharge
+    // records measure their genuine negations at 4-10 chars back vs. false
+    // suppressions at 85+ chars back in the same paragraph). Recognize a
+    // broad set of negation patterns:
+    // - "NOT", "no" (complete words; "no" excludes "no longer exist(s)",
+    //   since that's one of DISCHARGE_ANNOTATION_REGEX's OWN
+    //   affirmative phrases, not a negation of one)
     // - "never", "isn't", "aren't", "wasn't", "weren't" (contractions)
-    // - "hasn't (been)", "haven't (been)" (auxiliary verbs with "have")
-    // - "cannot be", "can't be" (modal verbs)
+    // - "hasn't", "haven't" (auxiliary verbs with "have")
+    // - "cannot", "can't" (modal verbs)
     // - "far from" (degree modifier)
-    // - "nothing" followed (in the same clause) by "is" (negating existential)
-    const polarityContext = scanText.slice(start, dm.index);
+    // - "nothing" (negating existential)
+    const POLARITY_PROXIMITY_CHARS = 30;
+    const polarityScanStart = Math.max(start, dm.index - POLARITY_PROXIMITY_CHARS);
+    const polarityContext = scanText.slice(polarityScanStart, dm.index);
     // Apostrophes are '-escaped (not literal) so this regex literal
-    // doesn't desync spawn-windows-hide.test.ts's quote-tracking scanner —
+    // doesn't desync spawn-windows-hide.test.ts's quote-tracking scanner --
     // see that guard's own regexLiteralDesyncsQuoteTracking comment.
     const hasNegationWord =
-      /\b(?:NOT|no|never|isn\u0027t|aren\u0027t|wasn\u0027t|weren\u0027t|hasn\u0027t|haven\u0027t|cannot|can\u0027t|far\s+from|nothing)\b/i.test(
+      /\b(?:NOT|no\b(?!\s+longer\s+exists?)|never|isn\u0027t|aren\u0027t|wasn\u0027t|weren\u0027t|hasn\u0027t|haven\u0027t|cannot|can\u0027t|far\s+from|nothing)\b/i.test(
         polarityContext,
       );
     // Also check if the discharge word itself is prefixed with "un-" (e.g., "undischarged", "un-discharged")
@@ -1440,7 +1450,7 @@ function dischargedSubjectsMentionedIn(rowBodyText) {
  *   - `currentSubjectsOf(id)`: the subject set `id`'s row currently carries,
  *     i.e. what it tracks NOW if it moved on — used only for message text and
  *     for telling a re-minted row (carries other subject metadata) apart from
- *     a row that never carried any (the 21-of-65 structural gap).
+ *     a row that never carried any (the 15-of-66 structural gap).
  */
 function buildLegitimateSubjectMap(registerRows) {
   const current = new Map();
@@ -1484,7 +1494,7 @@ function buildLegitimateSubjectMap(registerRows) {
 // original four wrong headings back produces 8 of 9 warnings naming exactly
 // those four lines, each stating which ID the subject actually maps to.
 // Kept exploratory/opt-in (never fatal) per the same header-comment
-// rationale — this still can't see every citation (the 21-of-65 rows with
+// rationale — this still can't see every citation (the 15-of-66 rows with
 // no issue/PR number in their heading are still uncheckable in either
 // direction, and a "Register row(s):" list is still not scanned here) — but
 // its ground truth is no longer "too thin to trust", only "incomplete".
@@ -1627,7 +1637,7 @@ function headingTitleSegments(line) {
  *     discharged...", is historical record, not a live defect). Printed
  *     non-fatal into `annotatedDischarge` instead.
  *   - Neither — `id` itself carries no subject metadata to compare against
- *     either (a plan-only row like A3, 21 of 65 real rows). A structural
+ *     either (a plan-only row like A3, 15 of 66 real rows). A structural
  *     coverage gap, not a proven-wrong citation. Stays `unknownSubject`,
  *     exploratory/opt-in.
  *
@@ -2191,7 +2201,7 @@ export function runCheckRegisterCitationsCli(options = {}) {
         `via a DISCHARGE (the cited ID still exists, for something else, but its subject left the ` +
         `register entirely) IS caught by the fatal half since #2721/#2833 — but only when the re-minted ` +
         `id's own current row carries subject metadata to contradict the citation with; an id that has ` +
-        `never carried a subject number at all (a real, permanent gap, 21 of 65 rows today) still can't ` +
+        `never carried a subject number at all (a real, permanent gap, 15 of 66 rows today) still can't ` +
         `be told apart from a fresh mint, and a discharge that's already self-annotated near the citation ` +
         `prints non-fatal instead of failing — see recordSubjectConflict's own comment for the exact rule.`,
     );
