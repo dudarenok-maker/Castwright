@@ -38,9 +38,11 @@ name: Verify
 # matrix jobs, each its own runner/dev-server — the workers=1 anti-flake
 # guarantee still holds PER SHARD, just with less work per shard (per-shard
 # fixed cost — checkout, setup, the warmup project, a fresh Vite dev server —
-# doesn't shrink with more shards, so the wall-clock win is sub-linear; see
-# docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md
-# Decision D). Visual baselines were pulled into
+# doesn't shrink with more shards, so the wall-clock win is sub-linear).
+# Measured outcome (2026-09-02, run 33631470487): 8-way average ~228s/shard,
+# slowest shard ~358s (worse than old 4-way baseline of ~240s), no queuing.
+# See docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md
+# Decision D. Visual baselines were pulled into
 # their own job in the same change: they used to run as a serial step after
 # test:e2e in the same job specifically to avoid racing test:e2e's dev server
 # — moot once e2e lives in separate shard jobs, so visual now runs concurrently
@@ -402,8 +404,8 @@ jobs:
   # process to contend over), while every shard still runs serially inside
   # itself — same anti-flake guarantee, less wall-clock (sub-linear: fixed
   # per-shard cost — checkout, setup, the warmup project, a fresh Vite dev
-  # server — doesn't shrink with more shards; watch actual PR wall-clock
-  # after this ships, not just this job's own duration).
+  # server — doesn't shrink with more shards). Measured: 8-way average ~228s/
+  # shard, slowest ~358s (worse than 4-way's ~240s baseline), no queuing.
   e2e:
     name: E2E (chromium) — shard ${{ matrix.shard }}/8
     needs: detect
