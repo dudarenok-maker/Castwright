@@ -202,6 +202,39 @@ test('a discharge word on a DIFFERENT line than the citation does not exempt it'
   assert.deepEqual(failures, [{ file: 'docs/testing/plan.md', line: 2, id: 'A99' }]);
 });
 
+test('a line with BOTH an annotated reference (row A1 discharged) and an unrelated dead citation (row A99999) exempts only the annotated one', () => {
+  // This test documents the bug fix: the annotation regex should only exempt
+  // citations that are specifically associated with the annotation phrase,
+  // not all citations on the same line.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': 'Previously row A1 was planned (discharged 2026-08-26), and row A99999 was also considered.\n',
+  };
+  const { failures, annotated } = checkRegisterCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A1 is valid and annotated → should be exempt (not in failures or annotated since it exists)
+  // A99999 is invalid and NOT annotated (annotation is for A1, not A99999) → should fail
+  assert.deepEqual(annotated, []);
+  assert.deepEqual(failures, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99999' }]);
+});
+
+test('a line with both an annotated dead reference and an unrelated dead citation exempts only the annotated one', () => {
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': 'Mark row A99 discharged (was removed 2026-08-26), but row A88888 still needs verification.\n',
+  };
+  const { failures, annotated } = checkRegisterCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 is annotated as discharged → downgraded to annotated note
+  // A88888 is also dead but has no annotation nearby → should fail
+  assert.deepEqual(annotated, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+  assert.deepEqual(failures, [{ file: 'docs/testing/plan.md', line: 1, id: 'A88888' }]);
+});
+
 test('isFrozenPath recognizes the dated historical-transcript exclusions', () => {
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-staleness-audit.md'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-wave5-results/step-1.md'), true);

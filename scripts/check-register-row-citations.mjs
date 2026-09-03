@@ -89,7 +89,66 @@ const REGISTER_LINK_REGEX = /onbox-acceptance-register\.md#([ae]\d+)\b/gi;
 // same-line is enough for v1: measured against every real hit on the tree at
 // the time this was added, the annotation always shares the citation's own
 // physical line.
+// NOTE: The annotation exemption is keyed to the SPECIFIC citation, not the
+// entire line. A line can contain multiple citations, and only those where
+// the annotation phrase is specifically tied to that citation ID are exempt.
+// See the bug fix for #2831 for details.
 const ANNOTATION_REGEX = /\bdischarged?\b|\bno longer exists?\b|\bremoved from the register\b/i;
+
+// Check if a citation (identified by its row ID) has a discharge/removal
+// annotation on the given line that is specifically tied to that citation.
+// This prevents exempting unrelated citations on the same line.
+// The annotation must appear in close proximity to the citation ID
+// to be considered associated with that specific citation (not another).
+function isCitationAnnotated(id, line) {
+  if (!ANNOTATION_REGEX.test(line)) return false;
+
+  const testLine = line.replace(/\n/g, ' ');
+
+  // Check if annotation appears within proximity of this specific citation.
+  // Primary pattern: "row A99 ... discharged" (annotation shortly after ID)
+  // Secondary pattern: "(discharged...) row A99" (annotation close before)
+  //
+  // The window is sized to catch typical annotation patterns like
+  // "row A99 discharged" or "row A99 at the time, discharged" but still
+  // be narrow enough to not capture annotations for different IDs on the
+  // same line (e.g., not capturing "A1's annotation" when checking "A99999").
+
+  // Check for "row " pattern citations
+  const rowRegexPattern = `\\brow\\s+${id}\\b`;
+  const rowMatch = testLine.match(new RegExp(rowRegexPattern, 'i'));
+  if (rowMatch) {
+    const idEnd = rowMatch.index + rowMatch[0].length;
+
+    // Look within ~50 chars after the citation to catch patterns like
+    // "row A99 at the time, discharged" or "row A99 ... discharged" in narrative text
+    const afterWindow = testLine.substring(idEnd, Math.min(testLine.length, idEnd + 50));
+    if (ANNOTATION_REGEX.test(afterWindow)) return true;
+
+    // Also check ~10 chars before (for tight patterns like "discharged row A99")
+    const beforeWindow = testLine.substring(Math.max(0, rowMatch.index - 10), idEnd);
+    if (ANNOTATION_REGEX.test(beforeWindow)) return true;
+  }
+
+  // Check for markdown link pattern citations
+  if (testLine.includes('onbox-acceptance-register.md#')) {
+    const linkRegexPattern = `onbox-acceptance-register\\.md#${id.toLowerCase()}\\b`;
+    const linkMatch = testLine.match(new RegExp(linkRegexPattern, 'i'));
+    if (linkMatch) {
+      const idEnd = linkMatch.index + linkMatch[0].length;
+
+      // Look within ~50 chars after the link
+      const afterWindow = testLine.substring(idEnd, Math.min(testLine.length, idEnd + 50));
+      if (ANNOTATION_REGEX.test(afterWindow)) return true;
+
+      // Also check ~10 chars before
+      const beforeWindow = testLine.substring(Math.max(0, linkMatch.index - 10), idEnd);
+      if (ANNOTATION_REGEX.test(beforeWindow)) return true;
+    }
+  }
+
+  return false;
+}
 
 // Dated historical-transcript files where an ID is cited as "what the
 // register said on that date," not as a live pointer -- see this file's
@@ -235,7 +294,7 @@ export function checkRegisterCitations({
       citationCount++;
       if (isRegisterItself && rowIdAtLine(strippedText, line) === id) continue; // self-reference
       if (validIds.has(id)) continue;
-      if (ANNOTATION_REGEX.test(lines[line - 1] ?? '')) {
+      if (isCitationAnnotated(id, lines[line - 1] ?? '')) {
         annotated.push({ file: normalizedPath, line, id });
         continue;
       }
