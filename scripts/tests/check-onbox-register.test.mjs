@@ -3690,7 +3690,6 @@ test('#2599 review round 2: replaying real live-view.html history as ordinary pe
 // `behindErrors` filter excludes 3-way-prefixed entries, and that
 // publishedFailed is NOT set.
 test('#2837: CLI -- 3-way content disagreement prints warning to stderr, exits 0', () => {
-  const workingRegister = buildSingleGroupRegister('A', [1]);
   const baselineRegister = buildSingleGroupRegister('A', [1]);
   // All three differ: baseline v0, published v1 (from a first publish),
   // tracked v2 (second edit before merge).
@@ -3744,7 +3743,6 @@ test('#2837: CLI -- 3-way content disagreement prints warning to stderr, exits 0
 // #2837 Finding 1: CLI-level test for extraction error in the tracked (working-tree)
 // live-view file. The banner must blame the tracked/local file specifically.
 test('#2837: CLI -- extraction error in tracked live-view produces [tracked] banner', () => {
-  const workingRegister = buildSingleGroupRegister('A', [1]);
   const baselineRegister = buildSingleGroupRegister('A', [1]);
   // Normal published/baseline; corrupted tracked by removing the body div's class.
   const normalHtml = buildRowContentLiveView([{ id: 'A1', body: 'Normal content' }]);
@@ -3790,7 +3788,6 @@ test('#2837: CLI -- extraction error in tracked live-view produces [tracked] ban
 // #2837 Finding 1: CLI-level test for extraction error in the baseline
 // (origin/main) live-view file. The banner must blame the baseline specifically.
 test('#2837: CLI -- extraction error in baseline live-view produces [baseline] banner', () => {
-  const workingRegister = buildSingleGroupRegister('A', [1]);
   const baselineRegister = buildSingleGroupRegister('A', [1]);
   // Normal published/tracked; corrupted baseline by removing the body div's class.
   const normalHtml = buildRowContentLiveView([{ id: 'A1', body: 'Normal content' }]);
