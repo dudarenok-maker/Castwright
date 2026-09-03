@@ -1594,7 +1594,18 @@ repairable branch around `:433-520`). Discharges 268's manual step 3.
 - Generating a **second** chapter afterwards fires **no** further derive (the
   voice is Healthy again).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). Deleted `$K.pt` on the C-14/C-08 clone (healthy, sidecar up).
+Generated chapter 2: **completed**, no error/toast, `logs/tts.err.log` shows
+exactly **one** `Cloned + cached Qwen voice 'qwen-65565e89-…' from caller
+clip.` line at the request's own timestamp (cross-checked against two OTHER
+derive lines from earlier, unrelated runs in this session's log history — the
+count is per-render, not cumulative). `$K.pt` reappeared with a fresh mtime.
+Re-generated the **same** chapter immediately after (voice now Healthy): also
+completed, and the derive-line count in `tts.err.log` did **not** increase —
+no further derive fired. (UI "Preparing voice…" caption not observed — no
+browser driving this run; the artifact/log evidence is the load-bearing part
+of this test and is unambiguous either way.)
 
 ---
 
@@ -1635,9 +1646,28 @@ honest options:
   `currentBaseModel` — onto `baseModel`, `clone-voice-resolver.ts:474-481`).
 - The voice still sounds like the person.
 
-**Record:** method used (real bump / simulated) = ______
+**Record:** method used (real bump / simulated) = simulated (option 2 —
+`voice.json`'s `engines.qwen.baseModel` overwritten with a bogus value)
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). `.pt` present throughout; overwrote
+`engines.qwen.baseModel` to `qwen-base-OLD-0.0`. First two attempts (sidecar
+carried over from earlier tests in this session, `rss` ~15GB / `committed`
+~22GB per its own memory-crossed-8192MB log lines — this box's known side-11
+memory-growth pattern, not new) both failed `cloned-voice-broken
+(derive-failed)` with no new "Cloned + cached" line in the sidecar log at
+all — read as GPU/VRAM-capacity exhaustion silently misreported as a derive
+failure rather than the stale-baseModel repair path being exercised.
+**Restarted the sidecar cleanly** (fresh process, `rss` back to baseline) and
+re-ran unchanged: **completed**, exactly **one** new
+`Cloned + cached Qwen voice` line at the request's timestamp, and
+`voice.json`'s `engines.qwen.baseModel` came back refreshed to the sidecar's
+real current base model (`Qwen/Qwen3-TTS-12Hz-0.6B-Base`), not the bogus
+value — matches the expected behaviour exactly once the sidecar had
+headroom. Not filed as a new defect: the two failed attempts are consistent
+with the pre-existing, already-tracked side-11 memory pattern this same
+session's log independently confirms — see C-08's timing note for a related
+observation on this box's slow failure diagnostics under memory pressure.
 
 ---
 
