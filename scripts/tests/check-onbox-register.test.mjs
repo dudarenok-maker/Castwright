@@ -3815,15 +3815,13 @@ test('#2837: CLI -- extraction error in baseline live-view produces [baseline] b
 
     // Must fail (exit 1) due to malformed HTML.
     assert.equal(r.status, 1, `expected exit 1 for extraction error, got ${r.status}. stderr: ${r.stderr}`);
-    // The error banner must mention that the baseline (origin/main) copy is broken.
+    // The error banner itself (not the unrelated ONBOX_TEST_BASELINE_LIVEVIEW_FILE
+    // override warning, which also happens to mention "origin/main") must
+    // specifically blame the baseline copy — this exact phrase only appears
+    // in the baseline extraction-error banner text.
     assert.ok(
-      r.stderr.includes('origin/main'),
-      `expected error to blame origin/main copy, got: ${r.stderr}`,
-    );
-    // The banner must include [baseline] tag or mention "baseline".
-    assert.ok(
-      r.stderr.includes('[baseline]'),
-      `expected [baseline] tag in error, got: ${r.stderr}`,
+      r.stderr.includes("origin/main's") && r.stderr.includes('(baseline copy) has malformed'),
+      `expected the baseline extraction-error banner specifically, got: ${r.stderr}`,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
