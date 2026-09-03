@@ -404,22 +404,32 @@ setup rather than repeatedly loading and evicting models.
 > the failure this stable-ID design exists to end. **This register's own
 > checker never catches it** — it only verifies uniqueness and the allocation
 > floor, not history, so a re-minted ID looks identical to a fresh one. And
-> `check-register-citations.mjs` does not close the gap reliably either, and
-> can make things worse when it fires: Check C's fatal `wrongId` half only
-> triggers when the stale citation sits on one of its two surfaces (an
-> anchored `### <ID> · …` heading or a `Criteria source:` line) with the
-> subject on that *same* line, **and** the subject still owns at least one
-> other live row — a subject can span several rows (e.g. `#2040` →
-> A22/A23/A34), so discharging just one of them leaves the subject in the
-> map, and re-minting that row's old ID trips `wrongId` on the survivors'
-> citations. Discharge a subject's *last* row and nothing fatal fires; a
-> prose-idiom `row A22` citation fires nothing either way, since Check C
-> doesn't read that surface at all. Widening `wrongId` to catch the
-> last-row-discharge case too is deliberately deferred (see #2721). **You
-> cannot rely on a check to stop you.** If `wrongId` does fire after a
-> re-mint, the fix is to undo the re-mint — never to edit the cited heading
-> to match the new ID, which is exactly the corruption this design exists to
-> prevent. The rule above is the only guard.
+> `check-register-citations.mjs` still does not close the gap reliably, even
+> after #2721/#2833 widened Check C's fatal `wrongId` half to also cover a
+> *last-row* discharge (a subject with NO live row left at all), and #2721/
+> #2842 widened it again to cover a *partially*-discharged multi-row subject
+> too (one row re-minted while a sibling row for the same subject stays
+> live): `wrongId` only ever triggers when the stale citation sits on one of
+> Check C's two surfaces (an anchored `### <ID> · …` heading or a
+> `Criteria source:` line) with the subject on that *same* line, **and**
+> the re-minted id's *own current* register row carries subject metadata of
+> its own to contradict it with — an id that has never carried a subject
+> number at all (a plan-only row, a real, permanent gap covering 15 of 66
+> rows today) still can't be told apart from a fresh mint. A prose-idiom
+> `row A22` citation fires nothing either way, since Check C doesn't read
+> that surface at all. And a re-mint that is *self-annotated* as discharged
+> — either near the citation itself, or (since #2721/#2842) in the re-minted
+> row's *own* section of this register, naming the subject it moved on from
+> — (this repo's own "annotate, don't renumber" convention) is deliberately
+> treated as historical record, not a live defect, and prints non-fatal
+> instead of failing the gate — an annotation is not an escape hatch from
+> the rule above, it only changes whether a genuine re-mint is reported as
+> `wrongId` or as a printed, non-fatal note; a re-mint with NEITHER kind of
+> annotation is still fatal even when a sibling row for the same subject
+> survives. **You cannot rely on a check to stop you.** If `wrongId` does
+> fire after a re-mint, the fix is to undo the re-mint — never to edit the
+> cited heading to match the new ID, which is exactly the corruption this
+> design exists to prevent. The rule above is the only guard.
 
 > **How this register goes stale, and how to check.** Its first version was built
 > by reading plan headers and issue bodies at face value, and three entries were
@@ -448,21 +458,109 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 40 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
-| — | **Blocked** (hardware absent) | 5 |
+| — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**66 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**65 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-08-30, no count change.** Row **A24**'s run note (2026-08-26,
+> **Last change: 2026-09-01, merging this branch's wave-10 A28 discharge with
+> `main`'s independent ROCm/AMD Blocked-row addition.** This branch
+> (`chore/sidecar-kokoro-cuda-path`) had discharged row **A28** below (66 → 65,
+> Group A 40 → 39); `origin/main` had independently added the Blocked-section
+> ROCm/AMD row (#2813, PR #2835) below (66 owed, no change — Blocked 5 → 6).
+> The two changes started from the same post-#2810 state and never saw each
+> other. The Blocked-row addition doesn't affect the owed count (Blocked rows
+> are excluded from that arithmetic by design — see the group table above), so
+> combining nets to **65 owed**, Group A **39**, Blocked **6**. `next-id`
+> markers unaffected by either change (Group A stays A106 — allocate-once IDs
+> are never reused, so a drop never frees or renumbers a slot, and a
+> Blocked-section addition doesn't consume a live-group id).
+>
+> **Prior change: 2026-09-01, 66 owed (no change) — Blocked 5 → 6.** Added a new
+> Blocked-section row, **ROCm/AMD admitted device-key normalisation — real GPU
+> engine load, pinned/resident, and idle-eviction**
+> ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), PR
+> [#2835](https://github.com/dudarenok-maker/Castwright/pull/2835)): the
+> VRAM-ledger admission layer hands engines a `"rocm:N"` device key on a
+> ROCm/AMD box that no torch/CTranslate2/speechbrain call understands;
+> separately an operator's config-validated `"cuda:N"` pin (or a resident
+> engine's own device string) could never match that same ledger's own
+> `"rocm:N"`-keyed candidates; and separately again, the idle-eviction
+> ladder's own card-comparison (`_same_card`) required `"cuda"` on both
+> sides it compares, so it could never match a probe-native `"rocm:N"`
+> target either — three seams, all fixed (`_normalise_rocm_device_key`
+> forward, `_report_rocm_device_key` reverse, both reused at `_same_card`
+> too) across `_resolve_torch_device`, `_ct2_kwargs`, `_spk_run_device`,
+> `WhisperEngine._ensure_loaded`, `SpeakerEngine.ensure_loaded`,
+> `_engine_env_pin`, `_is_resident`, and `_same_card` — but unprovable on
+> this box (dual-NVIDIA, no ROCm hardware), so it lands Blocked rather than
+> Group A. The pinned-device half was found and fixed in the same PR's own
+> `pr-review-gate` pass 1, and the idle-eviction half in pass 2, which is
+> also why the row's title and body were widened twice after first being
+> added (originally covered only the unpinned crash). **66 owed** is
+> unaffected — Blocked/Unconfirmed rows are excluded from that arithmetic
+> by design (see the group table above).
+>
+> **Prior change: 2026-08-31 (wave 10, claude), 66 → 65.** Row **A28** (ORT
+> marker — fresh NVIDIA bootstrap, #2192) fully discharged and dropped —
+> **A28 is retired, not reused** (allocate-once). The row's long-outstanding
+> third bullet (Kokoro reporting a real `CUDAExecutionProvider` on this box)
+> finally passed for real, after fixing two genuine defects the prior five
+> waves' investigation had narrowed down but never turned into code:
+> 1. `install-ort.mjs`'s `extraRuntimeSteps` was still missing
+>    `nvidia-cufft-cu12`/`nvidia-cuda-runtime-cu12` (wave-5's own validated
+>    "hypothesis 2", 2026-08-23, never shipped) — added, floor-plus-cap
+>    `~=11.3.3`/`~=12.8.0` matching torch's bundled DLL build line;
+>    `curand` tried and confirmed unneeded, dropped (`nvjitlink` is pulled in
+>    transitively by `cufft`'s own dependency tree regardless, so it was
+>    never pinned directly either way).
+> 2. A newly-found, DISTINCT root cause: cuDNN 9's own lazily-dlopened
+>    "engine" plugin DLLs (`cudnn_engines_tensor_ir64_9.dll` etc.) are never
+>    covered by `onnxruntime.preload_dlls()` (which only preloads the fixed
+>    set onnxruntime itself links against) and are NOT found via
+>    `os.add_dll_directory()` either — only prepending `nvidia/<pkg>/bin` to
+>    the process `PATH` works. New `main._add_nvidia_dll_dirs_to_path()`,
+>    wired into the same lifespan step as `_preload_ort_cuda_dlls`.
+> 3. Fixing (2) surfaced a THIRD, more serious pre-existing defect before it
+>    shipped: the unpinned `nvidia-cudnn-cu12~=9.0` resolved to 9.25.1.1,
+>    ABI-incompatible with the cuDNN 9.19.0 torch 2.11.0+cu128 bundles —
+>    loading it via `preload_dlls()`/PATH before `import torch` broke
+>    Coqui/Qwen/Whisper outright on this box (`OSError: [WinError 127]`
+>    loading `torch\lib\cudnn_cnn64_9.dll`). This is exactly the risk the
+>    row's own "N11" note had flagged as unverified. Tightened
+>    `NVIDIA_CUDNN_CONSTRAINT` to `~=9.19.0` (floor-and-cap on torch's exact
+>    bundled line) — fixes torch AND keeps the Kokoro CUDA fix intact.
+>
+> Verified end-to-end on real hardware via the real HTTP surface (RTX 4070
+> 8 GB, `cuda:0`, no `KOKORO_DEVICE` pin — the shipped default path):
+> `Device probe complete: {'kokoro': 'cuda', 'coqui': 'cuda', 'qwen':
+> 'cuda'}` at startup; a real `POST /synthesize` returned 192512 bytes of
+> real PCM (cold 5.5s, warm 0.45s, real VRAM allocated per `nvidia-smi`);
+> `/health` reports `cuda_verified: true` with no false `stale_reason`. Full
+> sidecar pytest suite and full server Vitest suite (8180 tests, per `npx
+> vitest list`) both green; one pre-existing, unrelated failure
+> (`test_design_kokoro_exclusion.py::test_design_voice_holds_arbiter_and_evicts_resident_kokoro`)
+> reproduced against unmodified `main` at the time this row was run and is
+> now fixed on `main` by PR #2810, not this row's concern.
+> This also newly un-blocks **A33**'s remaining bullets (2, 3, and the #2643
+> negative control) — CUDA can now genuinely construct and run on this box,
+> which A33's own 2026-08-27 note recorded as the reason those bullets were
+> "not testable ... on this hardware it cannot, ever." Not run this round —
+> A33 stays owed for those three, now newly reachable rather than
+> permanently blocked; see A33's own entry. Group A: 40 → 39. `next-id`
+> unaffected (still A106; allocate-once IDs are never reused, so a drop
+> never frees or renumbers a slot).
+>
+> **Prior change: 2026-08-30, no count change.** Row **A24**'s run note (2026-08-26,
 > below) filed [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678) as a
 > design decision owed: should the capacity-admission layer make a Base render wait for
 > a resident VoiceDesign, or evict it? PR
@@ -2598,174 +2696,6 @@ than a real render.
 
 ---
 
-### A28 · ORT marker — fresh NVIDIA bootstrap ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
-
-Design doc §On-box acceptance, criterion 1. A from-scratch `bootstrap-venv.mjs`
-run on the nvidia profile is unit-tested at the seam
-(`bootstrap-venv-helpers.test.ts`'s ordering assertions), but a real pip venv's
-version string, real PEP-427 directory escaping, and a real `pip check`/Kokoro
-provider report have never confirmed the write actually lands correctly on a
-genuinely fresh box — every other row here starts from an already-bootstrapped
-venv (self-heal) or a deliberately broken one (clobbered), neither of which
-exercises `installForProfile`'s write branch on a first-ever install.
-
-- Wipe (or freshly clone into) the sidecar venv and run a genuine from-scratch
-  bootstrap on the nvidia profile — not an upgrade, not the boot-time self-heal.
-- Inspect `site-packages` for `onnxruntime-<version>.dist-info` at the version
-  `onnxruntime-gpu` actually installed.
-- Run `pip check` — expect exit 0.
-- Load Kokoro and confirm it reports `CUDAExecutionProvider`.
-
-*Needs:* the existing NVIDIA dev box, willingness to rebuild the venv from
-scratch. *Criteria:* design doc §On-box acceptance item 1; run sheet §3 in
-`docs/testing/ort-marker-onbox-acceptance.md`.
-
-> **Wave-3 step 2, 2026-08-20 — STILL OWED, blocker now fixed.** Ran a genuine from-scratch
-> `bootstrap-venv.mjs` on the nvidia profile against a throwaway venv (live
-> venv untouched, byte-verified). Marker present at the correct version
-> (`INSTALLER: castwright-ort-marker`) and `pip check` exit 0 — both
-> **DISCHARGED**. The third check — Kokoro reporting `CUDAExecutionProvider`
-> — **failed**: `get_available_providers()` lists it, but constructing an
-> inference session with it errors (`Error 126`) and silently falls back to
-> CPU. Root cause was a box-level gap: this box has only CUDA 12.4 system-wide
-> while `onnxruntime-gpu` 1.27 needed CUDA 13.x/cuDNN 9.x runtime libraries.
-> This blocking dependency is now resolved by PR #2576, which re-pinned
-> `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27` (CUDA-12 line). The row
-> stays STILL OWED pending the GPU-provider re-check against the fixed pin;
-> see evidence doc `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
-
-> **Wave-4 step 8, 2026-08-21 — STILL OWED, re-run after #2534's fix landed.**
-> Re-ran the Kokoro GPU-provider check against `onnxruntime-gpu` 1.26.0 (the
-> version #2576's re-pin resolves to), commit `6e4eac6c0129b68e8ff47db7b1503f31344248ab`
-> (now on `main` via `4bb738d2`). `get_available_providers()` still lists
-> `CUDAExecutionProvider`, but actual `InferenceSession` construction — both
-> directly and through `kokoro_onnx.Kokoro` — still falls back to
-> `CPUExecutionProvider`. **This is not the #2534 defect recurring**: the
-> root cause is now confirmed as a *different*, more specific gap —
-> `onnxruntime-gpu` 1.26.0's own wheel metadata requires `nvidia-cudnn-cu12~=9.0`
-> only via its optional `[cudnn]` extra, which `install-ort.mjs` never
-> requests (and installs with `--no-deps` besides), so no cuDNN 9 runtime is
-> ever placed anywhere onnxruntime's CUDA provider will find it. A `cudnn64_9.dll`
-> exists on this box only bundled inside other packages' own directories
-> (`torch/lib`, `ctranslate2`), which onnxruntime does not search — confirmed
-> by adding `torch/lib` to the process DLL search path as a diagnostic, which
-> did not fix it either. Zero discharges this run — see evidence doc
-> `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`. **Follow-up filed:**
-> [#2600](https://github.com/dudarenok-maker/Castwright/issues/2600) — `install-ort.mjs` never requests the cuDNN 12 runtime that
-> `onnxruntime-gpu 1.26.x` requires for CUDA execution, leaving Kokoro to
-> silently fall back to CPU (distinct from #2534, which fixed the CUDA-13-vs-12
-> mismatch itself).
-
-> **PR #2617 note (pass-4 review P1/P2/P3/P6) — what the next run must read, and
-> what it is still assuming.** #2600's fix ships `main._preload_ort_cuda_dlls()`,
-> called once at lifespan startup, which forces onnxruntime's own
-> `preload_dlls(directory="")` to search `<venv>/Lib/site-packages/nvidia/<pkg>/bin`
-> instead of `torch/lib`, and separately measures (via onnxruntime's own private
-> `_get_nvidia_dll_paths`) how many of the expected DLLs actually sit there. It
-> reports one of six outcomes, each with an `[ort-preload]` prefix in the
-> sidecar log — **read these lines first**, before repeating the old "still
-> CPU" dead end. Quoted below is the sidecar's own log text (an earlier version
-> of this note quoted `RESULT: preloaded` / `RESULT: failed`, strings the
-> sidecar never emits — those were a review harness's own shorthand, not
-> anything logged; fixed at pass 4, P1):
-> - `onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft DLLs; all N
->   expected files were found under nvidia/<pkg>/bin.` — every DLL genuinely
->   came from the directory this installer writes to.
-> - `onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft DLLs, but
->   only N of M expected files were found under nvidia/<pkg>/bin -- the rest
->   resolved via preload_dlls()'s bare-name PATH fallback (...)` — a
->   **WARNING**. An empty capture from `preload_dlls()` only means every DLL
->   loaded from *somewhere* loadable — its second internal loop retries any
->   DLL missing from `nvidia/` by bare filename off `PATH` and prints nothing
->   either way (pass-4 finding P2). This line means some (or all) of the
->   twelve resolved off `PATH` — a system CUDA toolkit or torch's own bundled
->   copy — not from this installer's ~1.30 GB runtime. **This is the single
->   most diagnostic line available; do not read it as the same success as the
->   bullet above.**
-> - `onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft DLLs from
->   somewhere loadable -- this onnxruntime build does not expose enough to
->   confirm...` — the installed onnxruntime is too old/different to expose
->   the private helper the count above needs; provenance is genuinely unknown,
->   not assumed nvidia/.
-> - `onnxruntime.preload_dlls() ran but at least one CUDA/cuDNN DLL failed to
->   load (see lines above)` (also reached if `preload_dlls()` itself raised) —
->   at least one DLL never loaded from anywhere; the CUDA execution provider
->   may fall back to CPU. This was the observed live-venv shape at passes 2/3
->   (12 of 12 DLLs failed) — see the two DLLs named next.
-> - `onnxruntime.preload_dlls() skipped its own DLL search because torch was
->   already imported` — the torch-early-return branch fired (gated only on
->   `"torch" in sys.modules`, unaffected by `directory=""`); torch's own bundled
->   DLLs are what the provider will find, the same torch/lib-only outcome this
->   row already recorded as not fixing the bug.
-> - `onnxruntime.preload_dlls() ran but this onnxruntime build has no CUDA
->   support` / `onnxruntime <version> has no preload_dlls() (older build)` — a
->   non-NVIDIA `onnxruntime` build, or one too old to have the symbol at all.
->   Not expected on this row's nvidia profile — but a from-scratch bootstrap
->   whose swap silently left a stale/wrong `onnxruntime` package installed
->   would show up as exactly this line, which is why it belongs on this row's
->   checklist (pass-4 finding P6).
->
-> **`get_available_providers()` listing `CUDAExecutionProvider` proves nothing**
-> (wave-3/wave-4 both saw it list the provider while actual `InferenceSession`
-> construction still fell back to CPU) — a real `InferenceSession` must be
-> constructed and its **actual** provider recorded, same as wave-3/wave-4 did.
->
-> **Named assumption, currently unverified on this box:** `install-ort.mjs`'s
-> `extraRuntimeSteps` installs `nvidia-cudnn-cu12` and `nvidia-cublas-cu12` but
-> deliberately **not** `nvidia-cufft-cu12` or `nvidia-cuda-runtime-cu12` — two
-> of the four CUDA DLLs `preload_dlls()` asks for on Windows
-> (`cufft64_11.dll`, `cudart64_12.dll`). The assumption is that this box's
-> **system CUDA 12.4 toolkit** supplies those two via `PATH`, so onnxruntime's
-> fallback bare-name `LoadLibrary` still finds them even though `nvidia/` does
-> not carry them. The "N of M expected files found under nvidia/<pkg>/bin"
-> warning bullet above is how to check this directly — if it names fewer than
-> the full count, or the failure bullet names exactly `cufft64_11.dll` /
-> `cudart64_12.dll`, that assumption is false on this box — the alternative is
-> installing the `[cuda]` extras (`onnxruntime-gpu[cuda]` or the two packages
-> directly), not a further cuDNN/cublas change.
-> - **New process-wide coupling to also confirm (N11):** the preload
->   `ctypes.CDLL`s `nvidia/cublas/bin/cublas64_12.dll` (pip-resolved to
->   `12.8.5.5`) by full path at lifespan step 1, ahead of any lazy `import torch`
->   — so any later `LoadLibrary("cublas64_12.dll")` torch issues (Qwen, XTTS,
->   Whisper) binds to that already-loaded module instead of torch's own bundled
->   `12.8.4`. Same minor line, expected benign, but **unverified** — after this
->   preload lands, confirm Qwen / XTTS / Whisper still synthesise correctly on
->   this box, not just that Kokoro reports the right provider.
-
-> **2026-08-23 re-run (Castwright#2621, wave-5 lineage) — STILL OWED, root cause
-> now identified and it is NOT `install-ort.mjs`.** Re-ran against a fresh
-> throwaway venv (live venv untouched, byte-verified before/after). Marker
-> mechanics and `pip check` still **DISCHARGE** cleanly. Round 1 (fix as
-> shipped) reproduced the `[ort-preload]` **failed** line — `cufft64_11.dll`
-> and `cudart64_12.dll` could not load from anywhere — confirming the
-> "N of M expected files found under nvidia/" warning bullet above: this box's
-> system CUDA 12.4 toolkit does **not** supply those two DLLs via `PATH`, so the
-> named assumption is false here. Round 2, installing the `[cuda]` extras
-> (`nvidia-cuda-runtime-cu12`, `nvidia-cufft-cu12`, `nvidia-curand-cu12`,
-> `nvidia-nvjitlink-cu12`) into the same throwaway venv, produced a clean
-> `preload_dlls()` success — all 11 expected files resolved under
-> `nvidia/<pkg>/bin`, confirming **hypothesis 2 fixes the DLL-search problem
-> completely**. But Kokoro **still** fell back to CPU with this clean preload,
-> silently (no `[ort-preload]` warning at load time). Isolated with a bare
-> Python repro: a raw `onnxruntime.InferenceSession` with
-> `providers=['CUDAExecutionProvider','CPUExecutionProvider']` genuinely runs on
-> CUDA on this box once `preload_dlls()` has run — but `kokoro_onnx==0.5.0`'s
-> own `Kokoro.__init__` auto-detects via
-> `importlib.util.find_spec("onnxruntime-gpu")`, which is **always `None`**
-> (the `onnxruntime-gpu` pip distribution installs into the `onnxruntime`
-> import namespace, not a separately-importable `onnxruntime-gpu` module), so
-> `kokoro_onnx` always constructs with `providers=["CPUExecutionProvider"]`
-> explicitly — CUDA is never even offered to onnxruntime. `main.py`'s
-> `KokoroEngine._ensure_loaded` tries passing `providers=` explicitly when
-> `KOKORO_ORT_PROVIDERS` is set, but this installed `kokoro-onnx` version's
-> `Kokoro.__init__` has no `providers` parameter — that call raises `TypeError`
-> and falls back to the broken auto-detect path. **This is a third, distinct
-> root cause from both #2534 and #2600**, inside `kokoro-onnx`'s own
-> provider auto-detection, not `install-ort.mjs` or `preload_dlls()`. Per the
-> fold brief: reported as a finding here, not fixed. Evidence:
-> `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
-> (Castwright#2621).
-
 ### A29 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
 
 Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha
@@ -3114,6 +3044,25 @@ load, one drift simulation, one unpinned-auto load with its negative control.
 > deliberately" and "the engine can never place on GPU here" are
 > indistinguishable. **Still owed:** bullets 2/3 and the negative control,
 > on a box with a working `nvidia-cudnn-cu12` install.
+
+> **Update 2026-08-31 (wave 10, claude) — the blocking premise above no
+> longer holds; bullets 2/3 are reachable now, not run this round.** A28's
+> discharge (see "At a glance") fixed the real root cause: this box's
+> `nvidia-cudnn-cu12` was both missing two DLL-search-path packages
+> (`cufft`/`cuda-runtime`) AND, once those were added, ABI-mismatched against
+> torch's bundled cuDNN. Both are now fixed and verified end-to-end (a real
+> `POST /synthesize` with no `KOKORO_DEVICE` pin lands on `cuda:0` for real,
+> confirmed via `nvidia-smi` and `/health`'s `cuda_verified: true`). So "on
+> this hardware it cannot, ever" is no longer accurate — Kokoro's CUDA
+> execution provider now genuinely constructs and runs sessions on this box.
+> Bullets 2 (deliberate VRAM-ledger admission onto CPU under contention vs.
+> the positive-control genuine-GPU-placement case) and 3's #2643 negative
+> control (a box with no CUDA build/device at all) were NOT run this round —
+> this update only removes the blocker, it does not discharge the bullets.
+> Next on-box session targeting this row: load Qwen and/or Coqui first to
+> consume the 8 GB card's headroom, then trigger a Kokoro load and confirm
+> the resident entry carries **no** `stale_reason` (deliberate admission,
+> not a fallback) — same recipe the row's own bullet 2 already specifies.
 
 ---
 
@@ -5079,6 +5028,59 @@ so there is no way to put a genuinely-below-floor ffmpeg on `PATH` here.
 **3. What would change that.** A box or container where ffmpeg can be
 downgraded to a real pre-floor build — the row itself names a 22.04
 container with archive ffmpeg 4.4 as the cheapest route.
+
+### ROCm/AMD admitted device-key normalisation — real GPU engine load, pinned/resident, and idle-eviction ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), branch `fix/sidecar-rocm-device-normalisation`, PR review passes 1–2)
+
+**1. What is dormant.** The VRAM-ledger admission layer (`PlacementController.admit()`)
+hands engines a device key like `"rocm:N"` on a ROCm/AMD box (`probe()`'s own honest
+ROCm-vs-CUDA accounting), but a ROCm/HIP torch build only ever understands `"cuda:N"`
+at the API level — `torch.device("rocm:N")` raises, and CTranslate2/speechbrain
+likewise have no `"rocm"` device. Three seams of the same two-vocabulary split, all
+now closed in `server/tts-sidecar/main.py`. **Forward** (an admitted key reaching a
+real device call): `_resolve_torch_device`, `_ct2_kwargs`, `_spk_run_device`,
+`WhisperEngine._ensure_loaded`, and `SpeakerEngine.ensure_loaded` all convert an
+explicit `"rocm:N"` to `"cuda:N"` (index preserved) via the shared
+`_normalise_rocm_device_key` helper before it reaches
+`.to()`/`WhisperModel(...)`/`EncoderClassifier(...)`; Coqui's `_resolve_runtime_options`
+calls the resolver unconditionally (not just for `"auto"`) so an admitted value
+actually reaches it. **Reverse** (an operator's pin, or a resident engine's own
+device string, matching the ledger's own candidate keys): config validation only
+ever lets an operator set an indexed pin as `"cuda:N"` — never `"rocm:N"` — and a
+resident engine's `self._device` is now (per the forward fix) always `"cuda:N"`
+too, so `_engine_env_pin` and `_is_resident` re-tag their output back to `"rocm:N"`
+via the shared `_report_rocm_device_key` helper before `admit()` compares it
+against a probed candidate, or a pinned OR resident engine on a real ROCm box would
+report permanent `noCapacity` even with room free on its own card. **Idle-eviction**
+(review pass 2): `_same_card`, the comparison every `_idle_evict_steps` step is
+built from, required family `"cuda"` on BOTH the resident engine's device string
+AND the probe-derived eviction target — but the target is always probe-native
+(`"rocm:N"` on a ROCm box), so the entire eviction ladder silently emptied and every
+admission that needed an eviction to fit fell straight to `noCapacity` instead of
+freeing an idle engine; `_same_card` now normalises both sides via the shared
+`_normalise_rocm_device_key` helper before comparing. The unit tests
+(`test_qwen_device.py`, `test_coqui_device.py`, `test_device_parse.py`,
+`test_devices.py`, `test_placement.py`, `test_transcribe_embed_admission.py`) prove
+every conversion in isolation against stubbed `torch`/`_cuda_is_rocm` — they do not
+prove a real ROCm/HIP torch build, CTranslate2, and speechbrain actually accept the
+converted values end to end, load real models onto a real AMD card, and correctly
+evict an idle one to make room, with `SEG_CAPACITY_ADMISSION` on (the default).
+
+**2. Why this box cannot reach it.** This box is dual-NVIDIA; this will not move
+until AMD/ROCm hardware exists — same constraint as the AMD GPU support Phase 2 and
+ORT pip-consistency marker rows above.
+
+**3. What to observe, once ROCm/AMD hardware is available.** With
+`SEG_CAPACITY_ADMISSION` on, trigger a GPU engine load on each of the five engines
+(Qwen Base, Coqui/XTTS, Whisper `/transcribe`, the SPK `/embed` speaker-embed, and
+Kokoro if it ever gains a GPU placement) that the admission layer places on a ROCm
+card, and confirm each now succeeds (model resident, synth/transcribe/embed
+completes) rather than crashing on an unconverted `"rocm:N"`. Repeat with an explicit
+`*_DEVICE=cuda:N` pin set on at least one engine (e.g. `COQUI_DEVICE=cuda:0`) and
+confirm it actually admits onto that card rather than reporting permanent
+`noCapacity`. Then fill the card with an idle-but-resident engine and admit a
+different, heavier engine that needs the freed VRAM to fit — confirm the eviction
+ladder actually runs and frees it, rather than reporting `noCapacity` with an idle
+model sitting unused on the same card. Criteria live in issue #2813 and this row.
 
 ---
 

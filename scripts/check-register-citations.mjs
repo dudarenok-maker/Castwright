@@ -113,7 +113,7 @@
 //      the moment a subject's row discharges: the subject's citations start
 //      rotting from that moment, so failing open here (as an earlier version
 //      of this check did) silences the check exactly when it is needed.
-//      Note: 21 of 65 real register rows carry no issue/PR number in their
+//      Note: 15 of 66 real register rows carry no issue/PR number in their
 //      heading at all (they cite a plan number instead), so this check's
 //      ground truth is thin for roughly a third of the register — those rows
 //      can never be cross-checked in either direction, a real coverage gap,
@@ -155,8 +155,8 @@
 //        (checkConflictingSubjects' `unknownSubject`) stays EXPLORATORY,
 //        OPT-IN, NEVER FATAL — pass `--strict` to see it; skipped and
 //        printed nothing without the flag, same as the whole check used to
-//        be. This is the genuinely thinner ground truth: 21 of the
-//        register's 65 real rows carry no issue/PR number in their heading
+//        be. This is the genuinely thinner ground truth: 15 of the
+//        register's 66 real rows carry no issue/PR number in their heading
 //        at all (they cite a plan number instead, so those rows can never be
 //        cross-checked in either direction — a real, permanent coverage
 //        gap), a "Register row(s):" list is still not scanned by this
@@ -167,7 +167,7 @@
 //        structural subject-set mismatch, not a wrong citation; and a row
 //        whose OWN register heading carries no issue number, so its subject
 //        can never appear in the legitimate-subject map either way — the
-//        21-of-65 gap from the other direction). Neither is a wrong
+//        15-of-66 gap from the other direction). Neither is a wrong
 //        citation, so failing on either would be a false positive; that is
 //        why this half is not promoted alongside `wrongId`.
 //
@@ -202,14 +202,39 @@
 //      also nonexistent, never merely wrong-for-its-subject; (2) a wrong ID
 //      that arrives via a DISCHARGE — the cited ID still exists, just for a
 //      DIFFERENT subject now, because the citation's own original subject's
-//      row discharged and left the register entirely — routes to the
-//      non-fatal, opt-in `unknownSubject` bucket by construction, not
-//      `wrongId`, because the discriminator between the two branches is
-//      "does the register still know this subject at all", and a discharge
-//      answers no. Widening `wrongId` to that class is deliberately deferred
-//      (see #2721) rather than attempted here, since the two live
-//      `unknownSubject` residuals on this corpus are legitimately benign and
-//      a naive widening would false-positive on them.
+//      row discharged and left the register entirely — used to route to the
+//      non-fatal, opt-in `unknownSubject` bucket unconditionally, because the
+//      discriminator between the two branches was "does the register still
+//      know this subject at all", and a discharge answers no. #2721/#2833
+//      widened `wrongId` to cover exactly this discharge class: when the
+//      cited id's OWN current row tracks OTHER, known subjects (proof, from
+//      the register's own text, that the id has moved on since this citation
+//      was written), the subject is fatal `wrongId` rather than
+//      `unknownSubject` — UNLESS a nearby discharge annotation for that same
+//      id already documents the staleness (`annotatedDischarge`, non-fatal,
+//      always printed, same philosophy as Check A's annotated bucket). A
+//      subject cited against an id that carries NO subject metadata at all
+//      (the 15-of-66-rows structural gap) still can't be confirmed or
+//      refuted either way, and stays in the plain `unknownSubject` bucket.
+//      See `recordSubjectConflict`'s own comment for the exact rule and the
+//      real corpus cases (A19/A31 annotated-non-fatal, A34 unannotated-fatal,
+//      A3 structural-gap-non-fatal) that motivated the split.
+//
+//      #2832's verify pass on #2721/#2833's own attempt found a THIRD gap in
+//      the same territory: a subject that loses only ONE of several rows —
+//      not a full discharge — still has a live row elsewhere, so citing the
+//      discharged/re-minted sibling isn't a stale citation at all, but the
+//      pre-#2842 code fired `wrongId` on it unconditionally (case (a) above,
+//      "legitimately maps to a DIFFERENT set of IDs", didn't distinguish a
+//      historically-legitimate sibling from a genuinely wrong id). #2721/
+//      #2842 fixed this in `buildLegitimateSubjectMap` itself, which now
+//      returns both the current subject->id map AND a historical one built
+//      from each row's OWN body text (a discharge/re-mint annotation naming
+//      a subject there is the register's own record of that row's history —
+//      see `dischargedSubjectsMentionedIn`'s own comment). `wrongId` still
+//      fires for an id with no such record, whether or not the subject has a
+//      live row elsewhere — only a documented historical tie downgrades it
+//      to `annotatedDischarge`.
 //
 // Frozen paths are excluded from all three checks — see isFrozenPath's own
 // comment for why each one is frozen. This script's own source, its own test
@@ -351,6 +376,29 @@ function extractSubjectNumbers(text) {
   for (const m of text.matchAll(SUBJECT_NUMBER_REGEX)) {
     nums.add(Number(m[1] ?? m[2]));
   }
+  return nums;
+}
+
+// #2721/#2833: numbers introduced by an explicit "PR #nnnn"/"PR [#nnnn](...)"
+// marker specifically — this repo's own "(#issue, PR #pr)" heading
+// convention for naming an issue's OWN fixing PR alongside it (e.g. A19's
+// real register heading, "(#1976, PR [#1993](...))"). A citation can use this
+// convention even when the REGISTER's own row heading for that id doesn't
+// (a plan link stands in for the PR instead, as A32's real register heading
+// does) — in which case the PR number can never appear in `legitimateMap` no
+// matter how `buildLegitimateSubjectMap` is written, because the register's
+// own heading text never carries it. Deliberately narrower than "any other
+// subject on the same line/segment": pass-9 finding X's own pinned tests
+// (a bare "see also (#1001)" aside, and a bare "(#1000, #9999)" list) prove a
+// same-line/segment subject that ISN'T introduced this specific way must
+// still be checked normally — only the "PR #" syntax itself is read as
+// asserting "this number names the same work as the issue beside it", not
+// mere physical proximity.
+const PR_SUBJECT_REGEX = /\bPR\s*\[?#(\d+)/gi;
+
+function extractPrSubjectNumbers(text) {
+  const nums = new Set();
+  for (const m of text.matchAll(PR_SUBJECT_REGEX)) nums.add(Number(m[1]));
   return nums;
 }
 
@@ -596,7 +644,8 @@ function extractRunSheetMentions(rowBody) {
  * an ID-shaped heading.
  *
  * @returns {{ rows: Map<string, { title: string, issues: Set<number>,
- *   runSheetPaths: Set<string>, mentionedRunSheetPaths: Set<string> }> }}
+ *   runSheetPaths: Set<string>, mentionedRunSheetPaths: Set<string>,
+ *   bodyText: string }> }}
  */
 export function parseRegisterRows(text) {
   const stripped = stripFences(text);
@@ -624,6 +673,7 @@ export function parseRegisterRows(text) {
         issues,
         runSheetPaths: new Set(owned),
         mentionedRunSheetPaths: new Set(mentioned),
+        bodyText: rowBody,
       });
     }
   }
@@ -1275,17 +1325,151 @@ export function findUnclassifiedRunSheetMentions(registerRows) {
 // --- Check C: one subject, conflicting IDs -------------------------------
 
 /**
- * Builds subject-number -> legitimate-ID-set from the register's own rows.
+ * Subject numbers found in the same discharge-word CLAUSE as a mention,
+ * anywhere in one row's own body text — reuses the exact clause-bounding and
+ * proximity-capping logic `idSpecificAnnotationPresent` uses
+ * (DISCHARGE_ANNOTATION_REGEX + clauseBounds + ID_PROXIMITY_CHARS), just
+ * scanning for subject-number tokens instead of ID tokens, because it answers
+ * a different question: not "does this discharge note excuse a specific ID"
+ * but "does this row's OWN section document which subject(s) it used to track
+ * before discharging / being re-minted for different work". This is the
+ * register's own record of a row's history — the only place that history can
+ * live, since a re-minted row's CURRENT heading (`issues`) only ever reflects
+ * what it tracks NOW.
+ *
+ * Pass-11 review of PR #2846 (finding #1, CRITICAL): polarity-check the
+ * discharge word — "NOT discharged" (and similar negated contexts like "is
+ * why A16 below is not fully discharged") must not match as affirmative
+ * discharges. This is a polarity check `idSpecificAnnotationPresent` itself
+ * does NOT have (it is unconcerned with polarity, since it only answers
+ * whether a discharge word and a specific ID token co-occur in a clause, not
+ * what either one asserts) — added here, scoped to `clauseBounds`, because
+ * this function's answer of "did this row historically track this subject"
+ * is exactly the kind of claim a negated sentence can falsify. Pass-15
+ * review (finding new-B, SIGNIFICANT): the negation-word set is deliberately
+ * broad (NOT/no/never/isn't/aren't/wasn't/weren't/hasn't/haven't/cannot/
+ * can't/an "un-" prefix fused to the discharge word/"far from"/"nothing"),
+ * since the first cut (just "NOT"/"no") missed most real negation phrasings.
+ * Also applies the same ID_PROXIMITY_CHARS cap `idSpecificAnnotationPresent`
+ * uses so a subject number far from its discharge word (>120 chars) is not
+ * incorrectly attributed to a row that merely MENTIONS it in passing (e.g.
+ * in discussion of another row's history), and (pass-15, finding new-A)
+ * excludes a harvested number that `extractPrSubjectNumbers` identifies as a
+ * "PR #nnnn" reference rather than a genuine subject number, the same
+ * PR-vs-subject distinction the file already makes elsewhere.
  */
-function buildLegitimateSubjectMap(registerRows) {
-  const map = new Map();
-  for (const [id, row] of registerRows) {
-    for (const subject of row.issues) {
-      if (!map.has(subject)) map.set(subject, new Set());
-      map.get(subject).add(id);
+function dischargedSubjectsMentionedIn(rowBodyText) {
+  const scanText = stripInlineCodeSpans(rowBodyText);
+  const dischargeMatches = [
+    ...scanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
+  ];
+  const subjects = new Set();
+  for (const dm of dischargeMatches) {
+    // Get clause bounds first so we can use them for both polarity and subject scanning.
+    const { start, end } = clauseBounds(scanText, dm.index);
+
+    // Polarity check: scan for negation markers that would negate the
+    // discharge word. Bound the scan to BOTH the same clause (not a flat
+    // window, so an unrelated negation across a clause/list-item boundary
+    // cannot bleed in -- pass-15/new-B) AND a proximity cap of its own
+    // (pass-16/new-G: clause-bounding alone is too wide -- a "clause" here
+    // is a full paragraph, since CLAUSE_BOUNDARY_REGEX does not treat ". "
+    // as a boundary, and the register's real affirmative discharge
+    // records measure their genuine negations at 4-10 chars back vs. false
+    // suppressions at 85+ chars back in the same paragraph). Recognize a
+    // broad set of negation patterns:
+    // - "NOT", "no" (complete words; "no" excludes "no longer exist(s)",
+    //   since that's one of DISCHARGE_ANNOTATION_REGEX's OWN
+    //   affirmative phrases, not a negation of one)
+    // - "never", "isn't", "aren't", "wasn't", "weren't" (contractions)
+    // - "hasn't", "haven't" (auxiliary verbs with "have")
+    // - "cannot", "can't" (modal verbs)
+    // - "far from" (degree modifier)
+    // - "nothing" (negating existential)
+    const POLARITY_PROXIMITY_CHARS = 30;
+    const polarityScanStart = Math.max(start, dm.index - POLARITY_PROXIMITY_CHARS);
+    const polarityContext = scanText.slice(polarityScanStart, dm.index);
+    // Apostrophes are '-escaped (not literal) so this regex literal
+    // doesn't desync spawn-windows-hide.test.ts's quote-tracking scanner --
+    // see that guard's own regexLiteralDesyncsQuoteTracking comment.
+    const hasNegationWord =
+      /\b(?:NOT|no\b(?!\s+longer\s+exists?)|never|isn\u0027t|aren\u0027t|wasn\u0027t|weren\u0027t|hasn\u0027t|haven\u0027t|cannot|can\u0027t|far\s+from|nothing)\b/i.test(
+        polarityContext,
+      );
+    // Also check if the discharge word itself is prefixed with "un-" (e.g., "undischarged", "un-discharged")
+    const isUnPrefixed = /un-?discharged\b/i.test(scanText.slice(Math.max(0, dm.index - 10), dm.index + dm[0].length));
+    if (hasNegationWord || isUnPrefixed) {
+      // This discharge word is negated, skip it.
+      continue;
+    }
+
+    // Scan for subject numbers in the clause, applying proximity cap.
+    // Use scanText (not rowBodyText) so indices are consistent.
+    // Extract text for the clause and scan it, adjusting indices back.
+    const clauseText = scanText.slice(start, end);
+    // Extract PR-marked subject numbers to exclude them from genuine subject
+    // references (#2721 new-A: "PR #nnnn" is a reference to the PR itself, not a
+    // subject the row discharged).
+    const prSubjects = extractPrSubjectNumbers(clauseText);
+    for (const smatch of clauseText.matchAll(SUBJECT_NUMBER_REGEX)) {
+      const subject = Number(smatch[1] ?? smatch[2]);
+      // Skip numbers that are marked with "PR #" — they reference a PR, not a subject.
+      if (prSubjects.has(subject)) {
+        continue;
+      }
+      // Measure character distance from discharge word center to subject center.
+      // smatch.index is relative to clauseText, so convert to full scanText coords.
+      const dischargeCenter = dm.index + dm[0].length / 2;
+      const subjectIndex = start + smatch.index + (smatch[0].length / 2);
+      if (Math.abs(subjectIndex - dischargeCenter) <= ID_PROXIMITY_CHARS) {
+        subjects.add(subject);
+      }
     }
   }
-  return map;
+  return subjects;
+}
+
+/**
+ * Builds the register's own answer to two questions `recordSubjectConflict`
+ * needs — both derived from `registerRows`, so it never has to reach back
+ * into `registerRows` itself (#2721/#2842: the previous version left that
+ * reach-around AS a special case bolted onto `recordSubjectConflict`, rather
+ * than folding it in here):
+ *
+ *   - `ownersOf(subject)`: which row IDs the register's CURRENT headings say
+ *     legitimately own this subject (unchanged from before this fix — a
+ *     subject CAN legitimately span two rows at once).
+ *   - `historicalOwnersOf(subject)`: which row IDs the register's own text
+ *     documents as having ONCE legitimately owned this subject, via a
+ *     discharge/re-mint annotation in THAT ROW'S OWN body text (see
+ *     `dischargedSubjectsMentionedIn`) — this is what lets
+ *     `recordSubjectConflict` tell "this ID owned the subject once, before
+ *     its own row discharged or was re-minted for other work" apart from "this
+ *     ID never had anything to do with the subject at all", the distinction
+ *     #2832's verify pass found missing (#2721/#2842).
+ *   - `currentSubjectsOf(id)`: the subject set `id`'s row currently carries,
+ *     i.e. what it tracks NOW if it moved on — used only for message text and
+ *     for telling a re-minted row (carries other subject metadata) apart from
+ *     a row that never carried any (the 15-of-66 structural gap).
+ */
+function buildLegitimateSubjectMap(registerRows) {
+  const current = new Map();
+  const historical = new Map();
+  for (const [id, row] of registerRows) {
+    for (const subject of row.issues) {
+      if (!current.has(subject)) current.set(subject, new Set());
+      current.get(subject).add(id);
+    }
+    for (const subject of dischargedSubjectsMentionedIn(row.bodyText)) {
+      if (!historical.has(subject)) historical.set(subject, new Set());
+      historical.get(subject).add(id);
+    }
+  }
+  return {
+    ownersOf: (subject) => current.get(subject),
+    historicalOwnersOf: (subject) => historical.get(subject),
+    currentSubjectsOf: (id) => registerRows.get(id)?.issues,
+  };
 }
 
 // Pass-6 review of PR #2630 (finding D): the character-window approach this
@@ -1310,7 +1494,7 @@ function buildLegitimateSubjectMap(registerRows) {
 // original four wrong headings back produces 8 of 9 warnings naming exactly
 // those four lines, each stating which ID the subject actually maps to.
 // Kept exploratory/opt-in (never fatal) per the same header-comment
-// rationale — this still can't see every citation (the 21-of-65 rows with
+// rationale — this still can't see every citation (the 15-of-66 rows with
 // no issue/PR number in their heading are still uncheckable in either
 // direction, and a "Register row(s):" list is still not scanned here) — but
 // its ground truth is no longer "too thin to trust", only "incomplete".
@@ -1422,27 +1606,148 @@ function headingTitleSegments(line) {
 /**
  * Records one id/subject pairing's verdict — shared by the positional
  * (`headingTitleSegments`) and non-positional paths in `checkConflictingSubjects`
- * so both produce identically-worded messages.
+ * so both produce identically-worded messages. Never reaches into
+ * `registerRows` directly — `legitimateMap` (`buildLegitimateSubjectMap`'s
+ * return value) is the single source of truth for every register-derived
+ * question this function asks (#2721/#2842 — see that function's own
+ * comment for why the previous version's direct `registerRows.get(id)`
+ * reach-around was itself the defect #2832's verify pass found).
+ *
+ * TWO branches, by whether the subject currently has ANY legitimate owner:
+ *
+ * `legitimateMap.ownersOf(subject)` is EMPTY/undefined — the subject doesn't
+ * appear in any current register-row heading at all. #2721/#2833 widened
+ * this from a single non-fatal `unknownSubject` bucket into three, by what
+ * `id`'s own row proves:
+ *
+ *   - `legitimateMap.historicalOwnersOf(subject)` includes `id` — `id`'s own
+ *     row documents (a discharge/re-mint annotation naming this subject in
+ *     its own body text) that IT used to legitimately own this subject.
+ *     Non-fatal, `annotatedDischarge`.
+ *   - `legitimateMap.currentSubjectsOf(id)` is non-empty (and the above
+ *     didn't already match) — the register's OWN text proves `id` currently
+ *     tracks DIFFERENT, known work, but nothing on `id`'s own row explains
+ *     THIS subject specifically. Under stable, allocate-once IDs (#2717),
+ *     that is only possible because the subject's row discharged and `id`
+ *     was later re-minted for unrelated work — unambiguous dangling, same as
+ *     a uniform ID shift across headings. Fatal `wrongId`, UNLESS a discharge
+ *     annotation naming THIS id sits near the CITATION itself
+ *     (`idSpecificAnnotationPresent`, the same mechanism Check A uses — a
+ *     file that documents its own staleness, e.g. "Register row: A19 —
+ *     discharged...", is historical record, not a live defect). Printed
+ *     non-fatal into `annotatedDischarge` instead.
+ *   - Neither — `id` itself carries no subject metadata to compare against
+ *     either (a plan-only row like A3, 15 of 66 real rows). A structural
+ *     coverage gap, not a proven-wrong citation. Stays `unknownSubject`,
+ *     exploratory/opt-in.
+ *
+ * `legitimateMap.ownersOf(subject)` is NON-EMPTY but doesn't include `id` —
+ * the subject still has a live row, just not via this id. Before #2721/#2842
+ * this was unconditionally fatal, which could not tell "genuinely wrong id,
+ * never owned this subject" (the uniform-ID-shift class PR #2630 exists to
+ * catch) apart from "this id owned the subject once too, before its own row
+ * discharged/was re-minted, but the subject still has a live sibling row" —
+ * a multi-row subject losing one of its rows, not leaving the register.
+ * `legitimateMap.historicalOwnersOf(subject)` is exactly that distinction:
+ * when it includes `id`, non-fatal (`annotatedDischarge`) regardless of
+ * whether the CITATION itself is annotated — the register's own row already
+ * documents the history, which is the ground truth this whole file is built
+ * on. When it doesn't, `id` has no register-text tie to this subject at all:
+ * fatal `wrongId`, unchanged from before.
+ *
+ * `isOwnedPrCompanion` is a THIRD, narrower exemption checked first: `subject`
+ * was introduced by an explicit "PR #nnnn" marker (`extractPrSubjectNumbers`)
+ * AND `id` already legitimately owns a DIFFERENT subject cited on the same
+ * line/segment — read as a companion reference (the fixing PR of that other,
+ * legitimately-owned issue) that the register's own heading simply never
+ * recorded, not a citation defect, so nothing is printed. Measured real case:
+ * A32's own citation pairs its tracked issue #2310 with its fixing PR #2316,
+ * which the register's A32 heading never mentions (it links a design plan
+ * instead) — #2316 can never appear in `legitimateMap` no matter how
+ * `buildLegitimateSubjectMap` is written, because the register's own row
+ * heading text doesn't carry it. Deliberately gated on the "PR #" marker,
+ * not mere same-line/segment presence — see `extractPrSubjectNumbers`'s own
+ * comment for why a broader "owns anything nearby" rule was tried and
+ * rejected (it reopens pass-9 finding X's exact false-negative).
  */
-function recordSubjectConflict(filePath, lineIndex, id, subject, legitimate, wrongId, unknownSubject) {
-  const legitimateIds = legitimate.get(subject);
+function recordSubjectConflict(
+  filePath,
+  lineIndex,
+  id,
+  subject,
+  legitimateMap,
+  lines,
+  isOwnedPrCompanion,
+  wrongId,
+  unknownSubject,
+  annotatedDischarge,
+) {
+  // `isOwnedPrCompanion` is checked first, as its docstring claims — a PR
+  // companion citation is exempt regardless of which branch it would
+  // otherwise have taken, so check it unconditionally before any other logic.
+  if (isOwnedPrCompanion) return;
+
+  const legitimateIds = legitimateMap.ownersOf(subject);
+  const historicalIds = legitimateMap.historicalOwnersOf(subject);
+  const idHistoricallyOwnedThisSubject = historicalIds?.has(id) ?? false;
+
   if (!legitimateIds) {
-    // The subject doesn't appear in ANY current register-row heading at
-    // all — the exact moment its citations start rotting, since a subject
-    // leaves the register precisely when its row discharges. Failing open
-    // here (the earlier behaviour) silenced this check at the one moment it
-    // was needed; see this file's header comment for the worked example.
-    // Genuinely ambiguous (a structural coverage gap, not a proven-wrong
-    // citation) — stays in the non-fatal, opt-in bucket.
+    const currentSubjects = legitimateMap.currentSubjectsOf(id);
+    if (idHistoricallyOwnedThisSubject) {
+      const currentSubjectsText =
+        currentSubjects && currentSubjects.size > 0
+          ? `, but ${id} now tracks #${[...currentSubjects].sort((a, b) => a - b).join('/')}`
+          : '';
+      annotatedDischarge.push(
+        `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}${currentSubjectsText} — ` +
+          `${id}'s own row documents that #${subject} discharged — annotated as discharged, not failing`,
+      );
+      return;
+    }
+    if (currentSubjects && currentSubjects.size > 0) {
+      const currentSubjectsText = [...currentSubjects].sort((a, b) => a - b).join('/');
+      if (idSpecificAnnotationPresent(enclosingSectionText(lines, lineIndex), id)) {
+        annotatedDischarge.push(
+          `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but ${id} now tracks ` +
+            `#${currentSubjectsText} (#${subject}'s row has discharged and ${id} was re-minted) — ` +
+            `annotated as discharged, not failing`,
+        );
+      } else {
+        wrongId.push(
+          `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but #${subject} does not ` +
+            `appear in any current register row heading and ${id} now tracks #${currentSubjectsText} ` +
+            `instead — #${subject}'s row has fully discharged and ${id} was re-minted for different work`,
+        );
+      }
+      return;
+    }
+    // The subject doesn't appear in ANY current register-row heading, and
+    // `id` itself carries no subject metadata to compare against either — a
+    // structural coverage gap (see this function's own comment above), not
+    // a proven-wrong citation. Stays in the non-fatal, opt-in bucket.
     unknownSubject.push(
       `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but #${subject} does not ` +
         `appear in any current register row heading (its row may have discharged) — ` +
         `verify ${id} still applies`,
     );
   } else if (!legitimateIds.has(id)) {
-    // The subject's ID set is known and doesn't include this ID —
-    // unambiguously wrong, the four-wrong-headings class PR #2630 exists to
-    // catch. Fatal.
+    // The subject's ID set is known and doesn't include this ID. Before
+    // #2721/#2842 this was unconditionally fatal — but a subject can lose
+    // ONE of several rows without leaving the register: if `id`'s own row
+    // documents (via a discharge/re-mint annotation naming this subject)
+    // that it once legitimately owned this subject too, the sibling row(s)
+    // in `legitimateIds` prove the subject is still live, so this is history,
+    // not drift. Genuinely unrelated ids (the four-wrong-headings class PR
+    // #2630 exists to catch) have no such record and stay fatal.
+    if (idHistoricallyOwnedThisSubject) {
+      annotatedDischarge.push(
+        `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but the register's #${subject} ` +
+          `now maps to ${[...legitimateIds].sort().join('/')} — ${id}'s own row documents that it once ` +
+          `tracked #${subject} too, before discharging/being re-minted, and #${subject} still has a ` +
+          `live row elsewhere — annotated as discharged, not failing`,
+      );
+      return;
+    }
     wrongId.push(
       `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but the register's #${subject} ` +
         `maps to ${[...legitimateIds].sort().join('/')}, not ${id}`,
@@ -1451,9 +1756,10 @@ function recordSubjectConflict(filePath, lineIndex, id, subject, legitimate, wro
 }
 
 export function checkConflictingSubjects(fileTexts, registerRows) {
-  const legitimate = buildLegitimateSubjectMap(registerRows);
+  const legitimateMap = buildLegitimateSubjectMap(registerRows);
   const wrongId = [];
   const unknownSubject = [];
+  const annotatedDischarge = [];
   for (const [filePath, rawText] of fileTexts) {
     // Pass-10 review of PR #2630 (finding AD): this scan used to read
     // `deBold(stripFences(rawText))` directly — the UNBLANKED path — so an
@@ -1487,8 +1793,30 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
         // first's result.
         segmented.ids.forEach((id, idx) => {
           if (!registerRows.has(id)) return; // Check A's territory, not this one.
-          for (const subject of extractSubjectNumbers(segmented.segments[idx])) {
-            recordSubjectConflict(filePath, i, id, subject, legitimate, wrongId, unknownSubject);
+          const ownSubjects = extractSubjectNumbers(segmented.segments[idx]);
+          const prSubjects = extractPrSubjectNumbers(segmented.segments[idx]);
+          for (const subject of ownSubjects) {
+            // #2721/#2833: a "PR #nnnn"-marked companion WITHIN THE SAME
+            // SEGMENT is exempted the same way the non-positional path
+            // exempts one — see recordSubjectConflict's own comment (the
+            // A32-shaped "(#issue, PR #pr)" case). Gated on the PR marker,
+            // not mere co-occurrence, so pass-9 finding X's injected "third,
+            // unrelated subject in the same segment" still fires below.
+            const isOwnedPrCompanion =
+              prSubjects.has(subject) &&
+              [...ownSubjects].some((s) => s !== subject && legitimateMap.ownersOf(s)?.has(id));
+            recordSubjectConflict(
+              filePath,
+              i,
+              id,
+              subject,
+              legitimateMap,
+              lines,
+              isOwnedPrCompanion,
+              wrongId,
+              unknownSubject,
+              annotatedDischarge,
+            );
           }
         });
         return;
@@ -1532,19 +1860,41 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
       // `rowIds`, not the raw token set — so a fake second id can no longer
       // disarm the check for the real one.
       const rowIds = [...citedIds].filter((rid) => registerRows.has(rid));
+      const prSubjectsOnLine = extractPrSubjectNumbers(line);
       for (const id of citedIds) {
         if (!registerRows.has(id)) continue; // Check A's territory, not this one.
         const ownsAnySubjectHere = [...nearbySubjects].some((subject) =>
-          legitimate.get(subject)?.has(id),
+          legitimateMap.ownersOf(subject)?.has(id),
         );
         if (ownsAnySubjectHere && rowIds.length >= 2) continue;
+        // #2721/#2833: a "PR #nnnn"-marked companion is exempted from the new
+        // `wrongId`-widening/`unknownSubject` split the same way the
+        // segmented path exempts one — see recordSubjectConflict's own
+        // comment (the A32-shaped "(#issue, PR #pr)" case). Gated on the PR
+        // marker, not `ownsAnySubjectHere` itself, so a genuinely unrelated
+        // same-line subject (finding X's own "see also" pinned test) still
+        // fires below exactly as before this widening.
         for (const subject of nearbySubjects) {
-          recordSubjectConflict(filePath, i, id, subject, legitimate, wrongId, unknownSubject);
+          const isOwnedPrCompanion =
+            prSubjectsOnLine.has(subject) &&
+            [...nearbySubjects].some((s) => s !== subject && legitimateMap.ownersOf(s)?.has(id));
+          recordSubjectConflict(
+            filePath,
+            i,
+            id,
+            subject,
+            legitimateMap,
+            lines,
+            isOwnedPrCompanion,
+            wrongId,
+            unknownSubject,
+            annotatedDischarge,
+          );
         }
       }
     });
   }
-  return { wrongId, unknownSubject };
+  return { wrongId, unknownSubject, annotatedDischarge };
 }
 
 /**
@@ -1747,11 +2097,17 @@ export function runCheckRegisterCitationsCli(options = {}) {
   // Check C now runs UNCONDITIONALLY — `nonFrozenTexts` is already built
   // above regardless of `--strict` — because its `wrongId` half is FATAL by
   // default (pass 7, finding G; see checkConflictingSubjects' own comment).
-  // Only its `unknownSubject` half stays gated behind `--strict`.
-  const { wrongId: errorsC, unknownSubject: unknownSubjectC } = checkConflictingSubjects(
-    nonFrozenTexts,
-    rows,
-  );
+  // Only its `unknownSubject` half stays gated behind `--strict`. #2721/#2833
+  // widened `wrongId` to also cover a fully-discharged subject (an id that
+  // currently tracks different, known work) — `annotatedDischarge` is that
+  // same discharge class, but with a nearby annotation excusing it, so it
+  // prints unconditionally (like Check A's annotated bucket) rather than
+  // failing the gate or hiding behind `--strict`.
+  const {
+    wrongId: errorsC,
+    unknownSubject: unknownSubjectC,
+    annotatedDischarge: annotatedDischargeC,
+  } = checkConflictingSubjects(nonFrozenTexts, rows);
   const warningsC = strict ? unknownSubjectC : null;
   const unclassifiedRunSheets = findUnclassifiedRunSheetMentions(rows).map(
     ({ path, id }) => `${path} — mentioned by register row ${id}`,
@@ -1779,6 +2135,10 @@ export function runCheckRegisterCitationsCli(options = {}) {
   ];
   const nonFatalSections = [
     ['Check A — nonexistent row ID, already annotated as discharged/removed (not failing)', annotatedA],
+    [
+      'Check C — existing row ID cited for a fully-discharged subject, already annotated as discharged (not failing)',
+      annotatedDischargeC,
+    ],
     ['Run sheets mentioned but not classified as owned (not checked)', unclassifiedRunSheets],
   ];
   if (strict) {
@@ -1844,9 +2204,11 @@ export function runCheckRegisterCitationsCli(options = {}) {
         `subject number next to it is NOT DETECTED by Check C's fatal half at all — Check A only ` +
         `catches it if the ID is nonexistent, not merely wrong-for-its-subject. A wrong ID that arrives ` +
         `via a DISCHARGE (the cited ID still exists, for something else, but its subject left the ` +
-        `register entirely) is also not caught by the fatal half — it lands in the exploratory, ` +
-        `non-fatal "unknownSubject" bucket instead (--strict only), by construction; see ` +
-        `checkConflictingSubjects' own comment for why widening that is deferred, not silently absent.`,
+        `register entirely) IS caught by the fatal half since #2721/#2833 — but only when the re-minted ` +
+        `id's own current row carries subject metadata to contradict the citation with; an id that has ` +
+        `never carried a subject number at all (a real, permanent gap, 15 of 66 rows today) still can't ` +
+        `be told apart from a fresh mint, and a discharge that's already self-annotated near the citation ` +
+        `prints non-fatal instead of failing — see recordSubjectConflict's own comment for the exact rule.`,
     );
     return;
   }

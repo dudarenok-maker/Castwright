@@ -47,9 +47,68 @@ so they fan out at full concurrency into a starved box.
   manually. The vitest configs honor it: frontend caps its pool to half the
   cores (otherwise untouched — plan 45 left it uncapped), and the server drops
   `maxForks` 2 → 1. Disable the probe with `SKIP_CONTENTION_CHECK=1`.
-- **Pre-push unchanged.** Pre-push still runs the FULL `npm run verify` battery,
-  preserving the "local is the full coverage net, CI is the scoped one"
-  invariant.
+- **Pre-push unchanged.** Pre-push still runs the FULL `npm run verify:fast:branch`
+  battery (not bare `npm run verify` — corrected 2026-09-01, review finding on
+  #2839: this line was stale even before the --changed addendum below, which
+  only ever fixed its CI-vs-pre-push clause, not this one), preserving the
+  "local is the full coverage net, CI is the scoped one" invariant.
+
+### 2026-09-01 addendum (#2834)
+
+- **Sibling-worktree contention guard.** The GPU probe above missed the more
+  common local cause: another worktree's own `vitest`/`verify-cache.mjs`
+  process already running (observed: six worktrees running full `test:server`
+  at once). `detectSiblingContention()` enumerates other matching node
+  processes via `Get-CimInstance` (excluding this process's own PID) and
+  throttles to `LOW_CONCURRENCY=1` the same soft way the GPU probe does.
+- **`--changed HEAD`-only test/test:server on an UNSHARED `--scope-staged`
+  diff.** The scope filter above is step-granular, not file-granular — any
+  touched file under a step's globs still reran that step's WHOLE suite. Under
+  `--scope-staged` only, and only when `computeShared` is false, `test`/
+  `test:server` now run `test:changed`/`test:server:changed`
+  (`vitest run --changed HEAD`) instead. A shared-scope diff (root
+  manifest/lockfile/`.github/actions/**`) still runs the full script —
+  `--changed` against a file no test's dependency graph reaches would
+  otherwise select zero tests and exit 0. **Never cached as a full run**: a
+  `--changed`-only pass's `cache.steps` write is skipped entirely, because the
+  cache key is the step's full declared-input hash — caching a narrower run
+  under that hash let a later `--scope-branch`/CI run with no new diff read
+  `[cached]` and silently skip a full run that never happened (an actual bug,
+  caught in review before merge, not a design choice).
+- **The "CI is the scoped one" line above is corrected, not new**: CI already
+  narrowed its own PR runs via `vitest run --changed <PR base>` before this
+  addendum (`.github/workflows/verify.yml`'s Frontend/Server test legs,
+  `docs/features/118-ci-cost-round-2.md`) — pre-push's full local run, not
+  CI, is the actual full-suite gate before merge, and was already the actual
+  gate before this addendum too.
+- **`computeShared` alone under-covers "shared" for the --changed substitution
+  (review finding, PR #2839 pass 2).** It only catches the ROOT
+  package.json/package-lock.json/`.github/actions/**` — a step's OWN
+  `extraFiles` (config files, docs, fixtures a test reads at runtime) or the
+  SERVER lockfile via `includeLockfiles: ['server']` are the identical shape
+  one level down: `server/package-lock.json`, `server/tsconfig.json`,
+  `index.html` all bypassed `computeShared` and got --changed-narrowed
+  anyway, selecting and running ZERO tests.
+- **Excluding known-bad categories was still not enough — a third spelling of
+  the same gap (review finding, PR #2839 pass 3, live against real commits on
+  this branch).** `test:server`'s own `globs` include root-level `*.{mjs,ts}`
+  and `scripts/**` — files genuinely in this step's declared scope, matched
+  neither by `extraFiles` nor a lockfile, but that vitest's own `--changed`
+  selection still cannot reach: `eslint.config.mjs` (commits `2b010fb1`/
+  `b07b3bb2` touch only this file) selects zero test files under
+  `vitest related`. Separately, `src/styles.css` sitting UNDER the frontend
+  `test` step's own primary source glob (`src/**`) is unsafe too — its two
+  guard tests (`styles-neutrals.test.ts`, `dark-mode-css.test.ts`) read it via
+  `readFileSync`, not import, so being under `src/` is not sufficient on its
+  own. Three rounds each narrowing a scope-based exclusion list converged on
+  the conclusion that exclusion lists are the wrong shape for this check:
+  `diffSafeForChangedOnly` replaces every exclusion attempt above with one
+  POSITIVE allowlist — every file in the diff must sit under the step's own
+  primary source root (`src/**` for `test`, `server/src/**` for
+  `test:server`) AND carry a TS/TSX/JS source extension. Narrower than
+  "matches this step's scope" (a config-only or CSS-only commit now runs the
+  full suite rather than being narrowed), which is the deliberate trade: the
+  one guarantee that actually matters is never silently running zero tests.
 
 ## Invariants
 

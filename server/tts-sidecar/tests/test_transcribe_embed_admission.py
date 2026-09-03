@@ -351,3 +351,76 @@ def test_spk_ensure_loaded_uses_device_param_not_stale_self_device(monkeypatch) 
 
     assert captured["device"] == "cuda:1"  # _load_on got the PARAM's card
     assert eng.device == "cuda:1"
+
+
+# ── #2813 review finding 1: an admitted device can arrive as "rocm:N" (the
+#    VRAM-ledger's own honest ROCm-vs-CUDA accounting), not just "cuda:N" ──
+
+
+def test_asr_ensure_loaded_normalises_admitted_rocm_device(
+    monkeypatch, fake_whisper_module
+) -> None:
+    """`_ensure_loaded(device="rocm:0")` must build the CT2 model from a
+    normalised "cuda:0" -- CTranslate2 has no "rocm" device at all. Before
+    the fix, an admitted "rocm:0" reached `_ct2_kwargs` unconverted and
+    `WhisperModel(device="rocm")` would raise; this also pins that
+    `self._device` (what `/health`'s `fell_back` detection reads) ends up
+    "cuda:0", not the raw "rocm:0" string."""
+    monkeypatch.setenv("ASR_DEVICE", "cuda:0")
+    eng = main.WhisperEngine()
+
+    seen: dict[str, str] = {}
+    orig_ct2 = main._ct2_kwargs
+
+    def _spy_ct2(device: str, compute_type: str) -> dict:
+        seen["device"] = device
+        return orig_ct2(device, compute_type)
+
+    monkeypatch.setattr(main, "_ct2_kwargs", _spy_ct2)
+
+    eng._ensure_loaded(device="rocm:0")
+
+    assert seen["device"] == "cuda:0"  # normalised before it reached _ct2_kwargs
+    assert eng._device == "cuda:0"
+
+
+def test_spk_ensure_loaded_normalises_admitted_rocm_device_and_the_guard_fires(
+    monkeypatch,
+) -> None:
+    """`ensure_loaded(device="rocm:0")` must set `self.device` to a
+    normalised "cuda:0" BEFORE the cuda-presence guard runs -- both are
+    gated on `_parse_device(self.device)[0] == "cuda"`. Before the fix,
+    `self.device` was left at the raw "rocm:0", the guard's `== "cuda"`
+    check was False, so it was SILENTLY SKIPPED and `_spk_run_device`
+    would hand speechbrain the opaque string "rocm", crashing
+    `EncoderClassifier`. This proves the guard actually reaches its "no
+    real CUDA present -> demote to cpu" branch for an admitted "rocm:0" --
+    the concrete evidence the guard fired at all, not just that the final
+    device string looks right."""
+    import asyncio
+
+    _install_speechbrain_stub(monkeypatch)
+    # No real CUDA on this box (unlike _stub_torch_cuda's is_available=True) --
+    # this is what makes the presence guard's demote branch observable.
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: False, empty_cache=lambda: None)
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setenv("SPK_DEVICE", "cpu")  # env pin irrelevant -- device= param wins
+    eng = main.SpeakerEngine()
+
+    captured: dict[str, str] = {}
+
+    def _spy_load_on(self, device: str):
+        captured["device"] = device
+        return _FakeSpkModel()
+
+    monkeypatch.setattr(main.SpeakerEngine, "_load_on", _spy_load_on)
+
+    asyncio.run(eng.ensure_loaded(device="rocm:0"))
+
+    # The guard fired (demoted to cpu, since no real CUDA is present) --
+    # reachable only because self.device read "cuda:0" (normalised), not the
+    # raw "rocm:0" the pre-fix `== "cuda"` gate would have silently skipped.
+    assert eng.device == "cpu"
+    assert captured["device"] == "cpu"

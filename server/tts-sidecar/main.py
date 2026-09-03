@@ -144,6 +144,146 @@ def _measure_nvidia_dll_provenance(onnxruntime) -> Optional[tuple]:
         return None
 
 
+def _add_nvidia_dll_dirs_to_path() -> list[str]:
+    """Castwright#2752-followup / register row A28 (discharged 2026-08-31 on-box run):
+    `onnxruntime.preload_dlls()` (below) only preloads the FIXED set of DLLs
+    onnxruntime itself links against (cublas/cublasLt/cufft/cudart plus the
+    single `cudnn64_9.dll` entry point) -- it does NOT cover cuDNN 9's own
+    "engine" plugin DLLs (`cudnn_engines_tensor_ir64_9.dll`,
+    `cudnn_engines_precompiled64_9.dll`, etc.), which cuDNN itself dlopens
+    lazily, on demand, the FIRST time a real kernel (e.g. a Conv op) is
+    actually built -- long after `preload_dlls()` has already run and
+    returned. Confirmed on real hardware: even with `preload_dlls()` reporting
+    a clean load and a real `InferenceSession` correctly reporting
+    `CUDAExecutionProvider` in `get_providers()`, the first real Kokoro
+    `create()` call still raised `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED` /
+    "Could not locate cudnn_engines_tensor_ir64_9.dll" and onnxruntime silently
+    retried the failing node on CPU -- so `_cuda_selftest_or_warn` above still
+    reported CUDA as "landed" (session-construction-level) even though actual
+    inference was silently falling back per-node.
+
+    `os.add_dll_directory()` (what `preload_dlls()` itself uses internally)
+    does NOT fix this -- confirmed on the same box: cuDNN's own lazy loader
+    does not honour `AddDllDirectory`-registered search paths, only the
+    process `PATH` environment variable. Prepending every `nvidia/<pkg>/bin`
+    directory to `PATH` (not just calling `add_dll_directory` on them) is the
+    one mechanism that lets a LATER, lazy `LoadLibrary` call from inside
+    cuDNN itself find these engine DLLs. `PATH` is a process-wide env var, so
+    doing this once at startup (before anything is loaded, same ordering
+    constraint `_preload_ort_cuda_dlls` documents) covers every later lazy
+    load for the rest of the process lifetime -- unlike `add_dll_directory`,
+    there is no "only during this one call" scoping to worry about here.
+
+    Pure discovery + a single `os.environ` mutation; never raises (a missing
+    onnxruntime, or a site-packages layout with no `nvidia/` directory at all,
+    just returns an empty list -- the CPU/AMD/Apple case where this is a
+    harmless no-op). Returns the list of directories actually prepended, for
+    logging/testing.
+    """
+    try:
+        import onnxruntime  # type: ignore
+    except Exception:
+        return []
+    try:
+        site_packages = os.path.dirname(os.path.dirname(os.path.abspath(onnxruntime.__file__)))
+    except Exception:
+        return []
+    nvidia_root = os.path.join(site_packages, "nvidia")
+    if not os.path.isdir(nvidia_root):
+        return []
+    current_path = os.environ.get("PATH", "")
+    try:
+        pkg_names = sorted(os.listdir(nvidia_root))
+    except OSError as e:
+        # `nvidia_root` passed `os.path.isdir` a few lines above, so reaching
+        # this `except` means the directory EXISTS and could not be read (a
+        # tightened ACL, a transient I/O error on a redirected profile) --
+        # a genuine failure of this mechanism, not one of the healthy no-op
+        # reasons (`onnxruntime` not importable, no `nvidia/` dir at all).
+        # Silently returning the same `[]` as those healthy cases would be
+        # byte-identical to them -- the one condition where this mechanism
+        # actually failed would be the one condition nothing reports, exactly
+        # the silent-CPU-fallback bug this function exists to close (same
+        # reasoning as the PATH-write failure below).
+        log.warning(
+            "[ort-preload] failed to list %s (%s) -- cuDNN's lazily-dlopened "
+            "engine DLLs may not be found; the CUDA execution provider may "
+            "silently fall back to CPU.",
+            nvidia_root,
+            e,
+        )
+        return []
+    candidates = [
+        os.path.join(nvidia_root, pkg_name, "bin") for pkg_name in pkg_names
+    ]
+    candidates = [d for d in candidates if os.path.isdir(d)]
+    if not candidates:
+        return []
+    # Idempotence (found via a real regression, not speculatively): the docstring's
+    # "once at lifespan startup" is a PRODUCTION assumption -- a test harness that
+    # spins up the FastAPI app's lifespan repeatedly in one process (many sidecar
+    # tests do, via TestClient) calls this every time. Without a guard, PATH grows
+    # by the same handful of directories on every call, unbounded across a whole
+    # pytest session, until Windows' 32767-character env var ceiling raises
+    # `ValueError: the environment variable is longer than 32767 characters` --
+    # observed for real running this repo's own sidecar test suite.
+    #
+    # This checks the PATH *prefix*, not membership anywhere in PATH: a
+    # membership-only check (an earlier version of this guard) cannot tell a
+    # genuine repeat call by this exact function -- `candidates`, in this
+    # order, already sitting at the very front of PATH -- from a same- or
+    # differently-spelled entry for one of these directories sitting further
+    # BACK in PATH (a system CUDA toolkit install, say). Skipping in the
+    # latter case would silently defeat the "ahead of torch" ordering
+    # guarantee `install-ort.mjs` depends on: the pre-existing late entry
+    # would still win dll-search-order precedence. Prepending `candidates`
+    # again in that case produces a harmless duplicate further back in the
+    # string -- an accepted tradeoff of this design, not documented elsewhere
+    # -- but guarantees this call's copy is the one a bare-name load resolves to.
+    joined_candidates = os.pathsep.join(candidates)
+    if current_path == joined_candidates or current_path.startswith(
+        joined_candidates + os.pathsep
+    ):
+        return []
+    added = candidates
+    # An empty pre-existing PATH must not gain a trailing separator: Windows
+    # treats an empty PATH *entry* (not an empty PATH itself) as the current
+    # directory in its DLL search order, so `"<dirs>;" ` (current_path == "")
+    # would silently add CWD to the search path used by every later lazy
+    # LoadLibrary call this function exists to serve.
+    new_path = os.pathsep.join(added) if not current_path else (
+        os.pathsep.join(added) + os.pathsep + current_path
+    )
+    try:
+        os.environ["PATH"] = new_path
+    except Exception as e:
+        # Genuinely never raises, matching this function's docstring — e.g. a
+        # PATH already near Windows' 32767-char ceiling raises ValueError
+        # here, which a bare `except OSError` does not catch. This function
+        # is called from the FIRST, unguarded lifespan startup handler
+        # (`_startup_ort_cuda_preload`) — a raise here would abort sidecar
+        # boot entirely instead of degrading to the documented harmless no-op.
+        #
+        # Pass-2 review finding: degrading here must not also mean degrading
+        # SILENTLY. The caller's `if added:` gate (`_startup_ort_cuda_preload`)
+        # only logs on a truthy return, so an unlogged `[]` here is
+        # byte-identical to every OTHER reason this function returns `[]` (no
+        # `nvidia/` directory, nothing new to add, onnxruntime not
+        # importable) — the one condition where this mechanism actually
+        # failed would be the one condition nothing reports, silently
+        # reopening the exact A28 bug this function exists to close.
+        log.warning(
+            "[ort-preload] failed to write PATH with %d nvidia/<pkg>/bin director%s (%s) -- "
+            "cuDNN's lazily-dlopened engine DLLs may not be found; the CUDA execution "
+            "provider may silently fall back to CPU.",
+            len(added),
+            "y" if len(added) == 1 else "ies",
+            e,
+        )
+        return []
+    return added
+
+
 def _preload_ort_cuda_dlls() -> str:
     """#2600 (review finding 1, PR #2617): installing `nvidia-cudnn-cu12` (see
     install-ort.mjs's `extraRuntimeSteps`) lands the cuDNN DLLs on disk but does
@@ -174,8 +314,8 @@ def _preload_ort_cuda_dlls() -> str:
     components entirely — so the ~1.30 GB `extraRuntimeSteps` installs under
     `site-packages/nvidia/...` is never even looked at; on this box that path
     resolved 11 of 12 DLLs from `<torch>/lib` and 0 from `nvidia/`, which is the
-    same "torch/lib, not the installed cuDNN" shape register row A28 already
-    recorded as not fixing the bug. Passing `directory=""` (falsy, but not
+    same "torch/lib, not the installed cuDNN" shape register row A28 (now
+    discharged) had recorded as not fixing the bug. Passing `directory=""` (falsy, but not
     `None`) skips the `torch/lib` branch and, per the same source, joins the
     FULL relative path under site-packages instead — i.e. it looks under
     `nvidia/<pkg>/bin/` exactly where `extraRuntimeSteps` installs.
@@ -252,15 +392,15 @@ def _preload_ort_cuda_dlls() -> str:
         # `directory`. If it ever fires here, preload_dlls() looked at
         # nothing at all and torch's own bundled DLLs are what the CUDA
         # execution provider will find -- the exact "torch/lib, not the
-        # installed cuDNN" shape register row A28 recorded as NOT fixing the
-        # bug. That is a distinct, worse outcome than a genuine preload and
-        # must not be folded into "preloaded".
+        # installed cuDNN" shape register row A28 (now discharged) had
+        # recorded as NOT fixing the bug. That is a distinct, worse outcome
+        # than a genuine preload and must not be folded into "preloaded".
         log.warning(
             "[ort-preload] onnxruntime.preload_dlls() skipped its own DLL search because "
             "torch was already imported (see lines above) -- it fell back to torch's "
             "bundled CUDA/cuDNN DLLs instead of the ones this installer places under "
-            "nvidia/<pkg>/bin, which register row A28 already recorded as not fixing the "
-            "CUDA-fallback bug."
+            "nvidia/<pkg>/bin, which register row A28 (discharged) had recorded as not fixing "
+            "the CUDA-fallback bug."
         )
         return "torch-skip"
     if not output and not getattr(onnxruntime, "cuda_version", ""):
@@ -307,7 +447,7 @@ def _preload_ort_cuda_dlls() -> str:
                 "DLLs, but only %d of %d expected files were found under nvidia/<pkg>/bin -- "
                 "the rest resolved via preload_dlls()'s bare-name PATH fallback (e.g. a "
                 "system CUDA toolkit or torch's own bundled DLLs), not the installer's own "
-                "runtime -- see register row A28's Named assumption.",
+                "runtime -- see discharged register row A28's Named assumption.",
                 found,
                 total,
             )
@@ -317,7 +457,17 @@ def _preload_ort_cuda_dlls() -> str:
 async def _startup_ort_cuda_preload() -> None:
     """Lifespan wrapper around `_preload_ort_cuda_dlls` — same async-wrapper
     shape `_startup_cuda_env_shadow_check` uses around its own sync helper,
-    further down this module."""
+    further down this module.
+
+    `_add_nvidia_dll_dirs_to_path()` runs FIRST, and unconditionally (it is a
+    superset fix -- prepending `PATH` never hurts a CPU/AMD/Apple install
+    where `nvidia/` doesn't exist, and `_preload_ort_cuda_dlls()`'s own
+    `preload_dlls()` call benefits too, since its bare-name PATH fallback loop
+    can now also find these directories, not just cuDNN's later lazy
+    engine-DLL loads)."""
+    added = _add_nvidia_dll_dirs_to_path()
+    if added:
+        log.info("[ort-preload] added %d nvidia/<pkg>/bin dir(s) to PATH: %s", len(added), added)
     _preload_ort_cuda_dlls()
 
 
@@ -1780,8 +1930,14 @@ class CoquiEngine(Engine):
         env-derived `self._device` for THIS cold load. `None` (the default)
         leaves env resolution byte-for-byte unchanged."""
         device = device_override if device_override is not None else self._device
-        if device == "auto":
-            device = _resolve_torch_device(device, torch_module)
+        # Unconditional, not just for "auto" (#2813): an admitted device can
+        # arrive as an explicit "rocm:N" (the admission ledger's own honest
+        # ROCm-vs-CUDA accounting vocabulary — see _resolve_torch_device's
+        # docstring), which still needs normalising to "cuda:N" before it
+        # reaches a real torch.device()/.to() call below. _resolve_torch_device
+        # already passes every other explicit value ("cuda:1", "cpu", "mps")
+        # through unchanged, so this is behaviour-preserving for those.
+        device = _resolve_torch_device(device, torch_module)
         # On CUDA (any index — cuda, cuda:0, cuda:1, …), default both extras ON
         # (the whole point of the GPU path). On CPU, force them OFF: torch raises
         # on fp16 ops on CPU, and deepspeed-inference is a CUDA-only runtime.
@@ -3897,7 +4053,16 @@ def _read_device_env(var_name: str) -> Optional[str]:
 
 
 def _engine_env_pin(engine_id: str) -> Optional[str]:
-    """Concrete device key an engine's env pins it to, or None for auto/unset/cpu."""
+    """Concrete device key an engine's env pins it to, or None for auto/unset/cpu.
+
+    Config validation (`server/src/config/registry.ts`) only ever lets an
+    operator legally set an indexed pin as "cuda:N" -- never "rocm:N" -- so
+    `fam` here always reads "cuda" on a real ROCm box too. Re-tagged to
+    "rocm:N" via `_report_rocm_device_key` before returning (#2813 review
+    finding 2): the admission ledger's own candidate keys
+    (`PlacementController._device_key`, built from `probe_capacity()`'s
+    `kind`) are "rocm:N" on that box, and a pin left at "cuda:N" can never
+    match one -- every pinned engine would report permanent `noCapacity`."""
     env_var = {
         "coqui": "COQUI_DEVICE",
         "kokoro": "KOKORO_DEVICE",
@@ -3909,7 +4074,7 @@ def _engine_env_pin(engine_id: str) -> Optional[str]:
         return None
     fam, idx = _parse_device(_read_device_env(env_var))
     if fam in ("cuda", "rocm") and idx is not None:
-        return f"{fam}:{idx}"
+        return _report_rocm_device_key(f"{fam}:{idx}")
     return None
 
 
@@ -5070,7 +5235,32 @@ def _is_resident(engine_id: str) -> Optional[str]:
     unwinds. This is the best remaining evidence of where the weights
     actually live. This keeps `PlacementController` booking VRAM against the right card instead
     of silently dropping the constraint and admitting a second heavy engine
-    onto a card that is already full."""
+    onto a card that is already full.
+
+    Re-tagged via `_report_rocm_device_key` before returning (#2813 review
+    finding 2): `card["family"]`/`intent_fam` read "cuda" even on a real
+    ROCm box for every engine whose `self._device`/`.device` is normalised
+    to torch-native "cuda:N" (Coqui, Qwen, ASR, SPK -- all route an admitted
+    device through `_normalise_rocm_device_key` before publishing it), and
+    the admission ledger's own candidate keys are "rocm:N" there -- an
+    un-retagged "cuda:N" residency key could never match one, so a
+    genuinely resident engine would still report permanent `noCapacity` on
+    its own next admission. **Exception (#2813 review finding 9):** Kokoro
+    does NOT route through that normalisation -- `KokoroEngine._ensure_loaded`
+    publishes `self._device` straight from the admitted value whenever
+    `family` isn't literally "auto" (the `intent_device = resolved_device`
+    branch), so a Kokoro engine admitted onto "rocm:N" keeps that literal
+    string. Harmless today only because `_report_rocm_device_key` is
+    idempotent on an already-"rocm:N" input -- NOT via a conditional check of
+    the actual hardware, but because its `fam == "cuda" and _cuda_is_rocm()`
+    guard short-circuits on the family test alone: a "rocm:N" input parses to
+    `fam == "rocm"`, so the guard is already False and `_cuda_is_rocm()` is
+    never even called; the value is returned unchanged unconditionally, not
+    because the box was re-confirmed to be ROCm. Not because Kokoro
+    was normalised. This is currently unreachable in shipping regardless
+    (the amd accelerator profile has no CUDA ORT provider for a Kokoro
+    index to attach to), which is the only reason relying on that
+    idempotence hasn't mattered yet."""
     named: dict[str, Any] = dict(ENGINES)
     named["asr"] = ASR
     named["spk"] = SPK
@@ -5084,10 +5274,10 @@ def _is_resident(engine_id: str) -> Optional[str]:
         if card["family"] == "unknown":
             intent_fam, intent_idx = _parse_device(getattr(engine, "_device", None))
             if intent_fam in ("cuda", "rocm"):
-                return f"{intent_fam}:{intent_idx if intent_idx is not None else 0}"
+                return _report_rocm_device_key(f"{intent_fam}:{intent_idx if intent_idx is not None else 0}")
         return None
     index = card["index"] if card["index"] is not None else 0
-    return f"{card['family']}:{index}"
+    return _report_rocm_device_key(f"{card['family']}:{index}")
 
 
 def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
@@ -5138,10 +5328,19 @@ def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
 
     This also correctly reflects an admitted `device=` argument onto a
     NON-default card (#2678 review N2): `_resolve_torch_device` returns an
-    explicit (non-"auto") pref UNCHANGED, so an admission's concrete
-    "cuda:1" survives resolution intact -- only the unset/env-default "auto"
-    pref resolves via availability (cuda:0 first). Verified against
-    `_resolve_torch_device`'s own source, not assumed."""
+    explicit (non-"auto") "cuda:N" pref unchanged, so an admission's
+    concrete "cuda:1" survives resolution intact -- only the unset/
+    env-default "auto" pref resolves via availability (cuda:0 first).
+    **Updated for #2813**: `_resolve_torch_device` now converts an explicit
+    "rocm:N" pref to "cuda:N" too (a ROCm/HIP torch build only understands
+    "cuda:N" at the `.to()` level), so `qwen._device` itself is NEVER
+    literally "rocm:N" post-resolution any more -- it reads "cuda:N" even
+    on a genuinely ROCm-admitted load. The `_report_rocm_device_key` re-tag
+    below is what restores the "rocm:N" identity for the ledger's own
+    reporting/matching vocabulary; this function's return value still
+    reflects the admitted card correctly, just via that re-tag rather than
+    a literal pass-through. Verified against `_resolve_torch_device`'s own
+    source, not assumed."""
     if not isinstance(qwen, QwenEngine):
         return None
     resident = (
@@ -5155,29 +5354,38 @@ def _qwen_resident_device_key(qwen: Any) -> Optional[str]:
     fam, idx = _parse_device(qwen._device)
     if fam not in ("cuda", "rocm"):
         return None
-    # On a ROCm/HIP build torch's own device string still reads "cuda" (HIP
-    # aliases the CUDA API) -- _parse_device has no way to tell them apart,
-    # so normalise the family the same way probe_capacity() does (whose
-    # `kind` field is what PlacementController._device_key's format mirrors)
-    # via the SAME _cuda_is_rocm() check, rather than a second ad hoc test
-    # that could drift from it (#2678 review F2).
-    if fam == "cuda" and _cuda_is_rocm():
-        fam = "rocm"
-    return f"{fam}:{idx if idx is not None else 0}"
+    # Re-tag cuda -> rocm via the shared _report_rocm_device_key helper (the
+    # #2678 review F2 idiom, extracted by #2813 review finding 2 so every
+    # re-tag site shares ONE _cuda_is_rocm() check instead of a second ad
+    # hoc test that could drift from it).
+    return _report_rocm_device_key(f"{fam}:{idx if idx is not None else 0}")
 
 
 def _same_card(resident: Optional[str], target: str) -> bool:
-    """True when a resident engine's device string sits on the same CUDA card
-    as `target` (always a concrete "cuda:N" from `_worst_device_key`). cpu / mps
-    / auto / unparseable never match — an engine that isn't on the target card
-    holds no VRAM there, so evicting it couldn't help the admitting op. Unindexed
-    "cuda" normalises to card 0 (torch's default). This is `shares_device`'s
-    card-comparison tail without its auto-resolution / torch import: both inputs
-    here are already concrete (a resident engine's device + a probed device key),
-    so the "auto -> cuda:0" resolution `shares_device` does is unwanted, and the
-    hot admission path shouldn't import torch just to compare two strings."""
-    fam_r, idx_r = _parse_device(resident)
-    fam_t, idx_t = _parse_device(target)
+    """True when a resident engine's device string sits on the same card as
+    `target` (a probed device key from `_worst_device_key`/`_device_key` --
+    "cuda:N" on an NVIDIA box, "rocm:N" on a ROCm/HIP box, per
+    `probe_capacity()`'s own `kind`). cpu / mps / auto / unparseable never
+    match — an engine that isn't on the target card holds no VRAM there, so
+    evicting it couldn't help the admitting op. Unindexed "cuda"/"rocm"
+    normalises to card 0 (torch's default). This is `shares_device`'s
+    card-comparison tail without its auto-resolution / torch import: both
+    inputs here are already concrete (a resident engine's device + a probed
+    device key), so the "auto -> cuda:0" resolution `shares_device` does is
+    unwanted, and the hot admission path shouldn't import torch just to
+    compare two strings.
+
+    Both sides are normalised to the torch-native "cuda:N" family via the
+    shared `_normalise_rocm_device_key` helper before comparing (#2813
+    review finding 7): `target` is ALWAYS probe-native, so on a ROCm box it
+    reads "rocm:N" while a resident engine's own device string is (with one
+    documented exception, Kokoro -- see `_is_resident`'s docstring) always
+    "cuda:N" post-#2813 -- an un-normalised comparison could therefore never
+    match on that hardware, no matter how the eviction ladder was called,
+    silently emptying every `_idle_evict_steps` step and sending every
+    admission that needed an eviction straight to `noCapacity` instead."""
+    fam_r, idx_r = _parse_device(_normalise_rocm_device_key(resident))
+    fam_t, idx_t = _parse_device(_normalise_rocm_device_key(target))
     if fam_r != "cuda" or fam_t != "cuda":
         return False
     return (idx_r or 0) == (idx_t or 0)
@@ -5311,11 +5519,72 @@ def _kokoro_provider_options(device: Optional[str], providers: list[str]):
     return [{"device_id": index} if p == "CUDAExecutionProvider" else {} for p in providers]
 
 
+def _normalise_rocm_device_key(value: Optional[str]) -> Optional[str]:
+    """Convert an explicit 'rocm:N' device key to 'cuda:N' (index preserved)
+    -- the single normalisation every consumer of an ADMITTED device value
+    needs before it reaches a real device call, since none of torch,
+    CTranslate2, or speechbrain understand 'rocm:N' at the API level
+    (#2813). This is the SAME conversion `_resolve_torch_device` applies to
+    its own explicit (non-'auto') pref -- extracted here so `_ct2_kwargs`,
+    `_spk_run_device`, and the WhisperEngine/SpeakerEngine load chokepoints
+    can reuse it directly rather than each growing a second ad hoc check
+    (review finding 1: those three call sites received the identical
+    admitted 'rocm:N' this normalisation exists to close, but none of them
+    routed through it). Every value outside the 'rocm' family (cuda:N, cpu,
+    auto, mps, an already-'cuda:N' key, None) is returned unchanged --
+    EXCEPT a bare, unindexed 'rocm' (no ':N'), which becomes 'cuda:0', not
+    'rocm' unchanged (#2813 review finding 10): index 0 is torch's own
+    default card, the same substitution `_resolve_torch_device`'s 'auto'
+    branch and `_same_card`'s unindexed-'cuda' handling both already make.
+    Unreachable at every current call site (each formats an indexed key
+    before calling this, and config validation never lets an unindexed
+    'rocm' reach the sidecar in the first place) -- documented here because
+    a future caller passing a bare family string gets card 0 silently
+    substituted, not a pass-through."""
+    fam, idx = _parse_device(value)
+    if fam == "rocm":
+        return f"cuda:{idx if idx is not None else 0}"
+    return value
+
+
+def _report_rocm_device_key(value: Optional[str]) -> Optional[str]:
+    """Re-tag a torch-native 'cuda:N' device key as 'rocm:N' (index
+    preserved) for the admission ledger's own honest ROCm-vs-CUDA reporting
+    vocabulary -- `probe_capacity()`'s `kind` field, the format
+    `PlacementController._device_key`'s candidate keys already use. Every
+    function that FEEDS `admit()`/`reservation()` a residency or pin key
+    (`_is_resident`, `_engine_env_pin`) must return its answer in that same
+    vocabulary, or it can never match a probed 'rocm:N' candidate -- a real
+    ROCm box then reports permanent `noCapacity` for a resident OR pinned
+    engine alike (#2813 review finding 2). This is the exact reverse
+    direction of `_normalise_rocm_device_key` above. Extracted from
+    `_qwen_resident_device_key`'s original inline check (#2678 review F2) so
+    every re-tag site shares ONE `_cuda_is_rocm()` call rather than a second
+    ad hoc test that could drift from it. Every value outside the 'cuda'
+    family (cpu, auto, mps, an already-'rocm:N' key, None) is returned
+    unchanged -- EXCEPT a bare, unindexed 'cuda' (no ':N') OR an unresolved
+    'cuda-uuid:<uuid>' on a genuinely ROCm box, either of which becomes
+    'rocm:0', not passed through as-is (#2813 review finding 10): both
+    parse to family 'cuda' with no index, and index 0 is torch's own
+    default card, the same substitution `_normalise_rocm_device_key` above
+    makes in the opposite direction. Unreachable at every current call
+    site (each formats an indexed key before calling this) -- documented
+    here because a future caller passing an unindexed or unresolved value
+    gets card 0 silently substituted, not a pass-through."""
+    fam, idx = _parse_device(value)
+    if fam == "cuda" and _cuda_is_rocm():
+        return f"rocm:{idx if idx is not None else 0}"
+    return value
+
+
 def _spk_run_device(value: Optional[str]) -> str:
     """speechbrain run_opts device. speechbrain accepts the full 'cuda:N' form
     (unlike CT2), so 'cuda:1' stays 'cuda:1'; 'cuda' stays 'cuda'; anything
-    else → 'cpu'."""
-    family, index = _parse_device(value)
+    else → 'cpu'. An admitted 'rocm:N' is normalised to 'cuda:N' first
+    (#2813 review finding 1) -- speechbrain, like torch, has no 'rocm'
+    device of its own; ROCm hardware is driven through the same 'cuda:N'
+    string HIP masquerades as."""
+    family, index = _parse_device(_normalise_rocm_device_key(value))
     if family == "cuda":
         return f"cuda:{index}" if index is not None else "cuda"
     return "cpu" if family in ("cpu", "auto") else family
@@ -5323,8 +5592,11 @@ def _spk_run_device(value: Optional[str]) -> str:
 
 def _ct2_kwargs(device: str, compute_type: str) -> dict:
     """CTranslate2 WhisperModel kwargs. CT2 wants device='cuda' + a separate
-    device_index (it RAISES on 'cuda:1'); cpu/auto → device='cpu'."""
-    family, index = _parse_device(device)
+    device_index (it RAISES on 'cuda:1'); cpu/auto → device='cpu'. An
+    admitted 'rocm:N' is normalised to 'cuda:N' first (#2813 review finding
+    1) -- CT2 has no 'rocm' device at all, and would otherwise be handed the
+    literal string 'rocm', which it does not recognise either."""
+    family, index = _parse_device(_normalise_rocm_device_key(device))
     dev = "cuda" if family == "cuda" else ("cpu" if family in ("cpu", "auto") else family)
     kw: dict = {"device": dev, "compute_type": compute_type}
     if family == "cuda" and index is not None:
@@ -5350,10 +5622,18 @@ def _resolve_torch_device(pref: str, torch_module: Any) -> str:
 
     'auto' (the default) picks cuda:0 -> mps (Apple Silicon) -> cpu by
     availability. An explicit value (e.g. 'cuda:1', 'cpu', 'mps') is returned
-    unchanged so multi-GPU pins and forced devices are respected."""
+    unchanged so multi-GPU pins and forced devices are respected.
+
+    An explicit 'rocm:N' is converted to 'cuda:N' (#2813) via the shared
+    `_normalise_rocm_device_key` helper: the admission layer's own
+    accounting vocabulary distinguishes ROCm from real CUDA (`probe()`'s
+    `kind`, mirrored back by `_report_rocm_device_key`), but a ROCm/HIP
+    torch build masquerades as CUDA at the API level -- `torch.device()`
+    only ever understands 'cuda:N', never 'rocm:N' -- so an admitted
+    'rocm:N' has to be re-tagged before it reaches a real `.to()` call."""
     p = (pref or "auto").strip().lower()
     if p != "auto":
-        return pref
+        return _normalise_rocm_device_key(pref)
     if torch_module.cuda.is_available():
         return "cuda:0"
     backends = getattr(torch_module, "backends", None)
@@ -8089,8 +8369,11 @@ class WhisperEngine:
         # rather than the route pre-mutating the shared `self._device` before an
         # unlocked load, where a concurrent multi-GPU first cold-load admitted to
         # another card could clobber it. `None` keeps the env-derived default
-        # byte-for-byte.
-        dev = device if device is not None else self._device
+        # byte-for-byte. Normalised here (#2813 review finding 1) so an admitted
+        # "rocm:N" is "cuda:N" before it reaches `_compute_type`/`_ct2_kwargs`
+        # (also self-normalising, but the chokepoint is here so `self._device`
+        # below, and the cuda-family checks that read it, see the same value).
+        dev = _normalise_rocm_device_key(device if device is not None else self._device)
         try:
             from faster_whisper import WhisperModel  # type: ignore
             _record_whisper_import_result(True)
@@ -8411,8 +8694,16 @@ class SpeakerEngine:
             # UNDER the load lock, threaded in as a parameter — not mutated by
             # the route before the lock, where a concurrent multi-GPU first
             # cold-load could clobber it. `None` keeps the env-derived default.
+            # Normalised here (#2813 review finding 1): an admitted "rocm:N"
+            # is "cuda:N" before it reaches `self.device` — the cuda-presence
+            # guard and the cpu-demotion fallback just below are both gated on
+            # `family == "cuda"`, and were silently skipped for a raw "rocm:N"
+            # (no such gate ever fires, so ECAPA's bare `raise` reached /embed
+            # unfiltered), same as `_spk_run_device` (also self-normalising,
+            # but the chokepoint is here so `self.device` and both gates below
+            # see the same normalised value).
             if device is not None:
-                self.device = device
+                self.device = _normalise_rocm_device_key(device)
             # srv-47: a requested cuda device that isn't actually present
             # degrades to cpu rather than crashing.  Use _parse_device so an
             # indexed pin (cuda:1) is treated the same as plain 'cuda'.

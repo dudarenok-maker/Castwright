@@ -45,7 +45,13 @@ describe('planOrtSwap', () => {
     expect(plan.steps).toEqual([
       ['uninstall', '-y', 'onnxruntime', 'onnxruntime-gpu'],
       ['install', '--force-reinstall', '--no-deps', 'onnxruntime-gpu>=1.26,<1.27'],
-      ['install', 'nvidia-cudnn-cu12~=9.0', 'nvidia-cublas-cu12~=12.8.0'],
+      [
+        'install',
+        'nvidia-cudnn-cu12~=9.19.0',
+        'nvidia-cublas-cu12~=12.8.0',
+        'nvidia-cufft-cu12~=11.3.3',
+        'nvidia-cuda-runtime-cu12~=12.8.0',
+      ],
     ]);
   });
 
@@ -54,9 +60,23 @@ describe('planOrtSwap', () => {
   // TODAY exercises a non-onnxruntime-gpu SWAP (amd/apple/cpu are all
   // 'onnxruntime', i.e. skip): a future onnxruntime-directml re-enable must
   // not silently inherit a CUDA-only cuDNN package.
-  it('extraRuntimeSteps: only onnxruntime-gpu gets the cuDNN+cublas step (no nvrtc — Windows-unused, N6)', () => {
+  //
+  // cufft/cuda-runtime added 2026-08-31 (register row A28, discharged/on-box confirmed):
+  // onnxruntime's Windows DLL list also wants cufft64_11.dll/cudart64_12.dll,
+  // which neither the system CUDA toolkit nor any pip step here supplied —
+  // real InferenceSession construction with CUDAExecutionProvider silently
+  // fell back to CPU without them. curand/nvjitlink were tried on the same
+  // box and confirmed NOT needed (same "Windows-unused" shape as nvrtc), so
+  // they are deliberately not pinned here either.
+  it('extraRuntimeSteps: only onnxruntime-gpu gets the cuDNN+cublas+cufft+cuda-runtime step (no nvrtc/curand/nvjitlink — Windows-unused)', () => {
     expect(extraRuntimeSteps('onnxruntime-gpu')).toEqual([
-      ['install', 'nvidia-cudnn-cu12~=9.0', 'nvidia-cublas-cu12~=12.8.0'],
+      [
+        'install',
+        'nvidia-cudnn-cu12~=9.19.0',
+        'nvidia-cublas-cu12~=12.8.0',
+        'nvidia-cufft-cu12~=11.3.3',
+        'nvidia-cuda-runtime-cu12~=12.8.0',
+      ],
     ]);
     expect(extraRuntimeSteps('onnxruntime-directml')).toEqual([]);
     expect(extraRuntimeSteps('onnxruntime')).toEqual([]);

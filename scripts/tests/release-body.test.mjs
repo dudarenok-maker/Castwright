@@ -58,10 +58,15 @@ const CONFLICT_FIXTURE =
 // this for real: a stray tag landed in this worktree). Every git
 // invocation below, and every spawned `node release-body.mjs` process,
 // passes this explicit env instead of inheriting process.env.
+// Case-insensitive match: Windows preserves whatever casing a var was stored
+// under while lookup is case-insensitive, and git honours a lowercase
+// `git_dir` identically to `GIT_DIR` — see git-env.mjs's scrubGitEnv() header,
+// and bump-version.test.mjs's identical helper/fix (#2841), for the measured
+// evidence. A `startsWith('GIT_')` filter alone leaves a survivor.
 function cleanGitEnv() {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (key.startsWith('GIT_')) delete env[key];
+    if (key.toUpperCase().startsWith('GIT_')) delete env[key];
   }
   return env;
 }
@@ -374,7 +379,7 @@ test('readTagAnnotation resolves repoRoot even with an inherited GIT_DIR pointin
 
   const savedGitEnv = {};
   for (const key of Object.keys(process.env)) {
-    if (key.startsWith('GIT_')) {
+    if (key.toUpperCase().startsWith('GIT_')) {
       savedGitEnv[key] = process.env[key];
       delete process.env[key];
     }
@@ -389,5 +394,33 @@ test('readTagAnnotation resolves repoRoot even with an inherited GIT_DIR pointin
     for (const [k, v] of Object.entries(savedGitEnv)) process.env[k] = v;
     rmSync(dir, { recursive: true, force: true });
     rmSync(decoy, { recursive: true, force: true });
+  }
+});
+
+// #2841 — this file's cleanGitEnv() is a byte-identical copy of
+// bump-version.test.mjs's, which had the same case-sensitivity gap fixed
+// there. Mirrors that file's regression test directly against the local
+// helper. Deliberately mixed-case-only: cannot pass against a
+// `startsWith('GIT_')` filter.
+test('cleanGitEnv strips a git env override regardless of stored casing', () => {
+  const saved = { ...process.env };
+  try {
+    for (const key of Object.keys(process.env)) {
+      if (key.toUpperCase().startsWith('GIT_')) delete process.env[key];
+    }
+    process.env.git_dir = '/decoy/.git';
+    process.env.Git_Index_File = '/decoy/.git/index';
+
+    const cleaned = cleanGitEnv();
+    assert.equal(cleaned.git_dir, undefined);
+    assert.equal(cleaned.Git_Index_File, undefined);
+    // Non-GIT_ keys are untouched — spot-check against whichever casing this
+    // OS actually stores the PATH var under (Windows: "Path").
+    const pathKey = Object.keys(cleaned).find((k) => k.toUpperCase() === 'PATH');
+    assert.ok(pathKey, 'PATH must survive the scrub');
+    assert.equal(cleaned[pathKey], saved[pathKey]);
+  } finally {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, saved);
   }
 });

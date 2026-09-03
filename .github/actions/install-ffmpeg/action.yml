@@ -1,0 +1,89 @@
+# Composite action — replaces the three byte-duplicated `apt-get install
+# ffmpeg` steps in verify.yml (decision on parent #2449). Those steps had no
+# retry, no mirror fallback and no step-level timeout, so a hung `apt-get
+# update` against a slow Ubuntu mirror burned the whole job's timeout budget
+# and cancelled every step after it, tests included (measured on PR #2424:
+# three jobs cancelled at 15m/15m/10m before a third attempt passed clean).
+#
+# Caching choice: this caches apt's OWN downloaded .deb packages (redirected
+# to a runner-owned temp dir, not /var/cache/apt/archives, which is
+# root-owned). Even in a runner-owned directory, apt-get runs as root via
+# sudo and creates lock/partial/ as root-owned, so the post-step cleanup also
+# removes apt's bookkeeping files and transfers ownership back to the runner
+# so actions/cache can save the directory. Rather than snapshotting the
+# installed ffmpeg binary + its shared-library closure: `apt-get install
+# ffmpeg` pulls in a long, version-drifting chain of transitive dependency
+# packages, so re-deriving and re-linking that closure by hand is the fragile
+# option the task brief explicitly allows skipping in favor of this one.
+name: 'Install ffmpeg (cached)'
+description: 'Install ffmpeg on an Ubuntu runner, caching the apt .deb packages so a cache hit skips apt-get (and the network round trip) entirely, with a step-level timeout so a stuck mirror fails fast.'
+
+inputs:
+  ffmpeg-version-pin:
+    description: 'Manual cache-invalidation override. The cache key now auto-invalidates on runner image updates; use this to force a fresh apt-get fetch and cache write mid-image-version if needed.'
+    required: false
+    default: 'v1'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve runner image identity
+      id: image
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "id=${ImageOS}-${ImageVersion}" >> "$GITHUB_OUTPUT"
+
+    - name: Cache ffmpeg apt packages
+      id: apt-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/apt-cache-ffmpeg
+        key: ${{ runner.os }}-ffmpeg-apt-${{ inputs.ffmpeg-version-pin }}-${{ steps.image.outputs.id }}
+
+    # On a cache hit: install straight from the cached .deb files with
+    # `dpkg -i` — no apt-get, no `apt-get update`, no network at all.
+    # On a cache miss: hardened `apt-get update` (retries the mirror instead
+    # of failing on the first blip) then `apt-get install`, downloading into
+    # the same runner-owned dir so the cache step above has something to
+    # save.
+    #
+    # `timeout-minutes:` is a job-STEP key, not something a composite
+    # action's own steps accept — GitHub rejects the action manifest outright
+    # ("Unexpected value 'timeout-minutes'") if it's used here, which this
+    # action's first real CI run caught. Each apt/dpkg call below is instead
+    # wrapped in the coreutils `timeout` command with `-k 10 180` (180s timeout
+    # + 10s SIGKILL grace period) to guarantee termination even if the process
+    # ignores SIGTERM. This acts as a hang-detection ceiling: a normal
+    # (non-hanging) cache-miss apt-get is expected to be much faster than the
+    # 180s ceiling, but the ceiling itself can consume up to 190s per call
+    # (~380s / 6 min 20s for a two-call worst case). Note: this leaves
+    # comparatively tight headroom on jobs with small total budgets; e.g.,
+    # e2e-visual's 10-minute job timeout leaves ~4 minutes for the test battery
+    # itself after checkout + `npm ci` + Playwright setup + this install step.
+    # Still preferable to the prior unbounded step that silently ate entire job
+    # timeouts when a mirror hung.
+    - name: Install ffmpeg
+      shell: bash
+      run: |
+        set -euo pipefail
+        ARCHIVE_DIR="${{ runner.temp }}/apt-cache-ffmpeg"
+        mkdir -p "$ARCHIVE_DIR"
+        if [ "${{ steps.apt-cache.outputs.cache-hit }}" = "true" ]; then
+          echo "apt cache hit: installing ffmpeg from $ARCHIVE_DIR, skipping apt-get"
+          # dpkg -i skips apt's signature verification that `apt-get install` performs.
+          # This is acceptable: the cache was populated by this same action's prior
+          # `apt-get install` run (itself signature-verified), and actions/cache entries
+          # are scoped to this repo, not shared across repos.
+          sudo timeout -k 10 180 dpkg -i "$ARCHIVE_DIR"/*.deb
+        else
+          echo "apt cache miss: installing ffmpeg via apt-get"
+          sudo timeout -k 10 180 apt-get -o Acquire::Retries=3 update
+          sudo timeout -k 10 180 apt-get -o Dir::Cache::Archives="$ARCHIVE_DIR" install -y ffmpeg
+          sudo rm -rf "$ARCHIVE_DIR/lock" "$ARCHIVE_DIR/partial"
+          sudo chown -R "$(id -u):$(id -g)" "$ARCHIVE_DIR"
+        fi
+
+    - name: Verify ffmpeg
+      shell: bash
+      run: ffmpeg -version
