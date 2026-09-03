@@ -222,9 +222,9 @@ export function renderLaunchBlock({ worktreePath, branch, ports, slot, install }
     `Next steps — paste into a new terminal:`,
     ``,
     `  cd "${winPath}"`,
-    `  # Doing real sidecar/TTS work? Junction .venv AND voices/ from the primary`,
-    `  # checkout first — see CLAUDE.md "Worktree setup" step 2. A missing`,
-    `  # voices/ junction misreports as recycle-storm (#2811), not a missing-weights error.`,
+    `  # Doing real sidecar/TTS work? Junction server/tts-sidecar/.venv AND server/tts-sidecar/voices/ from`,
+    `  # the primary checkout first — see CLAUDE.md "Worktree setup" step 2. Missing voices/ causes`,
+    `  # Kokoro model errors that trigger recycle-storm; check logs/tts.err.log if #399 looks like it.`,
   ];
   if (install === false) {
     lines.push(`  npm install                  # root deps + husky hooks (skipped: --no-install)`);
