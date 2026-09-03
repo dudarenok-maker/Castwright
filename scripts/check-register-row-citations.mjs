@@ -44,21 +44,20 @@
 //
 // TWO ADDITIONS BEYOND THE LITERAL DECISION TEXT, both forced by a first
 // real-tree run rather than invented speculatively -- an unqualified
-// ID-existence check found 8 hits on `main` as shipped, and every one was a
+// ID-existence check found 5 hits on `main` as shipped, and every one was a
 // deliberately-annotated historical reference to a row this repo's own
 // "annotate, don't renumber" convention keeps on record after a discharge
 // (e.g. "register row A43 (discharged 2026-08-26, removed from the
 // register)") -- not drift. Shipping the check unqualified would leave it
 // permanently red against correct, intentional content:
-//   1. Same-line discharge/removal annotation exemption (ANNOTATION_REGEX) --
+//   1. Discharge/removal annotation exemption (ANNOTATION_REGEX) --
 //      a citation is downgraded to a printed, non-fatal NOTE (never silently
-//      dropped) when its own physical line also says the row was discharged
-//      or removed. Measured against all 8 real hits: every one carries the
-//      annotation on the SAME line as the citation, so this narrow,
-//      same-line-only rule (far simpler than the sibling checker's
-//      multi-line clause-boundary version -- see its own header comment for
-//      why IT needs that much machinery) fully accounts for them without
-//      borrowing that complexity.
+//      dropped) when an annotation phrase ("discharged", "removed") appears
+//      on the same logical line (including hard-wrapped continuations). A
+//      "nearest citation to the left" rule ties each annotation to the
+//      citation immediately before it, preventing cross-contamination when
+//      multiple citations appear on the same line. Measured against all 5
+//      real hits: the rule fully accounts for them.
 //   2. A short frozen-path list (FROZEN_EXACT/FROZEN_PREFIXES) for dated,
 //      historical-transcript files where an ID is cited as "what the
 //      register said on that date," not as a live pointer -- mirrors
@@ -212,7 +211,7 @@ export function isFrozenPath(relPath) {
   return FROZEN_PREFIXES.some((prefix) => p.startsWith(prefix));
 }
 
-function repoRoot() {
+export function repoRoot() {
   return fileURLToPath(new URL('..', import.meta.url));
 }
 

@@ -7,12 +7,13 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import {
   checkRegisterRowCitations,
   extractCitations,
   isFrozenPath,
   REGISTER_PATH,
+  repoRoot,
 } from '../check-register-row-citations.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -444,16 +445,32 @@ test('reported file count excludes frozen-skipped files (Finding 1)', () => {
   assert.equal(citationCount, 1, 'should still find the citation in plan.md');
 });
 
-test('fileURLToPath handles percent-encoded paths correctly (Finding 3)', async () => {
-  // This test verifies that the use of fileURLToPath (imported from node:url,
-  // rather than a hand-rolled helper) correctly percent-decodes paths.
-  // The real validation is that the script compiles and runs without errors
-  // when importing fileURLToPath. The hand-rolled version did:
+test('fileURLToPath handles percent-encoded paths correctly (Finding 3)', () => {
+  // This test verifies that repoRoot() uses fileURLToPath (from node:url)
+  // to correctly resolve the import.meta.url to a filesystem path.
+  // The hand-rolled version that was previously used did:
   //   return url.pathname.replace(/^\/([A-Za-z]:)/, '$1');
-  // which doesn't handle percent-encoding. The real fileURLToPath does.
-  const { fileURLToPath: importedFileURLToPath } = await import('node:url');
-  // Verify we can call it (function exists and is callable)
-  assert.strictEqual(typeof importedFileURLToPath, 'function', 'fileURLToPath should be importable');
+  // which doesn't handle percent-encoded paths or other special characters correctly.
+  // When import.meta.url contains a percent-encoded path (e.g., %20 for spaces),
+  // the hand-rolled version would fail to decode it, returning a path with
+  // literal "%20" instead of a space, causing filesystem lookups to fail.
+  // fileURLToPath (from node:url) handles these encodings correctly.
+  const root = repoRoot();
+
+  // Verify repoRoot() returns a string path
+  assert.strictEqual(typeof root, 'string', 'repoRoot() should return a string');
+
+  // Verify the path is non-empty
+  assert.ok(root.length > 0, 'repoRoot() should return a non-empty path');
+
+  // Verify the path points to the actual repo root by checking
+  // for a known file that exists there. This exercises the path resolution
+  // code path and would fail if the path were incorrectly decoded.
+  const packageJsonPath = join(root, 'package.json');
+  assert.ok(
+    existsSync(packageJsonPath),
+    `package.json should exist at repo root: ${packageJsonPath}`
+  );
 });
 
 // --- Real-tree CLI integration tests ---

@@ -124,10 +124,13 @@ this file's own `#a41`/`#e3` anchor, and fails if the cited ID has no current ro
 token with neither a "row" word nor a register link is never treated as a
 citation. GitHub issue bodies are explicitly OUT of scope for v1 — that would
 need `gh` API access from a CI script, disproportionate for this pass. A
-citation whose own line also says the row was discharged/removed is printed
-as a note, not failed — this register's own body is full of exactly that
-shape ("register row A43, discharged 2026-08-26, removed from the register"),
-and those are intentional history, not drift. **Deliberately NOT this
+citation whose own logical line (including hard-wrapped continuations) contains
+a discharge/removal annotation is printed as a note, not failed — this register's
+own body is full of exactly that shape ("register row A43, discharged 2026-08-26,
+removed from the register"), and those are intentional history, not drift. A
+"nearest citation to the left" rule ties each annotation to its nearest preceding
+citation, preventing cross-contamination when multiple citations appear on the
+same line. **Deliberately NOT this
 checker's job:** confirming the citing prose's *description* of a row still
 matches that row's current title — only that the ID it names still exists.
 That stronger check ("title-text matching") is a genuinely separate,
