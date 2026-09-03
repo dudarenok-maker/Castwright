@@ -126,9 +126,12 @@ function normalizeLineContext(lines, lineNum) {
     const isNextProse =
       !nextLine.startsWith('> ') && !nextLine.startsWith('#') && nextLine.trim() !== '';
 
-    // Check for list markers: lines starting with -, *, or number patterns like "1."
-    const currentStartsWithListMarker = /^\s*[-*]|\d+\.\s/.test(currentLine);
-    const nextStartsWithListMarker = /^\s*[-*]|\d+\.\s/.test(nextLine);
+    // Check for list markers: lines starting with -, *, +, or a numbered/lettered
+    // marker like "1." or "1)". Anchored to the start of the line -- an
+    // unanchored \d+\.\s would also match a mid-sentence date like "2026-08-01. ".
+    const LIST_MARKER_REGEX = /^\s*(?:[-*+]|\d+[.)]\s)/;
+    const currentStartsWithListMarker = LIST_MARKER_REGEX.test(currentLine);
+    const nextStartsWithListMarker = LIST_MARKER_REGEX.test(nextLine);
 
     // Check for table rows (starting or ending with |)
     const isCurrentTableRow = /^\s*\|/.test(currentLine) || /\|\s*$/.test(currentLine);
@@ -286,19 +289,12 @@ export function extractCitations(text) {
     .map((line) => line.replace(/^(> )+/, ''))
     .join('\n');
 
-  // Build line-start indices for BOTH the original and normalized text.
-  // We use the normalized index to compute line numbers from matches found
-  // in the normalized text.
-  const lineStartsOriginal = [];
-  let offset = 0;
-  for (const line of lines) {
-    lineStartsOriginal.push(offset);
-    offset += line.length + 1;
-  }
-
+  // Build a line-start index for the normalized text, since matches are
+  // found in normalizedText and its offsets must be resolved against its
+  // own line structure, not the original text's.
   const normalizedLines = normalizedText.split('\n');
   const lineStartsNormalized = [];
-  offset = 0;
+  let offset = 0;
   for (const line of normalizedLines) {
     lineStartsNormalized.push(offset);
     offset += line.length + 1;

@@ -513,6 +513,56 @@ test('legitimate prose hard-wrap still works: citation and annotation on adjacen
   assert.deepEqual(annotated, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
 });
 
+test('the list-marker check is anchored, so a mid-sentence date does not suppress a legitimate hard-wrap join', () => {
+  // Regression test: the list-marker regex previously used /^\s*[-*]|\d+\.\s/,
+  // which -- due to alternation binding looser than concatenation -- let the
+  // unanchored \d+\.\s branch match a date like "2026-08-01. " anywhere in the
+  // line, wrongly treating an ordinary sentence as starting with a list marker
+  // and suppressing a legitimate hard-wrap join. Anchoring the regex fixes this.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md':
+      'The audit ran on 2026-08-01. It covered row A99 and the outcome\n' +
+      'was that it had been discharged earlier.\n',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // The date in the first line must not be mistaken for a list marker on the
+  // SECOND line (nextStartsWithListMarker) or suppress the join.
+  assert.deepEqual(failures, []);
+  assert.deepEqual(annotated, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+});
+
+test('list-marker join suppression covers +-bulleted and N)-numbered lines too', () => {
+  // Regression test: the list-marker check previously enumerated only "-" and
+  // "*", so a "+"-bulleted or "N)"-numbered second bullet could still be
+  // joined with an unrelated first bullet, reopening the cross-contamination
+  // class the prose-continuation tightening was meant to close.
+  const plusBullets = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': '+ Row A99 is still owed.\n+ The old wave was discharged on 2026-08-01.\n',
+  };
+  const plusResult = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(plusBullets),
+  });
+  assert.deepEqual(plusResult.annotated, []);
+  assert.deepEqual(plusResult.failures, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+
+  const numberedParens = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': '1) Row A99 is still owed.\n2) The old wave was discharged on 2026-08-01.\n',
+  };
+  const numberedResult = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(numberedParens),
+  });
+  assert.deepEqual(numberedResult.annotated, []);
+  assert.deepEqual(numberedResult.failures, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+});
+
 test('repoRoot() resolves to the repo root with a valid filesystem path (Finding 3)', () => {
   // This test verifies that repoRoot() correctly resolves import.meta.url
   // to an actual filesystem path pointing to the repo root. It uses
