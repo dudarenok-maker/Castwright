@@ -263,12 +263,31 @@ function constrainForInstall(ortPackage) {
 // still reports CUDAExecutionProvider as available (the python binding
 // doesn't probe cuDNN at import time), but constructing an InferenceSession
 // with it silently falls back to CPU — no error, no warning. Kokoro then
-// "works" and runs on CPU. Pinned to the major line the runtime's own [cudnn]
-// extra declares (`nvidia-cudnn-cu12~=9.0`), not the exact patch a dry run
-// happens to resolve — this MUST move together with ONNXRUNTIME_GPU_CONSTRAINT
-// if the onnxruntime-gpu line above it is ever bumped to one that needs a
-// different cuDNN major version.
-const NVIDIA_CUDNN_CONSTRAINT = 'nvidia-cudnn-cu12~=9.0';
+// "works" and runs on CPU.
+//
+// TIGHTENED 2026-08-31 (register row A28, discharged/on-box, real regression confirmed):
+// the original `~=9.0` (any 9.x) let pip resolve to whatever was latest —
+// 9.25.1.1 as of this writing — which is NOT ABI-compatible with the cuDNN
+// build torch 2.11.0+cu128 bundles (`torch.backends.cudnn.version()` reports
+// `91900`, i.e. 9.19.0). `onnxruntime.preload_dlls()` (main.py's
+// `_preload_ort_cuda_dlls`, called unconditionally at sidecar startup on the
+// nvidia profile) loads nvidia-cudnn-cu12's `cudnn64_9.dll` into the process
+// BEFORE anything imports torch — Windows resolves a later `LoadLibrary` for
+// the same DLL basename to whichever copy is ALREADY loaded, so torch's own
+// subsequent `import torch` (its `_load_dll_libraries()`) picked up the
+// pip package's 9.25.1.1 build instead of its own bundled 9.19.x one and
+// failed outright: `OSError: [WinError 127] The specified procedure could
+// not be found. Error loading "...\torch\lib\cudnn_cnn64_9.dll"` — a
+// same-line-name, cross-minor-version export mismatch. Confirmed on real
+// hardware that breaks torch entirely (Coqui/Qwen/Whisper device probe and
+// every torch-backed engine), not just a cosmetic warning — this is exactly
+// the risk discharged register row A28's own "N11" note flagged as unverified. Floor-
+// AND-cap to the exact minor line torch bundles, same reasoning as
+// NVIDIA_CUBLAS_CONSTRAINT below: this MUST move together with whatever
+// torch version this venv's requirements pin, not just with
+// ONNXRUNTIME_GPU_CONSTRAINT — re-check `torch.backends.cudnn.version()`
+// against this pin whenever torch is bumped.
+const NVIDIA_CUDNN_CONSTRAINT = 'nvidia-cudnn-cu12~=9.19.0';
 
 // cuDNN's own dependency tree pulls in nvidia-cublas-cu12 (for nvidia-cudnn-cu12,
 // unpinned). Left alone, that is exactly the exposure ONNXRUNTIME_GPU_CONSTRAINT's
@@ -314,21 +333,87 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 // support (curand would need one too, and this step would need to become
 // platform-aware — a design question, not this fix's).
 //
-// NOT fixed here, deliberately deferred to on-box acceptance (register rows
-// A36–A38): onnxruntime's Windows DLL list ALSO wants
-// `nvidia/cufft/bin/cufft64_11.dll` and `nvidia/cuda_runtime/bin/cudart64_12.dll`,
-// neither of which any pip step here installs. The working assumption is that
-// the box's own system CUDA 12.4 toolkit install supplies both via the default
-// DLL search path (PATH) once cuDNN/cublas are no longer the missing piece —
-// unconfirmed without a GPU box, and NOT to be "fixed" by adding more pip pins
-// without that on-box confirmation first (a `[cuda]`-extras pip install is the
-// named alternative hypothesis, not something to reach for pre-emptively).
+// CONFIRMED on-box (register row A28, discharged 2026-08-31): onnxruntime's Windows DLL
+// list ALSO wants `nvidia/cufft/bin/cufft64_11.dll` and
+// `nvidia/cuda_runtime/bin/cudart64_12.dll`, neither of which any pip step
+// here installed — the "system CUDA 12.4 toolkit supplies both via PATH"
+// working assumption above was FALSE on the real GPU box: a from-scratch
+// venv with only cuDNN+cublas installed left onnxruntime's own
+// `preload_dlls()` reporting "Failed to load" for both, and real
+// `InferenceSession` construction with `CUDAExecutionProvider` silently fell
+// back to CPU. Installing these two packages (curand was tried too and
+// confirmed NOT needed — dropped, same N6 reasoning as nvrtc above; nvjitlink
+// is pulled in transitively by cufft's own dependency tree regardless, so
+// it is never pinned directly here either way) fixes it: `preload_dlls()`
+// then reports all expected files resolved under `nvidia/<pkg>/bin`, and a
+// real `InferenceSession` lands `CUDAExecutionProvider` in
+// `get_providers()`.
 //
-// If they turn out to be genuinely missing on-box, note this ALSO needs the
-// same floor-plus-cap fix N4 applies here: torch/lib's bundled cufft64_11.dll
-// reports the same 12.8.x build line as cublas above (per the live venv's file
-// version info), so a would-be `nvidia-cufft-cu12`/`nvidia-cuda-runtime-cu12`
-// pin should float on that line too, not an arbitrary unpinned/latest one.
+// PASS-1 REVIEW FIX (2026-08-31): the first cut of these two pins
+// (`cufft~=11.4.0`, `cuda-runtime~=12.8.0`) was wrong on both counts —
+// `~=11.4.0` was pip-latest-on-install-day, not torch's line, and
+// `~=12.8.0`, while correctly matching torch's cudart build line, EXCLUDED
+// the 12.9.79 version this box's on-box run had actually installed and
+// tested against (a floor-plus-cap pin that admits a version different from
+// the one the "verified end-to-end" claim was measured on is worse than no
+// pin — it looks precise while proving nothing). Re-measured `FileVersion`
+// directly against the live venv's `torch/lib` copies: `cufft64_11.dll`
+// reports **11.3.3** (`...,1133`), not 11.4.x; `cudart64_12.dll` reports
+// **12.8.0** (`...,12080`), confirming that half was already right, just
+// untested at the pinned value. Re-pinned both to torch's actual measured
+// line (`~=11.3.3`, `~=12.8.0`) and re-verified on real hardware at THESE
+// exact resolved versions (`nvidia-cufft-cu12==11.3.3.83`,
+// `nvidia-cuda-runtime-cu12==12.8.90`) — same real Kokoro CUDA
+// session-construction + real-synth check as the cuDNN/cublas pins above,
+// not just a version-string match. Same floor-plus-cap reasoning as cublas's
+// own pin (N4): an unpinned/latest install here would risk the same
+// intra-process DLL-version mismatch cublas's own pin exists to avoid.
+//
+// PASS-2 REVIEW NOTE (2026-08-31): the shadowing risk above is scoped to
+// mechanism A only — `onnxruntime.preload_dlls()`'s own fixed DLL list,
+// which is what every comment on this page has described so far. Since this
+// same fix, a SECOND, broader mechanism is also in force:
+// `main._add_nvidia_dll_dirs_to_path()` puts every `nvidia/<pkg>/bin`
+// directory ahead of torch on the process `PATH`, so ANY bare-name load —
+// not just the ones `preload_dlls()` itself makes — now resolves to this
+// installer's copy first. That covers several DLL basenames this file does
+// NOT pin here, including from `nvidia-cuda-nvrtc-cu12` and
+// `nvidia-nvjitlink-cu12` (both pulled in only transitively, by cufft's own
+// dependency tree — see the N6 note above for why they're deliberately not
+// pinned directly). Re-check this comment, not just the four constants
+// below, on any future torch bump.
+//
+// PASS-3 REVIEW NOTE (2026-09-01): the prior version of this note checked
+// only ONE basename pair and generalised from it. Re-measured `FileVersion`
+// directly, on the live venv, for THREE basenames mechanism B can shadow:
+//   - `nvrtc64_120_0.dll` / `nvJitLink_120_0.dll` (from
+//     `nvidia-cuda-nvrtc-cu12`/`nvidia-nvjitlink-cu12`): torch's own
+//     `torch/lib` copies and the `nvidia/*/bin` copies both report
+//     `FileVersion` 6.14.11.9000 — these two agree, so mechanism B is not
+//     currently exposed for them.
+//   - `cublas64_12.dll` / `cublasLt64_12.dll` (from
+//     `NVIDIA_CUBLAS_CONSTRAINT` above, `~=12.8.0`): torch's `torch/lib`
+//     copies report `6,14,11,1284` (12.8.4); the `nvidia/cublas/bin` copies
+//     this file installs report `6,14,11,1285` (12.8.5). These DO differ —
+//     same-minor, so low practical risk, but the `~=12.8.0` pin permits any
+//     12.8.x and does not itself guarantee agreement with torch's specific
+//     build the way `NVIDIA_CUDNN_CONSTRAINT`'s tighter `~=9.19.0` does.
+//   - `cudnn64_9.dll` from `ctranslate2` (faster-whisper's own bundled
+//     copy, `server/tts-sidecar/.venv/Lib/site-packages/ctranslate2/`):
+//     reports `9.10.2.21`. The `nvidia/cudnn/bin/cudnn64_9.dll` this file
+//     installs (per `NVIDIA_CUDNN_CONSTRAINT`, `~=9.19.0`) reports
+//     `9.19.0.56` — a CROSS-MINOR gap (9.10 → 9.19) WIDER than the 9.25→9.19
+//     gap this PR exists to fix. Whisper/ASR is the one engine the on-box
+//     `Device probe complete: {'kokoro': 'cuda', 'coqui': 'cuda', 'qwen':
+//     'cuda'}` run backing this PR did NOT exercise (ASR is off unless
+//     `SEG_ASR_ENABLED`), so this shadow is unconfirmed either way in
+//     practice — filed as #2845 rather than assumed benign.
+// All three shadows pre-date this PR (this PR only widens which of them
+// `_add_nvidia_dll_dirs_to_path()`'s PATH prepend can newly reach); nothing
+// here pins cross-mechanism agreement the way `NVIDIA_CUDNN_CONSTRAINT` etc.
+// pin the packages this file DOES own.
+const NVIDIA_CUFFT_CONSTRAINT = 'nvidia-cufft-cu12~=11.3.3';
+const NVIDIA_CUDA_RUNTIME_CONSTRAINT = 'nvidia-cuda-runtime-cu12~=12.8.0';
 
 /**
  * Extra pip step(s), if any, needed alongside an ortPackage swap so the
@@ -347,7 +432,15 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
  */
 export function extraRuntimeSteps(ortPackage) {
   return ortPackage === 'onnxruntime-gpu'
-    ? [['install', NVIDIA_CUDNN_CONSTRAINT, NVIDIA_CUBLAS_CONSTRAINT]]
+    ? [
+        [
+          'install',
+          NVIDIA_CUDNN_CONSTRAINT,
+          NVIDIA_CUBLAS_CONSTRAINT,
+          NVIDIA_CUFFT_CONSTRAINT,
+          NVIDIA_CUDA_RUNTIME_CONSTRAINT,
+        ],
+      ]
     : [];
 }
 
