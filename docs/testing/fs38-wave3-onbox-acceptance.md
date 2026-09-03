@@ -2502,7 +2502,20 @@ structured `cloned-voice-broken` code.
   `generationErrorCode` on these paths. **This is expected.** Record it as
   verified-as-expected, not as a defect.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P (splice half) · not reached (QA-repair half)  **Notes:** Run 5
+(2026-09-04, same worktree/setup). Revoked the C-14/C-08/C-09 clone. **Splice
+half confirmed:** `POST .../chapters/2/splice` (rerecord, master-oduvan)
+returned a plain SSE `chapter_failed` with `errorReason: "Splice failed:
+Cloned voice(s) unavailable — a cloned voice must never be substituted with
+another: \"Master Oduvan\" (revoked). Restore the missing voice(s); reassign
+the character(s)."` — names the voice and reason, **no** `errorCode` field at
+all (contrast C-02/C-08/C-09's `cloned-voice-broken`). **QA-repair half not
+reached:** `POST .../chapters/2/audio-qa-repair` (`dryRun:false`) scanned
+chapter 2 and found `flaggedCount: 0` — the chapter's existing audio (from an
+earlier clean C-06/C-07 render) had nothing flagged, so the repair path never
+reached the point of needing a voice and the cloned-voice check was never
+exercised. Would need a chapter with a genuinely QA-flagged sentence to
+manufacture the precondition — not attempted this run for time.
 
 ---
 

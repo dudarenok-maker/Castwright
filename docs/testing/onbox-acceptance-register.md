@@ -868,8 +868,8 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **23 of 60 run (2026-07-29, 2026-07-31, 2026-08-31) · ~37 still owed · 3 run-2 results retracted**
-<!-- stat:a1-still-owed 37 -->
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **28 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04) · ~32 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 32 -->
 <!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
@@ -1018,7 +1018,50 @@ above is left as its own row rather than assumed to also clear full-book
 work, but the specific failure mode this run hit was environmental, not
 side-11 recurring.
 
-**Still owed (~37), and why:**
+**Run 5 — 2026-09-04, Claude Code, isolated worktree `wt-a1-wave11-continue`,
+throwaway fixture book "The Coalfall Commission (A1 wave11)" imported fresh,
+real Qwen 0.6B sidecar, no mocks.** Five more discharged: **C-06** (deleting
+a healthy clone's `.pt` transparently re-derives — one log line, chapter
+completes, `.pt` reappears with a fresh mtime; a repeat render fires no
+further derive), **C-07** (a stale `baseModel` on a present `.pt` also
+triggers exactly one re-derive and refreshes `baseModel` to the sidecar's
+current value — two early attempts against a memory-pressured leftover
+sidecar failed, a clean restart reproduced the pass), **C-08** (a transient
+derive failure — sidecar killed — reports `derive-failed` without persisting
+`engines.qwen.status: 'failed'`; the voice self-heals on the next attempt
+once the sidecar is back, no manual repair), **C-09** (a permanent 4xx
+derive failure — empty `ref_text` — DOES persist `status: 'failed'`, and it
+is genuinely terminal: a retry with nothing changed fails again immediately
+with zero further derive attempts), and **C-14** (the assign-time
+wrong-engine guard, all four documented scenarios: session-default 409,
+character-override 409 naming the character, Coqui-eligible 200, and the
+pending-picker-beats-persisted-default case). **Two more partially run:**
+**C-13**'s wrong-engine half confirmed at render time (exact message shape,
+names both cloned characters, does not claim Qwen unavailable); its
+engine-unavailable contrast was **not** cleanly reproduced — a generation
+request lazily relaunches the sidecar on this box regardless of
+`autoStartSidecar`, so "stop the sidecar" doesn't stay stopped through a
+render, and both attempts instead hit the sidecar's own lazy-load path (one
+completed normally, one hit the pre-existing side-11 `recycle-storm`
+pattern, not a new defect). **D-04**'s splice half confirmed (plain-text
+`chapter_failed`, no `errorCode`, names the voice and `(revoked)`); its
+QA-repair half wasn't reached — the fixture chapter's audio had nothing
+QA-flagged to repair, so the cloned-voice check was never exercised on that
+path. No defects filed this run — every unexpected result traced to this
+box's own known, already-tracked side-11 memory-growth pattern or to a
+test-setup quirk (documented inline in the run sheet), not a new product
+bug. **Timing observation, not filed as a defect:** a chapter render against
+an unreachable sidecar takes 400-850s to fail-fast rather than the
+sub-second failure a revoked voice gets (C-02) — worth a closer look at
+`derive-engine-artifact.ts`'s retry/timeout budgets in a future session, but
+out of scope to chase here. Real Gemini credentials needed for C-17/E-07
+(designed-voice paths) are deliberately absent from this isolated worktree
+per CLAUDE.md's no-secrets rule; still owed, to be attempted from a session
+carrying real credentials. Browser/mic (A-07/A-08/A-09/B-02) and by-ear
+(B-03/E-06) items remain untouched — need a human at a real browser/mic and
+a human ear respectively, neither available to an unattended session.
+
+**Still owed (~32), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
@@ -1105,10 +1148,21 @@ side-11 recurring.
   whose `segments.json` and the current analysis disagreed (exactly the shape
   both fixture books in that run hit); #1972 has since closed that refusal.
   </details>
-- **The rest of Section C (15) and Section D (2):** not reached. C-08/C-12
-  (deliberate mid-write sidecar kills) and C-01 (revoke racing an in-flight
-  Qwen derive) are untouched and remain the highest-risk unproven behaviour
-  here. E-03 (the Coqui equivalent of C-01) is now discharged (Run 4, above).
+- **Section C — 8 of 15 discharged as of Run 5 (C-06, C-07, C-08, C-09, C-14
+  full; C-13 partial — wrong-engine half only).** Still not reached: **C-01**
+  ⭐ (revoke racing an in-flight Qwen derive — the highest-risk unproven
+  behaviour here, needs several timed attempts, not attempted this run),
+  **C-04** (title-beat narrator gating — needs a chapter with narrated-title-only
+  narrator dialogue, fixture not set up for it), **C-12** (deliberate mid-write
+  sidecar kill, needs precise timing), **C-15**/**C-16** (UI toast/chip
+  observation — need a real browser), **C-17** ⭐ (designed-voice self-heal,
+  needs `GEMINI_API_KEY` — see Run 5 note above), **C-18** (stale designed
+  `.pt` — blocked on C-17 producing a designed voice first), **C-20** (pause
+  during a repair derive — needs precise UI timing), **C-21** (partial erasure
+  via a held file handle — Windows-specific, not attempted).
+- **Section D — D-04 partial (splice half only) as of Run 5.** D-01
+  (concurrent multi-book render) and D-04's QA-repair half remain not
+  reached.
 - **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
   a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
   / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
