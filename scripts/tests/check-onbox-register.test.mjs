@@ -3683,3 +3683,152 @@ test('#2599 review round 2: replaying real live-view.html history as ordinary pe
     `${falsePositives.length}/${commits.length} ordinary-publish replays hard-failed as content drift: ${JSON.stringify(falsePositives, null, 2)}`,
   );
 });
+
+// #2837 Finding 1: CLI-level test ensuring 3-way warnings print to stderr and
+// exit 0 (not 1). Unit tests cover checkLiveView's return value; this tests
+// the CLI's wiring: that `console.warn` prints the warnings visibly, that
+// `behindErrors` filter excludes 3-way-prefixed entries, and that
+// publishedFailed is NOT set.
+test('#2837: CLI -- 3-way content disagreement prints warning to stderr, exits 0', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // All three differ: baseline v0, published v1 (from a first publish),
+  // tracked v2 (second edit before merge).
+  const v0Content = 'Original baseline (v0)';
+  const v1Content = 'First publish (v1)';
+  const v2Content = 'Second edit (v2)';
+
+  const baselineLiveView = buildRowContentLiveView([{ id: 'A1', body: v0Content }]);
+  const publishedLiveView = buildRowContentLiveView([{ id: 'A1', body: v1Content }]);
+  const trackedLiveViewHtml = buildRowContentLiveView([{ id: 'A1', body: v2Content }]);
+
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-cli-test-'));
+  try {
+    const publishedPath = join(dir, 'published.html');
+    const baselinePath = join(dir, 'baseline.md');
+    const baselineLiveViewPath = join(dir, 'baseline-liveview.html');
+    const trackedLiveViewPath = join(dir, 'tracked-liveview.html');
+    writeFileSync(publishedPath, publishedLiveView, 'utf8');
+    writeFileSync(baselinePath, baselineRegister, 'utf8');
+    writeFileSync(baselineLiveViewPath, baselineLiveView, 'utf8');
+    writeFileSync(trackedLiveViewPath, trackedLiveViewHtml, 'utf8');
+
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_BASELINE_LIVEVIEW_FILE: baselineLiveViewPath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedLiveViewPath,
+    });
+
+    // Must exit 0 (not 1) — 3-way warnings do not block.
+    assert.equal(r.status, 0, `expected exit 0 for 3-way warning (not error), got ${r.status}. stderr: ${r.stderr}`);
+    // Warning must appear in stderr.
+    assert.ok(
+      r.stderr.includes('Three-way content differences detected'),
+      `expected 3-way warning message in stderr, got: ${r.stderr}`,
+    );
+    // Exact string check: the message must say "not blocking".
+    assert.ok(
+      r.stderr.includes('not blocking'),
+      `expected "not blocking" in warning text, got: ${r.stderr}`,
+    );
+    // The row ID should be mentioned in the warning.
+    assert.ok(
+      r.stderr.includes('A1'),
+      `expected row ID (A1) mentioned in warning, got: ${r.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2837 Finding 1: CLI-level test for extraction error in the tracked (working-tree)
+// live-view file. The banner must blame the tracked/local file specifically.
+test('#2837: CLI -- extraction error in tracked live-view produces [tracked] banner', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Normal published/baseline; corrupted tracked by removing the body div's class.
+  const normalHtml = buildRowContentLiveView([{ id: 'A1', body: 'Normal content' }]);
+  const corruptedTrackedHtml = normalHtml.replace(
+    /<div class="body">/g,
+    '<div>',  // Missing class="body", causes extraction error
+  );
+
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-cli-test-'));
+  try {
+    const publishedPath = join(dir, 'published.html');
+    const baselinePath = join(dir, 'baseline.md');
+    const baselineLiveViewPath = join(dir, 'baseline-liveview.html');
+    const trackedLiveViewPath = join(dir, 'tracked-liveview.html');
+    writeFileSync(publishedPath, normalHtml, 'utf8');
+    writeFileSync(baselinePath, baselineRegister, 'utf8');
+    writeFileSync(baselineLiveViewPath, normalHtml, 'utf8');
+    writeFileSync(trackedLiveViewPath, corruptedTrackedHtml, 'utf8');
+
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_BASELINE_LIVEVIEW_FILE: baselineLiveViewPath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedLiveViewPath,
+    });
+
+    // Must fail (exit 1) due to malformed HTML.
+    assert.equal(r.status, 1, `expected exit 1 for extraction error, got ${r.status}. stderr: ${r.stderr}`);
+    // The error banner must mention that the tracked/local copy is broken.
+    assert.ok(
+      r.stderr.includes('Your local') && r.stderr.includes('working-tree copy'),
+      `expected error to blame local/working-tree copy, got: ${r.stderr}`,
+    );
+    // The banner must include [tracked] tag or mention "tracked".
+    assert.ok(
+      r.stderr.includes('[tracked]') || r.stderr.includes('tracking'),
+      `expected [tracked] tag or 'tracking' mention in error, got: ${r.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2837 Finding 1: CLI-level test for extraction error in the baseline
+// (origin/main) live-view file. The banner must blame the baseline specifically.
+test('#2837: CLI -- extraction error in baseline live-view produces [baseline] banner', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Normal published/tracked; corrupted baseline by removing the body div's class.
+  const normalHtml = buildRowContentLiveView([{ id: 'A1', body: 'Normal content' }]);
+  const corruptedBaselineHtml = normalHtml.replace(
+    /<div class="body">/g,
+    '<div>',  // Missing class="body", causes extraction error
+  );
+
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-cli-test-'));
+  try {
+    const publishedPath = join(dir, 'published.html');
+    const baselinePath = join(dir, 'baseline.md');
+    const baselineLiveViewPath = join(dir, 'baseline-liveview.html');
+    const trackedLiveViewPath = join(dir, 'tracked-liveview.html');
+    writeFileSync(publishedPath, normalHtml, 'utf8');
+    writeFileSync(baselinePath, baselineRegister, 'utf8');
+    writeFileSync(baselineLiveViewPath, corruptedBaselineHtml, 'utf8');
+    writeFileSync(trackedLiveViewPath, normalHtml, 'utf8');
+
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_BASELINE_LIVEVIEW_FILE: baselineLiveViewPath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedLiveViewPath,
+    });
+
+    // Must fail (exit 1) due to malformed HTML.
+    assert.equal(r.status, 1, `expected exit 1 for extraction error, got ${r.status}. stderr: ${r.stderr}`);
+    // The error banner must mention that the baseline (origin/main) copy is broken.
+    assert.ok(
+      r.stderr.includes('origin/main'),
+      `expected error to blame origin/main copy, got: ${r.stderr}`,
+    );
+    // The banner must include [baseline] tag or mention "baseline".
+    assert.ok(
+      r.stderr.includes('[baseline]'),
+      `expected [baseline] tag in error, got: ${r.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

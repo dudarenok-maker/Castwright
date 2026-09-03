@@ -1241,9 +1241,10 @@ export function checkLiveView(
   //   has a local edit not yet merged to origin/main, and the published page
   //   is simply unchanged (still at baseline) because nothing has been
   //   published yet — the ordinary pending-publish state. Don't report.
-  // - If neither matches baseline (all three disagree) → an unresolvable
-  //   3-way conflict; fail closed by reporting it too, since a publish gate
-  //   should refuse an unverifiable state rather than silently let it pass.
+  // - If neither matches baseline (all three disagree) → a 3-way content
+  //   disagreement; report as an advisory warning (not blocking), since
+  //   ordinary multi-step publishes (edit, publish, edit again before merge)
+  //   trigger this and hash-only comparison cannot distinguish from conflicts.
   // Fail closed when the baseline isn't available: skip content hashing
   // rather than treating "baseline unknown" as "no drift".
   if (direction === 'extraOnly' && typeof trackedLiveViewHtml === 'string') {

@@ -283,9 +283,12 @@ comparison, see the edge list above). The merge step that closes this, run
        has been published yet. This is the ordinary, expected pending-publish
        state — proceed.
      - **Neither matches the baseline** (all three — tracked, published, and
-       `origin/main` — disagree) — an unresolvable 3-way conflict. The check
-       fails closed and reports it rather than silently guessing which
-       version is correct; investigate manually before publishing.
+       `origin/main` — disagree) — a 3-way content disagreement. The check
+       reports this as a visible warning to stderr (not blocking), since
+       ordinary multi-step publishes (edit, publish again before merging)
+       trigger this and hash-only comparison cannot distinguish from genuine
+       conflicts. If the content seems wrong, investigate manually; otherwise,
+       you can proceed to publish.
 
    **Known limitation:** a row that's live and still genuinely owed but was
    never actually merged into `main` at all (e.g. published straight from a

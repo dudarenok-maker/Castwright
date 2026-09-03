@@ -50,6 +50,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # Node 24 + npm/node_modules caches + `npm ci` (root + server). Shared
       # composite with verify.yml (plan 106) — this matrix job gains the
