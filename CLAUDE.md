@@ -1059,11 +1059,11 @@ invalid commit messages sail through, pre-push verify never fires. In that case:
    checkout — the cheap alternative to installing. Frontend tooling resolves via
    root alone, so `server/` is easy to forget and fails the server test legs
    with "vitest not found".
-   **For real sidecar/TTS work, also junction `server/tts-sidecar/voices/`**
-   (found 2026-08-31, register row A1) — it holds the actual model weights
-   (Qwen HF cache, Kokoro ONNX, Coqui/XTTS, cloned-voice artifacts) and is
-   git-ignored like `.venv`, but junctioning only `.venv` leaves it absent. A
-   missing `voices/` doesn't 404 cleanly — Kokoro throws `Kokoro model not
+   **For real sidecar/TTS work, also junction `server/tts-sidecar/.venv` AND
+   `server/tts-sidecar/voices/`** (found 2026-08-31, register row A1) — `voices/`
+   holds the actual model weights (Qwen HF cache, Kokoro ONNX, Coqui/XTTS,
+   cloned-voice artifacts) and is git-ignored like `.venv`, but junctioning only
+   `.venv` leaves `voices/` absent. A missing `voices/` doesn't 404 cleanly — Kokoro throws `Kokoro model not
    found` repeatedly at sidecar boot, which can trigger enough restarts to trip
    the `recycle-storm` circuit breaker mid-chapter, misreporting as a side-11
    host-memory-leak regression (#399) when the real cause is the missing
