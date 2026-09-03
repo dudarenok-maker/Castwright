@@ -1671,9 +1671,31 @@ difference between a hiccup and a permanently dead voice.
 - Step 6: the chapter now **completes**. The `.pt` is re-derived and reappears.
   No manual repair, no re-clone, no manifest editing was needed.
 
-**Record:** status after the failed run = ______  (must not be `failed`)
+**Record:** status after the failed run = `ready` (unchanged — must not be `failed`)
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, Claude Code, isolated
+worktree `wt-a1-wave11-continue`, throwaway fixture book "The Coalfall
+Commission (A1 wave11)", real Qwen 0.6B sidecar, no mocks). Forced Repairable
+(deleted `$K.pt`), turned off `autoStartSidecar` and hard-killed the
+worktree's sidecar process (port-scoped, primary checkout unaffected),
+restarted the server alone. `POST .../generation` (force:true) on chapter 2
+(Master Oduvan, the cloned character, speaks): failed with
+`errorCode: cloned-voice-broken`, `errorReason` naming "Master Oduvan
+(derive-failed)" exactly per the expected shape. `voice.json`'s
+`engines.qwen.status` read straight after the failure: **`ready`**, not
+`failed` — not bricked. Restarted the sidecar (autoStartSidecar restored to
+`true` immediately after, a shared `~/.castwright/user-settings.json` value —
+confirmed back to its prior state) and re-ran the same chapter unchanged: it
+**completed** (`chapter_complete`, `audioEngines {qwen:1, kokoro:4}`), `$K.pt`
+reappeared with a fresh mtime. No manual repair, no re-clone. **Timing note
+(not a fail against this test's own criteria, but worth recording as a
+separate finding):** the failed run took **422s** to reach `chapter_failed`
+with the sidecar down — contrast C-02's revoked-voice path, which fails in
+under a second. Traced to `derive-engine-artifact.ts`'s `DERIVE_ABSOLUTE_MAX_MS`
+being the only hard ceiling (600s) on an unreachable-sidecar derive attempt;
+worth a closer look at why a plain connection failure isn't diagnosed faster
+than that ceiling, but out of scope to chase further this run — filed as a
+finding, not fixed.
 
 ---
 
