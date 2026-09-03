@@ -13,7 +13,6 @@ import {
   extractCitations,
   isFrozenPath,
   REGISTER_PATH,
-  scannedFiles,
 } from '../check-register-row-citations.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
