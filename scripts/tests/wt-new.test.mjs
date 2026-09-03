@@ -379,8 +379,8 @@ test('renderLaunchBlock reminds about the .venv AND voices/ junctions for sideca
     slot: 1,
     install: true,
   });
-  assert.match(block, /\.venv/);
-  assert.match(block, /voices\//);
+  assert.match(block, /server\/tts-sidecar\/\.venv/);
+  assert.match(block, /server\/tts-sidecar\/voices\//);
 });
 
 test('renderLaunchBlock includes both npm install lines when install=false', () => {
