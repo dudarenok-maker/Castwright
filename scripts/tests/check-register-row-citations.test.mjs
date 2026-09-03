@@ -396,7 +396,14 @@ test('CLI: the real tree scan passes clean', () => {
   assert.equal(result.status, 0, `expected exit 0, got ${result.status}:\n${result.stderr}`);
   assert.match(result.stdout, /check:register-row-citations: OK/);
   // Assert that the scan actually found citations (not scanning zero files).
-  assert.match(result.stdout, /\d+ citation\(s\) across \d+ file\(s\)/);
+  // Parse the citation count and verify it's nonzero — the regex alone matches
+  // "0 citation(s)" just as happily, so we need to verify the actual number.
+  const citationMatch = result.stdout.match(/(\d+) citation\(s\)/);
+  const citationCount = citationMatch ? parseInt(citationMatch[1], 10) : 0;
+  assert.ok(
+    citationCount > 0,
+    `expected to find citations, but got ${citationCount} citation(s) in:\n${result.stdout}`
+  );
 });
 
 test('CLI mutation: if scannedFiles() returns empty, the check would find zero citations', () => {
@@ -411,31 +418,37 @@ test('CLI mutation: if scannedFiles() returns empty, the check would find zero c
   const citationMatch = baseline.stdout.match(/(\d+) citation\(s\)/);
   const citationCount = citationMatch ? parseInt(citationMatch[1], 10) : 0;
 
-  // Only test the mutation if there are actual citations in the tree
-  if (citationCount > 0) {
-    // Mutate to make scannedFiles() return empty by finding the spread operator
-    // in the return statement and replacing the whole return
-    const mutated = original.replace(
-      'return [...files].sort();',
-      'return []; // MUTATED'
-    );
-    assert.notEqual(mutated, original, 'mutation should have changed the file');
+  // Assert there ARE actual citations in the tree — if not, the mutation would
+  // produce zero citations, which would silently pass the test (since returning
+  // zero citations is valid output). This assertion must fail if the baseline
+  // itself has zero citations, proving the test would be worthless for this tree.
+  assert.ok(
+    citationCount > 0,
+    `baseline must find citations to make this mutation test useful, but found ${citationCount}`
+  );
 
-    try {
-      writeFileSync(CLI_PATH, mutated);
-      const mutantResult = runCli([]);
-      // With zero files scanned, we should get zero citations reported
-      assert.match(mutantResult.stdout, /0 citation\(s\)/);
-      // The mutation should be detectable by checking that citation count dropped
-      assert.notEqual(mutantResult.stdout, baseline.stdout);
-    } finally {
-      writeFileSync(CLI_PATH, original);
-      assert.equal(
-        Buffer.compare(Buffer.from(readFileSync(CLI_PATH, 'utf8')), Buffer.from(original)),
-        0,
-        'file should be restored to original'
-      );
-    }
+  // Mutate to make scannedFiles() return empty by finding the spread operator
+  // in the return statement and replacing the whole return
+  const mutated = original.replace(
+    'return [...files].sort();',
+    'return []; // MUTATED'
+  );
+  assert.notEqual(mutated, original, 'mutation should have changed the file');
+
+  try {
+    writeFileSync(CLI_PATH, mutated);
+    const mutantResult = runCli([]);
+    // With zero files scanned, we should get zero citations reported
+    assert.match(mutantResult.stdout, /0 citation\(s\)/);
+    // The mutation should be detectable by checking that citation count dropped
+    assert.notEqual(mutantResult.stdout, baseline.stdout);
+  } finally {
+    writeFileSync(CLI_PATH, original);
+    assert.equal(
+      Buffer.compare(Buffer.from(readFileSync(CLI_PATH, 'utf8')), Buffer.from(original)),
+      0,
+      'file should be restored to original'
+    );
   }
 });
 
@@ -444,11 +457,17 @@ test('CLI mutation: if SCAN_PREFIXES drops docs/features/**, the check would mis
   const baseline = runCli([]);
   assert.equal(baseline.status, 0);
 
-  // Only test if the baseline actually scanned files from docs/features/**
-  // (which it should, given the test above found citations)
-  if (!baseline.stdout.includes('check:register-row-citations: OK')) {
-    return; // Skip if something's wrong with baseline
-  }
+  // Extract baseline citation count
+  const baselineMatch = baseline.stdout.match(/(\d+) citation\(s\)/);
+  const baselineCitationCount = baselineMatch ? parseInt(baselineMatch[1], 10) : 0;
+
+  // Assert that the baseline actually scanned docs/features/** and found citations
+  // from it. If it found zero citations or if SCAN_PREFIXES is already broken,
+  // this test would be worthless.
+  assert.ok(
+    baselineCitationCount > 0,
+    `baseline must find citations (including from docs/features/**) to make this mutation test useful, but found ${baselineCitationCount}`
+  );
 
   // Mutate SCAN_PREFIXES to exclude docs/features/**
   const mutated = original.replace(
@@ -460,9 +479,15 @@ test('CLI mutation: if SCAN_PREFIXES drops docs/features/**, the check would mis
   try {
     writeFileSync(CLI_PATH, mutated);
     const mutantResult = runCli([]);
-    // With docs/features/** excluded, the scan should find fewer files/citations
-    // (assuming docs/features/** contains at least one citation)
-    assert.notEqual(mutantResult.stdout, baseline.stdout, 'output should differ when docs/features/** is excluded');
+    // With docs/features/** excluded, the scan should find fewer citations.
+    // Parse the mutant's citation count and assert it is strictly LOWER than baseline.
+    const mutantMatch = mutantResult.stdout.match(/(\d+) citation\(s\)/);
+    const mutantCitationCount = mutantMatch ? parseInt(mutantMatch[1], 10) : 0;
+
+    assert.ok(
+      mutantCitationCount < baselineCitationCount,
+      `expected mutation to reduce citations from ${baselineCitationCount} to less, but got ${mutantCitationCount}`
+    );
   } finally {
     writeFileSync(CLI_PATH, original);
     assert.equal(
