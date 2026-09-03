@@ -1769,7 +1769,18 @@ genuine 4xx, mark **N/A** and lean on `clone-voice-resolver.test.ts`'s 422 case.
   This is the intended behaviour, not a bug.
 - The card shows the **danger** "Needs attention" chip (C-16).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). Corrupted `master.transcript` to `''` and deleted the `.pt`
+to force a repair attempt. Generated chapter 2: failed in **~1s** with
+`cloned-voice-broken`, reason `(derive-failed)` for both cloned characters.
+`voice.json`'s `engines.qwen.status` immediately after: **`failed`**
+(persisted — contrast C-08). Re-generated the same chapter unchanged: failed
+again in **0s**, `tts.err.log`'s derive-line count did not increase — no
+derive was attempted, confirming `'failed'` is terminal. (UI danger chip not
+observed — no browser driving this run.) Restored the transcript afterward,
+set `engines.qwen.status: 'stale'` (not `'failed'`, so classification could
+reach the needsDerive branch) and regenerated: completed normally, voice
+healthy again — left the fixture in a clean state for later tests.
 
 ---
 
