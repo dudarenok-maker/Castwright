@@ -94,57 +94,101 @@ const REGISTER_LINK_REGEX = /onbox-acceptance-register\.md#([ae]\d+)\b/gi;
 // entire line. A line can contain multiple citations, and only those where
 // the annotation phrase is specifically tied to that citation ID are exempt.
 // See the bug fix for #2831 for details.
-const ANNOTATION_REGEX = /\bdischarged?\b|\bno longer exists?\b|\bremoved from the register\b/i;
+// The 'g' flag is required for matchAll() in the citation-checking logic.
+const ANNOTATION_REGEX = /\bdischarged?\b|\bno longer exists?\b|\bremoved from the register\b/gi;
 
-// Check if a citation (identified by its row ID) has a discharge/removal
-// annotation on the given line that is specifically tied to that citation.
-// This prevents exempting unrelated citations on the same line.
-// The annotation must appear in close proximity to the citation ID
-// to be considered associated with that specific citation (not another).
-function isCitationAnnotated(id, line) {
-  if (!ANNOTATION_REGEX.test(line)) return false;
+// Join hard-wrapped continuation lines into a single logical line for checking.
+// This ensures annotations on the next physical line after a citation are still recognized.
+// Handles both blockquote continuations (lines starting with `> `) and prose wraps.
+function normalizeLineContext(lines, lineNum) {
+  let context = lines[lineNum - 1] ?? '';
+  let nextIdx = lineNum;
 
-  const testLine = line.replace(/\n/g, ' ');
+  while (nextIdx < lines.length) {
+    const currentLine = lines[nextIdx - 1];
+    const nextLine = lines[nextIdx];
 
-  // Check if annotation appears within proximity of this specific citation.
-  // Primary pattern: "row A99 ... discharged" (annotation shortly after ID)
-  // Secondary pattern: "(discharged...) row A99" (annotation close before)
-  //
-  // The window is sized to catch typical annotation patterns like
-  // "row A99 discharged" or "row A99 at the time, discharged" but still
-  // be narrow enough to not capture annotations for different IDs on the
-  // same line (e.g., not capturing "A1's annotation" when checking "A99999").
+    if (!nextLine) break;
 
-  // Check for "row " pattern citations
-  const rowRegexPattern = `\\brow\\s+${id}\\b`;
-  const rowMatch = testLine.match(new RegExp(rowRegexPattern, 'i'));
-  if (rowMatch) {
-    const idEnd = rowMatch.index + rowMatch[0].length;
+    // Blockquote continuation: both lines start with `> `
+    const isBlockquoteContinuation = currentLine.startsWith('> ') && nextLine.startsWith('> ');
 
-    // Look within ~50 chars after the citation to catch patterns like
-    // "row A99 at the time, discharged" or "row A99 ... discharged" in narrative text
-    const afterWindow = testLine.substring(idEnd, Math.min(testLine.length, idEnd + 50));
-    if (ANNOTATION_REGEX.test(afterWindow)) return true;
+    // Prose continuation: both are prose (not markdown structural markers)
+    const isCurrentProse =
+      !currentLine.startsWith('> ') && !currentLine.startsWith('#') && currentLine.trim() !== '';
+    const isNextProse =
+      !nextLine.startsWith('> ') && !nextLine.startsWith('#') && nextLine.trim() !== '';
+    const isProseContinuation = isCurrentProse && isNextProse;
 
-    // Also check ~10 chars before (for tight patterns like "discharged row A99")
-    const beforeWindow = testLine.substring(Math.max(0, rowMatch.index - 10), idEnd);
-    if (ANNOTATION_REGEX.test(beforeWindow)) return true;
+    if (isBlockquoteContinuation) {
+      // For blockquotes, remove the `> ` prefix from the continuation so the citation
+      // regex can match across the joined lines (e.g., "row A99" split as "row" + "A99")
+      const nextContent = nextLine.replace(/^> /, '');
+      context += ' ' + nextContent;
+      nextIdx++;
+    } else if (isProseContinuation) {
+      // For prose, just join with a space
+      context += ' ' + nextLine;
+      nextIdx++;
+    } else {
+      break;
+    }
   }
 
-  // Check for markdown link pattern citations
-  if (testLine.includes('onbox-acceptance-register.md#')) {
-    const linkRegexPattern = `onbox-acceptance-register\\.md#${id.toLowerCase()}\\b`;
-    const linkMatch = testLine.match(new RegExp(linkRegexPattern, 'i'));
-    if (linkMatch) {
-      const idEnd = linkMatch.index + linkMatch[0].length;
+  return context;
+}
 
-      // Look within ~50 chars after the link
-      const afterWindow = testLine.substring(idEnd, Math.min(testLine.length, idEnd + 50));
-      if (ANNOTATION_REGEX.test(afterWindow)) return true;
+// Check if a citation (identified by its row ID) has a discharge/removal
+// annotation that is specifically tied to that citation (not another citation
+// on the same logical line). Uses a "nearest citation" rule: for each
+// annotation phrase, the annotation applies to the citation nearest to its
+// left. This prevents cross-contamination from multiple citations on the
+// same line and handles hard-wrapped continuations.
+function isCitationAnnotated(id, lines, lineNum) {
+  const context = normalizeLineContext(lines, lineNum);
 
-      // Also check ~10 chars before
-      const beforeWindow = testLine.substring(Math.max(0, linkMatch.index - 10), idEnd);
-      if (ANNOTATION_REGEX.test(beforeWindow)) return true;
+  // Find all "row ID" citations in the context
+  const rowCitations = [...context.matchAll(/\brow\s+([AE]\d+)\b/gi)].map((m) => ({
+    index: m.index,
+    id: m[1].toUpperCase(),
+    type: 'row',
+  }));
+
+  // Find all markdown link citations
+  const linkCitations = [...context.matchAll(/onbox-acceptance-register\.md#([ae]\d+)\b/gi)].map(
+    (m) => ({
+      index: m.index,
+      id: m[1].toUpperCase(),
+      type: 'link',
+    })
+  );
+
+  // Merge and sort by position
+  const allCitations = [...rowCitations, ...linkCitations].sort((a, b) => a.index - b.index);
+
+  // Check if our citation exists in the context
+  const ourCitation = allCitations.find((c) => c.id === id);
+  if (!ourCitation) return false;
+
+  // Find all annotations in the context. Note: ANNOTATION_REGEX has the global
+  // flag, so we must use matchAll() rather than test() to avoid state issues.
+  const annotations = [...context.matchAll(ANNOTATION_REGEX)];
+  if (annotations.length === 0) return false;
+
+  // For each annotation, check if our citation is the nearest one to its left
+  for (const annotation of annotations) {
+    const annotationPos = annotation.index;
+
+    // Find all citations to the left of this annotation
+    const citationsToLeft = allCitations.filter((c) => c.index < annotationPos);
+    if (citationsToLeft.length === 0) continue;
+
+    // The nearest citation to the left is the last one
+    const nearestCitation = citationsToLeft[citationsToLeft.length - 1];
+
+    if (nearestCitation.id === id) {
+      // Our citation is the nearest to this annotation, so it applies to us
+      return true;
     }
   }
 
@@ -201,7 +245,18 @@ export function scannedFiles() {
 // immediately before the id and the other requires
 // "onbox-acceptance-register.md#" immediately before it, so no citation is
 // ever double-counted.
+//
+// To handle blockquote-prefixed citations (e.g., "> row\n> A99"), we
+// normalize blockquote markers before scanning, removing the ">" prefix so
+// the citation patterns can match across line breaks.
 export function extractCitations(text) {
+  // Remove blockquote prefixes to allow citation patterns to match across lines
+  // (e.g., "row\nA99" becomes matchable even when formatted as "> row\n> A99").
+  const normalizedText = text
+    .split('\n')
+    .map((line) => line.replace(/^> /, ''))
+    .join('\n');
+
   const lines = text.split('\n');
   const lineStarts = [];
   let offset = 0;
@@ -217,10 +272,10 @@ export function extractCitations(text) {
   };
 
   const citations = [];
-  for (const m of text.matchAll(ROW_WORD_CITATION_REGEX)) {
+  for (const m of normalizedText.matchAll(ROW_WORD_CITATION_REGEX)) {
     citations.push({ line: lineForOffset(m.index), id: m[1].toUpperCase() });
   }
-  for (const m of text.matchAll(REGISTER_LINK_REGEX)) {
+  for (const m of normalizedText.matchAll(REGISTER_LINK_REGEX)) {
     citations.push({ line: lineForOffset(m.index), id: m[1].toUpperCase() });
   }
   citations.sort((a, b) => a.line - b.line);
@@ -293,7 +348,7 @@ export function checkRegisterRowCitations({
       citationCount++;
       if (isRegisterItself && rowIdAtLine(strippedText, line) === id) continue; // self-reference
       if (validIds.has(id)) continue;
-      if (isCitationAnnotated(id, lines[line - 1] ?? '')) {
+      if (isCitationAnnotated(id, lines, line)) {
         annotated.push({ file: normalizedPath, line, id });
         continue;
       }

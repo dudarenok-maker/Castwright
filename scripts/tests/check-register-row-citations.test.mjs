@@ -234,6 +234,80 @@ test('a line with both an annotated dead reference and an unrelated dead citatio
   assert.deepEqual(failures, [{ file: 'docs/testing/plan.md', line: 1, id: 'A88888' }]);
 });
 
+test('cross-contamination: annotated citation SECOND on same line is correctly identified (Finding 3 pass-2 repro)', () => {
+  // The reviewer\'s exact repro: a line with two dead citations where only the
+  // second one is annotated. The first (A9999) should fail; the second (A8888) should be annotated.
+  // Before the fix, A9999 was falsely exempted because the annotation window
+  // extended far enough to capture "was discharged" even though it applies to A8888.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': 'Row A9999 is still owed and row A8888 was discharged.',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A9999 has no annotation → should fail
+  // A8888 is the nearest citation to "discharged" → should be annotated
+  assert.deepEqual(failures, [{ file: 'docs/testing/plan.md', line: 1, id: 'A9999' }]);
+  assert.deepEqual(annotated, [{ file: 'docs/testing/plan.md', line: 1, id: 'A8888' }]);
+});
+
+test('legitimate annotation far from citation on same line is still recognized', () => {
+  // Before the fix, annotations more than ~46 characters away from their citation
+  // would fail to be recognized due to the fixed proximity window being too narrow.
+  // This test verifies that with the "nearest citation" rule and a larger logical context,
+  // even distant annotations are correctly tied to their citation.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md':
+      'Row A99 was planned long ago and there was much discussion about it but ultimately it was discharged in 2026-08-26.',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 is the only citation and "discharged" appears after it → should be annotated
+  assert.deepEqual(failures, []);
+  assert.deepEqual(annotated, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+});
+
+test('hard-wrap false-failure: citation on one line, annotation on next (plain prose)', () => {
+  // A citation whose row ID is on one physical line and whose discharge annotation
+  // is on the very next physical line should still be recognized as annotated.
+  // Before the fix, this would be a false FAILURE because isCitationAnnotated
+  // only looked within a single physical line.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': 'See register row A99,\ndischarged 2026-08-01.',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 should be recognized as annotated (not a failure)
+  assert.deepEqual(failures, []);
+  assert.deepEqual(annotated, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+});
+
+test('hard-wrap with blockquote: citation on one blockquote line, annotation on next', () => {
+  // A blockquote-wrapped hard-wrap should also be handled.
+  // Before the fix, the blockquote continuation was a "silent miss" — extractCitations
+  // would return zero citations, so the error wasn\'t even caught.
+  // Now, normalizeLineContext joins blockquote continuations, and the citation is properly found and recognized as annotated.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': '> See register row\n> A99, discharged 2026-08-01.',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 should be found and recognized as annotated
+  assert.deepEqual(failures, []);
+  assert.deepEqual(annotated, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+});
+
 test('isFrozenPath recognizes the dated historical-transcript exclusions', () => {
   assert.equal(isFrozenPath('docs/testing/onbox-acceptance-staleness-audit.md'), true);
   assert.equal(isFrozenPath('docs/testing/onbox-wave5-results/step-1.md'), true);
