@@ -1909,10 +1909,39 @@ whole point.
   `Re-enable Qwen or restore the missing voice(s)` remedy — the two diagnoses must
   be visibly different.
 
-**Record:** wrong-engine message = ______________________________________
-**Record:** engine-unavailable message = ______________________________________
+**Record:** wrong-engine message = `Cloned voice(s) unavailable — a cloned
+voice must never be substituted with another: "Master Oduvan" (wrong-engine),
+"Wren — Sparrow only to him, and only when he had forgotten to be stern"
+(wrong-engine). switch the book to Qwen; reassign the character(s).`
+**Record:** engine-unavailable message = not reproduced this run — see notes.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P (wrong-engine half) · ☐ B (engine-unavailable contrast, this box)  **Notes:**
+Run 5 (2026-09-04, same worktree/setup). **Wrong-engine half: confirmed.**
+Two cloned characters (Master Oduvan, Wren) assigned on Qwen; book generated
+with `modelKey: kokoro-v1`; chapter failed immediately with
+`cloned-voice-broken`, reason naming both characters `(wrong-engine)`, remedy
+`switch the book to Qwen` — matches the expected shape exactly, does not
+claim Qwen is unavailable. **Engine-unavailable contrast: not cleanly
+reproduced on this box.** Killing the sidecar process and setting
+`autoStartSidecar: false` only suppresses the SERVER-BOOT spawn — a
+generation request still lazily loads the sidecar on demand regardless (log:
+`readiness qwen: sidecar not ready after 210000ms ... proceeding to lazy
+load`), so "stop the sidecar" does not stay stopped once a render starts.
+Two attempts: the first (chapter 2, sidecar confirmed down at request time)
+completed normally 851s later — the lazy-load quietly succeeded mid-render.
+The second (chapter 3, fresh, sidecar confirmed down and re-verified staying
+down for 25s before firing) failed after 851s with **`recycle-storm`**, not
+`engine-unavailable` — the sidecar it lazily spawned recycled twice under
+this box's known side-11 host-memory-leak pattern (tracked separately,
+unrelated to this test) before generation gave up. Neither run reached the
+`(engine-unavailable)` diagnosis this half is meant to exercise. Not filed as
+a new defect — recycle-storm is an existing tracked issue and the lazy-load
+behaviour may be intentional self-healing — but the precondition as written
+("stop the sidecar, generate") is not achievable on a box where a render
+request can relaunch it; a future run wanting this contrast should look for
+a way to make the sidecar process genuinely refuse to (re)start (e.g. block
+its port, or point `LOCAL_TTS_URL` at a closed port) rather than just killing
+the running process.
 
 ---
 
@@ -1975,7 +2004,27 @@ to change both the session engine picker (P-23) and a character's own `ttsEngine
   can slip past it. That is expected; the render-time pre-pass (C-13) is the hard
   boundary.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same worktree/setup
+as C-08). Character `wren-sparrow`, throwaway book. Case 1 (session picker
+Kokoro, no override, `modelKey:kokoro-v1` on the assign call): **409**,
+message byte-for-byte `Cloned voices render on Qwen or Coqui XTTS v2, but this
+book is set to kokoro. Switch the book's engine to Qwen or Coqui XTTS v2
+before assigning "<Character>".` Case 2 (`ttsEngine:'kokoro'` override,
+`modelKey:qwen3-tts-0.6b`): **409**, names the character, `Cloned voices
+render on Qwen or Coqui XTTS v2, but "<Character>" is cast on kokoro. Switch
+the character's engine to Qwen or Coqui XTTS v2 (or reassign the character)
+before assigning "<Character>".` Case 2b (`ttsEngine:'coqui'`): **200** —
+Coqui-cast cloned assign succeeds. Case 3 (persisted account default
+`defaultTtsModelKey: kokoro-v1, explicit: true`, character override cleared,
+assign called with no `modelKey`): **409** (fell back to the persisted
+default, correctly non-clone-capable); the SAME assign called WITH
+`modelKey: qwen3-tts-0.6b` (the pending picker): **200** — the pending choice
+won over the persisted default, per spec. Restored the account default to
+its prior `qwen3-tts-1.7b`/explicit afterwards. **Test-setup trap, not a
+product defect:** clearing a character's `ttsEngine` via the cast-slice PUT
+requires setting the field to `null`, not omitting/deleting the key — an
+omitted key is treated as "no change" (preserved from disk) by
+`preserveDesignedVoices`, so a naive delete-the-key patch silently no-ops.
 
 ---
 
