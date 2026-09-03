@@ -85,20 +85,22 @@ const ROW_WORD_CITATION_REGEX = /\b(?:row|Row)\s+([AE]\d+)\b/g;
 // upper-case.
 const REGISTER_LINK_REGEX = /onbox-acceptance-register\.md#([ae]\d+)\b/gi;
 
-// See this file's header ("TWO ADDITIONS...") for why this exists and why
-// same-line is enough for v1: measured against every real hit on the tree at
-// the time this was added, the annotation always shares the citation's own
-// physical line.
-// NOTE: The annotation exemption is keyed to the SPECIFIC citation, not the
-// entire line. A line can contain multiple citations, and only those where
-// the annotation phrase is specifically tied to that citation ID are exempt.
-// See the bug fix for #2831 for details.
+// See this file's header ("TWO ADDITIONS...") for why this exists.
+// The annotation exemption is keyed to the SPECIFIC citation, not the entire
+// line. A line can contain multiple citations, and only those where the
+// annotation phrase is specifically tied to that citation ID are exempt.
+// A "nearest citation to the left" rule ties each annotation to the most
+// recent citation before it in the logical line (including hard-wrapped
+// continuations), preventing cross-contamination from multiple citations on
+// the same line. See the bug fix for #2831 for details.
 // The 'g' flag is required for matchAll() in the citation-checking logic.
 const ANNOTATION_REGEX = /\bdischarged?\b|\bno longer exists?\b|\bremoved from the register\b/gi;
 
 // Join hard-wrapped continuation lines into a single logical line for checking.
 // This ensures annotations on the next physical line after a citation are still recognized.
 // Handles both blockquote continuations (lines starting with `> `) and prose wraps.
+// Conservative: only joins prose when the current line doesn't end with sentence-ending
+// punctuation and neither line starts with a list marker or looks like a table row.
 function normalizeLineContext(lines, lineNum) {
   let context = lines[lineNum - 1] ?? '';
   let nextIdx = lineNum;
@@ -112,17 +114,40 @@ function normalizeLineContext(lines, lineNum) {
     // Blockquote continuation: both lines start with `> `
     const isBlockquoteContinuation = currentLine.startsWith('> ') && nextLine.startsWith('> ');
 
-    // Prose continuation: both are prose (not markdown structural markers)
+    // Prose continuation: only join when genuinely a wrapped continuation
+    // (not when joining separate list items or sentences).
+    // Checks:
+    // 1. Both lines are prose (not markdown structural markers)
+    // 2. Current line doesn't end with sentence-ending punctuation (.!?)
+    // 3. Neither line starts with a list marker (-, *, or number patterns)
+    // 4. Neither line is a table row (starts or ends with |)
     const isCurrentProse =
       !currentLine.startsWith('> ') && !currentLine.startsWith('#') && currentLine.trim() !== '';
     const isNextProse =
       !nextLine.startsWith('> ') && !nextLine.startsWith('#') && nextLine.trim() !== '';
-    const isProseContinuation = isCurrentProse && isNextProse;
+
+    // Check for list markers: lines starting with -, *, or number patterns like "1."
+    const currentStartsWithListMarker = /^\s*[-*]|\d+\.\s/.test(currentLine);
+    const nextStartsWithListMarker = /^\s*[-*]|\d+\.\s/.test(nextLine);
+
+    // Check for table rows (starting or ending with |)
+    const isCurrentTableRow = /^\s*\|/.test(currentLine) || /\|\s*$/.test(currentLine);
+    const isNextTableRow = /^\s*\|/.test(nextLine) || /\|\s*$/.test(nextLine);
+
+    // For prose continuation, current line should not end with sentence-ending punctuation
+    const currentLineEndsWithPunctuation = /[.!?]\s*$/.test(currentLine);
+
+    const isProseContinuation =
+      isCurrentProse && isNextProse &&
+      !currentStartsWithListMarker && !nextStartsWithListMarker &&
+      !isCurrentTableRow && !isNextTableRow &&
+      !currentLineEndsWithPunctuation;
 
     if (isBlockquoteContinuation) {
       // For blockquotes, remove the `> ` prefix from the continuation so the citation
-      // regex can match across the joined lines (e.g., "row A99" split as "row" + "A99")
-      const nextContent = nextLine.replace(/^> /, '');
+      // regex can match across the joined lines (e.g., "row A99" split as "row" + "A99").
+      // Also handle nested blockquotes (> > ...).
+      const nextContent = nextLine.replace(/^(> )+/, '');
       context += ' ' + nextContent;
       nextIdx++;
     } else if (isProseContinuation) {
@@ -247,35 +272,51 @@ export function scannedFiles() {
 //
 // To handle blockquote-prefixed citations (e.g., "> row\n> A99"), we
 // normalize blockquote markers before scanning, removing the ">" prefix so
-// the citation patterns can match across line breaks.
+// the citation patterns can match across line breaks. Since normalization
+// changes character offsets within each line (by removing the "> " prefix),
+// we build a separate line-start index for the normalized text and use that
+// to compute line numbers from matches found in the normalized text.
 export function extractCitations(text) {
+  const lines = text.split('\n');
+
   // Remove blockquote prefixes to allow citation patterns to match across lines
   // (e.g., "row\nA99" becomes matchable even when formatted as "> row\n> A99").
-  const normalizedText = text
-    .split('\n')
-    .map((line) => line.replace(/^> /, ''))
+  // Also handle nested blockquotes (> > ...).
+  const normalizedText = lines
+    .map((line) => line.replace(/^(> )+/, ''))
     .join('\n');
 
-  const lines = text.split('\n');
-  const lineStarts = [];
+  // Build line-start indices for BOTH the original and normalized text.
+  // We use the normalized index to compute line numbers from matches found
+  // in the normalized text.
+  const lineStartsOriginal = [];
   let offset = 0;
   for (const line of lines) {
-    lineStarts.push(offset);
+    lineStartsOriginal.push(offset);
     offset += line.length + 1;
   }
-  const lineForOffset = (idx) => {
-    for (let i = lineStarts.length - 1; i >= 0; i--) {
-      if (idx >= lineStarts[i]) return i + 1;
+
+  const normalizedLines = normalizedText.split('\n');
+  const lineStartsNormalized = [];
+  offset = 0;
+  for (const line of normalizedLines) {
+    lineStartsNormalized.push(offset);
+    offset += line.length + 1;
+  }
+
+  const lineForOffsetNormalized = (idx) => {
+    for (let i = lineStartsNormalized.length - 1; i >= 0; i--) {
+      if (idx >= lineStartsNormalized[i]) return i + 1;
     }
     return 1;
   };
 
   const citations = [];
   for (const m of normalizedText.matchAll(ROW_WORD_CITATION_REGEX)) {
-    citations.push({ line: lineForOffset(m.index), id: m[1].toUpperCase() });
+    citations.push({ line: lineForOffsetNormalized(m.index), id: m[1].toUpperCase() });
   }
   for (const m of normalizedText.matchAll(REGISTER_LINK_REGEX)) {
-    citations.push({ line: lineForOffset(m.index), id: m[1].toUpperCase() });
+    citations.push({ line: lineForOffsetNormalized(m.index), id: m[1].toUpperCase() });
   }
   citations.sort((a, b) => a.line - b.line);
   return citations;
@@ -304,9 +345,10 @@ function rowIdAtLine(strippedText, lineNumber) {
 // reporting "no errors" over missing content (see check-onbox-register.mjs's
 // own handling for the same).
 // `failures` is `{ file, line, id }[]`, empty when every recognized citation
-// either resolves or carries a same-line discharge/removal annotation (see
-// this file's header); `annotated` is the same shape, for citations that
-// were excused that way -- printed as a note, never silently dropped.
+// either resolves or carries a discharge/removal annotation tied to that
+// citation via the nearest-citation rule on its logical line (including
+// hard-wrapped continuations); `annotated` is the same shape, for citations
+// that were excused that way -- printed as a note, never silently dropped.
 export function checkRegisterRowCitations({
   files = scannedFiles(),
   readFile = (relPath) => readNormalized(join(repoRoot(), relPath)),
@@ -392,7 +434,7 @@ export function runCheckRegisterRowCitationsCli() {
   if (annotated.length > 0) {
     console.log(
       `check:register-row-citations: ${annotated.length} citation(s) name a discharged/removed ` +
-        'row but say so on the same line -- printed as a note, not a failure:\n',
+        'row but carry a tied discharge/removal annotation (on the same logical line, including hard-wrapped continuations) -- printed as a note, not a failure:\n',
     );
     for (const { file, line, id } of annotated) {
       console.log(`- ${file}:${line} cites row ${id} (annotated as discharged/removed).`);

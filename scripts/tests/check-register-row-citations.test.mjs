@@ -445,16 +445,87 @@ test('reported file count excludes frozen-skipped files (Finding 1)', () => {
   assert.equal(citationCount, 1, 'should still find the citation in plan.md');
 });
 
-test('fileURLToPath handles percent-encoded paths correctly (Finding 3)', () => {
-  // This test verifies that repoRoot() uses fileURLToPath (from node:url)
-  // to correctly resolve the import.meta.url to a filesystem path.
-  // The hand-rolled version that was previously used did:
-  //   return url.pathname.replace(/^\/([A-Za-z]:)/, '$1');
-  // which doesn't handle percent-encoded paths or other special characters correctly.
-  // When import.meta.url contains a percent-encoded path (e.g., %20 for spaces),
-  // the hand-rolled version would fail to decode it, returning a path with
-  // literal "%20" instead of a space, causing filesystem lookups to fail.
-  // fileURLToPath (from node:url) handles these encodings correctly.
+test('Bug 1 fix: blockquote-prefixed citation before a plain citation reports correct line numbers', () => {
+  // Regression test for Bug 1: line numbers were wrong when blockquote-prefixed
+  // lines appeared before a citation, because extractCitations was building
+  // line-start indices from the original text but matching offsets in the
+  // normalized text (with > stripped). This caused citations after blockquotes
+  // to be reported with wrong line numbers.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md':
+      '> Background from the issue.\n' +
+      '> More blockquote.\n' +
+      '\n' +
+      'Now the plain text with row A1.\n' +
+      'And another line.\n',
+  };
+  const { failures } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A1 exists, so no failure
+  assert.deepEqual(failures, []);
+
+  // The citation should be on line 4 (counting from 1), not shifted
+  const citations = extractCitations(files['docs/testing/plan.md']);
+  assert.equal(citations.length, 1);
+  assert.equal(citations[0].line, 4, 'citation after blockquote should be on correct line');
+});
+
+test('Bug 2 fix: separate bullet points are not joined, preventing cross-contamination', () => {
+  // Regression test for Bug 2: separate bullet list items should NOT be joined
+  // into a single logical line, even though they are both prose. If they were
+  // joined, an annotation phrase on the second bullet would incorrectly apply
+  // to citations on the first bullet via the "nearest citation to the left" rule.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md':
+      '- Row A99 is still owed.\n' +
+      '- The old wave was discharged on 2026-08-01.\n',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 doesn't exist and has NO annotation (discharge is on next bullet)
+  // so it should fail, not be marked as annotated
+  assert.deepEqual(failures, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+  assert.deepEqual(annotated, []);
+});
+
+test('legitimate prose hard-wrap still works: citation and annotation on adjacent lines', () => {
+  // Ensure the tighter prose-join logic still allows genuine sentence wraps.
+  // A sentence split across two lines (where line 1 doesn't end with .) should
+  // still be joined so the annotation on line 2 applies.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md':
+      'See register row A99,\n' +
+      'discharged 2026-08-01.\n',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 should be recognized as annotated via the joined lines
+  assert.deepEqual(failures, []);
+  assert.deepEqual(annotated, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+});
+
+test('repoRoot() resolves to the repo root with a valid filesystem path (Finding 3)', () => {
+  // This test verifies that repoRoot() correctly resolves import.meta.url
+  // to an actual filesystem path pointing to the repo root. It uses
+  // fileURLToPath (from node:url) which correctly handles percent-encoded
+  // paths (e.g., %20 for spaces) that a naive string.replace() would not.
+  //
+  // NOTE: This test does NOT specifically exercise percent-encoding:
+  // This checkout's path has no spaces or special characters, so both
+  // fileURLToPath and a naive hand-rolled approach would both work here.
+  // To truly verify percent-encoding support would require creating a
+  // temporary directory with a space in its name, but that is impractical
+  // in this test environment. What this test DOES verify is that repoRoot()
+  // returns a working filesystem path that points to a real repo root.
   const root = repoRoot();
 
   // Verify repoRoot() returns a string path
@@ -464,8 +535,7 @@ test('fileURLToPath handles percent-encoded paths correctly (Finding 3)', () => 
   assert.ok(root.length > 0, 'repoRoot() should return a non-empty path');
 
   // Verify the path points to the actual repo root by checking
-  // for a known file that exists there. This exercises the path resolution
-  // code path and would fail if the path were incorrectly decoded.
+  // for a known file that exists there.
   const packageJsonPath = join(root, 'package.json');
   assert.ok(
     existsSync(packageJsonPath),

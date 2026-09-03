@@ -71,8 +71,9 @@ sitting; A1 is several sittings inside one pack.
 > carried when originally written.
 
 > **Correction, 2026-08-23 (`check:register-citations` mechanical sweep).**
-> `main`'s A38 discharge (register row A38 at the time, discharged, "ORT marker refuses —
-> not repairs — a clobbered venv" — that row id has since been reused by later waves, and no A38 exists in today's register) renumbered
+> `main`'s A38 discharge (register row A38 at the time, "ORT marker refuses —
+> not repairs — a clobbered venv" — that row id has since been discharged and
+> reused by later waves, and no A38 exists in today's register) renumbered
 > A39→A38 through A44→A43,
 > contradicting this table again: it read `A32, A33, A34` for
 > `onbox-sitting-vram-contention.md` (that pack's own heading is `A31`, not
