@@ -67,6 +67,7 @@
 //      onbox-wave{3,4,5}-results/ transcript directories), not a new policy.
 
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { readNormalized } from './lib/read-normalized.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
@@ -168,11 +169,7 @@ export function isFrozenPath(relPath) {
 }
 
 function repoRoot() {
-  return fileURLToPathSafe(new URL('..', import.meta.url));
-}
-
-function fileURLToPathSafe(url) {
-  return url.pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  return fileURLToPath(new URL('..', import.meta.url));
 }
 
 function gitLsFiles(prefix) {
@@ -256,7 +253,7 @@ function rowIdAtLine(strippedText, lineNumber) {
 // either resolves or carries a same-line discharge/removal annotation (see
 // this file's header); `annotated` is the same shape, for citations that
 // were excused that way -- printed as a note, never silently dropped.
-export function checkRegisterCitations({
+export function checkRegisterRowCitations({
   files = scannedFiles(),
   readFile = (relPath) => readNormalized(join(repoRoot(), relPath)),
 } = {}) {
@@ -277,9 +274,11 @@ export function checkRegisterCitations({
   const annotated = [];
   const fileErrors = [];
   let citationCount = 0;
+  let checkedFilesCount = 0;
   for (const relPath of files) {
     const normalizedPath = relPath.replace(/\\/g, '/');
     if (isFrozenPath(normalizedPath)) continue;
+    checkedFilesCount++;
     const isRegisterItself = normalizedPath === REGISTER_PATH;
     const fenceCheck = stripFences(readFile(relPath));
     if (fenceCheck.unterminatedFenceLine !== null) {
@@ -308,12 +307,12 @@ export function checkRegisterCitations({
       error: fileErrors.join('\n'),
       failures: [],
       annotated: [],
-      checkedFiles: files.length,
+      checkedFiles: checkedFilesCount,
       citationCount,
     };
   }
 
-  return { error: null, failures, annotated, checkedFiles: files.length, citationCount };
+  return { error: null, failures, annotated, checkedFiles: checkedFilesCount, citationCount };
 }
 
 // --- CLI --------------------------------------------------------------
@@ -331,7 +330,7 @@ class CliExitError extends Error {
 }
 
 export function runCheckRegisterRowCitationsCli() {
-  const { error, failures, annotated, checkedFiles, citationCount } = checkRegisterCitations();
+  const { error, failures, annotated, checkedFiles, citationCount } = checkRegisterRowCitations();
   if (error !== null) {
     console.error(`check:register-row-citations: ${error}`);
     throw new CliExitError(1);

@@ -117,9 +117,10 @@ check.** `check:onbox-register` above only validates the register's own
 internal arithmetic; it says nothing about the `A\d+`/`E\d+` row IDs cited
 *elsewhere* in the repo. `check:register-row-citations` closes that gap for
 one specific, bounded surface: it scans every `.md` file under
-`docs/testing/**` and `docs/features/**` for a citation matching
-`row/Row <ID>` or a markdown link into this file's own `#a41`/`#e3` anchor,
-and fails if the cited ID has no current row heading here. A bare `A41`-shaped
+`docs/testing/**` and `docs/features/**`, except the frozen dated-transcript
+paths (`docs/testing/onbox-acceptance-staleness-audit.md` and the `onbox-wave{3,4,5}-results/`
+directories), for a citation matching `row/Row <ID>` or a markdown link into
+this file's own `#a41`/`#e3` anchor, and fails if the cited ID has no current row heading here. A bare `A41`-shaped
 token with neither a "row" word nor a register link is never treated as a
 citation. GitHub issue bodies are explicitly OUT of scope for v1 — that would
 need `gh` API access from a CI script, disproportionate for this pass. A

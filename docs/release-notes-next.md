@@ -562,3 +562,6 @@ Two chains land together. The first stops a refusal being issued against a pessi
 ---
 
 **Full changelog:** v1.14.0...v1.15.0
+
+- **`check:register-row-citations`: mechanical checker for on-box register row citations** (#2603, PR #2840). A narrower sibling to the broader `check:register-citations` (#2629): scans `docs/testing/**` and `docs/features/**` (except dated-transcript frozen paths) for citations matching `row/Row <ID>` or markdown links into the register's own `#a41`-style anchors, and fails if the cited ID has no current `### <ID>` heading in `docs/testing/onbox-acceptance-register.md`. Citations on lines that name the row was discharged/removed are printed as notes, not failures — this repo's "annotate, don't renumber" convention keeps discharged IDs as historical records, not silent rots. ID-existence only for v1; title-text matching is a deferred, separate stronger check. Complements the legacy `check:register-citations` (whole-repo coverage with discharge/run-sheet/subject machinery) by closing a gap on the register's own surface — `check:onbox-register` validates the register's internal arithmetic, but nothing used to validate the citations *into* it.
+

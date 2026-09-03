@@ -444,3 +444,6 @@
 - **Even, broadcast-level volume.** Every chapter is loudness-matched, so you're not riding the volume knob between a whisper and a battle.
 - **Reshape it without starting over.** Merge, split, rename or reorder chapters and fix who-said-what — no re-import, no re-analysis.
 - **Your book never leaves the house.** Everything renders on your own machine — no meter, no monthly fee — in about the time it takes to play it.
+
+- **The register's own citations are now mechanically verified.** A separate checker, `check:register-row-citations` (#2603), scans docs/testing/** and docs/features/** for any citation of the register's row IDs (the `row A1`-style and markdown-link-anchor references), and fails if the cited ID has no current heading in the register itself. This closes a gap where the register's own internal arithmetic could pass (`check:onbox-register`) while citations *into* it were silently drifting. Citations paired with a discharge annotation on the same line are printed as notes rather than failures — the register's convention of keeping a discharged ID as historical record, not a silence-able rot.
+

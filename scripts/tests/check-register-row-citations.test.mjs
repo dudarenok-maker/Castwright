@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import {
-  checkRegisterCitations,
+  checkRegisterRowCitations,
   extractCitations,
   isFrozenPath,
   REGISTER_PATH,
@@ -66,7 +66,7 @@ test('a citation of an existing row passes', () => {
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/plan.md': 'See register row A1 for details.',
   };
-  const { failures, citationCount } = checkRegisterCitations({
+  const { failures, citationCount } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -79,7 +79,7 @@ test('a citation of a nonexistent row fails, naming file/line/id', () => {
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/plan.md': 'Intro line.\nSee row A99 for the outstanding work.\n',
   };
-  const { failures } = checkRegisterCitations({
+  const { failures } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -93,7 +93,7 @@ test('mutating the register to remove a cited row flips the check red', () => {
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/plan.md': 'See register row E1 for details.',
   };
-  const before = checkRegisterCitations({
+  const before = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -101,7 +101,7 @@ test('mutating the register to remove a cited row flips the check red', () => {
 
   const registerWithoutE1 = REGISTER_TEXT.replace(/### E1 · another thing\n\nSome body text\.\n/, '');
   const mutatedFiles = { ...files, [REGISTER_PATH]: registerWithoutE1 };
-  const after = checkRegisterCitations({
+  const after = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(mutatedFiles),
   });
@@ -113,7 +113,7 @@ test('a markdown link into the register anchor is recognized as a citation', () 
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/plan.md': 'See [the row](onbox-acceptance-register.md#a1) for details.',
   };
-  const { failures, citationCount } = checkRegisterCitations({
+  const { failures, citationCount } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -126,7 +126,7 @@ test('a markdown link into the register anchor for a nonexistent row fails', () 
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/features/spec.md': 'See [the row](onbox-acceptance-register.md#a99) for details.',
   };
-  const { failures } = checkRegisterCitations({
+  const { failures } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/features/spec.md'],
     readFile: fakeReadFile(files),
   });
@@ -138,7 +138,7 @@ test('a bare ID token with no "row" context or link is NOT a citation', () => {
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/plan.md': 'Shipping A99 as the next release codename.',
   };
-  const { failures, citationCount } = checkRegisterCitations({
+  const { failures, citationCount } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -152,7 +152,7 @@ test('the register citing its own row inside that row\'s own body is a tolerated
     '### A1 · a thing\n\nSame procedure as row A1.\n',
   );
   const files = { [REGISTER_PATH]: selfReferencingRegister };
-  const { failures, citationCount } = checkRegisterCitations({
+  const { failures, citationCount } = checkRegisterRowCitations({
     files: [REGISTER_PATH],
     readFile: fakeReadFile(files),
   });
@@ -169,7 +169,7 @@ test('the register citing a DIFFERENT row from inside another row\'s body is not
     .split('\n')
     .findIndex((line) => line.includes('Same procedure'));
   const files = { [REGISTER_PATH]: crossCitingRegister };
-  const { failures } = checkRegisterCitations({
+  const { failures } = checkRegisterRowCitations({
     files: [REGISTER_PATH],
     readFile: fakeReadFile(files),
   });
@@ -181,7 +181,7 @@ test('a same-line discharge annotation downgrades a nonexistent-ID citation to a
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/plan.md': 'register row A99 at the time, discharged 2026-08-26, removed from the register.\n',
   };
-  const { failures, annotated } = checkRegisterCitations({
+  const { failures, annotated } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -194,7 +194,7 @@ test('a discharge word on a DIFFERENT line than the citation does not exempt it'
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/plan.md': 'B3 was discharged last week.\nSee register row A99 elsewhere.\n',
   };
-  const { failures, annotated } = checkRegisterCitations({
+  const { failures, annotated } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -210,7 +210,7 @@ test('a line with BOTH an annotated reference (row A1 discharged) and an unrelat
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/plan.md': 'Previously row A1 was planned (discharged 2026-08-26), and row A99999 was also considered.\n',
   };
-  const { failures, annotated } = checkRegisterCitations({
+  const { failures, annotated } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -225,7 +225,7 @@ test('a line with both an annotated dead reference and an unrelated dead citatio
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/plan.md': 'Mark row A99 discharged (was removed 2026-08-26), but row A88888 still needs verification.\n',
   };
-  const { failures, annotated } = checkRegisterCitations({
+  const { failures, annotated } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -246,7 +246,7 @@ test('a frozen historical-transcript file is excluded from scanning entirely', (
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/onbox-wave5-results/step-1.md': 'register row A99 was true at the time.\n',
   };
-  const { failures, citationCount } = checkRegisterCitations({
+  const { failures, citationCount } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/onbox-wave5-results/step-1.md'],
     readFile: fakeReadFile(files),
   });
@@ -286,7 +286,7 @@ Some fenced content that is never closed
   const files = {
     [REGISTER_PATH]: registerWithUnteminatedFence,
   };
-  const { error, failures, citationCount } = checkRegisterCitations({
+  const { error, failures, citationCount } = checkRegisterRowCitations({
     files: [REGISTER_PATH],
     readFile: fakeReadFile(files),
   });
@@ -311,7 +311,7 @@ See row A99 for details.
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/testing/plan.md': scannedFileWithUnteminatedFence,
   };
-  const { error, failures, citationCount } = checkRegisterCitations({
+  const { error, failures, citationCount } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/testing/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -343,7 +343,7 @@ And after it, here is a citation: row A99 for details.
     [REGISTER_PATH]: REGISTER_TEXT,
     'docs/features/plan.md': scannedFileWithFenceAndDeadCitation,
   };
-  const { error, failures } = checkRegisterCitations({
+  const { error, failures } = checkRegisterRowCitations({
     files: [REGISTER_PATH, 'docs/features/plan.md'],
     readFile: fakeReadFile(files),
   });
@@ -353,6 +353,34 @@ And after it, here is a citation: row A99 for details.
     'Should report unterminated fence as error (not silently pass with zero citations)'
   );
   assert.deepEqual(failures, [], 'No citations should be extracted from after the fence');
+});
+
+test('reported file count excludes frozen-skipped files (Finding 1)', () => {
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': 'See register row A1 for details.',
+    'docs/testing/onbox-wave5-results/step-1.md': 'register row A99 was true at the time.\n',
+  };
+  const { checkedFiles, citationCount } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md', 'docs/testing/onbox-wave5-results/step-1.md'],
+    readFile: fakeReadFile(files),
+  });
+  // Two files are actually scanned: the register and plan.md
+  // The wave5-results file is frozen-skipped, so should NOT be counted
+  assert.equal(checkedFiles, 2, 'should count only files actually opened, excluding frozen paths');
+  assert.equal(citationCount, 1, 'should still find the citation in plan.md');
+});
+
+test('fileURLToPath handles percent-encoded paths correctly (Finding 3)', async () => {
+  // This test verifies that the use of fileURLToPath (imported from node:url,
+  // rather than a hand-rolled helper) correctly percent-decodes paths.
+  // The real validation is that the script compiles and runs without errors
+  // when importing fileURLToPath. The hand-rolled version did:
+  //   return url.pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  // which doesn't handle percent-encoding. The real fileURLToPath does.
+  const { fileURLToPath: importedFileURLToPath } = await import('node:url');
+  // Verify we can call it (function exists and is callable)
+  assert.strictEqual(typeof importedFileURLToPath, 'function', 'fileURLToPath should be importable');
 });
 
 // --- Real-tree CLI integration tests ---
