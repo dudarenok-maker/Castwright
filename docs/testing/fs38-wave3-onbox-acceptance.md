@@ -2282,15 +2282,51 @@ cannot self-heal (that is expected, not a defect).
   persona text — not blank.
 - Step 8: **re-design still works** — it does not trip the empty-persona guard.
 
-**Record:** `instruct` identical after self-heal? ☐ yes ☐ no (fail)
+**Record:** `instruct` identical after self-heal? ☒ yes ☐ no (fail)
 
-**Result:** ☐ P ☐ F ☒ B ☐ N/A  **Notes:** Attempted 2026-08-31 (Claude Code,
-isolated worktree). `POST .../cast/design` requires `GEMINI_API_KEY` to
-generate the persona text — an isolated worktree deliberately carries no
-secrets (CLAUDE.md: "no GEMINI_API_KEY, no secrets, nothing"), so this row
-cannot be exercised from a worktree at all. Needs a session with real Gemini
-credentials (or a local-Ollama persona path if one exists) — not attempted
-further this run, still owed.
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 7 (2026-09-04, coordinator
+follow-up, run directly against the **primary checkout**
+`C:\Claude\Projects\Audiobook-Generator` per explicit instruction — its real
+`server/.env` carries `GEMINI_API_KEY`). **Correction: GEMINI_API_KEY turned
+out unnecessary for this route** — `POST /api/voice-library/design` takes an
+already-written `persona` string directly; Gemini is only used by a
+*separate* auto-generate-persona endpoint this test doesn't need. Imported a
+fresh throwaway book (`castwright-throwaway-test__standalones__a1-throwaway-coalfall-c17e07`,
+title "A1 THROWAWAY — Coalfall C17E07", clearly labeled) via the app's own
+import/books API — no existing real book touched. Designed a voice ("A1
+Designed Oduvan", hand-written persona) for `master-oduvan`, who speaks in
+chapter 2. **Step 2 snapshot:** `instruct` = "An elderly master blacksmith
+with a gravelly, weathered voice, speaking slowly and deliberately with
+decades of quiet authority, occasional dry wit, and a warm gruffness beneath
+the stern exterior.", `designModel: "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"`.
+Deleted only `.pt`, generated chapter 2 (full generation, not a splice —
+#1972 is closed): **completed**, `.pt` reappeared. **Step 6 comparison:**
+`instruct` byte-identical to the snapshot; `designModel` still
+`"Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"` (not null); `refText`/`baseModel`
+refreshed to the current derive. `voice.json`'s `engines.qwen.status:
+"ready"` with the fresh `baseModel`. **Step 7 (Profile Drawer persona box)
+not observed** — no browser driving this run. **Step 8 (re-design):**
+confirmed working — `POST .../redesign` first failed twice with `Not enough
+GPU memory for qwen (6144MB). Kokoro is loaded — …` (real contention: Kokoro
+had auto-resolved onto the same 16 GB card Qwen is pinned to, from
+narrating the chapter just rendered); unloading Kokoro via
+`POST /api/sidecar/unload` — exactly the error's own suggested remedy — let
+the redesign succeed immediately after (`previewUrl` returned, no empty-
+persona guard tripped). Not a defect: an accurate blocker name with a
+working remedy, not a false report — `/capacity` at the time still showed
+ample nominal free VRAM, so the real margin during a redesign's transient
+Base+VoiceDesign co-load is tighter than the raw free-memory snapshot
+implies; worth a look in a future session but not chased further here since
+the system's own diagnosis and remedy were both correct.
+Environmental note for a future run on this box: `QWEN_DEVICE`/`COQUI_DEVICE`
+are normally pinned to `cuda:1` (the 16 GB card) by deliberate box policy
+(see `server/.env`'s own comment) — earlier in this session GPU1 was
+temporarily lost (needed a reboot to recover) and `QWEN_DEVICE` was
+temporarily repointed at `cuda:0` to unblock testing, then reverted back to
+`cuda:1` once the reboot restored GPU1. Also found and worth noting: the
+sidecar process is **adopted** across a Node server restart rather than
+respawned — an env-var change (or a `.env` edit) only takes effect on the
+sidecar after its *own* process is explicitly killed, not just Node's.
 
 ---
 
@@ -3062,7 +3098,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | **P** | Run 5. All 4 assign-time wrong-engine guard scenarios confirmed |
 | C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | | |
 | C-16 | Broken / Repairable card chip | | |
-| C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | | **RETRACTED — was recorded `F` in run 2; that was wrong.** The attempt used a splice re-record, which hit [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972): the chapter's `segments.json` attributed sentences 10/12/17/19 to `maerin`, but the analysis cache attributed all four to `narrator`, so the re-record rendered narrator lines in the narrator's voice and **never requested maerin's voice at all**. The `.pt` therefore never came back because the self-heal was never *reached* — not because it failed. **This test has not been exercised.** Re-run it after #1972 lands, on a book whose `segments.json` and analysis agree (or via a full chapter generation, which is unaffected) |
+| C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | **P** | Run 7: full chapter generation (not splice) on a throwaway primary-checkout book. `.pt` deleted → chapter completed, `.pt` reappeared, `instruct`/`designModel` byte-identical, `baseModel` refreshed. Re-design confirmed working (needed a Kokoro unload first — real, correctly-diagnosed VRAM contention, not a defect). Historical run-2 `F` was already withdrawn as a #1972 splice-attribution artifact — see the detailed section |
 | C-18 | §2.3 stale `.pt` deliberately left alone | | |
 | C-19 | 1.7B tier renders; `__1.7b.pt` created **and erased on revoke** | **P** | `qwen3-tts-1.7b` audition 200 in 49.7 s; `qwen-<uuid>__1.7b.pt` created (71,045 bytes); erased by the C-10 revoke above. The per-character 1.7B *toggle* UI was not exercised |
 | C-20 | Pause during a repair derive → no failure/toast | **P** (cloned-voice half only) | Run 5. Paused mid repair-derive: no failure, no persisted `generationState`, clean resume |
