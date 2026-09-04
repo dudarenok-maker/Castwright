@@ -1361,7 +1361,41 @@ by the Step 1 regression tests). **If you land inside the old millisecond window
 `revokedAt` still comes back clobbered, that is now a regression — file it,
 don't wave it through as expected.**
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Attempts:** ____  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Attempts:** 4 (2 too-early — revoke landed
+before classification even read the entry, no derive attempted at all; 1
+control run with no revoke, to calibrate timing; 1 landed in the window)
+**Notes:** Run 5 (2026-09-04, same worktree/setup). Used a fresh clone per
+attempt (`.pt` deleted to force Repairable) assigned to two characters
+(Master Oduvan, Wren) sharing the same storage key, both speaking in chapter
+2. **Timing calibration (attempt 3, no revoke):** request start to
+`Cloned + cached Qwen voice` in the sidecar log = **~4.8s** on a warm
+sidecar — much tighter than expected, and separate-tool-call dispatch
+overhead (~7-17s measured across attempts) made hitting it by elapsed-time
+guesswork unreliable; landed by firing the revoke with only a nominal 0.5s
+sleep after starting the background generation request (attempt 4), which
+in practice arrived ~17s post-request-start — i.e. AFTER the derive had
+already completed and re-dispatched on a *second* pass for the chapter's
+remaining totalGroups; the actual hit came from the revoke racing that
+in-flight second derive, not the first. **All three required outcomes held:**
+- `revokedAt` **survived**: `2026-09-04T00:09:08.120Z`, not clobbered.
+- **No `.pt` survived** on disk (`qwen-a93143cb-…pt` absent) even though
+  `tts.err.log` shows the sidecar's OWN `Cloned + cached Qwen voice
+  'qwen-a93143cb-…' from caller clip.` logged a **second time** at
+  `10:05:44.708` (the first, clean derive was attempt 3's, at `10:05:17.641`)
+  — i.e. the sidecar-side derive genuinely succeeded, and the Node-side
+  `statusStampMutate` post-derive guard re-purged it rather than persisting
+  it as ready. This is the exact race the invariant exists to close.
+  - Also gone: the entry-dir `master.wav` (voice.json's `master` block is
+    entirely absent) and `qwen-a93143cb-….json`.
+- **The chapter failed**, `cloned-voice-broken`, naming both characters —
+  but with a **mixed** reason: Master Oduvan (the character whose derive
+  actually raced) read `(derive-failed)`, not the sheet's expected
+  `(revoked)`; Wren (sharing the same voice, resolved separately) read
+  `(revoked)`. This is the SAME documented acceptable variant Run 4 recorded
+  for E-03 (the Coqui equivalent) — the sheet's own "Millisecond-window
+  update" note says a **clobbered `revokedAt`** would now be a regression,
+  not this reason-wording difference; `revokedAt` was never clobbered here,
+  so this is not that regression.
 
 ---
 
