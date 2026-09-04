@@ -81,3 +81,29 @@ test('a caller can re-add a specific GIT_* var after scrubbing via plain spread'
   assert.equal(merged.GIT_AUTHOR_DATE, 'new');
   assert.equal(merged.PATH, '/usr/bin');
 });
+
+// Regression test for the defensive-copy mutant: ensure the function returns
+// a NEW object and does NOT mutate its input argument. Passing an explicit
+// plain object (not process.env) as the argument makes this checkable without
+// having to save/restore the original.
+test('scrubGitEnvForThrowawayRepo returns a new object and does not mutate its input', () => {
+  const inputEnv = {
+    PATH: '/usr/bin',
+    GIT_DIR: '/decoy/.git',
+    GIT_WORK_TREE: '/decoy',
+    GIT_AUTHOR_DATE: '2026-01-01',
+  };
+  const scrubbed = scrubGitEnvForThrowawayRepo(inputEnv);
+
+  // The returned object must have GIT_* keys stripped
+  assert.equal(scrubbed.GIT_DIR, undefined);
+  assert.equal(scrubbed.GIT_WORK_TREE, undefined);
+  assert.equal(scrubbed.GIT_AUTHOR_DATE, undefined);
+  assert.equal(scrubbed.PATH, '/usr/bin');
+
+  // The input object must remain UNCHANGED — still contains all original keys
+  assert.equal(inputEnv.PATH, '/usr/bin');
+  assert.equal(inputEnv.GIT_DIR, '/decoy/.git');
+  assert.equal(inputEnv.GIT_WORK_TREE, '/decoy');
+  assert.equal(inputEnv.GIT_AUTHOR_DATE, '2026-01-01');
+});
