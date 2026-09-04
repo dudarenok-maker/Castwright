@@ -92,7 +92,7 @@ re-uses the same warm card for its contended-eviction `/health` measurement.
 A31 and A32 are independent but cheap to run while the sidecar and book are
 up.
 
-### A19 · Stranded VRAM pool reclaimed on the admission-failure path ([#1976](https://github.com/dudarenok-maker/Castwright/issues/1976), PR [#1993](https://github.com/dudarenok-maker/Castwright/pull/1993)) · **single 8 GB card**
+### A19 · Mixed Qwen+Coqui evict fails soft (#1893) — steps 1–2
 
 > **Register row: A19 — discharged 2026-08-26, row removed from the register**
 > (real on-box measurement: a pause during a permanently-stalled evict landed
@@ -245,7 +245,7 @@ up.
    line appears **only once**.
    - Result:
 
-### A31 · Russian XTTS quality — leading-dash pause by ear, Coqui degeneracy guard live, neuter -ее invariant ([#2026](https://github.com/dudarenok-maker/Castwright/issues/2026), PR #2050) · **Coqui/XTTS resident, Russian text; no clone needed**
+### A31 · Supervisor respawn survives a refused spawn attempt (#2037) — step 10
 
 > **Register row: A31 — discharged 2026-08-26, row removed from the register**
 > (real on-box measurement: the in-flight chapter's own completion was

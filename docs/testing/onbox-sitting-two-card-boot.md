@@ -50,7 +50,7 @@ the multi-GPU Wave 2 checklist; A12 is the device-pin respawn set, done last
 because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 2-card config.
 
-### A8 · Batch the QA re-record loops (plan 228)
+### A8 · GPU residency safety + coexistence (plan 222) — steps 1–5
 
 > **Criteria source:** [`../features/archive/222-gpu-residency-and-analysing-honesty.md`](../features/archive/222-gpu-residency-and-analysing-honesty.md) §"Manual acceptance walkthrough" at `:54-59` — discharged 2026-08-27, kept for the concrete observation. Distinct from B1/plan 216 (that one is the device probe).
 >

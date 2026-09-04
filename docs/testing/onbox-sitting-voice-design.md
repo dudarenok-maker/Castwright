@@ -127,7 +127,7 @@ runs last, after everything else is evicted.
    completes with a correct terminal summary once the sidecar comes back.
    - Result:
 
-### A14 · Real-book QA/badge agreement after the loudness measurement hoist (plan [274](../features/archive/274-loudness-measurement-provenance.md), [#1922](https://github.com/dudarenok-maker/Castwright/issues/1922), [#1923](https://github.com/dudarenok-maker/Castwright/issues/1923))
+### A14 · Qwen VoiceDesign persona-prompt rewrite (plan 160) — steps 4–6
 
 > **Register row: A14 — discharged 2026-08-26, row removed from the register**
 > (owner-confirmed live observation: the rewritten pitch/purpose-clause wording
@@ -203,7 +203,7 @@ runs last, after everything else is evicted.
    against the Side B audition played in step 7.
    - Result:
 
-### A17 · `/health` stays live through a contended eviction on the default Qwen path (plan [273](../features/archive/273-sidecar-lock-event-loop.md), [#1919](https://github.com/dudarenok-maker/Castwright/issues/1919)) · **single 8 GB card**
+### A17 · Emotion-chip preview from the manuscript (plan 180, fe-31) — step 10
 
 > **Register row: A17 — discharged 2026-08-26, row removed from the register**
 > (owner-confirmed live observation: the audible delta between a designed
