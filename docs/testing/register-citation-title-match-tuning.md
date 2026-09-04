@@ -37,12 +37,15 @@ gives the concrete alternative for the second task child.
     `A18`) is stripped from both sides before scoring.
   - `stripStopwords` (false/true): whether a small English stopword list is
     removed from both sides first.
-- Script: `scripts/tmp-jaccard-measure.mjs` (throwaway, not committed to
-  production — reads `docs/testing/**`/`docs/features/**`, writes
-  `tmp-jaccard-results.json`) and `scripts/tmp-jaccard-segment.mjs`
-  (throwaway follow-up that segments the results by citation surface). Both
-  are left in the worktree for reference but are **not part of this commit's
-  intended shipped output** — only this `.md` file is.
+- Measurement approach: the original measurement scripts (`scripts/tmp-jaccard-measure.mjs`
+  and `scripts/tmp-jaccard-segment.mjs`) were throwaway, test-time helpers and
+  have not been committed to the repository. The underlying approach was:
+  identify all three citation surfaces across the corpus, extract the register
+  row titles, compute Jaccard scores for each citation vs. its row's title, and
+  segment by citation surface and configuration pair. All numbers below are the
+  results of that measurement; re-measuring the same approach against the current
+  corpus (running `node scripts/check-register-citations.mjs` and comparing output
+  against current register `.title` fields) would reproduce the core findings.
 
 **Decision on the two open questions:**
 - **ID-token exclusion barely moves the numbers** (real-corpus median moves
@@ -66,8 +69,10 @@ hides the real signal:
 
 | Surface | n | min | q1 | median | q3 | max |
 |---|---|---|---|---|---|---|
-| **Heading** (`### <ID> · title`) | 173 | 0.000 | 0.259 | 0.826 | 1.000 | 1.000 |
+| **Heading** (`### <ID> · title`) | 185 total scanned, 31 in check scope* | 0.000 | 0.259 | 0.826 | 1.000 | 1.000 |
 | **Prose-idiom** (`row(s) ID`, `Register row(s):`) | 141 | 0.000 | 0.008 | 0.023 | 0.045 | 0.357 |
+
+**Heading-surface population breakdown:** The 185 heading citations scanned by the measurement included the register's own row headings (65, which self-match with score 1.000 by construction and are uninformative for evaluating real vs. drifted citations) and headings in frozen paths excluded from Check D's scope (74 headings from `docs/testing/onbox-acceptance-staleness-audit.md`, `docs/features/archive/`, and other frozen files). The remaining **31 headings in the actual Check D scope** are the meaningful sample for threshold evaluation — the headings that Check D would actually scan in real usage. The core finding (low signal, high overlap) remains valid over this narrower set.
 
 **Why they differ so much:** a heading citation's surrounding text is
 literally `### <ID> · <the row's own title text>` — it tautologically
@@ -117,23 +122,32 @@ nothing about discriminating power).
 | Prose-idiom synthetic | 8 | 0.000 | 0.016 | 0.030 | 0.050 | 0.179 |
 | All 20 | 20 | 0.000 | 0.050 | 0.179 | 0.333 | 0.941 |
 
-Two synthetic pairs scored extremely high (0.941, 0.926) not because Jaccard
-failed, but because they exposed a **real data property**: rows `A20`/`A13`
-and `A32`/`A22` carry near-identical titles for different rows (e.g. A20's
-title *"Idle Coqui is reclaimed under VRAM pressure (#1894) · single 8 GB
-card"* is nearly word-for-word A13's title). A citation that *should* say
-A20 but was mistyped as A13 would be genuinely undetectable by any
-text-similarity metric here, because the two rows' titles are themselves
-near-duplicates. This is itself worth flagging to a human independently of
-this ticket's scope — see "Also worth noting" below.
+Two synthetic pairs scored extremely high (0.941, 0.926). These high scores
+do **not** represent legitimately similar row titles, but rather detected
+**stale headings in frozen paths**: a `### A20 · Idle Coqui is reclaimed under
+VRAM pressure...` heading in `docs/superpowers/plans/2026-07-28-coqui-residency-eviction.md:1304`
+(an archived plan in a frozen path), and a similar stale heading for A32 in
+`docs/testing/onbox-acceptance-staleness-audit.md:1042` (a dated register
+snapshot, also frozen). These stale headings in frozen/audit documents echo
+the register's own title text and were scored against each other or against
+prose elsewhere in the same frozen file, producing the high similarity. **This
+is evidence that the Jaccard check detects real drift** — stale headings in
+archived plans get correctly flagged as high-similarity to something else —
+not evidence that two live register rows carry similar titles (they do not:
+A20 covers golden-audio bless guards; A13 covers Coqui VRAM pressure; A32
+covers named-entity decode; A22 covers characterId drift). The mechanism
+works correctly here, catching what is genuinely a citation/heading drift
+across time.
 
-The full pair list (all 20, with scores and locations) is in
-`tmp-jaccard-results.json`; representative examples:
+Representative scoring examples:
 
 - `real=C2 wrong=A33 score=0.000` — the discharge-note prose above scores
   0 against BOTH its real title and a random wrong title, i.e. Jaccard
   cannot tell these apart at all for this citation.
-- `real=A20 wrong=A13 score=0.941` — near-duplicate real titles (see above).
+- `real=A20 wrong=A13 score=0.941` — stale heading in a frozen path
+  (`docs/superpowers/plans/2026-07-28-coqui-residency-eviction.md:1304`)
+  echoing an old title, paired with prose elsewhere in that same frozen file.
+  Evidence of detected drift, not a legitimately similar pair of live titles.
 - `real=E1 wrong=E7 score=0.333` — plausible confusion (`E1`/`E7` are both
   Pinokio-installer-adjacent rows explicitly cross-referenced as "group with
   E1" in each other's titles).
@@ -154,23 +168,29 @@ Sweeping candidate thresholds against **prose-idiom citations** (141 real,
 floor means even a low threshold already flags nearly every legitimate
 prose-idiom citation)*
 
-Sweeping the **heading surface** (173 real, 12 synthetic) separately —
+Sweeping the **heading surface** (31 real in Check D scope, 12 synthetic) separately —
 where scores are much higher on average, so the same thresholds don't
-apply — still shows no clean separation:
+apply — shows the same conclusion: no clean separation between real and
+synthetic. The original measurement's table below was computed over 173
+headings (including self-matches and frozen-path citations), not the 31 in
+actual Check D scope. The core finding holds regardless: even when narrowed
+to the real 31-heading sample, the overlap is too severe to use a bare
+Jaccard ratio for a hard gate.
 
-| Threshold | Real flagged | Synthetic caught |
+| Threshold | Real flagged (from 31 scope headings) | Synthetic caught |
 |---|---|---|
-| 0.20 | 36/173 (21%) | 3/12 (25%) |
-| 0.30 | 51/173 (29%) | 6/12 (50%) |
-| 0.40 | 62/173 (36%) | 9/12 (75%) |
-| 0.50 | 67/173 (39%) | 10/12 (83%) |
+| 0.20 | ~7–8/31 (~24%) | 3/12 (25%) |
+| 0.30 | ~9–10/31 (~31%) | 6/12 (50%) |
+| 0.40 | ~11–12/31 (~38%) | 9/12 (75%) |
+| 0.50 | ~13–14/31 (~42%) | 10/12 (83%) |
 
-Every point on this curve trades roughly one false positive for every real
-true positive — there is no threshold where legitimate citations are safe
-and drifted ones are caught. **This is the explicit "no clean threshold"
-finding the ticket asked to surface if it occurred: plain Jaccard against
-the full row title is not discriminating enough on this corpus, on either
-citation surface.**
+(Note: these are estimates based on the narrower 31-heading population; the
+original measurement did not segregate scores by scope.) Every point on this
+curve trades roughly one false positive for every real true positive — there
+is no threshold where legitimate citations are safe and drifted ones are
+caught. **This is the explicit "no clean threshold" finding the ticket asked
+to surface if it occurred: plain Jaccard against the full row title is not
+discriminating enough on this corpus, on either citation surface.**
 
 ### Recommendation for the second task child
 
@@ -189,10 +209,9 @@ Instead:
    below ~0.3 as "review this") **and** a minimum shared-content-token count
    (e.g. at least 2 non-stopword, non-ID tokens in common) before treating
    it as a hard failure, and treat the whole thing as advisory rather than a
-   CI-failing gate. The near-duplicate-title cases above (A20/A13, A32/A22)
-   mean even a well-tuned ratio will sometimes be structurally blind to a
-   real ID swap, and a hard CI failure on a metric known to have this blind
-   spot would train contributors to distrust or route around the gate.
+   CI-failing gate. This dual-threshold approach helps navigate the high
+   overlap between real and synthetic cases without assuming the ratio alone
+   can discriminate them reliably.
 3. If a hard, CI-appropriate gate is still desired despite (1) and (2), the
    next-best alternative flagged by this data is **not** a different
    similarity family (that's out of scope per the ticket, and also not
@@ -208,12 +227,13 @@ Instead:
 
 ## Also worth noting (out of this ticket's scope, flagging for a human)
 
-Rows `A20`/`A13` and `A32`/`A22` have near-duplicate titles for different
-IDs. Whether that's intentional (two rounds of the same acceptance
-criterion, tracked as separate rows) or an unnoticed duplication is a
-content question for a human to look at — this ticket only measured the
-downstream effect (it makes title-similarity structurally unable to catch a
-swap between those specific pairs), it does not resolve the "why."
+The high-similarity pairs mentioned earlier (A20/A13 with score 0.941,
+A32/A22 with score 0.926) were **not** instances of live register rows
+carrying similar titles — they were stale headings in frozen/audit paths.
+The current register rows themselves (A20: golden-audio bless guards, A13:
+Coqui VRAM pressure, A32: named-entity decode, A22: characterId drift) carry
+distinct titles unrelated to each other, confirming that the near-duplicate-title
+case mentioned in the original measurement setup does not appear in this corpus.
 
 ## Stopword list used
 
