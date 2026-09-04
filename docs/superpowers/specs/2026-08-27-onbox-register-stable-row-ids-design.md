@@ -210,6 +210,16 @@ is the *cause* of every foreign divergence, including the ones no per-row rule
 reached (a dropped row, a moved summary strip, and the stale callout blocks
 described below).
 
+**Resolution: advisory-warning 3-way comparison (#2837).** This spec's argument
+against per-row comparison has been reconciled by PR #2837 (issue #2599), which
+implements a 3-way comparison that reports *as an advisory warning* — never
+blocking — when all three copies differ. This avoids the blocking failure on
+multi-step publishes (the exact failure mode this section warned about) by
+refusing to hard-block on ambiguous signals, while still surfacing the signal
+visibly so an operator can investigate manually if the content looks wrong. The
+approach trades hard guarantees for practical usability in the face of inherent
+ambiguity.
+
 **Rejected: a bare monotonic counter.** Recorded as the fourth failure, because
 it was written, tested against itself, and killed by the assumption-checker pass
 before any code existed — and because it fails for the *same* reason the third

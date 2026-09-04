@@ -149,33 +149,33 @@ comparison, see the edge list above). The merge step that closes this, run
    local file — this is the CURRENTLY-published register, which may be ahead
    of what you are about to publish.
 2. Run
-   `npm run check:onbox-register -- --against-published <saved-file>`. Unlike
-   `check:onbox-register`'s no-flag run, this comparison is deliberately
-   ONE-DIRECTIONAL: your register having rows the live page doesn't have yet
-   is the normal reason you're publishing, not a defect, so it is never
-   reported here. A row (or group) the live page has that your register
-   lacks is reported ONLY when `origin/main`'s own copy of this register
-   still has it too — the signature of another lane having already
+   `npm run check:onbox-register -- --against-published <saved-file>`. This
+   comparison detects structural drift (rows live vs. in register), and — when
+   the live-view baseline from `origin/main` is available — also detects
+   content drift (per-row body text hash comparison). Your register having rows
+   the live page doesn't have yet is the normal reason you're publishing, not a
+   defect, so it is never reported here. A row (or group) the live page has that
+   your register lacks is reported ONLY when `origin/main`'s own copy of this
+   register still has it too — the signature of another lane having already
    published ahead of you. When `origin/main` also lacks it, the row was a
-   deliberate discharge (by this change or an already-merged one), not a
-   race, and is not reported: discharging a row always makes the
-   still-live page look "ahead" of your working copy in this exact shape,
-   and that is expected. **The command fetches `origin/main` itself, fresh,
-   every run — you do not need to `git fetch` by hand first.** It then reads
-   `FETCH_HEAD`, deliberately NOT the local `origin/main` ref: `git fetch
-   origin main` only guarantees it writes `FETCH_HEAD` — whether it also
-   updates `refs/remotes/origin/main` depends on this checkout's
-   `remote.origin.fetch` refspec actually mapping `refs/heads/main`, which a
-   narrowed refspec can skip while the fetch still exits 0, leaving
-   `origin/main` silently stale even though the fetch just "succeeded". If
-   you ever need to reproduce this baseline by hand for debugging, run
-   `git fetch origin main` followed by `git show FETCH_HEAD:<path>` — NOT
-   `git show origin/main:<path>`, which can read stale (or, in a narrowly-
-   configured clone, entirely unresolvable) content even immediately after a
-   successful fetch. It follows that this step needs network access to
-   `origin`, with no offline fallback: you're about to publish to a remote
-   URL anyway, so an operator who can't reach the network here can't
-   complete step 4 either.
+   deliberate discharge (by this change or an already-merged one), not a race,
+   and is not reported: discharging a row always makes the still-live page look
+   "ahead" of your working copy in this exact shape, and that is expected.
+   **The command fetches `origin/main` itself, fresh, every run — you do not
+   need to `git fetch` by hand first.** It then reads `FETCH_HEAD`, deliberately
+   NOT the local `origin/main` ref: `git fetch origin main` only guarantees it
+   writes `FETCH_HEAD` — whether it also updates `refs/remotes/origin/main`
+   depends on this checkout's `remote.origin.fetch` refspec actually mapping
+   `refs/heads/main`, which a narrowed refspec can skip while the fetch still
+   exits 0, leaving `origin/main` silently stale even though the fetch just
+   "succeeded". If you ever need to reproduce this baseline by hand for
+   debugging, run `git fetch origin main` followed by `git show FETCH_HEAD:<path>`
+   — NOT `git show origin/main:<path>`, which can read stale (or, in a
+   narrowly-configured clone, entirely unresolvable) content even immediately
+   after a successful fetch. It follows that this step needs network access to
+   `origin`, with no offline fallback: you're about to publish to a remote URL
+   anyway, so an operator who can't reach the network here can't complete step 4
+   either.
 3. **If it fails**, do NOT publish. There are two distinct failure shapes,
    named in the error text:
    - **A row/group named as already live and BEHIND** — this message has TWO
@@ -257,6 +257,38 @@ comparison, see the edge list above). The merge step that closes this, run
        branch) to see which specific check fails, then fix THAT on `main`
        first (its own PR) before retrying step 2 here — this can't be fixed
        from your branch, only from `main`.
+   - **A row's content has drifted** (#2599/A41) — the row exists, with the
+     SAME ID, on both the tracked `.html` and the currently-published page,
+     but its own body text hashes differently between the two. This is a
+     DIFFERENT check from the BEHIND check above: it compares your local,
+     working-tree copy of
+     `docs/testing/onbox-acceptance-register-live-view.html` (including any
+     uncommitted edits mid-publish) against the published snapshot, not the
+     register — hashing the register's markdown against the published HTML
+     would flag almost every row, since the two are deliberately different
+     documents that only have to agree on structure, not wording. When tracked
+     and published content differ, the check disambiguates via the baseline
+     (`origin/main`'s copy) to tell a genuine defect apart from an ordinary
+     in-progress publish:
+     - **Your local copy matches the baseline, but the published page doesn't**
+       — this edit is already merged to `origin/main`, yet the live page never
+       caught up. This is the classic A41 signature: PR #2578 review rounds
+       13-18 caught it only by manually byte-diffing the two files, because
+       nothing mechanical compared row content before this check existed. A
+       reported failure of this shape is a genuine defect — do not publish
+       until it's investigated and reconciled.
+     - **The published page matches the baseline, but your local copy doesn't**
+       — you have a local edit not yet merged to `origin/main`, and the
+       published page is simply unchanged (still at baseline) because nothing
+       has been published yet. This is the ordinary, expected pending-publish
+       state — proceed.
+     - **Neither matches the baseline** (all three — tracked, published, and
+       `origin/main` — disagree) — a 3-way content disagreement. The check
+       reports this as a visible warning to stderr (not blocking), since
+       ordinary multi-step publishes (edit, publish again before merging)
+       trigger this and hash-only comparison cannot distinguish from genuine
+       conflicts. If the content seems wrong, investigate manually; otherwise,
+       you can proceed to publish.
 
    **Known limitation:** a row that's live and still genuinely owed but was
    never actually merged into `main` at all (e.g. published straight from a
