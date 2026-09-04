@@ -101,24 +101,32 @@ itself lazily loads the other cuDNN components (`cudnn_ops64_9.dll`,
 through the process `PATH` environment variable. This is the mechanism that
 `_add_nvidia_dll_dirs_to_path` prepends `nvidia/cudnn/bin/` for — not just for
 onnxruntime's own lazy engine plugins, but for cuDNN itself's later lazy loads.
-Since the PATH has been prepended with the 9.19.0.56 set, ctranslate2's dispatch
-stub resolved its sublibraries from that set, not from its own package directory.
+At runtime, the dispatch stub loaded by ctranslate2 necessarily resolves its
+required sublibraries from whatever is already resident or discoverable in the
+process — in this measurement, the 9.19.0.56 set from `nvidia/cudnn/bin` and/or
+`torch/lib`. However, this measurement did not isolate whether the PATH-prepend
+was the cause (rather than ctranslate2's bare-name lookup simply being satisfied
+by cuDNN sublibraries already resident from onnxruntime or torch initialization
+before ctranslate2 ran).
 
-The result: ctranslate2 loaded a 9.10.2.21 dispatch stub with 9.19.0.56 sublibraries.
-This is a real cross-version shadow (the sublibraries ARE shadowed from a different
-version), but it is narrower in scope than a full "uncontrolled fallback" scenario
-— only the sublibraries are shadowed, not the dispatch stub itself.
+The result: ctranslate2 loaded a 9.10.2.21 dispatch stub that resolved its
+9.19.0.56 sublibraries from the process (the 9.19.0.56 versions being already
+present before ctranslate2's dispatch stub executed). This is a mixed-version
+composition, not a displacement of ctranslate2's own sublibraries — ctranslate2
+bundles no cuDNN sublibraries at all, only the single dispatch DLL entry point.
 
 ### Conclusion
 
-**No fix needed.** The `install-ort.mjs:396-414` PASS-3 review note's concern
-(cross-minor cuDNN version gap 9.10→9.19 between ctranslate2's bundled copy and
-the PATH-prepended copy) manifests as a cuDNN sublibrary shadow on this real
-hardware, but empirically causes no harm: ctranslate2's 9.10.2.21 dispatch stub
-loaded and correctly resolved its 9.19.0.56 sublibraries from the PATH-prepended
-set, executed transcription correctly on CUDA, and produced the correct output.
-The mixed-version stack worked. `_add_nvidia_dll_dirs_to_path` is left untouched,
+**No fix needed.** The `install-ort.mjs` PASS-3 REVIEW NOTE (2026-09-01) concern
+(cross-minor cuDNN version gap 9.10→9.19 between ctranslate2's bundled dispatch
+stub and the system's cuDNN sublibraries) results in a mixed-version composition
+on this real hardware, but empirically causes no harm: ctranslate2's 9.10.2.21
+dispatch stub loaded and correctly resolved its required 9.19.0.56 sublibraries,
+executed transcription correctly on CUDA, and produced the correct output. The
+mixed-version stack worked. `_add_nvidia_dll_dirs_to_path` is left untouched,
 per the ticket's explicit instruction not to weaken it — the prepended PATH
-serves a critical purpose for onnxruntime's own lazy engine loads, and the fact
-that it also causes ctranslate2's sublibraries to be shadowed from a newer version
-is a side effect that does not cause problems in practice on this hardware.
+serves a critical purpose for onnxruntime's own lazy engine loads. Moreover,
+excluding the PATH-prepend for ctranslate2 specifically (a remedy #2845 floated)
+would leave its dispatch stub with zero discoverable sublibraries at all,
+reintroducing the exact `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED` failure #2818/A28
+already fixed, so the status quo is not just harmless but necessary.
