@@ -54,7 +54,7 @@ Sidecar log:
 INFO:     127.0.0.1:58098 - "POST /transcribe HTTP/1.1" 200 OK
 ```
 
-### 3. Module-provenance inspection: mixed cuDNN versions coexist
+### 3. Module-provenance inspection: inert bundled cuDNN copy coexists with active set
 
 `Get-Process -Id <sidecar pid> -Module` after the `/transcribe` call shows the
 sidecar process has loaded `cudnn64_9.dll` from **three different locations**,
@@ -70,38 +70,57 @@ but only **two distinct versions** — Windows did not collapse them into a sing
 `_add_nvidia_dll_dirs_to_path`'s PATH-prepend mechanism and torch's own bundled
 copy; the `ctranslate2\` one is the package's own bundled 9.10.2.21 copy.)
 
+**ctranslate2's own compiled code does not reference cuDNN at all.** Binary inspection
+of `server/tts-sidecar/.venv/Lib/site-packages/ctranslate2/ctranslate2.dll` and
+`_ext.cp312-win_amd64.pyd` via grep found zero cuDNN references (vs. 3 cuBLAS
+references in the same binary, confirming the grep methodology succeeds when
+cuDNN is actually present). The bundled `cudnn64_9.dll` in the ctranslate2 package
+directory is loaded unconditionally by `ctranslate2/__init__.py`'s glob-based
+directory-wide DLL load at import time (lines 20-21: `for library in
+glob.glob(os.path.join(package_dir, "*.dll")): ctypes.CDLL(library)`), but it is
+loaded inertly — ctranslate2's compiled code never calls into any cuDNN exports
+from this file.
+
 Every other loaded cuDNN component (`cudnn_ops64_9.dll`, `cudnn_adv64_9.dll`,
 `cudnn_graph64_9.dll`, `cudnn_heuristic64_9.dll`, `cudnn_engines_*64_9.dll`) is
 present ONLY under `nvidia\cudnn\bin` and `torch\lib` (version 9.19.0.56) — never
-bundled under `ctranslate2\` — because ctranslate2 only ships the single
-`cudnn64_9.dll` dispatch DLL entry point, not the full cuDNN library suite.
-cuDNN's dispatch DLL loads these sublibraries lazily (at the first real kernel
-operation) via bare-name `LoadLibrary` calls. Every other loaded cuDNN component
-is present in the process from the 9.19.0.56 set. At runtime, ctranslate2's
-dispatch stub resolved its required sublibraries from this 9.19.0.56 set present
-in the process. The result: a mixed-version stack (dispatch 9.10.2.21 +
-sublibraries 9.19.0.56) that worked correctly end-to-end on CUDA with a correct
-transcript.
+bundled under `ctranslate2\` — because ctranslate2 only ships the single dispatch
+DLL entry point, not the full cuDNN library suite. These sublibraries belong to
+the only actual cuDNN consumer in this process: **onnxruntime's CUDA execution
+provider, used by the Kokoro synth call in step 1** — not to ctranslate2/Whisper.
+The 9.19.0.56 sublibraries were loaded by onnxruntime's own cuDNN dispatch stub
+(which resolves them lazily at the first kernel operation via bare-name
+`LoadLibrary` calls), and all of them are present in the process from the
+9.19.0.56 set installed by this sidecar's environment.
 
 ### Interpretation
 
 Windows' loader identifies a module by its **normalized full path**, not by base
-name, when the loading component resolves the DLL via an explicit path. ctranslate2
-ships `cudnn64_9.dll` inside its own package directory and loads it from there,
-not via a bare-name `PATH` search — so its 9.10.2.21 dispatch stub loads as
-a distinct module, unaffected by `_add_nvidia_dll_dirs_to_path`'s PATH prepend.
-
-The dispatch DLL loaded by ctranslate2 (9.10.2.21) resolved its required
-sublibraries from the 9.19.0.56 set present in the process. This is a
-mixed-version composition, not a displacement of ctranslate2's own sublibraries —
-ctranslate2 bundles no cuDNN sublibraries at all, only the single dispatch DLL
-entry point.
+name. ctranslate2 ships `cudnn64_9.dll` in its own package directory and loads it
+via an absolute path (the glob-based unconditional load in `__init__.py`), not
+via a bare-name `PATH` search — so the 9.10.2.21 copy loads as a distinct module,
+unaffected by `_add_nvidia_dll_dirs_to_path`'s PATH prepend. However, ctranslate2's
+own compiled code does not call into this loaded DLL; the file is inert within
+ctranslate2's execution path. The only actual cuDNN consumer in this process is
+onnxruntime's CUDA execution provider (Kokoro), which loaded the 9.19.0.56
+sublibraries via its own lazy-loading dispatch mechanism.
 
 ### Conclusion
 
-**Empirically harmless. No fix needed.** The cross-minor cuDNN version gap (9.10→9.19)
-between ctranslate2's bundled dispatch stub and the system's cuDNN sublibraries
-results in a mixed-version composition on this real hardware. The measurement
-shows this mixed-version stack works correctly: ctranslate2's 9.10.2.21 dispatch
-stub loaded and correctly resolved its required 9.19.0.56 sublibraries, executed
-transcription correctly on CUDA, and produced the correct output.
+**No fix needed.** ctranslate2's own compiled code contains no cuDNN references
+at all (verified via binary grep: 0 hits in both `ctranslate2.dll` and
+`_ext.cp312-win_amd64.pyd`); the bundled `cudnn64_9.dll` is loaded inertly and
+not called by ctranslate2's execution path. The original concern (#2845) — whether
+a cross-minor cuDNN version gap (9.10 vs. 9.19) could affect ctranslate2/Whisper
+transcription — does not apply: there is no gap in practice because there is no
+consumption to be affected by a gap.
+
+The 9.19.0.56 cuDNN sublibraries loaded in this process belong to onnxruntime's
+CUDA execution provider (Kokoro), the only actual cuDNN consumer in this
+measurement. Transcription succeeded correctly on CUDA, confirming the setup is
+functional end-to-end.
+
+**Forward-looking caveat**: this conclusion is specific to ctranslate2 4.8.0's
+current build and the versions present in this sidecar's environment. If a future
+version of ctranslate2 adds cuDNN-based GPU kernels (unlikely but not ruled out
+by this measurement), this analysis would need re-checking at that time.

@@ -385,7 +385,7 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 //
 // PASS-3 REVIEW NOTE (2026-09-01): the prior version of this note checked
 // only ONE basename pair and generalised from it. Re-measured `FileVersion`
-// directly, on the live venv, for THREE basenames mechanism B can shadow:
+// directly, on the live venv, for basenames mechanism B can shadow:
 //   - `nvrtc64_120_0.dll` / `nvJitLink_120_0.dll` (from
 //     `nvidia-cuda-nvrtc-cu12`/`nvidia-nvjitlink-cu12`): torch's own
 //     `torch/lib` copies and the `nvidia/*/bin` copies both report
@@ -400,21 +400,21 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 //     build the way `NVIDIA_CUDNN_CONSTRAINT`'s tighter `~=9.19.0` does.
 //   - `cudnn64_9.dll` from `ctranslate2` (faster-whisper's own bundled
 //     dispatch stub, `server/tts-sidecar/.venv/Lib/site-packages/ctranslate2/`):
-//     reports `9.10.2.21`. The `nvidia/cudnn/bin/cudnn64_9.dll` this file
-//     installs (per `NVIDIA_CUDNN_CONSTRAINT`, `~=9.19.0`) reports
-//     `9.19.0.56` — a CROSS-MINOR gap (9.10 → 9.19) WIDER than the 9.25→9.19
-//     gap this PR exists to fix. On real hardware, ctranslate2's 9.10.2.21
-//     dispatch stub loads and resolves its required sublibraries from the
-//     9.19.0.56 set present in the process; measurement shows this
-//     mixed-version composition is empirically harmless: ASR transcription
-//     succeeds correctly on cuda:0 with correct output. Per #2845's measurement
+//     reports `9.10.2.21`. Binary inspection (via grep) found zero cuDNN
+//     references in ctranslate2's compiled code (ctranslate2.dll, _ext.cp312-win_amd64.pyd);
+//     the bundled cuDNN file is loaded unconditionally by __init__.py's
+//     glob-based directory-wide DLL load at import time, but ctranslate2 never
+//     calls into it. This entry is NOT a live shadow target — ctranslate2 does
+//     not consume cuDNN. Per #2845's measurement
 //     (server/tts-sidecar/docs/ctranslate2-cudnn-shadow-measurement.md),
-//     ctranslate2 bundles no cuDNN sublibraries of its own — only the dispatch
-//     entry point — so there is nothing of ctranslate2's own to displace.
-// All three shadows pre-date this PR (this PR only widens which of them
-// `_add_nvidia_dll_dirs_to_path()`'s PATH prepend can newly reach); nothing
-// here pins cross-mechanism agreement the way `NVIDIA_CUDNN_CONSTRAINT` etc.
-// pin the packages this file DOES own.
+//     the 9.19.0.56 cuDNN sublibraries loaded in this process belong to
+//     onnxruntime's CUDA execution provider (Kokoro), the only actual cuDNN
+//     consumer in this sidecar. The inert ctranslate2 bundled copy poses no
+//     concern.
+// The two live shadow targets (nvrtc/nvJitLink, cublas) pre-date this PR (this
+// PR only widens which of them `_add_nvidia_dll_dirs_to_path()`'s PATH prepend
+// can newly reach); nothing here pins cross-mechanism agreement the way
+// `NVIDIA_CUDNN_CONSTRAINT` etc. pin the packages this file DOES own.
 const NVIDIA_CUFFT_CONSTRAINT = 'nvidia-cufft-cu12~=11.3.3';
 const NVIDIA_CUDA_RUNTIME_CONSTRAINT = 'nvidia-cuda-runtime-cu12~=12.8.0';
 
