@@ -16,7 +16,7 @@
 // No npm dependencies: onbox-register-check.yml runs this with no `npm ci`
 // step. node builtins and scripts/lib/* only.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readNormalized } from './lib/read-normalized.mjs';
