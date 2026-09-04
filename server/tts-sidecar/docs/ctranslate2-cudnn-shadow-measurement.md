@@ -52,12 +52,11 @@ Sidecar log:
 INFO:     127.0.0.1:58098 - "POST /transcribe HTTP/1.1" 200 OK
 ```
 
-### 3. Module-provenance inspection: TWO distinct `cudnn64_9.dll` modules coexist
+### 3. Module-provenance inspection: mixed cuDNN versions coexist
 
 `Get-Process -Id <sidecar pid> -Module` after the `/transcribe` call shows the
-sidecar process has **two separate loaded modules both named `cudnn64_9.dll`**,
-at different full paths, with different versions — Windows did not collapse them
-into a single module:
+sidecar process has loaded `cudnn64_9.dll` from **three different locations**,
+but only **two distinct versions** — Windows did not collapse them into a single module:
 
 | Path | FileVersion |
 |---|---|
@@ -72,35 +71,52 @@ copy; the `ctranslate2\` one is the package's own bundled 9.10.2.21 copy.)
 Every other loaded cuDNN component (`cudnn_ops64_9.dll`, `cudnn_adv64_9.dll`,
 `cudnn_graph64_9.dll`, `cudnn_heuristic64_9.dll`, `cudnn_engines_*64_9.dll`) is
 present ONLY under `nvidia\cudnn\bin` and `torch\lib` (version 9.19.0.56) — never
-duplicated under `ctranslate2\` — because ctranslate2 only bundles the single
-`cudnn64_9.dll` entry-point stub, not the full cuDNN component set; its runtime
-loader resolves the rest through whichever `cudnn64_9.dll` gets loaded first in
-its own process, or ctranslate2 links narrowly against the entry stub only. What
-matters for this measurement is that ctranslate2's forward pass completed
-correctly end-to-end on CUDA with a correct transcript, so whichever component
-set it actually used at runtime worked.
+bundled under `ctranslate2\` — because ctranslate2 only ships the single
+`cudnn64_9.dll` dispatch DLL entry point, not the full cuDNN library suite.
+cuDNN's dispatch DLL loads these sublibraries lazily (at the first real kernel
+operation) via bare-name `LoadLibrary` calls, which resolves through the process
+`PATH` environment variable, not through explicit paths. This process `PATH` has
+been prepended with `nvidia/cudnn/bin/` at sidecar boot (via `_add_nvidia_dll_dirs_to_path`),
+so the sublibraries loaded are the 9.19.0.56 versions. The net result: ctranslate2
+loaded the 9.10.2.21 dispatch stub (via its explicit package path), but resolved
+its required sublibraries from the PATH-prepended 9.19.0.56 set. This is a
+mixed-version stack (dispatch 9.10.2.21 + sublibraries 9.19.0.56), not a
+fully self-contained 9.10.2.21 stack. The measurement shows this mixed
+combination worked correctly end-to-end on CUDA with a correct transcript.
 
 ### Interpretation
 
-Windows' loader identifies a already-loaded module by its **normalized full
-path**, not by base name, when the loading component resolves the DLL via an
-explicit path (as ctranslate2 does for its own bundled copy — it ships
-`cudnn64_9.dll` inside its own package directory and loads it from there, not
-via a bare-name `PATH` search). `_add_nvidia_dll_dirs_to_path`'s PATH prepend
-only affects **bare-name** `LoadLibrary`/`dlopen` resolution (which is what
-onnxruntime's lazily-dlopened cuDNN engine plugins need — the bug it was built
-to fix). ctranslate2 never does a bare-name search for its own `cudnn64_9.dll`,
-so the PATH-prepend candidate never gets a chance to shadow it: both DLLs load
-side by side as distinct modules, ctranslate2 gets its own pinned 9.10.2.21, and
-the onnxruntime-consuming engines (Kokoro/Coqui/Qwen) still get 9.19.0.56 from
-the PATH prepend. There is no shadow in practice on this measurement.
+Windows' loader identifies a module by its **normalized full path**, not by base
+name, when the loading component resolves the DLL via an explicit path. ctranslate2
+ships `cudnn64_9.dll` inside its own package directory and loads it from there,
+not via a bare-name `PATH` search — so its 9.10.2.21 dispatch stub loads as
+a distinct module, unaffected by `_add_nvidia_dll_dirs_to_path`'s PATH prepend.
+
+However, the bare-name search mechanism is NOT avoided downstream: cuDNN's
+dispatch DLL pattern (documented in `main.py:151-175`) means the dispatch stub
+itself lazily loads the other cuDNN components (`cudnn_ops64_9.dll`,
+`cudnn_graph64_9.dll`, etc.) via bare-name `LoadLibrary` calls, which resolves
+through the process `PATH` environment variable. This is the mechanism that
+`_add_nvidia_dll_dirs_to_path` prepends `nvidia/cudnn/bin/` for — not just for
+onnxruntime's own lazy engine plugins, but for cuDNN itself's later lazy loads.
+Since the PATH has been prepended with the 9.19.0.56 set, ctranslate2's dispatch
+stub resolved its sublibraries from that set, not from its own package directory.
+
+The result: ctranslate2 loaded a 9.10.2.21 dispatch stub with 9.19.0.56 sublibraries.
+This is a real cross-version shadow (the sublibraries ARE shadowed from a different
+version), but it is narrower in scope than a full "uncontrolled fallback" scenario
+— only the sublibraries are shadowed, not the dispatch stub itself.
 
 ### Conclusion
 
 **No fix needed.** The `install-ort.mjs:396-414` PASS-3 review note's concern
 (cross-minor cuDNN version gap 9.10→9.19 between ctranslate2's bundled copy and
-the PATH-prepended onnxruntime copy) does not manifest as a runtime shadow on
-this real hardware: ctranslate2 loads and uses its own bundled cuDNN 9.10.2.21
-via its own absolute package path, unaffected by `_add_nvidia_dll_dirs_to_path`'s
-PATH prepend, and transcription is correct. `_add_nvidia_dll_dirs_to_path` is
-left untouched, per the ticket's explicit instruction not to weaken it.
+the PATH-prepended copy) manifests as a cuDNN sublibrary shadow on this real
+hardware, but empirically causes no harm: ctranslate2's 9.10.2.21 dispatch stub
+loaded and correctly resolved its 9.19.0.56 sublibraries from the PATH-prepended
+set, executed transcription correctly on CUDA, and produced the correct output.
+The mixed-version stack worked. `_add_nvidia_dll_dirs_to_path` is left untouched,
+per the ticket's explicit instruction not to weaken it — the prepended PATH
+serves a critical purpose for onnxruntime's own lazy engine loads, and the fact
+that it also causes ctranslate2's sublibraries to be shadowed from a newer version
+is a side effect that does not cause problems in practice on this hardware.
