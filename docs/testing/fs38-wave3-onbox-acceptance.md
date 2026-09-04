@@ -2395,7 +2395,21 @@ in the chapter, so the render is guaranteed to spend seconds in the derive.
   the abort is the one exception `resolveDesignedVoicesForChapter` rethrows, so
   it must also read as a pause, not a failure.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P (cloned-voice half only) ☐ F ☐ B ☐ N/A  **Notes:** Run 5
+(2026-09-04, same worktree/setup). Deleted `.pt` to force Repairable, fired
+`POST .../generation` (force:true), then `POST .../generation/pause` ~1.5s
+later. Stream went straight from `chapter_preparing_voice` to `idle` — **no**
+`chapter_failed`, no toast payload of any kind. `GET .../state`'s chapter-2
+entry carries **no `generationState` field at all** (not `'failed'`) —
+untouched from its prior successful render, confirming the abort was never
+misread as a derive failure. `engines.qwen.status` stayed `'ready'`, and the
+`.pt` had already reappeared (the derive itself completed fast enough that
+the pause landed just after it, before/during the synth phase — still inside
+the sheet's target window, since no failure surfaced either way). **Resume
+confirmed:** re-running the same chapter unchanged completed normally
+(`chapter_complete`). **Designed-voice half not attempted** — blocked on
+`GEMINI_API_KEY` (no designed voice exists in this isolated worktree), same
+as C-17/C-18/E-07.
 
 ---
 
@@ -2439,7 +2453,24 @@ EBUSY/EPERM on the unlink. Practical options:
   per-file best-effort, not all-or-nothing).
 - After closing the handle, re-revoking (or deleting) clears the straggler.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). Opened an exclusive (`FileShare.None`) handle on a healthy
+clone's `.pt` from PowerShell, fired the revoke through the SAME script while
+the handle stayed open (one process, so the lock genuinely overlapped the
+delete attempt), closed the handle only after the response returned — landed
+on the **first** attempt, no retries needed. Response: HTTP 200,
+`consent.revokedAt` set, and **`artifactPurgeIncomplete: true` +
+`artifactPurgeFailedPaths: ["…\\qwen-e5a120c0-….pt"]`** naming exactly the
+held path — not a silent clean-success response. Confirmed on disk: the
+`.pt` (the locked file) **survived**; its sibling `.json` manifest was
+erased in the same pass (per-file best-effort, not all-or-nothing, as
+expected). Could not verify the two documented `server.log` lines directly —
+this dev-mode run has no `logs\server.log` file at all (stdout-only,
+matching the known "server.log only from `npm start`" behaviour) — but the
+response body's `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` fields
+are the authoritative API-level evidence and matched exactly. After closing
+the handle, `DELETE .../<uuid>?confirm=1` cleared the straggling `.pt`
+immediately (`{"deleted":true}`, confirmed gone from disk).
 
 ---
 
