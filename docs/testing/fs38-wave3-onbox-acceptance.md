@@ -2357,7 +2357,16 @@ E's D-B/D-F territory, not this Qwen-only test.)
 - Contrast with C-06/C-07: for a **cloned** voice, a stale `baseModel` *does*
   trigger a re-derive. The asymmetry is deliberate.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 7 (2026-09-04, primary
+checkout, same throwaway book/voice as C-17). `.pt` left present; bumped
+`engines.qwen.baseModel` to `qwen-base-C18-OLD` and `status` to `'stale'`
+(C-07 method 2 — same sanctioned stand-in). Generated chapter 2: **completed**,
+no error. `.pt`'s hash (`cc8c3004…`) and file mtime were **byte-for-byte and
+timestamp unchanged** — confirmed via `sha256sum` + `ls -la` before and
+after. `tts.err.log`'s derive-line count for this voice stayed at 1 (the
+original design's own derive) — zero new derives fired despite the stale
+`baseModel`, unlike a cloned voice's C-07 behavior. Restored `baseModel`/
+`status` to healthy afterward.
 
 ---
 
@@ -3099,7 +3108,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | | |
 | C-16 | Broken / Repairable card chip | | |
 | C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | **P** | Run 7: full chapter generation (not splice) on a throwaway primary-checkout book. `.pt` deleted → chapter completed, `.pt` reappeared, `instruct`/`designModel` byte-identical, `baseModel` refreshed. Re-design confirmed working (needed a Kokoro unload first — real, correctly-diagnosed VRAM contention, not a defect). Historical run-2 `F` was already withdrawn as a #1972 splice-attribution artifact — see the detailed section |
-| C-18 | §2.3 stale `.pt` deliberately left alone | | |
+| C-18 | §2.3 stale `.pt` deliberately left alone | **P** | Run 7: bumped `baseModel`+`status` to bogus/stale, `.pt` present. Chapter completed, `.pt` hash/mtime unchanged, zero new derives — designed-voice presence-only check confirmed, unlike a cloned voice's C-07 |
 | C-19 | 1.7B tier renders; `__1.7b.pt` created **and erased on revoke** | **P** | `qwen3-tts-1.7b` audition 200 in 49.7 s; `qwen-<uuid>__1.7b.pt` created (71,045 bytes); erased by the C-10 revoke above. The per-character 1.7B *toggle* UI was not exercised |
 | C-20 | Pause during a repair derive → no failure/toast | **P** (cloned-voice half only) | Run 5. Paused mid repair-derive: no failure, no persisted `generationState`, clean resume |
 | C-21 | Partial erasure is reported, not claimed as success | **P** | Run 5. Partial erasure via a held file handle hit on first attempt: `artifactPurgeIncomplete: true` naming the held path |
