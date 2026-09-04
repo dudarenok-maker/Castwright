@@ -2251,7 +2251,25 @@ rendered inside `ProvenanceMarker` at `:371-391`).
   - A `wrong-engine` case (C-13) shows **no chip at all**, even though the render
     will hard-fail.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 2026-09-04, same worktree/setup
+(post server-restart, fully clean). Minted one fresh clone via the app's own
+`/api/voice-library/{clone-sample,clone}` API, then walked it through all
+five states via `#/voices` → My voices, reloading between each (states 3-5
+per the sheet's own sanctioned hand-edit of `voice.json` in this throwaway
+workspace):
+- **Healthy** (fresh clone): **no chip**, `Qwen ✓` per-engine pill.
+- **Broken — revoked** (via `POST /revoke`): danger **`Needs attention`**.
+- **Broken — no master** (`master` key deleted from `voice.json`, consent
+  un-revoked to isolate the condition): danger **`Needs attention`**.
+- **Broken — failed** (`engines.qwen.status = 'failed'`, master restored):
+  danger **`Needs attention`**, per-engine pill **`Qwen ⚠`**.
+- **Repairable** (`engines.qwen.status = 'stale'`): warning **`Will
+  re-derive`**, per-engine pill **`Qwen ⟳`**.
+
+All five rows match the expected chip exactly, including the per-engine
+pill's icon change on the two engine-status states (not itself part of the
+table but confirmed plausible per the Wave-3c note). Test voice deleted via
+`DELETE /api/voice-library/{id}?confirm=1` afterward — nothing left behind.
 
 ---
 
@@ -3146,7 +3164,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-13 | `wrong-engine` diagnosed distinctly at render time | **P** (wrong-engine half) · **B** (engine-unavailable contrast) | Run 5. Wrong-engine half confirmed exactly. Engine-unavailable contrast not reproducible on this box — a generation request lazily relaunches the sidecar regardless of `autoStartSidecar` |
 | C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | **P** | Run 5. All 4 assign-time wrong-engine guard scenarios confirmed |
 | C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | **B** | Underlying mechanism confirmed via direct API call (fast `chapter_failed` with correct errorCode/errorReason) — live browser toast blocked by this session's own environment instability (SSE stalls, a queue-layer 503, one server exit), not reproduced as a stable product defect. Found+fixed in passing: `getResolvedSidecarUrl()` used `localhost` instead of `127.0.0.1` (real Windows IPv6 defect, verified not the cause here) |
-| C-16 | Broken / Repairable card chip | | |
+| C-16 | Broken / Repairable card chip | **P** | All 5 states confirmed on `#/voices`: Healthy=no chip, Broken(revoked/no-master/failed)=danger `Needs attention`, Repairable(stale)=warning `Will re-derive`; per-engine pill correctly shows `Qwen ⚠`/`Qwen ⟳` on the two engine-status states |
 | C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | **P** | Run 7: full chapter generation (not splice) on a throwaway primary-checkout book. `.pt` deleted → chapter completed, `.pt` reappeared, `instruct`/`designModel` byte-identical, `baseModel` refreshed. Re-design confirmed working (needed a Kokoro unload first — real, correctly-diagnosed VRAM contention, not a defect). Historical run-2 `F` was already withdrawn as a #1972 splice-attribution artifact — see the detailed section |
 | C-18 | §2.3 stale `.pt` deliberately left alone | **P** | Run 7: bumped `baseModel`+`status` to bogus/stale, `.pt` present. Chapter completed, `.pt` hash/mtime unchanged, zero new derives — designed-voice presence-only check confirmed, unlike a cloned voice's C-07 |
 | C-19 | 1.7B tier renders; `__1.7b.pt` created **and erased on revoke** | **P** | `qwen3-tts-1.7b` audition 200 in 49.7 s; `qwen-<uuid>__1.7b.pt` created (71,045 bytes); erased by the C-10 revoke above. The per-character 1.7B *toggle* UI was not exercised |

@@ -868,8 +868,8 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **37 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04) · ~23 still owed · 3 run-2 results retracted**
-<!-- stat:a1-still-owed 23 -->
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **38 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04) · ~22 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 22 -->
 <!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
@@ -1128,7 +1128,40 @@ sidecar process is **adopted** across a Node server restart rather than
 respawned, so an env/`.env` change only takes effect on the sidecar once
 its own process is explicitly killed. No defects filed this round.
 
-**Still owed (~23), and why:**
+**Run 8 — 2026-09-04, coordinator follow-up, same worktree.** **C-16**
+discharged in full: minted one fresh clone via the app's own clone API, then
+walked it through all five documented states on `#/voices` → My voices
+(reload between each) — Healthy (no chip), Broken-revoked, Broken-no-master,
+Broken-failed (all three: danger `Needs attention`), Repairable-stale
+(warning `Will re-derive`) — every chip matched exactly, including the
+per-engine pill's `Qwen ⚠`/`Qwen ⟳` icon swap on the two engine-status
+states. Test voice deleted afterward via the app's own delete API. **C-15
+attempted but Blocked, not discharged**: the underlying `cloned-voice-broken`
+mechanism was confirmed correct via a direct `POST
+/api/books/.../generation` call (fast `chapter_failed` SSE event, correct
+`errorCode`/`errorReason` naming the revoked voice) — but the *live browser
+toast* could not be observed, blocked by this session's own severe
+environment instability under heavy concurrent background load: repeated
+SSE-stream stalls, a `POST /generation` 503 specifically from the UI's
+queue-wrapper path (the same direct endpoint call succeeded moments later on
+the same box, so the 503 sits in the queue layer, not the underlying
+generation code), and one full server-process exit (code 1) immediately
+after a correctly-logged failure, cause not isolated. **Found and fixed in
+passing, filed as [#2887](https://github.com/dudarenok-maker/Castwright/issues/2887):**
+`getResolvedSidecarUrl()`'s per-worktree derivation built
+`http://localhost:$PORT` instead of `http://127.0.0.1:$PORT`, unlike every
+other sidecar-URL site in this codebase — a real Windows IPv6/IPv4
+dual-stack defect (verified, via a second reproduction after the fix, that
+it is NOT the cause of the C-15 blockers above). Fixed with a full
+`test:server` pass (538 files, 8201 tests) confirming no regression, after
+finding and fixing 5 genuinely-broken assertions across `qwen-voice.test.ts`
+(×2), `design-voice-core.test.ts`, and
+`synthesise-chapter-derive-vram-partition.test.ts` that depended on the old
+(wrong) `localhost` value — checked each of 16 files referencing
+`localhost:9000` individually rather than blind-replacing, since most were
+self-contained mocks/fixtures unaffected by the real derivation.
+
+**Still owed (~22), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
@@ -1215,11 +1248,14 @@ its own process is explicitly killed. No defects filed this round.
   whose `segments.json` and the current analysis disagreed (exactly the shape
   both fixture books in that run hit); #1972 has since closed that refusal.
   </details>
-- **Section C — 15 of 15 discharged as of Run 7 (C-01 ⭐, C-04, C-06, C-07,
-  C-08, C-09, C-12, C-14, C-17 ⭐, C-18, C-20, C-21 full; C-13 partial —
-  wrong-engine half only, engine-unavailable contrast not reproducible on
-  this box — see Run 5 note).** Still not reached: **C-15**/**C-16** (UI
-  toast/chip observation — need a real browser).
+- **Section C — 16 of 16 attempted, 15 discharged as of Run 8 (C-01 ⭐, C-04,
+  C-06, C-07, C-08, C-09, C-12, C-14, C-16, C-17 ⭐, C-18, C-20, C-21 full;
+  C-13 partial — wrong-engine half only, engine-unavailable contrast not
+  reproducible on this box — see Run 5 note).** **C-15** is the one row
+  still owed — attempted (Run 8), the underlying mechanism confirmed correct
+  via direct API call, but **Blocked** on this session's own environment
+  instability for the live browser-toast observation (see Run 8 note above);
+  retry on a box that isn't under heavy concurrent background load.
 - **Section D — 3 of 4 discharged as of Run 7 (D-01 full, D-03 pass
   incidentally from earlier isolation work, D-04 full).** **D-02** (full-book
   render with a cloned character) remains **Blocked** — the side-11 block it
