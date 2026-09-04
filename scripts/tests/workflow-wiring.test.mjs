@@ -1138,10 +1138,37 @@ test('lockfile-touched polarity: both frontend and server test steps force full 
     /else\s+npx\s+vitest\s+run;/,
     'Frontend step else branch does not run full vitest suite',
   );
+
+  // For the server step, we need a more structural check because it has
+  // multiple lines in both then and else branches. Extract the entire
+  // if/then/else/fi block and verify:
+  // (1) the then branch (LOCKFILE_TOUCHED != "true") runs --changed
+  // (2) the else branch (LOCKFILE_TOUCHED == "true") runs full suite
+  // Mutation proof: M7 (neuter else to --changed) and M11 (swap then/else bodies)
+  // must both fail this test.
+  const serverIfBlock = serverBody.match(
+    /if\s+\[\s*-n\s+"\$BASE"\s*\]\s+&&\s+\[\s*"\$LOCKFILE_TOUCHED"\s+!=\s+"true"\s*\]\s*;\s+then\n((?:[^\n]*\n)*?)^\s*else\n((?:[^\n]*\n)*?)^\s*fi/m,
+  );
+  assert.ok(
+    serverIfBlock,
+    'Server step: could not extract if/then/else/fi block structure',
+  );
+
+  const serverThenBranch = serverIfBlock[1];
+  const serverElseBranch = serverIfBlock[2];
+
+  // The THEN branch (when LOCKFILE_TOUCHED != "true") must contain --changed.
   assert.match(
-    serverBody,
-    /else\s+npx\s+vitest\s+run/,
-    'Server step else branch does not run full vitest suite',
+    serverThenBranch,
+    /--changed/,
+    'Server step: then branch does not use --changed (should run when lockfile NOT touched)',
+  );
+
+  // The ELSE branch (when LOCKFILE_TOUCHED == "true") must NOT contain --changed.
+  assert.doesNotMatch(
+    serverElseBranch,
+    /--changed/,
+    'Server step: else branch contains --changed (should run full suite when lockfile IS touched)',
   );
 });
 

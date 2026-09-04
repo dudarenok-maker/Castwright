@@ -267,8 +267,10 @@ jobs:
       # change to src/test/setup.ts (runner-injected, NOT import-reachable)
       # forces a full run via forceRerunTriggers in vitest.config.ts; a root
       # dep/config bump (the `shared` scope) forces a full run via vitest's
-      # default triggers; a lockfile-only diff forces a full run via the
-      # LOCKFILE_TOUCHED flag (#2853). test:a11y stays always-on as a cheap
+      # default triggers; a lockfile-only OR shared-scope diff forces a full run
+      # via the LOCKFILE_TOUCHED flag (#2853) — note lockfile_touched is
+      # computed as (shared || lockfile-specific-match), so e.g. an .github/actions/**
+      # diff also triggers a full run. test:a11y stays always-on as a cheap
       # core-view gate. See docs/features/118-ci-cost-round-2.md.
       # test:e2e is a deliberate extra trigger: this step also runs
       # `npm run test:a11y`, which has no STEP of its own, and an e2e-only
