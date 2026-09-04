@@ -2039,7 +2039,8 @@ function stripMarkdownLinkUrls(text) {
 
 function titleDriftTokens(text) {
   const withoutLinks = stripMarkdownLinkUrls(text);
-  const raw = withoutLinks.toLowerCase().match(TITLE_DRIFT_TOKEN_REGEX) ?? [];
+  const withoutCodeSpans = stripInlineCodeSpans(withoutLinks);
+  const raw = withoutCodeSpans.toLowerCase().match(TITLE_DRIFT_TOKEN_REGEX) ?? [];
   const tokens = new Set();
   for (const t of raw) {
     if (TITLE_DRIFT_STOPWORDS.has(t)) continue;

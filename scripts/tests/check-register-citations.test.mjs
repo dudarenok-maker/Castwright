@@ -1903,6 +1903,40 @@ Some body text.
   assert.match(findings[0], /completely unrelated volume audio normalization/);
 });
 
+test('checkCitationTitleDrift: does not fire (false positive) when row title contains backtick-wrapped text and heading echoes it exactly — the citing side must strip inline code spans symmetrically with the row side', () => {
+  // A register row whose title contains backtick-wrapped text — a real
+  // shape from the live register (A17's title starts with `` `/health` ``).
+  // The heading citation echoes the title byte-for-byte, including the
+  // backticks. Before the fix, stripInlineCodeSpans was applied to the
+  // heading side (titleEcho) during extractHeadingTitleEchoes, blanking the
+  // backtick span, but NOT to the row's title before tokenizing in
+  // titleDriftTokens — so the two sides had different token sets and
+  // falsely reported drift even though the heading is an accurate echo.
+  //
+  // We use a title where the backticked part is the DOMINANT content —
+  // stripping it from one side but not the other creates a clear token
+  // mismatch that produces drift even though the heading is exact. The row
+  // title starts with the backticked command and adds minimal extra text,
+  // so losing the backticked tokens creates a clear similarity drop.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A10 · \`npm run test:golden-audio --bless\` (#1234)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  // A heading that echoes the row title exactly, including the backticks.
+  // Before the fix, the backticked content gets blanked on the heading side
+  // only, creating tokens ["1234"] vs ["npm", "run", "test", "golden", "audio", "bless", "1234"],
+  // which scores as 1 shared / 7 union = 0.14 similarity, below the 0.3 threshold.
+  // After the fix, both sides get stripped the same way and produce the same tokens.
+  const text = '### A10 · `npm run test:golden-audio --bless` (#1234)\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 0, 'Expected no drift when heading echoes row title exactly, even with inline code spans');
+});
+
 // --- frozen-path exclusion ---
 
 test('isFrozenPath: excludes the documented frozen globs', () => {
