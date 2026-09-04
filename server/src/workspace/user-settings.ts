@@ -492,15 +492,24 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
 const DEFAULT_LOCAL_TTS_URL = 'http://localhost:9000';
 
 /** Normalises a sidecar URL for default-vs-explicit-choice comparisons only
-    (#2632 N21) — strips the same trailing slash(es) the function's own return
-    path already strips (`raw.replace(/\/+$/, '')` below), and lowercases, so
-    "http://localhost:9000/" and "http://LOCALHOST:9000" still compare equal to
-    the canonical default. Without this, a spelling that is the factory default
-    in every sense but one beat port derivation and reinstated the spawn-here /
-    talk-there split #2632/N1 exists to prevent. Comparison-only: the returned
-    URL itself keeps its original casing, only the trailing slash is stripped. */
+    (#2632 N21, extended by #2887/#2888 for the 127.0.0.1 spelling) — strips
+    the same trailing slash(es) the function's own return path already strips
+    (`raw.replace(/\/+$/, '')` below), lowercases, and folds the `127.0.0.1`
+    host spelling to `localhost`, so "http://localhost:9000/",
+    "http://LOCALHOST:9000", and "http://127.0.0.1:9000" (the literal string
+    getResolvedSidecarUrl() itself now returns and reports back to the user,
+    e.g. via SidecarHealthResult.url) all still compare equal to the canonical
+    default. Without this, a spelling that is the factory default in every
+    sense but one — including one the app's own UI hands back to the user to
+    paste into Settings — beats port derivation and reinstates the
+    spawn-here / talk-there split #2632/N1 exists to prevent. Comparison-only:
+    the returned URL itself keeps its original host/casing, only the trailing
+    slash is stripped. */
 function normalizeSidecarUrlForCompare(raw: string): string {
-  return raw.replace(/\/+$/, '').toLowerCase();
+  return raw
+    .replace(/\/+$/, '')
+    .toLowerCase()
+    .replace(/^(https?:\/\/)127\.0\.0\.1(:|\/|$)/, '$1localhost$2');
 }
 
 export function getResolvedSidecarUrl(): string {
@@ -560,14 +569,17 @@ export function getResolvedSidecarUrl(): string {
 
   // 3. Derive from LOCAL_TTS_PORT (per-worktree port isolation, #2632)
   const port = resolveSidecarPort();
-  /* 127.0.0.1, not localhost — the sidecar binds 127.0.0.1 only
-     (spawn-sidecar.ts's DEFAULT_HOST), and on a box where "localhost"
-     resolves ::1 first, every request built from this URL (generation.ts's
-     pre-flight /health check, the catalog audit, etc.) hangs on the IPv6
-     attempt with nothing listening, surfacing as a 503 on POST /generation
-     or a stalled catalog-audit rather than a fast, successful call.
-     loopback-url.ts already avoids this for the same reason; this is the
-     other sidecar-URL construction site. */
+  /* 127.0.0.1, not localhost — the sidecar binds 127.0.0.1 by default
+     (start.ps1/start.sh's $bindHost, overridable via LOCAL_TTS_HOST;
+     spawn-sidecar.ts's DEFAULT_HOST is the matching default this server
+     process itself probes/health-checks against, not a bind directive), and
+     on a box where "localhost" resolves ::1 first, every request built from
+     this URL (generation.ts's pre-flight /health check, the catalog audit,
+     etc.) hangs on the IPv6 attempt with nothing listening, surfacing as a
+     503 on POST /generation or a stalled catalog-audit rather than a fast,
+     successful call. scripts/remint-anchored-variants.mjs is a separate,
+     standalone sidecar-URL construction site (not routed through this
+     resolver) with the same fix applied for the same reason. */
   return `http://127.0.0.1:${port}`;
 }
 let lastWarnedSidecarUrl: string | null = null;

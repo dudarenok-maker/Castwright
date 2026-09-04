@@ -36,9 +36,12 @@ describe('isPrivateHostUrl', () => {
 
 describe('getResolvedSidecarUrl — srv-21 fallback', () => {
   const savedEnv = process.env.LOCAL_TTS_URL;
+  const savedPort = process.env.LOCAL_TTS_PORT;
   afterEach(() => {
     if (savedEnv === undefined) delete process.env.LOCAL_TTS_URL;
     else process.env.LOCAL_TTS_URL = savedEnv;
+    if (savedPort === undefined) delete process.env.LOCAL_TTS_PORT;
+    else process.env.LOCAL_TTS_PORT = savedPort;
     _resetUserSettingsCache();
   });
 
@@ -48,9 +51,18 @@ describe('getResolvedSidecarUrl — srv-21 fallback', () => {
     expect(getResolvedSidecarUrl()).toBe('http://127.0.0.1:9000');
   });
 
-  it('falls back to the default for a public-host URL', () => {
+  it('falls back to derived-port URL for a public-host URL', () => {
+    // LOCAL_TTS_PORT deliberately non-default (9110, not 9000) and distinct
+    // from the rejected URL's own port (1234) — if the srv-21 guard ever
+    // regressed to a hardcoded fallback instead of actually deriving from
+    // LOCAL_TTS_PORT, this would catch it (a fallback hardcoded to the
+    // factory-default port would fail this assertion, whereas the prior
+    // version of this test used LOCAL_TTS_PORT's factory default of 9000 for
+    // both the rejected URL's port and the fallback's port, so it could not
+    // tell a real derivation from a lucky coincidence).
     _resetUserSettingsCache();
-    process.env.LOCAL_TTS_URL = 'http://evil.example.com:9000';
-    expect(getResolvedSidecarUrl()).toBe('http://127.0.0.1:9000');
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = 'http://evil.example.com:1234';
+    expect(getResolvedSidecarUrl()).toBe('http://127.0.0.1:9110');
   });
 });

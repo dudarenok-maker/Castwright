@@ -2717,7 +2717,9 @@ another: \"Master Oduvan\" (revoked). Restore the missing voice(s); reassign
 the character(s)."` — names the voice and reason, **no** `errorCode` field at
 all (contrast C-02/C-08/C-09's `cloned-voice-broken`).
 
-**QA-repair half — completed in Run 6 (2026-09-04, coordinator follow-up).**
+**QA-repair half — completed in Run 7 (2026-09-04, coordinator follow-up;
+a box reboot interrupted Run 6 mid-flight before this half was reached, so
+it resumed and completed in Run 7 — see the register's Run 7 notes).**
 The chapter's clean audio had nothing flagged (`flaggedCount: 0`) on default
 thresholds, so the precondition needed manufacturing. Used the app's own
 `PUT /api/config` to temporarily tighten `qa.seg.minRatio`/`qa.seg.maxRatio`
@@ -3150,8 +3152,8 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | ID | Test | Result | Notes |
 |---|---|---|---|
 | **C-01** ⭐ | **Revoke lands mid-derive**: `revokedAt` survives, chapter fails, no `.pt` survives | **P** | Run 5 (2026-09-04), 4 attempts, hit on #4. `revokedAt` survived unclobbered; no `.pt`/`.json`/`master.wav` survived even though the sidecar's own log shows the derive succeeding a second time — Node's post-derive guard re-purged it. Chapter failed `cloned-voice-broken` naming both affected characters, one with reason `(derive-failed)` (the documented acceptable variant, same as Run 4's E-03) and one `(revoked)` |
-| C-02 | Revoked → fails loud, names the voice, **zero audio, zero GPU** | **B** | needs a full-chapter render — blocked by the side-11 leak (see §7.2 BLOCKER-1) |
-| C-03 | Broken voice not in this chapter doesn't fail it | | |
+| C-02 | Revoked → fails loud, names the voice, **zero audio, zero GPU** | **P** | Run 2026-08-31. Revoked clone assigned to "Wren": `chapter_failed` in 748 ms, `errorCode: cloned-voice-broken`, exact post-#1967 wording; `tts.log` delta pure health-check noise (no synth/derive calls); `audio/` confirmed empty |
+| C-03 | Broken voice not in this chapter doesn't fail it | **P** | Run 2026-08-31, same worktree/setup as C-02. Clone A (healthy) on Pell Hollis (ch.2 only), Clone B (revoked) on Sela (ch.3 only). Ch.2 completed normally (`chapter_complete`, `audioQa.status: "ok"`); ch.3 `chapter_failed` in 681 ms naming Sela `(revoked)`. Both halves pass |
 | C-04 | Title-beat narrator path is gated | **P** (weaker variant) | Run 5. Narrator's cloned voice revoked → chapter fails in 1s naming "Narrator" `(revoked)`, zero title audio. Weaker variant: fixture has no chapter where the narrator's ONLY usage is the title beat, so this can't isolate the title-beat path from body-line usage — matches the sheet's own documented fallback |
 | C-05 | Orphaned-characterId narrator path is gated | **F** (fires, and is **not** surfaced) | Fired naturally during the run-3 render. `cast.json` has `mairin`/`coalfall-dragon`; the analysis cache and `segments.json` have `mayrin`/`coalfall` — so **21 of 72 segments (60.3 s) rendered in the NARRATOR's voice**. Logged twice per render (`… which is not in this book's cast — falling back to the narrator voice`), **absent from `renderedFallbackByCharacter`** (`{}`), never surfaced in the UI. ECAPA confirms same voice: narrator vs mayrin **0.932**, narrator vs coalfall **0.965** (one real person across two clips = 0.891). **Not one book — 5 affected**: Playing with Fire 2.8 min, Unlocked 2.1, Exile 1.9 (incl. Silveny), Заказ Коалфолла 1.0, Everblaze 0.9. Escapes breaching the cloned-voice guarantee only by luck — every affected narrator is a *designed* voice. Filed [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023). **Caught by ear by the owner**, from audio the measurements had already flagged and I had misread |
 | C-06 | Repairable (`.pt` deleted) → transparent re-derive, chapter completes | **P** | Run 5. `.pt` deleted, chapter generated: transparent single re-derive, chapter completed, no failure/toast |
@@ -3178,7 +3180,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | D-01 | Concurrent multi-book render sharing a cloned voice | **P** | Run 5. Second throwaway book imported/analysed; concurrent healthy + concurrent repair-race renders both completed cleanly |
 | D-02 | Full-book render with a cloned character | **B** | blocked by side-11 (§7.2 BLOCKER-1). **Partially substituted:** a per-character re-record of a cloned character into a real chapter succeeded — `splice_complete`, 58 segments, `resolvedVoiceName` = the clone's key, `asr.verdict: ok`, WER 0 |
 | D-03 | Server + sidecar restart → still renders (cache-independent) | **P** (incidentally) | Proven repeatedly while isolating #1941: the on-disk `.pt` survived 6 stack restarts and rendered correctly each time from a cold cache. Not run as the sheet's scripted steps |
-| D-04 | Splice / QA-repair surface plain text (expected, KL-i) | **P** (both halves) | Run 5. Splice half: plain-text failure, no `errorCode`, names the voice + reason. QA-repair half: tightened `qa.seg.minRatio`/`maxRatio` via the app's own config API to manufacture a genuinely QA-flagged sentence, then real QA-repair hit the revoked character and failed plain-text, same shape — thresholds restored afterward |
+| D-04 | Splice / QA-repair surface plain text (expected, KL-i) | **P** (both halves) | Splice half (Run 5): plain-text failure, no `errorCode`, names the voice + reason. QA-repair half (Run 7, after a reboot interrupted Run 6 mid-flight): tightened `qa.seg.minRatio`/`maxRatio` via the app's own config API to manufacture a genuinely QA-flagged sentence, then real QA-repair hit the revoked character and failed plain-text, same shape — thresholds restored afterward |
 
 #### Section E — 3c: cloned + designed voices on Coqui XTTS v2 (9)
 
@@ -3188,7 +3190,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 > **Run 2 (superseded, kept for history):** Russian Coalfall ch.2, `oduvan` reassigned to clone `563501c7-…` and its `ttsEngine` forced to `coqui` (run 1's trap: the character's own engine overrides the requested `modelKey`). Splice `rerecord/coqui-xtts-v2` → `splice_complete`, 80 segments, 244.42 s. **`voices\xtts\xtts-$U.pt` (135,509 B) + `.json` (172 B) created — the first XTTS clone artifacts ever produced on this box.** `resolvedVoiceName` = `xtts-$U`, `voiceEngine: coqui`. 21 oduvan spans (55.0 s) → `/transcribe` auto-detect: **`ru`**, `avg_logprob` **−0.368**. Sidecar logged `Coqui ready — 58 speakers in manifest` on `cuda:1` in a process that had already served `/embed` (#1962 holding). **Required a workaround first — see DEF-D.** **⚠️ The identity half is RETRACTED** — this used a splice re-record, and **13 of the 21 targeted segments diverge** between `segments.json` and the analysis cache ([#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)), so roughly half the audio rendered in other characters' voices. That is what the unexplained ECAPA reading meant: **0.604** against the Russian narrator and **0.279** against the clone's own audition — a mixture, not a match, which run 2 recorded as "ambiguous" instead of investigating. What survives: the Coqui derive genuinely ran, the artifacts are real, and the language is right. Still owed: identity, the no-re-derive half, and the by-ear check
 | **E-02** ⭐ | Audition, then revoke — Play refuses afterwards | **P** (run 2) | Sample before revoke → 200 `{"url":"/audio/voices/qwen-$U-…-yqzvr6.mp3","cached":true}`. Revoke → 200, `revokedAt` set, `personName`/`relationship`/`permittedUse`/`attestedAt`/`attestedBy` intact, `master` block absent, **no `artifactPurgeIncomplete`**. Sample after revoke → **403** `This cloned voice has no valid consent and cannot be played.` (exact). Direct GET of the previously-cached audition URL → **404** — the cached clip of the revoked person is gone, not merely unlinked |
-| E-03 | Revoke lands during an in-flight Coqui derive | | |
+| E-03 | Revoke lands during an in-flight Coqui derive | **P** | Run 2026-08-31. `revokedAt` survived, chapter failed naming "Pell Hollis", no orphaned `voices\xtts\` artifact — all three core guarantees held on first attempt. Minor non-defect wording deviation: reason read `(derive-failed)`, not `(revoked)` |
 | E-04 | A long sentence on a cloned Coqui voice | **F** | **Reproduced deliberately, not inferred.** Same cloned voice, same engine, same `language: ru` — only length differs: a **46-char** line → **200**, 178,176 B PCM (3.71 s); a **245-char** line → **500** `{"detail":"Internal error."}`. `main.py:2427` hardcodes `enable_text_splitting=True`; XTTS reaches `get_spacy_lang` only past `char_limits[lang]`; **spacy is not installed and not declared in any `requirements/*.txt`**. Thresholds: **ja 71, ru 182**, es 239, en 250, de 253, fr 273 — tightest exactly where cloned Coqui voices matter. Chapter 2 still rendered because **zero** of its lines reach 182 chars. Filed [#2017](https://github.com/dudarenok-maker/Castwright/issues/2017). **This is the crash class `test_xtts_clone_sanity` was written for** — it never ran: the golden tier is opt-in and SKIP-exits-0 without weights. **Update:** the fix landed in [PR #2039](https://github.com/dudarenok-maker/Castwright/pull/2039) — `requirements/base.txt` now declares plain `spacy`, and `_infer_from_latents` catches the `ImportError` and retries with `enable_text_splitting=False`, logged loudly. Verified only against a unit-test fake reproducing the upstream `ImportError` shape; this row's `F` stands until the exact reproduction above (46-char control → 200; 245-char Russian line → 200 + PCM) is re-run on a box with real Coqui weights |
 | E-05 | Audition matches render (KL-o caveat) | **P** | Card Play with `modelKey: coqui-xtts-v2` → 200 `{"url":"/audio/voices/xtts-$U-coqui-xtts-v2-47pmuw.mp3","cached":false}` — KL-o's fix holds, the card asks for Coqui. Audition vs the rendered chapter spans **0.5515**, against floors of **0.105** (rendered narrator) and **0.051** (the old designed oduvan). Same artifact, same identity — no drift between preview and delivery |
 | **E-06** ⭐ | A designed voice on a Coqui book — judged against the stock voice it replaces (D-B) | | |
@@ -3309,11 +3311,32 @@ check, which **failed** for a reason unrelated to language — see **DEF-E**.
 resolution — see the B-06 row and DEF-C below. The historical "not reachable
 as written" finding is preserved in the row's Notes.)*
 
-**Zero failures** — but that is not an acceptance signal: 31 tests were never
-reached and 8 are blocked (the corrected totals above), including all of the
-highest-risk ⭐ set except C-10.
-The one Critical defect this run found (#1941) was discovered *outside* the
-scripted steps, while populating an artifact set for C-10.
+#### Cumulative — current (through Run 8, 2026-09-04)
+
+The tables above are frozen historical snapshots (Run 1, Run 2, and Run 2's
+correction); this one reflects the full §7.1 table's current P/F/B/N/A counts
+across Sections A–E, recomputed after Runs 3–8 (Sections C, D, and most of E
+were run for the first time in this window; see each row's own Notes for the
+run number).
+
+| Section | Total | P | F | B | N/A | not reached |
+|---|---|---|---|---|---|---|
+| A (3a) | 13 | 9 | 0 | 3 | 0 | 1 |
+| B (3b1) | 13 | 3 | 0 | 3 | 1 | 6 |
+| C (3b2) | 21 | 19 | 1 | 1 | 0 | 0 |
+| D (cross-cutting) | 4 | 3 | 0 | 1 | 0 | 0 |
+| E (3c) | 9 | 7 | 1 | 0 | 0 | 1 |
+| **All** | **60** | **41** | **2** | **8** | **1** | **8** |
+
+**Two failures now stand** (C-05's narrator-fallback misattribution, #2023;
+E-04's long-Coqui-sentence crash, #2017 — fixed in source per PR #2039 but
+not yet re-verified on hardware, so the row's `F` stands) — this is no longer
+the "zero failures" state Run 1/2 recorded. 8 tests remain not reached (A-13,
+B-08/09/10/11/12/13, E-06) and 8 remain blocked. Of the highest-risk ⭐ set
+(C-01, C-08, C-10, C-17, E-01, E-02, E-06, E-07), every one has now passed
+except **E-06**, still not reached. The one Critical defect Run 1 found
+(#1941) was discovered *outside* the scripted steps, while populating an
+artifact set for C-10.
 
 ### 7.2 Defects found
 

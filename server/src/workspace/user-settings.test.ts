@@ -966,6 +966,27 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
     expect(getResolvedSidecarUrl()).toBe('http://127.0.0.1:9110');
   });
 
+  // #2887/#2888: getResolvedSidecarUrl() itself now reports the factory
+  // default as "http://127.0.0.1:9000" (SidecarHealthResult.url), not
+  // "http://localhost:9000" — a user who copies that reported value back
+  // into Settings must still be recognised as confirming the default, not
+  // as making an explicit customisation that would beat port derivation.
+  it('N21: 127.0.0.1-spelled factory-default LOCAL_TTS_URL is still a non-choice', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    process.env.LOCAL_TTS_URL = 'http://127.0.0.1:9000';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS });
+
+    expect(getResolvedSidecarUrl()).toBe('http://127.0.0.1:9110');
+  });
+
+  it('N21: 127.0.0.1-spelled factory-default sidecarUrl setting is still a non-choice', () => {
+    process.env.LOCAL_TTS_PORT = '9110';
+    _setUserSettingsCacheForTest({ ...DEFAULT_USER_SETTINGS, sidecarUrl: 'http://127.0.0.1:9000' });
+    _setExplicitlySetKeysForTest(new Set(['sidecarUrl']));
+
+    expect(getResolvedSidecarUrl()).toBe('http://127.0.0.1:9110');
+  });
+
   // N2/B3: sidecarUrl requires BOTH key-present AND value-different (not just key-present)
   it('B3 regression: sidecarUrl at factory default (written by unrelated writer) loses to port derivation', () => {
     // Reproduces B3: an unrelated writer (e.g., writeSetupCompletedAt) writes the complete merged
