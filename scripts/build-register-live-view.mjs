@@ -105,6 +105,29 @@ export function buildStripRegion(figures) {
   `;
 }
 
+const BODY_GROUP_HEADING_REGEX = /^### ([A-Z])(\d+) · /gm;
+
+export function parseBodyGroupCounts(mdText) {
+  const counts = new Map();
+  for (const m of mdText.matchAll(BODY_GROUP_HEADING_REGEX)) {
+    const letter = m[1];
+    counts.set(letter, (counts.get(letter) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function rewriteGcountInSection(html, sectionId, count) {
+  const sectionRegex = new RegExp(
+    `(<section[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?<span class="gcount">)\\d+( rows?</span>)`,
+  );
+  const match = html.match(sectionRegex);
+  if (!match) throw new Error(`build-register-live-view: no gcount span found in section#${sectionId}`);
+  return html.replace(
+    sectionRegex,
+    (whole, before) => `${before}${count}${count === 1 ? ' row</span>' : ' rows</span>'}`,
+  );
+}
+
 export function main(
   registerPath = DEFAULT_REGISTER_PATH,
   liveViewPath = DEFAULT_LIVE_VIEW_PATH,
@@ -145,11 +168,17 @@ export function main(
 // body, not add a parallel one.
 export function buildLiveView(mdText, currentHtml) {
   const figures = parseRegisterFigures(mdText);
+  const bodyGroupCounts = parseBodyGroupCounts(mdText);
   let html = currentHtml;
   html = applyGeneratedRegion(html, 'strip', buildStripRegion(figures));
   for (const [letter, count] of figures.glanceGroups) {
     html = applyGeneratedRegion(html, `glance:${letter}`, String(count));
   }
+  for (const [letter, count] of bodyGroupCounts) {
+    html = rewriteGcountInSection(html, `g${letter.toLowerCase()}`, count);
+  }
+  html = rewriteGcountInSection(html, 'blocked', figures.blockedCount);
+  html = rewriteGcountInSection(html, 'unconfirmed', figures.unconfirmedCount);
   return html;
 }
 

@@ -5,6 +5,7 @@ import {
   parseRegisterFigures,
   buildStripRegion,
   buildLiveView,
+  parseBodyGroupCounts,
 } from '../build-register-live-view.mjs';
 
 test('applyGeneratedRegion replaces only the marked region', () => {
@@ -65,6 +66,8 @@ Some body text.
 function buildLiveViewFixture({
   glance = { A: 37, B: 2, C: 4, D: 3, E: 10, G: 2, H: 2 },
   setupText = 'Setup text for the group',
+  blocked = 5,
+  unconfirmed = 2,
 } = {}) {
   const rows = Object.entries(glance)
     .map(
@@ -106,6 +109,30 @@ ${rows}
   </div>
 
 ${sections}
+
+  <section class="group is-blocked" id="blocked">
+    <header>
+      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked <span class="gcount">${blocked} rows</span></h3>
+    </header>
+    <details class="item">
+      <summary><span class="num">—</span><span class="iname">fixture blocked item</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Fixture body.</p>
+      </div>
+    </details>
+  </section>
+
+  <section class="group is-soft" id="unconfirmed">
+    <header>
+      <h3 class="gtitle"><span class="gtag">?</span> Unconfirmed <span class="gcount">${unconfirmed} rows</span></h3>
+    </header>
+    <details class="item">
+      <summary><span class="num">—</span><span class="iname">fixture unconfirmed item</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Fixture body.</p>
+      </div>
+    </details>
+  </section>
 </body>
 </html>
 `;
@@ -163,4 +190,34 @@ test('a missing A1 marker is an explicit error, not a silent skip', () => {
     '',
   );
   assert.throws(() => parseRegisterFigures(noMarkers), /stat:a1-still-owed/);
+});
+
+test('parseBodyGroupCounts counts headings, not the glance table', () => {
+  const md = `## Group A — setup a
+
+### A1 · one
+### A2 · two
+
+## Group B — setup b
+
+### B1 · one
+`;
+  const counts = parseBodyGroupCounts(md);
+  assert.deepEqual([...counts.entries()], [['A', 2], ['B', 1]]);
+});
+
+test('buildLiveView rewrites a gcount span located by its enclosing section id, leaving gtitle prose untouched', () => {
+  const md = buildRegisterFixture() + '\n### A2 · two\n### A3 · three\n';
+  const html = buildLiveViewFixture();
+  const next = buildLiveView(md, html);
+  assert.match(next, /id="ga"[\s\S]*?<span class="gcount">3 rows<\/span>/);
+  assert.match(next, /<span class="gtag">A<\/span> Group A/);
+});
+
+test('the groups target covers Blocked and Unconfirmed sections too', () => {
+  const md = buildRegisterFixture({ blocked: 5, unconfirmed: 2 });
+  const html = buildLiveViewFixture({ blocked: 99, unconfirmed: 99 });
+  const next = buildLiveView(md, html);
+  assert.match(next, /id="blocked"[\s\S]*?<span class="gcount">5 rows<\/span>/);
+  assert.match(next, /id="unconfirmed"[\s\S]*?<span class="gcount">2 rows<\/span>/);
 });
