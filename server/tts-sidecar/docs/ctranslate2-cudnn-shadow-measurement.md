@@ -28,9 +28,11 @@ INFO:     127.0.0.1:51380 - "POST /synthesize HTTP/1.1" 200 OK
 ### 2. `/transcribe` (ctranslate2/faster-whisper, cold load) → correct transcript on CUDA
 
 Fed the kokoro PCM straight back into `/transcribe` (`X-Sample-Rate: 24000`), which
-triggers ctranslate2's first cuDNN load of the process (Whisper's model is lazy-loaded,
-after onnxruntime/kokoro has already loaded its own cuDNN 9.19.0.56 copy via
-`_add_nvidia_dll_dirs_to_path`).
+triggers ctranslate2's first cuDNN load of the process (Whisper's model is lazy-loaded).
+Kokoro's onnxruntime session is expected to have initialized its CUDA execution provider —
+and hence loaded cuDNN — by this point, given `_add_nvidia_dll_dirs_to_path` runs
+unconditionally at sidecar boot before any request is served; this run did not separately
+capture a pre-`/transcribe` module snapshot to confirm it directly.
 
 ```
 POST /transcribe (raw int16 PCM, X-Sample-Rate: 24000)
