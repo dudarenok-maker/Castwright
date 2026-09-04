@@ -165,12 +165,54 @@ function normalizeLineContext(lines, lineNum) {
   return context;
 }
 
+// Check if a discharge/removal annotation is negated by a negation word that
+// precedes it. Mirrors the polarity check from check-register-citations.mjs's
+// dischargedSubjectsMentionedIn function. Returns true if the discharge word
+// is negated (e.g., "NOT discharged", "undischarged"), false if affirmative.
+//
+// Recognizes these negation patterns:
+//   - "NOT", "no" (complete words; "no" excludes "no longer exist(s)",
+//     since that's an affirmative annotation phrase)
+//   - "never", "isn't", "aren't", "wasn't", "weren't" (contractions)
+//   - "hasn't", "haven't" (auxiliary verbs with "have")
+//   - "cannot", "can't" (modal verbs)
+//   - "far from" (degree modifier)
+//   - "nothing" (negating existential)
+//   - "un-" or "un-" prefix directly on the discharge word itself
+//
+// The proximity window is 30 characters backward from the discharge word match
+// position, matching the "nearby" heuristic from check-register-citations.mjs.
+function isDischargeAssertionNegated(text, dischargeMatch) {
+  // Check for "un-" or "un" prefix on the discharge word itself (e.g., "undischarged", "un-discharged")
+  const isUnPrefixed = /un-?discharged\b/i.test(
+    text.slice(Math.max(0, dischargeMatch.index - 10), dischargeMatch.index + dischargeMatch[0].length)
+  );
+  if (isUnPrefixed) return true;
+
+  // Check for negation words in a 30-character window before the discharge word
+  const POLARITY_PROXIMITY_CHARS = 30;
+  const polarityScanStart = Math.max(0, dischargeMatch.index - POLARITY_PROXIMITY_CHARS);
+  const polarityContext = text.slice(polarityScanStart, dischargeMatch.index);
+
+  // Apostrophes are '-escaped so this regex literal doesn't desync quote-tracking
+  const hasNegationWord =
+    /\b(?:NOT|no\b(?!\s+longer\s+exists?)|never|isn't|aren't|wasn't|weren't|hasn't|haven't|cannot|can't|far\s+from|nothing)\b/i.test(
+      polarityContext,
+    );
+
+  return hasNegationWord;
+}
+
 // Check if a citation (identified by its row ID) has a discharge/removal
 // annotation that is specifically tied to that citation (not another citation
 // on the same logical line). Uses a "nearest citation" rule: for each
 // annotation phrase, the annotation applies to the citation nearest to its
 // left. This prevents cross-contamination from multiple citations on the
 // same line and handles hard-wrapped continuations.
+//
+// POLARITY CHECK: an annotation is only treated as a real discharge if the
+// discharge word is NOT negated. A sentence like "was NOT discharged" or
+// "undischarged" does not exempt the citation.
 function isCitationAnnotated(id, lines, lineNum) {
   const context = normalizeLineContext(lines, lineNum);
 
@@ -204,6 +246,11 @@ function isCitationAnnotated(id, lines, lineNum) {
 
   // For each annotation, check if our citation is the nearest one to its left
   for (const annotation of annotations) {
+    // POLARITY CHECK: skip this annotation if it's negated
+    if (isDischargeAssertionNegated(context, annotation)) {
+      continue;
+    }
+
     const annotationPos = annotation.index;
 
     // Find all citations to the left of this annotation
