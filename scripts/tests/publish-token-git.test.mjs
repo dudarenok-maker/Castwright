@@ -16,7 +16,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nonceInHistory } from '../publish-token.mjs';
-import { scrubGitEnv } from '../git-env.mjs';
+import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 
 const LIVE = 'docs/live.html';
 
@@ -56,17 +56,19 @@ const LIVE = 'docs/live.html';
 //      right and this site is its exception — stated rather than assumed,
 //      because deleting this line looks like tidying.
 //
-// A FUNCTION, evaluated per spawn, not a constant snapshot taken at import. As
-// a constant it was computed before any test could inject a variable, so the
-// self-check below PASSED with the scrub deleted — the snapshot never held the
-// variable it was meant to strip, and the instrument could not fail.
-const cleanEnv = () => {
-  const env = scrubGitEnv(process.env);
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase() === 'GIT_INDEX_FILE') delete env[key];
-  }
-  return env;
-};
+// Strip GIT_* env vars before spawning git in a throwaway repo. When this
+// test runs from a git hook context (e.g. pre-commit via husky), the parent
+// `git commit` sets GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE / GIT_PREFIX,
+// which child processes inherit. Without sanitising, the test's `git commit`
+// would write into the PARENT worktree's git instead of the temp fixture —
+// silently creating bogus commits on whatever branch invoked the hook. A
+// throwaway repo built fresh in a temp dir has no real index or ambient
+// repository state to honour, so every GIT_*-named key must go, including
+// GIT_INDEX_FILE, GIT_PREFIX, and GIT_AUTHOR_DATE. Delegated to the shared,
+// broader-than-scrubGitEnv() helper — see git-env.mjs for the case-
+// insensitivity and GIT_INDEX_FILE-preservation rationale and why
+// scrubGitEnvForThrowawayRepo() is the right choice here.
+const cleanEnv = () => scrubGitEnvForThrowawayRepo();
 
 // The same shape check-onbox-register.mjs's runGitCommand returns.
 const runner = (args, cwd) => {
