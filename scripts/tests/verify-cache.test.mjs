@@ -1414,8 +1414,8 @@ test('a --changed-only pass is never written to the verify-cache — only a full
 // `git_dir` flipped a real checkout's `core.bare` from false to true via
 // `makeGitFixture()`'s `git init` below.
 // Thin wrapper over the shared, broader-than-scrubGitEnv() helper — see
-// git-env.mjs's scrubGitEnvForThrowawayRepo() for the case-insensitivity
-// rationale and why this needs a separate helper from scrubGitEnv().
+// git-env.mjs's scrubGitEnv() docstring for the case-insensitivity rationale,
+// and why this needs a separate helper from scrubGitEnv().
 function cleanGitEnv() {
   return scrubGitEnvForThrowawayRepo();
 }

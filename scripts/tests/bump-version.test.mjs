@@ -43,8 +43,8 @@ const MOJIBAKE_EM_DASH = 'â€”'; // should decode to U+2014 —, standalone 
 // would write into the PARENT worktree's git instead of the temp fixture —
 // silently creating bogus commits on whatever branch invoked the hook.
 // Thin wrapper over the shared, broader-than-scrubGitEnv() helper — see
-// git-env.mjs's scrubGitEnvForThrowawayRepo() for the case-insensitivity
-// rationale and why this needs a separate helper from scrubGitEnv().
+// git-env.mjs's scrubGitEnv() docstring for the case-insensitivity rationale,
+// and why this needs a separate helper from scrubGitEnv().
 function cleanGitEnv() {
   return scrubGitEnvForThrowawayRepo();
 }

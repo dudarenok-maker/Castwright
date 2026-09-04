@@ -60,8 +60,8 @@ const CONFLICT_FIXTURE =
 // invocation below, and every spawned `node release-body.mjs` process,
 // passes this explicit env instead of inheriting process.env.
 // Thin wrapper over the shared, broader-than-scrubGitEnv() helper — see
-// git-env.mjs's scrubGitEnvForThrowawayRepo() for the case-insensitivity
-// rationale and why this needs a separate helper from scrubGitEnv().
+// git-env.mjs's scrubGitEnv() docstring for the case-insensitivity rationale,
+// and why this needs a separate helper from scrubGitEnv().
 function cleanGitEnv() {
   return scrubGitEnvForThrowawayRepo();
 }
