@@ -3255,6 +3255,89 @@ describe('POST /:uuid/assign — designed-voice language mismatch warning (#1953
   });
 });
 
+/* #1998 — cloned-voice language mismatch warning. Sibling of the designed-
+   voice warning (#1953) above: when a cloned voice's `languageCode` (the
+   BCP-47 code the clone pipeline validated and persisted) differs from the
+   book's language, the assign succeeds with a 200 but attaches a warning
+   naming the character, the clone's language, and the book's. The comparison
+   is CODE-vs-CODE (`entry.languageCode` against `bookLanguage`), never
+   code-vs-sidecar-word — mutation 2 below pins that trap. */
+describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)', () => {
+  async function seedClonedWithLang(voiceUuid: string, languageCode?: string) {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid, name: 'Clone Voice', provenance: 'cloned',
+      tags: [], pinned: false, languageCode,
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+      master: {
+        clipFile: 'master.wav', sampleRate: 24_000, durationSeconds: 5,
+        transcript: 'hello there', transcriptSource: 'whisper',
+        captureMethod: 'record', languageCode,
+      },
+      consent: {
+        personName: 'Test', relationship: 'family-with-permission',
+        permittedUse: 'personal', attestedAt: '2026-01-01T00:00:00Z',
+        attestedBy: 'test',
+      },
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    writeFileSync(join(vl.entryDir(voiceUuid), 'master.wav'), 'fake-wav-bytes');
+  }
+
+  it('warns (200) when a cloned voice in Russian is assigned to an English book', async () => {
+    await seedClonedWithLang('clone-ru-en', 'ru');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-ru-en', [
+      { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
+    ]);
+    const res = await request(app)
+      .post('/api/voice-library/clone-ru-en/assign')
+      .send({ bookId: 'book-clone-ru-en', characterId: 'char-nik' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toMatch(/Nikolai/);
+    expect(res.body.warning).toMatch(/Russian/);
+    expect(res.body.warning).toMatch(/English/);
+    expect(res.body.warning).toMatch(/cloned in/);
+  });
+
+  it('does not warn when the cloned voice language matches the book language', async () => {
+    await seedClonedWithLang('clone-en-en', 'en');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-en-en', [
+      { id: 'char-ada', name: 'Ada', ttsEngine: 'qwen' },
+    ]);
+    const res = await request(app)
+      .post('/api/voice-library/clone-en-en/assign')
+      .send({ bookId: 'book-clone-en-en', characterId: 'char-ada' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  it('does not warn when the cloned voice has no languageCode (unknown language)', async () => {
+    await seedClonedWithLang('clone-undef');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-undef', [
+      { id: 'char-ada', name: 'Ada', ttsEngine: 'qwen' },
+    ]);
+    const res = await request(app)
+      .post('/api/voice-library/clone-undef/assign')
+      .send({ bookId: 'book-clone-undef', characterId: 'char-ada' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* Mutation 1 — invert the comparison so it fires on a MATCH instead of a
+     mismatch. The match-case test ("does not warn when…matches") must go
+     red. Pins that the guard tests inequality, not just presence.
+     To verify: change `entry.languageCode !== bookLanguage` to
+     `entry.languageCode === bookLanguage`, re-run the match test — fails. */
+
+  /* Mutation 2 — change the comparand from `bookLanguage` (BCP-47 code)
+     back to `expectedSidecarLang` (human-readable sidecar word). The match-
+     case test must go red: 'en' !== 'English' is always true, so the guard
+     fires on every correctly-matched assignment. Pins the code-vs-word trap.
+     To verify: change `entry.languageCode !== bookLanguage` to
+     `entry.languageCode !== expectedSidecarLang`, re-run the match test. */
+});
+
+
 /* Fix wave 2 (review) — the guard's first cut computed the effective engine
    purely from the PERSISTED account default (getResolvedTtsModelKey()), which
    is not what actually renders: the Voices-page engine picker (and the

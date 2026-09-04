@@ -2627,14 +2627,20 @@ paths:
                     type: string
                     nullable: true
                     description: |
-                      Non-fatal advisory. Carries one of two mutually exclusive
-                      (by provenance) signals, never both:
+                      Non-fatal advisory. Carries one of three signals:
 
                       - (#1953) set when a DESIGNED voice's baked manifest language
                         differs from the book's language. Applies on an English book
                         as well as a non-English one. Absent for a cloned/imported
                         entry (which has no baked design language) and for a
                         matching-language designed voice.
+                      - (#1998) set when a CLONED voice's `languageCode` (BCP-47,
+                        persisted by the clone pipeline at validation time) differs
+                        from the book's language. The comparison is code-versus-code
+                        (`entry.languageCode` against the book's `language` code),
+                        never code-versus-sidecar-word. Absent for an entry with no
+                        `languageCode` (unknown source language) and for a
+                        matching-language cloned voice.
                       - (#1933) set when a CLONED entry's OTHER clone-capable engine
                         (not the one this assign routed to) is not derivable — its
                         slot is terminally failed, or has no derivable source (no
@@ -2643,6 +2649,10 @@ paths:
                         regardless of which one this assign routed to, so this warns
                         about the one left unusable rather than letting it surface
                         silently the next time the character is switched to it.
+
+                      When both (#1933) and (#1998) apply to the same cloned entry,
+                      the (#1933) advisory takes priority (engine-readiness is the
+                      more actionable message).
 
                       Either way the assignment still succeeds; this is a warning,
                       never a 409 (see the cloned-voice per-engine-readiness 409
