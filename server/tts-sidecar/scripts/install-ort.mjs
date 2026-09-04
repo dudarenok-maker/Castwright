@@ -403,11 +403,13 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 //     reports `9.10.2.21`. The `nvidia/cudnn/bin/cudnn64_9.dll` this file
 //     installs (per `NVIDIA_CUDNN_CONSTRAINT`, `~=9.19.0`) reports
 //     `9.19.0.56` — a CROSS-MINOR gap (9.10 → 9.19) WIDER than the 9.25→9.19
-//     gap this PR exists to fix. Whisper/ASR is the one engine the on-box
-//     `Device probe complete: {'kokoro': 'cuda', 'coqui': 'cuda', 'qwen':
-//     'cuda'}` run backing this PR did NOT exercise (ASR is off unless
-//     `SEG_ASR_ENABLED`), so this shadow is unconfirmed either way in
-//     practice — filed as #2845 rather than assumed benign.
+//     gap this PR exists to fix. This cuDNN sublibrary shadow DOES occur
+//     on real hardware (ctranslate2's 9.10.2.21 dispatch DLL loads sublibraries
+//     from the PATH-prepended 9.19.0.56 set), but measurement shows it is
+//     empirically harmless: ASR transcription succeeds correctly on cuda:0 with
+//     correct output. Per #2845's measurement (server/tts-sidecar/docs/
+//     ctranslate2-cudnn-shadow-measurement.md), the mixed-version stack works.
+//     `NVIDIA_CUDNN_CONSTRAINT` and the PATH-prepend mechanism are left untouched.
 // All three shadows pre-date this PR (this PR only widens which of them
 // `_add_nvidia_dll_dirs_to_path()`'s PATH prepend can newly reach); nothing
 // here pins cross-mechanism agreement the way `NVIDIA_CUDNN_CONSTRAINT` etc.
