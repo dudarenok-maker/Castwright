@@ -1086,7 +1086,8 @@ test('lockfile-touched polarity: both frontend and server test steps force full 
   // This test verifies the exact polarity: when LOCKFILE_TOUCHED != "true",
   // run with --changed; when true (or BASE unset), run full suite.
   // Reverting to the pre-fix condition (removing LOCKFILE_TOUCHED guard or
-  // inverting the polarity) makes this test fail.
+  // inverting the polarity) makes this test fail. Order-guard ensures the
+  // LOCKFILE_TOUCHED assignment precedes the if condition that consumes it.
 
   // Find both test steps by their exact names.
   const frontendMatch = source.match(
@@ -1112,6 +1113,39 @@ test('lockfile-touched polarity: both frontend and server test steps force full 
     serverBody,
     /LOCKFILE_TOUCHED="\$\{\{\s*fromJSON\(needs\.detect\.outputs\.scopes\)\.lockfile_touched\s*\}\}"/,
     'Server step does not assign LOCKFILE_TOUCHED from detect scopes',
+  );
+
+  // Order guard: the LOCKFILE_TOUCHED assignment must come BEFORE the if
+  // statement that consumes it. Moving the assignment after the if would
+  // use an unset/stale variable and restore the #2853 bug.
+  const frontendAssignIdx = frontendBody.indexOf('LOCKFILE_TOUCHED=');
+  const frontendIfIdx = frontendBody.indexOf('[ "$LOCKFILE_TOUCHED"');
+  assert.ok(
+    frontendAssignIdx !== -1,
+    'Frontend step: LOCKFILE_TOUCHED assignment not found',
+  );
+  assert.ok(
+    frontendIfIdx !== -1,
+    'Frontend step: if condition checking LOCKFILE_TOUCHED not found',
+  );
+  assert.ok(
+    frontendAssignIdx < frontendIfIdx,
+    `Frontend step: LOCKFILE_TOUCHED assignment (at ${frontendAssignIdx}) must precede if condition (at ${frontendIfIdx})`,
+  );
+
+  const serverAssignIdx = serverBody.indexOf('LOCKFILE_TOUCHED=');
+  const serverIfIdx = serverBody.indexOf('[ "$LOCKFILE_TOUCHED"');
+  assert.ok(
+    serverAssignIdx !== -1,
+    'Server step: LOCKFILE_TOUCHED assignment not found',
+  );
+  assert.ok(
+    serverIfIdx !== -1,
+    'Server step: if condition checking LOCKFILE_TOUCHED not found',
+  );
+  assert.ok(
+    serverAssignIdx < serverIfIdx,
+    `Server step: LOCKFILE_TOUCHED assignment (at ${serverAssignIdx}) must precede if condition (at ${serverIfIdx})`,
   );
 
   // Both steps must have the correct polarity: when LOCKFILE_TOUCHED != "true",
