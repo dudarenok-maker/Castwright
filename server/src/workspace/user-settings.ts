@@ -521,8 +521,10 @@ export function getResolvedSidecarUrl(): string {
   //    complete merged object, so unrelated writes (e.g., writeSetupCompletedAt) write sidecarUrl
   //    at the default, making presence a false signal of user choice (#2632 N2 / B3).
   //    Value-difference alone was the old sentinel that failed when user explicitly picked :9000,
-  //    and still does: that one case (a user who deliberately picks http://localhost:9000) remains
-  //    mis-served on this head, tracked at #2639. In every production state checked so far,
+  //    and still does: that case (a user who deliberately picks the default-spelled URL — either
+  //    http://localhost:9000 or, since #2887/#2888's 127.0.0.1 fold above, http://127.0.0.1:9000
+  //    too) remains mis-served on this head, tracked at #2639. In every production state checked
+  //    so far,
   //    value-difference already implies key-presence (readUserSettings derives both from the same
   //    file, writeUserSettings sets sentKeys alongside the value), so today the key check is
   //    belt-and-braces rather than load-bearing — kept as defence-in-depth in case a future writer

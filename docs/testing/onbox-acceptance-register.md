@@ -1167,8 +1167,10 @@ self-contained mocks/fixtures unaffected by the real derivation.
   with a real microphone.
 - **By ear (2):** B-03, E-06. No instrument substitutes; ECAPA cosines above are
   the objective half only.
-- **Section E — 8 of 9 now run (runs 2, 3, 4 and 7); only E-06 (by-ear) still
-  owed.** E-03 discharged Run 4, E-07 discharged Run 7.
+- **Section E — 8 of 9 now run (runs 2, 3, 4 and 7); E-06 (by-ear) and E-04's
+  reproduction re-run (see below — the code fix landed, only the on-box
+  confirmation is owed) are what remain.** E-03 discharged Run 4, E-07
+  discharged Run 7.
   **Run 3 (2026-08-01)** added E-01's first genuine exercise — **P**
   (mechanism), **by-ear NEGATIVE**. Owner: *"2 does not sound like 4 much,
   cross language is not working well."* Mechanism passes, perceptual
@@ -1248,10 +1250,10 @@ self-contained mocks/fixtures unaffected by the real derivation.
   whose `segments.json` and the current analysis disagreed (exactly the shape
   both fixture books in that run hit); #1972 has since closed that refusal.
   </details>
-- **Section C — 16 of 16 attempted, 15 discharged as of Run 8 (C-01 ⭐, C-04,
-  C-06, C-07, C-08, C-09, C-12, C-14, C-16, C-17 ⭐, C-18, C-20, C-21 full;
-  C-13 partial — wrong-engine half only, engine-unavailable contrast not
-  reproducible on this box — see Run 5 note).** **C-15** is the one row
+- **Section C — 13 rows discharged in full this session (Runs 5-8): C-01 ⭐,
+  C-04, C-06, C-07, C-08, C-09, C-12, C-14, C-16, C-17 ⭐, C-18, C-20, C-21.**
+  **C-13** is partial — wrong-engine half only, engine-unavailable contrast
+  not reproducible on this box — see Run 5 note. **C-15** is the one row
   still owed — attempted (Run 8), the underlying mechanism confirmed correct
   via direct API call, but **Blocked** on this session's own environment
   instability for the live browser-toast observation (see Run 8 note above);
