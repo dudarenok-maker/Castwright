@@ -3046,36 +3046,36 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| **C-01** ⭐ | **Revoke lands mid-derive**: `revokedAt` survives, chapter fails, no `.pt` survives | | |
+| **C-01** ⭐ | **Revoke lands mid-derive**: `revokedAt` survives, chapter fails, no `.pt` survives | **P** | Run 5 (2026-09-04), 4 attempts, hit on #4. `revokedAt` survived unclobbered; no `.pt`/`.json`/`master.wav` survived even though the sidecar's own log shows the derive succeeding a second time — Node's post-derive guard re-purged it. Chapter failed `cloned-voice-broken` naming both affected characters, one with reason `(derive-failed)` (the documented acceptable variant, same as Run 4's E-03) and one `(revoked)` |
 | C-02 | Revoked → fails loud, names the voice, **zero audio, zero GPU** | **B** | needs a full-chapter render — blocked by the side-11 leak (see §7.2 BLOCKER-1) |
 | C-03 | Broken voice not in this chapter doesn't fail it | | |
-| C-04 | Title-beat narrator path is gated | | |
+| C-04 | Title-beat narrator path is gated | **P** (weaker variant) | Run 5. Narrator's cloned voice revoked → chapter fails in 1s naming "Narrator" `(revoked)`, zero title audio. Weaker variant: fixture has no chapter where the narrator's ONLY usage is the title beat, so this can't isolate the title-beat path from body-line usage — matches the sheet's own documented fallback |
 | C-05 | Orphaned-characterId narrator path is gated | **F** (fires, and is **not** surfaced) | Fired naturally during the run-3 render. `cast.json` has `mairin`/`coalfall-dragon`; the analysis cache and `segments.json` have `mayrin`/`coalfall` — so **21 of 72 segments (60.3 s) rendered in the NARRATOR's voice**. Logged twice per render (`… which is not in this book's cast — falling back to the narrator voice`), **absent from `renderedFallbackByCharacter`** (`{}`), never surfaced in the UI. ECAPA confirms same voice: narrator vs mayrin **0.932**, narrator vs coalfall **0.965** (one real person across two clips = 0.891). **Not one book — 5 affected**: Playing with Fire 2.8 min, Unlocked 2.1, Exile 1.9 (incl. Silveny), Заказ Коалфолла 1.0, Everblaze 0.9. Escapes breaching the cloned-voice guarantee only by luck — every affected narrator is a *designed* voice. Filed [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023). **Caught by ear by the owner**, from audio the measurements had already flagged and I had misread |
-| C-06 | Repairable (`.pt` deleted) → transparent re-derive, chapter completes | | |
-| C-07 | Base-model bump → same re-derive | | |
-| C-08 ⭐ | **Transient** failure → Broken but **not bricked**; restart + re-run succeeds | | |
-| C-09 | **Permanent** 4xx → persists `failed` (terminal) | | |
+| C-06 | Repairable (`.pt` deleted) → transparent re-derive, chapter completes | **P** | Run 5. `.pt` deleted, chapter generated: transparent single re-derive, chapter completed, no failure/toast |
+| C-07 | Base-model bump → same re-derive | **P** | Run 5. Stale `baseModel` triggered exactly one re-derive; two early attempts hit this box's side-11 memory pressure, a clean sidecar restart reproduced the pass |
+| C-08 ⭐ | **Transient** failure → Broken but **not bricked**; restart + re-run succeeds | **P** | Run 5. Transient derive failure marked Broken, not bricked; self-healed once the sidecar returned. Time-to-fail-fast ran ~7min on one attempt — noted, not filed as a defect |
+| C-09 | **Permanent** 4xx → persists `failed` (terminal) | **P** | Run 5. Permanent 4xx persisted `status: 'failed'`, genuinely terminal (no self-heal) |
 | C-10 ⭐ | **Total erasure on revoke**, incl. the entry-dir recording | **P** | Pre-state 7 artifacts / 3 locations (`.pt`, `.json`, `__1.7b.pt`, `master.wav`, `voice.json`, 2 cached mp3s). After revoke: 200 with **no `artifactPurgeIncomplete`**; every GONE-table row gone; **wildcard sweep 0 files**; sample cache 0. Survives: entry dir + `voice.json`, `revokedAt` set, rest of consent intact, `master` block absent |
 | C-11 | Delete also removes the entry dir + clears cast refs | **P** | Unconfirmed DELETE → **409** with `usage:[{bookId, bookTitle, characterId, characterName}]`, nothing erased. `?confirm=1` → 200 `{deleted:true}`; artifacts 2→0; **entry dir removed**; the referencing character's **qwen *and* coqui** slots both cleared |
-| C-12 | Atomic `.pt`: kill mid-write leaves no truncated `.pt` | | |
-| C-13 | `wrong-engine` diagnosed distinctly at render time | | |
-| C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | | |
+| C-12 | Atomic `.pt`: kill mid-write leaves no truncated `.pt` | **P** (weaker variant) | Run 5, 5 attempts — never caught a truncated `.pt`; every kill landed cleanly before or after the write. Consistent with atomicity but doesn't prove concurrent interruption directly |
+| C-13 | `wrong-engine` diagnosed distinctly at render time | **P** (wrong-engine half) · **B** (engine-unavailable contrast) | Run 5. Wrong-engine half confirmed exactly. Engine-unavailable contrast not reproducible on this box — a generation request lazily relaunches the sidecar regardless of `autoStartSidecar` |
+| C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | **P** | Run 5. All 4 assign-time wrong-engine guard scenarios confirmed |
 | C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | | |
 | C-16 | Broken / Repairable card chip | | |
 | C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | | **RETRACTED — was recorded `F` in run 2; that was wrong.** The attempt used a splice re-record, which hit [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972): the chapter's `segments.json` attributed sentences 10/12/17/19 to `maerin`, but the analysis cache attributed all four to `narrator`, so the re-record rendered narrator lines in the narrator's voice and **never requested maerin's voice at all**. The `.pt` therefore never came back because the self-heal was never *reached* — not because it failed. **This test has not been exercised.** Re-run it after #1972 lands, on a book whose `segments.json` and analysis agree (or via a full chapter generation, which is unaffected) |
 | C-18 | §2.3 stale `.pt` deliberately left alone | | |
 | C-19 | 1.7B tier renders; `__1.7b.pt` created **and erased on revoke** | **P** | `qwen3-tts-1.7b` audition 200 in 49.7 s; `qwen-<uuid>__1.7b.pt` created (71,045 bytes); erased by the C-10 revoke above. The per-character 1.7B *toggle* UI was not exercised |
-| C-20 | Pause during a repair derive → no failure/toast | | |
-| C-21 | Partial erasure is reported, not claimed as success | | |
+| C-20 | Pause during a repair derive → no failure/toast | **P** (cloned-voice half only) | Run 5. Paused mid repair-derive: no failure, no persisted `generationState`, clean resume |
+| C-21 | Partial erasure is reported, not claimed as success | **P** | Run 5. Partial erasure via a held file handle hit on first attempt: `artifactPurgeIncomplete: true` naming the held path |
 
 #### Section D — cross-cutting (4)
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| D-01 | Concurrent multi-book render sharing a cloned voice | | not reached |
+| D-01 | Concurrent multi-book render sharing a cloned voice | **P** | Run 5. Second throwaway book imported/analysed; concurrent healthy + concurrent repair-race renders both completed cleanly |
 | D-02 | Full-book render with a cloned character | **B** | blocked by side-11 (§7.2 BLOCKER-1). **Partially substituted:** a per-character re-record of a cloned character into a real chapter succeeded — `splice_complete`, 58 segments, `resolvedVoiceName` = the clone's key, `asr.verdict: ok`, WER 0 |
 | D-03 | Server + sidecar restart → still renders (cache-independent) | **P** (incidentally) | Proven repeatedly while isolating #1941: the on-disk `.pt` survived 6 stack restarts and rendered correctly each time from a cold cache. Not run as the sheet's scripted steps |
-| D-04 | Splice / QA-repair surface plain text (expected, KL-i) | | not reached |
+| D-04 | Splice / QA-repair surface plain text (expected, KL-i) | **P** (both halves) | Run 5. Splice half: plain-text failure, no `errorCode`, names the voice + reason. QA-repair half: tightened `qa.seg.minRatio`/`maxRatio` via the app's own config API to manufacture a genuinely QA-flagged sentence, then real QA-repair hit the revoked character and failed plain-text, same shape — thresholds restored afterward |
 
 #### Section E — 3c: cloned + designed voices on Coqui XTTS v2 (9)
 
