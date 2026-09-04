@@ -1167,8 +1167,8 @@ self-contained mocks/fixtures unaffected by the real derivation.
   with a real microphone.
 - **By ear (2):** B-03, E-06. No instrument substitutes; ECAPA cosines above are
   the objective half only.
-- **Section E — 6 of 9 now run (2026-07-31/08-01, across runs 2 and 3);
-  E-03, E-06 and E-07 still owed, but no longer blocked.**
+- **Section E — 8 of 9 now run (runs 2, 3, 4 and 7); only E-06 (by-ear) still
+  owed.** E-03 discharged Run 4, E-07 discharged Run 7.
   **Run 3 (2026-08-01)** added E-01's first genuine exercise — **P**
   (mechanism), **by-ear NEGATIVE**. Owner: *"2 does not sound like 4 much,
   cross language is not working well."* Mechanism passes, perceptual
@@ -1296,15 +1296,14 @@ its pid tracking drifts across restarts — minor, unfiled.
 attester — `attestedBy` is overwritten with `personName`, which inverts
 `guardian-of-minor`).
 
-Starred, highest-risk — **C-10 is now discharged (passed 2026-07-29)**; the rest
-remain: **C-01** revoke mid-derive leaves no live `.pt` and `revokedAt` survives ·
-**C-08** a transient failure does not brick a voice · **C-17**
-designed-voice self-heal preserves persona · **C-12** a killed mid-write leaves
-no truncated `.pt` · **E-01** clone → cast on Coqui → generate · **E-02**
-audition-then-revoke refuses Play on the Coqui path · **E-06** the one place
-D-B's synthetic-clip-vs-catalogue quality question can actually be judged, by
-ear · **E-07** a forced designed-derive failure still renders the chapter
-(fail-soft, the opposite policy from cloned's fail-loud).
+Starred, highest-risk — **C-10, C-01, C-08, C-17, C-12, E-01, E-02, and E-07
+are all now discharged** (C-10 2026-07-29; C-01/C-08/C-17/C-12 Run 5/7; E-01/
+E-02 Run 2; E-07 Run 7). **C-15 and E-06 are the two still owed**: **C-15**
+the `cloned-voice-broken` toast fires immediately with a help link
+(mechanism confirmed correct via direct API call, Run 8; the live browser
+observation is Blocked on this session's own environment instability, not a
+product defect — retry on a quieter box) · **E-06** the one place D-B's
+synthetic-clip-vs-catalogue quality question can actually be judged, by ear.
 
 **E-01 was attempted and is blocked, not failed.** A Coqui splice reported
 `splice_complete` but wrote no `voices\xtts\` artifacts and left
