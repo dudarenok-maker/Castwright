@@ -868,8 +868,8 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **34 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04) · ~26 still owed · 3 run-2 results retracted**
-<!-- stat:a1-still-owed 26 -->
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **37 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04) · ~23 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 23 -->
 <!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
@@ -1093,7 +1093,42 @@ side-11 memory pressure, resolved by a clean sidecar restart. **C-18
 not attempted** — blocked on a designed voice, which needs `GEMINI_API_KEY`
 (absent from this isolated worktree by design), same as C-17/E-07.
 
-**Still owed (~26), and why:**
+**Run 7 — 2026-09-04, coordinator follow-up (a box reboot interrupted Run 6
+mid-flight; this run resumed after recovery — see the run sheet's Run 7
+notes for the environmental detail).** Also discharges **D-04's QA-repair
+half**, completing D-04 (the splice half was already done in Run 5): the
+chapter's clean audio had nothing QA-flagged by default, so the app's own
+`PUT /api/config` was used to temporarily tighten `qa.seg.minRatio`/
+`maxRatio` (a real, supported sensitivity knob — not a hand-edited file),
+which flagged 22 segments on the *same unchanged* audio including the
+cloned/revoked character; the real (non-dry-run) repair correctly
+re-recorded the non-cloned segments and failed plain-text on the revoked
+one. Thresholds restored afterward. Three more discharged against the
+**primary checkout** (`C:\Claude\Projects\Audiobook-Generator`), the one
+GEMINI_API_KEY-gated group: **C-17** ⭐ (designed self-heal — a fresh
+throwaway book imported via the app's own API, `.pt` deleted, chapter
+regenerated, `instruct`/`designModel` byte-identical after, `baseModel`
+refreshed, re-design confirmed working after clearing a real, correctly-
+diagnosed VRAM/Kokoro contention; **turned out GEMINI_API_KEY was
+unnecessary** — the design route takes caller-supplied persona text, not
+Gemini-generated), **C-18** (stale designed `.pt` deliberately untouched —
+confirmed presence-only, zero derives, hash/mtime unchanged), and **E-07**
+⭐ (a designed voice's forced Coqui derive failure — retained clip moved
+aside — still rendered the chapter, fail-soft to the stock catalogue voice,
+no crash, no new xtts artifact). The throwaway book and the one voice-
+library entry created for these three tests were deleted afterward via the
+app's own delete APIs, confirmed gone from `C:\AudiobookWorkspace` on disk;
+the primary checkout's dev stack was stopped. **Environmental notes, not
+product defects:** this box's `QWEN_DEVICE`/`COQUI_DEVICE` are normally
+pinned to `cuda:1` (16 GB card) by deliberate box policy — GPU1 was
+temporarily lost mid-session (needed the reboot to recover, unrelated to
+this work) and the pin was briefly repointed at `cuda:0` to keep testing,
+then reverted once the reboot restored GPU1; also found that the TTS
+sidecar process is **adopted** across a Node server restart rather than
+respawned, so an env/`.env` change only takes effect on the sidecar once
+its own process is explicitly killed. No defects filed this round.
+
+**Still owed (~23), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
@@ -1180,14 +1215,18 @@ not attempted** — blocked on a designed voice, which needs `GEMINI_API_KEY`
   whose `segments.json` and the current analysis disagreed (exactly the shape
   both fixture books in that run hit); #1972 has since closed that refusal.
   </details>
-- **Section C — 13 of 15 discharged as of Run 6 (C-01 ⭐, C-04, C-06, C-07,
-  C-08, C-09, C-12, C-14, C-20, C-21 full; C-13 partial — wrong-engine half
-  only).** Still not reached: **C-15**/**C-16** (UI toast/chip observation —
-  need a real browser), **C-17** ⭐ (designed-voice self-heal, needs
-  `GEMINI_API_KEY` — see Run 5 note above), **C-18** (stale designed `.pt` —
-  blocked on C-17 producing a designed voice first).
-- **Section D — 1 of 4 fully discharged (D-01), D-04 partial (splice half
-  only) as of Run 6.** D-04's QA-repair half remains not reached.
+- **Section C — 15 of 15 discharged as of Run 7 (C-01 ⭐, C-04, C-06, C-07,
+  C-08, C-09, C-12, C-14, C-17 ⭐, C-18, C-20, C-21 full; C-13 partial —
+  wrong-engine half only, engine-unavailable contrast not reproducible on
+  this box — see Run 5 note).** Still not reached: **C-15**/**C-16** (UI
+  toast/chip observation — need a real browser).
+- **Section D — 3 of 4 discharged as of Run 7 (D-01 full, D-03 pass
+  incidentally from earlier isolation work, D-04 full).** **D-02** (full-book
+  render with a cloned character) remains **Blocked** — the side-11 block it
+  was scoped against is itself now closed as environmental (see Run 4's
+  note above), so a re-attempt on a properly-set-up box may well clear it,
+  but that re-attempt hasn't happened; only the per-character splice
+  substitute has been proven.
 - **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
   a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
   / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
