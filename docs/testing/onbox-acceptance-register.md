@@ -1297,15 +1297,17 @@ attester — `attestedBy` is overwritten with `personName`, which inverts
 `guardian-of-minor`).
 
 Starred, highest-risk — **C-10, C-01, C-08, C-17, C-12, E-01, E-02, and E-07
-are all now discharged** (C-10 2026-07-29; C-01/C-08/C-17/C-12 Run 5/7; E-01/
-E-02 Run 2; E-07 Run 7). **C-15 and E-06 are the two still owed**: **C-15**
+are all now discharged** (C-10 2026-07-29; C-01/C-08/C-17/C-12 Run 5/7; E-01
+Run 3 — Run 2's E-01 result was retracted, #1972; E-02 Run 2; E-07 Run 7).
+**C-15 and E-06 are the two still owed**: **C-15**
 the `cloned-voice-broken` toast fires immediately with a help link
 (mechanism confirmed correct via direct API call, Run 8; the live browser
 observation is Blocked on this session's own environment instability, not a
 product defect — retry on a quieter box) · **E-06** the one place D-B's
 synthetic-clip-vs-catalogue quality question can actually be judged, by ear.
 
-**E-01 was attempted and is blocked, not failed.** A Coqui splice reported
+**Historical (Run 1, before Section E was unblocked) — kept for the trap it
+documents, superseded by E-01's Run 3 discharge above.** A Coqui splice reported
 `splice_complete` but wrote no `voices\xtts\` artifacts and left
 `characterSnapshots.wren.voiceEngine` as `qwen` — the character's own
 `ttsEngine: 'qwen'` overrides the requested `modelKey`. To attempt Section E,

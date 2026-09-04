@@ -46,9 +46,13 @@ describe('getResolvedSidecarUrl — srv-21 fallback', () => {
   });
 
   it('passes through a private-host URL', () => {
+    // A distinctive private host + non-default port: distinguishable from
+    // the derived-default fallback (http://127.0.0.1:9000), unlike a plain
+    // loopback URL, which the fallback now also resolves to on its own —
+    // that shape would pass even if LOCAL_TTS_URL were ignored entirely.
     _resetUserSettingsCache();
-    process.env.LOCAL_TTS_URL = 'http://127.0.0.1:9000';
-    expect(getResolvedSidecarUrl()).toBe('http://127.0.0.1:9000');
+    process.env.LOCAL_TTS_URL = 'http://192.168.1.50:9123';
+    expect(getResolvedSidecarUrl()).toBe('http://192.168.1.50:9123');
   });
 
   it('falls back to derived-port URL for a public-host URL', () => {
