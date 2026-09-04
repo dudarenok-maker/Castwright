@@ -1,4 +1,4 @@
-# ctranslate2/cuDNN shadow measurement (Castwright#2861)
+# ctranslate2/cuDNN shadow measurement (Castwright#2845)
 
 ## Result: harmless. No source change made.
 
