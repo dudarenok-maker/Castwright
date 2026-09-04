@@ -2513,7 +2513,26 @@ character in **each**; both books routed to Qwen.
   in this scenario is now a regression, not an expected KL-j(2) hit** — file it
   rather than recording it against that item.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). Imported a **second** throwaway book (same
+`the-coalfall-commission.md` fixture, re-imported under a distinct title —
+"…(A1 wave11 book B)" — bookId `castwright__standalones__the-coalfall-commission-a1-wave11-book-b`,
+fully analysed and cast-confirmed). One fresh clone assigned to
+`master-oduvan` in **both** books, both on Qwen. **Step 1 (healthy,
+concurrent):** both books' chapter-2 renders fired in true parallel
+(`curl … & curl … & wait`) and **both completed** (`chapter_complete`), one
+`.pt` file on disk throughout, `voice.json` stayed valid JSON. **Step 2
+(repair race, concurrent):** deleted `.pt`, fired both again in parallel —
+**both completed**, single `.pt` (68821 B, no duplicate/competing files, no
+`.tmp` left behind), `voice.json` still valid and `engines.qwen.status:
+'ready'`. **One false start along the way, not a regression:** the first
+repair-race attempt hit a sidecar already carrying this session's
+accumulated side-11 memory pressure (`committedMb` ~25GB) and both books
+failed `(derive-failed)` — even a **single, non-concurrent** retry on the
+same sidecar failed identically, ruling out a two-worker-specific cause. A
+clean sidecar restart reproduced the expected pass on the very next attempt.
+No `.pt` ever survived a revoke in this scenario (revoke wasn't part of this
+test), so KL-j(2)'s specific regression trigger doesn't apply here.
 
 ---
 

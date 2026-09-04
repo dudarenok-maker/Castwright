@@ -868,8 +868,8 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **28 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04) · ~32 still owed · 3 run-2 results retracted**
-<!-- stat:a1-still-owed 32 -->
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **34 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04) · ~26 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 26 -->
 <!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
@@ -1061,7 +1061,39 @@ carrying real credentials. Browser/mic (A-07/A-08/A-09/B-02) and by-ear
 (B-03/E-06) items remain untouched — need a human at a real browser/mic and
 a human ear respectively, neither available to an unattended session.
 
-**Still owed (~32), and why:**
+**Run 6 — 2026-09-04, same session, same worktree/fixture.** Six more
+discharged, including the wave's single highest-value test: **C-01** ⭐
+(revoke landing mid-derive — hit on the 4th attempt after calibrating the
+derive-completion window at ~4.8s on a warm sidecar; the sidecar's own log
+confirms the derive genuinely succeeded a second time at the exact race
+timestamp, and Node's `statusStampMutate` post-derive guard re-purged it
+rather than persisting it as ready — `revokedAt` survived unclobbered, no
+`.pt`/`.json`/`master.wav` survived, chapter failed naming both characters,
+one reading `(derive-failed)` rather than `(revoked)`, the same accepted
+variant already recorded for E-03 in Run 4), **C-04** (title-beat narrator
+gating — weaker variant, this fixture has no title-only-narrator chapter so
+it can't isolate the title beat from the narrator's own body lines, both
+would produce the same failure), **C-12** (atomic `.pt` write — 5 kill-mid-write
+attempts at calibrated delays never caught a truncated file, every attempt
+landed cleanly before or after the write; demonstrates the outcome without
+directly proving concurrency, since the ~3-4s write window is narrower than
+cross-tool-call timing precision here), **C-20** (pause during a repair
+derive — no `chapter_failed`, no persisted `generationState`, clean resume
+afterward), **C-21** (partial erasure — holding an exclusive file handle on
+a healthy clone's `.pt` during revoke reproduced `artifactPurgeIncomplete:
+true` naming the held path on the first attempt), and **D-01** (concurrent
+multi-book render sharing a cloned voice — a second throwaway book imported
+and fully analysed; both the healthy-concurrent and repair-race scenarios
+completed cleanly on a fresh sidecar, one `.pt` file throughout; a first
+repair-race attempt against a memory-pressured leftover sidecar failed both
+books identically, ruled out as two-worker-specific by a single
+non-concurrent retry failing the same way, not filed as a new defect). No
+defects filed this round either — every anomaly traced to session-accumulated
+side-11 memory pressure, resolved by a clean sidecar restart. **C-18
+not attempted** — blocked on a designed voice, which needs `GEMINI_API_KEY`
+(absent from this isolated worktree by design), same as C-17/E-07.
+
+**Still owed (~26), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
@@ -1148,21 +1180,14 @@ a human ear respectively, neither available to an unattended session.
   whose `segments.json` and the current analysis disagreed (exactly the shape
   both fixture books in that run hit); #1972 has since closed that refusal.
   </details>
-- **Section C — 8 of 15 discharged as of Run 5 (C-06, C-07, C-08, C-09, C-14
-  full; C-13 partial — wrong-engine half only).** Still not reached: **C-01**
-  ⭐ (revoke racing an in-flight Qwen derive — the highest-risk unproven
-  behaviour here, needs several timed attempts, not attempted this run),
-  **C-04** (title-beat narrator gating — needs a chapter with narrated-title-only
-  narrator dialogue, fixture not set up for it), **C-12** (deliberate mid-write
-  sidecar kill, needs precise timing), **C-15**/**C-16** (UI toast/chip
-  observation — need a real browser), **C-17** ⭐ (designed-voice self-heal,
-  needs `GEMINI_API_KEY` — see Run 5 note above), **C-18** (stale designed
-  `.pt` — blocked on C-17 producing a designed voice first), **C-20** (pause
-  during a repair derive — needs precise UI timing), **C-21** (partial erasure
-  via a held file handle — Windows-specific, not attempted).
-- **Section D — D-04 partial (splice half only) as of Run 5.** D-01
-  (concurrent multi-book render) and D-04's QA-repair half remain not
-  reached.
+- **Section C — 13 of 15 discharged as of Run 6 (C-01 ⭐, C-04, C-06, C-07,
+  C-08, C-09, C-12, C-14, C-20, C-21 full; C-13 partial — wrong-engine half
+  only).** Still not reached: **C-15**/**C-16** (UI toast/chip observation —
+  need a real browser), **C-17** ⭐ (designed-voice self-heal, needs
+  `GEMINI_API_KEY` — see Run 5 note above), **C-18** (stale designed `.pt` —
+  blocked on C-17 producing a designed voice first).
+- **Section D — 1 of 4 fully discharged (D-01), D-04 partial (splice half
+  only) as of Run 6.** D-04's QA-repair half remains not reached.
 - **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
   a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
   / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
