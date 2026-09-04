@@ -4,6 +4,7 @@ import {
   applyGeneratedRegion,
   parseRegisterFigures,
   buildStripRegion,
+  buildLiveView,
 } from '../build-register-live-view.mjs';
 
 test('applyGeneratedRegion replaces only the marked region', () => {
@@ -55,6 +56,76 @@ ${rows}
 Some body text.
 `;
 }
+
+// Companion live-view fixture for buildRegisterFixture. Matches its default
+// group letters (A, B, C, D, E, G, H). Task 7 (row-shell reconciliation) and
+// Task 8 (idempotence) call this bare and need a structurally-complete page —
+// not just the strip/glance regions this task exercises — so every group gets
+// a full <header> plus at least one real <details class="item"> shell.
+function buildLiveViewFixture({
+  glance = { A: 37, B: 2, C: 4, D: 3, E: 10, G: 2, H: 2 },
+  setupText = 'Setup text for the group',
+} = {}) {
+  const rows = Object.entries(glance)
+    .map(
+      ([letter, count]) =>
+        `      <tr><td><a href="#g${letter.toLowerCase()}">${letter}</a></td><td>${setupText}</td><td><!-- BEGIN GENERATED:glance:${letter} -->${count}<!-- END GENERATED:glance:${letter} --></td></tr>`,
+    )
+    .join('\n');
+
+  const sections = Object.entries(glance)
+    .map(
+      ([letter, count]) => `  <section class="group" id="g${letter.toLowerCase()}">
+    <header>
+      <h3 class="gtitle"><span class="gtag">${letter}</span> Group ${letter} <span class="gcount">${count} rows</span></h3>
+    </header>
+    <details class="item">
+      <summary><span class="num">${letter}1</span><span class="iname">fixture item</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Fixture body.</p>
+      </div>
+    </details>
+  </section>`,
+    )
+    .join('\n\n');
+
+  return `<!doctype html>
+<html>
+<body>
+  <div class="strip">
+    <!-- BEGIN GENERATED:strip -->placeholder<!-- END GENERATED:strip -->
+  </div>
+
+  <div class="tscroll">
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+${rows}
+    </tbody>
+  </table>
+  </div>
+
+${sections}
+</body>
+</html>
+`;
+}
+
+test('buildLiveView rewrites only the glance count cells that changed', () => {
+  const md = buildRegisterFixture({ glanceRows: [['A', 5], ['B', 2]] });
+  const html = buildLiveViewFixture({ glance: { A: 99, B: 2 } });
+  const next = buildLiveView(md, html);
+  assert.match(next, /BEGIN GENERATED:glance:A -->5<!-- END/);
+  assert.match(next, /BEGIN GENERATED:glance:B -->2<!-- END/); // unchanged value, still rewritten byte-identically
+});
+
+test('buildLiveView never touches the Setup cell or the jump link', () => {
+  const md = buildRegisterFixture();
+  const html = buildLiveViewFixture({ setupText: 'A hand-authored, editorially shortened description' });
+  const next = buildLiveView(md, html);
+  assert.match(next, /A hand-authored, editorially shortened description/);
+  assert.match(next, /<a href="#ga">A<\/a>/);
+});
 
 test('parseRegisterFigures reads the owed total, oldest debt, and A1 markers', () => {
   const figures = parseRegisterFigures(buildRegisterFixture());

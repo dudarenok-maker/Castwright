@@ -140,14 +140,16 @@ export function main(
 }
 
 // buildLiveView itself is added incrementally across Tasks 4-7 — this
-// placeholder is replaced by Step 4 below in THIS task (strip only), then
-// extended in place by each later task. Never leave it calling only a subset
-// silently — every task in PR 3 must update this function's body, not add a
-// parallel one.
+// function's body is extended in place by each task. Never leave it calling
+// only a subset silently — every task in PR 3 must update this function's
+// body, not add a parallel one.
 export function buildLiveView(mdText, currentHtml) {
   const figures = parseRegisterFigures(mdText);
   let html = currentHtml;
   html = applyGeneratedRegion(html, 'strip', buildStripRegion(figures));
+  for (const [letter, count] of figures.glanceGroups) {
+    html = applyGeneratedRegion(html, `glance:${letter}`, String(count));
+  }
   return html;
 }
 
