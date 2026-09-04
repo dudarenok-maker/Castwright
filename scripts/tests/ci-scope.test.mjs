@@ -75,6 +75,27 @@ test('computeScopes is all-false for an unrelated diff on a PR', () => {
   assert.equal(scopes.shared, false);
 });
 
+// #2853/#2867: verify.yml's server-tests job forces a full (non-`--changed`)
+// run off this key rather than trusting `--changed`, since neither lockfile
+// is in either vitest config's forceRerunTriggers.
+test('computeScopes sets lockfile_touched for a server lockfile diff', () => {
+  const scopes = computeScopes(['server/package-lock.json'], { eventName: 'pull_request' });
+  assert.equal(scopes.lockfile_touched, true);
+});
+
+// The root lockfile already flips `shared` (computeShared) — lockfile_touched
+// must also be true here, since it shares CI_ONLY's `shared || fn(files)`
+// formula, so verify.yml can rely on one key for either lockfile.
+test('computeScopes sets lockfile_touched for a root lockfile diff', () => {
+  const scopes = computeScopes(['package-lock.json'], { eventName: 'pull_request' });
+  assert.equal(scopes.lockfile_touched, true);
+});
+
+test('computeScopes leaves lockfile_touched false for a non-lockfile diff', () => {
+  const scopes = computeScopes(['server/src/foo.ts'], { eventName: 'pull_request' });
+  assert.equal(scopes.lockfile_touched, false);
+});
+
 test('render emits GITHUB_OUTPUT lines plus the ok sentinel', () => {
   const out = render({ step_test_hooks: true, shared: false });
   assert.match(out, /^scopes=\{.*\}$/m);

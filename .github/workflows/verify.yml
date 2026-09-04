@@ -323,14 +323,23 @@ jobs:
       # condition is the union of both steps' keys. Drops the old `sidecar`
       # disjunct deliberately.
       # (was: server || sidecar || shared).
+      #
+      # #2853/#2867: neither lockfile is in either vitest config's
+      # forceRerunTriggers, so `--changed` can select ZERO tests against a
+      # changed dependency tree. `detect`'s scopes blob already carries
+      # `lockfile_touched` (ci-scope.mjs) computed from the same PR diff this
+      # job would otherwise re-derive — reuse it rather than a second
+      # merge-base/git diff call, and force the full (non-`--changed`) run
+      # whenever it is set, even on a PR.
       # leg: test:server
       - name: Server tests (fast + slow)
         if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
         run: |
           cd server
           BASE="${{ github.event.pull_request.base.sha }}"
+          LOCKFILE_TOUCHED="${{ fromJSON(needs.detect.outputs.scopes).lockfile_touched }}"
           # On a manual dispatch BASE is empty (no PR) → run the full suite.
-          if [ -n "$BASE" ]; then
+          if [ -n "$BASE" ] && [ "$LOCKFILE_TOUCHED" != "true" ]; then
             npx vitest run --changed "$BASE"
             npx vitest run --config vitest.config.slow.ts --changed "$BASE"
           else
