@@ -2924,7 +2924,22 @@ clip on disk before generating.
 - No coqui slot is written to `cast.json`/the entry for this character (the
   entry stays as it was before the attempt).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 7 (2026-09-04, primary
+checkout, same throwaway book/voice as C-17/C-18). Deleted the existing
+`xtts-bpRDo9aUNNE1X9_I7YQQL.pt`/`.json` (the design step had already
+eagerly derived both engines from the retained clip — an E-08-consistent
+side effect, not something this test's precondition anticipated but easily
+cleared to reach genuine "no artifact" state). Routed `master-oduvan` to
+Coqui (`ttsEngine: 'coqui'`, a supported cast-slice PUT — reverted after).
+Forced the derive to fail by moving the retained calibration clip
+(`qwen-…__master.wav`) aside so the sidecar's derive-from-clip step has
+nothing to read. Generated chapter 2 on `coqui-xtts-v2`: **completed**
+(`chapter_complete`, `audioEngines: {coqui: 5}`, 222s of real audio) — no
+`cloned-voice-broken`, no crash, no silence. Confirmed: **no** `xtts-…pt`
+was ever created; the character's `overrideTtsVoices.coqui` slot is
+unchanged from before the attempt (still pointing at the designed voice's
+key, exactly as it was — no new/different write). Restored the retained
+clip and cleared the `ttsEngine` override afterward.
 
 ---
 
@@ -3134,7 +3149,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | E-04 | A long sentence on a cloned Coqui voice | **F** | **Reproduced deliberately, not inferred.** Same cloned voice, same engine, same `language: ru` — only length differs: a **46-char** line → **200**, 178,176 B PCM (3.71 s); a **245-char** line → **500** `{"detail":"Internal error."}`. `main.py:2427` hardcodes `enable_text_splitting=True`; XTTS reaches `get_spacy_lang` only past `char_limits[lang]`; **spacy is not installed and not declared in any `requirements/*.txt`**. Thresholds: **ja 71, ru 182**, es 239, en 250, de 253, fr 273 — tightest exactly where cloned Coqui voices matter. Chapter 2 still rendered because **zero** of its lines reach 182 chars. Filed [#2017](https://github.com/dudarenok-maker/Castwright/issues/2017). **This is the crash class `test_xtts_clone_sanity` was written for** — it never ran: the golden tier is opt-in and SKIP-exits-0 without weights. **Update:** the fix landed in [PR #2039](https://github.com/dudarenok-maker/Castwright/pull/2039) — `requirements/base.txt` now declares plain `spacy`, and `_infer_from_latents` catches the `ImportError` and retries with `enable_text_splitting=False`, logged loudly. Verified only against a unit-test fake reproducing the upstream `ImportError` shape; this row's `F` stands until the exact reproduction above (46-char control → 200; 245-char Russian line → 200 + PCM) is re-run on a box with real Coqui weights |
 | E-05 | Audition matches render (KL-o caveat) | **P** | Card Play with `modelKey: coqui-xtts-v2` → 200 `{"url":"/audio/voices/xtts-$U-coqui-xtts-v2-47pmuw.mp3","cached":false}` — KL-o's fix holds, the card asks for Coqui. Audition vs the rendered chapter spans **0.5515**, against floors of **0.105** (rendered narrator) and **0.051** (the old designed oduvan). Same artifact, same identity — no drift between preview and delivery |
 | **E-06** ⭐ | A designed voice on a Coqui book — judged against the stock voice it replaces (D-B) | | |
-| **E-07** ⭐ | A designed voice's forced derive failure still renders the chapter (D-F) | | |
+| **E-07** ⭐ | A designed voice's forced derive failure still renders the chapter (D-F) | **P** | Run 7: corrupted the retained calibration clip so the Coqui derive genuinely fails; chapter completed on `coqui-xtts-v2` (fail-soft to the stock catalogue voice), no crash/silence, no new xtts artifact, coqui slot unchanged |
 | E-08 | Assign writes both slots, provenance-gated (Task 24) | **P** (via B-07) | Assigning a cloned entry wrote **both** `overrideTtsVoices.qwen` and `overrideTtsVoices.coqui` in one call — `{name: xtts-$U, libraryUuid: $U, provenance: cloned}`, `variants` absent. Confirmed twice (B-07 and the C-11 setup); C-11's delete then cleared both slots |
 | E-09 | Total erasure of the three Coqui artifact paths on delete | **P** (run 2) | Run 1 recorded this `N/A` because `voices\xtts\` had never existed; run 2's E-01 produced real artifacts, so this is its first genuine exercise. Pre-revoke set: **5 files across 3 locations** — `voices\qwen\qwen-$U.{json,pt}`, `qwen-$U__1.7b.pt`, `voices\xtts\xtts-$U.{json,pt}`, plus the cached audition mp3 under `server\audio\voices\`. After revoke: **0 remaining anywhere**, both `voices\xtts\` paths included. Entry dir survives holding **only `voice.json`** |
 
