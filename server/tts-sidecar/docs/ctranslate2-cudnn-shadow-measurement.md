@@ -79,7 +79,7 @@ combination is required for a true occurrence count; `grep -c` alone reports mat
 *lines* in a binary, which undercounts) found **zero** occurrences of "cudnn" in
 either file. The same command against "cublas" on `ctranslate2.dll` finds **35**
 occurrences, including symbol names like `cublasCreate_v2`, `cublasGemmEx`,
-`CUBLAS_STATUS_*`, `cublas64_12.dll`, etc.) — confirming the method finds real
+`CUBLAS_STATUS_*`, `cublas64_12.dll`, etc. — confirming the method finds real
 references when they exist, and that ctranslate2 uses **cuBLAS**, not cuDNN, for
 its GPU matrix operations. `ctranslate2.dll`'s import-name strings are
 `cublas64_12.dll`, `nvcuda.dll`, MKL, and CRT libraries — `cudnn64_9.dll` is not
