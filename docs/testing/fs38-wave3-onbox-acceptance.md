@@ -1513,7 +1513,22 @@ voice; that cloned voice **revoked** (Broken).
   narrator was pulled into the readiness set **because of the title beat**.
 - No title audio is produced (fail-fast is before the title beat).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P (weaker variant) ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04,
+same worktree/setup). Assigned a fresh clone to the `narrator` character,
+revoked it, generated chapter 2 ("Chapter One — The Knock" — chapter-title
+narration is not a separate toggle in this codebase; `buildChapterTitleNarration`
+always builds it from `chapter.id`+`chapter.title` whenever the title is
+non-empty, so this precondition is unconditionally satisfied for any titled
+chapter). Chapter failed in **1s**, `cloned-voice-broken`, naming
+**"Narrator"** (reason `(revoked)`) among the characters listed. No title
+audio produced (fail-fast, zero synth). **This is the sheet's own documented
+"weaker" variant, not the ideal isolated case:** chapter 2's narrator also
+speaks body lines (the fixture has no chapter where the narrator's ONLY
+usage is the title beat), so this run cannot isolate "pulled in because of
+the title beat" from "pulled in because of body lines" — both mechanisms
+would produce an identical failure. Confirms the gate fires with the
+narrator's real name in a real chapter; does not by itself prove the
+title-beat-specific code path in isolation.
 
 ---
 
@@ -1949,9 +1964,28 @@ Get-ChildItem "$WS\voices\qwen" -Filter "$K*" | Select-Object Name,Length
 Get-ChildItem "$WS\voices\qwen" -Filter "*.tmp"
 ```
 
-**Record:** attempts = ____ · truncated `.pt` ever observed? ☐ no ☐ yes (fail)
+**Record:** attempts = 5 · truncated `.pt` ever observed? ☒ no ☐ yes (fail)
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P (weaker variant — never landed a kill genuinely mid-write) ☐ F ☐ B ☐ N/A
+**Notes:** Run 5 (2026-09-04, same worktree/setup). Baseline `.pt` hash
+`04d6db02…` (68821 B). Bumped `baseModel` (C-07 method) to force a rewrite
+over the live file, hard-killed the sidecar process at delays of 3.5s, 2.5s,
+3.0s, 3.3s, 3.4s after request start across 5 attempts (calibrated from a
+~4.8s observed derive-completion time, which turned out to vary run to run).
+**Every attempt landed cleanly on one side of the write, never inside it:**
+the 3.5s attempt caught a fully-written NEW file (fresh hash `6b080fce…`,
+same 68821 B, no `.tmp` left behind); the other four (2.5-3.4s) all caught
+the ORIGINAL file completely unchanged (derive not yet dispatched or not yet
+complete at kill time). **Across all 5 attempts, `.pt` was never observed
+truncated, partial, or corrupt** — every single result was a clean binary
+either-or, consistent with the tmp+`os.replace` atomicity the invariant
+claims, but this run did not manage to interrupt an in-progress write byte
+by byte, so it demonstrates the *outcome* the invariant predicts without
+directly proving the *mechanism* under true concurrency. The derive window
+appears to be roughly 3-4s wide on this box and shifts by ±0.5-1s across
+sidecar restarts (VRAM/warm-cache variance), narrower than what separate
+tool-call dispatch overhead (~seconds) can reliably straddle. Restored the
+voice to healthy afterward (regenerated the chapter once more, cleanly).
 
 ---
 
