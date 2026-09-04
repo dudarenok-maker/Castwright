@@ -1873,6 +1873,36 @@ test('checkCitationTitleDrift: a multi-row heading ("A6 + A7 · ...") is checked
   assert.match(findings[0], /B1/);
 });
 
+test('checkCitationTitleDrift: correctly flags drift when row title contains a markdown link with URL boilerplate that would otherwise mask the drift via shared-token false positives', () => {
+  // A register row whose title contains a GitHub issue link. The markdown
+  // link's URL parts (github, com, issues, dudarenok, maker, castwright) are
+  // boilerplate that should NOT be counted as shared tokens, otherwise a
+  // completely unrelated heading that ALSO contains the same markdown link
+  // would rack up >= 2 shared tokens from the URL alone, failing the
+  // TITLE_DRIFT_MIN_SHARED_TOKENS gate and masking the drift.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A9 · feature deployment ([#1234](https://github.com/dudarenok-maker/Castwright/issues/1234))
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  // A heading whose text-echo is completely unrelated to A9's "feature
+  // deployment" but happens to cite the same GitHub issue link. Before the
+  // fix, the URL tokens (github, com, issues, dudarenok, maker, castwright,
+  // 1234) would be counted as shared tokens >= 2, and the drift would not
+  // fire. After the fix, only the shared words count (none, in this case),
+  // and drift correctly fires.
+  const text = '### A9 · completely unrelated volume audio normalization ([#1234](https://github.com/dudarenok-maker/Castwright/issues/1234))\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 1);
+  assert.match(findings[0], /A9/);
+  assert.match(findings[0], /feature deployment/);
+  assert.match(findings[0], /completely unrelated volume audio normalization/);
+});
+
 // --- frozen-path exclusion ---
 
 test('isFrozenPath: excludes the documented frozen globs', () => {

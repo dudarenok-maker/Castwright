@@ -2020,9 +2020,26 @@ const TITLE_DRIFT_TOKEN_REGEX = /[a-z0-9]+/g;
 // A bare row-ID-shaped token (e.g. "a6") — stripped from both sides before
 // scoring, same as the tuning doc's `excludeId` measurement.
 const TITLE_DRIFT_ID_TOKEN_REGEX = /^[a-z]\d{1,3}$/;
+// Markdown link pattern: [text](url). Replaces with just the link text to
+// exclude URL boilerplate tokens (github, com, issues, https, etc.) from
+// contributing to the Jaccard similarity computation. The link text itself
+// may be meaningful (e.g. [#1000]) and is preserved; only the URL is dropped.
+const MARKDOWN_LINK_REGEX = /\[([^\]]*)\]\([^)]*\)/g;
+
+/**
+ * Strips markdown link URLs from text, keeping only the link text.
+ * E.g. "foo ([#1234](https://github.com/...)) bar" becomes "foo (#1234) bar",
+ * so the URL's tokens (github, com, issues, https, etc.) don't contribute to
+ * drift scoring. Used by titleDriftTokens to exclude link-boilerplate false
+ * positives from the shared-token count gate.
+ */
+function stripMarkdownLinkUrls(text) {
+  return text.replace(MARKDOWN_LINK_REGEX, '$1');
+}
 
 function titleDriftTokens(text) {
-  const raw = text.toLowerCase().match(TITLE_DRIFT_TOKEN_REGEX) ?? [];
+  const withoutLinks = stripMarkdownLinkUrls(text);
+  const raw = withoutLinks.toLowerCase().match(TITLE_DRIFT_TOKEN_REGEX) ?? [];
   const tokens = new Set();
   for (const t of raw) {
     if (TITLE_DRIFT_STOPWORDS.has(t)) continue;
