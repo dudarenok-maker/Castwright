@@ -739,6 +739,11 @@ const ANNOTATION_WINDOW_LINES = 25;
 // paragraph.
 const ID_PROXIMITY_CHARS = 120;
 
+// How close a negation word must sit BEFORE a discharge-word match for
+// isDischargeAssertionNegated to treat it as negating that match — see that
+// function's own comment for why 30 (not the full clause) is the right cap.
+const POLARITY_PROXIMITY_CHARS = 30;
+
 // A bare ID token, used to find every ID mention in a section so a discharge
 // word can be bound to the right one(s) — see idSpecificAnnotationPresent's
 // own comment for why "within 120 chars" alone isn't enough.
@@ -883,6 +888,42 @@ function clauseBounds(text, pos) {
 }
 
 /**
+ * Whether the discharge-word match `dm` (against `scanText`, a
+ * stripInlineCodeSpans'd copy) is negated — e.g. "was NOT discharged" or
+ * "un-discharged" — rather than an affirmative discharge/removal assertion.
+ * `clauseStart` bounds the backward scan to the SAME clause `clauseBounds`
+ * already computed for `dm`, so an unrelated negation across a clause/
+ * list-item boundary cannot bleed in.
+ *
+ * Shared by `idSpecificAnnotationPresent` (Check A's fatal-path citation
+ * matcher) and `dischargedSubjectsMentionedIn` (Check C's own-history scan) —
+ * extracted from the latter, pass-11/pass-15/pass-16 review of PR #2846 (see
+ * `dischargedSubjectsMentionedIn`'s own comment for the full history of why
+ * this exists and why the window is backward-only and 30-char-capped, not
+ * clause-wide or bidirectional): a "clause" here is a full paragraph, since
+ * CLAUSE_BOUNDARY_REGEX does not treat ". " as a boundary, and the register's
+ * real affirmative discharge records measure their genuine negations at
+ * 4-10 chars back vs. false suppressions at 85+ chars back in the same
+ * paragraph. The negation-word set is deliberately broad (NOT/no/never/
+ * isn't/aren't/wasn't/weren't/hasn't/haven't/cannot/can't/an "un-" prefix
+ * fused to the discharge word/"far from"/"nothing"), since a first cut of
+ * just "NOT"/"no" missed most real negation phrasings.
+ */
+function isDischargeAssertionNegated(scanText, dm, clauseStart) {
+  const polarityScanStart = Math.max(clauseStart, dm.index - POLARITY_PROXIMITY_CHARS);
+  const polarityContext = scanText.slice(polarityScanStart, dm.index);
+  // Apostrophes are '-escaped (not literal) so this regex literal
+  // doesn't desync spawn-windows-hide.test.ts's quote-tracking scanner --
+  // see that guard's own regexLiteralDesyncsQuoteTracking comment.
+  const hasNegationWord =
+    /\b(?:NOT|no\b(?!\s+longer\s+exists?)|never|isn\u0027t|aren\u0027t|wasn\u0027t|weren\u0027t|hasn\u0027t|haven\u0027t|cannot|can\u0027t|far\s+from|nothing)\b/i.test(
+      polarityContext,
+    );
+  const isUnPrefixed = /un-?discharged\b/i.test(scanText.slice(Math.max(0, dm.index - 10), dm.index + dm[0].length));
+  return hasNegationWord || isUnPrefixed;
+}
+
+/**
  * Whether `sectionText` contains a discharge/removal annotation that
  * actually references `id` — not merely a discharge word somewhere in the
  * section, which a paired injection proved lets unrelated prose excuse a
@@ -952,6 +993,14 @@ function clauseBounds(text, pos) {
  * that real annotation (measured: `docs/superpowers/plans/2026-08-05-
  * device-token-scope.md`'s `F2`/`F3` citations went from correctly-excused
  * to falsely-flagged the first time this was tried).
+ *
+ * #2858: also polarity-checks the discharge word via the same
+ * `isDischargeAssertionNegated` helper `dischargedSubjectsMentionedIn` uses,
+ * so a negated sentence ("Register row: A18 — was NOT discharged; it is
+ * still live") can no longer be misread as affirmatively excusing A18 from
+ * Check A's fatal nonexistent-ID gate. Measured against the real corpus:
+ * this flips zero of today's citations — see #2858 for the false-positive
+ * analysis of the 4 citations a looser, unshared polarity scan misflagged.
  */
 function idSpecificAnnotationPresent(sectionText, id) {
   const dischargeScanText = stripInlineCodeSpans(sectionText);
@@ -961,6 +1010,7 @@ function idSpecificAnnotationPresent(sectionText, id) {
   if (dischargeMatches.length === 0) return false;
   for (const dm of dischargeMatches) {
     const { start, end } = clauseBounds(sectionText, dm.index);
+    if (isDischargeAssertionNegated(dischargeScanText, dm, start)) continue;
     ANY_ID_TOKEN_REGEX.lastIndex = start;
     let occ;
     while ((occ = ANY_ID_TOKEN_REGEX.exec(sectionText)) && occ.index < end) {
@@ -1340,16 +1390,15 @@ export function findUnclassifiedRunSheetMentions(registerRows) {
  * Pass-11 review of PR #2846 (finding #1, CRITICAL): polarity-check the
  * discharge word — "NOT discharged" (and similar negated contexts like "is
  * why A16 below is not fully discharged") must not match as affirmative
- * discharges. This is a polarity check `idSpecificAnnotationPresent` itself
- * does NOT have (it is unconcerned with polarity, since it only answers
- * whether a discharge word and a specific ID token co-occur in a clause, not
- * what either one asserts) — added here, scoped to `clauseBounds`, because
- * this function's answer of "did this row historically track this subject"
- * is exactly the kind of claim a negated sentence can falsify. Pass-15
- * review (finding new-B, SIGNIFICANT): the negation-word set is deliberately
- * broad (NOT/no/never/isn't/aren't/wasn't/weren't/hasn't/haven't/cannot/
- * can't/an "un-" prefix fused to the discharge word/"far from"/"nothing"),
- * since the first cut (just "NOT"/"no") missed most real negation phrasings.
+ * discharges, scoped to `clauseBounds`, because this function's answer of
+ * "did this row historically track this subject" is exactly the kind of
+ * claim a negated sentence can falsify. Pass-15 review (finding new-B,
+ * SIGNIFICANT): the negation-word set is deliberately broad (NOT/no/never/
+ * isn't/aren't/wasn't/weren't/hasn't/haven't/cannot/can't/an "un-" prefix
+ * fused to the discharge word/"far from"/"nothing"), since the first cut
+ * (just "NOT"/"no") missed most real negation phrasings. #2858: this
+ * polarity check is now shared, via `isDischargeAssertionNegated`, with
+ * `idSpecificAnnotationPresent` — which was polarity-blind until then.
  * Also applies the same ID_PROXIMITY_CHARS cap `idSpecificAnnotationPresent`
  * uses so a subject number far from its discharge word (>120 chars) is not
  * incorrectly attributed to a row that merely MENTIONS it in passing (e.g.
@@ -1368,38 +1417,10 @@ function dischargedSubjectsMentionedIn(rowBodyText) {
     // Get clause bounds first so we can use them for both polarity and subject scanning.
     const { start, end } = clauseBounds(scanText, dm.index);
 
-    // Polarity check: scan for negation markers that would negate the
-    // discharge word. Bound the scan to BOTH the same clause (not a flat
-    // window, so an unrelated negation across a clause/list-item boundary
-    // cannot bleed in -- pass-15/new-B) AND a proximity cap of its own
-    // (pass-16/new-G: clause-bounding alone is too wide -- a "clause" here
-    // is a full paragraph, since CLAUSE_BOUNDARY_REGEX does not treat ". "
-    // as a boundary, and the register's real affirmative discharge
-    // records measure their genuine negations at 4-10 chars back vs. false
-    // suppressions at 85+ chars back in the same paragraph). Recognize a
-    // broad set of negation patterns:
-    // - "NOT", "no" (complete words; "no" excludes "no longer exist(s)",
-    //   since that's one of DISCHARGE_ANNOTATION_REGEX's OWN
-    //   affirmative phrases, not a negation of one)
-    // - "never", "isn't", "aren't", "wasn't", "weren't" (contractions)
-    // - "hasn't", "haven't" (auxiliary verbs with "have")
-    // - "cannot", "can't" (modal verbs)
-    // - "far from" (degree modifier)
-    // - "nothing" (negating existential)
-    const POLARITY_PROXIMITY_CHARS = 30;
-    const polarityScanStart = Math.max(start, dm.index - POLARITY_PROXIMITY_CHARS);
-    const polarityContext = scanText.slice(polarityScanStart, dm.index);
-    // Apostrophes are '-escaped (not literal) so this regex literal
-    // doesn't desync spawn-windows-hide.test.ts's quote-tracking scanner --
-    // see that guard's own regexLiteralDesyncsQuoteTracking comment.
-    const hasNegationWord =
-      /\b(?:NOT|no\b(?!\s+longer\s+exists?)|never|isn\u0027t|aren\u0027t|wasn\u0027t|weren\u0027t|hasn\u0027t|haven\u0027t|cannot|can\u0027t|far\s+from|nothing)\b/i.test(
-        polarityContext,
-      );
-    // Also check if the discharge word itself is prefixed with "un-" (e.g., "undischarged", "un-discharged")
-    const isUnPrefixed = /un-?discharged\b/i.test(scanText.slice(Math.max(0, dm.index - 10), dm.index + dm[0].length));
-    if (hasNegationWord || isUnPrefixed) {
-      // This discharge word is negated, skip it.
+    // Polarity check (#2858: extracted into the shared isDischargeAssertionNegated
+    // helper, also used by idSpecificAnnotationPresent) -- skip a discharge word
+    // that is actually negated ("was NOT discharged", "un-discharged").
+    if (isDischargeAssertionNegated(scanText, dm, start)) {
       continue;
     }
 
