@@ -2038,6 +2038,11 @@ const SELF_REFERENTIAL_PATHS = new Set([
   'scripts/check-register-citations.mjs',
   'scripts/tests/check-register-citations.test.mjs',
   'scripts/tests/check-onbox-register.test.mjs',
+  // #2831's sibling checker (scripts/check-register-row-citations.mjs) and its
+  // test fixture use the same worked-example vocabulary for the same reason —
+  // see this Set's own header comment above.
+  'scripts/check-register-row-citations.mjs',
+  'scripts/tests/check-register-row-citations.test.mjs',
 ]);
 
 export function runCheckRegisterCitationsCli(options = {}) {

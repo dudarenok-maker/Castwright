@@ -112,6 +112,36 @@ them are wide:
   below, which gives the specific stale-snapshot race mechanical teeth via a
   second, explicit mode, but still can't verify by itself that someone ran it.
 
+**`npm run check:register-row-citations` (#2831) — a separate, narrower
+check.** `check:onbox-register` above only validates the register's own
+internal arithmetic; it says nothing about the `A\d+`/`E\d+` row IDs cited
+*elsewhere* in the repo. `check:register-row-citations` closes that gap for
+one specific, bounded surface: it scans every `.md` file under
+`docs/testing/**` and `docs/features/**`, except the frozen dated-transcript
+paths (`docs/testing/onbox-acceptance-staleness-audit.md` and the `onbox-wave{3,4,5}-results/`
+directories), for a citation matching `row/Row <ID>` or a markdown link into
+this file's own `#a41`/`#e3` anchor, and fails if the cited ID has no current row heading here. A bare `A41`-shaped
+token with neither a "row" word nor a register link is never treated as a
+citation. GitHub issue bodies are explicitly OUT of scope for v1 — that would
+need `gh` API access from a CI script, disproportionate for this pass. A
+citation whose own logical line (including hard-wrapped continuations) contains
+a discharge/removal annotation is printed as a note, not failed — this register's
+own body is full of exactly that shape ("register row A43, discharged 2026-08-26,
+removed from the register"), and those are intentional history, not drift. A
+"nearest citation to the left" rule ties each annotation to its nearest preceding
+citation, preventing cross-contamination when multiple citations appear on the
+same line. **Deliberately NOT this
+checker's job:** confirming the citing prose's *description* of a row still
+matches that row's current title — only that the ID it names still exists.
+That stronger check ("title-text matching") is a genuinely separate,
+harder-to-build capability, filed as its own follow-up rather than attempted
+here — see #2838. This is a different script from the older, broader
+`scripts/check-register-citations.mjs` (`npm run check:register-citations`,
+#2629/#2630), which scans the whole repo tree with a much larger citation
+surface and its own discharge/run-sheet/subject-conflict machinery — the two
+are complementary, not a replacement of one by the other, and neither script
+should be renamed to match the other's npm script name.
+
 **The concurrency hazard this closes (#1931).** Before the live view was
 tracked here, on 2026-07-28 two concurrent sessions each correctly added a
 different row (A20, E8) and republished from their own hand-built snapshot —
