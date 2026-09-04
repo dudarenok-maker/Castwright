@@ -406,7 +406,7 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 //     <file> | wc -l`, on both `ctranslate2.dll` and its `_ext.*.pyd`) found
 //     ZERO occurrences of "cudnn" anywhere in ctranslate2's compiled code —
 //     no import, no delay-load, no string reference. The same check finds 35
-//     occurrences of "cublas" (24 distinct symbols): ctranslate2 uses cuBLAS,
+//     occurrences of "cublas": ctranslate2 uses cuBLAS,
 //     not cuDNN, for its GPU compute. The bundled `cudnn64_9.dll` is loaded
 //     into the process only because `ctranslate2/__init__.py` unconditionally
 //     `ctypes.CDLL`-loads every `.dll` in its own package directory at import

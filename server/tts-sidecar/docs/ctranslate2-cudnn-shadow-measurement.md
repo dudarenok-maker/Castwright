@@ -65,9 +65,12 @@ but only **two distinct versions** — Windows did not collapse them into a sing
 | `...\.venv\Lib\site-packages\torch\lib\cudnn64_9.dll` | 9.19.0.56 |
 | `...\.venv\Lib\site-packages\ctranslate2\cudnn64_9.dll` | **9.10.2.21** |
 
-(the `nvidia\cudnn\bin` and `torch\lib` copies are both 9.19.0.56 as expected —
-`_add_nvidia_dll_dirs_to_path`'s PATH-prepend mechanism and torch's own bundled
-copy; the `ctranslate2\` one is the package's own bundled 9.10.2.21 copy.)
+(the `nvidia\cudnn\bin` copy is the one `_add_nvidia_dll_dirs_to_path` puts on
+`PATH`, and `torch\lib` is torch's own bundled copy — both report 9.19.0.56, as
+expected since `NVIDIA_CUDNN_CONSTRAINT` pins the installed copy to match torch's
+bundled line; this doesn't establish which mechanism actually loaded either one
+into this process, only which package each file belongs to. The `ctranslate2\`
+one is that package's own bundled 9.10.2.21 copy.)
 
 **ctranslate2's own compiled code does not reference cuDNN at all.** Binary inspection
 of `server/tts-sidecar/.venv/Lib/site-packages/ctranslate2/ctranslate2.dll` and
@@ -75,7 +78,7 @@ of `server/tts-sidecar/.venv/Lib/site-packages/ctranslate2/ctranslate2.dll` and
 combination is required for a true occurrence count; `grep -c` alone reports matching
 *lines* in a binary, which undercounts) found **zero** occurrences of "cudnn" in
 either file. The same command against "cublas" on `ctranslate2.dll` finds **35**
-occurrences across 24 distinct symbols (`cublasCreate_v2`, `cublasGemmEx`,
+occurrences, including symbol names like `cublasCreate_v2`, `cublasGemmEx`,
 `CUBLAS_STATUS_*`, `cublas64_12.dll`, etc.) — confirming the method finds real
 references when they exist, and that ctranslate2 uses **cuBLAS**, not cuDNN, for
 its GPU matrix operations. `ctranslate2.dll`'s import-name strings are
