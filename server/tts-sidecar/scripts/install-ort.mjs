@@ -405,18 +405,12 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 //     `9.19.0.56` — a CROSS-MINOR gap (9.10 → 9.19) WIDER than the 9.25→9.19
 //     gap this PR exists to fix. On real hardware, ctranslate2's 9.10.2.21
 //     dispatch stub loads and resolves its required sublibraries from the
-//     9.19.0.56 set (whether via the PATH-prepend or from already-resident
-//     modules loaded prior to ctranslate2, the measurement did not isolate);
-//     measurement shows this mixed-version composition is empirically harmless:
-//     ASR transcription succeeds correctly on cuda:0 with correct output. Per
-//     #2845's measurement (server/tts-sidecar/docs/
-//     ctranslate2-cudnn-shadow-measurement.md), ctranslate2 bundles no cuDNN
-//     sublibraries of its own — only the dispatch entry point — so there is
-//     nothing of ctranslate2's own to displace. `NVIDIA_CUDNN_CONSTRAINT` and
-//     the PATH-prepend mechanism are left untouched because removing the PATH-
-//     prepend would leave ctranslate2's dispatch stub with zero discoverable
-//     sublibraries, reintroducing the `CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED`
-//     failure already fixed.
+//     9.19.0.56 set present in the process; measurement shows this
+//     mixed-version composition is empirically harmless: ASR transcription
+//     succeeds correctly on cuda:0 with correct output. Per #2845's measurement
+//     (server/tts-sidecar/docs/ctranslate2-cudnn-shadow-measurement.md),
+//     ctranslate2 bundles no cuDNN sublibraries of its own — only the dispatch
+//     entry point — so there is nothing of ctranslate2's own to displace.
 // All three shadows pre-date this PR (this PR only widens which of them
 // `_add_nvidia_dll_dirs_to_path()`'s PATH prepend can newly reach); nothing
 // here pins cross-mechanism agreement the way `NVIDIA_CUDNN_CONSTRAINT` etc.
