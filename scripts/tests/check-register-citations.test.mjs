@@ -1937,6 +1937,144 @@ Some body text.
   assert.equal(findings.length, 0, 'Expected no drift when heading echoes row title exactly, even with inline code spans');
 });
 
+// --- Testing the two tuned constants (TITLE_DRIFT_RATIO_THRESHOLD and
+// TITLE_DRIFT_MIN_SHARED_TOKENS) and the filters (stopwords, ID tokens) ---
+//
+// Finding 4 & 6 from PR #2878 review: the ratio floor (0.30) and shared-
+// token minimum (2) are not currently tested, and mutations to either
+// constant leave the existing suite fully green. These tests verify both
+// constants are load-bearing and that the stopword and ID-token filters
+// are necessary for correctness.
+
+test('checkCitationTitleDrift: the ratio floor (0.30) is load-bearing — ratio just above 0.30 prevents flag despite shared < 2', () => {
+  // ratio = 1/3 ≈ 0.33 > 0.30 with shared = 1 should not flag.
+  // Arithmetic: title = {apple, berry} (2 tokens, no numbers to avoid confusion),
+  // heading = {apple, cherry} (2 tokens),
+  // shared = 1 (apple), union = 2 + 2 - 1 = 3, ratio = 1/3 ≈ 0.333 > 0.30.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A30 · apple berry
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const text = '### A30 · apple cherry\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 0, 'ratio ≈0.333 > 0.30 prevents flag even with shared=1 < 2');
+});
+
+test('checkCitationTitleDrift: the ratio floor (0.30) is load-bearing — low ratio causes flag with shared < 2', () => {
+  // Mismatched titles with only one shared token and a large union yield
+  // ratio = 1/6 ≈ 0.167 ≤ 0.30, causing a flag.
+  // Arithmetic: title tokens = {alpha, beta, charlie} (3),
+  // heading tokens = {alpha, delta, echo, foxtrot} (4),
+  // shared = 1 (alpha), union = 3 + 4 - 1 = 6, ratio = 1/6 ≈ 0.167.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A31 · alpha beta charlie (#1234)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const text = '### A31 · alpha delta echo foxtrot\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 1, 'Low ratio (≈0.167 ≤ 0.30) with shared < 2 should flag');
+  assert.match(findings[0], /A31/);
+});
+
+test('checkCitationTitleDrift: the shared-token minimum (2) is load-bearing — shared >= 2 prevents flag even with ratio ≤ 0.30', () => {
+  // Two shared tokens with low ratio (≈0.286 ≤ 0.30) should not flag because
+  // shared >= 2. This proves the shared-token gate is necessary.
+  // Arithmetic: title = {alpha, beta, charlie, delta} (4),
+  // heading = {alpha, beta, echo, foxtrot, golf} (5),
+  // shared = 2 (alpha, beta), union = 4 + 5 - 2 = 7, ratio = 2/7 ≈ 0.286.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A32 · alpha beta charlie delta (#1234)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const text = '### A32 · alpha beta echo foxtrot golf\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 0, 'Shared >= 2 should prevent flag even with ratio ≤ 0.30');
+});
+
+test('checkCitationTitleDrift: the ratio edge case (shared = 1, tiny union) is reachable — ratio = 0.5 > 0.30 prevents flag', () => {
+  // When shared = 1 and union = 2, ratio = 0.5 > 0.30, no flag. This
+  // demonstrates the ratio floor's genuine edge case is reachable and works.
+  // Arithmetic: title = {alpha} (1), heading = {alpha, beta} (2),
+  // shared = 1, union = 1 + 2 - 1 = 2, ratio = 1/2 = 0.5.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A33 · alpha (#1234)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const text = '### A33 · alpha beta\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 0, 'Edge case: shared=1, union=2 yields ratio=0.5 > 0.30, no flag');
+});
+
+test('checkCitationTitleDrift: the stopword filter is load-bearing — stopwords are not counted as shared tokens', () => {
+  // Two titles that differ only in stopwords should flag if the shared count
+  // were inflated by stopwords. By filtering stopwords, they share zero
+  // content tokens. With ratio also low, this correctly flags as drift.
+  // Title tokens after filtering = {quick} (1, "the" removed),
+  // heading tokens after filtering = {slow} (1, "the" removed),
+  // shared = 0, union = 1 + 1 - 0 = 2, ratio = 0/2 = 0.
+  // If stopwords weren't filtered: shared would include {the}, but even then
+  // shared = 1 < 2, and ratio = 1/2 = 0.5 > 0.30, so the non-filtered case
+  // wouldn't flag. This test shows stopwords are correctly excluded.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A40 · the quick (#1234)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const text = '### A40 · the slow\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 1, 'Stopwords filtered out, leaving no shared content tokens; ratio=0 should flag');
+  assert.match(findings[0], /A40/);
+});
+
+test('checkCitationTitleDrift: the ID-token filter is load-bearing — ID-shaped tokens are not counted as shared tokens', () => {
+  // A title and heading that both contain an ID token (e.g., "a15") should
+  // not let that ID inflate their shared count. After filtering the ID token,
+  // they share zero content tokens, and the drift correctly flags.
+  // Title: "a15 quick" → {quick} (1, "a15" matches ID pattern),
+  // heading: "a15 slow" → {slow} (1, "a15" filtered),
+  // shared = 0, union = 2, ratio = 0, should flag.
+  // If ID tokens weren't filtered, shared would be {a15} = 1, and
+  // ratio = 1/2 = 0.5 > 0.30, so it wouldn't flag — demonstrating the
+  // filter's necessity.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A41 · a15 quick (#1234)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const text = '### A41 · a15 slow\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 1, 'ID token "a15" filtered out, no shared content; ratio=0 should flag');
+  assert.match(findings[0], /A41/);
+});
+
 // --- frozen-path exclusion ---
 
 test('isFrozenPath: excludes the documented frozen globs', () => {
