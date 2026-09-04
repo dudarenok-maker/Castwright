@@ -7,6 +7,8 @@ import {
   buildLiveView,
   parseBodyGroupCounts,
   reconcileRowShells,
+  normaliseTitle,
+  decodeHtmlEntities,
 } from '../build-register-live-view.mjs';
 
 test('applyGeneratedRegion replaces only the marked region', () => {
@@ -301,6 +303,89 @@ test('reordered .md rows reorder shells, each body following its own ID', () => 
   </section>`;
   const next = reconcileRowShells(md, html);
   assert.ok(next.indexOf('body two') < next.indexOf('body one'), 'A2 (now first in .md order) must come before A1');
+});
+
+test('normaliseTitle strips a balanced, markdown-linked trailing parenthetical', () => {
+  const md = 'AMD GPU support Phase 2 ([#1335](https://github.com/dudarenok-maker/Castwright/issues/1335))';
+  assert.equal(normaliseTitle(md), 'AMD GPU support Phase 2');
+});
+
+test('normaliseTitle applied to both sides matches the RAM_HEAVY_MODELS case', () => {
+  const md = 'CPU-only `RAM_HEAVY_MODELS` clamp (plan 263, B2 step 7)';
+  const iname = decodeHtmlEntities('CPU-only RAM_HEAVY_MODELS clamp (B2 step 7)');
+  assert.equal(normaliseTitle(md), normaliseTitle(iname));
+});
+
+test('a Blocked heading matches its shell by exact normalised title, not position', () => {
+  const md = `## Blocked — hardware not available
+
+### First blocked thing (#111)
+### Second blocked thing (#222)
+`;
+  const html = `<section class="group is-blocked" id="blocked">
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">Second blocked thing</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">second body</div>
+      </details>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">First blocked thing</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">first body</div>
+      </details>
+  </section>`;
+  const next = reconcileRowShells(md, html);
+  assert.ok(next.indexOf('First blocked thing') < next.indexOf('Second blocked thing'), 'md order must be preserved, not html order');
+  assert.match(next, /First blocked thing[\s\S]*?first body/);
+});
+
+test('a Blocked title matching zero shells is an error', () => {
+  const md = `## Blocked — hardware not available
+
+### Something with no shell (#333)
+`;
+  const html = `<section class="group is-blocked" id="blocked">
+      <header><h3 class="gtitle">…<span class="gcount">0 rows</span></h3></header>
+  </section>`;
+  assert.throws(() => reconcileRowShells(md, html), /Something with no shell/);
+});
+
+test('an Unconfirmed bullet is matched by its bold-span text as a PREFIX of the decoded iname, not exact match', () => {
+  const md = `## Unconfirmed — not debts until substantiated
+
+- **fs-38 Wave 1** (designed-voice authoring, PR #1800) — no explicit owed callout
+`;
+  const html = `<section class="group is-soft" id="unconfirmed">
+      <header><h3 class="gtitle">…<span class="gcount">1 row</span></h3></header>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">fs-38 Wave 1 — designed-voice authoring</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">b</div>
+      </details>
+  </section>`;
+  const next = reconcileRowShells(md, html);
+  assert.match(next, /fs-38 Wave 1 — designed-voice authoring/);
+});
+
+test('reordering the two Unconfirmed bullets does not re-pair their bodies', () => {
+  const md = `## Unconfirmed — not debts until substantiated
+
+- **Second bullet**
+- **First bullet**
+`;
+  const html = `<section class="group is-soft" id="unconfirmed">
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">First bullet</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">first body</div>
+      </details>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">Second bullet</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">second body</div>
+      </details>
+  </section>`;
+  const next = reconcileRowShells(md, html);
+  assert.ok(next.indexOf('Second bullet') < next.indexOf('First bullet'));
+  assert.match(next, /Second bullet[\s\S]*?second body/);
+  assert.match(next, /First bullet[\s\S]*?first body/);
 });
 
 test('the publish-token heading is not treated as a row', () => {

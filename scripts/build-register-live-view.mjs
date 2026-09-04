@@ -201,10 +201,13 @@ function extractRowIdsInOrder(sectionMd) {
   return [...sectionMd.matchAll(ROW_HEADING_REGEX)].map((m) => ({ id: m[1], title: m[2] }));
 }
 
-// One shell = one whole <details class="item">…</details> block. Non-nested
-// in this markup (no <details> inside another), so a non-greedy match to the
-// FIRST </details> after the opening tag is exact, not an approximation.
-const SHELL_BY_ID_REGEX = /<details class="item">\s*<summary><span class="num">([^<]+)<\/span>[\s\S]*?<\/details>/g;
+// One shell = one whole <details class="item">…</details> block, including
+// its own leading indentation — captured so a shell that is kept in place
+// round-trips byte-identical rather than losing its indent on every rebuild.
+// Non-nested in this markup (no <details> inside another), so a non-greedy
+// match to the FIRST </details> after the opening tag is exact, not an
+// approximation.
+const SHELL_BY_ID_REGEX = /[ \t]*<details class="item">\s*<summary><span class="num">([^<]+)<\/span>[\s\S]*?<\/details>/g;
 
 function splitShellsById(sectionHtml) {
   const shells = new Map();
@@ -215,12 +218,74 @@ function splitShellsById(sectionHtml) {
 }
 
 function buildPlaceholderShell(id, title) {
-  return `      <details class="item">
-        <summary><span class="num">${id}</span><span class="iname">${title}</span><span class="risk">Not yet published</span><span class="chev">›</span></summary>
-        <div class="body">
-          <p class="body-placeholder">Not yet published — run \`npm run register:build\` after adding row content, or fill in manually and re-run --check.</p>
-        </div>
-      </details>`;
+  return `    <details class="item">
+      <summary><span class="num">${id}</span><span class="iname">${title}</span><span class="risk">Not yet published</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p class="body-placeholder">Not yet published — run \`npm run register:build\` after adding row content, or fill in manually and re-run --check.</p>
+      </div>
+    </details>`;
+}
+
+// Strips ONE balanced trailing "(...)" — walking from the end, tracking
+// paren depth, so a nested markdown link's own (url) doesn't stop the strip
+// early. Returns the input unchanged if it doesn't end in ")".
+function stripTrailingParenthetical(s) {
+  const trimmed = s.trimEnd();
+  if (!trimmed.endsWith(')')) return trimmed;
+  let depth = 0;
+  for (let i = trimmed.length - 1; i >= 0; i--) {
+    if (trimmed[i] === ')') depth++;
+    else if (trimmed[i] === '(') {
+      depth--;
+      if (depth === 0) return trimmed.slice(0, i).trimEnd();
+    }
+  }
+  return trimmed; // unbalanced — leave as-is rather than guess
+}
+
+export function decodeHtmlEntities(s) {
+  return s.replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+}
+
+// Applied to BOTH the .md heading and the decoded .html iname — not just one
+// side, which is the defect an earlier draft of this normaliser shipped (its
+// own paired test normalised both sides; its implementation normalised only
+// the .md side, so the test could never have failed against the real file).
+export function normaliseTitle(raw) {
+  // A plain string replace, not a regex literal — a bare backtick inside a
+  // regex literal desyncs src/spawn-windows-hide.test.ts's own quote-tracking
+  // scanner (#2747), which cannot tell it apart from a template-literal
+  // delimiter.
+  return stripTrailingParenthetical(raw.split('`').join('')).trim();
+}
+
+const BLOCKED_HEADING_REGEX = /^### (.+?)\r?$/gm;
+const UNCONFIRMED_BULLET_REGEX = /^- \*\*(.+?)\*\*/gm;
+const SHELL_BY_TITLE_REGEX = /[ \t]*<details class="item">\s*<summary><span class="num">—<\/span><span class="iname">([^<]+)<\/span>[\s\S]*?<\/details>/g;
+
+function reconcileTitledSection(html, sectionId, titles, { prefixMatch }) {
+  const sectionRegex = new RegExp(
+    `(<section[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?<\\/header>\\s*\\n)([\\s\\S]*?)(\\s*<\\/section>)`,
+  );
+  const match = html.match(sectionRegex);
+  if (!match) throw new Error(`reconcileRowShells: no section#${sectionId} (with a <header>) found`);
+  const [, headerAndOpen, body, closeTag] = match;
+  const shellsByIname = new Map();
+  for (const m of body.matchAll(SHELL_BY_TITLE_REGEX)) {
+    shellsByIname.set(decodeHtmlEntities(m[1]), m[0]);
+  }
+  const newBody = titles
+    .map((rawTitle) => {
+      const wanted = prefixMatch ? rawTitle : normaliseTitle(rawTitle);
+      const matches = [...shellsByIname.entries()].filter(([iname]) =>
+        prefixMatch ? iname.startsWith(wanted) : normaliseTitle(iname) === wanted,
+      );
+      if (matches.length === 0) throw new Error(`reconcileRowShells: no shell title matches "${wanted}" in #${sectionId}`);
+      if (matches.length > 1) throw new Error(`reconcileRowShells: "${wanted}" matches ${matches.length} shells in #${sectionId}`);
+      return matches[0][1];
+    })
+    .join('\n');
+  return html.replace(sectionRegex, `${headerAndOpen}${newBody}\n${closeTag}`);
 }
 
 export function reconcileRowShells(mdText, html) {
@@ -228,10 +293,22 @@ export function reconcileRowShells(mdText, html) {
   let result = html;
   for (const section of sections) {
     const letterMatch = section.title.match(/^Group ([A-Z])\b/);
-    if (!letterMatch) continue;
-    const letter = letterMatch[1];
-    const rowIds = extractRowIdsInOrder(section.body);
-    result = reconcileOneSection(result, `g${letter.toLowerCase()}`, rowIds);
+    if (letterMatch) {
+      const rowIds = extractRowIdsInOrder(section.body);
+      result = reconcileOneSection(result, `g${letterMatch[1].toLowerCase()}`, rowIds);
+      continue;
+    }
+    // Re-derived against the real .md: the Blocked heading reads "Blocked —
+    // hardware not available" and Unconfirmed reads "Unconfirmed — not debts
+    // until substantiated" — both start with the bare word, so the prefix
+    // test below covers the real titles without assuming the whole line.
+    if (/^Blocked\b/.test(section.title)) {
+      const blockedTitles = [...section.body.matchAll(BLOCKED_HEADING_REGEX)].map((m) => m[1]);
+      result = reconcileTitledSection(result, 'blocked', blockedTitles, { prefixMatch: false });
+    } else if (/^Unconfirmed\b/.test(section.title)) {
+      const unconfirmedTitles = [...section.body.matchAll(UNCONFIRMED_BULLET_REGEX)].map((m) => m[1]);
+      result = reconcileTitledSection(result, 'unconfirmed', unconfirmedTitles, { prefixMatch: true });
+    }
   }
   return result;
 }
