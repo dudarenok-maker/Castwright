@@ -24,6 +24,7 @@ import {
   findUnclassifiedRunSheetMentions,
   measureWrongIdEligibleLines,
   isLikelyBinaryFile,
+  checkCitationTitleDrift,
 } from '../check-register-citations.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1819,6 +1820,57 @@ test('measureWrongIdEligibleLines: a heading citing only a NONEXISTENT id is not
   assert.equal(headingFiles, 0);
   assert.equal(criteriaLines, 0);
   assert.equal(criteriaFiles, 0);
+});
+
+// --- Check D: heading title drift (v2, #2871, tuning doc #2870) ---
+//
+// Per the tuning doc's own recommendation, only the anchored heading surface
+// carries a usable signal — the prose-idiom/label-line surfaces are skipped
+// entirely, so these fixtures only exercise `### <ID> · ...` headings.
+
+test('checkCitationTitleDrift: does not fire when the heading echoes the row\'s current title', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = '### A2 · Second thing (#1001)\n\nBody two.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 0);
+});
+
+// Constructed the same way the tuning doc's synthetic mismatches were: the
+// citing text is scored against a title that describes clearly different
+// work, not a hand-picked easy negative.
+test('checkCitationTitleDrift: fires (advisory) when the heading describes clearly different work than the row\'s current title', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = '### A2 · Completely unrelated volume normalization audio pipeline redesign\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 1);
+  assert.match(findings[0], /A2/);
+  assert.match(findings[0], /docs\/foo\.md/);
+  assert.match(findings[0], /Second thing/);
+});
+
+test('checkCitationTitleDrift: does not fire on a nonexistent ID — that is Check A\'s job, not this one\'s', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = '### A99 · Completely unrelated volume normalization audio pipeline redesign\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 0);
+});
+
+test('checkCitationTitleDrift: skips the prose-idiom surface entirely, even when it clearly does not restate the title', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'This discharged register row A2 as numbered before the volume normalization redesign shipped.';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 0);
+});
+
+test('checkCitationTitleDrift: a multi-row heading ("A6 + A7 · ...") is checked against each row\'s own title', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // A2/B1 borrowed here as a stand-in multi-row heading — B1's real title is
+  // "Language gate (#1001)", clearly different from A2's "Second thing
+  // (#1001)", so only B1 should flag.
+  const text = '### A2 + B1 · Second thing (#1001)\n\nBody.\n';
+  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(findings.length, 1);
+  assert.match(findings[0], /B1/);
 });
 
 // --- frozen-path exclusion ---

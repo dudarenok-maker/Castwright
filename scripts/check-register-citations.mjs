@@ -1973,6 +1973,142 @@ export function measureWrongIdEligibleLines(fileTexts, registerRows) {
   };
 }
 
+// --- Check D: heading title drift (advisory, non-fatal) -------------------
+//
+// Measured in docs/testing/register-citation-title-match-tuning.md (#2870,
+// first task child of #2838): plain Jaccard token-overlap between a register
+// row's `.title` and the prose that cites it does NOT cleanly separate real
+// citations from genuine drift on the prose-idiom/label-line surfaces — a
+// prose-idiom citation ("register row A21 recorded in...") almost never
+// restates the row's title by design (it references the row by ID while
+// talking about something else), so its real-corpus floor is
+// indistinguishable from a synthetic mismatch's floor. Only the anchored
+// HEADING surface (`### <ID> · <title-echo>`) carries a usable signal,
+// because a heading's text after `·` tautologically restates the title when
+// nothing has drifted. Per that doc's own recommendation: skip the
+// prose-idiom/label-line surfaces entirely, and for the heading surface,
+// require BOTH a ratio floor AND a minimum shared-content-token count before
+// flagging, and treat the whole thing as advisory — never fails the gate,
+// not even under `--strict` — because the tuning doc's own near-duplicate-
+// title cases (A20/A13, A32/A22) mean even a well-tuned ratio is
+// structurally blind to some real ID swaps; a hard CI gate on a metric known
+// to have that blind spot would train contributors to distrust or route
+// around it.
+
+// Verbatim from the tuning doc's own measurement — do not re-derive.
+const TITLE_DRIFT_STOPWORDS = new Set(
+  `a an the of to in on for and or but with without at by from as is are was
+   were be been being this that these those it its into over under again
+   further then once here there when where why how all any both each few more
+   most other some such no nor not only own same so than too very s t can will
+   just don should now`
+    .split(/\s+/)
+    .filter(Boolean),
+);
+
+// A ratio at or below this is "low similarity" — the tuning doc's own
+// heading-surface recommendation (~0.3, informational).
+const TITLE_DRIFT_RATIO_THRESHOLD = 0.3;
+
+// Minimum non-stopword, non-ID tokens the title and the heading text must
+// share before a low ratio is treated as real drift rather than noise from
+// two short strings — the tuning doc's own "both a ratio floor and a minimum
+// shared-content-token count" recommendation.
+const TITLE_DRIFT_MIN_SHARED_TOKENS = 2;
+
+const TITLE_DRIFT_TOKEN_REGEX = /[a-z0-9]+/g;
+// A bare row-ID-shaped token (e.g. "a6") — stripped from both sides before
+// scoring, same as the tuning doc's `excludeId` measurement.
+const TITLE_DRIFT_ID_TOKEN_REGEX = /^[a-z]\d{1,3}$/;
+
+function titleDriftTokens(text) {
+  const raw = text.toLowerCase().match(TITLE_DRIFT_TOKEN_REGEX) ?? [];
+  const tokens = new Set();
+  for (const t of raw) {
+    if (TITLE_DRIFT_STOPWORDS.has(t)) continue;
+    if (TITLE_DRIFT_ID_TOKEN_REGEX.test(t)) continue;
+    tokens.add(t);
+  }
+  return tokens;
+}
+
+/**
+ * Jaccard similarity between two token sets, plus the shared-token count
+ * both the ratio-floor and minimum-shared-token-count gates need. Two empty
+ * token sets score 1 (no content on either side to disagree about) rather
+ * than 0/0 — this never fires in the real corpus (a row title and a heading
+ * echo are never entirely stopwords/IDs) but a defined answer beats NaN
+ * silently propagating into a false flag.
+ */
+function titleDriftScore(titleTokens, proseTokens) {
+  let shared = 0;
+  for (const t of titleTokens) if (proseTokens.has(t)) shared++;
+  const union = titleTokens.size + proseTokens.size - shared;
+  const ratio = union === 0 ? 1 : shared / union;
+  return { ratio, shared };
+}
+
+/**
+ * Every `### <ID> [+ <ID> ...] · <title-echo>` heading citation on `text`,
+ * paired with its trailing title-echo text — the surface the tuning doc
+ * measured as the only one carrying a usable similarity signal (see this
+ * section's header comment). Reuses HEADING_ID_REGEX/splitCitedIds so this
+ * recognises exactly the same heading citations Check A does — no new
+ * surface is invented here.
+ * @returns {{ lineIndex: number, ids: string[], titleEcho: string }[]}
+ */
+function extractHeadingTitleEchoes(text) {
+  const stripped = deBold(stripFences(text));
+  const lines = stripInlineCodeSpans(stripped).split('\n');
+  const citations = [];
+  lines.forEach((line, i) => {
+    const m = line.match(HEADING_ID_REGEX);
+    if (!m) return;
+    const ids = splitCitedIds(m[1]);
+    if (!ids.length) return;
+    const titleEcho = line.slice(m[0].length).trim();
+    citations.push({ lineIndex: i, ids, titleEcho });
+  });
+  return citations;
+}
+
+/**
+ * v2 of `check:register-row-citations` (#2838's second task child): flags a
+ * heading citation whose title-echo text scores at or below
+ * TITLE_DRIFT_RATIO_THRESHOLD against the row's current `.title` AND shares
+ * fewer than TITLE_DRIFT_MIN_SHARED_TOKENS non-stopword, non-ID tokens with
+ * it — both conditions per the tuning doc's recommendation, since either
+ * alone over-fires (a low ratio from two merely-short strings, or a low
+ * shared count that's low only because both strings are short). Non-fatal by
+ * design, always — see this section's header comment for why. Only the
+ * heading surface is scored; the prose-idiom and "Register row(s):"
+ * label-line surfaces are skipped entirely per the tuning doc's own finding
+ * that they carry no usable signal there. A nonexistent ID is silently
+ * skipped here — that's Check A's job, not this one's, and double-reporting
+ * it would be noise.
+ * @returns {string[]} advisory findings, file:line formatted like the other
+ *   checks' output
+ */
+export function checkCitationTitleDrift(text, filePath, registerRows) {
+  const findings = [];
+  for (const { lineIndex, ids, titleEcho } of extractHeadingTitleEchoes(text)) {
+    const proseTokens = titleDriftTokens(titleEcho);
+    for (const id of ids) {
+      const row = registerRows.get(id);
+      if (!row) continue;
+      const titleTokens = titleDriftTokens(row.title);
+      const { ratio, shared } = titleDriftScore(titleTokens, proseTokens);
+      if (ratio > TITLE_DRIFT_RATIO_THRESHOLD || shared >= TITLE_DRIFT_MIN_SHARED_TOKENS) continue;
+      findings.push(
+        `${filePath}:${lineIndex + 1} — heading cites ${id} — row's current title is ` +
+          `"${row.title}" but the heading text says "${titleEcho}" (similarity ${ratio.toFixed(2)}, ` +
+          `${shared} shared token(s) — review for drift)`,
+      );
+    }
+  }
+  return findings;
+}
+
 // --- CLI ------------------------------------------------------------------
 
 class CliExitError extends Error {
@@ -2063,6 +2199,7 @@ export function runCheckRegisterCitationsCli(options = {}) {
 
   const errorsA = [];
   const annotatedA = [];
+  const titleDriftD = [];
   const nonFrozenTexts = new Map();
   let unreadableCount = 0;
   for (const relPath of scannedFiles) {
@@ -2086,6 +2223,7 @@ export function runCheckRegisterCitationsCli(options = {}) {
     const found = checkNonexistentIds(text, relPath, rows);
     errorsA.push(...found.errors);
     annotatedA.push(...found.annotated);
+    titleDriftD.push(...checkCitationTitleDrift(text, relPath, rows));
   }
 
   const errorsB = checkRunSheetLinkage(rows, (p) => readRepoFile(p));
@@ -2135,6 +2273,10 @@ export function runCheckRegisterCitationsCli(options = {}) {
       annotatedDischargeC,
     ],
     ['Run sheets mentioned but not classified as owned (not checked)', unclassifiedRunSheets],
+    [
+      'Check D — heading title drift vs. the row\'s current title (advisory, never fatal — see header comment)',
+      titleDriftD,
+    ],
   ];
   if (strict) {
     nonFatalSections.push([
