@@ -385,36 +385,40 @@ const NVIDIA_CUBLAS_CONSTRAINT = 'nvidia-cublas-cu12~=12.8.0';
 //
 // PASS-3 REVIEW NOTE (2026-09-01): the prior version of this note checked
 // only ONE basename pair and generalised from it. Re-measured `FileVersion`
-// directly, on the live venv, for basenames mechanism B can shadow:
+// directly, on the live venv, for every basename mechanism B COULD reach:
 //   - `nvrtc64_120_0.dll` / `nvJitLink_120_0.dll` (from
 //     `nvidia-cuda-nvrtc-cu12`/`nvidia-nvjitlink-cu12`): torch's own
 //     `torch/lib` copies and the `nvidia/*/bin` copies both report
-//     `FileVersion` 6.14.11.9000 — these two agree, so mechanism B is not
-//     currently exposed for them.
+//     `FileVersion` 6.14.11.9000 — these two agree, so mechanism B is
+//     reachable here but has no live gap to expose today.
 //   - `cublas64_12.dll` / `cublasLt64_12.dll` (from
 //     `NVIDIA_CUBLAS_CONSTRAINT` above, `~=12.8.0`): torch's `torch/lib`
 //     copies report `6,14,11,1284` (12.8.4); the `nvidia/cublas/bin` copies
 //     this file installs report `6,14,11,1285` (12.8.5). These DO differ —
 //     same-minor, so low practical risk, but the `~=12.8.0` pin permits any
 //     12.8.x and does not itself guarantee agreement with torch's specific
-//     build the way `NVIDIA_CUDNN_CONSTRAINT`'s tighter `~=9.19.0` does.
-//   - `cudnn64_9.dll` from `ctranslate2` (faster-whisper's own bundled
-//     dispatch stub, `server/tts-sidecar/.venv/Lib/site-packages/ctranslate2/`):
-//     reports `9.10.2.21`. Binary inspection (via grep) found zero cuDNN
-//     references in ctranslate2's compiled code (ctranslate2.dll, _ext.cp312-win_amd64.pyd);
-//     the bundled cuDNN file is loaded unconditionally by __init__.py's
-//     glob-based directory-wide DLL load at import time, but ctranslate2 never
-//     calls into it. This entry is NOT a live shadow target — ctranslate2 does
-//     not consume cuDNN. Per #2845's measurement
-//     (server/tts-sidecar/docs/ctranslate2-cudnn-shadow-measurement.md),
-//     the 9.19.0.56 cuDNN sublibraries loaded in this process belong to
-//     onnxruntime's CUDA execution provider (Kokoro), the only actual cuDNN
-//     consumer in this sidecar. The inert ctranslate2 bundled copy poses no
-//     concern.
-// The two live shadow targets (nvrtc/nvJitLink, cublas) pre-date this PR (this
-// PR only widens which of them `_add_nvidia_dll_dirs_to_path()`'s PATH prepend
-// can newly reach); nothing here pins cross-mechanism agreement the way
-// `NVIDIA_CUDNN_CONSTRAINT` etc. pin the packages this file DOES own.
+//     build the way `NVIDIA_CUDNN_CONSTRAINT`'s tighter `~=9.19.0` does. This
+//     is the one basename pair with a currently-live (if low-risk) gap.
+//   - `cudnn64_9.dll` from `ctranslate2` (its own bundled copy,
+//     `server/tts-sidecar/.venv/Lib/site-packages/ctranslate2/`): reports
+//     `9.10.2.21`, differing from `nvidia/cudnn/bin`'s `9.19.0.56` — but this
+//     is NOT a live shadow target. Binary inspection (`grep -a -i -o "cudnn"
+//     <file> | wc -l`, on both `ctranslate2.dll` and its `_ext.*.pyd`) found
+//     ZERO occurrences of "cudnn" anywhere in ctranslate2's compiled code —
+//     no import, no delay-load, no string reference. The same check finds 35
+//     occurrences of "cublas" (24 distinct symbols): ctranslate2 uses cuBLAS,
+//     not cuDNN, for its GPU compute. The bundled `cudnn64_9.dll` is loaded
+//     into the process only because `ctranslate2/__init__.py` unconditionally
+//     `ctypes.CDLL`-loads every `.dll` in its own package directory at import
+//     time — it is resident but never called. Mechanism B cannot shadow a
+//     version ctranslate2 never reads. Full measurement:
+//     server/tts-sidecar/docs/ctranslate2-cudnn-shadow-measurement.md (#2845).
+// Of these, mechanism B is reachable for two basename pairs (nvrtc/nvJitLink,
+// cublas/cublasLt) and irrelevant for the third (ctranslate2's inert cudnn64_9.dll).
+// Both reachable pairs pre-date this PR (this PR only widens which of them
+// `_add_nvidia_dll_dirs_to_path()`'s PATH prepend can newly reach); nothing
+// here pins cross-mechanism agreement the way `NVIDIA_CUDNN_CONSTRAINT` etc.
+// pin the packages this file DOES own.
 const NVIDIA_CUFFT_CONSTRAINT = 'nvidia-cufft-cu12~=11.3.3';
 const NVIDIA_CUDA_RUNTIME_CONSTRAINT = 'nvidia-cuda-runtime-cu12~=12.8.0';
 
