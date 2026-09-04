@@ -1215,6 +1215,43 @@ feat/server-foo` and tell the agent in its prompt to check it out as its
   [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md)
   is now historical.
 
+### One writer per worktree — commit/push is single-threaded
+
+A worktree's `git commit`/`push` is single-writer. Running more than one
+against the same worktree at a time — two dispatched fix agents, or a
+dispatched agent plus the dispatching session itself — doesn't corrupt the
+repo, but reliably produces the exact contention this repo has hit three
+separate times (2026-08-29, 2026-08-30, 2026-09-04/05): commits bundling
+together, hook batteries competing for CPU/GPU and throwing unrelated flaky
+failures, and — worst — a subagent concluding the contention it caused
+*itself* is an external blocker and reaching for `--no-verify` to route
+around it (never acceptable — see "Do not use `--no-verify` to bypass" under
+Working practice below; this holds even under contention).
+
+- **A subagent whose `git commit`/`push` is slow does not get to retry it as
+  a second background call.** `verify:fast:branch`/pre-push can legitimately
+  run 15–45+ minutes under load; the fix for "it's taking a while" is to
+  wait, never to fire a second attempt in parallel against the same
+  worktree. A subagent report describing multiple retry attempts against one
+  worktree is reporting a bug it caused, not a completed task — re-dispatch
+  or take over manually rather than trusting its "eventually succeeded"
+  claim.
+- **`TaskStop`'s "Successfully stopped" is not proof the underlying OS
+  process is gone.** Confirmed three times now: stopping a wrapping
+  bash/agent task does not reliably kill the child processes it spawned
+  (`git.exe`, `node`/`vitest` workers) on Windows — they can keep running,
+  still holding the git index or burning CPU, after the stop call reports
+  success. Before trusting a worktree is idle, independently check
+  `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like
+  "*<worktree-path>*" }` and `Stop-Process -Force` anything still there —
+  don't rely on the stop confirmation alone.
+- **Before starting your own commit/push in a worktree a subagent was just
+  working in, re-verify the worktree is actually idle** (empty process list
+  per above, `git status` unchanged across a few seconds), not just that the
+  dispatch tool reported the agent "completed" — a completed agent
+  notification can still have live background children of its own still
+  running commits/pushes.
+
 ### Planning agents
 
 Plan agents (`subagent_type: "Plan"`) design strategies but don't write code,
