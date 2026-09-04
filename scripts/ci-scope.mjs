@@ -18,10 +18,21 @@ export function slugFor(stepName) {
 }
 
 // openapi gates the CI-only "OpenAPI types up to date" drift check and has no
-// cache step. shared is the root-manifest global override.
+// cache step. shared is the root-manifest global override. lockfile_touched
+// (#2867, fixing #2853) is a hazard flag, not a leg gate: neither lockfile is
+// in either vitest config's forceRerunTriggers, so a lockfile-only diff can
+// select ZERO tests via `--changed` in both the server-tests and frontend-tests
+// CI jobs even though `stepTouchedByDiff`'s includeLockfiles branch already
+// routes it there — consumed by verify.yml to force a full (non-`--changed`)
+// run instead of widening `shared`, which was explicitly rejected (#2853) as
+// too broad a fix for this narrow hazard. Note: lockfile_touched fires on
+// (shared || lockfile-specific-match), so it also triggers on non-lockfile
+// shared-scope diffs like .github/actions/**.
 const CI_ONLY = {
   openapi: (files) => files.some((f) => f === 'openapi.yaml'),
   shared: (files) => computeShared(files),
+  lockfile_touched: (files) =>
+    files.some((f) => f === 'package-lock.json' || f === 'server/package-lock.json'),
 };
 
 export function computeScopes(files, { eventName } = {}) {
