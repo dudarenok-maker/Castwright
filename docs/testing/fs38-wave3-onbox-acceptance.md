@@ -2167,7 +2167,32 @@ generation view **open and visible** when the failure lands.
   when the underlying reason is `wrong-engine`. Repeat once against C-13's
   wrong-engine setup to confirm.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☐ P ☐ F ☒ B ☐ N/A  **Notes:** Attempted 2026-09-04, same
+worktree/setup. **Underlying mechanism confirmed correct via a direct API
+call** — `POST /api/books/{id}/generation` for chapter 3 (Master Oduvan,
+revoked clone) returned the SSE stream `chapter_failed` event almost
+immediately after chapter 2's cached progress, with `errorCode:
+"cloned-voice-broken"` and `errorReason` naming `"Master Oduvan" (revoked)`
+verbatim per the expected shape — `state.json` persisted the same. **The
+live browser-toast half could not be observed**, blocked by severe,
+unrelated environment instability on this box during this session: repeated
+SSE-stream stalls (the client "no progress for now" watchdog firing on a
+backend that had, in fact, already finished), a `POST
+/api/books/.../generation` 503 from the UI's queue-wrapper path specifically
+(the *direct* endpoint call above succeeded on the same box moments later —
+so the 503 is in the queue layer, not the underlying generation code), and
+one full server-process exit (code 1) immediately after a correctly-logged
+`UnresolvableClonedVoiceError` — cause not isolated; flagged for follow-up,
+not filed as a specific issue since it couldn't be pinned to a single
+repro. Also found and fixed in passing (see commit): `getResolvedSidecarUrl()`'s
+per-worktree derivation built `http://localhost:$PORT` instead of
+`http://127.0.0.1:$PORT`, unlike every other sidecar-URL site in this
+codebase — real defect (Windows IPv6/IPv4 dual-stack resolution can hang the
+`localhost` attempt), but verified NOT the cause of the 503/stalls above
+(the 503 reproduced identically after the fix). **Retry this row properly
+on a box that isn't under heavy concurrent background load** — this
+session's environment issues look like resource contention, not a stable
+product defect, but that is inferred, not proven.
 
 ---
 
@@ -3120,7 +3145,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-12 | Atomic `.pt`: kill mid-write leaves no truncated `.pt` | **P** (weaker variant) | Run 5, 5 attempts — never caught a truncated `.pt`; every kill landed cleanly before or after the write. Consistent with atomicity but doesn't prove concurrent interruption directly |
 | C-13 | `wrong-engine` diagnosed distinctly at render time | **P** (wrong-engine half) · **B** (engine-unavailable contrast) | Run 5. Wrong-engine half confirmed exactly. Engine-unavailable contrast not reproducible on this box — a generation request lazily relaunches the sidecar regardless of `autoStartSidecar` |
 | C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | **P** | Run 5. All 4 assign-time wrong-engine guard scenarios confirmed |
-| C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | | |
+| C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | **B** | Underlying mechanism confirmed via direct API call (fast `chapter_failed` with correct errorCode/errorReason) — live browser toast blocked by this session's own environment instability (SSE stalls, a queue-layer 503, one server exit), not reproduced as a stable product defect. Found+fixed in passing: `getResolvedSidecarUrl()` used `localhost` instead of `127.0.0.1` (real Windows IPv6 defect, verified not the cause here) |
 | C-16 | Broken / Repairable card chip | | |
 | C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | **P** | Run 7: full chapter generation (not splice) on a throwaway primary-checkout book. `.pt` deleted → chapter completed, `.pt` reappeared, `instruct`/`designModel` byte-identical, `baseModel` refreshed. Re-design confirmed working (needed a Kokoro unload first — real, correctly-diagnosed VRAM contention, not a defect). Historical run-2 `F` was already withdrawn as a #1972 splice-attribution artifact — see the detailed section |
 | C-18 | §2.3 stale `.pt` deliberately left alone | **P** | Run 7: bumped `baseModel`+`status` to bogus/stale, `.pt` present. Chapter completed, `.pt` hash/mtime unchanged, zero new derives — designed-voice presence-only check confirmed, unlike a cloned voice's C-07 |

@@ -347,7 +347,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
        own line as the audition calibration text. */
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://localhost:9000/qwen/design-voice');
+    expect(url).toBe('http://127.0.0.1:9000/qwen/design-voice');
     const sent = JSON.parse(init.body);
     expect(sent).toEqual({
       voiceId: 'qwen-v_maerin',
@@ -589,7 +589,7 @@ describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
 
     // fs-55: variant design hits /qwen/mint-variant, not /qwen/design-voice.
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://localhost:9000/qwen/mint-variant');
+    expect(url).toBe('http://127.0.0.1:9000/qwen/mint-variant');
     const sent = JSON.parse(init.body);
     // baseVoiceId is the real (non-preview, non-emotion) storage key.
     expect(sent.baseVoiceId).toBe('qwen-v_maerin');
@@ -748,7 +748,7 @@ describe('#1954 — emotion variants for a CLONED voice', () => {
 
     expect(res.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9000/qwen/design-voice');
+    expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:9000/qwen/design-voice');
   });
 
   describe('series-wide (Task 7, v5 upfront fix + write-time integration)', () => {

@@ -560,7 +560,15 @@ export function getResolvedSidecarUrl(): string {
 
   // 3. Derive from LOCAL_TTS_PORT (per-worktree port isolation, #2632)
   const port = resolveSidecarPort();
-  return `http://localhost:${port}`;
+  /* 127.0.0.1, not localhost — the sidecar binds 127.0.0.1 only
+     (spawn-sidecar.ts's DEFAULT_HOST), and on a box where "localhost"
+     resolves ::1 first, every request built from this URL (generation.ts's
+     pre-flight /health check, the catalog audit, etc.) hangs on the IPv6
+     attempt with nothing listening, surfacing as a 503 on POST /generation
+     or a stalled catalog-audit rather than a fast, successful call.
+     loopback-url.ts already avoids this for the same reason; this is the
+     other sidecar-URL construction site. */
+  return `http://127.0.0.1:${port}`;
 }
 let lastWarnedSidecarUrl: string | null = null;
 /* Separate from lastWarnedSidecarUrl (#2632 N19) — the two srv-21 rejection

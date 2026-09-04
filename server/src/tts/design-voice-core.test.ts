@@ -115,7 +115,7 @@ describe('runVoiceDesign', () => {
        persona forwarded as instruct, a non-empty calibrationText. */
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://localhost:9000/qwen/design-voice');
+    expect(url).toBe('http://127.0.0.1:9000/qwen/design-voice');
     const sent = JSON.parse(init.body);
     expect(sent.voiceId).toBe('qwen-abc123');
     expect(sent.instruct).toBe('a calm, measured narrator');

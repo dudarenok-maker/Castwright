@@ -51,6 +51,6 @@ describe('getResolvedSidecarUrl — srv-21 fallback', () => {
   it('falls back to the default for a public-host URL', () => {
     _resetUserSettingsCache();
     process.env.LOCAL_TTS_URL = 'http://evil.example.com:9000';
-    expect(getResolvedSidecarUrl()).toBe('http://localhost:9000');
+    expect(getResolvedSidecarUrl()).toBe('http://127.0.0.1:9000');
   });
 });
