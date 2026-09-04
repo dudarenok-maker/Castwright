@@ -44,6 +44,7 @@ import {
   STEPS,
   _internals,
 } from '../verify-cache.mjs';
+import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 
 const { SCHEMA_VERSION } = _internals;
 
@@ -1412,12 +1413,11 @@ test('a --changed-only pass is never written to the verify-cache — only a full
 // fixture commands at the real repo. Demonstrated live: an ambient lowercase
 // `git_dir` flipped a real checkout's `core.bare` from false to true via
 // `makeGitFixture()`'s `git init` below.
+// Thin wrapper over the shared, broader-than-scrubGitEnv() helper — see
+// git-env.mjs's scrubGitEnv() docstring for the case-insensitivity rationale,
+// and why this needs a separate helper from scrubGitEnv().
 function cleanGitEnv() {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase().startsWith('GIT_')) delete env[key];
-  }
-  return env;
+  return scrubGitEnvForThrowawayRepo();
 }
 
 function gitAt(cwd, args) {
