@@ -25,7 +25,8 @@ export function slugFor(stepName) {
 // `stepTouchedByDiff`'s includeLockfiles branch already routes it there —
 // consumed by verify.yml to force a full (non-`--changed`) run instead of
 // widening `shared`, which was explicitly rejected (#2853) as too broad a fix
-// for this narrow hazard.
+// for this narrow hazard. Note: lockfile_touched fires on (shared || lockfile-specific-match),
+// so it also triggers on non-lockfile shared-scope diffs like .github/actions/**.
 const CI_ONLY = {
   openapi: (files) => files.some((f) => f === 'openapi.yaml'),
   shared: (files) => computeShared(files),
