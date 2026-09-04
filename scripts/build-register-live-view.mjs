@@ -179,7 +179,80 @@ export function buildLiveView(mdText, currentHtml) {
   }
   html = rewriteGcountInSection(html, 'blocked', figures.blockedCount);
   html = rewriteGcountInSection(html, 'unconfirmed', figures.unconfirmedCount);
+  html = reconcileRowShells(mdText, html);
   return html;
+}
+
+function splitMdSections(mdText) {
+  const headingRegex = /^## (.+)$/gm;
+  const matches = [...mdText.matchAll(headingRegex)];
+  const sections = [];
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].index + matches[i][0].length;
+    const end = i + 1 < matches.length ? matches[i + 1].index : mdText.length;
+    sections.push({ title: matches[i][1].trim(), body: mdText.slice(start, end) });
+  }
+  return sections;
+}
+
+const ROW_HEADING_REGEX = /^### ([A-Z]\d+) · (.+?)\r?$/gm;
+
+function extractRowIdsInOrder(sectionMd) {
+  return [...sectionMd.matchAll(ROW_HEADING_REGEX)].map((m) => ({ id: m[1], title: m[2] }));
+}
+
+// One shell = one whole <details class="item">…</details> block. Non-nested
+// in this markup (no <details> inside another), so a non-greedy match to the
+// FIRST </details> after the opening tag is exact, not an approximation.
+const SHELL_BY_ID_REGEX = /<details class="item">\s*<summary><span class="num">([^<]+)<\/span>[\s\S]*?<\/details>/g;
+
+function splitShellsById(sectionHtml) {
+  const shells = new Map();
+  for (const m of sectionHtml.matchAll(SHELL_BY_ID_REGEX)) {
+    shells.set(m[1], m[0]);
+  }
+  return shells;
+}
+
+function buildPlaceholderShell(id, title) {
+  return `      <details class="item">
+        <summary><span class="num">${id}</span><span class="iname">${title}</span><span class="risk">Not yet published</span><span class="chev">›</span></summary>
+        <div class="body">
+          <p class="body-placeholder">Not yet published — run \`npm run register:build\` after adding row content, or fill in manually and re-run --check.</p>
+        </div>
+      </details>`;
+}
+
+export function reconcileRowShells(mdText, html) {
+  const sections = splitMdSections(mdText);
+  let result = html;
+  for (const section of sections) {
+    const letterMatch = section.title.match(/^Group ([A-Z])\b/);
+    if (!letterMatch) continue;
+    const letter = letterMatch[1];
+    const rowIds = extractRowIdsInOrder(section.body);
+    result = reconcileOneSection(result, `g${letter.toLowerCase()}`, rowIds);
+  }
+  return result;
+}
+
+// Captures three groups: everything through the closing </header> tag
+// (preserved verbatim — this is where Task 6's gcount rewrite already
+// landed), the details-list body (rebuilt), and the closing </section> tag
+// (preserved). The header is located structurally, not assumed to be a fixed
+// string, so it survives regardless of what Task 6 wrote into it.
+function reconcileOneSection(html, sectionId, rowIds) {
+  const sectionRegex = new RegExp(
+    `(<section[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?<\\/header>\\s*\\n)([\\s\\S]*?)(\\s*<\\/section>)`,
+  );
+  const match = html.match(sectionRegex);
+  if (!match) throw new Error(`reconcileRowShells: no section#${sectionId} (with a <header>) found`);
+  const [, headerAndOpen, body, closeTag] = match;
+  const existingShells = splitShellsById(body);
+  const newBody = rowIds
+    .map(({ id, title }) => existingShells.get(id) ?? buildPlaceholderShell(id, title))
+    .join('\n');
+  return html.replace(sectionRegex, `${headerAndOpen}${newBody}\n${closeTag}`);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {

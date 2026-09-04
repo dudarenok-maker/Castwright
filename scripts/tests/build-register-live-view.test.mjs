@@ -6,6 +6,7 @@ import {
   buildStripRegion,
   buildLiveView,
   parseBodyGroupCounts,
+  reconcileRowShells,
 } from '../build-register-live-view.mjs';
 
 test('applyGeneratedRegion replaces only the marked region', () => {
@@ -220,4 +221,107 @@ test('the groups target covers Blocked and Unconfirmed sections too', () => {
   const next = buildLiveView(md, html);
   assert.match(next, /id="blocked"[\s\S]*?<span class="gcount">5 rows<\/span>/);
   assert.match(next, /id="unconfirmed"[\s\S]*?<span class="gcount">2 rows<\/span>/);
+});
+
+test('a row added to the .md inserts a placeholder shell, wrapped in <details>, in markdown order', () => {
+  const md = `## Group A — setup a
+
+### A1 · first
+### A2 · second (new)
+`;
+  const html = `<section class="group" id="ga">
+      <header><h3 class="gtitle"><span class="gtag">A</span> setup a <span class="gcount">1 row</span></h3></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">existing body</div>
+      </details>
+  </section>`;
+  const next = reconcileRowShells(md, html);
+  const order = [...next.matchAll(/<span class="num">(A\d+)<\/span>/g)].map((m) => m[1]);
+  assert.deepEqual(order, ['A1', 'A2']);
+  assert.match(next, /A2[\s\S]*body-placeholder/);
+  assert.equal((next.match(/<details class="item">/g) ?? []).length, 2);
+  assert.equal((next.match(/<\/details>/g) ?? []).length, 2); // balanced — the defect an earlier draft shipped
+});
+
+test('the header block is preserved verbatim, including the gcount span Task 6 already wrote', () => {
+  const md = `## Group A — setup a
+
+### A1 · first
+`;
+  const html = `<section class="group" id="ga">
+      <header><h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">1 row</span></h3><p class="setup">hand-authored</p></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">b</div>
+      </details>
+  </section>`;
+  const next = reconcileRowShells(md, html);
+  assert.match(next, /hand-authored/);
+  assert.match(next, /<span class="gcount">1 row<\/span>/);
+});
+
+test('a row removed from the .md deletes its shell and nothing adjacent', () => {
+  const md = `## Group A — setup a
+
+### A1 · first
+`;
+  const html = `<section class="group" id="ga">
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">keep me</div>
+      </details>
+      <details class="item">
+        <summary><span class="num">A2</span><span class="iname">discharged</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">gone</div>
+      </details>
+  </section>`;
+  const next = reconcileRowShells(md, html);
+  assert.match(next, /keep me/);
+  assert.doesNotMatch(next, /gone/);
+});
+
+test('reordered .md rows reorder shells, each body following its own ID', () => {
+  const md = `## Group A — setup a
+
+### A2 · second
+### A1 · first
+`;
+  const html = `<section class="group" id="ga">
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">body one</div>
+      </details>
+      <details class="item">
+        <summary><span class="num">A2</span><span class="iname">second</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">body two</div>
+      </details>
+  </section>`;
+  const next = reconcileRowShells(md, html);
+  assert.ok(next.indexOf('body two') < next.indexOf('body one'), 'A2 (now first in .md order) must come before A1');
+});
+
+test('the publish-token heading is not treated as a row', () => {
+  const md = `## Live view
+
+### The publish token — never hand-edit it
+
+Some prose.
+
+## Group A — setup a
+
+### A1 · first
+`;
+  const html = `<section class="group" id="ga">
+      <header><h3 class="gtitle">…<span class="gcount">1 row</span></h3></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">b</div>
+      </details>
+  </section>`;
+  const next = reconcileRowShells(md, html);
+  const order = [...next.matchAll(/<span class="num">([^<]+)<\/span>/g)].map((m) => m[1]);
+  assert.deepEqual(order, ['A1']);
 });
