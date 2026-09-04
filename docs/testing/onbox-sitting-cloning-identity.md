@@ -305,7 +305,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     and confirm the rendered output is equivalent by ear.
     - Result:
 
-### A34 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398)
+### A34 · Cast/analysis `characterId` drift — wrong-direction retirement fix ([#2584](https://github.com/dudarenok-maker/Castwright/issues/2584), [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), PR [#2640](https://github.com/dudarenok-maker/Castwright/pull/2640))
 
 > **Register row: A34 — discharged, pre-2026-08-26 numbering; that ID has
 > since been re-minted for unrelated work (`characterId` drift, #2584/#2040)
