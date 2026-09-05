@@ -646,3 +646,50 @@ test('rewriteGcountInSection fails when target section gcount is missing, even i
   );
 });
 
+// buildRegisterFixture() has no '## Blocked'/'## Unconfirmed' section, so the
+// idempotence tests above ('build then build is a no-op', 'build then --check
+// passes') never call reconcileTitledSection at all — reconcileRowShells only
+// invokes it for a section whose title matches /^Blocked\b/ or /^Unconfirmed\b/
+// (see reconcileRowShells' loop over splitMdSections' output), and neither
+// heading exists in that fixture. A regression in reconcileTitledSection's own
+// idempotence (e.g. reintroducing the extra '\n' the comment above it
+// documents, "idempotence failure, Task 8 Step 2") would leave every existing
+// fixture test green. These two tests close that gap by extending the .md
+// fixture with real Blocked/Unconfirmed sections (titles matching
+// buildLiveViewFixture()'s default "fixture blocked item"/"fixture
+// unconfirmed item" shells) and running the same build-then-build check.
+test('build then build is a no-op when the .md has Blocked and Unconfirmed sections', () => {
+  const md = buildRegisterFixture() + `
+## Blocked — hardware not available
+
+### fixture blocked item
+
+Needs a real GPU.
+
+## Unconfirmed — not debts until substantiated
+
+- **fixture unconfirmed item** — not yet run on real hardware.
+`;
+  const html = buildLiveViewFixture();
+  const once = buildLiveView(md, html);
+  const twice = buildLiveView(md, once);
+  assert.equal(once, twice);
+});
+
+test('build then --check passes when the .md has Blocked and Unconfirmed sections', () => {
+  const md = buildRegisterFixture() + `
+## Blocked — hardware not available
+
+### fixture blocked item
+
+Needs a real GPU.
+
+## Unconfirmed — not debts until substantiated
+
+- **fixture unconfirmed item** — not yet run on real hardware.
+`;
+  const html = buildLiveViewFixture();
+  const built = buildLiveView(md, html);
+  assert.equal(buildLiveView(md, built), built);
+});
+
