@@ -461,13 +461,25 @@ Design rationale:
   presence is not proof — `~/.cline/skills` is in that same list and was proven
   dead — so it stays unverified pending #2368. A
   **per-machine** step: the target is under `$HOME`, so CI cannot run it and a
-  fresh clone has no mirror. Re-run after any change under either directory;
-  the drift guard in `scripts/tests/review-gate-mechanism.test.mjs` checks
-  against the store root (`~/.agents/skills/`), so it only **skips**, loudly,
-  on a machine with no store at all — once the store exists (e.g. any box
-  where Cline has installed its global skills), the guard **fails** rather
-  than skips if this repo's mirror is missing or stale there, even if
-  `skills:sync` has never been run on that machine.
+  fresh clone has no mirror. **POST-MERGE ONLY, run from `main` in the
+  primary checkout — never from the feature branch that made the change**
+  (#3001): the mirror is shared machine state read by every worktree on the
+  box, so syncing from a feature branch overwrites it with that branch's
+  unmerged content and blocks every other lane's commits until someone
+  re-syncs from `main`. This was previously worded "re-run after any change
+  under either directory," which read as "run it now, from this branch" and
+  is exactly what caused PR #2999 to poison the mirror out from under the
+  unrelated PR #2998. `sync-agent-skills.mjs` now refuses to run outside
+  `main` for this reason. The drift guard in
+  `scripts/tests/review-gate-mechanism.test.mjs` checks the store root
+  (`~/.agents/skills/`) against what `main` has committed (not against
+  whatever branch is checked out), so it only **skips**, loudly, on a machine
+  with no store at all — once the store exists (e.g. any box where Cline has
+  installed its global skills), the guard **fails** rather than skips if the
+  mirror doesn't match `main`, even if `skills:sync` has never been run on
+  that machine. If this guard fires, do not reflexively re-run
+  `skills:sync` from wherever you are — that is the action that propagates a
+  poisoned mirror; check out `main` in the primary checkout first.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
   is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not

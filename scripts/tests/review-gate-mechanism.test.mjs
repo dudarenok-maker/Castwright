@@ -40,11 +40,13 @@ import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { readNormalized } from '../lib/read-normalized.mjs';
+import { scrubGitEnv } from '../git-env.mjs';
 import {
   FILES as MIRRORED_FILES,
   buildMirrorContent,
   syncOneFile,
   assertFilesNonEmpty,
+  assertOnMainBranch,
 } from '../sync-agent-skills.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -559,7 +561,45 @@ test('MIRRORED_FILES (sync-agent-skills.mjs FILES) is non-empty and names the ex
   ]);
 });
 
-test('the agent-store mirror matches its canonical source, when it exists', () => {
+// Reads a skills-root-relative path (e.g. 'pr-review-gate/SKILL.md') as it is
+// COMMITTED ON `main` — not as it sits on whatever branch this worktree
+// happens to have checked out. #3001: the mirror is machine state shared by
+// every worktree on the box, and sync-agent-skills.mjs now refuses to write
+// it from anything but `main` (assertOnMainBranch), so `main` is the only
+// content the mirror can ever legitimately hold. Comparing against the
+// CURRENT checkout's disk copy instead — the old behaviour — made this test
+// fail on a branch with a perfectly legitimate, not-yet-synced in-flight edit
+// to a mirrored skill, which is exactly the false positive that blocked PR
+// #2998 while PR #2999 held an unmerged edit elsewhere on the same machine.
+// `git show` reads a worktree's shared `.git`, so this resolves correctly
+// regardless of which branch is checked out here.
+function readCommittedOnMain(rel) {
+  const gitPath = `.claude/skills/${rel}`;
+  let raw;
+  try {
+    raw = execFileSync('git', ['show', `main:${gitPath}`], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      windowsHide: true,
+      env: scrubGitEnv(),
+    });
+  } catch (err) {
+    throw new Error(`git show main:${gitPath} failed — is local 'main' up to date? (${err.message})`);
+  }
+  return raw.replace(/\r\n/g, '\n');
+}
+
+test('sync-agent-skills.mjs refuses to run from a branch other than main', () => {
+  // #3001: this is the mechanical half of the fix — it turns "run
+  // skills:sync post-merge from main" from a documentation convention (which
+  // PR #2999's implementer followed literally, reading "re-run after any
+  // change" as "run it now, from this branch") into something the script
+  // itself enforces.
+  assert.throws(() => assertOnMainBranch('chore/some-feature'), /refusing to sync from branch/);
+  assert.doesNotThrow(() => assertOnMainBranch('main'));
+});
+
+test('the agent-store mirror matches what main has committed, when it exists', () => {
   // FAILS OPEN BY CONSTRUCTION, and that is not an oversight. The target is
   // in $HOME: absent on a fresh clone and in CI. Making this a hard failure
   // would turn every never-synced machine red. The trade is deliberate — but
@@ -571,11 +611,15 @@ test('the agent-store mirror matches its canonical source, when it exists', () =
   }
   for (const rel of MIRRORED_FILES) {
     const mirrored = join(AGENT_SKILL_STORE, rel);
-    assert.ok(existsSync(mirrored), `mirror is missing ${rel} — run npm run skills:sync`);
+    assert.ok(existsSync(mirrored), `mirror is missing ${rel} — run npm run skills:sync from main`);
     assert.equal(
       readNormalized(mirrored),
-      buildMirrorContent(readNormalized(join(REPO_ROOT, '.claude', 'skills', rel)), rel),
-      `${rel} has drifted from its canonical copy — run npm run skills:sync`,
+      buildMirrorContent(readCommittedOnMain(rel), rel),
+      `${rel} in the shared ~/.agents/skills mirror does not match main's committed copy. ` +
+        "This does NOT necessarily mean YOUR branch is wrong — the mirror is shared machine " +
+        "state, and another worktree on this box may have synced an unmerged edit into it " +
+        '(see #3001). Do not blindly run `npm run skills:sync` from here: check out `main` ' +
+        'in the PRIMARY checkout, pull latest, and run it from there.',
     );
   }
 });

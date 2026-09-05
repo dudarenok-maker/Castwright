@@ -16,10 +16,16 @@
 // and every one of those links resolved to a directory the mirror did not
 // write until then.
 //
-// This is a PER-MACHINE step. CI cannot run it — the target lives under
-// $HOME, which is absent on every fresh clone and every CI runner. Run
-// `npm run skills:sync` after any change under .claude/skills/pr-review-gate/
-// or .claude/skills/model-routing/.
+// This is a PER-MACHINE, POST-MERGE-ONLY step. CI cannot run it — the target
+// lives under $HOME, which is absent on every fresh clone and every CI
+// runner. Run `npm run skills:sync` from `main` in the primary checkout
+// AFTER a change under .claude/skills/pr-review-gate/ or
+// .claude/skills/model-routing/ has merged — never from the feature branch
+// that made the change. The mirror is shared machine state read by every
+// worktree on the box; syncing from a feature branch overwrites it with that
+// branch's unmerged content and poisons the drift guard for every other lane
+// until someone re-syncs from `main` (see #3001). The script refuses to run
+// outside `main` for this reason (assertOnMainBranch below).
 //
 // Three encoding/format traps bit the original hand sync this script
 // replaces. Each produces a file that LOOKS fine and is broken:
@@ -36,7 +42,9 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { scrubGitEnv } from './git-env.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..');
@@ -166,7 +174,40 @@ export function assertFilesNonEmpty(files) {
   }
 }
 
+// #3001 — the mirror is MACHINE state, not BRANCH state: every worktree on
+// the box shares one ~/.agents/skills/, so whichever branch last ran this
+// script decides what every other lane's drift guard compares against. A
+// feature branch that syncs its own unmerged edit to a mirrored skill
+// poisons the mirror for every unrelated worktree until someone re-syncs
+// from `main` — which is exactly what happened with PR #2999 (see #3001).
+// The old guidance ("re-run after any change under either directory") reads
+// as "run it when you make the change," i.e. from the feature branch, which
+// is precisely the harmful moment. This is a POST-MERGE-ONLY step: the
+// mirror must only ever hold what's on `main`. Exported so the check can be
+// exercised directly, mirroring assertNoBom/assertFilesNonEmpty above.
+export function assertOnMainBranch(branchName) {
+  if (branchName !== 'main') {
+    throw new Error(
+      `sync-agent-skills: refusing to sync from branch '${branchName}' — the mirror ` +
+        "is shared machine state, not branch state, and must only ever hold what's on " +
+        "'main'. This is a POST-MERGE step: merge your change first, check out 'main', " +
+        'then run `npm run skills:sync` again. Syncing from a feature branch poisons the ' +
+        'shared mirror for every other worktree on this machine (see #3001).',
+    );
+  }
+}
+
+function currentBranch() {
+  return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    windowsHide: true,
+    env: scrubGitEnv(),
+  }).trim();
+}
+
 export function syncAgentSkills() {
+  assertOnMainBranch(currentBranch());
   assertFilesNonEmpty(FILES);
   const written = [];
   for (const rel of FILES) {
@@ -180,8 +221,10 @@ if (isDirectlyInvoked(import.meta.url)) {
     syncAgentSkills();
     console.log(
       '\nThis is a per-machine step — CI cannot run it (the target lives in ' +
-        '$HOME and is absent on every fresh clone). Re-run `npm run skills:sync` ' +
-        'after any change under .claude/skills/pr-review-gate/ or .claude/skills/model-routing/.',
+        '$HOME and is absent on every fresh clone). This is POST-MERGE ONLY: run it ' +
+        'from `main` in the primary checkout after a change under ' +
+        '.claude/skills/pr-review-gate/ or .claude/skills/model-routing/ has merged — ' +
+        'never from the feature branch that made the change (see #3001).',
     );
   } catch (err) {
     console.error(`skills:sync failed: ${err.message}`);
