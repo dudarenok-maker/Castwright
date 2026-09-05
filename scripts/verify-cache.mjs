@@ -135,9 +135,13 @@ export const STEPS = [
            actions-only diff would leave that test stale-green on the very
            file it exists to check — same #1847 trap as fixtures/** above. */
         '.github/actions/**',
-        /* .husky/** is covered TODAY only by verify.yml's `hooks` bash
-           matcher, which A2 deletes — and it is an input to no step, so
-           without this a .husky-only PR would run zero legs after A2.
+        /* .husky/** used to be covered ONLY by verify.yml's `hooks` bash
+           matcher, which A2 deletes, and used to be an input to no step —
+           this glob is what closed that gap. (Corrected 2026-09, ops-2997:
+           a stale copy of "and it is an input to no step" describing the
+           pre-fix state survived here after the fix landed — this line
+           itself is that input, to this very step.) Without it, a
+           .husky-only PR would run zero legs after A2.
            release-manifest.test.mjs's sample-path array includes
            .husky/pre-commit as a literal string fed to a pure classifier —
            it does not read the file from disk (plan review round 2 named
@@ -1133,6 +1137,23 @@ export function siblingContentionFor(stdout, ownPid) {
   return { busy: count >= SIBLING_CONTENTION_THRESHOLD, count };
 }
 
+/** Returns true if any selected step is affected by LOW_CONCURRENCY.
+ *  These are the vitest-backed steps: `LOW_CONCURRENCY` is read by
+ *  `vitest.config.ts` / `server/vitest.config.ts` and by nothing else, so
+ *  pytest, Pester, Playwright and node:test steps are all unaffected.
+ *
+ *  `test:pinokio` used to be listed here and is deliberately NOT: it spawns
+ *  `node --test` (`scripts/run-pinokio-tests.mjs`), the identical runner
+ *  `test:hooks` (`scripts/run-hooks-tests.mjs`) uses, and `test:hooks` was
+ *  never listed. Neither reads `LOW_CONCURRENCY`, so no throttle is lost
+ *  either way — this is consistency only, so that the set means exactly
+ *  "vitest-backed" rather than "vitest-backed, plus one node:test step by
+ *  accident". */
+function hasVitestStep(selectedSteps) {
+  const vitestStepNames = new Set(['test', 'test:server', 'test:server-slow']);
+  return selectedSteps.some((step) => vitestStepNames.has(step.name));
+}
+
 // Returns { busy, count }. PowerShell absent / errors (non-Windows CI
 // runners) → { busy:false, count:null } — same fallback shape as
 // detectGpuContention. Cheap (~150-300ms): one Get-CimInstance query.
@@ -1344,8 +1365,10 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
 
   // Contention guard — if a generation run is hammering the GPU, throttle the
   // child test runs (soft: warn + dial down, never block). Skip the probe when
-  // already throttled or explicitly disabled.
-  if (!env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
+  // already throttled, explicitly disabled, or when no selected step is affected
+  // by LOW_CONCURRENCY (vitest-only; pytest, Pester, Playwright are unaffected).
+  const affectedByContention = hasVitestStep(activeSteps);
+  if (affectedByContention && !env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
     const { busy, util } = detectGpuContention();
     if (busy) {
       console.log(`[contention] GPU busy (~${util}% util) — a generation run may be active.`);
@@ -1355,7 +1378,7 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
       env.LOW_CONCURRENCY = '1';
     }
   }
-  if (!env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
+  if (affectedByContention && !env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
     const { busy, count } = detectSiblingContention();
     if (busy) {
       console.log(
@@ -1529,4 +1552,4 @@ if (isDirectInvocation) {
 
 // For tests that want to know the schema version / cache filename without
 // hardcoding string literals.
-export const _internals = { SCHEMA_VERSION, CACHE_FILENAME, toPosix, globToRegex };
+export const _internals = { SCHEMA_VERSION, CACHE_FILENAME, toPosix, globToRegex, hasVitestStep };

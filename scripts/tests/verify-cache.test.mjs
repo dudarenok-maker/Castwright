@@ -44,6 +44,8 @@ import {
   STEPS,
   _internals,
 } from '../verify-cache.mjs';
+
+const { hasVitestStep } = _internals;
 import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 
 const { SCHEMA_VERSION } = _internals;
@@ -633,20 +635,36 @@ test('.github/actions/** is covered by BOTH computeShared and the test:hooks glo
   );
 });
 
-// .husky/** is covered TODAY only by verify.yml's `hooks` bash matcher
-// (`^\.husky/`), which A2 deletes. It is an input to NO step — measured:
-// stepTouchedByDiff returns [] for all 13 steps. Without this, A2 ships
-// defect D again for .husky, on the very PR that fixes it for .github, and
-// none of the four wiring assertions can see it (they check key existence
-// and job membership, not whether a derived condition still covers what the
-// legacy one did). release-manifest.test.mjs:95 includes .husky/pre-commit
-// as a literal string in an array of sample paths fed to a pure classifier —
-// it does not read the file from disk — but it is still a real edge worth
+// .husky/** used to be covered ONLY by verify.yml's `hooks` bash matcher
+// (`^\.husky/`), which A2 deletes, and used to be an input to NO step — the
+// `.husky/**` glob below (verify-cache.mjs's `test:hooks` step) was added to
+// close exactly that gap. Corrected 2026-09 (ops-2997): the claim "it is an
+// input to no step" is now FALSE and stayed that way in this comment after
+// the fix landed — the assertion right below it already proves the glob
+// matches. Without that glob, a .husky-only PR would ship defect D again for
+// .husky on the very PR that fixed it for .github, and none of the four
+// wiring assertions would see it (they check key existence and job
+// membership, not whether a derived condition still covers what the legacy
+// one did). release-manifest.test.mjs:95 includes .husky/pre-commit as a
+// literal string in an array of sample paths fed to a pure classifier — it
+// does not read the file from disk — but it is still a real edge worth
 // pinning, not a theoretical one (M1, #2146 review: corrects the previous
 // "reads at runtime" claim, which was false).
 test('stepTouchedByDiff: a .husky diff matches test:hooks via globs', () => {
   for (const hook of ['.husky/pre-commit', '.husky/pre-push', '.husky/commit-msg']) {
     assert.equal(stepTouchedByDiff(stepByName['test:hooks'], [hook]), true, hook);
+  }
+});
+
+// The positive half (above) was the only half pinned. A .husky/** diff could
+// ALSO have quietly started matching some other step's glob (e.g. a future
+// widening of lint's or typecheck's inputs) without any test catching it —
+// unpinned until ops-2997. Pin the negative: test:hooks is the ONLY step a
+// .husky/** diff selects.
+test('stepTouchedByDiff: a .husky diff matches test:hooks and NOTHING ELSE', () => {
+  for (const hook of ['.husky/pre-commit', '.husky/pre-push', '.husky/commit-msg']) {
+    const matched = STEPS.filter((step) => stepTouchedByDiff(step, [hook])).map((step) => step.name);
+    assert.deepEqual(matched, ['test:hooks'], hook);
   }
 });
 
@@ -1672,4 +1690,51 @@ test('sidecarFingerprint still returns unavailable when no venv exists on POSIX'
   const dir = mkTmp();
   const result = sidecarFingerprint(dir, 'linux');
   assert.equal(result, 'unavailable');
+});
+
+// Finding 5 (ops-2997): contention probe optimization — skip probing when no
+// selected step is affected by LOW_CONCURRENCY (vitest-only). The probe (~4.6s)
+// cannot affect non-vitest runners (pytest, Pester, Playwright).
+test('hasVitestStep returns true when any vitest-backed step is selected', () => {
+  const vitestSteps = [
+    { name: 'test' },
+    { name: 'test:server' },
+    { name: 'test:server-slow' },
+  ];
+  for (const step of vitestSteps) {
+    assert.equal(hasVitestStep([step]), true, `${step.name} is vitest-backed`);
+    assert.equal(hasVitestStep([step, { name: 'test:sidecar' }]), true, 'mixed selection with vitest');
+  }
+});
+
+// `test:pinokio` and `test:hooks` both spawn `node --test`, not vitest, so
+// neither reads LOW_CONCURRENCY. `test:pinokio` was listed as vitest-backed
+// and `test:hooks` was not; no throttle is lost either way, but the set now
+// means exactly "vitest-backed". This pins the pair together so a future edit
+// cannot silently re-split them.
+test('hasVitestStep treats test:pinokio and test:hooks alike — both are node --test, not vitest', () => {
+  assert.equal(hasVitestStep([{ name: 'test:pinokio' }]), false);
+  assert.equal(hasVitestStep([{ name: 'test:hooks' }]), false);
+  assert.equal(hasVitestStep([{ name: 'test:pinokio' }, { name: 'test:hooks' }]), false);
+});
+
+test('hasVitestStep returns false when no vitest steps are selected', () => {
+  const nonVitestSteps = [
+    [{ name: 'test:sidecar' }],
+    [{ name: 'lint' }],
+    [{ name: 'typecheck' }],
+    [{ name: 'test:e2e' }],
+    [{ name: 'test:sidecar' }, { name: 'lint' }, { name: 'typecheck' }],
+  ];
+  for (const steps of nonVitestSteps) {
+    assert.equal(hasVitestStep(steps), false, `${steps.map((s) => s.name).join(', ')} has no vitest`);
+  }
+});
+
+test('hasVitestStep returns FALSE for an empty array', () => {
+  // `hasVitestStep` answers "does THIS list contain a vitest step", not "what
+  // will the run end up executing" — an empty list contains none, so it is
+  // false. The default-to-all-steps expansion happens upstream, before this is
+  // ever called with the resolved list, so the two never disagree in practice.
+  assert.equal(hasVitestStep([]), false, 'empty selection contains no vitest step');
 });
