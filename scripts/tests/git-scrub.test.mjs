@@ -224,9 +224,9 @@ function buildShellCallRe(names) {
 // Recognizes both the ESM `import { execSync as sh } from
 // 'node:child_process'` alias form and the CommonJS `const { execSync: sh }
 // = require('node:child_process')` alias form (pinokio-scripts is CJS).
-const CHILD_PROCESS_IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*(['"])node:child_process\2/g;
+const CHILD_PROCESS_IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*([\u0027\u0022])node:child_process\2/g;
 const CHILD_PROCESS_REQUIRE_RE =
-  /(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*(['"])node:child_process\2\s*\)/g;
+  /(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*([\u0027\u0022])node:child_process\2\s*\)/g;
 
 function collectShellAliases(source) {
   const shell = new Set(SHELL_CANONICAL_NAMES);

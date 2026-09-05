@@ -2489,6 +2489,7 @@ function runCli(args, envOverrides) {
     encoding: 'utf8',
     timeout: 60000,
     env: envOverrides ? { ...process.env, ...envOverrides } : process.env,
+    windowsHide: true,
   });
 }
 
@@ -2772,7 +2773,7 @@ test('--against-published gives an unreadable ONBOX_TEST_BASELINE_FILE its own h
     // failed when git was never invoked at all.
     assert.doesNotMatch(
       r.stderr,
-      /`git show FETCH_HEAD:/,
+      /\u0060git show FETCH_HEAD:/,
       'must not claim git show failed when the override path was simply unreadable',
     );
   });
@@ -3593,12 +3594,12 @@ test('#2599 review round 2: replaying real live-view.html history as ordinary pe
   const commits = spawnSync(
     'git',
     ['-C', REPO_ROOT, 'log', '--format=%H', '-25', '--', lvRelPath],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', windowsHide: true },
   ).stdout.trim().split('\n').filter(Boolean);
   assert.ok(commits.length > 0, 'fixture assumption: real commit history exists for the live-view file');
 
   function show(ref, path) {
-    const r = spawnSync('git', ['-C', REPO_ROOT, 'show', `${ref}:${path}`], { encoding: 'utf8' });
+    const r = spawnSync('git', ['-C', REPO_ROOT, 'show', `${ref}:${path}`], { encoding: 'utf8', windowsHide: true });
     return r.status === 0 ? r.stdout : null;
   }
 

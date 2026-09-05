@@ -152,7 +152,7 @@ function gitRepo(files, ignore) {
   // fixture — a real risk if this suite ever runs alongside an ambient
   // GIT_DIR export, not just the read-only hazard classifyIgnored's own
   // scrub (module-graph.mjs) already guards against.
-  execFileSync('git', ['init', '-q'], { cwd: dir, env: scrubGitEnv() });
+  execFileSync('git', ['init', '-q'], { cwd: dir, env: scrubGitEnv(), windowsHide: true });
   writeFileSync(join(dir, '.gitignore'), ignore, 'utf8');
   return dir;
 }

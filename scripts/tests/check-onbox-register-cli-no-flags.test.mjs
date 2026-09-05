@@ -82,6 +82,7 @@ function runFixtureCli(root) {
   return spawnSync(process.execPath, [join(root, 'scripts', 'check-onbox-register.mjs')], {
     encoding: 'utf8',
     timeout: 30000,
+    windowsHide: true,
   });
 }
 
@@ -207,7 +208,7 @@ test('CLI (no flags), real subprocess: a many-mismatch register exits 1 and repo
     for (const letter of LETTERS) {
       assert.match(
         combined,
-        new RegExp(`Live view's Group ${letter} section has row ${letter}3 that the register's Group ${letter} does not`),
+        new RegExp(`Live view's Group ${letter} section has row ${letter}3 that the register\u0027s Group ${letter} does not`),
         `missing extra-row line for Group ${letter} — full output:\n${combined}`,
       );
       assert.match(
@@ -221,7 +222,7 @@ test('CLI (no flags), real subprocess: a many-mismatch register exits 1 and repo
     // duplicate-row error shapes — a coarse count check that catches an
     // accidental duplicate or a silently-skipped group even if the
     // per-letter regexes above somehow both matched something unintended.
-    const extraRowCount = (combined.match(/section has row [A-L]3 that the register's Group [A-L] does not/g) ?? []).length;
+    const extraRowCount = (combined.match(/section has row [A-L]3 that the register\u0027s Group [A-L] does not/g) ?? []).length;
     const duplicateRowCount = (combined.match(/lists [A-L]3 more than once/g) ?? []).length;
     assert.equal(extraRowCount, GROUP_COUNT, `expected ${GROUP_COUNT} extra-row lines, got ${extraRowCount}`);
     assert.equal(duplicateRowCount, GROUP_COUNT, `expected ${GROUP_COUNT} duplicate-row lines, got ${duplicateRowCount}`);

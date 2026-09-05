@@ -537,7 +537,7 @@ test('the real register and its real live view agree (register:build --check)', 
   const result = spawnSync(
     process.execPath,
     [CLI_PATH_FOR_REGISTER_BUILD, '--check'],
-    { cwd: REPO_ROOT, encoding: 'utf8' },
+    { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true },
   );
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
