@@ -23,7 +23,7 @@ import { encodePcmToAudio } from './mp3.js';
 
 const ffmpegPresent = (() => {
   try {
-    const result = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    const result = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
     return result.status === 0;
   } catch {
     return false;
@@ -62,7 +62,7 @@ async function measureMp3Loudness(mp3: Buffer): Promise<number> {
     '-',
   ];
   return await new Promise<number>((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
     const stderrChunks: Buffer[] = [];
     child.stderr.on('data', (c) => stderrChunks.push(c));
     child.on('error', reject);

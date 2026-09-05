@@ -67,7 +67,7 @@ function cleanGitEnv() {
 }
 
 function gitExec(args, opts = {}) {
-  return execFileSync('git', args, { ...opts, env: cleanGitEnv() });
+  return execFileSync('git', args, { ...opts, env: cleanGitEnv(), windowsHide: true });
 }
 
 function setupRepo() {
@@ -108,6 +108,7 @@ function makeAnnotatedTag(dir, tagName, message) {
     input: message,
     encoding: 'utf8',
     env: cleanGitEnv(),
+    windowsHide: true,
   });
 }
 
@@ -128,6 +129,7 @@ function setupDecoyRepoWithTag(tagName, message) {
     input: message,
     encoding: 'utf8',
     env,
+    windowsHide: true,
   });
   return dir;
 }
@@ -145,6 +147,7 @@ function runReleaseBody(dir, tag, outRelPath) {
     cwd: dir,
     encoding: 'utf8',
     env: cleanGitEnv(),
+    windowsHide: true,
   });
 }
 

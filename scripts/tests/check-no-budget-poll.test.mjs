@@ -104,7 +104,7 @@ test('CLI exits non-zero against a planted budgeted-poll + oversized-timeout fil
     const result = spawnSync(
       process.execPath,
       ['scripts/check-no-budget-poll.mjs', dir],
-      { cwd: repoRoot, stdio: 'pipe', encoding: 'utf8' },
+      { cwd: repoRoot, stdio: 'pipe', encoding: 'utf8', windowsHide: true },
     );
     exitCode = result.status;
   } finally {
@@ -133,7 +133,7 @@ test('CLI exits 0 against a clean temp directory', () => {
     const result = spawnSync(
       process.execPath,
       ['scripts/check-no-budget-poll.mjs', dir],
-      { cwd: repoRoot, stdio: 'pipe', encoding: 'utf8' },
+      { cwd: repoRoot, stdio: 'pipe', encoding: 'utf8', windowsHide: true },
     );
     exitCode = result.status;
   } finally {

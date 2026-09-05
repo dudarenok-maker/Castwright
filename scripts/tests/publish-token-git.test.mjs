@@ -78,6 +78,7 @@ const runner = (args, cwd) => {
       encoding: 'utf8',
       stdio: 'pipe',
       env: cleanEnv(),
+      windowsHide: true,
     });
     return { status: 0, stdout };
   } catch (err) {
@@ -86,7 +87,7 @@ const runner = (args, cwd) => {
 };
 
 const git = (repo, ...args) =>
-  execFileSync('git', args, { cwd: repo, stdio: 'pipe', env: cleanEnv() });
+  execFileSync('git', args, { cwd: repo, stdio: 'pipe', env: cleanEnv(), windowsHide: true });
 const token = (n, nonce) => `<p data-published-as="${n}" data-publish-id="${nonce}">x</p>\n`;
 
 function writeToken(repo, n, nonce) {
@@ -136,6 +137,7 @@ test('git: the env scrub actually isolates the throwaway repo (self-check)', () 
           cwd: decoy,
           encoding: 'utf8',
           env: cleanEnv(),
+          windowsHide: true,
         });
         assert.equal(decoyFiles.trim(), '', `${dirKey} leaked: the decoy repo was written to`);
       } finally {
@@ -199,6 +201,7 @@ test('git: a nonce born in a MERGE CONFLICT RESOLUTION is found (pass 6 / F1)', 
         cwd: repo,
         encoding: 'utf8',
         env: cleanEnv(),
+        windowsHide: true,
       }),
       /nRESOLV/,
     );

@@ -99,7 +99,7 @@ function withRepoLink(fn) {
 test('ci-scope.mjs invoked through a junction/symlink still runs main() (#2291)', { skip: LINK_SKIP_REASON ?? false }, () => {
   withRepoLink((linkPath) => {
     const target = join(linkPath, 'scripts', 'ci-scope.mjs');
-    const r = spawnSync(process.execPath, [target, '--files=src/app.tsx'], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [target, '--files=src/app.tsx'], { encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     // The reviewer's exact repro was 0 bytes of stdout through a junction.
     // A real run must emit the scopes=...  / ok=true payload render() builds.
@@ -117,7 +117,7 @@ test('ci-scope.mjs imported as a module does not execute main() (no argv[1] matc
       `import ${JSON.stringify(pathToFileURL(join(REPO_ROOT, 'scripts', 'ci-scope.mjs')).href)};\n` +
         "console.log('IMPORT-OK');\n",
     );
-    const r = spawnSync(process.execPath, [entry], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [entry], { encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     // main()'s own output is `scopes=...\nok=true\n` — that must NOT appear;
     // only the entry script's own marker should.
@@ -136,6 +136,7 @@ test('check-import-cycles.mjs invoked through a junction/symlink still runs main
     const r = spawnSync(process.execPath, [target], {
       encoding: 'utf8',
       env: { ...process.env, CHECK_IMPORT_CYCLES_PROBE_GUARD_ONLY: '1' },
+      windowsHide: true,
     });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.match(
@@ -158,6 +159,7 @@ test('check-import-cycles.mjs imported as a module does not execute main() (no a
     const r = spawnSync(process.execPath, [entry], {
       encoding: 'utf8',
       env: { ...process.env, CHECK_IMPORT_CYCLES_PROBE_GUARD_ONLY: '1' },
+      windowsHide: true,
     });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.doesNotMatch(r.stdout, /direct-invocation guard resolved TRUE/);
@@ -176,7 +178,7 @@ test('check-import-cycles.mjs imported as a module does not execute main() (no a
 test('build-release-zip.mjs invoked through a junction/symlink still runs main() (#2291)', { skip: LINK_SKIP_REASON ?? false }, () => {
   withRepoLink((linkPath) => {
     const target = join(linkPath, 'scripts', 'build-release-zip.mjs');
-    const r = spawnSync(process.execPath, [target, '--dry-run', '--version', 'v0.0.0-test'], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [target, '--dry-run', '--version', 'v0.0.0-test'], { encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     // The pre-fix bug through a junction was 0 bytes of stdout, exit 0 —
     // indistinguishable from success without checking the byte count.
@@ -195,7 +197,7 @@ test('build-release-zip.mjs imported as a module does not execute main() (no arg
       `import ${JSON.stringify(pathToFileURL(join(REPO_ROOT, 'scripts', 'build-release-zip.mjs')).href)};\n` +
         "console.log('IMPORT-OK');\n",
     );
-    const r = spawnSync(process.execPath, [entry], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [entry], { encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.doesNotMatch(r.stdout, /\[SCAN\]/);
     assert.match(r.stdout, /IMPORT-OK/);
@@ -262,6 +264,7 @@ test(
               APP_RUN_DIR: runDir,
               APP_LOG_DIR: logDir,
             },
+            windowsHide: true,
           });
           // The pre-fix bug through a junction was exit 0 with zero output — a
           // launcher that silently does nothing, which is worse than a crash.
@@ -288,7 +291,7 @@ test('start-app-prod.mjs imported as a module does not execute main() (no argv[1
       `import ${JSON.stringify(pathToFileURL(join(REPO_ROOT, 'scripts', 'start-app-prod.mjs')).href)};\n` +
         "console.log('IMPORT-OK');\n",
     );
-    const r = spawnSync(process.execPath, [entry], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [entry], { encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.doesNotMatch(r.stderr, /\[FAIL\]/);
     assert.match(r.stdout, /IMPORT-OK/);

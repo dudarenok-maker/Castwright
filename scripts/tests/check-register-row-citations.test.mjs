@@ -20,7 +20,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-register-row-citations.mjs');
 
 function runCli(args) {
-  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000 });
+  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000, windowsHide: true });
 }
 
 // A minimal register carrying two real rows: A1 and E1. Every fixture below
@@ -716,7 +716,7 @@ test('CLI mutation: if REGISTER_PATH points at a nonexistent file, the check wou
 
   // Mutate REGISTER_PATH to point at a nonexistent file
   const mutated = original.replace(
-    /export const REGISTER_PATH = '[^']*';/,
+    /export const REGISTER_PATH = \u0027[^\u0027]*\u0027;/,
     "export const REGISTER_PATH = 'docs/testing/nonexistent-register.md';"
   );
   assert.notEqual(mutated, original, 'mutation should have changed REGISTER_PATH');
@@ -734,4 +734,84 @@ test('CLI mutation: if REGISTER_PATH points at a nonexistent file, the check wou
       'file should be restored to original'
     );
   }
+});
+
+// --- Polarity check tests (PR #2879 bugfix for negated discharge words) ---
+
+test('negated discharge word: "was NOT discharged" does NOT exempt the citation', () => {
+  // This is the reviewer's repro from PR #2879: a negated discharge sentence
+  // should not be treated as a real discharge annotation.
+  // Before the fix, this would incorrectly mark the citation as annotated.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': 'Register row A99 — was NOT discharged; it is still live.',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 is nonexistent, the discharge word is negated, so it should FAIL, not be annotated
+  assert.deepEqual(failures, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+  assert.deepEqual(annotated, []);
+});
+
+test('affirmative discharge word: "was discharged" DOES exempt the citation', () => {
+  // Control: affirmative discharge should still work as before.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': 'Register row A99 — was discharged; it is no longer live.',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 is nonexistent but the discharge is affirmative, so it should be annotated
+  assert.deepEqual(failures, []);
+  assert.deepEqual(annotated, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+});
+
+test('negation variant: "no longer" in a negative context is not the discharge word', () => {
+  // "no longer" by itself is in ANNOTATION_REGEX, but "no\b(?!\s+longer\s+exists?)" in the
+  // negation regex explicitly excludes "no longer" — test that negation words
+  // don't interfere with legitimate "no longer exists" annotations.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': 'Register row A99 no longer exists after the 2026-08-26 cleanup.',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 is nonexistent, "no longer exists" is affirmative, so it should be annotated
+  assert.deepEqual(failures, []);
+  assert.deepEqual(annotated, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+});
+
+test('un- prefix: "undischarged" negates the discharge', () => {
+  // "un-" prefixed discharge words should not exempt the citation.
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': 'Row A99 is undischarged and still needs work.',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 is nonexistent, "undischarged" is negated, so it should FAIL, not be annotated
+  assert.deepEqual(failures, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+  assert.deepEqual(annotated, []);
+});
+
+test('un- prefix with hyphen: "un-discharged" negates the discharge', () => {
+  const files = {
+    [REGISTER_PATH]: REGISTER_TEXT,
+    'docs/testing/plan.md': 'Row A99 is un-discharged and still needs work.',
+  };
+  const { failures, annotated } = checkRegisterRowCitations({
+    files: [REGISTER_PATH, 'docs/testing/plan.md'],
+    readFile: fakeReadFile(files),
+  });
+  // A99 is nonexistent, "un-discharged" is negated, so it should FAIL, not be annotated
+  assert.deepEqual(failures, [{ file: 'docs/testing/plan.md', line: 1, id: 'A99' }]);
+  assert.deepEqual(annotated, []);
 });

@@ -75,7 +75,7 @@ function parseRoleTable() {
   assert.ok(section, 'model-routing/SKILL.md has no "## Named dispatch roles" section');
   const rows = [];
   for (const line of section[1].split('\n')) {
-    const m = /^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|/.exec(line);
+    const m = /^\|\s*\u0060([^\u0060]+)\u0060\s*\|\s*([^|]+?)\s*\|\s*\u0060([^\u0060]+)\u0060\s*\|\s*\u0060([^\u0060]+)\u0060\s*\|/.exec(line);
     if (m) rows.push({ name: m[1], tier: m[2], model: m[3], effort: m[4] });
   }
   return rows;
@@ -250,7 +250,7 @@ function stripFencedBlocks(text) {
   const out = [];
   let inFence = false;
   for (const line of text.split('\n')) {
-    if (/^\s*```/.test(line)) {
+    if (/^\s*\u0060\u0060\u0060/.test(line)) {
       inFence = !inFence;
       continue;
     }
@@ -395,7 +395,7 @@ const TIER_MODEL = { Premium: 'opus', Default: 'sonnet', Cheap: 'haiku' };
 
 test('every role-table row has a tracked definition file whose frontmatter matches', () => {
   const tracked = new Set(
-    execFileSync('git', ['ls-files', '.claude/agents'], { cwd: REPO_ROOT, encoding: 'utf8' })
+    execFileSync('git', ['ls-files', '.claude/agents'], { cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true })
       .split('\n')
       .filter(Boolean)
       .map((p) => basename(p, '.md')),

@@ -94,7 +94,7 @@ function runThroughJunction(nodeArgs = []) {
   try {
     symlinkSync(fixtureRoot, linkPath, IS_WIN ? 'junction' : 'dir');
     const target = join(linkPath, 'launch.mjs');
-    return spawnSync(process.execPath, [...nodeArgs, target], { encoding: 'utf8' });
+    return spawnSync(process.execPath, [...nodeArgs, target], { encoding: 'utf8', windowsHide: true });
   } finally {
     removeLink(linkPath);
     rmSync(container, { recursive: true, force: true });

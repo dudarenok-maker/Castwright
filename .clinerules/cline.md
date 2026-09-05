@@ -120,47 +120,66 @@ this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
 - **Git-ignored artifacts (`brand/`, `mockups/`, marketing captures) are
   produced in the primary checkout**, never in a worktree: they do not travel
   with the branch and worktree teardown destroys them.
-- **A commit can take longer than your 30-second command cap, so `git commit`
-  has to be run detached.** Not a silent trap -- the timeout is loud -- but the
-  loop it produces is not. See "Committing when a step is in scope" below.
+- **A `git push` can take longer than your 30-second command cap whenever the
+  branch diff touches `server/tts-sidecar/**`, so that push has to be run
+  detached.** Not a silent trap -- the timeout is loud -- but the loop it
+  produces is not. See "Committing when a step is in scope" below.
 
 ## Committing when a step is in scope
 
-**Your runtime kills a single command at 30 seconds. A pre-commit run that has
-any test step in scope takes minutes. So a foreground `git commit` cannot
-finish, and retrying it never will.** The cap is internal to Cline -- there is
-no CLI flag (`-t/--timeout` is the whole-run timeout, not the per-command one).
+**Commits are instant now; a sidecar-touching push is not.** As of ops-2997,
+pre-commit is one ESLint process over the staged JS/TS files -- the
+`verify:fast:scoped` battery is gone -- so a foreground `git commit` finishes
+well inside a 30-second command cap. Pre-push is its guard scripts plus
+`node scripts/verify-cache.mjs --steps test:sidecar --scope-branch`. That is
+seconds when `test:sidecar` is out of scope or cached, and **~6.85 minutes**
+when it actually runs pytest. Your runtime kills a single command at 30
+seconds; the cap is internal to Cline and there is no CLI flag for it
+(`-t/--timeout` is the whole-run timeout, not the per-command one).
 
-**So commit detached ALWAYS -- do not try to work out whether this diff is one
-of the slow ones.** That prediction is the bug. Three successive revisions of
-this very paragraph tried to enumerate what puts a step in scope, and all three
-were wrong in the same direction: they under-listed, so an agent read its own
-change as exempt and took the foreground path into the 30-second kill. Detached
-costs nothing when the commit is fast -- the first poll returns immediately --
-and it is the only correct route when it is slow. There is no case where
-predicting first helps.
+**The rule -- it applies to every agent lane, not just this one:**
 
-If you do want to know, `STEPS[]` in `scripts/verify-cache.mjs` is the source
-of truth and the only one; pre-commit runs `verify:fast:scoped` over
-`test:hooks,check:budget-poll,test,test:server`, and a step runs when the staged
-diff matches its `globs`, any of its `extraFiles`, or `computeShared`. Read it
-there rather than trusting a summary -- including this one. What makes a
-summary untrustworthy here is that the surprising members are the whole point:
-`test:hooks` alone reaches `.claude/skills/**`, `.claude/agents/**`,
-`CLAUDE.md`, `CONTRIBUTING.md`, and the `RELEASE_NOTES.md` /
-`docs/release-notes-next.md` pair that CLAUDE.md's before-shipping step 5 makes
-nearly every PR touch -- so editing the very skill files this document tells you
-to edit costs 41-58 s, and "it's only docs" predicts nothing. `openapi.yaml`
-runs both `test` and `test:server` while matching no `server/` path. A root
-`package.json` or lockfile edit is `computeShared` and busts every leg at once,
-~12 minutes, while matching no step's globs at all.
+> **Launch `git push` detached and poll whenever the branch diff touches
+> `server/tts-sidecar/**`.** Every `git commit`, and every push whose branch
+> diff does not touch that path, may run in the foreground.
 
-**Budget 10-15 minutes when a test step is in scope, and do not call it hung
-before 20.** Recorded on this repo: `test:server` **518.8 s** and `test`
-**153.3 s** in the last green `.verify-cache.json`; a contended red run of
-`test:server` took **746.6 s** (`docs/testing/flaky-register.md`). A single
-vitest run can report far less wall-clock on an idle box, so treat these as the
-range, not a constant.
+Evaluate that mechanically before you push. Do not substitute a judgement about
+whether this diff "looks slow":
+
+```powershell
+git -C $W diff --name-only main...HEAD -- 'server/tts-sidecar/**'
+```
+
+Non-empty output means detached. **`main...HEAD`, not `origin/main...HEAD`** —
+this test only predicts the hook if it asks the hook's own question, and
+`branchDiffFiles` (`scripts/verify-cache.mjs`) merge-bases against the LOCAL
+`main`. With a stale local `main` the two disagree in the dangerous direction:
+the doc's test says "foreground" while the hook puts `test:sidecar` in scope and
+the foreground push runs into the 30-second kill.
+
+**The mechanical test is the point.** Three
+successive revisions of this paragraph tried instead to *predict* which diffs
+were slow, and all three under-listed in the same direction: the agent read its
+own change as exempt, took the foreground path into the 30-second kill,
+diagnosed a *slow* command when what it actually had was a *capped* one, and
+reached for `--no-verify`. On 2026-08-19 an agent did precisely that and
+produced correct, well-tested code that never left the box. The rule is stated
+unconditionally for the same reason: an instruction scoped by lane name is read
+as an exemption by every lane it does not name.
+
+Two further things push a `git push` over the cap, and the path test above
+catches neither -- so if a foreground push is still running at ~25 s, relaunch
+it detached rather than retrying it in the foreground:
+
+- a root `package.json` / `package-lock.json` / `.github/actions/**` change,
+  which `computeShared` in `scripts/verify-cache.mjs` puts **every** step in
+  scope for, `test:sidecar` included, whatever the step's own globs say;
+- a cold verify cache, which makes an in-scope `test:sidecar` actually execute
+  instead of reporting `[cached]`.
+
+`STEPS[]` in `scripts/verify-cache.mjs` is the source of truth for what pre-push
+selects and what each step costs. Read it there rather than trusting a summary
+-- including this one.
 
 **Call `scripts/oe-detached-commit.ps1` -- do not freelance your own inline
 Start-Process variant.** It lives in every worktree (it's a tracked file, so
@@ -236,6 +255,54 @@ the child vanished without a sentinel, **check `git -C $W log --oneline -1`
 before concluding it never ran**: it may have been killed after the commit
 landed, which is exactly what happened on #2382.
 
+### Pushing detached (the `server/tts-sidecar/**` case)
+
+`oe-detached-commit.ps1` only commits. When the rule above says this push must
+go detached, launch it the same way -- hidden window, output redirected into a
+**freshly named** scratch dir, an `EXIT=` sentinel appended last:
+
+```powershell
+$W = 'C:\Claude\Projects\wt-<your-worktree>'
+$T = Join-Path $env:TEMP ('cw-push-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Path $T -Force | Out-Null
+$child = @'
+param([string]$Dir, [string]$Worktree)
+$ErrorActionPreference = 'Continue'
+git -C $Worktree push *>&1 | Out-File -FilePath (Join-Path $Dir 'push.log') -Encoding utf8
+"EXIT=$LASTEXITCODE" | Out-File -FilePath (Join-Path $Dir 'push.log') -Append -Encoding utf8
+'@
+Set-Content -Path (Join-Path $T 'push.ps1') -Value $child -Encoding utf8
+$p = Start-Process powershell -WindowStyle Hidden -PassThru -ArgumentList @(
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$T\push.ps1`"",
+    '-Dir', "`"$T`"", '-Worktree', "`"$W`"")
+$p.Id | Set-Content (Join-Path $T 'push.pid')
+$T
+```
+
+**Never a fixed log name.** The GUID suffix is load-bearing, exactly as it is in
+`oe-detached-commit.ps1`: two lanes -- or two attempts in one lane -- that share
+a `%TEMP%\push.log` each poll the other's sentinel, and you report `EXIT=0` for
+a push you never made, with no error at all.
+
+Poll it exactly as for a commit: **process first, sentinel second**, and while
+the process is alive any `EXIT=` you can see is from an earlier attempt.
+
+```powershell
+$id    = Get-Content "$T\push.pid"
+$alive = [bool](Get-Process -Id $id -ErrorAction SilentlyContinue)
+$done  = (Test-Path "$T\push.log") -and (Select-String -Path "$T\push.log" -Pattern '^EXIT=' -Quiet)
+"alive=$alive done=$done"
+if ($alive)    { 'still running -- keep polling, and IGNORE any EXIT= you can see' }
+elseif ($done) { Get-Content "$T\push.log" -Tail 40 }
+else           { 'child gone with no EXIT= -- check whether the upstream ref moved' }
+```
+
+`EXIT=0` means the hooks passed. **Budget ~7 minutes and do not call it hung
+before 10** -- that is one pytest run, not a battery. The repo settles any
+disagreement, because a pid can be reused and a log line can be stale while a
+ref either moved or did not: `git -C $W status -sb` (the `ahead`/`behind`
+counts), or `git -C $W rev-parse HEAD "@{u}"`.
+
 **Do not end your turn while it runs.** Polling is active waiting and is
 correct; ending the run is not -- you are headless and nothing will wake you.
 If it genuinely cannot be delivered from your lane, say so once with the exact
@@ -263,16 +330,21 @@ See CLAUDE.md "Incidental findings: report, fix, record".
   vocabulary lives in CONTRIBUTING.md "Allowed types" / "Allowed scopes" and is
   enforced by `scripts/validate-commit-msg.mjs` -- read it there rather than
   copying the lists around, because they change.
-- `commit-msg` validates the subject. `pre-push` refuses force-push or deletion
-  of `main`, re-validates every pushed subject (so bypassing `commit-msg` buys
-  nothing), then runs `npm run verify:fast:branch` unless the push is
-  docs-only.
-- Run `npm run verify:fast:branch` before pushing, so the hooks pass on the
-  first try. Do NOT rely on `verify:fast:scoped` as a pre-flight: it scopes to
-  the STAGED diff, so on an empty or unrelated index every leg reports
-  `(out of scope)` and it exits 0 having run no tests at all. A green from it
-  proves nothing until the change is staged -- and even then only for the legs
-  whose input globs the diff actually touches.
+- `commit-msg` validates the subject (all commits). `pre-push` refuses force-push or
+  deletion of `main`, re-validates every pushed subject (so bypassing `commit-msg` buys
+  nothing), then runs the three guards and scope-gated `test:sidecar` (~1-2s when that
+  step is out of scope or already cached; +6.85 min when it actually runs -- which is
+  any push whose branch diff touches `server/tts-sidecar/**`, and also any push that
+  trips `computeShared` (root `package.json`/`package-lock.json`/`.github/actions/**`)
+  on a cold cache. Launch that push detached -- see "Committing when a step is in
+  scope").
+- Verify locally before pushing: `npm run verify:fast:branch` for the full branch-scoped
+  battery (lint, typecheck, config:check, test:hooks, test, test:server, build, audit, etc.)
+  OR just the pre-push guards and sidecar check by running `git push --dry-run` first.
+  Do NOT rely on `verify:fast:scoped` as a pre-flight: it scopes to the STAGED diff, so
+  on an empty or unrelated index every leg reports `(out of scope)` and exits 0 having
+  run no tests at all. A green from it proves nothing until the change is staged -- and
+  even then only for the legs whose input globs the diff actually touches.
 - The **PR title** must itself match the commit-subject format
   (`pr-title-lint.yml`), and the **PR body** must carry a literal `Closes #NN`
   or `Refs #NN` (`pr-issue-link.yml`). Both are required status checks -- a
