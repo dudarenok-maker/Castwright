@@ -236,7 +236,7 @@
 //      live row elsewhere — only a documented historical tie downgrades it
 //      to `annotatedDischarge`.
 //
-// Frozen paths are excluded from all three checks — see isFrozenPath's own
+// Frozen paths are excluded from all four checks — see isFrozenPath's own
 // comment for why each one is frozen. This script's own source, its own test
 // fixtures, and the sibling `check-onbox-register.mjs` checker's test
 // fixtures are excluded from scanning entirely (not just Check A/B/C — see
