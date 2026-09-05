@@ -3,9 +3,10 @@
 //
 // Reconciles derived figures and row shells in
 // docs/testing/onbox-acceptance-register-live-view.html against
-// docs/testing/onbox-acceptance-register.md. Every hand-authored byte outside
-// a generated target (BEGIN/END GENERATED:<name> region, or a row shell's own
-// body/iname/risk spans) is preserved verbatim. See
+// docs/testing/onbox-acceptance-register.md. Each row shell matched by ID/title
+// (its <details class="item">…</details> block) is preserved verbatim; inter-shell
+// content in a section body (blank lines, stray HTML markup between shells) is
+// NOT preserved — shells are rebuilt in markdown order, joined by newlines. See
 // docs/superpowers/specs/2026-08-28-onbox-register-generated-surfaces-design.md
 // for the design; this comment states only the invariants the code must hold.
 //

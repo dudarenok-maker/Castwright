@@ -578,3 +578,41 @@ test('SHELL_BY_ID_REGEX matches a shell with <summary> on its own line (hand-aut
   const rowIds = [...result.matchAll(/<span class="num">([^<]+)<\/span>/g)].map((m) => m[1]);
   assert.deepEqual(rowIds, ['A1', 'A2']);
 });
+
+test('inter-shell content (blank lines, comments) between shells is NOT preserved during reconciliation', () => {
+  // Regression test: verify that non-shell content between shells is dropped.
+  // Shells are preserved verbatim, but the section body is rebuilt by joining
+  // shells with newlines, so blank lines, HTML comments, or other markup
+  // between shells does not survive.
+  const md = `## Group A — setup a
+
+### A1 · first
+### A2 · second
+`;
+  // Create HTML with shells separated by blank lines and an HTML comment
+  const html = `<section class="group" id="ga">
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">first</span><span class="chev">›</span></summary>
+        <div class="body">body one</div>
+      </details>
+
+      <!-- this comment between shells should not survive -->
+
+      <details class="item">
+        <summary><span class="num">A2</span><span class="iname">second</span><span class="chev">›</span></summary>
+        <div class="body">body two</div>
+      </details>
+  </section>`;
+
+  const result = reconcileRowShells(md, html);
+
+  // Both shells must be present with their original body content
+  assert.match(result, /body one/);
+  assert.match(result, /body two/);
+  // But the inter-shell comment and blank lines should be gone
+  assert.doesNotMatch(result, /this comment between shells/);
+  // Verify the shells are now adjacent with no extra blank lines between them
+  // (shells are joined by '\n', and indentation is part of each shell's capture)
+  assert.match(result, /<\/details>\n\s+<details class="item">/);
+});
