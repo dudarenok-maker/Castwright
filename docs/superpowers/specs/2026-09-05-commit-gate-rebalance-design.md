@@ -139,8 +139,22 @@ worktree GC · a Windows CI leg · a sidecar acceptance gate.
 | Hook | Now | After | Budget |
 |---|---|---|---|
 | `commit-msg` | `validate-commit-msg.mjs` | unchanged | ~0.3s |
-| `pre-commit` | `verify:fast:scoped` (~13,500 tests) | ESLint over **staged files only**, one process | ~2–3s |
-| `pre-push` | 3 guards + `verify:fast:branch` (**~35 min**) | the guards + Part 3's census | ~1–2s |
+| `pre-commit` | `verify:fast:scoped` (~13,500 tests) | ESLint over **staged files only**, one process | **0.14s / ~4s** |
+| `pre-push` | 3 guards + `verify:fast:branch` (**~35 min**) | the guards + `test:sidecar`, scope-gated | ~1–2s / 6.85 min |
+
+**Measured on the shipping implementation** (commit `faa273cb`), not estimated:
+
+| Path | Cost |
+|---|---|
+| `pre-commit`, no JS/TS staged — docs, config, most commits | **0.14s** (short-circuits before spawning anything) |
+| `pre-commit`, JS/TS staged, warm | **~4s** |
+| `pre-commit`, JS/TS staged, cold cache under box contention | up to ~50s — dominated by ESLint startup, not file count |
+| `pre-push`, no `server/tts-sidecar/**` in the branch diff | ~1–2s (step out of scope) |
+| `pre-push`, sidecar touched | + 6.85 min |
+
+The cold-vs-warm spread is ESLint's fixed startup cost; a single-file run measured 73.6s cold
+and 3.7s warm on the same box. If that first-commit cost proves annoying in practice, the lever
+is `--cache`, or dropping local lint entirely — CI's `lint` leg is a required check either way.
 
 `pre-commit` → `scripts/hooks/pre-commit-lint.mjs`: staged set from `git diff --cached
 --name-only --diff-filter=ACMR`, filtered to JS/TS extensions; empty set exits 0 without
