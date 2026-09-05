@@ -18,8 +18,11 @@ owns everything PR-specific.
 
 ## When this fires
 
-A PR is fully staged: implementation finalized, `verify:fast:branch` green,
-every applicable [before-shipping checklist](../../../CLAUDE.md#before-shipping-checklist)
+A PR is fully staged: implementation finalized, cloud `verify.yml` green (the
+required status check on `main` — ops-2997 slimmed the local pre-push hook to
+an instant scope-gated check, so `verify:fast:branch` passing is no longer the
+enforcement signal; see CLAUDE.md "Commit gate"), every applicable
+[before-shipping checklist](../../../CLAUDE.md#before-shipping-checklist)
 item addressed (or explicitly marked not-applicable), and everything pushed.
 Not on an earlier, incomplete push.
 

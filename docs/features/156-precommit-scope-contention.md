@@ -47,11 +47,19 @@ so they fan out at full concurrency into a starved box.
   manually. The vitest configs honor it: frontend caps its pool to half the
   cores (otherwise untouched — plan 45 left it uncapped), and the server drops
   `maxForks` 2 → 1. Disable the probe with `SKIP_CONTENTION_CHECK=1`.
-- **Pre-push unchanged.** Pre-push still runs the FULL `npm run verify:fast:branch`
-  battery (not bare `npm run verify` — corrected 2026-09-01, review finding on
-  #2839: this line was stale even before the --changed addendum below, which
-  only ever fixed its CI-vs-pre-push clause, not this one), preserving the
-  "local is the full coverage net, CI is the scoped one" invariant.
+- **Pre-push unchanged (AT THE TIME THIS PLAN LANDED).** Pre-push still ran
+  the FULL `npm run verify:fast:branch` battery (not bare `npm run verify` —
+  corrected 2026-09-01, review finding on #2839: this line was stale even
+  before the --changed addendum below, which only ever fixed its
+  CI-vs-pre-push clause, not this one), preserving the "local is the full
+  coverage net, CI is the scoped one" invariant as it stood then.
+  **Superseded 2026-09 by ops-2997**
+  (docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md): that
+  battery cost ~35 minutes even healthy, and under concurrency degraded to
+  hours-long deadlock, so pre-push no longer runs it automatically at all —
+  only its guards plus a scope-gated `test:sidecar` check. Cloud `verify.yml`
+  is now the enforcing gate the "local is the full coverage net" half of that
+  invariant depended on; see [CLAUDE.md "Commit gate"](../../CLAUDE.md#commit-gate).
 
 ### 2026-09-01 addendum (#2834)
 

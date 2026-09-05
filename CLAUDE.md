@@ -429,12 +429,12 @@ Design rationale:
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
   Requires one-time `npx playwright install chromium`. Excludes the visual baselines (run via `test:e2e:visual` separately). See `docs/features/archive/37-e2e-playwright.md`.
 - `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Runs in the cloud `verify.yml` PR battery (Ubuntu → `e2e/linux` baselines) and the full local `npm run verify`, not in pre-push `verify:fast:branch`, so visual regressions still surface at PR time rather than only at release.
-- `npm run test:fast` — frontend + server only (matches the pre-commit hook).
+- `npm run test:fast` — frontend + server only. No longer what `pre-commit` runs (ops-2997 — see "Commit gate"): the hook is now a single staged-files ESLint pass, not a battery.
 - `npm run test:all` — frontend + server + server-slow + PowerShell-scripts + sidecar tests (no e2e).
 - `npm run verify` — full battery: typecheck + all tests + e2e + build. No longer the pre-push default (see "Commit gate") — run manually when you want the full local battery (e.g. before a release cut).
 - `npm run verify:quick` — all tests (no e2e, no typecheck, no build) — alias for `test:all`.
-- `npm run verify:fast` — fast tests only (alias for `test:fast`); a manual full-fast run. NOTE: pre-commit actually gates on `verify:fast:scoped` (the scope-filtered variant), not this — see "Commit gate".
-- `npm run verify:fast:branch` — lint + typecheck + config:check + test:hooks + test + test:server + build + test:sidecar + audit + audit:server, each scope-gated to whether the current branch's diff (vs local `main`) touches its inputs. This is the new pre-push default (see "Commit gate") — the fast, branch-scoped smoke check; cloud `verify.yml` is now the actual enforcement gate for everything else.
+- `npm run verify:fast` — fast tests only (alias for `test:fast`); a manual full-fast run. NOTE: `pre-commit` no longer gates on this or on `verify:fast:scoped` (ops-2997 retired that battery from the hook entirely) — see "Commit gate".
+- `npm run verify:fast:branch` — lint + typecheck + config:check + test:hooks + test + test:server + build + test:sidecar + audit + audit:server, each scope-gated to whether the current branch's diff (vs local `main`) touches its inputs. **No longer what `pre-push` invokes** (ops-2997 — see "Commit gate"): pre-push now runs only its guards plus the scope-gated `test:sidecar` step. This script remains for a manual full branch-scoped run — Before-shipping step 7 calls for it — and cloud `verify.yml` is the actual enforcement gate for everything it covers.
 - `npm run audit` — npm audit against the root lockfile, gating on any unwaived high/critical severity advisories (threshold `--audit-level=high`). Waivers live in `audit-waivers.json` at repo root with expiry enforcement. Exit codes: 0 = pass, 1 = unwaived high/critical, 2 = expired waiver(s) or bad CLI args, 3 = audit cannot be trusted (npm audit failed, or its output could not be parsed). See `scripts/check-audit.mjs` for scope and mechanics (#2434).
 - `npm run audit:server` — npm audit against the server lockfile, omitting devDependencies (`--omit=dev` for production/runtime scope only), same gate and severity threshold as root. Exits with the same codes as `audit`. Runs in both `verify.yml` and `verify:fast:branch` (root runs full tree, server scope-gated to `server/package-lock.json` changes). **Note:** both audit steps require network access to npm's advisory database — they cannot run offline.
 - `npm run build` — production build into `dist/`.
@@ -766,7 +766,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 4. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
 5. **Update the two release-notes documents, in this PR.** Append an entry to `docs/release-notes-next.md` (technical register, PR-refed) AND a matching user-facing, brand-voice line to the in-progress version section at the top of `RELEASE_NOTES.md`. Land both PR-by-PR, not reconstructed from git history at cut time — that's the whole point of this step. The first-PR-after-a-cut bootstrap case (resetting both files) is documented once, in [CONTRIBUTING.md "Release notes"](CONTRIBUTING.md#release-notes) — check there, don't re-derive it. Skip only when the change has no shippable delta (pure docs/process, CI-only, internal chore with no user- or operator-visible effect) — say so explicitly rather than silently omitting.
 6. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [PR review → issue verification](.claude/skills/pr-review-gate/SKILL.md#issue-verification-at-pr-creation)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
-7. **Run `npm run verify:fast:branch`** locally (same battery as pre-push) — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way (see "Commit gate").
+7. **Run `npm run verify:fast:branch`** locally (a manual run of the branch-scoped subset — as of ops-2997, `pre-push` itself no longer runs this automatically, see "Commit gate") — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way.
 8. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 9. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
 10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory gate via the `pr-review-gate` skill — see [the PR review runbook](.claude/skills/pr-review-gate/SKILL.md). Triage and fold findings before merge.
@@ -888,70 +888,47 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   no-scope catch-all). Merge / Revert / fixup! / squash! commits are exempt.
   Full spec lives in [CONTRIBUTING.md](CONTRIBUTING.md); regression plan is
   [docs/features/archive/38-branching-and-commit-convention.md](docs/features/archive/38-branching-and-commit-convention.md).
-- **pre-commit** (`.husky/pre-commit`): runs `npm run verify:fast:scoped` —
-  validator unit tests + frontend + server tests, but **scope-filtered against
-  the staged diff** (plan 156): a leg whose scope the staged change never
-  touched is skipped (`[skip] … (out of scope)`), so a sidecar-only or
-  docs-only commit runs none of them. Sub-5s on a warm cache. Refuses the
-  commit if any in-scope spec is red. Sidecar (pytest), Pester scripts,
-  Playwright e2e, and typecheck are NOT in pre-commit — they live in
-  pre-push so commits stay snappy. Under `--scope-staged` the `test`/
-  `test:server` steps additionally run vitest's own `--changed HEAD`
-  selection (`test:changed`/`test:server:changed`) instead of the whole
-  suite — a one-file server commit runs only the tests that file's diff
-  touches, not all ~6700. Applies only to an UNSHARED `--scope-staged` diff
-  that is CONFINED to the step's own primary source root with a safe
-  extension (`diffSafeForChangedOnly` — `src/**` for `test`,
-  `server/src/**` for `test:server`, `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`/
-  `.mts`/`.cts` only) — a positive allowlist, not an exclusion list, after
-  three review rounds each found a narrower live gap in "matches this step's
-  declared scope" (a shared root-manifest/lockfile change; a step's own
-  `extraFiles`/server lockfile; a root-level config file matched only via
-  `globs`; a non-JS asset like `src/styles.css` read by its guard tests via
-  `readFileSync`, not import). Any diff outside that allowlist still runs
-  every step's full script, since `--changed` against a file no test's
-  dependency graph actually reaches would otherwise exit 0 having run
-  zero tests. A `--changed`-only pass is also never written to the verify-cache
-  (only a full run is), so it cannot leave behind a cache entry a later
-  `--scope-branch`/CI run would read as `[cached]` and skip. `--scope-branch`
-  (pre-push) always runs the full suite — the narrowing above never applies
-  there — so a change `--changed` misses through an untracked dependency is
-  still caught before merge. (Cloud CI narrows its own PR runs via
-  `vitest run --changed <PR base>` independently — see `verify.yml`'s
-  Frontend/Server test legs — a pre-existing, deliberate design predating
-  this pre-commit optimisation and unrelated to it; pre-push's full local
-  run is the actual full-suite gate before merge, not CI.) If a co-running
-  GPU generation is
-  detected (nvidia-smi) **or a sibling worktree is already running a
-  vitest/verify-cache battery**, the runner warns and throttles test
-  concurrency (`LOW_CONCURRENCY=1`); `SKIP_CONTENTION_CHECK=1` disables both
-  probes.
-  `npm run verify:fast` (no scope filter) remains for a manual full fast run.
+- **pre-commit** (`.husky/pre-commit`): as of ops-2997
+  (docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md), runs
+  `node scripts/hooks/pre-commit-lint.mjs` — ONE ESLint process over the
+  **staged files only** (`git diff --cached --name-only --diff-filter=ACMR`,
+  filtered to JS/TS extensions). An empty staged set exits 0 without spawning
+  anything. Blocks on real lint findings; **passes** (with a warning to
+  stderr) when eslint is missing (a worktree without `node_modules`, a
+  normal state here) or a 60s budget is exceeded — CI still enforces lint
+  either way. Sub-second on the common case. This REPLACED `npm run
+  verify:fast:scoped` (~13,500 tests, a whole vitest fork pool) — see the
+  design doc's "Problem" section for why that battery was never viable, even
+  healthy: a hook may never spawn a process pool.
 - **pre-push** (`.husky/pre-push`): first runs `scripts/guard-protected-push.mjs`,
-  which refuses a force-push or deletion of a protected branch (`main`) before
-  the battery even starts (a local guard; since 2026-06-14 `main` ALSO has
-  server-side branch protection — a GitHub ruleset blocking force-push +
-  deletion, enabled after the Pro upgrade per `com-4` — so this hook is now
-  belt-and-suspenders; see
+  which refuses a force-push or deletion of a protected branch (`main`) (a
+  local guard; since 2026-06-14 `main` ALSO has server-side branch
+  protection — a GitHub ruleset blocking force-push + deletion, enabled after
+  the Pro upgrade per `com-4` — so this hook is now belt-and-suspenders; see
   [docs/features/163-protected-push-guard.md](docs/features/163-protected-push-guard.md);
-  bypass the local hook intentionally with `git push --no-verify`). Then, unless
-  the push is docs-only (below), runs `npm run verify:fast:branch` — a fast,
-  branch-diff-scoped subset (lint, typecheck, config:check, test:hooks, check:budget-poll, test,
-  test:server, build, test:sidecar, audit, audit:server). Requires npm registry
-  access (unlike other `verify:fast:branch` legs, the audit steps cannot run offline).
-  Refuses the push if any in-scope step fails. This
-  replaced running the full `npm run verify` battery on every push (see
-  [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md))
-  — the heavy legs (e2e, server-slow, scripts, test:pinokio) now run in the
-  cloud instead, which is now the required, enforcing gate (see below).
+  bypass the local hook intentionally with `git push --no-verify`), then
+  `scripts/guard-commit-subjects.mjs`. Then, unless the push is docs-only
+  (below), runs `node scripts/verify-cache.mjs --steps test:sidecar
+  --scope-branch` — ops-2997 dropped `verify:fast:branch`'s ~35-minute
+  battery from this hook entirely (a healthy run's own arithmetic, before any
+  concurrency; see the ops-2997 design doc's "Problem" section) in favour of
+  cloud `verify.yml`, a required status check on `main`, as the enforcing
+  gate. `test:sidecar`, scope-gated to `server/tts-sidecar/**` and
+  input-hashed, is the one exception kept local: it spawns pytest, not a
+  vitest fork pool, and it's the only automatic executor of the 38
+  `pytest.importorskip("torch")` tests CI deliberately can't run (its own
+  lean sidecar install skips torch). Costs ~6.85 min on a sidecar-touching
+  push, zero on every other push. `npm run verify:fast:branch` itself still
+  exists as an npm script for a manual full local run (see Before-shipping
+  step 7) — it is just no longer what this hook invokes.
 
-**Docs-only pushes skip `npm run verify:fast:branch` entirely** — `scripts/is-docs-only-push.mjs`
+**Docs-only pushes skip the local sidecar check entirely** — `scripts/is-docs-only-push.mjs`
 checks the pushed commits' changed-file set against the same doc-glob test as
 CONTRIBUTING.md's "Doc-only PR fast-path" (`docs/**`, root `*.md`, `.github/*.md`);
-a doc-only diff has no runtime surface for tests/build to exercise, so paying
-even the fast local check is wasted time/CPU. Conservative by design: any
-uncertainty (git error, unresolvable merge-base) runs the full selected-steps
-battery rather than guessing.
+a doc-only diff has no runtime surface for `test:sidecar` to exercise, so
+paying even the scope computation is wasted time/CPU. Conservative by design:
+any uncertainty (git error, unresolvable merge-base) runs the sidecar check
+rather than guessing.
 
 `npm run verify` is cache-aware (see
 [docs/features/archive/50-verify-cache.md](docs/features/archive/50-verify-cache.md)):
@@ -970,9 +947,10 @@ the `verify.yml` battery runs automatically on every PR by default and is a
 replaces the prior opt-in/label-gated design, which existed to control
 Actions-minute cost while the repo was private; the repo is now public, so
 standard-runner Actions minutes are free and uncapped, and that rationale no
-longer applies. Local pre-push now only runs a fast, branch-scoped subset
-(`verify:fast:branch`) — this cloud run is the real enforcement gate for
-everything else, not redundant insurance. Every leg is still
+longer applies. Local pre-push now runs only its guards plus the
+scope-gated `test:sidecar` check (ops-2997 — see "Commit gate" above) — this
+cloud run is the real enforcement gate for everything else, not redundant
+insurance. Every leg is still
 **scope-filtered** to what the PR's diff actually touched (plan 103 — `git
 diff` against the PR base; a frontend-only PR skips server tests, a
 server-only PR skips Playwright e2e + the frontend unit suite, a root
@@ -1288,13 +1266,16 @@ Additional one-time setup:
 Working practice:
 
 - Default loop for non-trivial work: finalize the change → run
-  `npm run verify:fast:branch` (same branch-scoped check pre-push now runs)
-  → open the PR → cloud `verify.yml` (required, opt-out) and the mandatory
-  `pr-review-gate` pass run independently → merge once both are green. Run the
-  full `npm run verify` manually only when you specifically want the full
-  local battery (e.g. before a release cut, or debugging something scope-
-  filtering might be hiding).
-- `npm run verify:fast` matches pre-commit; `npm run verify:quick` is `test:all` without typecheck/build/e2e.
+  `npm run verify:fast:branch` by hand (as of ops-2997, `pre-push` itself no
+  longer runs this — see "Commit gate") → open the PR → cloud `verify.yml`
+  (required, opt-out) and the mandatory `pr-review-gate` pass run
+  independently → merge once both are green. Run the full `npm run verify`
+  manually only when you specifically want the full local battery (e.g.
+  before a release cut, or debugging something scope-filtering might be
+  hiding).
+- `npm run verify:fast` is a manual full-fast run (typecheck is NOT in it;
+  `pre-commit` itself runs neither this nor any battery — see "Commit gate");
+  `npm run verify:quick` is `test:all` without typecheck/build/e2e.
 - **Do not use `--no-verify` to bypass.** If a hook fails:
   1. **Triage first.** Categorise the failure as **related to my change** vs. **pre-existing** (i.e. the same test would fail on `main`). A `git stash && git checkout main && <run the failing test>` round-trip settles it in 30 seconds.
   2. **Related → fix it.** Update the code, the regression doc, and the paired test in the same commit. Then retry.

@@ -480,9 +480,10 @@ Two required sections:
    `docs/features/archive/44-pr-hygiene.md`."_). If the PR fills a plan's Ship notes,
    say so.
 2. **`## Test plan`** — checklist of what was run and what reviewers should
-   look at. Always start with `- [ ] npm run verify:fast:branch — green`
-   (the pre-push hook will fail your push if it isn't anyway) — cloud
-   `verify.yml` is the required, authoritative gate on top of that.
+   look at. Always start with `- [ ] cloud verify.yml — green` (the
+   required, authoritative gate) — `pre-push` itself no longer runs a
+   battery (see [CLAUDE.md "Commit gate"](CLAUDE.md#commit-gate)), so it
+   can't stand in for this the way it once did.
 
 If the PR delivers or advances a backlog/bug issue, link it in `## Summary`:
 `Closes #NN` (full delivery) or `Refs #NN` (partial). The keyword in the PR
@@ -498,8 +499,9 @@ The `verify.yml` battery runs automatically on every PR push and is a
 **required status check** on `main` — it must go green before merge. This
 replaced the prior label-gated opt-in design (plan 215) now that the repo is
 public and standard-runner Actions minutes are free/uncapped; local pre-push
-now only runs a fast, branch-scoped subset (`verify:fast:branch`), so the
-cloud run is the actual enforcement gate, not optional insurance. Dispatch
+now runs only its guards plus a scope-gated `test:sidecar` check (ops-2997 —
+see [CLAUDE.md "Commit gate"](CLAUDE.md#commit-gate)), so the cloud run is
+the actual enforcement gate, not optional insurance. Dispatch
 it manually (Actions tab → Verify → Run workflow, or `gh workflow run
 verify.yml --ref <branch>`) only when you want an unscoped, full-battery run
 off a non-PR ref.
@@ -542,7 +544,7 @@ current design:
 
 ### Before requesting review
 
-- `npm run verify:fast:branch` green locally (pre-push hook already enforces this) — and the required cloud `verify.yml` check green on the PR.
+- `npm run verify:fast:branch` run locally by hand (pre-push no longer enforces this — see [CLAUDE.md "Commit gate"](CLAUDE.md#commit-gate)) — and the required cloud `verify.yml` check green on the PR.
 - The regression plan under `docs/features/` is updated or added in the same
   diff if the PR changes behaviour the plan cites.
 - The end-of-turn summary names the branch + commit SHAs so the reviewer can
@@ -582,11 +584,10 @@ min full battery. Rationale and the exact glob list for the underlying
 scope-matching (unrelated to the removed `paths-ignore`):
 [docs/features/archive/101-docs-only-ci-skip.md](docs/features/archive/101-docs-only-ci-skip.md).
 
-The same file-set test also skips the **local** pre-push
-`npm run verify:fast:branch` check (`scripts/is-docs-only-push.mjs`, wired
-into `.husky/pre-push`) — a docs-only push has no runtime surface for the
-fast checks to exercise, so paying even that fast local cost is wasted
-time/CPU for zero signal. See
+The same file-set test also skips the **local** pre-push `test:sidecar`
+check (`scripts/is-docs-only-push.mjs`, wired into `.husky/pre-push`) — a
+docs-only push has no runtime surface for it to exercise, so paying even
+that scope computation is wasted time/CPU for zero signal. See
 [CLAUDE.md "Commit gate"](CLAUDE.md#commit-gate).
 
 ## When you ship a change
@@ -599,7 +600,7 @@ The compact version:
 3. Update `docs/features/INDEX.md` and `docs/BACKLOG.md` if relevant.
 4. Update `docs/release-notes-next.md` and `RELEASE_NOTES.md` in this PR (see
    "Release notes" below) — skip only when the change has no shippable delta.
-5. Run `npm run verify:fast:branch` locally (pre-push already enforces it) — the required cloud `verify.yml` check covers the rest.
+5. Run `npm run verify:fast:branch` locally by hand (pre-push no longer runs this automatically — see [CLAUDE.md "Commit gate"](CLAUDE.md#commit-gate)) — the required cloud `verify.yml` check covers the rest.
 6. Surface the user-visible delta in the end-of-turn summary.
 7. No budgeted polling loops in tests (await an event or drain to quiescence);
    no `page.waitForTimeout` in new e2e (use state-based waits); no oversized

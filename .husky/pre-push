@@ -1,6 +1,6 @@
-# Pre-push guards run before the fast branch-scoped check. git pipes the
-# pushed-ref list on stdin; capture it ONCE and feed all three checks (stdin
-# can only be read once). Bypass intentionally with `git push --no-verify`.
+# Pre-push guards, then ONE scope-gated local check. git pipes the pushed-ref
+# list on stdin; capture it ONCE and feed all three checks (stdin can only be
+# read once). Bypass intentionally with `git push --no-verify`.
 #   1. guard-protected-push  — refuse force-push / deletion of main (#163).
 #   2. guard-commit-subjects — reject any pushed commit whose subject violates
 #      the Conventional-Commits rule, even if commit-msg was bypassed
@@ -10,19 +10,21 @@
 #      changed file is docs (same test as CONTRIBUTING.md's CI doc-only
 #      fast-path) — a docs-only diff has no runtime surface to exercise.
 #
-# The heavy legs (e2e, server-slow, scripts/Pester, test:pinokio, etc.) no
-# longer run locally on every push — cloud `verify.yml` is now a
-# required status check covering them (see
-# docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md).
-# `verify:fast:branch` runs only the fast/cheap steps, each scope-gated to
-# whether this branch's diff (vs local `main`) actually touches its inputs —
-# including `test:sidecar`, scope-gated to `server/tts-sidecar/**`, so the
-# one check that genuinely needs this machine still runs automatically
-# exactly when it's relevant.
+# ops-2997 (docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md,
+# Part 1): this hook no longer runs `verify:fast:branch`'s ~35-minute battery
+# — a healthy run cost that on its own arithmetic, and under concurrency it
+# degraded to hours-long deadlock. CI (`npm run verify`, a required status
+# check on `main`) is the enforcing gate now; local hooks only inform. The
+# ONE exception is `test:sidecar`, scope-gated to `server/tts-sidecar/**`: it
+# spawns pytest, not a vitest fork pool, so it doesn't violate "no hook may
+# spawn a process pool," and it's the only automatic executor of the
+# `pytest.importorskip("torch")` tests CI deliberately can't run (its own
+# lean sidecar install skips torch, see verify.yml). Costs ~6.85 min on a
+# sidecar-touching push, zero on every other push.
 PUSH_REFS=$(cat)
 printf '%s\n' "$PUSH_REFS" | node scripts/guard-protected-push.mjs "$@" || exit 1
 printf '%s\n' "$PUSH_REFS" | node scripts/guard-commit-subjects.mjs "$@" || exit 1
 if printf '%s\n' "$PUSH_REFS" | node scripts/is-docs-only-push.mjs "$@"; then
   exit 0
 fi
-npm run verify:fast:branch
+node scripts/verify-cache.mjs --steps test:sidecar --scope-branch

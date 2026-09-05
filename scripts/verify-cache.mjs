@@ -135,9 +135,13 @@ export const STEPS = [
            actions-only diff would leave that test stale-green on the very
            file it exists to check — same #1847 trap as fixtures/** above. */
         '.github/actions/**',
-        /* .husky/** is covered TODAY only by verify.yml's `hooks` bash
-           matcher, which A2 deletes — and it is an input to no step, so
-           without this a .husky-only PR would run zero legs after A2.
+        /* .husky/** used to be covered ONLY by verify.yml's `hooks` bash
+           matcher, which A2 deletes, and used to be an input to no step —
+           this glob is what closed that gap. (Corrected 2026-09, ops-2997:
+           a stale copy of "and it is an input to no step" describing the
+           pre-fix state survived here after the fix landed — this line
+           itself is that input, to this very step.) Without it, a
+           .husky-only PR would run zero legs after A2.
            release-manifest.test.mjs's sample-path array includes
            .husky/pre-commit as a literal string fed to a pure classifier —
            it does not read the file from disk (plan review round 2 named
