@@ -145,6 +145,18 @@ describe('CloneReadinessGateModal', () => {
     expect(ctaButtonsIn(row)).toEqual(['Assign a different voice']);
   });
 
+  it('unresolvable-uuid renders "Assign a different voice" and no other CTA — reuses missing-entry\'s CTA per the repo owner\'s decision', () => {
+    mockVerdicts = [verdict({ characterId: 'c1', reason: 'unresolvable-uuid', engine: 'kokoro' })];
+    const store = makeStore({ characters: [char({ id: 'c1' })] });
+    render(
+      <Provider store={store}>
+        <CloneReadinessGateModal />
+      </Provider>,
+    );
+    const row = screen.getByTestId('clone-readiness-row-c1');
+    expect(ctaButtonsIn(row)).toEqual(['Assign a different voice']);
+  });
+
   it('revoked renders explanatory copy and NO CTA at all', () => {
     mockVerdicts = [verdict({ characterId: 'c1', reason: 'revoked', engine: 'qwen' })];
     const store = makeStore({ characters: [char({ id: 'c1' })] });
