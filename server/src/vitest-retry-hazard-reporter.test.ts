@@ -146,7 +146,7 @@ function runVitestOnFixture(
     return spawnSync(
       'node',
       [VITEST_BIN, 'run', '--config', WIRE_FIXTURES_CONFIG, `src/__wire-fixtures__/${fixtureName}`],
-      { cwd: SERVER_ROOT, encoding: 'utf8', env },
+      { cwd: SERVER_ROOT, encoding: 'utf8', env, windowsHide: true },
     );
   } finally {
     rmSync(fixturePath, { force: true });

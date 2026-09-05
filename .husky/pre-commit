@@ -1,1 +1,1 @@
-npm run verify:fast:scoped
+node scripts/hooks/pre-commit-lint.mjs

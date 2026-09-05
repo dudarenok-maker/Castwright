@@ -6,6 +6,21 @@ area: scripts
 
 # Pre-commit scope filter + GPU-contention test throttle
 
+> **SUPERSEDED MECHANISM, 2026-09 (ops-2997, PR #2999).** Read this whole
+> document in the past tense. The scope filter, the `--changed` narrowing and
+> the throttle described below all still EXIST in `scripts/verify-cache.mjs`
+> and still behave as described **when that script runs** — but no git hook
+> invokes them any more. `.husky/pre-commit` is now one ESLint process over the
+> staged files (`scripts/hooks/pre-commit-lint.mjs`); `.husky/pre-push` runs its
+> guards plus a single scope-gated `test:sidecar`. Cloud `verify.yml` is the
+> enforcing gate. Design of record:
+> [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md);
+> current behaviour: [CLAUDE.md "Commit gate"](../../CLAUDE.md#commit-gate).
+> The plan is kept `active` because the machinery it documents is still live on
+> the `npm run verify:fast:scoped` / `verify:fast:branch` paths a human or CI
+> can still invoke by hand — what changed is that nothing invokes them
+> automatically.
+
 ## Problem / Why
 
 Pre-commit flaked constantly under machine contention and re-ran suites
@@ -20,7 +35,7 @@ observed cases:
    unexpectedly") under sustained load during a full-verify push — a
    load-induced infra flake, not a test assertion.
 
-Root cause of (1): `.husky/pre-commit` → `npm run verify:fast` runs
+Root cause of (1), as `.husky/pre-commit` stood then: `npm run verify:fast` ran
 `test:hooks,test,test:server` on every commit, suppressed only by the
 input-hash cache, which records a step skippable **only after it passes**. A
 contention flake → no green entry → the next commit re-runs the full suite even
@@ -33,27 +48,53 @@ so they fan out at full concurrency into a starved box.
 
 ## What changed
 
-- **Pre-commit scope filter.** `scripts/verify-cache.mjs` gained a
-  `--scope-staged` flag. Pre-commit now runs `verify:fast:scoped`, which derives
+*(As of this plan's own delivery. The banner above says which of these
+statements about **who invokes** the machinery are now historical; every
+statement about **what `verify-cache.mjs` does when invoked** is still current.)*
+
+- **Scope filter.** `scripts/verify-cache.mjs` gained a
+  `--scope-staged` flag, which derives
   the changed set from `git diff --cached --name-only` and skips any step whose
   scope the staged diff never touched — `[skip] <step> (out of scope)` — *before*
   the input-hash cache. Diff-driven and stateless, so it skips reliably even on
   a cold or flake-poisoned cache. The STEPS table's `inputs.globs` ARE the scope
   map (mirrors verify.yml's bash matcher). A root `package.json`/`package-lock`
   change is global (`computeShared`), matching CI's `shared` scope.
-- **Contention guard + throttle.** `verify-cache.mjs` probes `nvidia-smi` once at
+  **Pre-commit ran this as `verify:fast:scoped` from this plan until ops-2997
+  (2026-09); it no longer does.** The flag and the script are unchanged — the
+  hook that called them is what went away — so `npm run verify:fast:scoped`
+  still behaves exactly as described.
+- **Contention guard + throttle.** When `verify-cache.mjs` runs, it probes
+  `nvidia-smi` once at
   start; if GPU utilization ≥ 40% it warns and sets `LOW_CONCURRENCY=1` for the
   child test runs (soft — never blocks). `LOW_CONCURRENCY` can also be set
   manually. The vitest configs honor it: frontend caps its pool to half the
   cores (otherwise untouched — plan 45 left it uncapped), and the server drops
-  `maxForks` 2 → 1. Disable the probe with `SKIP_CONTENTION_CHECK=1`.
-- **Pre-push unchanged.** Pre-push still runs the FULL `npm run verify:fast:branch`
-  battery (not bare `npm run verify` — corrected 2026-09-01, review finding on
-  #2839: this line was stale even before the --changed addendum below, which
-  only ever fixed its CI-vs-pre-push clause, not this one), preserving the
-  "local is the full coverage net, CI is the scoped one" invariant.
+  `maxForks` 2 → 1. Disable the probe with `SKIP_CONTENTION_CHECK=1`. Still
+  true of the script; since ops-2997 no *hook* reaches it on a commit, so in
+  practice it now fires only on a hand-run `verify`/`verify:fast:*` and on the
+  pre-push `test:sidecar` step (which is not a vitest step, so it is not
+  throttle-affected).
+- **Pre-push unchanged (AT THE TIME THIS PLAN LANDED).** Pre-push still ran
+  the FULL `npm run verify:fast:branch` battery (not bare `npm run verify` —
+  corrected 2026-09-01, review finding on #2839: this line was stale even
+  before the --changed addendum below, which only ever fixed its
+  CI-vs-pre-push clause, not this one), preserving the "local is the full
+  coverage net, CI is the scoped one" invariant as it stood then.
+  **Superseded 2026-09 by ops-2997**
+  (docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md): that
+  battery cost ~35 minutes even healthy, and under concurrency degraded to
+  hours-long deadlock, so pre-push no longer runs it automatically at all —
+  only its guards plus a scope-gated `test:sidecar` check. Cloud `verify.yml`
+  is now the enforcing gate the "local is the full coverage net" half of that
+  invariant depended on; see [CLAUDE.md "Commit gate"](../../CLAUDE.md#commit-gate).
 
 ### 2026-09-01 addendum (#2834)
+
+*(Written three days before ops-2997 removed the hook that invoked all of it.
+Same reading rule as above: the `verify-cache.mjs` behaviour is current, the
+"pre-commit does X on every commit" framing is not — `--scope-staged` is now
+reached only by a hand-run `npm run verify:fast:scoped`.)*
 
 - **Sibling-worktree contention guard.** The GPU probe above missed the more
   common local cause: another worktree's own `vitest`/`verify-cache.mjs`
@@ -79,8 +120,10 @@ so they fan out at full concurrency into a starved box.
   narrowed its own PR runs via `vitest run --changed <PR base>` before this
   addendum (`.github/workflows/verify.yml`'s Frontend/Server test legs,
   `docs/features/118-ci-cost-round-2.md`) — pre-push's full local run, not
-  CI, is the actual full-suite gate before merge, and was already the actual
-  gate before this addendum too.
+  CI, was the actual full-suite gate before merge at the time, and was already
+  that gate before this addendum too. **Reversed by ops-2997 three days later:**
+  pre-push runs no battery at all now, and cloud `verify.yml` — a required
+  status check on `main` — is the full-suite gate before merge.
 - **`computeShared` alone under-covers "shared" for the --changed substitution
   (review finding, PR #2839 pass 2).** It only catches the ROOT
   package.json/package-lock.json/`.github/actions/**` — a step's OWN
@@ -112,6 +155,12 @@ so they fan out at full concurrency into a starved box.
 
 ## Invariants
 
+**These are invariants of `scripts/verify-cache.mjs`, not of any git hook.**
+Every one of 1–6 holds whenever the script runs with the stated flags — which,
+since ops-2997, means a hand-run `npm run verify`/`verify:fast:*` or pre-push's
+one scope-gated `test:sidecar` step, never a commit. Read every "pre-commit"
+below as "a `--scope-staged` run".
+
 1. A staged diff touching only files outside a step's `inputs.globs` /
    `extraFiles` / server-lockfile → that step is skipped under `--scope-staged`.
 2. A staged root `package.json` / `package-lock.json` change → every selected
@@ -126,7 +175,19 @@ so they fan out at full concurrency into a starved box.
    `scripts/test-concurrency.mjs` (the unit-tested copy).
 6. The contention probe is soft: nvidia-smi absent/erroring (CI, non-NVIDIA) →
    no throttle, no failure.
-7. Pre-push runs the full battery; only pre-commit is scope-filtered.
+7. **Was:** "Pre-push runs the full battery; only pre-commit is scope-filtered."
+   **False on both halves since ops-2997 (2026-09), and retained only so the
+   sentence is not silently reused.** Pre-push runs no battery — its guards
+   plus a scope-gated `test:sidecar`, and nothing at all on a docs-only push;
+   pre-commit is not scope-filtered either, because it no longer runs
+   `verify-cache.mjs` at all (one ESLint process over the staged files).
+   Nothing local is the full coverage net now; cloud `verify.yml` is.
+   The invariant that replaces it, and the one this document is now
+   subordinate to, lives in the ops-2997 design doc: **no git hook may spawn a
+   process pool** — guarded by `scripts/tests/hook-no-pool.test.mjs`.
+8. `--scope-branch` never applies the `--changed` narrowing — it is
+   `--scope-staged`-only (see the addendum). That was what kept pre-push's full
+   local run honest while it existed, and it is unchanged in the script.
 
 ## Test plan
 

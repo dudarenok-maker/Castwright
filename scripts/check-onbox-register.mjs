@@ -887,7 +887,7 @@ export function checkLiveView(
   if (!glanceSection) {
     return ['No "## At a glance" section in the markdown — cannot check the live view against it.'];
   }
-  const { groups: mdGroups, total: mdTotal } = parseGlanceTable(glanceSection.body);
+  const { groups: mdGroups } = parseGlanceTable(glanceSection.body);
   const { groups: mdBodyGroups } = parseBodyGroups(sections);
 
   // 'extraOnly' needs a baseline to tell a discharge apart from a genuine
@@ -924,14 +924,6 @@ export function checkLiveView(
   if (!owedMatch) {
     errors.push(
       'Live view: no `<div class="n owed">NN</div>` found — the summary strip\'s owed total could not be read. If the markup changed, update scripts/check-onbox-register.mjs.',
-    );
-  } else if (direction === 'both' && mdTotal !== null && Number(owedMatch[1]) !== mdTotal) {
-    // Scalar, not directional: a total mismatch can't say WHICH rows differ,
-    // only that they do — so in 'extraOnly' mode it is dropped in favour of
-    // the precise, directional per-row `extra` checks below, rather than
-    // guessed at from the sign of the difference.
-    errors.push(
-      `Live view says ${owedMatch[1]} owed but the register says ${mdTotal}. Update the live view's summary strip.`,
     );
   }
 
@@ -970,7 +962,7 @@ export function checkLiveView(
         `Live view: the glance-table row for Group ${letter} could not be parsed — expected exactly three cells, the last a bare integer.`,
       );
     }
-    for (const [letter, mdCount] of mdGroups) {
+    for (const letter of mdGroups.keys()) {
       if (!lvGroups.has(letter)) {
         // "the register has a group the live page doesn't" is the normal
         // pre-publish state (a brand-new group not yet published) — not
@@ -979,11 +971,6 @@ export function checkLiveView(
           errors.push(`Live view: Group ${letter} is missing from the glance table.`);
         }
         continue;
-      }
-      if (direction === 'both' && lvGroups.get(letter) !== mdCount) {
-        errors.push(
-          `Live view: glance table says Group ${letter} has ${lvGroups.get(letter)} rows, the register says ${mdCount}.`,
-        );
       }
     }
     for (const letter of lvGroups.keys()) {
@@ -1069,30 +1056,21 @@ export function checkLiveView(
       errors.push(
         `Live view: Group ${letter}'s header has no \`<span class="gcount">N rows</span>\`.`,
       );
-    } else if (direction === 'both' && section.headerCount !== mdNumbers.length) {
-      errors.push(
-        `Live view: Group ${letter}'s header says ${section.headerCount} rows, the register's body has ${mdNumbers.length}.`,
-      );
     }
     const expected = new Set(mdNumbers.map((n) => `${letter}${n}`));
     const found = new Set(section.rowIds);
-    const missing = [...expected].filter((id) => !found.has(id));
+    // The error message below names the SECTION the comparison was made in.
+    // Without it a row filed under the wrong group reads as "extra" with
+    // nothing saying where it actually sits. `expected`-has-but-`found`-lacks
+    // ("missing") is the normal pre-publish state (a row not yet published,
+    // or — since Task 7/8 — already covered by row-shell reconciliation's own
+    // insert/delete/reorder handling) and is no longer reported here; `extra`
+    // (live page has, register doesn't) is the directional signal this
+    // function exists to surface, but as of #2199 it is not reported as-is: a
+    // row in `extra` that origin/main ALSO lacks was deliberately discharged,
+    // not left behind, so it's filtered out below before deciding whether to
+    // fire.
     const extra = [...found].filter((id) => !expected.has(id));
-    // Both messages name the SECTION the comparison was made in. Without it a
-    // row filed under the wrong group reads as two contradicting errors — "X is
-    // missing" and "X is extra" — with nothing saying where it actually sits.
-    // `missing` (register has, live page doesn't) is the normal pre-publish
-    // state in 'extraOnly' mode — see the function header comment — so it is
-    // skipped there; `extra` (live page has, register doesn't) is the
-    // directional signal that mode exists to surface, but as of #2199 it is
-    // not reported as-is: a row in `extra` that origin/main ALSO lacks was
-    // deliberately discharged, not left behind, so it's filtered out below
-    // before deciding whether to fire.
-    if (direction === 'both' && missing.length > 0) {
-      errors.push(
-        `Live view's Group ${letter} section is missing ${missing.length === 1 ? 'row' : 'rows'} ${missing.join(', ')} — present in the register, absent from that section.`,
-      );
-    }
     // #2199: filter `extra` down to rows origin/main's baseline still has.
     // Looked up by the ID's OWN letter (not this section's `letter`), so a
     // row filed under the wrong group (see the comment above) is checked

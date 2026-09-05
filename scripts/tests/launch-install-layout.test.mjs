@@ -68,7 +68,7 @@ function buildVersionedInstall() {
 test('launch.mjs boots at the documented versioned-install layout (scripts/lib/ absent at the install root)', () => {
   const installRoot = buildVersionedInstall();
   try {
-    const r = spawnSync(process.execPath, [join(installRoot, 'launch.mjs')], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [join(installRoot, 'launch.mjs')], { encoding: 'utf8', windowsHide: true });
     assert.doesNotMatch(
       r.stderr,
       /ERR_MODULE_NOT_FOUND/,
@@ -96,7 +96,7 @@ test('launch.mjs still runs as a plain dev-checkout no-op (unaffected by the ins
     cpSync(join(REPO_ROOT, 'launch.mjs'), join(installRoot, 'launch.mjs'));
     mkdirSync(join(installRoot, 'scripts'), { recursive: true });
     writeFileSync(join(installRoot, 'scripts', 'start-app-prod.mjs'), "console.log('STUB-STARTED');\n");
-    const r = spawnSync(process.execPath, [join(installRoot, 'launch.mjs')], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [join(installRoot, 'launch.mjs')], { encoding: 'utf8', windowsHide: true });
     assert.doesNotMatch(r.stderr, /ERR_MODULE_NOT_FOUND/, `stderr: ${r.stderr}`);
     assert.equal(r.status, 0, `stdout: ${r.stdout} stderr: ${r.stderr}`);
     assert.match(r.stdout, /\[launch\] dev checkout \(no releases\/ \+ \.current-version\)/);

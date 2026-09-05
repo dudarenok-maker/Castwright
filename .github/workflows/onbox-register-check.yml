@@ -16,6 +16,7 @@ on:
       # editing the checker exercises it against the real register, rather
       # than only ever running against a register that hasn't changed.
       - 'scripts/check-onbox-register.mjs'
+      - 'scripts/build-register-live-view.mjs'
       - '.github/workflows/onbox-register-check.yml'
 
 permissions:
@@ -39,3 +40,6 @@ jobs:
 
       - name: Check on-box register consistency
         run: node scripts/check-onbox-register.mjs
+
+      - name: Check the generated live-view surfaces are up to date
+        run: node scripts/build-register-live-view.mjs --check

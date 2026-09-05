@@ -145,7 +145,7 @@ function probePowerShell(exe) {
   const args = ['-NoProfile', '-NonInteractive'];
   if (process.platform === 'win32') args.push('-ExecutionPolicy', 'Bypass');
   args.push('-Command', '$PSVersionTable.PSVersion.ToString()');
-  return spawnSync(exe, args, { encoding: 'utf8' });
+  return spawnSync(exe, args, { encoding: 'utf8', windowsHide: true });
 }
 
 function findPowerShell() {
@@ -185,7 +185,7 @@ function runPowerShellFile(scriptPath, extraArgs = [], env = process.env) {
   const args = ['-NoProfile', '-NonInteractive'];
   if (process.platform === 'win32') args.push('-ExecutionPolicy', 'Bypass');
   args.push('-File', scriptPath, ...extraArgs);
-  return spawnSync(PWSH_EXE, args, { encoding: 'utf8', env });
+  return spawnSync(PWSH_EXE, args, { encoding: 'utf8', env, windowsHide: true });
 }
 
 // Uses PowerShell's OWN parser — System.Management.Automation.Language.Parser

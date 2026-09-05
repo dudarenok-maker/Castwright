@@ -12,13 +12,30 @@ const file = get('--file');
 const runs = Number(get('--runs', '3'));
 if (!file) { console.error('--file <relpath> required'); process.exit(2); }
 
-// Decide config: slow files run via the slow config.
-const SLOW = ['analysis-pipelining', 'gemini', 'book-state', 'chapters-restructure',
-  'generation', 'generation-boundary-recycle', 'pdf-real', 'setup-readiness.route',
-  'kokoro-install.route', 'venv-bootstrap.route'];
-const isSlow = SLOW.some((s) => file.includes(s));
+// Decide config: slow files run via the slow config. This list is the exact
+// set of paths in server/vitest.config.slow.ts's SLOW_FILES, mirrored here
+// verbatim (server/src/slow-lane-mirror.guard.test.ts enforces the mirror).
+// Matched by EXACT equality against `rel` (the path with a leading `server/`
+// stripped, same shape as SLOW_FILES itself) — a substring match here
+// previously over-matched (e.g. 'generation' also matched
+// generation-error.test.ts) and routed unrelated files to a config that
+// doesn't declare them, which crashed the tool (PR #2998 review pass 2).
+const SLOW = [
+  'src/analyzer/gemini.test.ts',
+  'src/routes/analysis-pipelining.test.ts',
+  'src/routes/book-state.test.ts',
+  'src/routes/chapters-restructure.test.ts',
+  'src/routes/generation.test.ts',
+  'src/routes/generation-boundary-recycle.test.ts',
+  'src/parsers/pdf-real.test.ts',
+  'src/routes/setup-readiness.route.test.ts',
+  'src/routes/kokoro-install.route.test.ts',
+  'src/routes/venv-bootstrap.route.test.ts',
+  'src/routes/analysis.interim-prune-prohibition.e2e.test.ts',
+];
 const cwd = file.startsWith('server/') ? 'server' : '.';
 const rel = file.replace(/^server\//, '');
+const isSlow = SLOW.includes(rel);
 
 let cpuBurners = [];
 function startCpuLoad() {

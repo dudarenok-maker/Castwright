@@ -45,6 +45,7 @@ function runEslint(args) {
     cwd: repoRoot,
     encoding: 'utf8',
     shell: IS_WIN,
+    windowsHide: true,
   });
   if (result.error) {
     throw result.error;

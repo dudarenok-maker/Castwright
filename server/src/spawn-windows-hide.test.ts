@@ -21,7 +21,12 @@
  *      bootstraps spawn through a function pointer the bare scan can't see),
  *   3. the prod launcher + start/stop + model-installer scripts that live
  *      OUTSIDE server/src (a hidden parent does not stop a grandchild pip /
- *      python from popping its own console). */
+ *      python from popping its own console) — this scan now ALSO covers
+ *      `scripts/tests/` (previously excluded), since `npm run test:hooks`
+ *      spawns those test files with `windowsHide: true` and no console of
+ *      its own, so any spawn call inside them missing the flag pops its own
+ *      visible window (worst offender: cross-os-ffmpeg-install.test.mjs's
+ *      module-load-time pwsh probe). */
 
 import { readdirSync, readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -227,7 +232,10 @@ function applyExclusions(files: string[], exclusions: string[]): string[] {
 
    Directory scope (derived from the old 49-entry hand list):
    - REPO_ROOT non-recursive, .mjs/.ts (covers launch.mjs, vite.config.ts)
-   - scripts/ recursive, .mjs/.cjs/.js, EXCLUDING scripts/tests/
+   - scripts/ recursive, .mjs/.cjs/.js, INCLUDING scripts/tests/ (previously
+     excluded — that exclusion let an unguarded module-load-time pwsh spawn
+     in cross-os-ffmpeg-install.test.mjs pop a visible window on every
+     `npm run test:hooks` run; see externalFilesFloor()'s scripts/ comment)
    - server/tts-sidecar/scripts/ recursive, .mjs
    - pinokio-scripts/lib/ recursive, .js/.mjs
 
@@ -243,13 +251,16 @@ function externalFilesFloor(): string[] {
     }
   }
 
-  // scripts/ recursive, .mjs/.cjs/.js, EXCLUDING scripts/tests/
+  // scripts/ recursive, .mjs/.cjs/.js, INCLUDING scripts/tests/ (the old
+  // exclusion of scripts/tests/ was itself the bug: those test files spawn
+  // real child processes as part of their own test logic, and a spawn there
+  // missing windowsHide pops its own visible console/PowerShell window when
+  // run under a parent with no console of its own (e.g. `npm run test:hooks`,
+  // which spawns `node --test scripts/tests/*.test.mjs` WITH windowsHide) —
+  // see cross-os-ffmpeg-install.test.mjs's module-load-time pwsh probe, the
+  // worst offender this exclusion let slip through).
   const scriptsDir = join(REPO_ROOT, 'scripts');
-  const scriptsFiles = listFilesRecursive(scriptsDir, ['.mjs', '.cjs', '.js'])
-    .filter(f => {
-      const rel = f.slice(scriptsDir.length + 1).replace(/\\/g, '/');
-      return !rel.startsWith('tests/');
-    });
+  const scriptsFiles = listFilesRecursive(scriptsDir, ['.mjs', '.cjs', '.js']);
 
   // server/tts-sidecar/scripts/ recursive, .mjs
   const ttsDir = join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts');
@@ -298,6 +309,30 @@ function listSourceFiles(dir: string): string[] {
     if (entry.name.endsWith('.test.ts') || entry.name.endsWith('.spec.ts')) continue;
     if (entry.name === 'test-setup.ts') continue;
     out.push(full);
+  }
+  return out;
+}
+
+/* The dev-machine counterpart to listSourceFiles(): *.test.ts files
+   themselves. listSourceFiles() deliberately EXCLUDES these (a test-only
+   spawn never ships to a user's production install), which is correct for
+   the prod-flash invariant above but leaves a real gap: a dev box running
+   `npm test`/`npm run test:server` (pre-commit, pre-push, or by hand)
+   executes these files constantly, and an unguarded console-app spawn in one
+   flashes a window on every run just the same — found 2026-09-05 via 14 such
+   spawns (`spawnSync('ffmpeg'/'ffprobe', ...)` presence probes and real
+   encode/probe calls) across server/src/export and server/src/tts test
+   files, none caught by the prod-only scan above. */
+function listTestFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+      out.push(...listTestFiles(full));
+      continue;
+    }
+    if (entry.name.endsWith('.test.ts') || entry.name.endsWith('.spec.ts')) out.push(full);
   }
   return out;
 }
@@ -495,6 +530,24 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
       offenders,
       `spawns outside server/src missing windowsHide (launcher/installer flash):\n${offenders.join('\n')}`,
     ).toEqual([]);
+  });
+
+  describe('dev-machine invariant: *.test.ts spawns flash windows on every local run', () => {
+    const testFiles = listTestFiles(SRC_ROOT).filter((f) =>
+      readFileSync(f, 'utf8').includes('child_process'),
+    );
+
+    it('finds at least the known ffmpeg/ffprobe test-file spawners (scan is wired up)', () => {
+      expect(testFiles.length).toBeGreaterThanOrEqual(5);
+    });
+
+    it('every child_process spawn in a server/src *.test.ts file passes windowsHide: true', () => {
+      const offenders = testFiles.flatMap((f) => scanFile(f, CALL_RE));
+      expect(
+        offenders,
+        `test-file spawns missing windowsHide (flashes a console window on every local test run):\n${offenders.join('\n')}`,
+      ).toEqual([]);
+    });
   });
 
   describe('lastIndex-leak and fail-open regressions (#2716 PR review, pass 2)', () => {

@@ -202,7 +202,7 @@
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
     <div class="stat"><div class="n">22</div><div class="l">Still owed in A1 (of 60)</div></div>
     <div class="stat"><div class="n">06-01</div><div class="l">Oldest debt</div></div>
-    <!-- END GENERATED:strip -->
+  <!-- END GENERATED:strip -->
   </div>
 
   <div class="tscroll">
@@ -284,7 +284,6 @@
         <p class="src"><b>Prerequisites confirmed present 2026-07-29:</b> Qwen 0.6B/1.7B-Base + VoiceDesign, <code>faster-whisper-base</code>, ECAPA, coqui-tts 0.27.5 + xtts_v2 weights, both GPUs (eGPU attached — 2-card rows runnable), Coalfall imported and analysed in 7 languages incl. the Russian twin. <b>The §4 audio fixtures now exist</b> at <code>C:\fixtures\fs38\</code> (public-domain LibriVox, two narrators) — a follow-up session need not rebuild them. Note the box runs <code>LAN_HTTPS=1</code>, so the server is on <code>https://localhost:8443</code>, not the <code>:8080</code> the sheet's §3 probes assume · <code>docs/testing/fs38-wave3-onbox-acceptance.md</code> · plans 267/268/271 now record this partial run · multi-hour</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A2</span><span class="iname">Capacity-aware GPU placement (plan 264)</span><span class="risk">Two debts</span><span class="chev">›</span></summary>
       <div class="body">
@@ -295,7 +294,6 @@
         <p class="src"><code>docs/features/264-vram-aware-gpu-placement.md:129-179</code>, header <code>:9-22</code></p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A3</span><span class="iname">srv-57 Multi-GPU Wave 2</span><span class="risk">2-card · blocks a build</span><span class="chev">›</span></summary>
       <div class="body">
@@ -304,7 +302,6 @@
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1230">#1230</a></p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A4</span><span class="iname">Audition engine + tier fidelity</span><span class="risk low">Never heard</span><span class="chev">›</span></summary>
       <div class="body">
@@ -317,7 +314,6 @@
         <p class="src">Kokoro + Coqui + both Qwen tiers, and enough VRAM pressure for a real refusal · <a href="https://github.com/dudarenok-maker/Castwright/pull/1849">#1849</a> · short</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A5</span><span class="iname">fs-60 XTTS per-language eligibility (plan 249)</span><span class="risk">Gates the plan</span><span class="chev">›</span></summary>
       <div class="body">
@@ -326,7 +322,6 @@
         <p class="src">Real sidecar, 8 GB-class GPU, a Russian book with an undesigned character, VRAM pressure for Qwen/Coqui evict-and-reload · <code>plan 249:9,51,53-66</code></p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A6</span><span class="iname">Bulk voice-design recycle resilience (plan 200)</span><span class="risk">Only remaining check</span><span class="chev">›</span></summary>
       <div class="body">
@@ -335,7 +330,6 @@
         <p class="src">The flow gets exercised informally — bugs #1156, #1532, #1557, #1570 were found through real use — but never this forced-recycle walkthrough</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A7</span><span class="iname">Design full cast — bulk Qwen design (plan 195)</span><span class="risk">OOM-adjacent</span><span class="chev">›</span></summary>
       <div class="body">
@@ -343,7 +337,6 @@
         <p class="src">Shipped 2026-06-07 (PR #637); PR #638 filled the Ship-notes SHA but left the acceptance bullet open · <code>plan 195:78-82</code></p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A8</span><span class="iname">Batch the QA re-record loops (plan 228)</span><span class="risk">Never claimed done</span><span class="chev">›</span></summary>
       <div class="body">
@@ -352,7 +345,6 @@
         <p class="src"><code>plan 228:95-100</code></p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A9</span><span class="iname">Per-character re-record / splice (plan 176)</span><span class="risk">Audio integrity</span><span class="chev">›</span></summary>
       <div class="body">
@@ -360,7 +352,6 @@
         <p class="src">Merged 2026-06-03 (PR #500); still <code>active</code> as of a 2026-07-24 commit saying “Still owed: live-GPU re-record acceptance” · <code>plan 176:50,55,59</code></p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A10</span><span class="iname">Structured failure taxonomy (plan 173)</span><span class="risk low">Force 2 failures</span><span class="chev">›</span></summary>
       <div class="body">
@@ -368,7 +359,6 @@
         <p class="src">Shipped 2026-06-03 (<code>affa489</code>, closes #469) · <code>plan 173:9,45</code></p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A11</span><span class="iname">A/B current-vs-proposed voice audition (plan 161)</span><span class="risk low">Oldest debt</span><span class="chev">›</span></summary>
       <div class="body">
@@ -376,7 +366,6 @@
         <p class="src">First landed <b>2026-06-01</b> · <code>plan 161:9</code></p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A12</span><span class="iname">Device-pin resolution survives a respawn</span><span class="risk">2-card · the point of the fix</span><span class="chev">›</span></summary>
       <div class="body">
@@ -391,7 +380,6 @@
         <p class="src">Both cards, and the ability to change enumeration order between boots — batch with A2 step 9 and A3 · <a href="https://github.com/dudarenok-maker/Castwright/pull/1870">#1870</a> closes <a href="https://github.com/dudarenok-maker/Castwright/issues/1857">#1857</a> · short</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A13</span><span class="iname">Idle Coqui is reclaimed under VRAM pressure</span><span class="risk hot">Bullet 4 partial · bullets 2-3 still owed</span><span class="chev">›</span></summary>
       <div class="body">
@@ -407,7 +395,6 @@
         <p class="src">The 8 GB card only, pinned via <code>CUDA_VISIBLE_DEVICES=0</code>, and a mixed-cast non-English book · criteria in the spec at <code>docs/superpowers/specs/2026-07-28-coqui-residency-eviction-design.md</code> §6; TTL rationale in the comment on <code>_COQUI_IDLE_TTL_DEFAULT</code> in <code>tts-sidecar/main.py</code> · short</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A14</span><span class="iname">Real-book QA/badge agreement after the loudness measurement hoist (plan 274)</span><span class="risk low">Rides along with any render</span><span class="chev">›</span></summary>
       <div class="body">
@@ -416,7 +403,6 @@
         <p class="src">A working TTS engine + a real book · criteria in plan 274 §6 row 1 · short, rides along with any other real-book render session</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A15</span><span class="iname">Measurement-failure path renders as untrusted, not fabricated (plan 274)</span><span class="risk low">Opportunistic</span><span class="chev">›</span></summary>
       <div class="body">
@@ -425,7 +411,6 @@
         <p class="src">A working TTS engine + a real book; this failure is hard to force naturally, so treat it as opportunistic rather than something to engineer · criteria in plan 274 §6 row 3 · short, opportunistic</p>
       </div>
     </details>
-  
     <details class="item">
       <summary><span class="num">A16</span><span class="iname">A cloned voice renders a non-English book in the book&#39;s language</span><span class="risk hot">Core PASS 07-31 · 2 sub-checks owed</span><span class="chev">&#8250;</span></summary>
       <div class="body">
@@ -448,7 +433,6 @@
         <p class="src">A single GPU with Qwen resident, a non-English book, and ASR available — <code>ASR_DEVICE</code> and <code>ASR_COMPUTE_TYPE</code> must agree, since a <code>cpu</code> device with a pinned <code>int8_float16</code> makes every <code>/transcribe</code> 500. <b>Run with A1&#39;s remaining Section C/D items</b> — same box, same book, same sidecar session · plan <a href="https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/275-clone-voice-language.md">275</a> §&quot;On-box acceptance&quot;, <a href="https://github.com/dudarenok-maker/Castwright/issues/1951">#1951</a> · one chapter render plus a sidecar restart</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A17</span><span class="iname">/health stays live through a contended eviction on the default Qwen path (plan 273)</span><span class="risk hot">Measured, caveated — exact race still owed</span><span class="chev">›</span></summary>
       <div class="body">
@@ -465,7 +449,6 @@
         <p class="src">The 8 GB card only, pinned via <code>CUDA_VISIBLE_DEVICES=0</code>, a book with a designed Qwen voice in progress plus a second admission target (a Coqui <code>/load</code> or an XTTS clone) · run sheet <code>docs/testing/sidecar-evict-latency-onbox-acceptance.md</code> · criteria in plan <a href="https://github.com/dudarenok-maker/Castwright/blob/main/docs/features/archive/273-sidecar-lock-event-loop.md">273</a> §7, <a href="https://github.com/dudarenok-maker/Castwright/issues/1919">#1919</a> · short</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A18</span><span class="iname">Cloned-voice derive on Coqui no longer needs torchcodec</span><span class="risk">Items 1+3 DONE 07-31 · 2+4 owed</span><span class="chev">›</span></summary>
       <div class="body">
@@ -503,7 +486,6 @@
         <p class="src">8 GB card, after a real chapter render · <a href="https://github.com/dudarenok-maker/Castwright/issues/1976">#1976</a> · short</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A20</span><span class="iname">Golden-audio bless guards don't rubber-stamp an honest bless</span><span class="risk low">Kokoro weights · no CUDA required</span><span class="chev">›</span></summary>
       <div class="body">
@@ -524,7 +506,6 @@
         <p class="src">Kokoro weights on disk (<code>kokoro-v1.0.onnx</code> + <code>voices-v1.0.bin</code>) and a bootstrapped sidecar venv. A single 8 GB card is plenty; <b>CUDA is not required</b> — CPU Kokoro exercises this too. Needs a box quiet enough that <code>--bless</code> measures a stable value, and permission to hand-edit a baseline for the refusal drill (revert before committing) · PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2032">#2032</a> closes <a href="https://github.com/dudarenok-maker/Castwright/issues/1995">#1995</a>, <a href="https://github.com/dudarenok-maker/Castwright/issues/2003">#2003</a>, <a href="https://github.com/dudarenok-maker/Castwright/issues/1987">#1987</a> · criteria in this row; the PR's mutation table is the synthetic half of the evidence, this is the real-file half · short — well under an hour</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A21</span><span class="iname">Cast-time clone-readiness gate — the fixes actually fix</span><span class="risk">One CTA is untestable in mock mode</span><span class="chev">›</span></summary>
       <div class="body">
@@ -539,7 +520,6 @@
         <p class="src">The 8 GB card, a real sidecar, and a real cloned voice with a real master clip · <a href="https://github.com/dudarenok-maker/Castwright/issues/1980">#1980</a>, plan 276 · criteria in the run sheet <code>docs/testing/clone-readiness-gate-onbox-acceptance.md</code>, walkthrough steps 1–7 · short if it rides along with A1's cloning session, which already stages a real clone on this card</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A22</span><span class="iname">Cast/analysis characterId drift — Wave 1 resolver</span><span class="risk">Read-time fix; render not yet watched</span><span class="chev">›</span></summary>
       <div class="body">
@@ -554,7 +534,6 @@
         <p class="src">The 8 GB card, a real sidecar with Qwen resident, and the real workspace book above (back up its two affected chapter files first) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2040">#2040</a> · criteria in the run sheet <code>docs/testing/cast-id-drift-onbox-acceptance.md</code> · short — two single-chapter re-renders on an already-imported, already-analysed book</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A23</span><span class="iname">Cast/analysis characterId drift — Wave 3 repair pass --apply run</span><span class="risk">PARTIALLY DISCHARGED 08-05 — write proven; audio/banner checks owed</span><span class="chev">›</span></summary>
       <div class="body">
@@ -581,7 +560,6 @@
         <p class="src">No GPU or TTS engine needed for the <code>--apply</code> write itself — just the real 20-book workspace, a completed <code>server</code> build, and the ability to stop any locally-running Castwright server. Re-rendering the confirmation chapter needs the 8 GB card + Qwen resident, like most other Group A rows · <a href="https://github.com/dudarenok-maker/Castwright/issues/2040">#2040</a> · criteria in the run sheet <code>docs/testing/cast-id-drift-onbox-acceptance.md</code> §8 (Wave 3) · short — one script invocation against an already-imported, already-analysed workspace, then one chapter re-render</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A24</span><span class="iname">Design-wins VRAM contention timeout sized against a REAL 0.6B cold load</span><span class="risk hot">Fix shipped PR #2797 — still unproven on real hardware</span><span class="chev">›</span></summary>
       <div class="body">
@@ -671,7 +649,6 @@
         <p class="src">A real installed release directory + a way to trigger its upgrade path; the existing NVIDIA dev box otherwise · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A31</span><span class="iname">Russian XTTS quality — leading-dash pause, Coqui degeneracy guard, neuter <code>-ее</code> invariant</span><span class="risk">Coqui/XTTS resident, Russian text; no clone needed</span><span class="chev">›</span></summary>
       <div class="body">
@@ -686,7 +663,6 @@
         <p class="src">A Coqui-capable sidecar with XTTS resident, a Russian book or line, no clone needed (every #2026 defect reproduces on the stock catalogue voice <code>Damien Black</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2026">#2026</a> · criteria: <code>docs/testing/fs38-wave3-onbox-acceptance.md</code>'s <code>#2026 — additional acceptance criteria: Russian XTTS quality</code> section · short — a handful of <code>/synthesize</code> probes plus one attempt at reproducing the degenerate collapse</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A32</span><span class="iname">Named-entity decode reaches the TTS engine on a real EPUB</span><span class="risk">single 8 GB card</span><span class="chev">›</span></summary>
       <div class="body">
@@ -715,7 +691,6 @@
         <p class="src">A single 8 GB GPU, a live Kokoro-capable sidecar, and <code>KOKORO_DEVICE</code> settable per run · <a href="https://github.com/dudarenok-maker/Castwright/issues/2647">#2647</a> · criteria are the four bullets above — no existing run sheet covers this alarm-correctness surface specifically; <code>ort-marker-onbox-acceptance.md</code> covers the neighbouring ORT-marker/GPU-provider mechanism (A28–A30) but not this bookkeeping · short — one genuine-fallback load, one contended-admission load, one drift simulation, one unpinned-auto load with its negative control</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A34</span><span class="iname">Cast/analysis <code>characterId</code> drift — #2584/#2570 wrong-direction retirement fix</span><span class="risk">Run, criterion not met — root cause understood</span><span class="chev">›</span></summary>
       <div class="body">
@@ -729,7 +704,6 @@
         <p class="src">The real workspace book above and a real analyzer (local Ollama or Gemini) — no GPU/TTS sidecar required, since this is an analysis-only defect · <a href="https://github.com/dudarenok-maker/Castwright/issues/2584">#2584</a>, <a href="https://github.com/dudarenok-maker/Castwright/issues/2040">#2040</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/2640">PR #2640</a> · criteria in <code>cast-id-drift-onbox-acceptance.md</code> §10 · short — one full re-analysis of an already-imported book</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A35</span><span class="iname">Stranded VRAM after a chapter render — resident-model floor or genuine leak?</span><span class="risk">Partial post-unload diff taken — one of three models</span><span class="chev">›</span></summary>
       <div class="body">
@@ -743,7 +717,6 @@
         <p class="src">A live sidecar with all three models potentially resident (Qwen Base 0.6B, Qwen 1.7B-Base, Whisper), and the ability to force explicit <code>/unload</code> + TTL lapse mid-session · <a href="https://github.com/dudarenok-maker/Castwright/issues/2656">#2656</a> · criteria: extend <code>docs/testing/1996-stranded-vram-measurement.md</code>, don't replace it · short — one idle render, explicit unloads for all three models, one reading</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A36</span><span class="iname">Voice reassignment: a rebuilt audition centroid actually scores real audio, not just discards the stale one</span><span class="risk">PARTIALLY run 2026-08-29 — 2 of 3 criteria met, new defect found (#2793)</span><span class="chev">›</span></summary>
       <div class="body">
@@ -756,7 +729,6 @@
         <p class="src">A working TTS engine (Coqui/XTTS) + a real book + a cloned or designed voice with a long enough sample to clear <code>MIN_DURATION_SEC</code> (3.0s per synthesis group) · <a href="https://github.com/dudarenok-maker/Castwright/issues/1969">#1969</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/2402">PR #2402</a>, <a href="https://github.com/dudarenok-maker/Castwright/issues/2700">#2700</a> · full criteria text in #2700 · short, opportunistic — rides along with any cloned-voice reassignment test that happens to produce a long-enough sample</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A37</span><span class="iname">Russian dash-attributed dialogue — doubled-comma collapse pause by ear</span><span class="risk">Coqui/XTTS resident, Russian text; no clone needed</span><span class="chev">›</span></summary>
       <div class="body">
@@ -767,7 +739,6 @@
         <p class="src">A Coqui-capable sidecar with XTTS resident, a Russian line (no clone needed — the stock catalogue voice <code>Damien Black</code> reproduces this shape) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2059">#2059</a> · criteria: the bullet above — #2059 itself has only this one dialogue shape and no separate run sheet (unlike A31's) · short — one or two renders of a Russian test sentence</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A102</span><span class="iname">CUDA self-test on real ORT session detects Kokoro CPU fallback</span><span class="risk">single 8 GB card, live Kokoro sidecar with real ORT session</span><span class="chev">›</span></summary>
       <div class="body">
@@ -795,7 +766,6 @@
         <p class="src">two NVIDIA GPUs of different sizes, a local Ollama daemon, and a model sized to force a genuine split · <a href="https://github.com/dudarenok-maker/Castwright/issues/2367">#2367</a> · criteria: Castwright#2734 (the verify child for this chain) checklist item 6; the four task briefs under #2367 for the exact behaviour each piece owns · short — one oversized load that splits, one genuinely-too-big load that doesn't, one expectedDevice mismatch check</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">A105</span><span class="iname">Qwen base17 eviction guard and _DEVICE_LEDGER serialization</span><span class="risk">single 8 GB GPU card, Qwen VoiceDesign 1.7B resident, real sidecar with base17 weights</span><span class="chev">›</span></summary>
       <div class="body">
@@ -1267,7 +1237,6 @@
         <p class="src">A machine with Pinokio, an existing pre-fix install, nvidia profile · 20–40 min, sharing setup with E1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 4</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">E8</span><span class="iname">Revoke is loopback-only — the forwarder boundary</span><span class="risk">Every test fabricates the peer or stubs location</span><span class="chev">›</span></summary>
       <div class="body">
@@ -1282,7 +1251,6 @@
         <p class="src">LAN HTTPS with the <code>:443</code> forwarder actually bound (no elevation needed on Windows), a <b>non-default <code>LAN_HTTPS_PORT</code></b>, plus a phone paired over <code>castwright.local</code> · 15–20 min, shares setup with E2/E3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/2269">#2269</a> · <a href="https://github.com/dudarenok-maker/Castwright/pull/2280">PR #2280</a> · <a href="https://github.com/dudarenok-maker/Castwright/pull/2294">PR #2294</a> · plan 225 invariant 6</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">E9</span><span class="iname">measure-attribution.mjs against the real workspace (#1984 Wave 1)</span><span class="risk">Run complete; D13 drop confirmed (#2357) — 2 sub-items still owed</span><span class="chev">›</span></summary>
       <div class="body">
@@ -1299,7 +1267,6 @@
         <p class="src">A checkout (or worktree with its cache populated from one) whose cache holds the real library&#39;s analyses, <code>cd server &amp;&amp; npm run build</code>, then <code>WORKSPACE_DIR=C:\AudiobookWorkspace node scripts/measure-attribution.mjs</code> · under 5 min once <code>server/dist</code> exists · <a href="https://github.com/dudarenok-maker/Castwright/issues/1984">#1984</a> Wave 1 · <a href="https://github.com/dudarenok-maker/Castwright/blob/main/docs/superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md">plan</a> · full checklist: <code>docs/testing/attribution-collapse-visibility-onbox-acceptance.md</code></p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">E10</span><span class="iname">npm run stop sweeps the RIGHT checkout&#39;s sidecar, Vite, AND server (#2632, PR #2635)</span><span class="risk">Two live checkouts, no GPU needed</span><span class="chev">›</span></summary>
       <div class="body">
@@ -1309,22 +1276,6 @@
         <p class="src">Two checkouts of this repo (e.g. the primary + a <code>wt-new.mjs</code> worktree, e.g. slot 1: <code>VITE_PORT=5183</code>, <code>PORT</code>/<code>VITE_API_PORT=8090</code>, <code>LOCAL_TTS_PORT=9010</code>), each with <b>all three</b> of Vite, the server, and the sidecar live (<code>npm start</code> / <code>npm run dev</code>) so each checkout owns a <code>tts.owner.&lt;port&gt;.json</code> note. From the worktree, run <code>npm run stop</code> and observe <b>four</b> things, not just the sidecar pair: (1) the worktree&#39;s own sidecar (<code>:9010</code>) dies; (2) the primary&#39;s sidecar (<code>:9000</code>) survives; (3) the worktree&#39;s own Vite (<code>:5183</code>) and server (<code>:8090</code>) die; (4) the <b>primary&#39;s</b> Vite (<code>:5173</code>) and server (<code>:8080</code>) survive — this last pair is the one pass 8 found broken and is the one an operator must not skip. Then repeat after a clean shutdown of the worktree&#39;s sidecar (so <code>tts.owner.&lt;port&gt;.json</code> is absent and the sweep falls back to <code>server/.env</code>/<code>.env.local</code>) and confirm the same four-way discrimination holds. <b>Optionally</b>, if exercising the LAN-HTTPS path too: start the primary with <code>LAN_HTTPS=1</code> (so it&#39;s listening on <code>:8443</code>), then from the worktree run <code>npm run stop</code> and confirm the <b>primary&#39;s <code>:8443</code> also survives</b> — a smoke check on the removal, not a required step every run. On Windows PowerShell only (<code>stop-app.ps1</code> force-kills; <code>stop-app.mjs</code>, the prod launcher, only warns and never runs Vite). <b>A fifth observation, in the PRIMARY checkout itself</b> (#2632 N46): with no <code>.env.local</code> and no <code>PORT</code> line in <code>server/.env</code> — the primary checkout&#39;s actual today-state — <code>Get-PortsToSweep</code>&#39;s <code>-BasePorts</code> resolves to an empty array at the <code>stop-app.ps1</code> call site. Run <code>scripts/stop-app.ps1</code> there (nothing needs to actually be running) and confirm: no red <code>ParameterBindingValidationException</code>/<code>Cannot bind argument</code> block appears, and the script still reports its outcome truthfully (<code>[OK] nothing to stop</code>, or the correct sweep line if a listener is present) rather than silently swallowing the error and printing a false "nothing to stop" while a raw exception scrolled past above it — the observer must not skip this one either. Under 10 min with the stacks already running, under 2 more for the fifth observation · <a href="https://github.com/dudarenok-maker/Castwright/issues/2632">#2632</a> · PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2635">#2635</a></p>
       </div>
     </details>
-
-    <details class="item">
-      <summary><span class="num">E101</span><span class="iname">Port-keyed TTS owner notes prevent collision when servers share a run directory (#2641)</span><span class="risk low">Two live sidecars, shared run dir</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>Before #2641, the TTS sidecar owner-note file was fixed at <code>.run/tts.owner.json</code> regardless of which port the sidecar was listening on. When two different server instances on different ports both used the same <code>.run</code> directory (set via <code>APP_RUN_DIR</code>) they would both try to write to this single filename. Whichever wrote last would silently clobber the other's note, losing the ownership information (PID, port, lineage). A server reading the note later would find stale or wrong data about which sidecar it was supposed to manage.</p>
-        <p>#2641 fixes this by keying the owner-note filename by port: <code>.run/tts.owner.&lt;port&gt;.json</code>. The sidecar-sweep logic that reads owner notes also resolves the port, so it correctly discriminates.</p>
-        <p>E10 verifies the sweep with <b>separate</b> <code>.run/</code> directories; this row verifies port-keying prevents collision when <b>the run directory is shared</b>.</p>
-        <ul>
-          <li>Primary checkout at default ports (<code>PORT=8080</code>, <code>LOCAL_TTS_PORT=9000</code>) + worktree at slot 1 (<code>PORT=8090</code>, <code>LOCAL_TTS_PORT=9010</code>), both with <code>APP_RUN_DIR=/abs/path/shared-run-dir</code> in their <code>server/.env</code>.</li>
-          <li>Run <code>npm start</code> or <code>npm run dev</code> in each checkout. From the primary, observe both <code>.run/tts.owner.9000.json</code> and <code>.run/tts.owner.9010.json</code> coexist without collision — this is the core fix of #2641. Verify by inspecting file contents directly (e.g., <code>cat /abs/path/shared-run-dir/tts.owner.*.json</code>); the port-keyed naming prevents the overwrite-collision that would have occurred before this fix.</li>
-        </ul>
-        <p><strong>Note:</strong> Verifying the port-based sweep's behavior in a shared-run-dir configuration is not currently a safe on-box test, because the PID file (<code>.run/tts.pid</code>) is not port-keyed — only the owner notes are. When two servers share a run directory, both write to the same <code>tts.pid</code>, and whichever started last overwrites the first. Running <code>npm run stop</code> from either checkout can then kill the wrong process (the one whose PID happens to be in the file, not the one whose checkout the stop was issued from), defeating the separation the port-keyed owner notes provide. The actual #2641 fix (port-keyed owner-note filenames) is verified above; the sweep's correctness in this shared-run-dir scenario will require #2641 to be extended to port-key the PID files as well.</p>
-        <p class="src">Two live sidecars on the same host with a shared run directory · 5–10 min · this PR's description (§On-box acceptance), <code>server/src/tts/sidecar-owner.ts</code> (Node server write path), <code>scripts/lib/sidecar-sweep-port.mjs</code> and <code>.psm1</code> (sweep read and fallback logic) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2641">#2641</a> · PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2754">#2754</a></p>
-      </div>
-    </details>
-
     <details class="item">
       <summary><span class="num">E11</span><span class="iname">Pinokio Install/Update: requirements CRLF normalization</span><span class="risk">Windows box with pre-existing Pinokio install</span><span class="chev">›</span></summary>
       <div class="body">
@@ -1339,7 +1290,6 @@
         <p><b>One-update lag:</b> Updates FROM pre-#2799 releases run the old <code>resolve-release.js</code>, so CRLF normalization only takes effect from the NEXT update onward (see <a href="#ge1">E1</a> and <code>pinokio-scripts/update.js</code> lines 19–28).</p>
       </div>
     </details>
-
     <details class="item">
       <summary><span class="num">E12</span><span class="iname">ASR warm footprint measurement via torch allocator peak</span><span class="risk">GPU with CTranslate2/faster-whisper resident</span><span class="chev">›</span></summary>
       <div class="body">
@@ -1352,6 +1302,20 @@
           <li>Verify the recorded value matches the expected range for CTranslate2+faster-whisper on this box&#39;s GPU (typically a few hundred MB, depending on model size and CUDA compute capacity).</li>
         </ul>
         <p class="src">GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar with ASR enabled (<code>SEG_ASR_ENABLED=1</code>) and configured to use GPU (<code>ASR_DEVICE=cuda</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2682">#2682</a>, PR #2799 · the allocator-peak measurement in <code>server/tts-sidecar/main.py</code>&#39;s <code>FootprintTable</code> class must observe a positive value recorded via its <code>record()</code> method when a real forward runs, not a stubbed test value · short — one real ASR warm-up sequence during a render or via manual endpoint</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E101</span><span class="iname">Port-keyed TTS owner notes prevent collision when servers share a run directory (#2641)</span><span class="risk low">Two live sidecars, shared run dir</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Before #2641, the TTS sidecar owner-note file was fixed at <code>.run/tts.owner.json</code> regardless of which port the sidecar was listening on. When two different server instances on different ports both used the same <code>.run</code> directory (set via <code>APP_RUN_DIR</code>) they would both try to write to this single filename. Whichever wrote last would silently clobber the other's note, losing the ownership information (PID, port, lineage). A server reading the note later would find stale or wrong data about which sidecar it was supposed to manage.</p>
+        <p>#2641 fixes this by keying the owner-note filename by port: <code>.run/tts.owner.&lt;port&gt;.json</code>. The sidecar-sweep logic that reads owner notes also resolves the port, so it correctly discriminates.</p>
+        <p>E10 verifies the sweep with <b>separate</b> <code>.run/</code> directories; this row verifies port-keying prevents collision when <b>the run directory is shared</b>.</p>
+        <ul>
+          <li>Primary checkout at default ports (<code>PORT=8080</code>, <code>LOCAL_TTS_PORT=9000</code>) + worktree at slot 1 (<code>PORT=8090</code>, <code>LOCAL_TTS_PORT=9010</code>), both with <code>APP_RUN_DIR=/abs/path/shared-run-dir</code> in their <code>server/.env</code>.</li>
+          <li>Run <code>npm start</code> or <code>npm run dev</code> in each checkout. From the primary, observe both <code>.run/tts.owner.9000.json</code> and <code>.run/tts.owner.9010.json</code> coexist without collision — this is the core fix of #2641. Verify by inspecting file contents directly (e.g., <code>cat /abs/path/shared-run-dir/tts.owner.*.json</code>); the port-keyed naming prevents the overwrite-collision that would have occurred before this fix.</li>
+        </ul>
+        <p><strong>Note:</strong> Verifying the port-based sweep's behavior in a shared-run-dir configuration is not currently a safe on-box test, because the PID file (<code>.run/tts.pid</code>) is not port-keyed — only the owner notes are. When two servers share a run directory, both write to the same <code>tts.pid</code>, and whichever started last overwrites the first. Running <code>npm run stop</code> from either checkout can then kill the wrong process (the one whose PID happens to be in the file, not the one whose checkout the stop was issued from), defeating the separation the port-keyed owner notes provide. The actual #2641 fix (port-keyed owner-note filenames) is verified above; the sweep's correctness in this shared-run-dir scenario will require #2641 to be extended to port-key the PID files as well.</p>
+        <p class="src">Two live sidecars on the same host with a shared run directory · 5–10 min · this PR's description (§On-box acceptance), <code>server/src/tts/sidecar-owner.ts</code> (Node server write path), <code>scripts/lib/sidecar-sweep-port.mjs</code> and <code>.psm1</code> (sweep read and fallback logic) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2641">#2641</a> · PR <a href="https://github.com/dudarenok-maker/Castwright/pull/2754">#2754</a></p>
       </div>
     </details>
 
