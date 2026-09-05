@@ -19,7 +19,7 @@ import { BIN_COUNT } from '../audio/compute-peaks.js';
 
 const ffmpegPresent = (() => {
   try {
-    const result = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    const result = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
     return result.status === 0;
   } catch {
     return false;
@@ -28,7 +28,7 @@ const ffmpegPresent = (() => {
 
 const ffprobePresent = (() => {
   try {
-    const result = spawnSync('ffprobe', ['-version'], { stdio: 'ignore' });
+    const result = spawnSync('ffprobe', ['-version'], { stdio: 'ignore', windowsHide: true });
     return result.status === 0;
   } catch {
     return false;
@@ -44,7 +44,7 @@ function ffprobeDurationSec(file: string): number {
   const out = spawnSync(
     'ffprobe',
     ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nk=1:nw=1', file],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', windowsHide: true },
   );
   return Number(out.stdout.trim());
 }

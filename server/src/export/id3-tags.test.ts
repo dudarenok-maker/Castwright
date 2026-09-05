@@ -16,14 +16,14 @@ import { applyId3v24Tags } from './id3-tags.js';
 
 const ffmpegPresent = (() => {
   try {
-    return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+    return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true }).status === 0;
   } catch {
     return false;
   }
 })();
 const ffprobePresent = (() => {
   try {
-    return spawnSync('ffprobe', ['-version'], { stdio: 'ignore' }).status === 0;
+    return spawnSync('ffprobe', ['-version'], { stdio: 'ignore', windowsHide: true }).status === 0;
   } catch {
     return false;
   }
@@ -74,7 +74,7 @@ function probe(path: string): Promise<ProbeResult> {
         'json',
         path,
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
     );
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
