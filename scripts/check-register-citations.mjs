@@ -36,7 +36,7 @@
 // gating, whether it belongs in `verify.yml` or its own workflow), not
 // something to wire in blind here; tracked at `#2721`.
 //
-// Three checks, ordered by precision (least to most likely to need
+// Four checks, ordered by precision (least to most likely to need
 // judgment):
 //
 //   A. Nonexistent ID — a cited row ID with no heading in the register.
@@ -235,6 +235,12 @@
 //      fires for an id with no such record, whether or not the subject has a
 //      live row elsewhere — only a documented historical tie downgrades it
 //      to `annotatedDischarge`.
+//
+//   D. Heading title drift — a heading citation (`### <ID> · <title-echo>`)
+//      whose title-echo text no longer matches the cited row's current
+//      `.title` (checkCitationTitleDrift). Advisory only, never fatal even
+//      under --strict — see that function's own header comment for the
+//      threshold rationale and the annotation-exemption it shares with A/C.
 //
 // Frozen paths are excluded from all four checks — see isFrozenPath's own
 // comment for why each one is frozen. This script's own source, its own test
@@ -2191,7 +2197,7 @@ function dischargeAnnotationPresentAnywhere(sectionText, id) {
 }
 
 /**
- * v2 of `check:register-row-citations` (#2838's second task child): flags a
+ * v2 of `check:register-citations` (#2838's second task child): flags a
  * heading citation whose title-echo text scores at or below
  * TITLE_DRIFT_RATIO_THRESHOLD against the row's current `.title` AND shares
  * fewer than TITLE_DRIFT_MIN_SHARED_TOKENS non-stopword, non-ID tokens with

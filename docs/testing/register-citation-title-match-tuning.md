@@ -72,7 +72,7 @@ hides the real signal:
 | **Heading** (`### <ID> · title`) | 185 total scanned, 31 in check scope* | 0.000 | 0.259 | 0.826 | 1.000 | 1.000 |
 | **Prose-idiom** (`row(s) ID`, `Register row(s):`) | 141 | 0.000 | 0.008 | 0.023 | 0.045 | 0.357 |
 
-**Heading-surface population breakdown:** The 185 heading citations scanned by the measurement included the register's own row headings (65, which self-match with score 1.000 by construction and are uninformative for evaluating real vs. drifted citations) and headings in frozen paths excluded from Check D's scope (74 headings from `docs/testing/onbox-acceptance-staleness-audit.md`, `docs/features/archive/`, and other frozen files). The remaining **31 headings in the actual Check D scope** are the meaningful sample for threshold evaluation — the headings that Check D would actually scan in real usage. The core finding (low signal, high overlap) remains valid over this narrower set.
+**Heading-surface population breakdown:** The 185 heading citations scanned by the measurement included the register's own row headings (self-matching with score 1.000 by construction, uninformative for evaluating real vs. drifted citations) and headings excluded from Check D's actual scan by two DIFFERENT mechanisms, not one: genuine frozen-path exclusion (`isFrozenPath` — e.g. `docs/testing/onbox-acceptance-staleness-audit.md`, a real `FROZEN_EXACT` entry) and, separately, code-fence stripping (`stripFences`) for a heading that only appears inside a ` ```markdown ` worked-example block, like the A20 example a few paragraphs below in a `docs/superpowers/plans/` file — `docs/superpowers/**` and `docs/features/archive/` are explicitly NOT frozen paths (see `isFrozenPath`'s own header comment for why that exclusion was deliberately removed), so a heading there is only excluded from Check D's scan when it sits inside a fence, not because of its directory. The remaining headings in the actual Check D scan scope are the meaningful sample for threshold evaluation. The core finding (low signal, high overlap) remains valid regardless of the exact split between these two exclusion mechanisms, which this doc does not re-derive precisely — see the CLI's own real-corpus output for the current, authoritative scan-scope count.
 
 **Why they differ so much:** a heading citation's surrounding text is
 literally `### <ID> · <the row's own title text>` — it tautologically
@@ -124,29 +124,35 @@ nothing about discriminating power).
 
 Two synthetic pairs scored extremely high (0.941, 0.926). These high scores
 do **not** represent legitimately similar row titles, but rather detected
-**stale headings in frozen paths**: a `### A20 · Idle Coqui is reclaimed under
-VRAM pressure...` heading in `docs/superpowers/plans/2026-07-28-coqui-residency-eviction.md:1304`
-(an archived plan in a frozen path), and a similar stale heading for A32 in
-`docs/testing/onbox-acceptance-staleness-audit.md:1042` (a dated register
-snapshot, also frozen). These stale headings in frozen/audit documents echo
-the register's own title text and were scored against each other or against
-prose elsewhere in the same frozen file, producing the high similarity. **This
-is evidence that the Jaccard check detects real drift** — stale headings in
-archived plans get correctly flagged as high-similarity to something else —
-not evidence that two live register rows carry similar titles (they do not:
-A20 covers golden-audio bless guards; A13 covers Coqui VRAM pressure; A32
-covers named-entity decode; A22 covers characterId drift). The mechanism
-works correctly here, catching what is genuinely a citation/heading drift
-across time.
+**stale headings excluded from Check D's real scan by two different
+mechanisms**: a `### A20 · Idle Coqui is reclaimed under VRAM pressure...`
+heading in `docs/superpowers/plans/2026-07-28-coqui-residency-eviction.md:1304`
+— NOT a frozen path (`docs/superpowers/**` is deliberately not frozen, see
+`isFrozenPath`'s own header comment); this heading is only inside a
+` ```markdown ` worked-example fence a few lines above it, so `stripFences`
+excludes it from Check D's real scan, not path-based freezing — and a similar
+stale heading for A32 in `docs/testing/onbox-acceptance-staleness-audit.md:1042`
+(a dated register snapshot, which genuinely IS a `FROZEN_EXACT` path). These
+stale headings echo the register's own title text and were scored against
+each other or against prose elsewhere in the same file, producing the high
+similarity. **This is evidence that the Jaccard check detects real drift** —
+a stale worked example and a stale audit snapshot both get correctly flagged
+as high-similarity to something else — not evidence that two live register
+rows carry similar titles (they do not: A20 covers golden-audio bless guards;
+A13 covers Coqui VRAM pressure; A32 covers named-entity decode; A22 covers
+characterId drift). The mechanism works correctly here, catching what is
+genuinely a citation/heading drift across time.
 
 Representative scoring examples:
 
 - `real=C2 wrong=A33 score=0.000` — the discharge-note prose above scores
   0 against BOTH its real title and a random wrong title, i.e. Jaccard
   cannot tell these apart at all for this citation.
-- `real=A20 wrong=A13 score=0.941` — stale heading in a frozen path
+- `real=A20 wrong=A13 score=0.941` — stale heading inside a worked-example
+  code fence, excluded from Check D's real scan by `stripFences`, not
+  frozen-path exclusion
   (`docs/superpowers/plans/2026-07-28-coqui-residency-eviction.md:1304`)
-  echoing an old title, paired with prose elsewhere in that same frozen file.
+  echoing an old title, paired with prose elsewhere in that same file.
   Evidence of detected drift, not a legitimately similar pair of live titles.
 - `real=E1 wrong=E7 score=0.333` — plausible confusion (`E1`/`E7` are both
   Pinokio-installer-adjacent rows explicitly cross-referenced as "group with
@@ -229,7 +235,9 @@ Instead:
 
 The high-similarity pairs mentioned earlier (A20/A13 with score 0.941,
 A32/A22 with score 0.926) were **not** instances of live register rows
-carrying similar titles — they were stale headings in frozen/audit paths.
+carrying similar titles — they were stale headings excluded from Check D's
+real scan (A20's inside a worked-example code fence, A32's in a genuinely
+frozen audit-snapshot path).
 The current register rows themselves (A20: golden-audio bless guards, A13:
 Coqui VRAM pressure, A32: named-entity decode, A22: characterId drift) carry
 distinct titles unrelated to each other, confirming that the near-duplicate-title

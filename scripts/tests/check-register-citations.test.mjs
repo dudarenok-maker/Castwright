@@ -2002,7 +2002,7 @@ test('checkCitationTitleDrift: the ratio floor (0.30) is load-bearing — low ra
 
 ## Group A — test group
 
-### A31 · alpha beta charlie (#1234)
+### A31 · alpha beta charlie
 
 Some body text.
 `;
@@ -2023,7 +2023,7 @@ test('checkCitationTitleDrift: the shared-token minimum (2) is load-bearing — 
 
 ## Group A — test group
 
-### A32 · alpha beta charlie delta (#1234)
+### A32 · alpha beta charlie delta
 
 Some body text.
 `;
@@ -2042,7 +2042,7 @@ test('checkCitationTitleDrift: the ratio edge case (shared = 1, tiny union) is r
 
 ## Group A — test group
 
-### A33 · alpha (#1234)
+### A33 · alpha
 
 Some body text.
 `;
