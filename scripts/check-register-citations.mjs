@@ -36,7 +36,7 @@
 // gating, whether it belongs in `verify.yml` or its own workflow), not
 // something to wire in blind here; tracked at `#2721`.
 //
-// Three checks, ordered by precision (least to most likely to need
+// Four checks, ordered by precision (least to most likely to need
 // judgment):
 //
 //   A. Nonexistent ID — a cited row ID with no heading in the register.
@@ -236,7 +236,13 @@
 //      live row elsewhere — only a documented historical tie downgrades it
 //      to `annotatedDischarge`.
 //
-// Frozen paths are excluded from all three checks — see isFrozenPath's own
+//   D. Heading title drift — a heading citation (`### <ID> · <title-echo>`)
+//      whose title-echo text no longer matches the cited row's current
+//      `.title` (checkCitationTitleDrift). Advisory only, never fatal even
+//      under --strict — see that function's own header comment for the
+//      threshold rationale and the annotation-exemption it shares with A/C.
+//
+// Frozen paths are excluded from all four checks — see isFrozenPath's own
 // comment for why each one is frozen. This script's own source, its own test
 // fixtures, and the sibling `check-onbox-register.mjs` checker's test
 // fixtures are excluded from scanning entirely (not just Check A/B/C — see
@@ -2004,6 +2010,257 @@ export function measureWrongIdEligibleLines(fileTexts, registerRows) {
   };
 }
 
+// --- Check D: heading title drift (advisory, non-fatal) -------------------
+//
+// Measured in docs/testing/register-citation-title-match-tuning.md (#2870,
+// first task child of #2838): plain Jaccard token-overlap between a register
+// row's `.title` and the prose that cites it does NOT cleanly separate real
+// citations from genuine drift on the prose-idiom/label-line surfaces — a
+// prose-idiom citation ("register row A21 recorded in...") almost never
+// restates the row's title by design (it references the row by ID while
+// talking about something else), so its real-corpus floor is
+// indistinguishable from a synthetic mismatch's floor. Only the anchored
+// HEADING surface (`### <ID> · <title-echo>`) carries a usable signal,
+// because a heading's text after `·` tautologically restates the title when
+// nothing has drifted. Per that doc's own recommendation: skip the
+// prose-idiom/label-line surfaces entirely, and for the heading surface,
+// require BOTH a ratio floor AND a minimum shared-content-token count before
+// flagging, and treat the whole thing as advisory — never fails the gate,
+// not even under `--strict` — because the tuning doc's own near-duplicate-
+// title cases (A20/A13, A32/A22) mean even a well-tuned ratio is
+// structurally blind to some real ID swaps; a hard CI gate on a metric known
+// to have that blind spot would train contributors to distrust or route
+// around it.
+
+// Verbatim from the tuning doc's own measurement — do not re-derive.
+const TITLE_DRIFT_STOPWORDS = new Set(
+  `a an the of to in on for and or but with without at by from as is are was
+   were be been being this that these those it its into over under again
+   further then once here there when where why how all any both each few more
+   most other some such no nor not only own same so than too very s t can will
+   just don should now`
+    .split(/\s+/)
+    .filter(Boolean),
+);
+
+// A ratio at or below this is "low similarity" — the tuning doc's own
+// heading-surface recommendation (~0.3). On this repo's real corpus the
+// ratio floor is currently empirically inert: every genuine detection
+// (annotated or not) has shared < TITLE_DRIFT_MIN_SHARED_TOKENS with ratio
+// well under this floor, so shared < 2 alone would flag the same set —
+// annotation-exemption (below) doesn't change this, since it filters
+// findings the ratio+shared gate has already fired on. The floor is kept
+// for the case the mutation tests construct directly: shared === 1 with a
+// very small token union, where ratio is the only thing distinguishing a
+// coincidental one-word overlap from real drift — a case this corpus
+// doesn't currently exercise, not one the code fails to guard.
+const TITLE_DRIFT_RATIO_THRESHOLD = 0.3;
+
+// Minimum non-stopword, non-ID tokens the title and the heading text must
+// share before a low ratio is treated as real drift rather than noise from
+// two short strings — the tuning doc's own "both a ratio floor and a minimum
+// shared-content-token count" recommendation.
+const TITLE_DRIFT_MIN_SHARED_TOKENS = 2;
+
+const TITLE_DRIFT_TOKEN_REGEX = /[a-z0-9]+/g;
+// A bare row-ID-shaped token (e.g. "a6") — stripped from both sides before
+// scoring, same as the tuning doc's `excludeId` measurement.
+const TITLE_DRIFT_ID_TOKEN_REGEX = /^[a-z]\d{1,3}$/;
+// Markdown link pattern: [text](url). Replaces with just the link text to
+// exclude URL boilerplate tokens (github, com, issues, https, etc.) from
+// contributing to the Jaccard similarity computation. The link text itself
+// may be meaningful (e.g. [#1000]) and is preserved; only the URL is dropped.
+const MARKDOWN_LINK_REGEX = /\[([^\]]*)\]\([^)]*\)/g;
+
+/**
+ * Strips markdown link URLs from text, keeping only the link text.
+ * E.g. "foo ([#1234](https://github.com/...)) bar" becomes "foo (#1234) bar",
+ * so the URL's tokens (github, com, issues, https, etc.) don't contribute to
+ * drift scoring. Used by titleDriftTokens to exclude link-boilerplate false
+ * positives from the shared-token count gate.
+ */
+function stripMarkdownLinkUrls(text) {
+  return text.replace(MARKDOWN_LINK_REGEX, '$1');
+}
+
+function titleDriftTokens(text) {
+  const withoutLinks = stripMarkdownLinkUrls(text);
+  const withoutCodeSpans = stripInlineCodeSpans(withoutLinks);
+  const raw = withoutCodeSpans.toLowerCase().match(TITLE_DRIFT_TOKEN_REGEX) ?? [];
+  const tokens = new Set();
+  for (const t of raw) {
+    if (TITLE_DRIFT_STOPWORDS.has(t)) continue;
+    if (TITLE_DRIFT_ID_TOKEN_REGEX.test(t)) continue;
+    tokens.add(t);
+  }
+  return tokens;
+}
+
+/**
+ * Jaccard similarity between two token sets, plus the shared-token count
+ * both the ratio-floor and minimum-shared-token-count gates need. Two empty
+ * token sets score 1 (no content on either side to disagree about) rather
+ * than 0/0 — this never fires in the real corpus (a row title and a heading
+ * echo are never entirely stopwords/IDs) but a defined answer beats NaN
+ * silently propagating into a false flag.
+ */
+function titleDriftScore(titleTokens, proseTokens) {
+  let shared = 0;
+  for (const t of titleTokens) if (proseTokens.has(t)) shared++;
+  const union = titleTokens.size + proseTokens.size - shared;
+  const ratio = union === 0 ? 1 : shared / union;
+  return { ratio, shared };
+}
+
+/**
+ * Every `### <ID> [+ <ID> ...] · <title-echo>` heading citation on `text`,
+ * paired with its trailing title-echo text — the surface the tuning doc
+ * measured as the only one carrying a usable similarity signal (see this
+ * section's header comment). Reuses HEADING_ID_REGEX/splitCitedIds so this
+ * recognises exactly the same heading citations Check A does — no new
+ * surface is invented here.
+ * @returns {{ lineIndex: number, ids: string[], titleEcho: string }[]}
+ */
+function extractHeadingTitleEchoes(text) {
+  const stripped = deBold(stripFences(text));
+  const lines = stripInlineCodeSpans(stripped).split('\n');
+  const citations = [];
+  lines.forEach((line, i) => {
+    const m = line.match(HEADING_ID_REGEX);
+    if (!m) return;
+    const ids = splitCitedIds(m[1]);
+    if (!ids.length) return;
+    const titleEcho = line.slice(m[0].length).trim();
+    citations.push({ lineIndex: i, ids, titleEcho });
+  });
+  return citations;
+}
+
+/**
+ * For a single-ID heading, check if a discharge annotation exists in the
+ * section text AND either:
+ *   1. Has NO ID proximate to the discharge word (the A8 case where discharge
+ *      is "bare"), OR
+ *   2. Has the heading's own ID proximate to the discharge word (the A41 case
+ *      with proximity-adjacent discharge)
+ *
+ * This avoids false positives like "B1 was discharged" excusing a nearby
+ * "### A41 · ..." heading, while catching both:
+ *   - "— discharged 2026-08-27" with no ID nearby (the A8 real case)
+ *   - "A41 was discharged" with the heading's own ID nearby (the standard case)
+ *
+ * For multi-ID headings, a discharge annotation must still use the stricter
+ * `idSpecificAnnotationPresent` check, since the same section could contain
+ * multiple IDs and we can't tell which one a bare discharge word refers to
+ * without proximity.
+ *
+ * Pass-1 of #2838's title-drift-annotation relaxation: A8's real case has
+ * a single-ID heading with a discharge annotation in its section, but the
+ * annotation doesn't repeat the ID next to the discharge word (unlike A19,
+ * A31, etc., which do). This relaxation moves A8 from `findings` to
+ * `annotatedFindings` by treating a single-id case more generously.
+ */
+function dischargeAnnotationPresentAnywhere(sectionText, id) {
+  // For single-ID headings, look for discharge in the header section only
+  // (first ~300 chars) to avoid false positives from body text mentioning
+  // other IDs. This covers the criteria-source blockquote region.
+  const HEADER_CHARS = 300;
+  const headerText = sectionText.slice(0, HEADER_CHARS);
+  const headerScanText = stripInlineCodeSpans(headerText);
+
+  const dischargeMatches = [
+    ...headerScanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
+  ];
+  for (const dm of dischargeMatches) {
+    const { start, end } = clauseBounds(headerText, dm.index);
+    if (isDischargeAssertionNegated(headerScanText, dm, start)) continue;
+
+    // Check what ID (if any) is proximate to this discharge word IN THE HEADER.
+    ANY_ID_TOKEN_REGEX.lastIndex = start;
+    let proximateId = null;
+    let occ;
+    while ((occ = ANY_ID_TOKEN_REGEX.exec(headerText)) && occ.index < end) {
+      const dischargeCenter = dm.index + dm[0].length / 2;
+      const occCenter = occ.index + occ[1].length / 2;
+      // If there's an ID within proximity of this discharge word, record it.
+      if (Math.abs(occCenter - dischargeCenter) <= ID_PROXIMITY_CHARS) {
+        proximateId = occ[1];
+        break;
+      }
+    }
+    // Discharge annotation excuses this heading's drift if:
+    //   - No ID is proximate (bare discharge in header), OR
+    //   - The heading's own ID is proximate
+    if (proximateId === null || proximateId === id) return true;
+  }
+  return false;
+}
+
+/**
+ * v2 of `check:register-citations` (#2838's second task child): flags a
+ * heading citation whose title-echo text scores at or below
+ * TITLE_DRIFT_RATIO_THRESHOLD against the row's current `.title` AND shares
+ * fewer than TITLE_DRIFT_MIN_SHARED_TOKENS non-stopword, non-ID tokens with
+ * it — both conditions per the tuning doc's recommendation, since either
+ * alone over-fires (a low ratio from two merely-short strings, or a low
+ * shared count that's low only because both strings are short). Non-fatal by
+ * design, always — see this section's header comment for why. Only the
+ * heading surface is scored; the prose-idiom and "Register row(s):"
+ * label-line surfaces are skipped entirely per the tuning doc's own finding
+ * that they carry no usable signal there. A nonexistent ID is silently
+ * skipped here — that's Check A's job, not this one's, and double-reporting
+ * it would be noise.
+ *
+ * Heading citations with a nearby discharge/removal annotation (the same
+ * annotation-exemption mechanism Checks A and C use) are moved to a separate
+ * `annotatedFindings` bucket rather than treated as plain drift, per #2838:
+ * all six real-corpus detections were correctly-annotated historical references.
+ *
+ * For single-ID headings, a discharge annotation anywhere in the section
+ * counts as excusing the heading, since there's no ambiguity about which ID
+ * the annotation applies to (#2858). For multi-ID headings, the stricter
+ * `idSpecificAnnotationPresent` check (ID must be proximity-adjacent to the
+ * discharge word) still applies, to avoid a discharge for one ID wrongly
+ * excusing another.
+ *
+ * @returns {{ findings: string[], annotatedFindings: string[] }}
+ */
+export function checkCitationTitleDrift(text, filePath, registerRows) {
+  const findings = [];
+  const annotatedFindings = [];
+  const lines = deBold(stripFences(text)).split('\n');
+  for (const { lineIndex, ids, titleEcho } of extractHeadingTitleEchoes(text)) {
+    const proseTokens = titleDriftTokens(titleEcho);
+    for (const id of ids) {
+      const row = registerRows.get(id);
+      if (!row) continue;
+      const titleTokens = titleDriftTokens(row.title);
+      const { ratio, shared } = titleDriftScore(titleTokens, proseTokens);
+      if (ratio > TITLE_DRIFT_RATIO_THRESHOLD || shared >= TITLE_DRIFT_MIN_SHARED_TOKENS) continue;
+      const message =
+        `${filePath}:${lineIndex + 1} — heading cites ${id} — row's current title is ` +
+        `"${row.title}" but the heading text says "${titleEcho}" (similarity ${ratio.toFixed(2)}, ` +
+        `${shared} shared token(s) — review for drift)`;
+
+      const sectionText = enclosingSectionText(lines, lineIndex);
+
+      // For single-ID headings, use relaxed annotation check (discharge word
+      // anywhere in section, or next to this heading's ID). For multi-ID headings,
+      // require ID-proximity to avoid one ID's discharge excusing another's drift.
+      const isAnnotated = ids.length === 1
+        ? dischargeAnnotationPresentAnywhere(sectionText, id)
+        : idSpecificAnnotationPresent(sectionText, id);
+
+      if (isAnnotated) {
+        annotatedFindings.push(`${message} — annotated as discharged/removed, not flagged as drift`);
+      } else {
+        findings.push(message);
+      }
+    }
+  }
+  return { findings, annotatedFindings };
+}
+
 // --- CLI ------------------------------------------------------------------
 
 class CliExitError extends Error {
@@ -2099,6 +2356,8 @@ export function runCheckRegisterCitationsCli(options = {}) {
 
   const errorsA = [];
   const annotatedA = [];
+  const titleDriftD = [];
+  const annotatedTitleDriftD = [];
   const nonFrozenTexts = new Map();
   let unreadableCount = 0;
   for (const relPath of scannedFiles) {
@@ -2122,6 +2381,9 @@ export function runCheckRegisterCitationsCli(options = {}) {
     const found = checkNonexistentIds(text, relPath, rows);
     errorsA.push(...found.errors);
     annotatedA.push(...found.annotated);
+    const titleDriftResult = checkCitationTitleDrift(text, relPath, rows);
+    titleDriftD.push(...titleDriftResult.findings);
+    annotatedTitleDriftD.push(...titleDriftResult.annotatedFindings);
   }
 
   const errorsB = checkRunSheetLinkage(rows, (p) => readRepoFile(p));
@@ -2171,6 +2433,14 @@ export function runCheckRegisterCitationsCli(options = {}) {
       annotatedDischargeC,
     ],
     ['Run sheets mentioned but not classified as owned (not checked)', unclassifiedRunSheets],
+    [
+      'Check D — heading title drift vs. the row\'s current title (advisory, never fatal — see header comment)',
+      titleDriftD,
+    ],
+    [
+      'Check D — heading title drift, already annotated as discharged/removed (not flagged as drift)',
+      annotatedTitleDriftD,
+    ],
   ];
   if (strict) {
     nonFatalSections.push([
