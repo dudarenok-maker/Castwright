@@ -13,13 +13,46 @@
 // fire: the real hook files must pass TODAY, and a synthetic "fat" hook body
 // (the shape a regression would look like — someone re-adding a battery)
 // must fail, proving the checker can actually redden.
+//
+// BLIND SPOTS — declared, the way `server/src/workspace/cast-lock.guard.test.ts`
+// declares its own. This is a LINE-SHAPE scan over raw hook text, not an
+// execution model, so each of these passes green while the invariant is
+// actually broken. A reviewer must cover them by reading:
+//
+//   1. IT IS ONE LEVEL DEEP. The allowlist pins the exact hook LINE, never what
+//      the script on that line does. `scripts/hooks/pre-commit-lint.mjs` could
+//      grow a `spawnSync('npm', ['test'])` tomorrow — or `verify-cache.mjs`'s
+//      `test:sidecar` step could be redefined to shell out to vitest — and
+//      every test here stays green. The pinned `--steps test:sidecar` value
+//      guards the ARGUMENT, not the step's definition.
+//   2. IT ONLY READS `.husky/*` FILES. A hook whose body is a single allowlisted
+//      line that sources another file, and anything git runs from a
+//      `core.hooksPath` pointed somewhere else, are both invisible.
+//      `enumerateHookFiles` also skips subdirectories outright, so `.husky/_`
+//      (husky's own generated wrappers) is never scanned.
+//   3. IT IS TEXTUAL, NOT SHELL-AWARE. Matching is per physical line against
+//      whole-line regexes, so a backslash-continued command, a `;`-joined pair,
+//      or a here-doc body is judged line-by-line rather than as the commands
+//      the shell would actually run. The narrowness of the patterns is what
+//      makes this safe in practice — none of those shapes matches an entry —
+//      but the guard fails them as "unrecognised", it does not understand them.
+//   4. AN ALLOWLIST ENTRY IS ONLY AS GOOD AS ITS REVIEW. Widening a pattern
+//      (say, to `^node scripts\/verify-cache\.mjs .*$`) disarms this guard
+//      completely and no test here would notice. Adding an entry is the
+//      reviewable act; the guard cannot police its own list.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const repoRoot = process.cwd();
+// Derived from THIS FILE's location, never `process.cwd()`: `node --test
+// scripts/tests/...` run from another directory otherwise silently scans a
+// DIFFERENT checkout's `.husky/` and reports a confident verdict about hooks
+// this worktree does not have. (Same rule its sibling
+// `pre-commit-lint-e2e.test.mjs` documents at the top of its header.)
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 // One pattern per line-shape that exists in a `.husky/*` hook today. Matched
 // against the WHOLE trimmed line — deliberately narrow (no wildcard command

@@ -1731,8 +1731,10 @@ test('hasVitestStep returns false when no vitest steps are selected', () => {
   }
 });
 
-test('hasVitestStep returns true for empty array (defensive: would select all steps)', () => {
-  // If no steps are explicitly selected, the default is to run ALL steps,
-  // which includes vitest ones. Empty array is a defensive edge case.
-  assert.equal(hasVitestStep([]), false, 'empty selection (edge case) is treated as no vitest');
+test('hasVitestStep returns FALSE for an empty array', () => {
+  // `hasVitestStep` answers "does THIS list contain a vitest step", not "what
+  // will the run end up executing" — an empty list contains none, so it is
+  // false. The default-to-all-steps expansion happens upstream, before this is
+  // ever called with the resolved list, so the two never disagree in practice.
+  assert.equal(hasVitestStep([]), false, 'empty selection contains no vitest step');
 });

@@ -15,7 +15,17 @@
 //   - drop `--no-warn-ignored` → an eslint-ignored tracked file (the generated
 //                             `src/lib/api-types.ts`) produces a warning, which
 //                             `--max-warnings 0` turns into a blocked commit —
-//                             the pass-1 finding-2 regression, reopened.
+//                             the pass-1 finding-2 regression, reopened;
+//   - drop `maxBuffer`       → a staged file with >1 MB of `--format json`
+//                             findings overflows spawnSync's 1 MB default,
+//                             arrives as ENOBUFS with truncated stdout, and the
+//                             fail-open rule passes the commit UNLINTED.
+//
+// THE BUDGET PATH IS TOLERATED, NOT ASSERTED AWAY. See BUDGET_EXCEEDED_MARKER
+// below: the hook's per-batch budget legitimately warns-and-passes, and these
+// tests accept exactly that one stderr line in place of their expected verdict
+// (still asserting the exit code is 0 on that path). Every mutation above still
+// reddens through the tolerance — verified, see the mutation log at the bottom.
 //
 // Each test below is paired with one of those tokens and was verified RED by
 // deleting it (see the mutation log at the bottom of this file).
@@ -140,7 +150,15 @@ function runHook(indexFile, { detectEslintSpawn = false } = {}) {
     cwd: repoRoot,
     encoding: 'utf8',
     windowsHide: true,
-    timeout: 180_000,
+    // Must exceed the hook's OWN per-batch budget (BUDGET_MS, 120s) with room
+    // for its git call and node startup — otherwise this harness kills the
+    // hook before its budget path can run and the tolerance below is untested.
+    timeout: 300_000,
+    // The HARNESS needs its own ceiling for the same reason the hook does: the
+    // >1 MB-of-findings case below makes the hook print >1 MB of reason to
+    // stderr, and at `spawnSync`'s 1 MB default this call ENOBUFS-es before any
+    // assertion runs. (Observed the first time that test was written.)
+    maxBuffer: 64 * 1024 * 1024,
     env,
   });
   if (r.error) throw r.error;
@@ -148,6 +166,52 @@ function runHook(indexFile, { detectEslintSpawn = false } = {}) {
 }
 
 const SPAWNED_MARKER = /did not produce valid JSON output/;
+
+/** The ONE stderr line these tests tolerate instead of their expected verdict.
+ *
+ *  The hook's per-batch `BUDGET_MS` is a real code path: exceed it and eslint
+ *  is killed, the verdict becomes `{blocked:false, warning:…}`, and the hook
+ *  warns to stderr and exits 0 by design (principle 4's fail-open direction).
+ *  On a cold tree, or a loaded box, a single-file eslint run has been measured
+ *  at 73.6s and (under concurrent load, PR #2999 review) 77.4s — so asserting
+ *  the findings verdict unconditionally makes these tests flake, and
+ *  `test:hooks` is a leg of the required `verify.yml`.
+ *
+ *  Anchored to the hook's exact wording and to `^pre-commit-lint: `, so it
+ *  matches ONLY that path. Every other warning the hook can emit — the missing
+ *  binary, the fatal-config error, the unparseable-output one the mutation log
+ *  below relies on, the ENOBUFS overflow — still falls through to the strict
+ *  assertion and reddens. */
+const BUDGET_EXCEEDED_MARKER = /^pre-commit-lint: eslint exceeded its \d+s local budget/m;
+
+/** Assert the hook's verdict, accepting the budget path as the one alternative.
+ *
+ *  Returns `true` when the real verdict was observed (the caller may then make
+ *  its findings-specific assertions) and `false` when the budget path was
+ *  taken. It is NOT a blanket softening: on the budget path the exit code is
+ *  still asserted — 0, because a budget breach must warn and pass, never block
+ *  — so a hook that times out AND blocks still fails here. */
+function assertVerdict({ status, stderr }, expectedStatus, message) {
+  if (BUDGET_EXCEEDED_MARKER.test(stderr)) {
+    assert.equal(status, 0, `a budget breach must warn and PASS; stderr was:\n${stderr}`);
+    return false;
+  }
+  assert.equal(status, expectedStatus, `${message}; stderr was:\n${stderr}`);
+  return true;
+}
+
+/** `stderr` must be empty — or hold nothing but the budget warning. */
+function assertQuietStderr(stderr) {
+  if (BUDGET_EXCEEDED_MARKER.test(stderr)) {
+    assert.equal(
+      stderr.split(/\r?\n/).filter((l) => l.trim() && !BUDGET_EXCEEDED_MARKER.test(l)).join('\n'),
+      '',
+      `stderr carried more than the budget warning:\n${stderr}`,
+    );
+    return;
+  }
+  assert.equal(stderr, '');
+}
 
 /** The scratch-index machinery is itself an instrument, so prove it reports
  *  what we think before trusting any verdict built on it. */
@@ -165,10 +229,10 @@ test('e2e: a staged file with real lint errors blocks the commit (exit 1)', () =
   const index = scratchIndexWith([fixture('dirty.mjs', dirty)]);
   assertStagedSetIs(index, [`${fixtureDirName}/dirty.mjs`]);
 
-  const { status, stderr } = runHook(index);
-  assert.equal(status, 1, `expected the hook to block; stderr was:\n${stderr}`);
-  assert.match(stderr, /dirty\.mjs/);
-  assert.match(stderr, /is not defined/);
+  const result = runHook(index);
+  if (!assertVerdict(result, 1, 'expected the hook to block')) return;
+  assert.match(result.stderr, /dirty\.mjs/);
+  assert.match(result.stderr, /is not defined/);
 });
 
 // Pairs with `--max-warnings 0`: this file's only finding is severity 1, so
@@ -178,10 +242,10 @@ test('e2e: a staged file whose only findings are WARNINGS still blocks (exit 1) 
   const index = scratchIndexWith([fixture('warn-only.mjs', warnOnly)]);
   assertStagedSetIs(index, [`${fixtureDirName}/warn-only.mjs`]);
 
-  const { status, stderr } = runHook(index);
-  assert.equal(status, 1, `expected a warnings-only file to block; stderr was:\n${stderr}`);
-  assert.match(stderr, /warn-only\.mjs/);
-  assert.doesNotMatch(stderr, /is not defined/, 'fixture must carry NO error-severity finding');
+  const result = runHook(index);
+  if (!assertVerdict(result, 1, 'expected a warnings-only file to block')) return;
+  assert.match(result.stderr, /warn-only\.mjs/);
+  assert.doesNotMatch(result.stderr, /is not defined/, 'fixture must carry NO error-severity finding');
 });
 
 // The healthy path. Also the control for the two tests above: it proves a
@@ -192,7 +256,7 @@ test('e2e: a clean staged JS file passes (exit 0, no output)', () => {
 
   const { status, stdout, stderr } = runHook(index);
   assert.equal(status, 0, `expected a clean file to pass; stderr was:\n${stderr}`);
-  assert.equal(stderr, '');
+  assertQuietStderr(stderr);
   assert.equal(stdout, '');
 });
 
@@ -243,8 +307,35 @@ test('e2e: an eslint-ignored but tracked staged file passes (exit 0) — --no-wa
 
   const { status, stdout, stderr } = runHook(index);
   assert.equal(status, 0, `an eslint-ignored file must not block; stderr was:\n${stderr}`);
-  assert.equal(stderr, '');
+  assertQuietStderr(stderr);
   assert.equal(stdout, '');
+});
+
+// Pairs with `maxBuffer` in `eslintSpawnOptions`. `spawnSync`'s DEFAULT
+// maxBuffer is 1 MB; `--format json` over a heavily-dirty staged file blows
+// past it, which arrives as an `ENOBUFS` spawn error with TRUNCATED stdout.
+// Principle 4 turns any spawn error into warn-and-pass, so before the explicit
+// ceiling this commit sailed through UNLINTED — silently, and exactly when the
+// staged file carried the most findings. Verified RED by deleting `maxBuffer`
+// from `eslintSpawnOptions` (see the mutation log below).
+test('e2e: a staged file with MORE THAN 1 MB of findings still blocks — maxBuffer', () => {
+  // ~180 bytes of `--format json` per no-undef finding; 12,000 lines is ~2 MB,
+  // comfortably over the 1 MB default and far under the explicit 64 MB one.
+  const huge = 'someUndefinedGlobalThing();\n'.repeat(12_000);
+  const index = scratchIndexWith([fixture('huge.mjs', huge)]);
+  assertStagedSetIs(index, [`${fixtureDirName}/huge.mjs`]);
+
+  const result = runHook(index);
+  assert.doesNotMatch(
+    result.stderr,
+    /output budget/,
+    'the hook hit an output ceiling on ~2 MB: either `maxBuffer` is gone from '
+      + 'eslintSpawnOptions (so the 1 MB default applies and this commit would '
+      + 'pass UNLINTED), or MAX_OUTPUT_BYTES was lowered under the fixture',
+  );
+  if (!assertVerdict(result, 1, 'a >1 MB findings set must still block')) return;
+  assert.match(result.stderr, /huge\.mjs/);
+  assert.match(result.stderr, /is not defined/);
 });
 
 // === Mutation log (2026-09-05, measured in this worktree) ================
@@ -272,7 +363,27 @@ test('e2e: an eslint-ignored but tracked staged file passes (exit 0) — --no-wa
 //     ✖ staging only non-JS/TS files exits 0 without ever spawning eslint
 //       AssertionError: eslint was spawned on a non-lintable staged set
 //
-// The last one is why the preload detector exists. The first cut of that test
+// === Mutation log addendum (2026-09-06, PR #2999 pass 3) ================
+//
+//   delete `maxBuffer` from `eslintSpawnOptions` → 1 red:
+//     ✖ a staged file with MORE THAN 1 MB of findings still blocks — maxBuffer
+//       AssertionError: the hook hit an output ceiling on ~2 MB ...
+//       actual: 'pre-commit-lint: eslint produced more than the 64 MB output
+//       budget — its output was truncated ... skipping local lint'
+//
+//   BUDGET_MS 120_000 → 1_000 (forces the budget path on EVERY test) → 0 red,
+//     7 of 7 green. That is the tolerance working as designed, not a
+//     disarmament — with the SAME 1s budget in place, deleting `--format json`
+//     still reddens 5 of 7, because the budget marker is anchored to the hook's
+//     exact "exceeded its Ns local budget" wording and every other warning it
+//     can emit falls through to the strict assertion.
+//
+//   delete '--format','json' (re-run against the tolerant assertions) → 5 red:
+//     ✖ real lint errors blocks the commit  ✖ warnings-only still blocks
+//     ✖ a clean staged JS file passes       ✖ eslint-ignored tracked file passes
+//     ✖ >1 MB of findings still blocks
+//
+// The extension-filter mutation is why the preload detector exists. The first cut of that test
 // asserted `stderr === ''` instead, and stayed GREEN under this mutation:
 // `--no-warn-ignored` suppresses the very warning it was waiting for, so
 // eslint spawned on a `.md` file exits 0 in silence. It was 16-ways-a-test-

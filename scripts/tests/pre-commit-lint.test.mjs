@@ -9,6 +9,9 @@ import {
   chunkFiles,
   combineBatchVerdicts,
   combineBatchResults,
+  BUDGET_MS,
+  MAX_OUTPUT_BYTES,
+  eslintSpawnOptions,
 } from '../hooks/pre-commit-lint.mjs';
 
 // === REAL CAPTURED ESLINT OUTPUT =========================================
@@ -164,6 +167,38 @@ test('ETIMEDOUT (budget exceeded) does NOT block', () => {
   const verdict = classifyLintResult({ status: null, error: { code: 'ETIMEDOUT' }, stdout: '', stderr: '' });
   assert.equal(verdict.blocked, false);
   assert.match(verdict.warning, /budget/);
+});
+
+test('ENOBUFS (output overflowed maxBuffer) does NOT block, and says so DISTINCTLY', () => {
+  const verdict = classifyLintResult({ status: null, error: { code: 'ENOBUFS' }, stdout: '[{"truncat', stderr: '' });
+  assert.equal(verdict.blocked, false, 'truncated output is not evidence of findings');
+  // Distinct from the generic "invocation failed (ENOBUFS)" fallback: an
+  // overflow means eslint RAN and its output was cut, which is a different
+  // thing for the reader to act on than a spawn that never happened.
+  assert.match(verdict.warning, /output budget/);
+  assert.match(verdict.warning, /truncated/);
+  assert.doesNotMatch(verdict.warning, /invocation failed/);
+});
+
+test('the eslint spawn options carry BOTH ceilings that silently disarm this hook', () => {
+  const opts = eslintSpawnOptions('/repo');
+  // Without `timeout` a wedged eslint hangs the commit forever; without
+  // `maxBuffer` a >1 MB `--format json` run ENOBUFS-es and the commit passes
+  // unlinted. Both are invisible to every other test in this file.
+  assert.equal(opts.timeout, BUDGET_MS);
+  assert.equal(opts.maxBuffer, MAX_OUTPUT_BYTES);
+  assert.equal(opts.cwd, '/repo');
+  assert.equal(opts.encoding, 'utf8');
+  assert.equal(opts.windowsHide, true);
+});
+
+test('BUDGET_MS clears the measured cold single-file eslint run with headroom', () => {
+  // 73.6s cold (design doc Part 1) and 77.4s cold-under-load (PR #2999 review).
+  // A budget below those makes the hook inert exactly when the tree is coldest.
+  assert.ok(
+    BUDGET_MS > 77_400,
+    `BUDGET_MS (${BUDGET_MS}) must exceed the slowest measured cold run (77.4s)`,
+  );
 });
 
 test('any other spawn error does NOT block', () => {

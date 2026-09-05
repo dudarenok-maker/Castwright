@@ -147,10 +147,17 @@ Evaluate that mechanically before you push. Do not substitute a judgement about
 whether this diff "looks slow":
 
 ```powershell
-git -C $W diff --name-only origin/main...HEAD -- 'server/tts-sidecar/**'
+git -C $W diff --name-only main...HEAD -- 'server/tts-sidecar/**'
 ```
 
-Non-empty output means detached. **The mechanical test is the point.** Three
+Non-empty output means detached. **`main...HEAD`, not `origin/main...HEAD`** —
+this test only predicts the hook if it asks the hook's own question, and
+`branchDiffFiles` (`scripts/verify-cache.mjs`) merge-bases against the LOCAL
+`main`. With a stale local `main` the two disagree in the dangerous direction:
+the doc's test says "foreground" while the hook puts `test:sidecar` in scope and
+the foreground push runs into the 30-second kill.
+
+**The mechanical test is the point.** Three
 successive revisions of this paragraph tried instead to *predict* which diffs
 were slow, and all three under-listed in the same direction: the agent read its
 own change as exempt, took the foreground path into the 30-second kill,

@@ -143,6 +143,13 @@ worktree GC · a Windows CI leg · a sidecar acceptance gate.
    must not block a commit — CI still enforces. A timeout is the opposite: a timeout that passes
    is not a cap. *(An earlier draft collapsed these into one clause that told timeouts to pass —
    the inverse of Part 2.)*
+   **Scope: the budget half is Part 2's**, i.e. `verify-cache.mjs`'s pipeline and step budgets,
+   where the budget IS the cap and passing on a breach would void it. Part 1's `pre-commit`
+   lint is the deliberate exception and warns-and-passes on its own per-batch budget: it caps
+   nothing but a human's wait, blocking on it would reject a commit on machine load rather than
+   on code, and CI's `lint` leg enforces the same rules regardless. What makes that exception
+   safe is the budget being sized *above* the measured cold run (see Part 1) — a budget below it
+   turns "warn and pass" into "never lint anything", which is a different thing entirely.
 
 ## The design
 
@@ -160,7 +167,7 @@ worktree GC · a Windows CI leg · a sidecar acceptance gate.
 |---|---|
 | `pre-commit`, no JS/TS staged — docs, config, most commits | **0.14s** (short-circuits before spawning anything) |
 | `pre-commit`, JS/TS staged, warm | **~4s** |
-| `pre-commit`, JS/TS staged, cold cache under box contention | up to ~50s — dominated by ESLint startup, not file count |
+| `pre-commit`, JS/TS staged, cold cache under box contention | **34.9s – 77.4s** — dominated by ESLint startup, not file count |
 | `pre-push`, no `server/tts-sidecar/**` in the branch diff | ~1–2s (step out of scope) |
 | `pre-push`, sidecar touched | + 6.85 min |
 
@@ -172,13 +179,26 @@ when the step's input hash is already cached; a cold cache pays the full run. An
 says "zero on every other push" is over-claiming both of those.
 
 The cold-vs-warm spread is ESLint's fixed startup cost; a single-file run measured 73.6s cold
-and 3.7s warm on the same box. If that first-commit cost proves annoying in practice, the lever
+and 3.7s warm on the same box, and PR #2999's review re-measured the cold case at 34.9s / 43.4s
+/ 77.4s under concurrent load. An earlier draft of the table above said "up to ~50s", which
+contradicted the 73.6s figure in this same section; the row now carries the measured range.
+If that first-commit cost proves annoying in practice, the lever
 is `--cache`, or dropping local lint entirely — CI's `lint` leg is a required check either way.
 
 `pre-commit` → `scripts/hooks/pre-commit-lint.mjs`: staged set from `git diff --cached
 --name-only --diff-filter=ACMR`, filtered to JS/TS extensions; empty set exits 0 without
 spawning anything; one `eslint` process, no pool, no `--fix`. **Blocks on lint findings; warns
-and passes** when eslint is absent or a 60 s budget is exceeded.
+and passes** when eslint is absent or the per-batch budget is exceeded. **That budget is 120 s,
+not the 60 s an earlier draft specified** (`BUDGET_MS`, `scripts/hooks/pre-commit-lint.mjs`):
+60 s sat *below* the 73.6s cold measurement two paragraphs up, so on a cold tree the hook
+timed out, warned, and passed having linted nothing — inert exactly when the tree was coldest.
+120 s clears the slowest measured cold run (77.4s) by ~55%. Raising it costs nothing on the
+common path: the timeout is only ever reached by a run that would otherwise have been
+abandoned, and it warns rather than blocks. The eslint spawn also carries an explicit 64 MB
+`maxBuffer` — `spawnSync`'s 1 MB default overflows on a heavily-dirty staged file, and an
+overflow arrives as `ENOBUFS` with truncated stdout, which principle 4 turns into
+warn-and-pass: the commit would sail through unlinted, silently, exactly when the diff carried
+the most findings.
 
 It must be a **script, not an inline hook body.** Husky executes user hooks as `sh -e "$s"`
 (`.husky/_/h:17`) — under `errexit`, `FILES=$(git diff … | grep -E …)` fails the hook whenever

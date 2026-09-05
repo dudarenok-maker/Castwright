@@ -15,11 +15,15 @@
 // eslint.config.mjs lints the WHOLE TREE — exactly the pool this script
 // exists to avoid.
 //
-// Principle 4 (fail on findings; pass on a missing tool; pass on a budget
-// breach): a worktree without `node_modules` — a normal state here, see
-// CLAUDE.md's worktree-setup checklist — must not block a commit; CI still
-// enforces lint. An exceeded budget is treated the same way: warn to stderr
-// and pass, never hang the commit.
+// Principle 4 (fail on findings; pass on a missing tool): a worktree without
+// `node_modules` — a normal state here, see CLAUDE.md's worktree-setup
+// checklist — must not block a commit; CI still enforces lint. An exceeded
+// budget is treated the same way: warn to stderr and pass, never hang the
+// commit. That is the DECLARED EXCEPTION to principle 4's "FAIL on a budget
+// breach", which scopes to Part 2's pipeline budgets — see the principle's own
+// scope note in the design doc. It is only safe while BUDGET_MS sits above the
+// measured cold run: a budget below it turns "warn and pass" into "never lint
+// anything", inert exactly when the tree is coldest.
 //
 // The budget is PER BATCH, not per hook run: `BUDGET_MS` is the `timeout` of
 // one `spawnSync`, and a staged set larger than MAX_FILES_PER_BATCH runs
@@ -27,7 +31,7 @@
 // is `ceil(files / MAX_FILES_PER_BATCH) × BUDGET_MS`, not BUDGET_MS. That is
 // deliberate — a per-run deadline would have to be divided across batches,
 // making a large staged set time out on batch size rather than on eslint
-// actually being stuck — but it means "60s worst case" is wrong for any
+// actually being stuck — but it means "BUDGET_MS worst case" is wrong for any
 // commit staging more than 100 lintable files.
 
 import { spawnSync } from 'node:child_process';
@@ -42,7 +46,26 @@ import { isDirectlyInvoked } from '../lib/is-main-module.mjs';
 // helper answers a different question), but deliberately the same list.
 export const LINTABLE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
 
-export const BUDGET_MS = 60_000;
+// Sized ABOVE the measured cold case, with headroom. A budget below it makes
+// the hook inert exactly when the tree is coldest: eslint's fixed startup cost
+// dominates a first run, the timeout fires, and the hook warns-and-passes
+// having linted nothing. Measured on this box: 73.6s cold / 3.7s warm for a
+// single-file run (the design doc's "Part 1" table), and 34.9s / 43.4s / 77.4s
+// cold under concurrent load during PR #2999's review. 120s clears the worst of
+// those by ~55%. Raising it costs nothing on the common path — the timeout is
+// only ever *reached* by a run that would otherwise have been abandoned, and a
+// breach warns and passes rather than blocking. Note it is PER BATCH (see
+// MAX_FILES_PER_BATCH below), not per hook run.
+export const BUDGET_MS = 120_000;
+
+// `spawnSync`'s default `maxBuffer` is 1 MB. `--format json` blows past that on
+// a large or very dirty staged set (measured: ~180 bytes of JSON per finding,
+// so ~5,800 findings), and an overflow arrives as an `ENOBUFS` spawn error with
+// TRUNCATED stdout — which principle 4 turns into warn-and-pass. The commit
+// then sails through unlinted, silently, exactly when the diff carries the most
+// findings. An explicit generous ceiling keeps that path unreachable in
+// practice; `classifyLintResult` still names it distinctly if it is ever hit.
+export const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 /** Parse `git diff --cached --name-only --diff-filter=ACMR` stdout into a
  *  list of repo-relative paths, dropping blank lines. */
@@ -70,6 +93,9 @@ export function classifyLintResult(result) {
   if (result.error) {
     if (result.error.code === 'ETIMEDOUT') {
       return { blocked: false, warning: `eslint exceeded its ${BUDGET_MS / 1000}s local budget — skipping (CI still enforces lint).` };
+    }
+    if (result.error.code === 'ENOBUFS') {
+      return { blocked: false, warning: `eslint produced more than the ${MAX_OUTPUT_BYTES / (1024 * 1024)} MB output budget — its output was truncated, so it cannot be trusted; skipping local lint (CI still enforces lint).` };
     }
     if (result.error.code === 'ENOENT') {
       return { blocked: false, warning: 'eslint binary not found — skipping local lint (CI still enforces lint).' };
@@ -180,6 +206,22 @@ export function combineBatchResults(results) {
   return combineBatchVerdicts(results.map(classifyLintResult));
 }
 
+/** The `spawnSync` options every eslint batch runs under.
+ *
+ *  Exported so the two ceilings that silently disarm this hook when they are
+ *  wrong — the per-batch `timeout` and `maxBuffer` — are asserted by a test
+ *  rather than living only inside the main-module block, where deleting either
+ *  one is invisible to every other test in this repo. */
+export function eslintSpawnOptions(repoRoot) {
+  return {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: BUDGET_MS,
+    maxBuffer: MAX_OUTPUT_BYTES,
+  };
+}
+
 if (isDirectlyInvoked(import.meta.url)) {
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = resolve(here, '..', '..');
@@ -216,12 +258,7 @@ if (isDirectlyInvoked(import.meta.url)) {
 
   for (const batch of batches) {
     const argv = [eslintJs, ...baseArgs, ...batch];
-    results.push(spawnSync(process.execPath, argv, {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: BUDGET_MS,
-    }));
+    results.push(spawnSync(process.execPath, argv, eslintSpawnOptions(repoRoot)));
   }
 
   const verdict = combineBatchResults(results);
