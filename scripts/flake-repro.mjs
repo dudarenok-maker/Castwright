@@ -15,7 +15,7 @@ if (!file) { console.error('--file <relpath> required'); process.exit(2); }
 // Decide config: slow files run via the slow config.
 const SLOW = ['analysis-pipelining', 'gemini', 'book-state', 'chapters-restructure',
   'generation', 'generation-boundary-recycle', 'pdf-real', 'setup-readiness.route',
-  'kokoro-install.route', 'venv-bootstrap.route'];
+  'kokoro-install.route', 'venv-bootstrap.route', 'interim-prune-prohibition'];
 const isSlow = SLOW.some((s) => file.includes(s));
 const cwd = file.startsWith('server/') ? 'server' : '.';
 const rel = file.replace(/^server\//, '');

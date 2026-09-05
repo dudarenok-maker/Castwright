@@ -76,7 +76,7 @@ export default defineConfig({
        picomatch 4 — a wildcard inside that path segment kills the
        trailing-wildcard-suffix-also-matches-the-file behaviour (ops-30/
        #1848) — so a change to THIS file would silently select zero of the
-       slow suite's 10 files. Set explicitly (`.ts` extension, not `.*`) so
+       slow suite's 11 files. Set explicitly (`.ts` extension, not `.*`) so
        it, and package.json, still force a full run.
 
        The second alternative in each entry — the one naming a dot segment

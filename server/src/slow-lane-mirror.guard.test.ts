@@ -25,6 +25,7 @@
 import { describe, it, expect } from 'vitest';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readFileSync, existsSync } from 'node:fs';
 
 const SERVER_ROOT = resolve(__dirname, '..');
 
@@ -50,6 +51,24 @@ async function loadSlowConfig(): Promise<SlowConfigModule> {
   return (await import(pathToFileURL(configAbsPath).href)) as SlowConfigModule;
 }
 
+/* scripts/flake-repro.mjs holds a THIRD copy of the slow-file list, as
+   substrings matched against a `--file` argument (not paths, and not a
+   1:1 mapping — one substring like 'generation' legitimately covers more
+   than one SLOW_FILES entry). #2947 added an 11th SLOW_FILES entry without
+   a matching substring there, which silently broke the tool (found by PR
+   #2998 review). A dynamic import of that module is NOT used here: it reads
+   `process.argv` at module-eval time and calls `process.exit(2)` when
+   `--file` is absent, which would kill this test process rather than throw
+   catchably. Reading the source and parsing out the `SLOW` array literal is
+   the honest way to reach it without triggering that exit. */
+function loadFlakeReproSlowList(): string[] {
+  const srcPath = resolve(SERVER_ROOT, '..', 'scripts', 'flake-repro.mjs');
+  const src = readFileSync(srcPath, 'utf8');
+  const match = src.match(/const SLOW = (\[[\s\S]*?\]);/);
+  if (!match) throw new Error('could not find the SLOW array literal in scripts/flake-repro.mjs');
+  return new Function(`return ${match[1]}`)() as string[];
+}
+
 const { default: mainConfigDefault, SLOW_FILES_TO_EXCLUDE } = await loadMainConfig();
 const { SLOW_FILES } = await loadSlowConfig();
 
@@ -73,5 +92,36 @@ describe('slow-lane mirror invariant (SLOW_FILES <-> SLOW_FILES_TO_EXCLUDE)', ()
     for (const file of SLOW_FILES) {
       expect(effectiveExclude).toContain(file);
     }
+  });
+
+  it("every SLOW_FILES entry is matched by at least one substring in flake-repro.mjs's SLOW list", () => {
+    const flakeReproSlow = loadFlakeReproSlowList();
+    const unmatched = SLOW_FILES.filter((file) => !flakeReproSlow.some((s) => file.includes(s)));
+    expect(unmatched).toEqual([]);
+  });
+
+  /* All five checks above compare string arrays to each other (or, for the
+     effective-exclude check, to a config object) — nothing touches disk. A
+     SLOW_FILES entry that no longer names a real file (renamed or deleted
+     without updating this list) leaves every one of those checks green
+     while the slow lane silently runs 10 of 11 (vitest's `include` doesn't
+     error on a glob matching nothing) AND the main config's literal-path
+     `exclude` stops matching, so the file rejoins the parallel pool — the
+     exact double-run this guard exists to prevent. */
+  it('every SLOW_FILES entry resolves to a file that exists on disk', () => {
+    const missingFromDisk = SLOW_FILES.filter((file) => !existsSync(resolve(SERVER_ROOT, file)));
+    expect(missingFromDisk).toEqual([]);
+  });
+
+  /* If SLOW_FILES and SLOW_FILES_TO_EXCLUDE were ever emptied together, every
+     check above passes vacuously: the filter/for-loop bodies never run and
+     the set-equality holds trivially between two empty sets. A floor -
+     rather than an exact count - is deliberate: hardcoding the current
+     count (11) would fail on every legitimate future addition, which would
+     make this a worse guard than none (it would train people to bump a
+     magic number instead of reading why it exists). A small floor is enough
+     to catch the vacuous-empty case this check exists for. */
+  it('SLOW_FILES is actually populated (guards against the whole invariant going vacuous)', () => {
+    expect(SLOW_FILES.length).toBeGreaterThanOrEqual(5);
   });
 });

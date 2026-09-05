@@ -198,7 +198,7 @@ export default defineConfig({
          slow-config-only diff selects zero tests from THIS suite — which is
          where force-rerun-triggers.test.ts lives, so the guard protecting the
          slow config could itself be reverted with CI green. (The slow config's
-         own trigger does fire, but it selects only the 10 slow files, and the
+         own trigger does fire, but it selects only the 11 slow files, and the
          guard is not one of them. Nothing creates a module-graph edge either:
          SLOW_FILES has no importers, and the guard reaches both configs via a
          runtime-computed dynamic import that vite cannot record as a dep.) */

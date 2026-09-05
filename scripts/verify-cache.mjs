@@ -432,9 +432,17 @@ export const STEPS = [
          RUNTIME to assert the requirements/*.txt LF pin is actually declared — a
          .gitattributes-only diff (the file the pin itself lives in) touches no
          glob above, so without this line it reported [cached] and the guard the
-         diff could most directly break never re-ran. */
+         diff could most directly break never re-ran.
+         server/vitest.config.slow.ts (#2998 review): slow-lane-mirror.guard.test.ts
+         (this suite, not test:server-slow) reads it at RUNTIME to detect drift
+         against server/vitest.config.ts — same #1847 runtime-read trap as
+         openapi.yaml/scripts/** above. Without this entry, a diff confined to
+         that file (exactly the shape the guard exists to catch) reported
+         [cached] here while test:server-slow re-ran instead, so the guard
+         never ran locally. */
       extraFiles: [
         'server/vitest.config.ts',
+        'server/vitest.config.slow.ts',
         'server/tsconfig.json',
         'openapi.yaml',
         'scripts/tests/fixtures/ffmpeg-version-cases.json',
@@ -455,7 +463,7 @@ export const STEPS = [
     },
   },
   {
-    /* Plan 45 (vitest pool tuning) — 10 hot files (analyzer/gemini + routes test
+    /* Plan 45 (vitest pool tuning) — 11 hot files (analyzer/gemini + routes test
        files) run serially in a separate vitest invocation so their
        mkdtempSync + module-import contention can't trip the main
        parallel test:server battery. Cache invalidates on the same
