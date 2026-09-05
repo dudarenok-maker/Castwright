@@ -258,7 +258,16 @@ if (isDirectlyInvoked(import.meta.url)) {
 
   for (const batch of batches) {
     const argv = [eslintJs, ...baseArgs, ...batch];
-    results.push(spawnSync(process.execPath, argv, eslintSpawnOptions(repoRoot)));
+    /* `windowsHide` is repeated LITERALLY here even though eslintSpawnOptions()
+       already sets it. server/src/spawn-windows-hide.test.ts scans scripts/**
+       syntactically and requires the literal inside THIS call's own balanced
+       parens — it cannot follow a hoisted options object. Passing
+       eslintSpawnOptions(repoRoot) alone failed that guard in CI on this PR
+       (run 33994051794). The spread still carries cwd/encoding/timeout/maxBuffer,
+       so the helper stays the single source of those and stays unit-testable. */
+    results.push(
+      spawnSync(process.execPath, argv, { ...eslintSpawnOptions(repoRoot), windowsHide: true }),
+    );
   }
 
   const verdict = combineBatchResults(results);
