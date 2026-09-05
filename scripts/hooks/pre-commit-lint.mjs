@@ -15,11 +15,20 @@
 // eslint.config.mjs lints the WHOLE TREE — exactly the pool this script
 // exists to avoid.
 //
-// Principle 4 (fail on findings; pass on a missing tool; FAIL on a budget
+// Principle 4 (fail on findings; pass on a missing tool; pass on a budget
 // breach): a worktree without `node_modules` — a normal state here, see
 // CLAUDE.md's worktree-setup checklist — must not block a commit; CI still
-// enforces lint. A 60s local budget that's exceeded is treated the same way:
-// warn to stderr and pass, never hang the commit.
+// enforces lint. An exceeded budget is treated the same way: warn to stderr
+// and pass, never hang the commit.
+//
+// The budget is PER BATCH, not per hook run: `BUDGET_MS` is the `timeout` of
+// one `spawnSync`, and a staged set larger than MAX_FILES_PER_BATCH runs
+// several of them in sequence. So the worst-case wall clock the hook can add
+// is `ceil(files / MAX_FILES_PER_BATCH) × BUDGET_MS`, not BUDGET_MS. That is
+// deliberate — a per-run deadline would have to be divided across batches,
+// making a large staged set time out on batch size rather than on eslint
+// actually being stuck — but it means "60s worst case" is wrong for any
+// commit staging more than 100 lintable files.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -113,8 +122,14 @@ export function classifyLintResult(result) {
   return { blocked: false };
 }
 
-// Windows caps a command line at ~8191 chars and each path runs 50-100 chars,
-// so a large staged set has to be split across several eslint invocations.
+// Batch size for the eslint invocations. The ceiling this respects is
+// `CreateProcess`'s 32,767-character command line — NOT the 8,191-char figure
+// an earlier version of this comment cited, which is `cmd.exe`'s limit and
+// does not apply: `spawnSync` calls `CreateProcess` directly, no shell.
+// Measured on this repo, 100 repo-relative paths came to 4,328 characters, so
+// 100 leaves a wide margin even for unusually deep paths. The batch size is
+// therefore chosen for the per-batch timeout budget above and for bounded
+// memory, not because 100 is anywhere near a command-line limit.
 export const MAX_FILES_PER_BATCH = 100;
 
 /** Split `files` into batches of at most `size`. */
@@ -192,9 +207,10 @@ if (isDirectlyInvoked(import.meta.url)) {
   // Run with --format json to verify ESLint produces parseable output (POSITIVE EVIDENCE it ran).
   const baseArgs = ['--format', 'json', '--max-warnings', '0', '--no-warn-ignored'];
 
-  // Batch to stay under the Windows ~8191 char command-line limit, then
-  // classify EACH batch on its own and combine the verdicts. Never aggregate
-  // raw stdout or raw exit codes across batches — see combineBatchVerdicts.
+  // Batch (see MAX_FILES_PER_BATCH), then classify EACH batch on its own and
+  // combine the verdicts. Never aggregate raw stdout or raw exit codes across
+  // batches — see combineBatchVerdicts. Note the BUDGET_MS timeout below is
+  // per batch, so the hook's worst case is batches × BUDGET_MS.
   const batches = chunkFiles(files);
   const results = [];
 

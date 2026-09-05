@@ -20,7 +20,11 @@
 # spawn a process pool," and it's the only automatic executor of the
 # `pytest.importorskip("torch")` tests CI deliberately can't run (its own
 # lean sidecar install skips torch, see verify.yml). Costs ~6.85 min on a
-# sidecar-touching push, zero on every other push.
+# sidecar-touching push and near-zero when the step is out of scope or its
+# input hash is already cached — but NOT literally "zero on every other push":
+# a root package.json / package-lock.json / .github/actions/** change trips
+# computeShared in verify-cache.mjs, which puts every step in scope whatever
+# its own globs say, so that push pays the full cost on a cold cache.
 PUSH_REFS=$(cat)
 printf '%s\n' "$PUSH_REFS" | node scripts/guard-protected-push.mjs "$@" || exit 1
 printf '%s\n' "$PUSH_REFS" | node scripts/guard-commit-subjects.mjs "$@" || exit 1

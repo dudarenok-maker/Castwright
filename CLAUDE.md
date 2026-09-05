@@ -337,7 +337,7 @@ Design rationale:
 - `npm test` — Vitest single-run for the frontend.
 - `npm run test:server` — Vitest single-run for the server (parallel, excludes the 10 hot files routed to `test:server-slow`).
 - `npm run test:changed` / `npm run test:server:changed` — `vitest run --changed HEAD` for the frontend/server suites respectively, selecting only tests vitest's own dependency graph says the diff (staged + unstaged, vs `HEAD`) affects. Previously backed pre-commit's `--scope-staged` narrowing, but pre-commit now runs ESLint directly and no longer uses these commands. Retained for manual local use — a fast way to re-run only affected tests during development.
-- `npm run test:server-slow` — Vitest single-run for 10 timeout-prone server test files (analyzer/gemini, a parsers PDF test, and routes tests), pinned to one fork via `server/vitest.config.slow.ts`. Runs in the cloud `verify.yml` battery and the full local `npm run verify`, not in pre-push `verify:fast:branch` or `verify:fast` pre-commit. See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
+- `npm run test:server-slow` — Vitest single-run for 10 timeout-prone server test files (analyzer/gemini, a parsers PDF test, and routes tests), pinned to one fork via `server/vitest.config.slow.ts`. Runs in the cloud `verify.yml` battery and the full local `npm run verify`, not in `verify:fast:branch` or `verify:fast` — and, as of ops-2997, not in any git hook (see "Commit gate"). See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
 - `npm run test:server:routes` / `:tts` / `:analyzer` / `:workspace` and `npm run test:components` / `:store` / `:lib` / `:views` — opt-in, manual, subsystem-scoped test runs (`vitest run <subdir>` under the hood) for a fast local loop when you know you're only touching one area. Not part of the automated verify pipeline — not in `STEPS[]`, not cached, not gated by any hook, and carry no coverage guarantee (a `routes/` change that breaks something in `workspace/` isn't caught by `test:server:routes` alone). The four server-side scripts cover 76.9% of `test:server`'s **tests** (file counts differ: `test:server:routes` selects 138 files, not the 146 a raw file search under `server/src/routes/` would find — 8 are in `vitest.config.slow.ts`'s `SLOW_FILES` and excluded from `test:server` itself, so this matches, not a gap); the four frontend scripts cover 86.3% of `test`'s tests (as of 2026-09-02; these figures will drift as test files are added or removed). See `docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md` Decision E.
 - `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
   (log rotation/pruning). Requires Pester >= 5.0; install once with
@@ -428,7 +428,7 @@ Design rationale:
   distinct from both a noise line and a normal forced-move line.
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
   Requires one-time `npx playwright install chromium`. Excludes the visual baselines (run via `test:e2e:visual` separately). See `docs/features/archive/37-e2e-playwright.md`.
-- `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Runs in the cloud `verify.yml` PR battery (Ubuntu → `e2e/linux` baselines) and the full local `npm run verify`, not in pre-push `verify:fast:branch`, so visual regressions still surface at PR time rather than only at release.
+- `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Runs in the cloud `verify.yml` PR battery (Ubuntu → `e2e/linux` baselines) and the full local `npm run verify`, not in `verify:fast:branch` — and, as of ops-2997, not in any git hook (see "Commit gate") — so visual regressions still surface at PR time rather than only at release.
 - `npm run test:fast` — frontend + server only. No longer what `pre-commit` runs (ops-2997 — see "Commit gate"): the hook is now a single staged-files ESLint pass, not a battery.
 - `npm run test:all` — frontend + server + server-slow + PowerShell-scripts + sidecar tests (no e2e).
 - `npm run verify` — full battery: typecheck + all tests + e2e + build. No longer the pre-push default (see "Commit gate") — run manually when you want the full local battery (e.g. before a release cut).
@@ -895,7 +895,9 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   filtered to JS/TS extensions). An empty staged set exits 0 without spawning
   anything. Blocks on real lint findings; **passes** (with a warning to
   stderr) when eslint is missing (a worktree without `node_modules`, a
-  normal state here) or a 60s budget is exceeded — CI still enforces lint
+  normal state here) or a 60s **per-batch** budget is exceeded (a staged set
+  over 100 lintable files runs several batches, so the hook's worst case is
+  `ceil(files / 100) × 60s`, not 60s) — CI still enforces lint
   either way. Sub-second on the common case. This REPLACED `npm run
   verify:fast:scoped` (~13,500 tests, a whole vitest fork pool) — see the
   design doc's "Problem" section for why that battery was never viable, even
@@ -918,7 +920,13 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   vitest fork pool, and it's the only automatic executor of the 38
   `pytest.importorskip("torch")` tests CI deliberately can't run (its own
   lean sidecar install skips torch). Costs ~6.85 min on a sidecar-touching
-  push, zero on every other push. `npm run verify:fast:branch` itself still
+  push, and near-zero on a push where the step is out of scope or its input
+  hash is already cached. **"Zero on every other push" is not quite true:**
+  a root `package.json` / `package-lock.json` / `.github/actions/**` change
+  trips `computeShared` (`scripts/verify-cache.mjs`), which puts EVERY step in
+  scope regardless of its own globs — so such a push pays the full ~6.85 min
+  on a cold cache while touching no sidecar file at all.
+  `npm run verify:fast:branch` itself still
   exists as an npm script for a manual full local run (see Before-shipping
   step 7) — it is just no longer what this hook invokes.
 
@@ -934,6 +942,17 @@ rather than guessing.
 [docs/features/archive/50-verify-cache.md](docs/features/archive/50-verify-cache.md)):
 each step skips with `[cached]` when its input hash matches the last
 green run. Pass `npm run verify -- --no-cache` to force a full re-run.
+
+**The contention throttle is still live, but no git hook reaches it any more.**
+When a selected step is vitest-backed, `verify-cache.mjs` probes for a
+co-running GPU generation (nvidia-smi) and for a sibling worktree already
+running a vitest/verify-cache battery, and on either it warns and dials the
+child test runs down (`LOW_CONCURRENCY=1`); `SKIP_CONTENTION_CHECK=1` disables
+both probes. As of ops-2997 that only fires on a **manual** run — `npm run
+verify`, `verify:fast`, `verify:fast:branch` — because `pre-commit` no longer
+calls `verify-cache.mjs` at all and `pre-push` calls it only for
+`test:sidecar`, which is pytest, not vitest, so `hasVitestStep` is false and
+the probes are skipped outright.
 
 `npm run verify` also prepends `lint` (ESLint + Prettier via
 `eslint-config-prettier`) and includes `test:a11y` (axe-core on the six

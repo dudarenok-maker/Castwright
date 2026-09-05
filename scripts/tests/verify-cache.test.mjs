@@ -1699,12 +1699,22 @@ test('hasVitestStep returns true when any vitest-backed step is selected', () =>
     { name: 'test' },
     { name: 'test:server' },
     { name: 'test:server-slow' },
-    { name: 'test:pinokio' },
   ];
   for (const step of vitestSteps) {
     assert.equal(hasVitestStep([step]), true, `${step.name} is vitest-backed`);
     assert.equal(hasVitestStep([step, { name: 'test:sidecar' }]), true, 'mixed selection with vitest');
   }
+});
+
+// `test:pinokio` and `test:hooks` both spawn `node --test`, not vitest, so
+// neither reads LOW_CONCURRENCY. `test:pinokio` was listed as vitest-backed
+// and `test:hooks` was not; no throttle is lost either way, but the set now
+// means exactly "vitest-backed". This pins the pair together so a future edit
+// cannot silently re-split them.
+test('hasVitestStep treats test:pinokio and test:hooks alike — both are node --test, not vitest', () => {
+  assert.equal(hasVitestStep([{ name: 'test:pinokio' }]), false);
+  assert.equal(hasVitestStep([{ name: 'test:hooks' }]), false);
+  assert.equal(hasVitestStep([{ name: 'test:pinokio' }, { name: 'test:hooks' }]), false);
 });
 
 test('hasVitestStep returns false when no vitest steps are selected', () => {

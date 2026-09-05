@@ -16,7 +16,7 @@ in service of keeping it shippable.
 - Cut every change on a branch named `<type>/<scope>-<slug>` (e.g. `feat/server-batch-retry`).
 - Every commit subject MUST be `<type>(<scope>): <subject>` — `chore: <subject>` is the no-scope catch-all. A pre-commit-msg hook rejects anything else.
 - Long-running parallel work goes in a `git worktree`, not a second clone. Reconcile multiple agent branches via an `integration/<date>` branch with `npm run verify` between merges.
-- `main` is always shippable. `npm run verify:fast:branch` is the pre-push gate; cloud `verify.yml` is the required, authoritative gate.
+- `main` is always shippable. `npm run verify:fast:branch` is the manual pre-flight (as of ops-2997 `pre-push` runs only its guards plus a scope-gated `test:sidecar`, not this battery — see [CLAUDE.md "Commit gate"](CLAUDE.md#commit-gate)); cloud `verify.yml` is the required, authoritative gate.
 
 ## Contributing & licensing
 

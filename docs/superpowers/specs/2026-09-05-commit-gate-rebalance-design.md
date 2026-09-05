@@ -164,6 +164,13 @@ worktree GC · a Windows CI leg · a sidecar acceptance gate.
 | `pre-push`, no `server/tts-sidecar/**` in the branch diff | ~1–2s (step out of scope) |
 | `pre-push`, sidecar touched | + 6.85 min |
 
+**The "out of scope" row is narrower than "every push that isn't a sidecar push."** A root
+`package.json` / `package-lock.json` / `.github/actions/**` change trips `computeShared` in
+`verify-cache.mjs`, which puts every step in scope whatever its own globs say — so such a
+push lands on the 6.85 min row while touching no sidecar file at all. It is also only ~1–2s
+when the step's input hash is already cached; a cold cache pays the full run. Any prose that
+says "zero on every other push" is over-claiming both of those.
+
 The cold-vs-warm spread is ESLint's fixed startup cost; a single-file run measured 73.6s cold
 and 3.7s warm on the same box. If that first-commit cost proves annoying in practice, the lever
 is `--cache`, or dropping local lint entirely — CI's `lint` leg is a required check either way.
@@ -418,9 +425,14 @@ the governor entirely.
 - **O1 — `is-docs-only-push.mjs`:** retain script + tests + invocation. The invocation guards the
   early exit when a push is docs-only, preventing the `test:sidecar` scope check from running
   unnecessarily. Deleting it reddens `scripts/tests/entry-point-guard-convention.test.mjs:301`
-  and needs edits to `CLAUDE.md:948` and `CONTRIBUTING.md:586` for no gain. **Settled unless
-  challenged.**
-- **O2 — `SKIP_CONTENTION_CHECK`** (`verify-cache.mjs:1340`, `:1350`; `CLAUDE.md:927`). With
+  and needs edits to CLAUDE.md's "Docs-only pushes skip the local sidecar check entirely"
+  paragraph (under "Commit gate") and CONTRIBUTING.md's "Doc-only PR fast-path" section for
+  no gain. **Settled unless challenged.** (Cited by section rather than by line: this very
+  PR moved all three targets, and the first cut of this doc shipped with the pre-edit line
+  numbers baked in.)
+- **O2 — `SKIP_CONTENTION_CHECK`** (`verify-cache.mjs`'s two `affectedByContention &&
+  !env.SKIP_CONTENTION_CHECK` guards in `runPipeline`; CLAUDE.md's "The contention throttle
+  is still live" paragraph under "Commit gate"). With
   hooks no longer running batteries, do the probes still earn their place? Deferred with the
   throttle question.
 - **O3 — `wt-2947-slow-lane`.** #2947 proposes a twelfth serial-lane file, and that worktree

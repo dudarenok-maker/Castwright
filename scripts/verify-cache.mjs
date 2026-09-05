@@ -1130,9 +1130,19 @@ export function siblingContentionFor(stdout, ownPid) {
 }
 
 /** Returns true if any selected step is affected by LOW_CONCURRENCY.
- *  These are the vitest-backed steps (pytest, Pester, Playwright, etc. are unaffected). */
+ *  These are the vitest-backed steps: `LOW_CONCURRENCY` is read by
+ *  `vitest.config.ts` / `server/vitest.config.ts` and by nothing else, so
+ *  pytest, Pester, Playwright and node:test steps are all unaffected.
+ *
+ *  `test:pinokio` used to be listed here and is deliberately NOT: it spawns
+ *  `node --test` (`scripts/run-pinokio-tests.mjs`), the identical runner
+ *  `test:hooks` (`scripts/run-hooks-tests.mjs`) uses, and `test:hooks` was
+ *  never listed. Neither reads `LOW_CONCURRENCY`, so no throttle is lost
+ *  either way — this is consistency only, so that the set means exactly
+ *  "vitest-backed" rather than "vitest-backed, plus one node:test step by
+ *  accident". */
 function hasVitestStep(selectedSteps) {
-  const vitestStepNames = new Set(['test', 'test:server', 'test:server-slow', 'test:pinokio']);
+  const vitestStepNames = new Set(['test', 'test:server', 'test:server-slow']);
   return selectedSteps.some((step) => vitestStepNames.has(step.name));
 }
 
