@@ -2851,7 +2851,7 @@ test('CLI: with --strict, Check D finds title drift but does NOT fail the gate (
 
     // The finding must be Check D's OWN message for THIS injected heading —
     // not merely some unrelated "cited <id>" substring elsewhere in the much
-    // larger combined CLI output (Check C\u0027s exploratory findings use that
+    // larger combined CLI output (Check C's exploratory findings use that
     // exact word too, e.g. "cited A3 for #1230"). Match the single real line
     // precisely: file:line, "heading cites <id>", and the injected echo text,
     // all on one line, with no 's' (dotall) flag to allow cross-output drift.

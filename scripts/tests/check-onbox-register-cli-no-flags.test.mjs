@@ -208,7 +208,7 @@ test('CLI (no flags), real subprocess: a many-mismatch register exits 1 and repo
     for (const letter of LETTERS) {
       assert.match(
         combined,
-        new RegExp(`Live view's Group ${letter} section has row ${letter}3 that the register\u0027s Group ${letter} does not`),
+        new RegExp(`Live view's Group ${letter} section has row ${letter}3 that the register's Group ${letter} does not`),
         `missing extra-row line for Group ${letter} — full output:\n${combined}`,
       );
       assert.match(
