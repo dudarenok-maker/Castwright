@@ -39,6 +39,7 @@ import {
   cosineToCentroid,
   percentile,
   scoreSegment,
+  syntheticOnlySpread,
   CUTOFFS,
 } from './score.js';
 import { auditionCentroid, type AuditionCharacter, type AuditionCentroidOpts } from './audition-centroid.js';
@@ -277,8 +278,15 @@ async function resolveCharacterReference(
     .map((v) => cosineToCentroid(Array.from(v), centroidArr))
     .sort((a, b) => a - b);
   const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
-  const pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
-  const pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
+  // A36 — a small, synthetic-only pool (no real anchors blended in; see
+  // AuditionCentroidResult.syntheticOnly) clusters far tighter than real
+  // render-to-render variance, so the normal percentile cutoffs over-flag a
+  // correctly-cast voice on fresh text as 'voice-mismatch'/'severe' (srv-36
+  // register row A36). Use the separately-calibrated sigma band instead —
+  // the real (real-anchor) in-book path above never reaches this branch.
+  const { pSevere, pBand } = audition.syntheticOnly
+    ? syntheticOnlySpread(cosines)
+    : { pSevere: percentile(cosines, CUTOFFS.severeEdgePctl), pBand: percentile(cosines, CUTOFFS.bandUpperPctl) };
   return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', auditionVoice: { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned } } };
 }
 

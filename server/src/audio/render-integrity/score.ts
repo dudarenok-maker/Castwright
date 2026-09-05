@@ -52,6 +52,57 @@ export const CUTOFFS = {
   minDurationSec: MIN_DURATION_SEC,
 } as const;
 
+/**
+ * A36 (2026-09-05 owner ruling) — distinct, wider calibration used ONLY when
+ * a character's reference pool is small AND synthetic-only (Option-B Phase B:
+ * anchors dropped for a bimodal split, or Phase A with zero real anchors to
+ * begin with — see `AuditionCentroidResult.syntheticOnly` in
+ * audition-centroid.ts). `CUTOFFS`'s percentile cutoffs assume a pool whose
+ * scatter reflects real render-to-render variance; a same-engine,
+ * same-conditions synthetic-only pool clusters far tighter than that (the
+ * register's own observed case: N=6, cosines 0.9629±0.02), so a percentile
+ * near the bottom of that tight cluster sits ABOVE a correctly-cast voice's
+ * real re-render cosine (observed 0.928/0.934) — a false 'voice-mismatch'/
+ * 'severe' flag on a correct render (srv-36 register row A36).
+ *
+ * Uses mean/std-dev sigma bands instead of percentile-of-pool: at N=6,
+ * percentile-of-pool is really "near the sample minimum" (see `percentile`'s
+ * behaviour at low pctl on a tiny array), which is exactly the tight-cluster
+ * problem, not a fix for it. Sigma widths are picked so the register's own
+ * false-positive case clears the severe edge:
+ *   severeSigma=3  → well below the observed 0.928/0.934 correct-voice
+ *                    cosines (no longer 'severe') for the register's own
+ *                    pinned pool (mean 0.9629, population std≈0.0173).
+ *   bandSigma=1.5  → both 0.928 and 0.934 land 'inconclusive' (never
+ *                    'severe') against that same pool — the fix's actual
+ *                    requirement; a clearly-matching render still resolves
+ *                    'voice-match' well above this edge.
+ * The normal (real-anchor) path is entirely unaffected — this band is never
+ * consulted unless `syntheticOnly` is set.
+ */
+export const SYNTHETIC_ONLY_CUTOFFS = {
+  severeSigma: 3,
+  bandSigma: 1.5,
+} as const;
+
+/**
+ * Mean/std-dev-based spread for a small synthetic-only audition pool — see
+ * `SYNTHETIC_ONLY_CUTOFFS` for why this replaces percentile-of-pool rather
+ * than just using different percentile numbers.
+ *
+ * @param cosines Cosine-to-centroid values for the pool (any order; not
+ *   required to be pre-sorted, unlike `percentile`).
+ */
+export function syntheticOnlySpread(cosines: number[]): { pSevere: number; pBand: number } {
+  const mean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
+  const variance = cosines.reduce((s, c) => s + (c - mean) ** 2, 0) / cosines.length;
+  const std = Math.sqrt(variance);
+  return {
+    pSevere: mean - SYNTHETIC_ONLY_CUTOFFS.severeSigma * std,
+    pBand: mean - SYNTHETIC_ONLY_CUTOFFS.bandSigma * std,
+  };
+}
+
 // ── percentile ─────────────────────────────────────────────────────────────
 
 /**

@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   CUTOFFS,
+  SYNTHETIC_ONLY_CUTOFFS,
   percentile,
   cosineToCentroid,
   scoreSegment,
+  syntheticOnlySpread,
 } from './score.js';
 
 // ── CUTOFFS pin ────────────────────────────────────────────────────────────
@@ -48,6 +50,42 @@ describe('percentile', () => {
     const arr = [1, 2, 3, 4];
     // Standard linear interpolation at p50: midpoint between 2 and 3 = 2.5
     expect(percentile(arr, 50)).toBeCloseTo(2.5, 5);
+  });
+});
+
+// ── syntheticOnlySpread (A36) ────────────────────────────────────────────────
+
+describe('SYNTHETIC_ONLY_CUTOFFS', () => {
+  it('exports the sigma-band calibration constants', () => {
+    expect(SYNTHETIC_ONLY_CUTOFFS.severeSigma).toBe(3);
+    expect(SYNTHETIC_ONLY_CUTOFFS.bandSigma).toBe(1.5);
+  });
+});
+
+describe('syntheticOnlySpread', () => {
+  // Register row A36's own observed shape: a tight, small (N=6) synthetic-only
+  // pool clustered around 0.9629, spread ±0.02 — and the two real correct-voice
+  // re-render cosines (0.928, 0.934) that a plain percentile-of-pool cutoff
+  // false-flagged 'voice-mismatch'/'severe' against this exact cluster.
+  const poolCosines = [0.9429, 0.9429, 0.9529, 0.9729, 0.9829, 0.9829]; // mean 0.9629
+
+  it('places both real over-flagged cosines (0.928, 0.934) above the severe edge', () => {
+    const { pSevere } = syntheticOnlySpread(poolCosines);
+    expect(0.928).toBeGreaterThan(pSevere);
+    expect(0.934).toBeGreaterThan(pSevere);
+  });
+
+  it('reproduces the calibrated severe/band edges for the pinned pool', () => {
+    // mean=0.9629, population std≈0.017318 → severe = mean-3σ, band = mean-1.5σ
+    const { pSevere, pBand } = syntheticOnlySpread(poolCosines);
+    expect(pSevere).toBeCloseTo(0.9629 - 3 * 0.017318, 4);
+    expect(pBand).toBeCloseTo(0.9629 - 1.5 * 0.017318, 4);
+  });
+
+  it('the plain percentile-of-pool cutoff (old behaviour) DOES flag the same pool\'s edge at/above 0.928 — this is the bug this band replaces', () => {
+    const sorted = [...poolCosines].sort((a, b) => a - b);
+    const oldPSevere = percentile(sorted, CUTOFFS.severeEdgePctl);
+    expect(oldPSevere).toBeGreaterThan(0.928); // old cutoff over-flags the real render
   });
 });
 
@@ -141,5 +179,35 @@ describe('scoreSegment', () => {
     const r = scoreSegment(0.10, spread, 0.5);
     expect(r.verdict).toBe('inconclusive');
     expect(r.severity).toBe('inconclusive');
+  });
+
+  // A36 regression: reproduces the exact 2026-08-29 false-positive shape — a
+  // correctly-cast voice re-rendered on fresh text, scored against a small
+  // (N=6) synthetic-only Phase B pool clustered at 0.9629±0.02. With the old
+  // percentile-of-pool spread this cosine was flagged 'voice-mismatch'/'severe';
+  // with the new synthetic-only sigma band it must not be.
+  it('a correct-voice cosine (0.928) against a tight synthetic-only pool is no longer flagged severe', () => {
+    const poolCosines = [0.9429, 0.9429, 0.9529, 0.9729, 0.9829, 0.9829]; // mean 0.9629
+    const synthSpread = syntheticOnlySpread(poolCosines);
+    const r = scoreSegment(0.928, synthSpread, okDur);
+    expect(r.verdict).not.toBe('voice-mismatch');
+    expect(r.severity).not.toBe('severe');
+  });
+
+  it('a correct-voice cosine (0.934) against the same pool is also no longer flagged severe under the synthetic-only band', () => {
+    const poolCosines = [0.9429, 0.9429, 0.9529, 0.9729, 0.9829, 0.9829];
+    const synthSpread = syntheticOnlySpread(poolCosines);
+    const r = scoreSegment(0.934, synthSpread, okDur);
+    expect(r.verdict).not.toBe('voice-mismatch');
+    expect(r.severity).not.toBe('severe');
+  });
+
+  it('the SAME cosine (0.928) against the normal (real-anchor) percentile spread is unaffected by the new band', () => {
+    // Sanity check that the normal path's own spread values are untouched —
+    // this test's `spread` constant (0.47/0.60) is a stand-in for a real
+    // in-book spread and is never routed through syntheticOnlySpread.
+    const r = scoreSegment(0.928, spread, okDur);
+    expect(r.verdict).toBe('voice-match');
+    expect(r.severity).toBeNull();
   });
 });
