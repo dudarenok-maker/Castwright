@@ -117,15 +117,15 @@ export function parseBodyGroupCounts(mdText) {
   return counts;
 }
 
-function rewriteGcountInSection(html, sectionId, count) {
+export function rewriteGcountInSection(html, sectionId, count) {
   const sectionRegex = new RegExp(
-    `(<section[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?<span class="gcount">)\\d+( rows?</span>)`,
+    `(<section[^>]*\\bid="${sectionId}"[^>]*>(?:(?!<\\/section>)[\\s\\S])*?<span class="gcount">)\\d+( rows?</span>)([\\s\\S]*?<\\/section>)`,
   );
   const match = html.match(sectionRegex);
   if (!match) throw new Error(`build-register-live-view: no gcount span found in section#${sectionId}`);
   return html.replace(
     sectionRegex,
-    (whole, before) => `${before}${count}${count === 1 ? ' row</span>' : ' rows</span>'}`,
+    (whole, before, middle, closeSection) => `${before}${count}${count === 1 ? ' row</span>' : ' rows</span>'}${closeSection}`,
   );
 }
 

@@ -14,6 +14,7 @@ import {
   reconcileRowShells,
   normaliseTitle,
   decodeHtmlEntities,
+  rewriteGcountInSection,
   main,
 } from '../build-register-live-view.mjs';
 
@@ -616,3 +617,32 @@ test('inter-shell content (blank lines, comments) between shells is NOT preserve
   // (shells are joined by '\n', and indentation is part of each shell's capture)
   assert.match(result, /<\/details>\n\s+<details class="item">/);
 });
+
+test('rewriteGcountInSection fails when target section gcount is missing, even if a later section has one', () => {
+  // Regression test: the regex uses a lazy match [\\s\\S]*? between the section opening
+  // and the gcount span, which is unbounded — it can match across section boundaries.
+  // If the target section's gcount span is missing BUT another gcount span exists
+  // later in the document, the unbounded lazy match would silently find the wrong span
+  // instead of throwing a "no gcount span found" error. This test verifies that the
+  // regex is now bounded to only search within the target section (up to </section>).
+  const html = buildLiveViewFixture({ glance: { A: 2, B: 3, C: 4 } });
+
+  // Manually remove the gcount span from section B (the middle section)
+  // while leaving section C's gcount intact, simulating the failure mode.
+  const htmlWithMissingGcountB = html.replace(
+    /(<section class="group" id="gb">\s*<header>[\s\S]*?)<span class="gcount">3 rows<\/span>/,
+    '$1'
+  );
+
+  // Verify that section B's gcount was actually removed
+  assert.doesNotMatch(htmlWithMissingGcountB, /id="gb"[\s\S]*?<span class="gcount">3 rows/);
+  // AND section C's gcount still exists (to trigger the unbounded-match failure mode)
+  assert.match(htmlWithMissingGcountB, /id="gc"[\s\S]*?<span class="gcount">4 rows/);
+
+  // Attempting to rewrite B's gcount should throw an error, NOT silently match C's gcount
+  assert.throws(
+    () => rewriteGcountInSection(htmlWithMissingGcountB, 'gb', 5),
+    /no gcount span found in section#gb/
+  );
+});
+
