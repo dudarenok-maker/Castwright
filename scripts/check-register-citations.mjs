@@ -2038,7 +2038,16 @@ const TITLE_DRIFT_STOPWORDS = new Set(
 );
 
 // A ratio at or below this is "low similarity" — the tuning doc's own
-// heading-surface recommendation (~0.3, informational).
+// heading-surface recommendation (~0.3). On this repo's real corpus the
+// ratio floor is currently empirically inert: every genuine detection
+// (annotated or not) has shared < TITLE_DRIFT_MIN_SHARED_TOKENS with ratio
+// well under this floor, so shared < 2 alone would flag the same set —
+// annotation-exemption (below) doesn't change this, since it filters
+// findings the ratio+shared gate has already fired on. The floor is kept
+// for the case the mutation tests construct directly: shared === 1 with a
+// very small token union, where ratio is the only thing distinguishing a
+// coincidental one-word overlap from real drift — a case this corpus
+// doesn't currently exercise, not one the code fails to guard.
 const TITLE_DRIFT_RATIO_THRESHOLD = 0.3;
 
 // Minimum non-stopword, non-ID tokens the title and the heading text must

@@ -2066,7 +2066,7 @@ test('checkCitationTitleDrift: the stopword filter is load-bearing — stopwords
 
 ## Group A — test group
 
-### A40 · the quick (#1234)
+### A40 · the quick
 
 Some body text.
 `;
@@ -2091,7 +2091,7 @@ test('checkCitationTitleDrift: the ID-token filter is load-bearing — ID-shaped
 
 ## Group A — test group
 
-### A41 · a15 quick (#1234)
+### A41 · a15 quick
 
 Some body text.
 `;
@@ -2659,6 +2659,81 @@ test('CLI: the real tree scan finds at least one binary file, and the success li
   const result = runCli([]);
   assert.equal(result.status, 0);
   assert.match(result.stdout, /\d+ unreadable\/binary excluded/);
+});
+
+// --- Check D: title drift is advisory, non-fatal even under --strict ---
+//
+// Finding 5: Check D's findings must be advisory-only and NEVER escalate to
+// fatal, even under `--strict` (unlike Check C's wrongId half, which does
+// escalate under some conditions). This test exercises the CLI with `--strict`,
+// triggers a Check D finding, and asserts the exit code stays 0.
+
+test('CLI: with --strict, Check D finds title drift but does NOT fail the gate (finding 5)', () => {
+  const TEST_FILE = join(HERE, '..', '..', 'docs', 'testing', 'onbox-sitting-plan.md');
+  const original = readFileSync(TEST_FILE, 'utf8');
+
+  // Find a real register row with a heading to mutate for the drift test.
+  // We'll inject a heading that cites a real row ID but with completely
+  // different text, triggering Check D's drift detection.
+  const registerPath = join(HERE, '..', '..', 'docs', 'testing', 'onbox-acceptance-register.md');
+  const registerText = readFileSync(registerPath, 'utf8');
+  const { rows } = parseRegisterRows(registerText);
+
+  // Pick the first row that exists in the real register.
+  let targetId = null;
+  for (const id of rows.keys()) {
+    targetId = id;
+    break;
+  }
+  assert.ok(targetId, 'fixture assumption: at least one real register row exists');
+
+  const row = rows.get(targetId);
+  const currentTitle = row.title;
+
+  // Create a heading that cites this row but with completely different text.
+  // This triggers Check D's drift detection: the heading's text ("unrelated
+  // work") shares zero tokens with the row's current title.
+  const driftHeading = `### ${targetId} · unrelated work completely different`;
+
+  // Inject at the end of the test file so it's scanned but doesn't break
+  // anything else (it's a heading in the middle of prose, not a real row).
+  const mutated = original + '\n\n' + driftHeading + '\n\nThis is test text.\n';
+
+  try {
+    writeFileSync(TEST_FILE, mutated);
+    const result = runCli(['--strict']);
+
+    // Exit code must be 0: Check D findings do not fail the gate, even with --strict.
+    assert.equal(result.status, 0, 'Check D drift findings are advisory, should not fail');
+
+    // The finding must be Check D's OWN message for THIS injected heading —
+    // not merely some unrelated "cited <id>" substring elsewhere in the much
+    // larger combined CLI output (Check C's exploratory findings use that
+    // exact word too, e.g. "cited A3 for #1230"). Match the single real line
+    // precisely: file:line, "heading cites <id>", and the injected echo text,
+    // all on one line, with no 's' (dotall) flag to allow cross-output drift.
+    assert.match(
+      result.stdout,
+      new RegExp(
+        `onbox-sitting-plan\\.md:\\d+ — heading cites ${targetId} — .*unrelated work completely different.*review for drift\\)`,
+      ),
+      'Check D drift finding for the injected heading should be visible in output',
+    );
+
+    // The injected heading has no nearby discharge annotation, so it must
+    // land in the plain drift bucket, not the annotated-exemption bucket.
+    assert.doesNotMatch(
+      result.stdout,
+      new RegExp(`heading cites ${targetId} — .*unrelated work completely different.*annotated as discharged`),
+      'an unannotated heading must not be excused into the annotated bucket',
+    );
+
+    // Verify the Check D section header is present in output.
+    assert.match(result.stdout, /Check D.*heading title drift.*advisory/i);
+  } finally {
+    writeFileSync(TEST_FILE, original);
+    assert.equal(readFileSync(TEST_FILE, 'utf8'), original, 'restore must be byte-identical');
+  }
 });
 
 // --- Self-referential exclusion: this checker's own source and the sibling
