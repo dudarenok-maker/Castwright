@@ -16,12 +16,13 @@
      2. A file excluded as a slow file but absent from SLOW_FILES → it is
         exercised nowhere.
 
-   A third check goes beyond comparing the two constants: it dynamically
-   imports vitest.config.ts's resolved default export and confirms every
-   SLOW_FILES entry actually appears in the *effective* `test.exclude` array.
-   The two constants can agree with each other while the spread that wires
-   SLOW_FILES_TO_EXCLUDE into `exclude` is broken or removed — that failure
-   mode is invisible to the set-equality check alone. */
+   Beyond comparing the two constants, further checks dynamically import each
+   config's resolved default export and confirm every SLOW_FILES entry
+   actually appears in the *effective* `test.exclude` (main config) and
+   `test.include` (slow config) arrays. The two constants can agree with each
+   other while the spread/binding that wires one of them into its config's
+   effective output is broken or removed — that failure mode is invisible to
+   the set-equality check alone, on either side of the mirror. */
 import { describe, it, expect } from 'vitest';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -101,6 +102,14 @@ describe('slow-lane mirror invariant (SLOW_FILES <-> SLOW_FILES_TO_EXCLUDE)', ()
     expect(new Set(SLOW_FILES_TO_EXCLUDE)).toEqual(new Set(SLOW_FILES));
   });
 
+  /* toContain, not toEqual: the main config's `test.exclude` legitimately
+     carries many entries besides SLOW_FILES_TO_EXCLUDE (node_modules, dist,
+     config globs, and more) — it merely CONTAINS the slow files, it does not
+     consist of exactly them. This is the asymmetric sibling of the
+     effective-include check below, which is the reverse relationship: the
+     slow config's `include` IS exactly SLOW_FILES, so that check uses
+     toEqual. Don't "fix" this one to match — toEqual here would fail
+     immediately against the config's other entries. */
   it("every SLOW_FILES entry actually appears in the main config's effective test.exclude", () => {
     const effectiveExclude = mainConfigDefault.test?.exclude ?? [];
     for (const file of SLOW_FILES) {
@@ -118,12 +127,18 @@ describe('slow-lane mirror invariant (SLOW_FILES <-> SLOW_FILES_TO_EXCLUDE)', ()
      on this side until now (PR #2998 review pass 2) — a hot file dropped
      from the slow config's effective `include` this way isn't double-run,
      it's exercised NOWHERE, because the main config's `exclude` still lists
-     it under SLOW_FILES_TO_EXCLUDE. */
+     it under SLOW_FILES_TO_EXCLUDE.
+
+     toEqual, not toContain: the slow config's `include` IS exactly
+     SLOW_FILES (nothing else belongs in the serial lane), unlike the main
+     config's `exclude`, which legitimately contains many entries besides
+     SLOW_FILES_TO_EXCLUDE. A toContain here would leave an extra file
+     spliced into `include` undetected — selected by both configs, the exact
+     double-run this guard exists to prevent — while every assertion in this
+     file stayed green. */
   it("every SLOW_FILES entry actually appears in the slow config's effective test.include", () => {
     const effectiveInclude = slowConfigDefault.test?.include ?? [];
-    for (const file of SLOW_FILES) {
-      expect(effectiveInclude).toContain(file);
-    }
+    expect(effectiveInclude).toEqual(SLOW_FILES);
   });
 
   it("flake-repro.mjs's SLOW list is exactly the same set as SLOW_FILES (both directions)", () => {
@@ -134,8 +149,10 @@ describe('slow-lane mirror invariant (SLOW_FILES <-> SLOW_FILES_TO_EXCLUDE)', ()
     expect(extraInFlakeRepro).toEqual([]);
   });
 
-  /* All five checks above compare string arrays to each other (or, for the
-     effective-exclude check, to a config object) — nothing touches disk. A
+  /* The checks above compare string arrays to each other (or, for the
+     effective-exclude/effective-include checks, to a config object) —
+     nothing touches disk. (Deliberately uncounted: a fixed count here has
+     already gone stale twice as checks were added — see the file header.) A
      SLOW_FILES entry that no longer names a real file (renamed or deleted
      without updating this list) leaves every one of those checks green
      while the slow lane silently runs 10 of 11 (vitest's `include` doesn't
