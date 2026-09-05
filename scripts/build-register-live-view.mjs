@@ -213,7 +213,7 @@ function extractRowIdsInOrder(sectionMd) {
 // Non-nested in this markup (no <details> inside another), so a non-greedy
 // match to the FIRST </details> after the opening tag is exact, not an
 // approximation.
-const SHELL_BY_ID_REGEX = /[ \t]*<details class="item">\s*<summary><span class="num">([^<]+)<\/span>[\s\S]*?<\/details>/g;
+const SHELL_BY_ID_REGEX = /[ \t]*<details class="item">\s*<summary>\s*<span class="num">([^<]+)<\/span>[\s\S]*?<\/details>/g;
 
 function splitShellsById(sectionHtml) {
   const shells = new Map();
@@ -267,7 +267,7 @@ export function normaliseTitle(raw) {
 
 const BLOCKED_HEADING_REGEX = /^### (.+?)\r?$/gm;
 const UNCONFIRMED_BULLET_REGEX = /^- \*\*(.+?)\*\*/gm;
-const SHELL_BY_TITLE_REGEX = /[ \t]*<details class="item">\s*<summary><span class="num">—<\/span><span class="iname">([^<]+)<\/span>[\s\S]*?<\/details>/g;
+const SHELL_BY_TITLE_REGEX = /[ \t]*<details class="item">\s*<summary>\s*<span class="num">—<\/span>\s*<span class="iname">([^<]+)<\/span>[\s\S]*?<\/details>/g;
 
 function reconcileTitledSection(html, sectionId, titles, { prefixMatch }) {
   const sectionRegex = new RegExp(

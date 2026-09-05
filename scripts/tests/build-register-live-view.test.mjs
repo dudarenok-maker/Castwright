@@ -543,3 +543,38 @@ test('reconcileTitledSection preserves literal $1 and $& in row body text (strin
   // The match should not be substituted/duplicated
   assert.doesNotMatch(result, /Runs on <section/);
 });
+
+test('SHELL_BY_ID_REGEX matches a shell with <summary> on its own line (hand-authored formatting)', () => {
+  // Regression test for data-loss bug: if a shell's <summary> is on its own line
+  // with indentation, the regex should still match and preserve the body.
+  // This is a real, plausible authoring style when someone hand-edits the HTML.
+  const md = `## Group A — setup a
+
+### A1 · title
+### A2 · another
+`;
+  // Create HTML where A1's shell has <summary> on its own line
+  const html = `<section class="group" id="ga">
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary>
+          <span class="num">A1</span><span class="iname">title</span><span class="chev">›</span>
+        </summary>
+        <div class="body">Real hand-authored content for A1</div>
+      </details>
+      <details class="item">
+        <summary><span class="num">A2</span><span class="iname">another</span><span class="chev">›</span></summary>
+        <div class="body">Content for A2</div>
+      </details>
+  </section>`;
+
+  const result = reconcileRowShells(md, html);
+
+  // The real body content must survive, not be replaced by the placeholder
+  assert.match(result, /Real hand-authored content for A1/);
+  assert.doesNotMatch(result, /A1[\s\S]*?Not yet published/);
+  assert.doesNotMatch(result, /body-placeholder/);
+  // Verify both rows are present in the correct order
+  const rowIds = [...result.matchAll(/<span class="num">([^<]+)<\/span>/g)].map((m) => m[1]);
+  assert.deepEqual(rowIds, ['A1', 'A2']);
+});
