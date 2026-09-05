@@ -139,7 +139,22 @@ export function main(
   const mdText = readNormalized(mdPath);
   const currentHtml = readNormalized(htmlPath);
 
-  const nextHtml = buildLiveView(mdText, currentHtml);
+  // buildLiveView's own helpers throw on a structural mismatch between the
+  // markdown and the live view (e.g. a Blocked/Unconfirmed row's title was
+  // reworded in the .md but not the .html, so reconcileTitledSection can no
+  // longer find its shell by title). Uncaught, that crashes this CLI with a
+  // raw stack trace instead of the checked, actionable exit-1 every other
+  // drift case in this function already reports — the one path here that
+  // didn't match the rest.
+  let nextHtml;
+  try {
+    nextHtml = buildLiveView(mdText, currentHtml);
+  } catch (err) {
+    console.error(
+      `register:build: ${liveViewPath} could not be reconciled against ${registerPath}: ${err.message}. Run \`npm run register:build\` after fixing the mismatch and commit the result.`,
+    );
+    return 1;
+  }
 
   if (check) {
     const placeholderStillCommitted = currentHtml.includes('class="body-placeholder"');

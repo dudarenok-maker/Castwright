@@ -466,6 +466,32 @@ test('main() writes LF even when the tracked file is CRLF, and --check passes af
   }
 });
 
+test('main() reports a clean exit-1, not an uncaught crash, when a Blocked/Unconfirmed title no longer matches the live view', () => {
+  // Regression test: reconcileTitledSection throws when a Blocked/Unconfirmed
+  // row's title in the .md doesn't match any shell's iname in the .html (e.g.
+  // the row was reworded in one file but not the other — a real edit this
+  // register's own docs call "the most common edit it gets"). Before this
+  // fix, that Error propagated out of main() uncaught, crashing the CLI (and
+  // the CI step that runs it) with a raw stack trace instead of the same
+  // clean, actionable exit-1 every other drift case in main() reports.
+  const dir = mkdtempSync(join(tmpdir(), 'register-build-'));
+  try {
+    const mdPath = join(dir, 'register.md');
+    const htmlPath = join(dir, 'live-view.html');
+    const md = buildRegisterFixture() + `
+## Blocked — hardware not available
+
+### a reworded title that no longer matches the live view
+`;
+    writeFileSync(mdPath, md);
+    writeFileSync(htmlPath, buildLiveViewFixture());
+    const exit = main('register.md', 'live-view.html', { repoRoot: dir, check: true });
+    assert.equal(exit, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the real register and its real live view agree (register:build --check)', () => {
   const result = spawnSync(
     process.execPath,
@@ -524,25 +550,43 @@ test('reconcileOneSection preserves literal $1 and $& in row body text (string.r
 test('reconcileTitledSection preserves literal $1 and $& in row body text (string.replace special-pattern corruption bug)', () => {
   // Test the same bug in reconcileTitledSection (Blocked/Unconfirmed sections).
   // The Blocked section uses prefixMatch: false, matching titles exactly (after normalisation).
+  //
+  // A prior version of this test used "$PORT" and a whole-string substring
+  // match, and it passed even against the un-fixed (buggy) code: "$P" is not
+  // one of JavaScript's special replacement-pattern sequences (only $1-$99,
+  // $&, $`, $', $$ and $<name> are), so "$PORT" survives untouched either
+  // way; and $&'s bug-path expansion reinserts the WHOLE original matched
+  // section (verbatim, including the row's own literal body text as a
+  // substring of it), so a plain `assert.match` for that literal text still
+  // finds it inside the reinjected blob. Neither assertion could ever fail.
+  // This version uses "$1" — a real digit-group reference into
+  // reconcileTitledSection's own 3-capture sectionRegex (header, body,
+  // closeTag) — and a STRUCTURAL count (how many times `id="blocked"`
+  // appears) rather than a substring match, since the bug's $1/$& expansions
+  // each reinsert a copy of the section's own opening tag.
   const md = `## Blocked — hardware not available
 
 ### Server config
 `;
-  // Create HTML with an existing shell containing $PORT and $& in the body
   const html = `<section class="group is-blocked" id="blocked">
       <header><h3 class="gtitle">…<span class="gcount">1 row</span></h3></header>
       <details class="item">
         <summary><span class="num">—</span><span class="iname">Server config</span><span class="chev">›</span></summary>
-        <div class="body">Runs on $PORT and status is $& (always check)</div>
+        <div class="body">Port is $1 and full match is $&amp; below</div>
       </details>
   </section>`;
 
   const result = reconcileRowShells(md, html);
 
-  // The literal text "$PORT" and "$&" must appear unchanged
-  assert.match(result, /Runs on \$PORT and status is \$& \(always check\)/);
-  // The match should not be substituted/duplicated
-  assert.doesNotMatch(result, /Runs on <section/);
+  // The literal text "$1" and "$&" must survive unchanged.
+  assert.match(result, /Port is \$1 and full match is \$&amp; below/);
+  // Structural check: exactly one section open tag. Under the bug, "$1" in
+  // the replacement string is read as sectionRegex's capture group 1
+  // (headerAndOpen, itself containing `id="blocked"`), and "$&" as the
+  // WHOLE original match (which contains its own headerAndOpen too) --
+  // each expansion adds a duplicate `id="blocked"` on top of the one the
+  // correct, un-corrupted output already carries.
+  assert.equal((result.match(/id="blocked"/g) ?? []).length, 1);
 });
 
 test('SHELL_BY_ID_REGEX matches a shell with <summary> on its own line (hand-authored formatting)', () => {
@@ -578,6 +622,34 @@ test('SHELL_BY_ID_REGEX matches a shell with <summary> on its own line (hand-aut
   // Verify both rows are present in the correct order
   const rowIds = [...result.matchAll(/<span class="num">([^<]+)<\/span>/g)].map((m) => m[1]);
   assert.deepEqual(rowIds, ['A1', 'A2']);
+});
+
+test('SHELL_BY_TITLE_REGEX matches a Blocked shell with <summary> on its own line (hand-authored formatting)', () => {
+  // Companion to the SHELL_BY_ID_REGEX test above, for the title-matched path
+  // (Blocked/Unconfirmed sections) — that fix widened BOTH SHELL_BY_ID_REGEX
+  // and SHELL_BY_TITLE_REGEX with the same \s* tolerance, but the original
+  // regression test only exercised the ID-matched path (a numbered Group
+  // section), leaving the title-matched widening completely unproven:
+  // reverting SHELL_BY_TITLE_REGEX's \s* additions left every existing test
+  // green.
+  const md = `## Blocked — hardware not available
+
+### Server config
+`;
+  const html = `<section class="group is-blocked" id="blocked">
+      <header><h3 class="gtitle">…<span class="gcount">1 row</span></h3></header>
+      <details class="item">
+        <summary>
+          <span class="num">—</span><span class="iname">Server config</span><span class="chev">›</span>
+        </summary>
+        <div class="body">Real hand-authored content for the Blocked row</div>
+      </details>
+  </section>`;
+
+  const result = reconcileRowShells(md, html);
+
+  assert.match(result, /Real hand-authored content for the Blocked row/);
+  assert.doesNotMatch(result, /body-placeholder/);
 });
 
 test('inter-shell content (blank lines, comments) between shells is NOT preserved during reconciliation', () => {

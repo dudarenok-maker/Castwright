@@ -97,22 +97,35 @@ The live view carries derived figures — owed count, per-group counts, oldest
 debt — that are **generated** on every build. Rows can be right while the
 summary strip lies. `npm run register:build` generates the summary strip and all
 its derived figures; `npm run check:onbox-register` verifies the row IDs are
-unique across the document and sit below their group's allocation floor, and
-that each group's glance-table count matches the rows in its body section. Both
-fail CI when rows are added, removed, or miscounted, so **adding or removing a
-row here and missing the live view build fails CI**. Know its edges, because two of
-them are wide:
+unique across the document and that each group's `next-id` marker sits at or
+above the shared allocation floor (never that a row ID itself sits below the
+floor — the floor gates the NEXT id a group may mint, not the ids already in
+use), and that each group's glance-table count matches the rows in its body
+section. Both fail CI when rows are added, removed, or miscounted, so
+**adding or removing a row here and missing the live view build fails CI**.
+Know its edges, because three of them are wide:
 
-- **A wording-only edit does not fail.** Rewording a row, recording a run
-  result, changing a hardware note or a criteria link — the most common edit
-  this register gets — changes nothing either check compares. The live view mirrors
-  that prose in its own row bodies and will silently fall behind (the generator
-  does not rewrite a row's title if you changed only the body; it preserves
-  hand-authored titles).
-- **The summary strip is generated, not hand-edited.** All derived figures —
-  owed count, per-group counts, oldest debt, group/blocked/unconfirmed tallies —
-  are built by `npm run register:build` from the markdown register. Never edit
-  the `## At a glance` section by hand; edit the rows instead and rebuild.
+- **A wording-only edit to a numbered Group row does not fail — but the same
+  edit to a Blocked/Unconfirmed row does.** Rewording a Group row (`A12`,
+  `E9`, …), recording a run result, changing a hardware note or a criteria
+  link — the most common edit this register gets — changes nothing either
+  check compares for a Group row, since those are matched by ID. The live
+  view mirrors that prose in its own row bodies and will silently fall behind
+  (the generator does not rewrite a row's title if you changed only the
+  body; it preserves hand-authored titles). Blocked and Unconfirmed rows are
+  matched by TITLE, not ID — rewording one WITHOUT the matching live-view
+  edit makes `register:build`/`--check` fail with a clean, actionable
+  "no shell title matches" error (not a crash) naming the mismatched title.
+- **The markdown's own `## At a glance` table is hand-maintained input, not
+  generated output — only the LIVE VIEW's mirrored glance table and strip are
+  generated.** `register:build` reads the markdown's `## At a glance` table
+  and body sections and writes the live view's HTML; it never writes back
+  into the markdown. Adding, removing, or reordering a row still requires
+  hand-editing the markdown's own glance-table row count for that row's
+  group — `check:onbox-register` fails ("glance table says N, body has M
+  rows … Update the table or the body") if you forget. Only the generated
+  *HTML* summary strip and per-group `gcount`/glance-table-cell regions are
+  off-limits to hand-editing; rebuild those with `register:build` instead.
 - **The published page is invisible to CI checks.** Both `register:build` and
   `check:onbox-register` read only the two TRACKED files, so "was it published at all, and
   was it the right file?" is procedure, not that gate — see the merge step
