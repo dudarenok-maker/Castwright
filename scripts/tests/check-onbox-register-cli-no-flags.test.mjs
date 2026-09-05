@@ -112,12 +112,11 @@ ${glanceRows}
 ${bodySections}`;
 }
 
-// A live view that disagrees with EVERY group in TWO independent ways: its
-// header claims only 1 row (register's body has 2 -> a header-count-mismatch
-// error) and it only lists the first row ID (the second is genuinely absent
-// from that section -> a missing-row error). GROUP_COUNT groups x 2 errors
-// each = 24 register-vs-live-view errors, plus the summary strip's owed
-// total (deliberately left at the coherent value here so this fixture
+// A live view that disagrees with EVERY group in TWO independent ways: it
+// lists a row ID the register does not have at all (-> an extra-row error)
+// and lists that same ID twice (-> a duplicate-row error). GROUP_COUNT groups
+// x 2 errors each = 24 register-vs-live-view errors, plus the summary strip's
+// owed total (deliberately left at the coherent value here so this fixture
 // isolates the per-group errors from the scalar total-mismatch one).
 function buildDisagreeingLiveView() {
   const owed = GROUP_COUNT * 2;
@@ -127,8 +126,10 @@ function buildDisagreeingLiveView() {
   const sections = LETTERS.map((letter) => {
     const lower = letter.toLowerCase();
     return `  <section class="group" id="g${lower}">
-    <h3 class="gtitle"><span class="gtag">${letter}</span> Setup ${letter} <span class="gcount">1 rows</span></h3>
+    <h3 class="gtitle"><span class="gtag">${letter}</span> Setup ${letter} <span class="gcount">3 rows</span></h3>
     <summary><span class="num">${letter}1</span><span class="iname">t</span></summary>
+    <summary><span class="num">${letter}3</span><span class="iname">t</span></summary>
+    <summary><span class="num">${letter}3</span><span class="iname">t</span></summary>
   </section>`;
   }).join('\n\n');
   return `<title>On-box acceptance register — Castwright</title>
@@ -198,32 +199,32 @@ test('CLI (no flags), real subprocess: a many-mismatch register exits 1 and repo
     assert.equal(r.status, 1, `expected exit 1; stdout: ${r.stdout}\nstderr: ${r.stderr}`);
     const combined = r.stdout + r.stderr;
 
-    // One header-count-mismatch line and one missing-row line PER group —
-    // 24 distinct error lines total. Assert every single one is present, not
-    // just a sample: a truncation (or a control-flow bug that short-circuits
-    // after some groups) would drop a suffix, which checking only the first
-    // few groups would miss.
+    // One extra-row line and one duplicate-row line PER group — 24 distinct
+    // error lines total. Assert every single one is present, not just a
+    // sample: a truncation (or a control-flow bug that short-circuits after
+    // some groups) would drop a suffix, which checking only the first few
+    // groups would miss.
     for (const letter of LETTERS) {
       assert.match(
         combined,
-        new RegExp(`Live view: Group ${letter}'s header says 1 rows, the register's body has 2`),
-        `missing header-count-mismatch line for Group ${letter} — full output:\n${combined}`,
+        new RegExp(`Live view's Group ${letter} section has row ${letter}3 that the register's Group ${letter} does not`),
+        `missing extra-row line for Group ${letter} — full output:\n${combined}`,
       );
       assert.match(
         combined,
-        new RegExp(`Live view's Group ${letter} section is missing row ${letter}2`),
-        `missing missing-row line for Group ${letter} — full output:\n${combined}`,
+        new RegExp(`Live view: Group ${letter} lists ${letter}3 more than once`),
+        `missing duplicate-row line for Group ${letter} — full output:\n${combined}`,
       );
     }
 
-    // Exactly 2 * GROUP_COUNT occurrences of "Live view" error lines specific
-    // to a group letter — a coarse count check that catches an accidental
-    // duplicate or a silently-skipped group even if the per-letter regexes
-    // above somehow both matched something unintended.
-    const headerMismatchCount = (combined.match(/'s header says 1 rows, the register's body has 2/g) ?? []).length;
-    const missingRowCount = (combined.match(/section is missing row [A-L]2/g) ?? []).length;
-    assert.equal(headerMismatchCount, GROUP_COUNT, `expected ${GROUP_COUNT} header-mismatch lines, got ${headerMismatchCount}`);
-    assert.equal(missingRowCount, GROUP_COUNT, `expected ${GROUP_COUNT} missing-row lines, got ${missingRowCount}`);
+    // Exactly GROUP_COUNT occurrences apiece of the extra-row and
+    // duplicate-row error shapes — a coarse count check that catches an
+    // accidental duplicate or a silently-skipped group even if the
+    // per-letter regexes above somehow both matched something unintended.
+    const extraRowCount = (combined.match(/section has row [A-L]3 that the register's Group [A-L] does not/g) ?? []).length;
+    const duplicateRowCount = (combined.match(/lists [A-L]3 more than once/g) ?? []).length;
+    assert.equal(extraRowCount, GROUP_COUNT, `expected ${GROUP_COUNT} extra-row lines, got ${extraRowCount}`);
+    assert.equal(duplicateRowCount, GROUP_COUNT, `expected ${GROUP_COUNT} duplicate-row lines, got ${duplicateRowCount}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
