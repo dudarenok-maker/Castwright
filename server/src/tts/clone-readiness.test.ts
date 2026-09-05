@@ -132,6 +132,31 @@ const cases: Case[] = [
     input: { ...base, engine: 'kokoro', slotStatus: 'failed', characterHasSlot: true },
     expected: 'wrong-engine',
   },
+  {
+    // Rule 0 (#2054). Mutation: delete rule 0 -> red (falls through to
+    // whatever entryFound/etc. would otherwise decide for this base input,
+    // which is null).
+    name: 'libraryUuidUnresolvable:true -> unresolvable-uuid (on an otherwise healthy input)',
+    input: { ...base, libraryUuidUnresolvable: true },
+    expected: 'unresolvable-uuid',
+  },
+  {
+    // Rule 0 outranks everything, including rule 1 — mirrors the existing
+    // "rule 1 outranks everything" fixture above. Mutation: swap rule 0
+    // below rule 1 -> this must go red (would report 'missing-entry').
+    name: 'libraryUuidUnresolvable:true outranks entryFound:false and every other field',
+    input: {
+      ...base,
+      libraryUuidUnresolvable: true,
+      entryFound: false,
+      consentRevoked: true,
+      slotStatus: 'failed',
+      hasMaster: false,
+      transcript: '',
+      characterHasSlot: false,
+    },
+    expected: 'unresolvable-uuid',
+  },
 ];
 
 describe('cloneReadiness', () => {

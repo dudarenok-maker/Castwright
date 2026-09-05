@@ -84,7 +84,7 @@ const VERDICT_PAIRS: ReadonlyArray<{ client: CloneUnready | null; render: Render
   {
     client: 'missing-entry',
     render: 'misconfigured',
-    why: "entryFound:false (client) <-> the render's readEntry(libraryUuid) returning null for the same uuid. Both are the SAME event (no voice-library entry backs this slot); the render's `misconfigured` reason is broader (it also covers a missing libraryUuid, which cloneReadiness never sees at all — the adapter skips the check entirely for that shape, see clone-readiness-selectors.ts's buildInput), but the entry-not-found flavor is identical.",
+    why: "entryFound:false (client) <-> the render's readEntry(libraryUuid) returning null for a REAL, resolved uuid. Both are the SAME event (a real uuid backs no voice-library entry). The render's `misconfigured` reason also covers a missing libraryUuid itself (#2054's 'unresolvable-uuid' pairing below, a different event entirely) — see that pairing's own comment for the boundary between the two.",
   },
   {
     client: 'revoked',
@@ -111,6 +111,11 @@ const VERDICT_PAIRS: ReadonlyArray<{ client: CloneUnready | null; render: Render
     render: 'derive-failed',
     why: "DIFFERENT TIER of the same problem, not a coincidence of the map being loose. classifyClonedVoice never inspects `master.transcript` at all (this is rev 1's fatal bug, see clone-readiness.ts's header) — a repairable qwen voice with a blank transcript classifies 'repairable' and the render ATTEMPTS the derive. The real `deriveEngineArtifact` then rejects it for real (`derive-engine-artifact.ts:71-73`, \"`refText` is required for a Qwen clone derive\", a genuine 4xx — the plan's own problem statement: \"a clip ingested without one can never derive\"), which the resolver persists as `derive-failed`. cloneReadiness's whole reason to exist is to warn BEFORE that attempt instead of after it — so the two verdicts are the SAME failure observed at two different points in the pipeline, which is exactly the agreement this pairing is asserting.",
   },
+  {
+    client: 'unresolvable-uuid',
+    render: 'misconfigured',
+    why: "#2054 — libraryUuidUnresolvable:true (client) <-> resolveClonedVoicesForChapter's own `!libraryUuid` short-circuit (render, clone-voice-resolver.ts's very first check in the request loop, before readEntry is ever called). Both are the SAME event: no libraryUuid at all to look anything up with. This is the narrower half of the render's `misconfigured` reason the 'missing-entry' pairing's own comment names as a documented gap (\"the render's misconfigured reason is broader (it also covers a missing libraryUuid, which cloneReadiness never sees at all)\") — #2054 closes exactly that gap on the predicate side; the adapter (clone-readiness-selectors.ts's buildInput) still needs to actually set this field, which is child #2909's job.",
+  },
 ];
 
 function verdictsAgree(client: CloneUnready | null, render: RenderReason): boolean {
@@ -130,6 +135,13 @@ function verdictsAgree(client: CloneUnready | null, render: RenderReason): boole
    that equivalence holds only for a clone-capable `engine`. */
 interface Row {
   name: string;
+  /** #2054 — true simulates a cast slot with no libraryUuid at all. When
+      true, `entryFound` and every entry-shaped field below are irrelevant on
+      BOTH sides: the client input is expected to short-circuit on rule 0
+      before ever consulting `entryFound`, and the render request carries
+      `libraryUuid: undefined`, which resolveClonedVoicesForChapter's own
+      first check reports before ever calling readEntry. */
+  libraryUuidUnresolvable?: boolean;
   entryFound: boolean;
   consentRevoked: boolean;
   /** Persisted (pre-transform) status of `entry.engines[manifestSlotFor(engine)]`. */
@@ -222,6 +234,7 @@ function clientInputFor(row: Row, entry: VoiceLibraryEntry | null): CloneReadine
       ? transformed.engines[manifestSlotFor(row.engine)]?.status
       : undefined;
   return {
+    libraryUuidUnresolvable: row.libraryUuidUnresolvable,
     entryFound: !!entry,
     /* row.consentRevoked, NOT `!!transformed?.consent?.revokedAt`. The real
        adapter (clone-readiness-selectors.ts) DOES derive this from the
@@ -322,7 +335,7 @@ async function renderVerdict(row: Row): Promise<RenderReason> {
   const request: ClonedVoiceRequest = {
     characterName: 'Contract Test Character',
     characterId: 'contract-test-character',
-    libraryUuid: LIBRARY_UUID,
+    libraryUuid: row.libraryUuidUnresolvable ? undefined : LIBRARY_UUID,
     engine,
     wrongEngine: !row.characterHasSlot,
     // Out of contract (Decision 3, "Machine state is deliberately absent") —
@@ -606,6 +619,25 @@ const rows: Row[] = [
     characterHasSlot: true,
     expectedClient: 'no-transcript',
     expectedRender: 'derive-failed',
+  },
+  // --- #2054: no libraryUuid at all, doubly-broken against a maximally
+  // unhealthy remainder — mirrors the '1v2 doubly-broken' row's shape, one
+  // rule earlier. Every other field is set to what would otherwise win a
+  // DIFFERENT verdict, proving rule 0 outranks all of them, not just
+  // entryFound.
+  {
+    name: '#2054 libraryUuidUnresolvable:true -> client unresolvable-uuid, render misconfigured, outranking a maximally-broken remainder',
+    libraryUuidUnresolvable: true,
+    entryFound: false,
+    consentRevoked: true,
+    rawStatus: 'failed',
+    versionMismatch: false,
+    hasMaster: false,
+    transcript: undefined,
+    engine: 'qwen',
+    characterHasSlot: false,
+    expectedClient: 'unresolvable-uuid',
+    expectedRender: 'misconfigured',
   },
 ];
 

@@ -76,6 +76,11 @@ function reasonCopy(verdict: CloneCharacterVerdict): string {
       return `${characterName} is routed to ${engineName}, which doesn't have this cloned voice.`;
     case 'missing-entry':
       return `${characterName}'s assigned voice is no longer in your voice library.`;
+    case 'unresolvable-uuid':
+      // #2054 — copy only, no CTA yet; the adapter that can actually produce
+      // this verdict (clone-readiness-selectors.ts's buildInput) is child
+      // #2909's job, same as this reason's CTA row below.
+      return `${characterName}'s cloned voice reference is missing or invalid, so it can't be found.`;
   }
 }
 

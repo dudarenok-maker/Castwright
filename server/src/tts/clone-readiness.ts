@@ -34,9 +34,20 @@ export type CloneUnready =
   | 'derive-failed'
   | 'missing-master'
   | 'no-transcript'
-  | 'missing-entry';
+  | 'missing-entry'
+  | 'unresolvable-uuid';
 
 export interface CloneReadinessInput {
+  /** #2054 — true when the character's own libraryUuid is itself missing,
+      empty, or malformed, so there is nothing to even look up. Distinct from
+      `entryFound: false`, which means a REAL uuid resolved to no
+      voice-library entry. Optional and defaults to "resolvable" when omitted
+      — every pre-#2054 caller never sets this, and must keep classifying
+      exactly as before; the adapter that actually detects the unresolvable
+      case is child #2909's job (clone-readiness-selectors.ts's `buildInput`
+      still short-circuits to `undefined` for it today — see that function's
+      own doc comment). */
+  libraryUuidUnresolvable?: boolean;
   /** false when the character's libraryUuid resolves to no voice-library
       entry at all. */
   entryFound: boolean;
@@ -63,6 +74,7 @@ export interface CloneReadinessInput {
 
 /* Rules, in order — the order is the contract (plan 276 Decision 3):
 
+   0. libraryUuidUnresolvable  -> 'unresolvable-uuid'
    1. !entryFound              -> 'missing-entry'
    2. consentRevoked           -> 'revoked'
    3. !isCloneEngine(engine)
@@ -75,15 +87,29 @@ export interface CloneReadinessInput {
       && !transcript?.trim()   -> 'no-transcript'
    7. otherwise                -> null (ready, or needs a derive that will succeed)
 
+   Rule 0 (#2054) outranks every other rule, including rule 1: with no
+   resolvable uuid there is no entry to even ask "found or not" about, so
+   `entryFound` is not a meaningful answer in that state and must never be
+   consulted first.
+
    Rules 5 and 6 are gated on `slotStatus !== 'ready'` because a `ready` slot
    with a live artifact and no master (or a blank transcript) is a HEALTHY,
    explicitly supported state (voice-library.ts:1249-1251) — ungated, rule 5
    would warn on a working voice with no CTA, and rule 6 would tell the user
    to "fix" a voice that already renders. Do not simplify this gate away. */
 export function cloneReadiness(input: CloneReadinessInput): CloneUnready | null {
-  const { entryFound, consentRevoked, slotStatus, hasMaster, transcript, engine, characterHasSlot } =
-    input;
+  const {
+    libraryUuidUnresolvable,
+    entryFound,
+    consentRevoked,
+    slotStatus,
+    hasMaster,
+    transcript,
+    engine,
+    characterHasSlot,
+  } = input;
 
+  if (libraryUuidUnresolvable) return 'unresolvable-uuid';
   if (!entryFound) return 'missing-entry';
   if (consentRevoked) return 'revoked';
   if (!isCloneEngine(engine) || !characterHasSlot) return 'wrong-engine';
