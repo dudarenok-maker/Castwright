@@ -113,9 +113,15 @@ Know its edges, because three of them are wide:
   view mirrors that prose in its own row bodies and will silently fall behind
   (the generator does not rewrite a row's title if you changed only the
   body; it preserves hand-authored titles). Blocked and Unconfirmed rows are
-  matched by TITLE, not ID — rewording one WITHOUT the matching live-view
-  edit makes `register:build`/`--check` fail with a clean, actionable
-  "no shell title matches" error (not a crash) naming the mismatched title.
+  matched by TITLE, not ID. A Blocked row's title must match EXACTLY (after
+  normalisation) — rewording one WITHOUT the matching live-view edit makes
+  `register:build`/`--check` fail with a clean, actionable "no shell title
+  matches" error (not a crash) naming the mismatched title. An Unconfirmed
+  row's title matches by PREFIX, though — lengthening it (adding text) fails
+  the same way, but *shortening* it (or any edit that keeps the new title a
+  prefix of the unchanged live-view iname) still matches and passes
+  silently, exactly like the numbered-Group case above; only the failure
+  mode changed shape, not the coverage gap for that one direction.
 - **The markdown's own `## At a glance` table is hand-maintained input, not
   generated output — only the LIVE VIEW's mirrored glance table and strip are
   generated.** `register:build` reads the markdown's `## At a glance` table

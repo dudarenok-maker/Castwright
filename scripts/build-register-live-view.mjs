@@ -191,6 +191,7 @@ export function main(
 export function buildLiveView(mdText, currentHtml) {
   const figures = parseRegisterFigures(mdText);
   const bodyGroupCounts = parseBodyGroupCounts(mdText);
+  const titledCounts = parseTitledSectionBodyCounts(mdText);
   let html = currentHtml;
   html = applyGeneratedRegion(html, 'strip', buildStripRegion(figures));
   for (const [letter, count] of figures.glanceGroups) {
@@ -199,8 +200,11 @@ export function buildLiveView(mdText, currentHtml) {
   for (const [letter, count] of bodyGroupCounts) {
     html = rewriteGcountInSection(html, `g${letter.toLowerCase()}`, count);
   }
-  html = rewriteGcountInSection(html, 'blocked', figures.blockedCount);
-  html = rewriteGcountInSection(html, 'unconfirmed', figures.unconfirmedCount);
+  // Body-derived, like every lettered group's gcount above — NOT
+  // figures.blockedCount/unconfirmedCount (the hand-typed glance-table
+  // cell), which self-corrects nothing if it drifts from the real rows.
+  html = rewriteGcountInSection(html, 'blocked', titledCounts.blockedCount);
+  html = rewriteGcountInSection(html, 'unconfirmed', titledCounts.unconfirmedCount);
   html = reconcileRowShells(mdText, html);
   return html;
 }
@@ -284,6 +288,29 @@ export function normaliseTitle(raw) {
 const BLOCKED_HEADING_REGEX = /^### (.+?)\r?$/gm;
 const UNCONFIRMED_BULLET_REGEX = /^- \*\*(.+?)\*\*/gm;
 const SHELL_BY_TITLE_REGEX = /[ \t]*<details class="item">\s*<summary>\s*<span class="num">—<\/span>\s*<span class="iname">([^<]+)<\/span>[\s\S]*?<\/details>/g;
+
+// Blocked/Unconfirmed's row counts, unlike every lettered group's, were
+// sourced from the hand-typed "## At a glance" table cell (parseRegisterFigures'
+// blockedCount/unconfirmedCount) rather than the actual body rows — so a row
+// added or removed from '## Blocked'/'## Unconfirmed' without a matching
+// glance-table edit went undetected by both register:build --check (which
+// wrote the stale, hand-typed number right back) and check-onbox-register
+// (whose Check 1 iterates lettered groups only, by design, per its own
+// header comment). Lettered groups derive their gcount from the body
+// (parseBodyGroupCounts) precisely so this class of drift self-corrects;
+// this mirrors that for the two title-matched sections.
+export function parseTitledSectionBodyCounts(mdText) {
+  let blockedCount = 0;
+  let unconfirmedCount = 0;
+  for (const section of splitMdSections(mdText)) {
+    if (/^Blocked\b/.test(section.title)) {
+      blockedCount = [...section.body.matchAll(BLOCKED_HEADING_REGEX)].length;
+    } else if (/^Unconfirmed\b/.test(section.title)) {
+      unconfirmedCount = [...section.body.matchAll(UNCONFIRMED_BULLET_REGEX)].length;
+    }
+  }
+  return { blockedCount, unconfirmedCount };
+}
 
 function reconcileTitledSection(html, sectionId, titles, { prefixMatch }) {
   const sectionRegex = new RegExp(

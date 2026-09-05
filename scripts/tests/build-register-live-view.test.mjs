@@ -11,6 +11,7 @@ import {
   buildStripRegion,
   buildLiveView,
   parseBodyGroupCounts,
+  parseTitledSectionBodyCounts,
   reconcileRowShells,
   normaliseTitle,
   decodeHtmlEntities,
@@ -228,12 +229,52 @@ test('buildLiveView rewrites a gcount span located by its enclosing section id, 
   assert.match(next, /<span class="gtag">A<\/span> Group A/);
 });
 
-test('the groups target covers Blocked and Unconfirmed sections too', () => {
-  const md = buildRegisterFixture({ blocked: 5, unconfirmed: 2 });
-  const html = buildLiveViewFixture({ blocked: 99, unconfirmed: 99 });
+test('parseTitledSectionBodyCounts derives Blocked/Unconfirmed counts from real rows, ignoring the glance-table cell', () => {
+  const md = `## At a glance
+
+| Group | Setup | Rows |
+|---|---|---|
+| — | **Blocked** (hardware absent) | 99 |
+| — | **Unconfirmed** (not debts until substantiated) | 99 |
+
+## Blocked — hardware not available
+
+### first
+### second
+### third
+
+## Unconfirmed — not debts until substantiated
+
+- **only one** — still needs proof.
+`;
+  assert.deepEqual(parseTitledSectionBodyCounts(md), { blockedCount: 3, unconfirmedCount: 1 });
+});
+
+test('buildLiveView writes Blocked/Unconfirmed gcount from real body rows, even when the glance-table cell AND the previously-committed gcount are both stale (silent-drift bug)', () => {
+  // Regression test: before this fix, a Blocked/Unconfirmed row added or
+  // removed from the .md without a matching "## At a glance" table edit
+  // went undetected -- the generator copied the stale, hand-typed glance
+  // figure straight into the gcount span instead of counting the real rows,
+  // the way every lettered group's gcount already does via
+  // parseBodyGroupCounts. Demonstrated live on the real files: deleting one
+  // Blocked subsection while leaving the glance cell unchanged still passed
+  // BOTH `register:build --check` and `check-onbox-register` before this fix.
+  const md = buildRegisterFixture({ blocked: 99, unconfirmed: 99 }) + `
+## Blocked — hardware not available
+
+### fixture blocked item
+
+## Unconfirmed — not debts until substantiated
+
+- **fixture unconfirmed item** — needs a real GPU.
+`;
+  // The previously-committed live view claims 5/2 -- also stale, also wrong.
+  const html = buildLiveViewFixture({ blocked: 5, unconfirmed: 2 });
   const next = buildLiveView(md, html);
-  assert.match(next, /id="blocked"[\s\S]*?<span class="gcount">5 rows<\/span>/);
-  assert.match(next, /id="unconfirmed"[\s\S]*?<span class="gcount">2 rows<\/span>/);
+  // Real body has exactly one Blocked row and one Unconfirmed row: gcount
+  // must reflect THAT, not the glance table's "99" nor the committed "5"/"2".
+  assert.match(next, /id="blocked"[\s\S]*?<span class="gcount">1 row<\/span>/);
+  assert.match(next, /id="unconfirmed"[\s\S]*?<span class="gcount">1 row<\/span>/);
 });
 
 test('a row added to the .md inserts a placeholder shell, wrapped in <details>, in markdown order', () => {
@@ -542,9 +583,18 @@ test('reconcileOneSection preserves literal $1 and $& in row body text (string.r
   const result = reconcileRowShells(md, html);
 
   // The literal text "$1" and "$&" must appear unchanged in the output
+  // (a sanity check, not the bug-discriminating assertion below: $&'s
+  // bug-path expansion reinserts the whole original matched section
+  // verbatim, which itself contains this literal text as a substring, so
+  // this assertion alone cannot fail under the bug).
   assert.match(result, /bash deploy\.sh \$1 and check \$& status/);
-  // And the old match text should NOT be duplicated or substituted
-  assert.doesNotMatch(result, /bash deploy\.sh <section/);
+  // Structural check: exactly one section open tag. Under the bug, "$1" in
+  // the replacement string is read as sectionRegex's capture group 1
+  // (headerAndOpen, itself containing `id="ga"`), and "$&" as the WHOLE
+  // original match (which contains its own headerAndOpen too) -- each
+  // expansion adds a duplicate `id="ga"` on top of the one the correct,
+  // un-corrupted output already carries.
+  assert.equal((result.match(/id="ga"/g) ?? []).length, 1);
 });
 
 test('reconcileTitledSection preserves literal $1 and $& in row body text (string.replace special-pattern corruption bug)', () => {
@@ -578,7 +628,11 @@ test('reconcileTitledSection preserves literal $1 and $& in row body text (strin
 
   const result = reconcileRowShells(md, html);
 
-  // The literal text "$1" and "$&" must survive unchanged.
+  // The literal text "$1" and "$&" must survive unchanged (a sanity check,
+  // not the bug-discriminating assertion below: $&'s bug-path expansion
+  // reinserts the whole original matched section verbatim, which itself
+  // contains this literal text as a substring, so this assertion alone
+  // cannot fail under the bug).
   assert.match(result, /Port is \$1 and full match is \$&amp; below/);
   // Structural check: exactly one section open tag. Under the bug, "$1" in
   // the replacement string is read as sectionRegex's capture group 1
