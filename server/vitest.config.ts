@@ -32,7 +32,7 @@ import { isAgent } from 'std-env';
    vitest.config.slow.ts's SLOW_FILES array. The slow config runs these
    files serially (maxForks=1) and the main config excludes them so we
    never double-run. */
-const SLOW_FILES_TO_EXCLUDE = [
+export const SLOW_FILES_TO_EXCLUDE = [
   'src/analyzer/gemini.test.ts',
   'src/routes/analysis-pipelining.test.ts',
   'src/routes/book-state.test.ts',
@@ -51,6 +51,9 @@ const SLOW_FILES_TO_EXCLUDE = [
   /* Integration route test: supertest against a live Express instance
      (venv bootstrap, offline-stubbed). Serialised (fs-21). */
   'src/routes/venv-bootstrap.route.test.ts',
+  /* mkdtempSync + five sequential dynamic imports in beforeAll; same
+     contention class as the other route e2e tests above (#2947). */
+  'src/routes/analysis.interim-prune-prohibition.e2e.test.ts',
 ];
 
 /* Contention throttle (plan 156). LOW_CONCURRENCY (set manually, or

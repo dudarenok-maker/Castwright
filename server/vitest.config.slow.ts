@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-/* Plan 45 (vitest pool tuning) — slow-test config that runs the 10 hot files in
+/* Plan 45 (vitest pool tuning) — slow-test config that runs the 11 hot files in
    a single fork (maxForks=1), separate from the main parallel `test`
    battery. The hot files all share the same shape: mkdtempSync +
    module imports in beforeAll racing on Windows tmpdir under
@@ -29,6 +29,9 @@ import { defineConfig } from 'vitest/config';
        tempdir; serialised alongside the other route integration tests.
      - src/routes/venv-bootstrap.route.test.ts  — venv-bootstrap SSE mock +
        tempdir; same contention class as the other install route tests.
+     - src/routes/analysis.interim-prune-prohibition.e2e.test.ts — Hook timed
+       out; mkdtempSync + five sequential dynamic imports in beforeAll,
+       same class as the other route e2e tests above (#2947).
 
    Mirror invariant: each entry in SLOW_FILES below MUST also appear
    in server/vitest.config.ts's `test.exclude` array. Add a file in
@@ -50,6 +53,7 @@ export const SLOW_FILES = [
   'src/routes/setup-readiness.route.test.ts',
   'src/routes/kokoro-install.route.test.ts',
   'src/routes/venv-bootstrap.route.test.ts',
+  'src/routes/analysis.interim-prune-prohibition.e2e.test.ts',
 ];
 
 export default defineConfig({
