@@ -159,9 +159,28 @@ Drops the `verify:fast:branch` invocation.
 promotes as the local fast loop, and a bare `npx vitest` all reach vitest without touching
 `verify-cache.mjs` — and PID 47832 in the census above came through exactly that door.
 
-Admission therefore lives in **`vitest.config.ts` and `server/vitest.config.ts`**, which every
-entrance passes through. `verify-cache.mjs` acquires once up front and passes a token down so
-its child suites do not double-acquire.
+**The complete entry-point enumeration** (reviewer question 1 — categories are not enough, the
+list has to be exhaustive or the guarantee is false):
+
+| Entry point | Config used | Reaches `verify-cache`? |
+|---|---|---|
+| `test`, `test:changed`, `test:components`, `test:store`, `test:lib`, `test:views`, `test:a11y` | `vitest.config.ts` | no |
+| `test:server`, `test:server:changed`, `test:server:routes`/`:tts`/`:analyzer`/`:workspace` | `server/vitest.config.ts` | no |
+| `test:server-slow` | `server/vitest.config.slow.ts` | no |
+| `test:golden-audio:assembly` | `server/vitest.config.golden.ts` | no |
+| `test:quarantine`, `test:fast`, `test:all`, `verify:quick` | composites of the above | no |
+| bare `npx vitest` | whichever config resolves | no |
+| `verify`, `verify:fast`, `verify:fast:scoped`, `verify:fast:branch` | via `runPipeline` | yes |
+| `test:watch`, `server:test:watch` | `vitest.config.ts` / `server/vitest.config.ts` | no — **and long-lived**, see O5 |
+
+So admission cannot live in two configs. **There are six**: `vitest.config.ts`,
+`vitest.config.wire-fixtures.ts`, `server/vitest.config.ts`, `server/vitest.config.slow.ts`,
+`server/vitest.config.golden.ts`, `server/vitest.config.wire-fixtures.ts`.
+
+Admission therefore lives in **one shared module imported by every vitest config**, with a
+guard test asserting that every file matching `vitest.config*.ts` imports it — otherwise a
+seventh config added later silently reopens the hole. `verify-cache.mjs` acquires once up front
+and passes a token down through the environment so its child suites do not double-acquire.
 
 `scripts/lib/verify-slots.mjs`:
 
@@ -276,8 +295,16 @@ when it matters, rather than a unit slice on every commit.
 | Staged-file selection | extension filter, empty-set short-circuit, missing-eslint pass, timeout pass |
 | Step budgets | wall-clock fires; **the whole child tree dies**, not just the direct child |
 | **The invariant** | `hook-no-pool.test.mjs` — an **allowlist** of permitted hook invocations. A denylist misses `npm test`, `npm run verify`, `npm run test:server`, `playwright`, `pytest` — the most likely re-additions — and would be the `f_test_cannot_fail` shape this very table warns about. |
+| **Admission coverage** | every file matching `vitest.config*.ts` (six today) imports the shared admission module. Without this, a seventh config silently reopens the ungated door that PID 47832 came through. |
 
 Every test asserts against input that would otherwise make the guard fire.
+
+**Where the invariant guard actually runs.** `scripts/run-hooks-tests.mjs` drives `node --test`
+across ~100 files, forking per file — so `test:hooks` is itself a process pool, and after Part 1
+no hook will run it. The guard therefore lives in CI's `test:hooks` leg (a required check) and
+in a manual `npm run verify`, **not** on the commit path. That is acceptable — a hook
+re-fattening is caught at PR time rather than at commit time — but it is a real reduction in
+locality and is recorded here rather than discovered later.
 
 **On-box acceptance rows are owed** (CLAUDE.md checklist step 3 — a merge gate). All six unit
 tests above pass on fixture snapshots while the real mechanism could still fail on a live box.
@@ -354,7 +381,14 @@ is the one cheap door out.
   is documented at `CLAUDE.md:927`. With Part 2 bounding concurrency properly, do the probes
   and this flag still earn their place, or does the flag become the vestige of a superseded
   mechanism? Deferred with the throttle question above.
-- **O4 — `wt-2947-slow-lane`.** #2947 proposes moving a twelfth file to the serial lane, and
+- **O4 — Watch mode.** `test:watch` and `server:test:watch` start long-lived vitest sessions. If
+  they take a slot they hold it for hours and starve every other run under
+  `CASTWRIGHT_VERIFY_SLOTS=1`; if they are exempt, a developer running watch mode is invisible
+  load that the governor believes is not there. Neither is obviously right. Recommendation:
+  **exempt watch mode from acquiring, but have it register a non-blocking presence marker** the
+  reaper and the refusal message can both report, so the load is visible without being
+  blocking. Needs a decision before Part 2 is implemented.
+- **O5 — `wt-2947-slow-lane`.** #2947 proposes moving a twelfth file to the serial lane, and
   that worktree produced one of the two stalled batteries measured here. It should be
   re-evaluated under bounded concurrency before a twelfth entry lands — this is not a neutral
   deferral, and the ticket should be linked to this one.
