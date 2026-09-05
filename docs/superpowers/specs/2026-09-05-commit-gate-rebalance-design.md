@@ -2,13 +2,42 @@
 
 - **Date:** 2026-09-05
 - **Issue:** [#2997](https://github.com/dudarenok-maker/Castwright/issues/2997)
-- **Status:** draft, revised after two adversarial review passes
+- **Status:** draft, revised after **three** adversarial review passes
 - **Supersedes the local-gate half of:** [2026-07-06-verify-ci-rebalance-design.md](2026-07-06-verify-ci-rebalance-design.md)
 
 ## Problem
 
-The local commit gate has stopped functioning as a gate. Measured on the primary checkout on
-2026-09-05, before any intervention:
+Two problems, and the first one is not about contention at all.
+
+### 1. The gate was never viable, even healthy
+
+Recorded `durationMs` from the last **green** run of each step
+(`.verify-cache.json`, primary checkout — 16 independent last-green runs spanning
+2026-07-05 → 2026-09-04, *not* one pipeline's wall-clock):
+
+| Step | Green duration |
+|---|---|
+| `test:server` | **19.45 min** |
+| `test:e2e` | 8.33 min |
+| `test:sidecar` | 6.85 min |
+| `test:hooks` | 3.35 min |
+| `build` | 1.62 min |
+| `test` | 1.59 min |
+| `lint` | 1.20 min |
+| `typecheck` | 0.84 min |
+| everything else | < 1 min each |
+
+`verify:fast:branch`'s eleven legs sum to **35.1 minutes**. A full `npm run verify` reaches
+**44.9 minutes** — and that is a **floor**: `check:cycles` is in `STEPS`
+(`verify-cache.mjs:513`) and has no cache entry at all, because it shells `npx --yes
+madge@8.0.0`.
+
+**So a completely healthy pre-push cost ~35 minutes.** No contention required. The hooks were
+non-viable on their own arithmetic.
+
+### 2. Under concurrency it degrades to deadlock
+
+Measured 2026-09-05 before intervention:
 
 | Metric | Value |
 |---|---|
@@ -17,9 +46,8 @@ The local commit gate has stopped functioning as a gate. Measured on the primary
 | Batteries making progress | **0 of 11** |
 | Orphaned vitest (parent dead) | 2, aged 392m and 389m |
 | `node.exe` total | 86 |
-| Worktrees | 19 (9 of 14 side trees 0 commits ahead of `main`) |
 
-Per-battery subtree CPU. A live vitest subtree burns **30–100 CPU-seconds per minute**:
+Per-battery subtree CPU; a live vitest subtree burns **30–100 CPU-seconds per minute**:
 
 | PID | Age | Procs | Subtree CPU | CPU/min |
 |---|---|---|---|---|
@@ -35,88 +63,74 @@ Per-battery subtree CPU. A live vitest subtree burns **30–100 CPU-seconds per 
 | 12120 | 105.0m | 8 | 17.3s | 0.2 |
 | 41696 | 90.4m | 9 | 28.4s | 0.3 |
 
-335 CPU-seconds across ~24 hours of cumulative wall-clock. Reaping the 13 roots freed 96
-processes and took `node.exe` from 86 → 9.
+Reaping the 13 roots freed 96 processes and took `node.exe` from 86 → 9. Fifteen minutes later
+two fresh batteries were both at **1.3 CPU-seconds per 45 s** with falling process counts — so
+**two concurrent batteries are enough.**
 
-Fifteen minutes after that reap, two fresh batteries from other sessions were both measured at
-**1.3 CPU-seconds per 45 s** (~1.7/min) with falling process counts — so **two concurrent
-batteries are enough to stall both.** With **76 open `[agent instructions]` tickets**,
-two-at-once is the steady state.
+> **Known gap in this census: no command lines were captured.** Age, PID, process count and CPU
+> were recorded; *what each root was running* was not. This matters — see "Deferred work" — and
+> Part 3 exists partly to stop it recurring.
 
 ## Root cause
 
-**The mechanism is Windows tmpdir and handle-budget contention, and it is machine-global.**
-The repo's own configs name it: `server/vitest.config.ts:12-29` ("the default forks pool grows
-to N=logical-CPUs; with subprocess-spawning tests that exhausts pipe/handle budgets and one
-worker dies mid-suite") and `server/vitest.config.slow.ts:4-33` ("`mkdtempSync` + module
-imports in `beforeAll` racing on **Windows tmpdir** under parallel-fork pressure").
+**Asserted mechanism, not proven mechanism.** `server/vitest.config.ts:12-29` and
+`server/vitest.config.slow.ts:4-33` attribute the failure to Windows tmpdir races and
+pipe/handle exhaustion under fork pressure. Those comments describe **one battery's own forks**;
+neither this design nor any review pass has demonstrated the *inter*-battery interaction
+directly. The plausible bridge is that two batteries share one `%TEMP%` and one per-user handle
+budget, but that is inference. It is called out here rather than stated as fact, because a
+cheap experiment would settle it (see "Deferred work").
 
-Three defects let that mechanism run unchecked:
+Three defects let it run unchecked:
 
-1. **Every commit runs the whole world.** `pre-commit` runs `verify:fast:scoped` (~13,500
-   tests); `pre-push` runs 11 steps including both suites, a build, and two *network* audits.
-   `--changed` narrowing applies only to diffs confined to `src/**` or `server/src/**`
+1. **Every commit runs the whole world** — see the arithmetic above. `--changed` narrowing
+   applies only to diffs confined to `src/**` or `server/src/**`
    (`diffSafeForChangedOnly`, `verify-cache.mjs:903-915`).
 2. **Nothing bounds concurrency.**
 3. **Nothing is ever reaped.**
 
-### Corrections from adversarial review — do not re-derive these
+### Corrections carried forward — do not re-derive these
 
 - **The GPU probe never fired.** `GPU_BUSY_THRESHOLD = 40` (`verify-cache.mjs:1028`); measured
-  utilisation was **0%**. Deleting it fixes nothing. It also cannot be deleted cheaply:
-  `scripts/run-golden-audio.mjs:68` imports `maxNvidiaSmiUtil` and `GPU_BUSY_THRESHOLD`, and
-  `scripts/tests/verify-cache.test.mjs:1183-1224` pins `detectGpuContention`'s source text.
-- **A second probe exists**, `detectSiblingContention` (`verify-cache.mjs:1131-1145`), which the
-  first draft never mentioned. `SKIP_CONTENTION_CHECK` gates both at `:1340` and `:1350`.
+  utilisation was **0%**. It also cannot be deleted cheaply: `scripts/run-golden-audio.mjs:68`
+  imports `maxNvidiaSmiUtil` and `GPU_BUSY_THRESHOLD`, and
+  `scripts/tests/verify-cache.test.mjs:1183-1224` pins `detectGpuContention`'s **source text**.
+- **A second probe exists** — `detectSiblingContention` (`verify-cache.mjs:1131-1145`);
+  `SKIP_CONTENTION_CHECK` gates both at `:1340` and `:1350`.
 - **Neither probe explains the failure.** Both set `LOW_CONCURRENCY` on their own process env,
-  which reaches only that battery's children. The **first** battery sees zero siblings and an
-  idle GPU, runs at `maxWorkers: 2`, and stalls anyway. "All 11 were latched" was never
-  observable — it would require dumping each process's environment block.
-- **`.husky/pre-push:19-21`'s "the one check that genuinely needs this machine" is CORRECT, not
-  stale.** An earlier draft called it stale on the grounds that `verify.yml:403-418` runs
-  `test:sidecar`. CI runs it **without torch** — deliberately (`verify.yml:396-400`) — so all 38
-  `pytest.importorskip("torch")` tests (14 files, all under `server/tts-sidecar/`) skip there
-  and execute only on this box. Part 6 depends on that sentence being true. Do not "fix" it.
+  reaching only that battery's children. The **first** battery sees zero siblings and an idle
+  GPU, runs at `maxWorkers: 2`, and stalls anyway.
+- **`.husky/pre-push:19-21`'s "the one check that genuinely needs this machine" is CORRECT.** CI
+  runs `test:sidecar` **without torch**, deliberately (`verify.yml:396-400`), so all 38
+  `pytest.importorskip("torch")` tests (14 files, all under `server/tts-sidecar/`) execute only
+  here. Part 6 depends on it. *(But the surrounding comment block at `.husky/pre-push:1-21` does
+  go stale under Part 1 — it is in the doc-update list.)*
 
-## Scope: what this design does and does not do
+## Scope: what ships, and what is deferred
 
-Two adversarial passes established that **admission control / a concurrency governor cannot be
-built the way it was specified, and probably should not be built yet at all.**
+The concurrency governor is **deferred, not designed.** Config-level admission would break the
+repo on day one: `vitest.config.wire-fixtures.ts` and `server/vitest.config.wire-fixtures.ts`
+are spawned as nested vitest processes *from inside running tests*
+(`src/vitest-retry-hazard-reporter.test.ts:137`,
+`server/src/vitest-retry-hazard-reporter.test.ts:148`), and both `import mainConfig from
+'./vitest.config.js'`. Slot liveness has no sound implementation, and leaked slots would be the
+normal case. The full constraint list is in "Deferred work".
 
-- Gating inside the vitest configs **breaks the repo on day one**:
-  `vitest.config.wire-fixtures.ts` and `server/vitest.config.wire-fixtures.ts` are not entry
-  points — they are spawned as nested vitest processes *from inside a running vitest test*
-  (`src/vitest-retry-hazard-reporter.test.ts:137`,
-  `server/src/vitest-retry-hazard-reporter.test.ts:148`). With one slot held by the outer suite,
-  the nested child cannot acquire and exits non-zero by design, failing both test files on every
-  local run and in CI. Both configs additionally `import mainConfig from './vitest.config.js'`,
-  double-acquiring in one process.
-- Slot liveness has no sound implementation yet: `CreationDate`-vs-`startedAt` cannot match
-  (they differ by Node boot + config bundling), `process.kill(pid,0)` is unsafe on Windows, and
-  release via `process.on('exit')` is bypassed by `taskkill /T /F` and by this design's own
-  reaper — making **leaked slots the normal case**, not the edge.
-- The cure was narrower than the cause anyway: Playwright (4 scripts, one at `--workers=2`),
-  pytest ×2, Pester, and the sidecar all spawn pools against the same `%TEMP%` and handle
-  budget, and none would have been gated.
-
-**Decision: the governor is deferred, not designed.** Part 1 removes the source of nearly all
-concurrent batteries — after it, a battery only exists because someone deliberately started
-one. Building machinery to bound a population we are about to shrink by an order of magnitude
-is speculative. **Measure first** (see "Deferred work" below).
-
-What ships here: instant hooks, bounded run duration, a reaper, worktree GC, a Windows CI leg,
-and a scope-triggered local acceptance requirement for the sidecar.
+**Ships here:** instant hooks · bounded run duration · an automatically-invoked reaper ·
+worktree GC · a Windows CI leg · a sidecar acceptance gate.
 
 ## Design principles
 
 1. **CI enforces; local informs — except where CI provably cannot.** The sidecar's ML stack is
-   the one real exception and gets an explicit mechanism (Part 6).
-2. **A hook may never spawn a process pool.** Load-bearing; enforced by an **allowlist** guard
-   test.
+   the one real exception (Part 6).
+2. **A hook may never spawn a process pool.** Enforced by an **allowlist** guard test. *(A
+   process *scan* is not a pool — Part 3's census is one `Win32_Process`/`ps` query, ~300 ms,
+   which the existing sibling probe already pays.)*
 3. **No run may outlive a budget**, and the budget is on the *pipeline*, not only its steps.
-4. **Distinguish "ran and found nothing" from "declined to run."** A check that runs blocks on
-   findings and passes on infrastructure failure (missing tool, timeout), because CI still
-   enforces.
+4. **Fail on findings; pass on a missing tool; FAIL on a budget breach.** An absent `eslint`
+   must not block a commit — CI still enforces. A timeout is the opposite: a timeout that passes
+   is not a cap. *(An earlier draft collapsed these into one clause that told timeouts to pass —
+   the inverse of Part 2.)*
 
 ## The design
 
@@ -126,216 +140,260 @@ and a scope-triggered local acceptance requirement for the sidecar.
 |---|---|---|---|
 | `commit-msg` | `validate-commit-msg.mjs` | unchanged | ~0.3s |
 | `pre-commit` | `verify:fast:scoped` (~13,500 tests) | ESLint over **staged files only**, one process | ~2–3s |
-| `pre-push` | 3 guards + `verify:fast:branch` (11 steps) | the guards only | ~1–2s |
+| `pre-push` | 3 guards + `verify:fast:branch` (**~35 min**) | the guards + Part 3's census | ~1–2s |
 
 `pre-commit` → `scripts/hooks/pre-commit-lint.mjs`: staged set from `git diff --cached
 --name-only --diff-filter=ACMR`, filtered to JS/TS extensions; empty set exits 0 without
 spawning anything; one `eslint` process, no pool, no `--fix`. **Blocks on lint findings; warns
-and passes** when eslint is absent or a 60 s budget is exceeded (principle 4).
+and passes** when eslint is absent or a 60 s budget is exceeded.
 
-`pre-push` keeps `guard-protected-push.mjs` and `guard-commit-subjects.mjs`. Drops the
-`verify:fast:branch` invocation. `is-docs-only-push.mjs` is **retained** (its invocation is
-dropped, the script and tests stay — see O1).
+It must be a **script, not an inline hook body.** Husky executes user hooks as `sh -e "$s"`
+(`.husky/_/h:17`) — under `errexit`, `FILES=$(git diff … | grep -E …)` fails the hook whenever
+grep matches nothing, rejecting every commit with no staged JS/TS; `xargs` without `-r` would
+invoke `eslint` with zero args, which under the flat `eslint.config.mjs` lints the whole tree —
+a pool, violating principle 2; and a missing `eslint` exits 127, contradicting principle 4.
+
+`pre-push` keeps `guard-protected-push.mjs` and `guard-commit-subjects.mjs`, drops the
+`verify:fast:branch` invocation, and gains Part 3's census. `is-docs-only-push.mjs` is
+**retained**; only its invocation goes (`.husky/pre-push:25-27` exists solely to guard line 28).
 
 ### Part 2 — No run outlives a budget
 
-Three numbers, and the pipeline cap is the one that actually bounds the incident:
+**Budget shape: per-step TOTAL, not per-attempt.** An earlier draft argued that a per-step
+budget "would have let those two alone reach 120 minutes" and then adopted per-attempt — but
+120 = 2 steps × 3 attempts × 20 **is the per-attempt shape**; per-step-total at 20 caps the pair
+at 40. The labels were swapped and the looser shape was chosen on the argument against it.
+Per-step-total is also the only shape that composes additively with a pipeline cap.
 
-| Knob | Default | Purpose |
+| Knob | Interim default | Basis |
 |---|---|---|
-| `CASTWRIGHT_RUN_TIMEOUT_MIN` | **60** | whole-pipeline cap. A legitimate full `npm run verify` measures well under this; the incident ran 273.8. |
-| `CASTWRIGHT_STEP_TIMEOUT_MIN` | **20** | per **attempt**, not per step |
-| — | — | a timeout-kill sets an explicit flag so it is **never** re-read as a retriable pool crash |
+| `CASTWRIGHT_STEP_TIMEOUT_MIN` | **45** | `test:server`'s measured green total is 19.45 min; 20 gave a 3% margin and would false-positive constantly |
+| `CASTWRIGHT_RUN_TIMEOUT_MIN` | **180** | a full `verify` floors at 44.9 min; still cuts the 273.8-min incident by a third |
 
-The first draft specified only a per-step budget. That was arithmetically inadequate: 11 steps ×
-20 min is **220 minutes**, against an incident of 273.8 — and `test:server`/`test:server-slow`
-each retry up to `MAX_POOL_ATTEMPTS = 3` (`verify-cache.mjs:1247`, `:1253`), so per-step-not-
-per-attempt would have let those two alone reach 120 minutes. The pipeline cap is what makes
-principle 3 true.
+**Target design — self-calibrating, replacing both constants.** `verify-cache.json` already
+records `durationMs` per step. Derive the budget as `max(FLOOR, K × lastGreenDurationMs)`: no
+magic numbers, adapts to the box, and degrades to `FLOOR` when cold.
 
-**Implementation is an async `spawn` conversion of step execution, and it is the largest piece
-of work here.** Steps currently run via `spawnSync` (`verify-cache.mjs:1288-1318`), which blocks
-the event loop so no timer can fire. **There are two stdio shapes to preserve, not one:**
+**One measurement is owed before these are final.** `durationMs` is recorded around the whole
+retry loop (`verify-cache.mjs:1478-1481`), so 19.45 min is a **step total** and the per-attempt
+figure is unknown by up to 3×. Run one `test:server --no-cache` on a reaped box and record
+per-attempt timings.
 
-- non-retriable steps: `stdio: 'inherit'`;
-- `test:server` / `test:server-slow`: `stdio: ['inherit','inherit','pipe']` with `encoding:
-  'utf8'` and `maxBuffer: 64MB`, whose captured stderr feeds `isVitestPoolCrash()` and the
-  3-attempt retry loop.
+**Implementation is an async `spawn` conversion of step execution — the largest piece of work
+here, and its real risk is source-text pins, not caller compatibility.**
 
-The async version must reproduce both, including a bounded stderr accumulator standing in for
-`maxBuffer`. Timeouts kill the **whole child tree**, not the direct child.
+- `scripts/tests/verify-cache.test.mjs:1288` extracts `runStepProcess`'s body by regex and
+  `:1298-1302` asserts it contains the literal **`spawnSync('npm', ['run', npmScript]`**. This
+  fails the moment `spawnSync` becomes `spawn`.
+- `:1305-1311` extracts `runPipeline`'s loop body with a regex anchored on a trailing `return
+  0;` at **exactly two-space indent**; `:1332-1341` and `:1391-1399` depend on that match and
+  throw if it fails to locate.
+- **`server/src/spawn-windows-hide.test.ts`** scans `scripts/**` and its `SPAWN_NAMES` (`:134`)
+  covers `spawn` as well as `spawnSync`; the rule (`:459-478`) requires the literal
+  `windowsHide: true` **inside the call's own balanced-paren argument text**, so hoisting
+  options into a variable fails it. This guard will also scan the new reaper, `wt-gc.mjs`, and
+  `pre-commit-lint.mjs`.
 
-`runPipeline`'s signature and return contract are preserved. This is safe:
-`scripts/ci-scope.mjs:13` imports only `{ STEPS, stepTouchedByDiff, computeShared }` — never the
-runner — and `verify-cache.mjs`'s module body is guarded by `isDirectlyInvoked(import.meta.url)`
-(`:1513-1520`), so importing it has no side effects.
+**Two stdio shapes to preserve**, plus two options the earlier draft omitted: non-retriable
+steps use `stdio: 'inherit'`; `test:server`/`test:server-slow` use `['inherit','inherit','pipe']`
+with `encoding:'utf8'` and `maxBuffer: 64MB`, feeding `isVitestPoolCrash()` and
+`MAX_POOL_ATTEMPTS = 3`. Both also pass **`shell: true`** and **`windowsHide: true`**
+(`verify-cache.mjs:1288-1318`).
 
-**The silence watchdog is not in scope.** Its evidence was inference, and it was unobservable
-under `stdio: 'inherit'`. The wall-clock caps need no such evidence. If it is ever revisited,
-the experiment is: reap the box, run one battery with output redirected, start a second
-concurrently, and sample the log's size and `LastWriteTime` every 30 s for 15 minutes.
+**The stderr accumulator must keep the TAIL, not the head.** `maxBuffer` kills the child and
+keeps the head; an accumulator does neither by default. `isVitestPoolCrash` matches "Worker
+exited unexpectedly", which appears at the **end** of a crashed run — so a head-keeping
+accumulator silently loses the signature under exactly the high-output contention where crashes
+happen, and the retry stops firing with every test green.
 
-### Part 3 — A reaper
+**`runPipeline`'s return contract is NOT preserved** — async makes it `Promise<number>`, and its
+one live caller (`verify-cache.mjs:1518-1519`, `const code = runPipeline({…}); process.exit(code)`)
+must `await`. `ci-scope.mjs:13` imports only `{STEPS, stepTouchedByDiff, computeShared}` and is
+genuinely unaffected — but it was never the risk.
 
-`scripts/reap-stale-batteries.mjs`, exposed as `npm run doctor`. Enumerates processes
-(`Win32_Process` on Windows, `ps` on POSIX), classifies roots by **subtree CPU per minute** and
-**dead-parent orphan** status — the logic validated against this incident. Reports by default;
-`--kill` acts. Never touches `python.exe` (TTS sidecars, Ringer) or the caller's own ancestor
-chain.
+**Tree-kill on Windows.** `shell: true` means `child.pid` is `cmd.exe`, and the tree is
+`cmd.exe → npm.cmd → node(npm) → node(vitest) → N forks`; `child.kill()` reaps only the shell.
+`taskkill /T /F` is the mechanism, with prior art at `scripts/stop-app.mjs:34-40`,
+`server/src/tts/spawn-sidecar.ts:452-460`, `server/src/mdns-owner.ts:162-172`. **Its blind spot
+is load-bearing:** `/T` walks live parent-PID links at the moment it runs, so a fork whose
+parent already died is invisible to it — exactly the two 390-minute orphans in the census above.
+**The timeout path is therefore a manufacturer of orphans, which is why Part 3 must run
+automatically and must classify by dead-parent, not only by CPU.**
 
-`classify(snapshot, now, thresholds) → verdicts` is a pure function; that is the testable seam.
+### Part 3 — A reaper that actually runs
+
+`scripts/reap-stale-batteries.mjs`, exposed as `npm run doctor` **and invoked automatically**.
+
+An earlier draft left this as a manual, report-only CLI that nothing in the design ever called —
+while the risk table credited it with automatic cleanup. That gap is closed here:
+
+- **On every `pre-push`:** run the census (one `Win32_Process`/`ps` query, ~300 ms, no pool) and
+  **append it to a log** — including **each root's command line**, which the 2026-09-05 census
+  omitted. Kill **only provably-orphaned trees** (parent dead). Never blocks the push.
+- **From Part 2's timeout path:** after `taskkill /T /F`, sweep for survivors the `/T` walk
+  could not see.
+- **`npm run doctor --kill`:** the manual, wider-scoped path.
+
+`classify(snapshot, now, thresholds) → verdicts` is a pure function — the testable seam. Never
+touches `python.exe` (TTS sidecars, Ringer) or the caller's own ancestor chain.
+
+The pre-push log is also the dataset that decides the governor question (see "Deferred work"),
+which is why it is mechanised rather than left to a weekly manual sample.
 
 ### Part 4 — Worktree GC
 
-`scripts/wt-gc.mjs`, exposed as `npm run wt:gc`. Lists worktrees with commits-ahead-of-`main`,
-merged status, and (when `gh` is available) PR state; offline-tolerant. Reports by default,
-`--prune` acts. Junctions dropped **first** via `[System.IO.Directory]::Delete($p, $false)`
-gated on the `ReparsePoint` attribute — never on `.LinkTarget`, which reads empty on Windows
-PowerShell 5.1 and silently skips the delete. Refuses to prune the primary checkout, any tree
-with uncommitted changes, and any tree with unpushed commits.
-
-Independent of Parts 1–3 and cuttable without affecting them.
+`scripts/wt-gc.mjs` / `npm run wt:gc`. Lists worktrees with commits-ahead-of-`main`, merged
+status, and (when `gh` is available) PR state; offline-tolerant. Reports by default, `--prune`
+acts. Junctions dropped **first** via `[System.IO.Directory]::Delete($p, $false)` gated on the
+`ReparsePoint` attribute — never `.LinkTarget`, which reads empty on Windows PowerShell 5.1.
+Refuses to prune the primary checkout, any tree with uncommitted changes, and any tree with
+unpushed commits. Independent of Parts 1–3 and cuttable.
 
 ### Part 5 — A Windows leg in PR-time CI
 
-**Wiring is the whole risk here.** Two traps, both of which would have shipped:
+**What it runs:** a `windows-latest` job executing `test` and `test:server`, with its scope
+conditions on **steps**, reusing `.github/actions/setup` (already used on `windows-latest` by
+`cross-os.yml`) and `.github/actions/install-ffmpeg-windows` for the server leg. Every step pins
+`shell: bash` — `verify.yml` sets no `defaults: run: shell:` and relies on ubuntu's default.
+Sets `timeout-minutes` like every other job in the file.
 
-- **The new job must be added to the aggregator's `needs:` list.** The only required context on
-  ruleset 17654264 is the aggregator job named `npm run verify` (`verify.yml:557-560`,
-  `docs/features/235-model-routing-review-gates.md:37,43-44`). A Windows job outside that list
-  is decorative — red on Windows would not block merge.
-- **Scope conditions go on steps, never on the job.** The aggregator's "Check leg results" step
-  fails on `'skipped'` as well as failure. A job-level `if:` makes the job report `skipped` and
-  **permanently blocks every docs-only PR**. Every existing leg puts its condition on steps for
-  exactly this reason.
-- `verify.yml` has no `defaults: run: shell: bash`, and every multi-line `run:` in it is bash, so
-  each new step pins `shell: bash` explicitly. `detect`'s outputs are OS-agnostic and consumable
-  via `needs:` from any runner; `.github/actions/setup` already keys its cache on `runner.os`.
+**Three wiring traps, all verified against the workflow:**
 
-**Honest scope of the payoff.** This closes CRLF, `windowsHide`, and path-handling regressions.
-It does **not** close the tmpdir/handle race that caused this incident — that is a concurrency
-artifact and a `windows-latest` runner is single-tenant, so it structurally cannot reproduce
-there. The earlier draft justified Part 5 with that race; that justification was wrong.
+- **The job must join the aggregator's `needs:` list** (`verify.yml:560`). The only required
+  context is the aggregator job `name: npm run verify` (`:558`); a job outside that list is
+  decorative. The "Check leg results" step iterates `jq -r 'keys[]'` over all of `needs`, so no
+  second edit is required, and the required-check name does not change.
+- **Scope conditions go on steps, never the job.** The aggregator fails on `'skipped'`
+  (`:629`, `:634-640`); a job-level `if:` would permanently block every docs-only PR. No
+  existing leg uses a job-level `if:`.
+- **`concurrency: cancel-in-progress: true`** makes a slow Windows leg a new source of
+  `cancelled`, which the aggregator also treats as failure.
+
+**Honest payoff: detection latency, not coverage.** `cross-os.yml` already runs full
+`verify:quick` + audits + build on `windows-latest` twice weekly, and `release.yml` gates every
+tag on Windows. Part 5 moves Windows detection from ≤3.5 days to per-PR. It does **not** close
+the tmpdir/handle race — that is a concurrency artifact and a `windows-latest` runner is
+single-tenant, so it structurally cannot reproduce there.
 
 ### Part 6 — Scope-triggered local acceptance for the sidecar
 
-`verify.yml:396-400` deliberately installs only `requirements/base.txt` +
-`requirements-dev.txt`, so **38 `pytest.importorskip("torch")` tests across 14 files — all under
-`server/tts-sidecar/`** — skip in CI and run only on this box. Part 1 deletes the automatic
-`test:sidecar` push trigger that exercises them.
+38 `pytest.importorskip("torch")` tests across 14 files, all under `server/tts-sidecar/`, run
+only on this box. Part 1 deletes the automatic `test:sidecar` push trigger that exercised them.
 
 **Trigger path: `server/tts-sidecar/**` only.** An earlier draft also listed
-`server/src/tts/**`, `server/src/analyzer/**`, and `server/src/gpu/**` — 177 TypeScript test
-files that Ubuntu CI already covers. Requiring a manual on-box run for those would be waived by
-habit within a week and would protect nothing.
+`server/src/tts/**`, `server/src/analyzer/**`, `server/src/gpu/**` — 177 TypeScript test files
+Ubuntu CI already covers; that requirement would be waived by habit within a week.
 
-**This must be mechanised, not written on a checklist.** Part 1 replaces an *automatic* trigger;
-an unenforced checklist item is strictly weaker than what it replaces, and this repo's record is
-that unmechanised items drift. A required check mirroring `.github/workflows/pr-issue-link.yml`
-fails a PR touching `server/tts-sidecar/**` unless the body records the local run — command,
-date, outcome — or links an [on-box acceptance
+**Mechanised, not a checklist item** — Part 1 replaces an *automatic* trigger, and an unenforced
+item is strictly weaker than what it replaces. A required check mirroring
+`.github/workflows/pr-issue-link.yml` fails a PR touching `server/tts-sidecar/**` unless the body
+records the local run (command, date, outcome) or links an [on-box acceptance
 register](../../testing/onbox-acceptance-register.md) row.
 
 ## Testing
 
 | Area | Test |
 |---|---|
-| Reaper classification | pure `classify()` over fixture snapshots **including the 11-battery census above** |
-| Worktree GC classification | merged / ahead / dirty / unpushed refusal cases |
-| Staged-file selection | extension filter, empty-set short-circuit, missing-eslint pass, timeout pass |
-| Step budgets | per-attempt timeout fires; **pipeline cap fires independently**; the whole child tree dies; a timeout is **not** retried as a pool crash; both stdio shapes preserved; retry loop still triggers on a genuine `isVitestPoolCrash` |
-| **The invariant** | `hook-no-pool.test.mjs` — an **allowlist** of permitted hook invocations. A denylist misses `npm test`, `npm run verify`, `npm run test:server`, `playwright`, `pytest`. |
-| Hook-scope exclusivity | pin that a `.husky/**` diff selects `test:hooks` **and nothing else**. `scripts/tests/verify-cache.test.mjs:647-648` was cited for this and does **not** assert it — it tests only the positive. True today, unpinned; the rollout depends on it, so pin it. |
+| Reaper classification | pure `classify()` over fixtures **including the 11-battery census**; dead-parent orphans detected independently of CPU rate |
+| Reaper auto-invocation | pre-push census writes the log incl. command lines; kills orphans only; never blocks the push |
+| Worktree GC | merged / ahead / dirty / unpushed refusal cases |
+| Staged-file selection | extension filter, empty-set short-circuit, missing-eslint **passes**, timeout passes |
+| Step budgets | per-step-total fires; pipeline cap fires independently; **timeout is not retried as a pool crash**; tail-keeping accumulator still matches `isVitestPoolCrash`; both stdio shapes + `shell`/`windowsHide` preserved |
+| **The invariant** | `hook-no-pool.test.mjs` — an **allowlist** of permitted hook invocations |
+| Hook-scope exclusivity | pin that a `.husky/**` diff selects `test:hooks` and nothing else. `verify-cache.test.mjs:647-651` asserts only the positive; true today, **unpinned**. Also fix the stale comment at `:636-646` claiming `.husky/**` matches no step. |
 
 Every test asserts against input that would otherwise make the guard fire.
 
-**Where the invariant guard runs.** `scripts/run-hooks-tests.mjs:15` drives `node --test` across
-~100 files, forking per file — so `test:hooks` is itself a pool, and after Part 1 no hook runs
-it. The guard lives in CI's `test:hooks` leg (a required check) and in a manual `npm run
-verify`, not on the commit path. A hook re-fattening is caught at PR time, not commit time.
+**Source-text pins are part of the work, not a surprise:** `verify-cache.test.mjs:1288-1311` and
+`server/src/spawn-windows-hide.test.ts` must be updated in the same commit as the async
+conversion.
 
-**On-box acceptance rows are owed** (CLAUDE.md checklist step 3 — a merge gate). Every unit test
-above passes on fixture snapshots while the real mechanism could fail on a live box. Rows
-required for: the reaper's `Win32_Process` classification against real processes, and the
-budget's kill-the-whole-tree semantics on Windows.
+**On-box acceptance rows are owed** (CLAUDE.md step 3 — a merge gate): the reaper's
+`Win32_Process` classification against real processes, and the budget's kill-the-whole-tree
+semantics on Windows including the `taskkill /T` orphan blind spot.
 
 ## Rollout order
 
-**Commit 1 touches `.husky/**` only, and its hook bodies must be self-contained.** This is
-forced. `test:server`'s inputs include `scripts/**/*.{mjs,cjs,js}` (`verify-cache.mjs:399`) and
-`diffSafeForChangedOnly` is limited to `src/`/`server/src/`, so any commit adding a file under
-`scripts/` pulls in the **full** `test:server` suite and must pass the gate being fixed. A
-`.husky/**`-only diff selects `test:hooks` alone (extension-less hook files miss `lint`'s
-`**/*.{ts,tsx,js,jsx,cjs,mjs}` glob).
+**Commit 1 touches `.husky/**` only, and its `pre-commit` is a NO-OP.** Verified safe:
+`.husky/_/h:6` passes on an absent file, an empty file exits 0 under `sh -e`, and **no test in
+the repo asserts on hook file content.** It must not call `scripts/hooks/pre-commit-lint.mjs`,
+which commit 2 creates — between the two, every commit would die on `MODULE_NOT_FOUND`,
+including commit 2 itself.
 
-**The trap:** commit 1 must not install a hook that calls
-`scripts/hooks/pre-commit-lint.mjs`, because commit 2 creates that file. Between the two, every
-commit dies on `MODULE_NOT_FOUND` — including commit 2. So commit 1's `pre-commit` is either a
-no-op or an inline `git diff --cached` + `eslint` one-liner, and commit 2 swaps in the script.
+*Correction to an earlier draft's rationale:* commit 1 was justified by "a `.husky/**`-only diff
+selects `test:hooks` alone." True, but it does not bind — git resolves the hook from the
+**working tree** (`.husky/_/h:4`), so commit 1 is gated by its own already-slimmed hook and pays
+nothing at all. The **ordering** is still right (the reverse order pays the full ~35-minute
+gate); the stated mechanism was wrong, and a reader trusting it might reorder the commits.
 
-1. **Hooks slimmed** — `.husky/**`-only, self-contained bodies. Unblocks everything downstream.
-2. `scripts/hooks/pre-commit-lint.mjs` + the allowlist guard test + the hook-scope exclusivity pin.
-3. **Reaper** (Part 3) — standalone.
-4. **Step + pipeline budgets** (Part 2) — the async `spawn` conversion.
+1. **Hooks slimmed** — `.husky/**`-only, no-op `pre-commit`.
+2. `scripts/hooks/pre-commit-lint.mjs` + allowlist guard test + hook-scope exclusivity pin.
+3. **Reaper** (Part 3) incl. pre-push census wiring.
+4. **Budgets** (Part 2) — async `spawn` conversion + the source-text pin updates.
 5. **Windows CI leg** (Part 5) and **sidecar acceptance gate** (Part 6).
 6. **Worktree GC** (Part 4).
-7. **Docs** — four sites: CLAUDE.md "Commit gate"; Before-shipping step 7 ("same battery as
-   pre-push" becomes false); "Working practice" default loop; Worktree-setup item 4. Plus
-   CONTRIBUTING.md and release notes.
+7. **Docs — five sites:** CLAUDE.md "Commit gate"; Before-shipping step 7 ("same battery as
+   pre-push" becomes false); "Working practice" default loop; Worktree-setup item 4; **and
+   `.husky/pre-push`'s own comment block (lines 1-21)**, which describes three mechanisms Part 1
+   deletes. Plus CONTRIBUTING.md and release notes.
 
 ## Deferred work — the governor
 
-Filed as its own issue rather than built here. **The measurement that would justify it:** after
-Part 1 ships, sample concurrent battery count on this box for a week (the reaper's classifier
-already produces exactly this census). If two-or-more concurrent batteries remain common,
-admission control is warranted — and must then be designed against the constraints both review
-passes established:
+**The deferral rests on a premise this design cannot yet support, and says so.** The argument is
+that Part 1 removes most concurrent batteries. But the 11-battery census **captured no command
+lines**, so not one of them was attributed to a hook; and on the single sample where attribution
+was recorded, one root was a hook (`verify-cache.mjs --scope-staged`) and one was a bare `vitest
+run` outside it. CLAUDE.md Before-shipping step 7 still instructs every agent to run
+`verify:fast:branch` by hand, and rollout item 7 rewords that line rather than deleting the
+instruction. With 76 open agent tickets, deliberate starts may well be the steady state.
+
+**This is why Part 3's census is mechanised and logs command lines.** After Part 1 ships, the
+log answers the question with data instead of assertion. If two-or-more concurrent batteries
+remain common, admission control is warranted — and must then satisfy:
 
 - not in the vitest configs (nested wire-fixture spawns break);
-- a sound liveness check that survives PID recycling and hard kills;
-- leaked slots treated as the normal case, not the edge;
+- a liveness check surviving PID recycling and hard kills;
+- leaked slots as the normal case, not the edge;
 - coverage of Playwright, pytest and Pester, not vitest alone.
 
-**A cheaper candidate to test first: per-process `TMPDIR`.** If the mechanism really is Windows
-tmpdir contention, giving each vitest process its own `TMPDIR` removes it with no coordination
-layer, no slots, and nothing to leak. Neither review pass *proved* tmpdir is the mechanism — the
-vitest configs assert it — so the experiment is: run two batteries with separate `TMPDIR`s and
-see whether they still wedge. Cheap, and it would obviate the governor entirely.
+**Cheaper candidate to test first: per-process `TMPDIR`.** If the mechanism really is tmpdir
+contention — asserted by the configs, never demonstrated — giving each vitest process its own
+`TMPDIR` removes it with no coordination layer and nothing to leak. The experiment: run two
+batteries with separate `TMPDIR`s and see whether they still wedge. Cheap, and it would obviate
+the governor entirely.
 
 ## Risks and trade-offs
 
 | Risk | Mitigation |
 |---|---|
-| Broken code reaches a PR branch more often | Cannot reach `main` — required checks. Feedback goes from 4h34m to 1–6 min. |
-| Windows CRLF/path regressions escape | **Part 5**, correctly wired into the aggregator. |
-| Sidecar ML-stack regressions escape | **Part 6**, mechanised so it is not weaker than the automatic trigger it replaces. |
-| Concurrent batteries still wedge after Part 1 | Bounded by Part 2's pipeline cap and cleaned by Part 3; measured before any governor is built. |
-| Async conversion breaks the retry loop | Explicitly tested: timeout ≠ pool crash; genuine pool crash still retries; both stdio shapes preserved. |
+| Broken code reaches a PR branch more often | Cannot reach `main` — required checks. Feedback goes from ~35 min (healthy) or 4h34m (wedged) to 1–6 min. |
+| Windows CRLF/path regressions detected late | **Part 5**, wired into the aggregator's `needs:`. |
+| Sidecar ML-stack regressions escape | **Part 6**, mechanised. |
+| Concurrent batteries still wedge after Part 1 | Bounded by Part 2's pipeline cap; orphans cleaned by Part 3's **automatic** pre-push sweep; measured by its log before any governor is built. |
+| Async conversion lands red on source-text pins | Named explicitly above; pin updates are in the same commit. |
+| Timeout kill leaves orphans `taskkill /T` cannot see | Part 3 sweeps after every timeout and classifies by dead-parent. |
 
 ## Out of scope
 
 - **The concurrency governor** — deferred with a measurement plan, above.
-- **Deleting the GPU throttle.** The probe never fired; removing it breaks
-  `run-golden-audio.mjs:68`'s import and invalidates `verify-cache.test.mjs:1183-1224`. The real
-  defect in that area — both probes decide once at entry and never re-evaluate — is a separate,
-  smaller issue.
-- `verify-cache.mjs`'s input-hash/STEPS table. **It is not local-only:** `ci-scope.mjs:13`
-  imports `STEPS`/`stepTouchedByDiff`/`computeShared` and `verify.yml:127` runs it, so CI's
-  per-leg scoping derives from this file. After Part 1 nothing local exercises it, so a future
+- **Deleting the GPU throttle** — the probe never fired; removal breaks
+  `run-golden-audio.mjs:68` and `verify-cache.test.mjs:1183-1224`. The real defect there (both
+  probes decide once at entry, never re-evaluate) is a separate issue.
+- `verify-cache.mjs`'s input-hash/STEPS table. **Not local-only:** `ci-scope.mjs:13` imports
+  from it and `verify.yml:127` runs it, so CI's per-leg scoping derives from this file. A future
   "it's only local now" simplification would silently degrade CI scoping with every check green.
-- Reducing the Open Engine queue's concurrency.
+- **Open Engine queue concurrency.** Noted as a gap: with the governor deferred, this was the
+  only other lever on battery count, and both are now out. If Part 3's log shows deliberate
+  starts dominate, this becomes the live option alongside the governor.
 
 ## Open questions
 
-- **O1 — `is-docs-only-push.mjs`.** Retain the script and tests, drop only the `pre-push`
-  invocation. Deleting it would redden
-  `scripts/tests/entry-point-guard-convention.test.mjs:301` and require edits to `CLAUDE.md:948`
-  and `CONTRIBUTING.md:586` for no functional gain. **Recommendation: retain** — recorded as
-  settled unless challenged.
-- **O2 — `SKIP_CONTENTION_CHECK`.** It gates both probes (`verify-cache.mjs:1340`, `:1350`) and
-  is documented at `CLAUDE.md:927`. With hooks no longer running batteries, do the probes still
-  earn their place? Deferred with the throttle question.
-- **O3 — `wt-2947-slow-lane`.** #2947 proposes moving a twelfth file to the serial lane, and that
-  worktree produced one of the two stalled batteries measured here. It should be re-evaluated
-  once hooks stop firing batteries — this is not a neutral deferral, and the ticket should be
-  linked to this one.
+- **O1 — `is-docs-only-push.mjs`:** retain script + tests, drop only the invocation. Deleting it
+  reddens `scripts/tests/entry-point-guard-convention.test.mjs:301` and needs edits to
+  `CLAUDE.md:948` and `CONTRIBUTING.md:586` for no gain. **Settled unless challenged.**
+- **O2 — `SKIP_CONTENTION_CHECK`** (`verify-cache.mjs:1340`, `:1350`; `CLAUDE.md:927`). With
+  hooks no longer running batteries, do the probes still earn their place? Deferred with the
+  throttle question.
+- **O3 — `wt-2947-slow-lane`.** #2947 proposes a twelfth serial-lane file, and that worktree
+  produced one of the two stalled batteries measured here. Re-evaluate once hooks stop firing
+  batteries; link the ticket to this one.
