@@ -109,7 +109,7 @@ function worksWhenRelocated(pythonExe) {
     } catch {
       copyFileSync(pythonExe, target);
     }
-    const probe = spawnSync(target, ['--version'], { encoding: 'utf8' });
+    const probe = spawnSync(target, ['--version'], { encoding: 'utf8', windowsHide: true });
     return probe.status === 0;
   } catch {
     return false;
@@ -133,6 +133,7 @@ function findRealPython() {
     const label = [cmd, ...baseArgs].join(' ');
     const probe = spawnSync(cmd, [...baseArgs, '-c', 'import sys; print(sys.executable)'], {
       encoding: 'utf8',
+      windowsHide: true,
     });
     if (probe.error) {
       attempts.push(`${label}: not found on PATH (${probe.error.code ?? probe.error.message})`);
@@ -254,6 +255,7 @@ function runEntryPoint(root, args, env = {}, execArgv = []) {
   return spawnSync(process.execPath, [...execArgv, join(root, 'scripts', 'run-sidecar-tests.mjs'), ...args], {
     encoding: 'utf8',
     env: { ...process.env, ...env },
+    windowsHide: true,
   });
 }
 

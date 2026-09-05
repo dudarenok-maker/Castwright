@@ -64,6 +64,7 @@ test('repair-missing-book-language: full suite (real detect-language/state-migra
       cwd: REPO_ROOT,
       env: childEnv,
       encoding: 'utf8',
+      windowsHide: true,
     });
   } catch (err) {
     // Surface the full inner-suite output (which test(s) failed) rather than

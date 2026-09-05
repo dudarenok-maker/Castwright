@@ -31,7 +31,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-register-citations.mjs');
 
 function runCli(args) {
-  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000 });
+  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000, windowsHide: true });
 }
 
 // A minimal but structurally real register: two groups, a run-sheet
@@ -2648,7 +2648,7 @@ test('CLI: without --strict, Check C\'s exploratory half does not print and the 
   const result = runCli([]);
   assert.equal(result.status, 0);
   assert.doesNotMatch(result.stdout, /Check C — subject not found/);
-  assert.match(result.stdout, /Check C's exploratory .* did NOT run/);
+  assert.match(result.stdout, /Check C\u0027s exploratory .* did NOT run/);
 });
 
 test('CLI: with --strict, Check C\'s exploratory half runs and prints under its own opt-in label, still non-fatal', () => {
@@ -2658,7 +2658,7 @@ test('CLI: with --strict, Check C\'s exploratory half runs and prints under its 
     result.stdout,
     /Check C — subject not found in any current register heading \(--strict, exploratory, not failing/,
   );
-  assert.match(result.stdout, /Check C's exploratory .* found \d+ warning\(s\) above/);
+  assert.match(result.stdout, /Check C\u0027s exploratory .* found \d+ warning\(s\) above/);
 });
 
 test('CLI: Check C\'s wrongId half is FATAL and runs whether or not --strict is passed', () => {
