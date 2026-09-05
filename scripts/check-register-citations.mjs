@@ -742,6 +742,16 @@ const ID_PROXIMITY_CHARS = 120;
 // How close a negation word must sit BEFORE a discharge-word match for
 // isDischargeAssertionNegated to treat it as negating that match — see that
 // function's own comment for why 30 (not the full clause) is the right cap.
+//
+// #2858 NOTE: This 30-char cap was originally measured/tuned for Check C
+// (conflicting subjects). Check A (nonexistent IDs) now reuses the shared
+// isDischargeAssertionNegated helper and this constant without independent
+// re-measurement for Check A's own citation-text shapes. Zero real-corpus hits
+// of a boundary-flip as of this PR (e.g., `"Nothing further owed - A999
+// discharged ..."` at the 30-char boundary), but a future false-negative or
+// false-positive near this cap for Check A specifically should prompt
+// re-measuring the cap for Check A's own text patterns rather than assuming
+// Check C's tuning transfers without measurement.
 const POLARITY_PROXIMITY_CHARS = 30;
 
 // A bare ID token, used to find every ID mention in a section so a discharge
