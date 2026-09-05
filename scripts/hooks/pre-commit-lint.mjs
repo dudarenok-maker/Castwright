@@ -50,24 +50,119 @@ export function filterLintableFiles(files) {
 }
 
 /** Turn a `spawnSync(eslint, ...)` result into a verdict.
- *    { blocked: true,  reason: <combined stdout+stderr> }   — real findings
- *    { blocked: false, warning: <string> }                  — infra failure,
- *                                                              pass with a note
- *    { blocked: false }                                     — clean lint
- * A timeout sets `error.code === 'ETIMEDOUT'` (with `signal` also set); a
- * missing binary sets `error.code === 'ENOENT'`. Both must PASS, never block
- * — principle 4. Anything else with a nonzero exit is a real lint finding. */
+ * POSITIVE EVIDENCE that ESLint ran is required before blocking.
+ *    { blocked: true,  reason: <human findings> }   — ESLint JSON output with findings
+ *    { blocked: false, warning: <string> }          — ESLint did not run or error occurred
+ *    { blocked: false }                             — ESLint ran, no findings
+ *
+ * Principle 4: Pass on missing tool, pass on infra failure, block ONLY on real findings. */
 export function classifyLintResult(result) {
-  if (result.error?.code === 'ETIMEDOUT') {
-    return { blocked: false, warning: `eslint exceeded its ${BUDGET_MS / 1000}s local budget — skipping (CI still enforces lint).` };
+  // Any spawn error → ESLint did not run. Pass.
+  if (result.error) {
+    if (result.error.code === 'ETIMEDOUT') {
+      return { blocked: false, warning: `eslint exceeded its ${BUDGET_MS / 1000}s local budget — skipping (CI still enforces lint).` };
+    }
+    if (result.error.code === 'ENOENT') {
+      return { blocked: false, warning: 'eslint binary not found — skipping local lint (CI still enforces lint).' };
+    }
+    // Any other spawn error (MODULE_NOT_FOUND via Node, OOM, signal kill, etc.)
+    return { blocked: false, warning: `eslint invocation failed (${result.error.code ?? 'unknown error'}) — skipping local lint (CI still enforces lint).` };
   }
-  if (result.error?.code === 'ENOENT') {
-    return { blocked: false, warning: 'eslint binary not found — skipping local lint (CI still enforces lint).' };
+
+  // Exit code 2 = ESLint fatal config/internal error, not lint findings. Pass.
+  if (result.status === 2) {
+    return { blocked: false, warning: 'eslint reported a fatal configuration error — skipping local lint (CI still enforces lint).' };
   }
-  if (result.status !== 0) {
-    return { blocked: true, reason: `${result.stdout ?? ''}${result.stderr ?? ''}` };
+
+  // Try to parse JSON output. If it doesn't parse, ESLint did not run.
+  let jsonOutput;
+  try {
+    jsonOutput = JSON.parse(result.stdout ?? '[]');
+  } catch {
+    // Node.js or eslint produced non-JSON output (module error, signal, OOM, etc.)
+    return { blocked: false, warning: 'eslint did not produce valid JSON output — skipping local lint (CI still enforces lint).' };
+  }
+
+  // Stdout must parse as an ARRAY — that, and only that, is the positive
+  // evidence that ESLint itself ran. It is NOT the findings signal: ESLint's
+  // `--format json` emits one entry per linted file even when the file is
+  // completely clean (`messages: []`), so a clean run of one file yields
+  // `length === 1`. Reading length as "has findings" blocked every commit
+  // that staged a clean JS/TS file.
+  if (!Array.isArray(jsonOutput)) {
+    return { blocked: false, warning: 'eslint did not produce valid JSON output — skipping local lint (CI still enforces lint).' };
+  }
+
+  // The exit code carries the findings signal: 0 = clean, 1 = findings at or
+  // above `--max-warnings 0`. (2 = fatal, already handled above.)
+  if (result.status === 1) {
+    // Reconstruct human-readable output from ESLint JSON for the error message.
+    const humanOutput = jsonOutput
+      .map((file) => {
+        const lines = (file.messages || [])
+          .map((msg) => `  ${file.filePath}\n    ${msg.line}:${msg.column}  ${msg.severity}  ${msg.message}`)
+          .join('\n');
+        return lines ? `${file.filePath}\n${lines}` : '';
+      })
+      .filter(Boolean)
+      .join('\n');
+    return { blocked: true, reason: humanOutput };
+  }
+
+  // ESLint ran (array parsed) and exited 0. Clean run.
+  return { blocked: false };
+}
+
+// Windows caps a command line at ~8191 chars and each path runs 50-100 chars,
+// so a large staged set has to be split across several eslint invocations.
+export const MAX_FILES_PER_BATCH = 100;
+
+/** Split `files` into batches of at most `size`. */
+export function chunkFiles(files, size = MAX_FILES_PER_BATCH) {
+  const batches = [];
+  for (let i = 0; i < files.length; i += size) {
+    batches.push(files.slice(i, i + size));
+  }
+  return batches;
+}
+
+/** Fold one `classifyLintResult` verdict PER BATCH into a single verdict.
+ *
+ * Batches are classified individually and only their VERDICTS are combined.
+ * Aggregating raw stdout instead does not work: concatenating two `--format
+ * json` runs yields `[...][...]`, which `JSON.parse` rejects, so every commit
+ * staging more than one batch fell into the unparseable-output branch and
+ * skipped linting entirely — silently, exactly when the diff was largest.
+ * Aggregating raw exit codes has its own bug: a later batch's 2 (fatal) would
+ * overwrite an earlier batch's 1, suppressing real findings by accident of
+ * batch order.
+ *
+ * Precedence is explicit and order-independent:
+ *   1. ANY batch blocks  → block, reasons from the blocking batches only.
+ *   2. else ANY batch warns → pass with that warning (a batch that could not
+ *      run is not evidence of findings — principle 4's fail-open direction).
+ *   3. else                → pass. */
+export function combineBatchVerdicts(verdicts) {
+  const blocking = verdicts.filter((v) => v.blocked);
+  if (blocking.length > 0) {
+    return {
+      blocked: true,
+      reason: blocking.map((v) => v.reason).filter(Boolean).join('\n'),
+    };
+  }
+  const warned = verdicts.find((v) => v.warning);
+  if (warned) {
+    return { blocked: false, warning: warned.warning };
   }
   return { blocked: false };
+}
+
+/** The whole multi-batch decision: classify each `spawnSync` result on its
+ *  own, then fold the verdicts. This is the seam the old raw-stdout /
+ *  raw-exit-code aggregation occupied; keeping it a named export means the
+ *  regression tests drive exactly the code the hook runs. */
+export function combineBatchResults(results) {
+  return combineBatchVerdicts(results.map(classifyLintResult));
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
@@ -86,22 +181,34 @@ if (isDirectlyInvoked(import.meta.url)) {
     process.exit(0);
   }
 
-  const isWin = process.platform === 'win32';
-  const eslintBin = join(repoRoot, 'node_modules', '.bin', isWin ? 'eslint.cmd' : 'eslint');
-  const lintArgs = [...files, '--max-warnings', '0'];
-  // shell:true is required to exec a .cmd on Windows (spawnSync can't run one
-  // directly — EINVAL, same trap eslint-guardrail.test.mjs documents for
-  // npx.cmd); shell:true skips Node's own arg quoting, so quote by hand.
-  const argv = isWin ? lintArgs.map((a) => `"${a}"`) : lintArgs;
-  const result = spawnSync(eslintBin, argv, {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    shell: isWin,
-    windowsHide: true,
-    timeout: BUDGET_MS,
-  });
+  // Pre-check: eslint entry point must exist. If missing, pass (worktree without
+  // node_modules is a normal state). This gives us POSITIVE EVIDENCE before trying to spawn.
+  const eslintJs = join(repoRoot, 'node_modules', 'eslint', 'bin', 'eslint.js');
+  if (!existsSync(eslintJs)) {
+    process.stderr.write('pre-commit-lint: eslint not found — skipping local lint (CI still enforces lint).\n');
+    process.exit(0);
+  }
 
-  const verdict = classifyLintResult(result);
+  // Run with --format json to verify ESLint produces parseable output (POSITIVE EVIDENCE it ran).
+  const baseArgs = ['--format', 'json', '--max-warnings', '0', '--no-warn-ignored'];
+
+  // Batch to stay under the Windows ~8191 char command-line limit, then
+  // classify EACH batch on its own and combine the verdicts. Never aggregate
+  // raw stdout or raw exit codes across batches — see combineBatchVerdicts.
+  const batches = chunkFiles(files);
+  const results = [];
+
+  for (const batch of batches) {
+    const argv = [eslintJs, ...baseArgs, ...batch];
+    results.push(spawnSync(process.execPath, argv, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: BUDGET_MS,
+    }));
+  }
+
+  const verdict = combineBatchResults(results);
   if (verdict.warning) {
     process.stderr.write(`pre-commit-lint: ${verdict.warning}\n`);
     process.exit(0);
