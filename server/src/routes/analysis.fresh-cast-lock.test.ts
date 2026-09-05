@@ -284,11 +284,23 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
           .send({ characterId: 'nova', aliasName: 'Supernova' });
         aliasPromise.catch(() => {}); // supertest is lazy — force real dispatch now
         // Let add-alias acquire the cast lock and reach (and get stuck
-        // behind) its intercepted in-lock read. Generous — this file's first
-        // supertest request pays a cold Express/module-init cost a warmer
-        // file (many prior requests already run) wouldn't.
-        await new Promise((r) => setTimeout(r, 300));
-        expect(intercepted).toBe(true);
+        // behind) its intercepted in-lock read. Poll for it (vi.waitFor,
+        // per #2262's precedent in docs/testing/flaky-register.md) rather
+        // than sleeping a fixed duration — this file's first supertest
+        // request pays a cold Express/module-init cost a warmer file (many
+        // prior requests already run) wouldn't, and that cost is not
+        // bounded enough to hardcode: a loaded box can blow well past any
+        // fixed constant, while a fast one clears it in a few ms.
+        await vi.waitFor(
+          () => {
+            if (!intercepted) {
+              throw new Error(
+                'add-alias never reached its intercepted in-lock read within 5000ms',
+              );
+            }
+          },
+          { timeout: 5_000, interval: 5 },
+        );
 
         const recordRef = getManuscript(manuscriptId)!;
         jobPromise = runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
