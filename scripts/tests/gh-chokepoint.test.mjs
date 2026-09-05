@@ -167,7 +167,7 @@ const SHELL_CANONICAL_NAMES = ['execSync', 'exec'];
 // there, so Q is deliberately not reused for this one). `[^}]*` spans
 // newlines with no `/s` flag needed, so a specifier list broken across
 // multiple lines is still captured whole.
-const CHILD_PROCESS_IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*(['"])node:child_process\2/g;
+const CHILD_PROCESS_IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*([\u0027\u0022])node:child_process\2/g;
 
 /** Finds every local alias this file's own `node:child_process` import(s)
  *  bind to execSync/exec — e.g. `import { execSync as sh } from

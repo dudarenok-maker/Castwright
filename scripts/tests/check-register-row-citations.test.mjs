@@ -20,7 +20,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-register-row-citations.mjs');
 
 function runCli(args) {
-  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000 });
+  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000, windowsHide: true });
 }
 
 // A minimal register carrying two real rows: A1 and E1. Every fixture below
@@ -716,7 +716,7 @@ test('CLI mutation: if REGISTER_PATH points at a nonexistent file, the check wou
 
   // Mutate REGISTER_PATH to point at a nonexistent file
   const mutated = original.replace(
-    /export const REGISTER_PATH = '[^']*';/,
+    /export const REGISTER_PATH = \u0027[^\u0027]*\u0027;/,
     "export const REGISTER_PATH = 'docs/testing/nonexistent-register.md';"
   );
   assert.notEqual(mutated, original, 'mutation should have changed REGISTER_PATH');

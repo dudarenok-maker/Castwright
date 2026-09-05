@@ -319,6 +319,7 @@ test('a junction/symlink earlier in the invoked path does not silently no-op the
       encoding: 'utf8',
       timeout: 30000,
       env: { ...process.env, CUDA_VISIBLE_DEVICES: '', RUN_GOLDEN_AUDIO_PROBE_GUARD_ONLY: '1' },
+      windowsHide: true,
     });
     assert.equal(
       r.status,

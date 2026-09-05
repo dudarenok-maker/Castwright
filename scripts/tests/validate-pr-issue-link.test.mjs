@@ -109,6 +109,7 @@ test('CLI: a dependabot[bot]-authored PR with no Closes/Refs still passes the ch
     );
     const result = spawnSync(process.execPath, [scriptPath, bodyFile, 'dependabot[bot]'], {
       encoding: 'utf8',
+      windowsHide: true,
     });
     assert.equal(
       result.status,
@@ -134,6 +135,7 @@ test('CLI: a human-authored PR with no Closes/Refs still fails the check', () =>
     );
     const result = spawnSync(process.execPath, [scriptPath, bodyFile, 'some-human'], {
       encoding: 'utf8',
+      windowsHide: true,
     });
     assert.equal(
       result.status,
@@ -154,6 +156,7 @@ test('CLI: a human-authored PR with a Closes link still passes', () => {
     writeFileSync(bodyFile, 'Closes #123\n');
     const result = spawnSync(process.execPath, [scriptPath, bodyFile, 'some-human'], {
       encoding: 'utf8',
+      windowsHide: true,
     });
     assert.equal(
       result.status,

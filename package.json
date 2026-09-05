@@ -65,6 +65,7 @@
     "test:quarantine": "cross-env RUN_QUARANTINE=1 npm run test && cross-env RUN_QUARANTINE=1 npm --prefix server run test && cross-env RUN_QUARANTINE=1 npm --prefix server run test:slow",
     "quarantine:health": "node scripts/quarantine-health.mjs",
     "check:onbox-register": "node scripts/check-onbox-register.mjs",
+    "register:build": "node scripts/build-register-live-view.mjs",
     "stamp:publish-token": "node scripts/stamp-publish-token.mjs",
     "check:register-citations": "node scripts/check-register-citations.mjs",
     "check:register-row-citations": "node scripts/check-register-row-citations.mjs",

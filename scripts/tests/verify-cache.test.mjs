@@ -1439,7 +1439,7 @@ function cleanGitEnv() {
 }
 
 function gitAt(cwd, args) {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv() });
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: cleanGitEnv(), windowsHide: true });
   if (r.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
   }
@@ -1642,6 +1642,7 @@ test('stagedDiffFiles: honours an ambient GIT_INDEX_FILE pointing at a temporary
     cwd: repoDir,
     encoding: 'utf8',
     env: { ...cleanGitEnv(), GIT_INDEX_FILE: tempIndexPath },
+    windowsHide: true,
   });
   assert.equal(populateTempIndex.status, 0, populateTempIndex.stderr);
 
