@@ -141,10 +141,16 @@ export function main(
   const nextHtml = buildLiveView(mdText, currentHtml);
 
   if (check) {
-    if (nextHtml !== currentHtml) {
-      console.error(
-        `register:build --check: ${liveViewPath} is out of date. Run \`npm run register:build\` and commit the result.`,
-      );
+    const placeholderStillCommitted = currentHtml.includes('class="body-placeholder"');
+    if (nextHtml !== currentHtml || placeholderStillCommitted) {
+      if (placeholderStillCommitted) {
+        console.error(
+          'register:build --check: a committed row shell still carries class="body-placeholder" — fill in its content and re-run.',
+        );
+      }
+      if (nextHtml !== currentHtml) {
+        console.error(`register:build --check: ${liveViewPath} is out of date. Run \`npm run register:build\` and commit the result.`);
+      }
       return 1;
     }
     console.log('register:build --check: up to date.');
@@ -285,7 +291,12 @@ function reconcileTitledSection(html, sectionId, titles, { prefixMatch }) {
       return matches[0][1];
     })
     .join('\n');
-  return html.replace(sectionRegex, `${headerAndOpen}${newBody}\n${closeTag}`);
+  // No extra '\n' inserted here: closeTag's own `\s*` capture already carries
+  // whatever whitespace separated the last shell from `</section>` in the
+  // ORIGINAL html, verbatim and untouched by this function — prepending
+  // another '\n' on top of it grew the gap by one line on every rebuild
+  // (idempotence failure, Task 8 Step 2).
+  return html.replace(sectionRegex, `${headerAndOpen}${newBody}${closeTag}`);
 }
 
 export function reconcileRowShells(mdText, html) {
@@ -326,10 +337,13 @@ function reconcileOneSection(html, sectionId, rowIds) {
   if (!match) throw new Error(`reconcileRowShells: no section#${sectionId} (with a <header>) found`);
   const [, headerAndOpen, body, closeTag] = match;
   const existingShells = splitShellsById(body);
+  // No extra '\n' inserted before closeTag here either — see the matching
+  // comment in reconcileTitledSection above; this is the same fix for the
+  // same idempotence bug in the ID-keyed sibling function.
   const newBody = rowIds
     .map(({ id, title }) => existingShells.get(id) ?? buildPlaceholderShell(id, title))
     .join('\n');
-  return html.replace(sectionRegex, `${headerAndOpen}${newBody}\n${closeTag}`);
+  return html.replace(sectionRegex, `${headerAndOpen}${newBody}${closeTag}`);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {

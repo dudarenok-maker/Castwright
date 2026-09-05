@@ -1,5 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import {
   applyGeneratedRegion,
   parseRegisterFigures,
@@ -9,7 +14,12 @@ import {
   reconcileRowShells,
   normaliseTitle,
   decodeHtmlEntities,
+  main,
 } from '../build-register-live-view.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CLI_PATH_FOR_REGISTER_BUILD = join(HERE, '..', 'build-register-live-view.mjs');
+const REPO_ROOT = join(HERE, '..', '..');
 
 test('applyGeneratedRegion replaces only the marked region', () => {
   const html = 'before\n<!-- BEGIN GENERATED:x -->old<!-- END GENERATED:x -->\nafter';
@@ -409,4 +419,75 @@ Some prose.
   const next = reconcileRowShells(md, html);
   const order = [...next.matchAll(/<span class="num">([^<]+)<\/span>/g)].map((m) => m[1]);
   assert.deepEqual(order, ['A1']);
+});
+
+test('build then build is a no-op on an LF checkout', () => {
+  const md = buildRegisterFixture();
+  const html = buildLiveViewFixture();
+  const once = buildLiveView(md, html);
+  const twice = buildLiveView(md, once);
+  assert.equal(once, twice);
+});
+
+test('build then --check passes on an LF checkout', () => {
+  const md = buildRegisterFixture();
+  const html = buildLiveViewFixture();
+  const built = buildLiveView(md, html);
+  assert.equal(buildLiveView(md, built), built);
+});
+
+test('a CRLF-normalised input passes --check rather than failing on every line', () => {
+  const md = buildRegisterFixture();
+  const html = buildLiveViewFixture().replace(/\n/g, '\r\n');
+  // main() reads via readNormalized, so the CRLF html degrades to a correct
+  // comparison rather than a whole-file false failure — exercised at the
+  // main()-level test below, not here (buildLiveView itself is CRLF-agnostic
+  // string work; readNormalized is main()'s job).
+  const built = buildLiveView(md, html.replace(/\r\n/g, '\n'));
+  assert.doesNotMatch(built, /\r\n/);
+});
+
+test('main() writes LF even when the tracked file is CRLF, and --check passes after', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'register-build-'));
+  try {
+    const mdPath = join(dir, 'register.md');
+    const htmlPath = join(dir, 'live-view.html');
+    writeFileSync(mdPath, buildRegisterFixture().replace(/\n/g, '\r\n'));
+    writeFileSync(htmlPath, buildLiveViewFixture().replace(/\n/g, '\r\n'));
+    const writeExit = main('register.md', 'live-view.html', { repoRoot: dir, check: false });
+    assert.equal(writeExit, 0);
+    const written = readFileSync(htmlPath, 'utf8');
+    assert.doesNotMatch(written, /\r\n/);
+    const checkExit = main('register.md', 'live-view.html', { repoRoot: dir, check: true });
+    assert.equal(checkExit, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the real register and its real live view agree (register:build --check)', () => {
+  const result = spawnSync(
+    process.execPath,
+    [CLI_PATH_FOR_REGISTER_BUILD, '--check'],
+    { cwd: REPO_ROOT, encoding: 'utf8' },
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test('--check fails when a committed shell still carries the placeholder class, even if otherwise up to date', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'register-build-'));
+  try {
+    const mdPath = join(dir, 'register.md');
+    const htmlPath = join(dir, 'live-view.html');
+    writeFileSync(mdPath, buildRegisterFixture());
+    const html = buildLiveViewFixture().replace(
+      /<summary><span class="num">A1<\/span>.*?<\/summary>/s,
+      (m) => `${m}\n<p class="body-placeholder">TODO</p>`,
+    );
+    writeFileSync(htmlPath, html);
+    const exit = main('register.md', 'live-view.html', { repoRoot: dir, check: true });
+    assert.equal(exit, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
