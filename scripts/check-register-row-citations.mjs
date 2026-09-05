@@ -196,7 +196,7 @@ function isDischargeAssertionNegated(text, dischargeMatch) {
 
   // Apostrophes are '-escaped so this regex literal doesn't desync quote-tracking
   const hasNegationWord =
-    /\b(?:NOT|no\b(?!\s+longer\s+exists?)|never|isn't|aren't|wasn't|weren't|hasn't|haven't|cannot|can't|far\s+from|nothing)\b/i.test(
+    /\b(?:NOT|no\b(?!\s+longer\s+exists?)|never|isn\u0027t|aren\u0027t|wasn\u0027t|weren\u0027t|hasn\u0027t|haven\u0027t|cannot|can\u0027t|far\s+from|nothing)\b/i.test(
       polarityContext,
     );
 
