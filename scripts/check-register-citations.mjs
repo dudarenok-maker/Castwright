@@ -2104,11 +2104,18 @@ function extractHeadingTitleEchoes(text) {
  * that they carry no usable signal there. A nonexistent ID is silently
  * skipped here — that's Check A's job, not this one's, and double-reporting
  * it would be noise.
- * @returns {string[]} advisory findings, file:line formatted like the other
- *   checks' output
+ *
+ * Heading citations with a nearby discharge/removal annotation (the same
+ * annotation-exemption mechanism Checks A and C use) are moved to a separate
+ * `annotatedFindings` bucket rather than treated as plain drift, per #2838:
+ * all six real-corpus detections were correctly-annotated historical references.
+ *
+ * @returns {{ findings: string[], annotatedFindings: string[] }}
  */
 export function checkCitationTitleDrift(text, filePath, registerRows) {
   const findings = [];
+  const annotatedFindings = [];
+  const lines = deBold(stripFences(text)).split('\n');
   for (const { lineIndex, ids, titleEcho } of extractHeadingTitleEchoes(text)) {
     const proseTokens = titleDriftTokens(titleEcho);
     for (const id of ids) {
@@ -2117,14 +2124,18 @@ export function checkCitationTitleDrift(text, filePath, registerRows) {
       const titleTokens = titleDriftTokens(row.title);
       const { ratio, shared } = titleDriftScore(titleTokens, proseTokens);
       if (ratio > TITLE_DRIFT_RATIO_THRESHOLD || shared >= TITLE_DRIFT_MIN_SHARED_TOKENS) continue;
-      findings.push(
+      const message =
         `${filePath}:${lineIndex + 1} — heading cites ${id} — row's current title is ` +
-          `"${row.title}" but the heading text says "${titleEcho}" (similarity ${ratio.toFixed(2)}, ` +
-          `${shared} shared token(s) — review for drift)`,
-      );
+        `"${row.title}" but the heading text says "${titleEcho}" (similarity ${ratio.toFixed(2)}, ` +
+        `${shared} shared token(s) — review for drift)`;
+      if (idSpecificAnnotationPresent(enclosingSectionText(lines, lineIndex), id)) {
+        annotatedFindings.push(`${message} — annotated as discharged/removed, not flagged as drift`);
+      } else {
+        findings.push(message);
+      }
     }
   }
-  return findings;
+  return { findings, annotatedFindings };
 }
 
 // --- CLI ------------------------------------------------------------------
@@ -2218,6 +2229,7 @@ export function runCheckRegisterCitationsCli(options = {}) {
   const errorsA = [];
   const annotatedA = [];
   const titleDriftD = [];
+  const annotatedTitleDriftD = [];
   const nonFrozenTexts = new Map();
   let unreadableCount = 0;
   for (const relPath of scannedFiles) {
@@ -2241,7 +2253,9 @@ export function runCheckRegisterCitationsCli(options = {}) {
     const found = checkNonexistentIds(text, relPath, rows);
     errorsA.push(...found.errors);
     annotatedA.push(...found.annotated);
-    titleDriftD.push(...checkCitationTitleDrift(text, relPath, rows));
+    const titleDriftResult = checkCitationTitleDrift(text, relPath, rows);
+    titleDriftD.push(...titleDriftResult.findings);
+    annotatedTitleDriftD.push(...titleDriftResult.annotatedFindings);
   }
 
   const errorsB = checkRunSheetLinkage(rows, (p) => readRepoFile(p));
@@ -2294,6 +2308,10 @@ export function runCheckRegisterCitationsCli(options = {}) {
     [
       'Check D — heading title drift vs. the row\'s current title (advisory, never fatal — see header comment)',
       titleDriftD,
+    ],
+    [
+      'Check D — heading title drift, already annotated as discharged/removed (not flagged as drift)',
+      annotatedTitleDriftD,
     ],
   ];
   if (strict) {

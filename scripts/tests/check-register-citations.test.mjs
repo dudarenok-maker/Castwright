@@ -1831,7 +1831,7 @@ test('measureWrongIdEligibleLines: a heading citing only a NONEXISTENT id is not
 test('checkCitationTitleDrift: does not fire when the heading echoes the row\'s current title', () => {
   const { rows } = parseRegisterRows(buildRegister());
   const text = '### A2 · Second thing (#1001)\n\nBody two.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 0);
 });
 
@@ -1841,7 +1841,7 @@ test('checkCitationTitleDrift: does not fire when the heading echoes the row\'s 
 test('checkCitationTitleDrift: fires (advisory) when the heading describes clearly different work than the row\'s current title', () => {
   const { rows } = parseRegisterRows(buildRegister());
   const text = '### A2 · Completely unrelated volume normalization audio pipeline redesign\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 1);
   assert.match(findings[0], /A2/);
   assert.match(findings[0], /docs\/foo\.md/);
@@ -1851,14 +1851,14 @@ test('checkCitationTitleDrift: fires (advisory) when the heading describes clear
 test('checkCitationTitleDrift: does not fire on a nonexistent ID — that is Check A\'s job, not this one\'s', () => {
   const { rows } = parseRegisterRows(buildRegister());
   const text = '### A99 · Completely unrelated volume normalization audio pipeline redesign\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 0);
 });
 
 test('checkCitationTitleDrift: skips the prose-idiom surface entirely, even when it clearly does not restate the title', () => {
   const { rows } = parseRegisterRows(buildRegister());
   const text = 'This discharged register row A2 as numbered before the volume normalization redesign shipped.';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 0);
 });
 
@@ -1868,7 +1868,7 @@ test('checkCitationTitleDrift: a multi-row heading ("A6 + A7 · ...") is checked
   // "Language gate (#1001)", clearly different from A2's "Second thing
   // (#1001)", so only B1 should flag.
   const text = '### A2 + B1 · Second thing (#1001)\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 1);
   assert.match(findings[0], /B1/);
 });
@@ -1896,7 +1896,7 @@ Some body text.
   // fire. After the fix, only the shared words count (none, in this case),
   // and drift correctly fires.
   const text = '### A9 · completely unrelated volume audio normalization ([#1234](https://github.com/dudarenok-maker/Castwright/issues/1234))\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 1);
   assert.match(findings[0], /A9/);
   assert.match(findings[0], /feature deployment/);
@@ -1933,7 +1933,7 @@ Some body text.
   // which scores as 1 shared / 7 union = 0.14 similarity, below the 0.3 threshold.
   // After the fix, both sides get stripped the same way and produce the same tokens.
   const text = '### A10 · `npm run test:golden-audio --bless` (#1234)\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 0, 'Expected no drift when heading echoes row title exactly, even with inline code spans');
 });
 
@@ -1961,7 +1961,7 @@ Some body text.
 `;
   const { rows } = parseRegisterRows(registerText);
   const text = '### A30 · apple cherry\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 0, 'ratio ≈0.333 > 0.30 prevents flag even with shared=1 < 2');
 });
 
@@ -1981,7 +1981,7 @@ Some body text.
 `;
   const { rows } = parseRegisterRows(registerText);
   const text = '### A31 · alpha delta echo foxtrot\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 1, 'Low ratio (≈0.167 ≤ 0.30) with shared < 2 should flag');
   assert.match(findings[0], /A31/);
 });
@@ -2002,7 +2002,7 @@ Some body text.
 `;
   const { rows } = parseRegisterRows(registerText);
   const text = '### A32 · alpha beta echo foxtrot golf\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 0, 'Shared >= 2 should prevent flag even with ratio ≤ 0.30');
 });
 
@@ -2021,7 +2021,7 @@ Some body text.
 `;
   const { rows } = parseRegisterRows(registerText);
   const text = '### A33 · alpha beta\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 0, 'Edge case: shared=1, union=2 yields ratio=0.5 > 0.30, no flag');
 });
 
@@ -2045,7 +2045,7 @@ Some body text.
 `;
   const { rows } = parseRegisterRows(registerText);
   const text = '### A40 · the slow\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const { findings } = checkCitationTitleDrift(text, 'docs/foo.md', rows);
   assert.equal(findings.length, 1, 'Stopwords filtered out, leaving no shared content tokens; ratio=0 should flag');
   assert.match(findings[0], /A40/);
 });
@@ -2070,9 +2070,116 @@ Some body text.
 `;
   const { rows } = parseRegisterRows(registerText);
   const text = '### A41 · a15 slow\n\nBody.\n';
-  const findings = checkCitationTitleDrift(text, 'docs/foo.md', rows);
-  assert.equal(findings.length, 1, 'ID token "a15" filtered out, no shared content; ratio=0 should flag');
-  assert.match(findings[0], /A41/);
+  const result = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(result.findings.length, 1, 'ID token "a15" filtered out, no shared content; ratio=0 should flag');
+  assert.match(result.findings[0], /A41/);
+  assert.equal(result.annotatedFindings.length, 0);
+});
+
+// --- Check D: annotation-exemption for drift (like Checks A and C) ---
+
+test('checkCitationTitleDrift: a heading with low title similarity returns { findings, annotatedFindings }', () => {
+  // #2838 v2: Check D returns an object with both buckets, like Checks A and
+  // C, instead of just an array. An unannotated drift finding goes in
+  // `findings`; an annotated one goes in `annotatedFindings`.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A41 · historical work for old issue (#1234)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const text = '### A41 · current work for new issue\n\nBody.\n';
+  const result = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(typeof result, 'object');
+  assert.ok(Array.isArray(result.findings));
+  assert.ok(Array.isArray(result.annotatedFindings));
+});
+
+test('checkCitationTitleDrift: a heading with low title similarity but a nearby discharge annotation moves to annotatedFindings, not findings', () => {
+  // #2838: independent review found ALL SIX real Check D detections were
+  // correctly-annotated historical references. This test creates that shape:
+  // a heading with clearly different text from the current title, BUT with a
+  // nearby discharge annotation naming that same ID — should not flag as drift.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A41 · historical work for old issue (#1234)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  // Heading has low similarity to current title, but a nearby discharge
+  // annotation exists for this ID.
+  const text = [
+    '## Some section',
+    '',
+    '### A41 · old feature implementation (now archived)',
+    '',
+    'A41 was discharged and no longer exists, replaced by work under new issues.',
+    '',
+  ].join('\n');
+  const result = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(result.findings.length, 0, 'unannotated drift should be empty');
+  assert.equal(result.annotatedFindings.length, 1, 'annotated drift should be in separate bucket');
+  assert.match(result.annotatedFindings[0], /A41/);
+  assert.match(result.annotatedFindings[0], /annotated as discharged/);
+});
+
+test('checkCitationTitleDrift: a heading with low title similarity WITHOUT a nearby annotation still flags as drift', () => {
+  // Paired control: without an annotation, the drift finding should still appear
+  // in `findings` (not `annotatedFindings`), so drift without annotation is
+  // not silently passing.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A41 · historical work for old issue (#1234)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  // Heading has low similarity, NO discharge annotation nearby.
+  const text = '### A41 · completely different work\n\nBody.\n';
+  const result = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(result.findings.length, 1, 'unannotated drift should flag');
+  assert.equal(result.annotatedFindings.length, 0, 'no annotation, so not in annotated bucket');
+  assert.match(result.findings[0], /A41/);
+  assert.ok(!result.findings[0].includes('annotated as discharged'));
+});
+
+test('checkCitationTitleDrift: an annotation for a DIFFERENT ID does not excuse this ID\'s drift', () => {
+  // Paired injection: an annotation for ID B1 near a heading citing A41 must
+  // not excuse A41's drift — the annotation must name the SAME ID.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A41 · historical work for old issue (#1234)
+
+Some body text.
+
+### B1 · other row (#1235)
+
+Other body.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const text = [
+    '## Some section',
+    '',
+    '### A41 · completely different work',
+    '',
+    'B1 was discharged and no longer exists.',
+    '',
+  ].join('\n');
+  const result = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  // A41's drift should still flag — the annotation is for B1, not A41.
+  assert.equal(result.findings.length, 1, 'drift should flag when annotation names different ID');
+  assert.match(result.findings[0], /A41/);
+  assert.equal(result.annotatedFindings.length, 0);
 });
 
 // --- frozen-path exclusion ---
