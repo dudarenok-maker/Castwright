@@ -79,17 +79,25 @@ const VERDICT_PAIRS: ReadonlyArray<{ client: CloneUnready | null; render: Render
   {
     client: null,
     render: null,
-    why: 'Rule 7 silence. Either the slot is genuinely healthy, or it needs a derive that (assuming the machine is up, which this whole check assumes) succeeds — both oracles call that fine.',
+    why: 'Rule 8 silence. Either the slot is genuinely healthy, or it needs a derive that (assuming the machine is up, which this whole check assumes) succeeds — both oracles call that fine.',
+  },
+  {
+    // #2912 — the new state for a slot with no libraryUuid at all. Both
+    // oracles report the same event differently: the client says "no UUID
+    // to look up", the render says "no UUID means misconfigured".
+    client: 'unresolvable-uuid',
+    render: 'misconfigured',
+    why: "libraryUuidResolvable:false (client) <-> the render's `!libraryUuid` check (clone-voice-resolver.ts). Both fire when the character's cloned slot has no UUID to resolve — the client warns before the render fails, which is the whole point of the gate.",
   },
   {
     client: 'missing-entry',
     render: 'misconfigured',
-    why: "entryFound:false (client) <-> the render's readEntry(libraryUuid) returning null for the same uuid. Both are the SAME event (no voice-library entry backs this slot); the render's `misconfigured` reason is broader (it also covers a missing libraryUuid, which cloneReadiness never sees at all — the adapter skips the check entirely for that shape, see clone-readiness-selectors.ts's buildInput), but the entry-not-found flavor is identical.",
+    why: "entryFound:false (client) <-> the render's readEntry(libraryUuid) returning null for the same uuid. Both are the SAME event (no voice-library entry backs this slot); the render's `misconfigured` reason is broader (it also covers a missing libraryUuid, which the client now handles separately via `unresolvable-uuid` above), but the entry-not-found flavor is identical.",
   },
   {
     client: 'revoked',
     render: 'revoked',
-    why: 'entry.consent.revokedAt — the identical field, read the identical way, and outranks everything else on BOTH sides (cloneReadiness rule 2; classifyClonedVoice checks it before wrongEngine).',
+    why: 'entry.consent.revokedAt — the identical field, read the identical way, and outranks everything else on BOTH sides (cloneReadiness rule 3; classifyClonedVoice checks it before wrongEngine).',
   },
   {
     client: 'wrong-engine',
@@ -99,12 +107,12 @@ const VERDICT_PAIRS: ReadonlyArray<{ client: CloneUnready | null; render: Render
   {
     client: 'derive-failed',
     render: 'derive-failed',
-    why: "A persisted `failed` slot status reads identically on both sides (cloneReadiness rule 4; classifyClonedVoice's `slot?.status === 'failed'` check). Also reached via a different tier below (no-transcript).",
+    why: "A persisted `failed` slot status reads identically on both sides (cloneReadiness rule 5; classifyClonedVoice's `slot?.status === 'failed'` check). Also reached via a different tier below (no-transcript).",
   },
   {
     client: 'missing-master',
     render: 'missing-master',
-    why: 'Not-ready slot + no master, both sides (cloneReadiness rule 5; classifyClonedVoice needsDerive=true with `entry.master` falsy).',
+    why: 'Not-ready slot + no master, both sides (cloneReadiness rule 6; classifyClonedVoice needsDerive=true with `entry.master` falsy).',
   },
   {
     client: 'no-transcript',
@@ -130,6 +138,13 @@ function verdictsAgree(client: CloneUnready | null, render: RenderReason): boole
    that equivalence holds only for a clone-capable `engine`. */
 interface Row {
   name: string;
+  /** #2912 — false when the character's cloned slot carries no libraryUuid
+      (or it is empty/malformed). Defaults to true in every existing row.
+      When false, the render request gets `libraryUuid: undefined` (so the
+      render's `!libraryUuid` check fires `misconfigured`), and the client
+      input gets `libraryUuidResolvable: false` (so cloneReadiness returns
+      `unresolvable-uuid`). */
+  libraryUuidResolvable?: boolean;
   entryFound: boolean;
   consentRevoked: boolean;
   /** Persisted (pre-transform) status of `entry.engines[manifestSlotFor(engine)]`. */
@@ -222,6 +237,7 @@ function clientInputFor(row: Row, entry: VoiceLibraryEntry | null): CloneReadine
       ? transformed.engines[manifestSlotFor(row.engine)]?.status
       : undefined;
   return {
+    libraryUuidResolvable: row.libraryUuidResolvable !== false,
     entryFound: !!entry,
     /* row.consentRevoked, NOT `!!transformed?.consent?.revokedAt`. The real
        adapter (clone-readiness-selectors.ts) DOES derive this from the
@@ -231,14 +247,14 @@ function clientInputFor(row: Row, entry: VoiceLibraryEntry | null): CloneReadine
        value. The two diverge ONLY when entryFound is false, where an
        entry-derived read is necessarily `false` (there is no entry to hold
        a consent record) regardless of what this field says — which would
-       make rule 1 vs rule 2 precedence structurally untestable here: no
+       make rule 2 vs rule 3 precedence structurally untestable here: no
        real caller, client or render, can ever observe "entry missing AND
        consent revoked" (revocation lives inside the entry that's absent),
-       so an entry-derived read would silently swallow the 1v2 doubly-broken
+       so an entry-derived read would silently swallow the 2v3 doubly-broken
        row below. Reading the row field directly keeps that row meaningful:
        it exercises cloneReadiness's actual rule ordering, compared against
        the render's answer for "entry missing" (fixed at 'misconfigured'
-       regardless of any consent belief) — a rule-1/rule-2 swap changes the
+       regardless of any consent belief) — a rule-2/rule-3 swap changes the
        client's answer to 'revoked', which is NOT an accepted pairing with
        'misconfigured', so `verdictsAgree` reddens. */
     consentRevoked: row.consentRevoked,
@@ -322,7 +338,9 @@ async function renderVerdict(row: Row): Promise<RenderReason> {
   const request: ClonedVoiceRequest = {
     characterName: 'Contract Test Character',
     characterId: 'contract-test-character',
-    libraryUuid: LIBRARY_UUID,
+    // #2912 — when the slot has no libraryUuid at all, the render's
+    // `!libraryUuid` check fires `misconfigured` (clone-voice-resolver.ts).
+    libraryUuid: row.libraryUuidResolvable !== false ? LIBRARY_UUID : undefined,
     engine,
     wrongEngine: !row.characterHasSlot,
     // Out of contract (Decision 3, "Machine state is deliberately absent") —
@@ -344,13 +362,29 @@ async function renderVerdict(row: Row): Promise<RenderReason> {
 /* --- The table -------------------------------------------------------- */
 
 const rows: Row[] = [
-  // --- Rule 7 silence: the most important agreement in the table. A
+  // --- #2912 Rule 1: unresolvable-uuid. A cloned slot with no libraryUuid
+  // at all — the render's `!libraryUuid` check fires `misconfigured`.
+  {
+    name: 'unresolvable-uuid: no libraryUuid -> client unresolvable-uuid, render misconfigured',
+    libraryUuidResolvable: false,
+    entryFound: true,
+    consentRevoked: false,
+    rawStatus: undefined,
+    versionMismatch: false,
+    hasMaster: true,
+    transcript: 'a transcript',
+    engine: 'coqui',
+    characterHasSlot: true,
+    expectedClient: 'unresolvable-uuid',
+    expectedRender: 'misconfigured',
+  },
+  // --- Rule 8 silence: the most important agreement in the table. A
   // Qwen-cloned voice with no coqui slot yet, character's own coqui cast
   // slot present, routed to Coqui: both oracles say fine (client: never
   // derived yet but the derive will succeed; render: repairable, and the
   // real derive DOES succeed for coqui regardless of transcript).
   {
-    name: 'rule 7 silence: never-derived coqui slot, master+transcript present, coqui cast slot present -> both null',
+    name: 'rule 8 silence: never-derived coqui slot, master+transcript present, coqui cast slot present -> both null',
     entryFound: true,
     consentRevoked: false,
     rawStatus: undefined,
@@ -362,7 +396,7 @@ const rows: Row[] = [
     expectedClient: null,
     expectedRender: null,
   },
-  // --- Healthy `ready` gate (rule 5/6 gate), both directions.
+  // --- Healthy `ready` gate (rule 6/7 gate), both directions.
   {
     name: "ready slot + blank transcript + qwen -> both null (a ready slot with no transcript is healthy)",
     entryFound: true,
@@ -406,7 +440,7 @@ const rows: Row[] = [
     expectedRender: 'derive-failed',
   },
   {
-    name: 'identical input on Coqui -> both null (rule 6 is qwen-only; coqui derive is purely acoustic)',
+    name: 'identical input on Coqui -> both null (rule 7 is qwen-only; coqui derive is purely acoustic)',
     entryFound: true,
     consentRevoked: false,
     rawStatus: undefined,
@@ -418,7 +452,7 @@ const rows: Row[] = [
     expectedClient: null,
     expectedRender: null,
   },
-  // --- missing-master, a clean single-cause row (Coqui, so rule 6 can't
+  // --- missing-master, a clean single-cause row (Coqui, so rule 7 can't
   // supply the client verdict instead).
   {
     name: 'never-derived slot + no master, coqui -> both missing-master',
@@ -433,7 +467,7 @@ const rows: Row[] = [
     expectedClient: 'missing-master',
     expectedRender: 'missing-master',
   },
-  // --- Existence rows: rules 2, 3, 4 and 1 must each be independently
+  // --- Existence rows: rules 3, 4, 5 and 2 must each be independently
   // reachable, each on an otherwise-healthy input, on BOTH oracles — without
   // these, any one of those rules is deletable outright with the whole
   // suite (both oracles' worth of assertions) still green.
@@ -484,8 +518,8 @@ const rows: Row[] = [
   // current one. Mutation: delete `qwen.status !== 'failed' &&` from
   // `withComputedStaleness` (routes/voice-library.ts) -> the client side
   // reads the overwritten 'stale' status instead of 'failed', falls through
-  // to rule 7 (a non-blank transcript on qwen with slotStatus 'stale' isn't
-  // caught by rules 5/6 either), and this row goes red on the client
+  // to rule 8 (a non-blank transcript on qwen with slotStatus 'stale' isn't
+  // caught by rules 6/7 either), and this row goes red on the client
   // assertion (null instead of 'derive-failed') without ever reaching the
   // co-oracle comparison.
   {
@@ -521,7 +555,7 @@ const rows: Row[] = [
   // table records, per pair, that swapping cloneReadiness's rule order
   // reddens exactly this row.
   {
-    name: '1v2 doubly-broken: entryFound:false AND consentRevoked:true -> rule 1 wins on both oracles',
+    name: '2v3 doubly-broken: entryFound:false AND consentRevoked:true -> rule 2 wins on both oracles',
     entryFound: false,
     consentRevoked: true,
     rawStatus: undefined,
@@ -534,7 +568,7 @@ const rows: Row[] = [
     expectedRender: 'misconfigured',
   },
   {
-    name: '2v3 doubly-broken: consentRevoked:true AND !characterHasSlot -> rule 2 wins on both oracles',
+    name: '3v4 doubly-broken: consentRevoked:true AND !characterHasSlot -> rule 3 wins on both oracles',
     entryFound: true,
     consentRevoked: true,
     rawStatus: 'ready',
@@ -547,7 +581,7 @@ const rows: Row[] = [
     expectedRender: 'revoked',
   },
   {
-    name: "3v4 doubly-broken: !characterHasSlot AND failed slot -> rule 3 wins on both oracles",
+    name: "4v5 doubly-broken: !characterHasSlot AND failed slot -> rule 4 wins on both oracles",
     entryFound: true,
     consentRevoked: false,
     rawStatus: 'failed',
@@ -560,7 +594,7 @@ const rows: Row[] = [
     expectedRender: 'wrong-engine',
   },
   {
-    name: '4v5 doubly-broken: failed slot AND no master -> rule 4 wins on both oracles',
+    name: '5v6 doubly-broken: failed slot AND no master -> rule 5 wins on both oracles',
     entryFound: true,
     consentRevoked: false,
     rawStatus: 'failed',
@@ -573,7 +607,7 @@ const rows: Row[] = [
     expectedRender: 'derive-failed',
   },
   {
-    name: '5v6 doubly-broken: no master AND blank qwen transcript -> rule 5 wins on both oracles',
+    name: '6v7 doubly-broken: no master AND blank qwen transcript -> rule 6 wins on both oracles',
     entryFound: true,
     consentRevoked: false,
     rawStatus: undefined,
@@ -588,7 +622,7 @@ const rows: Row[] = [
   // --- The staleness-parity / "C1" guard row. Plan 276 Decision 2 [R3]/[R4]
   // — the client MUST see the POST-withComputedStaleness status, not the raw
   // persisted one. A `ready`-but-version-stale slot must read 'stale' to the
-  // client (so rules 5/6 can fire); reading raw 'ready' instead reproduces
+  // client (so rules 6/7 can fire); reading raw 'ready' instead reproduces
   // the exact false-negative class that killed rev 2 and re-broke rev 3's
   // own "Add transcript" flow (Decision 2 [R4]). Mutation 2 (commit
   // message): skip calling withComputedStaleness in clientInputFor -> this
@@ -677,6 +711,7 @@ describe('clone-readiness co-oracle contract', () => {
       // tries to thread machine state through CloneReadinessInput gets
       // caught by a failing compile, not a silently-stale comment.
       const input: CloneReadinessInput = {
+        libraryUuidResolvable: true,
         entryFound: true,
         consentRevoked: false,
         slotStatus: 'ready',
@@ -712,6 +747,11 @@ describe('clone-readiness co-oracle contract', () => {
       ['wrong-engine', null],
       [null, 'missing-master'],
       ['derive-failed', 'missing-master'],
+      // #2912 — unresolvable-uuid pairs with misconfigured only. Anything
+      // else is a genuine disagreement the mapping must reject.
+      ['unresolvable-uuid', 'revoked'],
+      ['unresolvable-uuid', null],
+      [null, 'misconfigured'],
     ];
     for (const [client, render] of genuineDisagreements) {
       it(`(${client}, ${render}) is NOT an accepted pairing`, () => {
