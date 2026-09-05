@@ -2687,9 +2687,6 @@ test('CLI: with --strict, Check D finds title drift but does NOT fail the gate (
   }
   assert.ok(targetId, 'fixture assumption: at least one real register row exists');
 
-  const row = rows.get(targetId);
-  const currentTitle = row.title;
-
   // Create a heading that cites this row but with completely different text.
   // This triggers Check D's drift detection: the heading's text ("unrelated
   // work") shares zero tokens with the row's current title.
