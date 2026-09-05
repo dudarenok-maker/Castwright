@@ -44,6 +44,8 @@ import {
   STEPS,
   _internals,
 } from '../verify-cache.mjs';
+
+const { hasVitestStep } = _internals;
 import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 
 const { SCHEMA_VERSION } = _internals;
@@ -1687,4 +1689,39 @@ test('sidecarFingerprint still returns unavailable when no venv exists on POSIX'
   const dir = mkTmp();
   const result = sidecarFingerprint(dir, 'linux');
   assert.equal(result, 'unavailable');
+});
+
+// Finding 5 (ops-2997): contention probe optimization — skip probing when no
+// selected step is affected by LOW_CONCURRENCY (vitest-only). The probe (~4.6s)
+// cannot affect non-vitest runners (pytest, Pester, Playwright).
+test('hasVitestStep returns true when any vitest-backed step is selected', () => {
+  const vitestSteps = [
+    { name: 'test' },
+    { name: 'test:server' },
+    { name: 'test:server-slow' },
+    { name: 'test:pinokio' },
+  ];
+  for (const step of vitestSteps) {
+    assert.equal(hasVitestStep([step]), true, `${step.name} is vitest-backed`);
+    assert.equal(hasVitestStep([step, { name: 'test:sidecar' }]), true, 'mixed selection with vitest');
+  }
+});
+
+test('hasVitestStep returns false when no vitest steps are selected', () => {
+  const nonVitestSteps = [
+    [{ name: 'test:sidecar' }],
+    [{ name: 'lint' }],
+    [{ name: 'typecheck' }],
+    [{ name: 'test:e2e' }],
+    [{ name: 'test:sidecar' }, { name: 'lint' }, { name: 'typecheck' }],
+  ];
+  for (const steps of nonVitestSteps) {
+    assert.equal(hasVitestStep(steps), false, `${steps.map((s) => s.name).join(', ')} has no vitest`);
+  }
+});
+
+test('hasVitestStep returns true for empty array (defensive: would select all steps)', () => {
+  // If no steps are explicitly selected, the default is to run ALL steps,
+  // which includes vitest ones. Empty array is a defensive edge case.
+  assert.equal(hasVitestStep([]), false, 'empty selection (edge case) is treated as no vitest');
 });

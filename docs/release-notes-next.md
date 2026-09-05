@@ -23,6 +23,11 @@ cycle reopens this file per CONTRIBUTING.md "Release notes"). Populated
 PR-by-PR as the v1.15.0 cycle progresses — do not reconstruct from git
 history at cut time.
 
+## Developer tooling only — no user-visible changes
+- ops-2997 (#2999): commit-gate rebalance (pre-commit ESLint-only instant local check,
+  pre-push instant guards + scope-gated test:sidecar, cloud enforcement via GitHub CI).
+  No user-visible product delta.
+
 CONSOLIDATION PASS 2026-08-05 — reordered into the CONTRIBUTING.md anatomy
 (theme paragraph → upgrade note → ## ✨ Headline features → themed sections →
 footer). Every entry and every (#PR) ref is preserved verbatim; nothing was

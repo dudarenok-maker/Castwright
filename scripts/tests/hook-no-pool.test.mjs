@@ -16,7 +16,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const repoRoot = process.cwd();
@@ -58,7 +58,21 @@ export function findDisallowedHookLines(hookBody) {
     .filter((line) => !ALLOWED_LINE_PATTERNS.some((re) => re.test(line)));
 }
 
-const HOOKS = ['commit-msg', 'pre-commit', 'pre-push'];
+/** Enumerate all hook files in .husky/ — excludes directories and dotfiles. */
+function enumerateHookFiles() {
+  const huskyDir = join(repoRoot, '.husky');
+  const entries = readdirSync(huskyDir);
+  return entries
+    .filter((name) => {
+      // Skip directories and dotfiles.
+      if (name.startsWith('.')) return false;
+      const stat = statSync(join(huskyDir, name));
+      return stat.isFile();
+    })
+    .sort();
+}
+
+const HOOKS = enumerateHookFiles();
 
 for (const hook of HOOKS) {
   test(`.husky/${hook} contains only allowlisted invocations`, () => {

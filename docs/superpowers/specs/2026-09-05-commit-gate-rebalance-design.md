@@ -2,7 +2,7 @@
 
 - **Date:** 2026-09-05
 - **Issue:** [#2997](https://github.com/dudarenok-maker/Castwright/issues/2997)
-- **Status:** draft, revised after **three** adversarial review passes
+- **Status:** draft, revised after **four** adversarial review passes
 - **Supersedes the local-gate half of:** [2026-07-06-verify-ci-rebalance-design.md](2026-07-06-verify-ci-rebalance-design.md)
 
 ## Problem
@@ -64,12 +64,24 @@ Per-battery subtree CPU; a live vitest subtree burns **30–100 CPU-seconds per 
 | 41696 | 90.4m | 9 | 28.4s | 0.3 |
 
 Reaping the 13 roots freed 96 processes and took `node.exe` from 86 → 9. Fifteen minutes later
-two fresh batteries were both at **1.3 CPU-seconds per 45 s** with falling process counts — so
-**two concurrent batteries are enough.**
+two apparent batteries were both at **1.3 CPU-seconds per 45 s** with falling process counts.
 
-> **Known gap in this census: no command lines were captured.** Age, PID, process count and CPU
-> were recorded; *what each root was running* was not. This matters — see "Deferred work" — and
-> Part 3 exists partly to stop it recurring.
+> **The root count in both censuses is unreliable, and the "two concurrent batteries" reading
+> may be an artifact.** The classifier treated a process as a root when its *immediate* parent
+> was not itself a matching `node.exe`. These chains alternate `node → cmd → node`, so a
+> descendant six frames deep presents as an independent root. A later full-ancestry trace of a
+> similar pair proved exactly that: two apparent roots resolved to **one** battery —
+> `vitest run --changed HEAD` ← `npm run test:server:changed` ← `verify-cache.mjs
+> --scope-staged` ← `npm run verify:fast:scoped` ← a bash whose own parent was already dead.
+>
+> **So it is not established that concurrency is the mechanism at all.** A single battery may
+> wedge on its own. No command lines were captured in the 11-battery census either, so none of
+> those roots was ever attributed to a hook. This does not affect Part 1, which stands on the
+> ~35-minute healthy arithmetic above and needs no contention argument — but it does mean the
+> framing of this section, Part 3's thresholds, and the governor deferral all rest on a count
+> that has not been re-measured with ancestry resolved. That measurement is the first item in
+> "Deferred work", and Part 3's classifier must resolve ancestry through non-matching frames
+> rather than repeat this mistake.
 
 ## Root cause
 
@@ -292,7 +304,8 @@ single-tenant, so it structurally cannot reproduce there.
 ### Part 6 — Scope-triggered local acceptance for the sidecar
 
 38 `pytest.importorskip("torch")` tests across 14 files, all under `server/tts-sidecar/`, run
-only on this box. Part 1 deletes the automatic `test:sidecar` push trigger that exercised them.
+only on this box. Part 1 retains the automatic `test:sidecar` push trigger that exercises them,
+scope-gated to `server/tts-sidecar/**` so it runs only on sidecar-touching pushes.
 
 **Trigger path: `server/tts-sidecar/**` only.** An earlier draft also listed
 `server/src/tts/**`, `server/src/analyzer/**`, `server/src/gpu/**` — 177 TypeScript test files
@@ -402,9 +415,11 @@ the governor entirely.
 
 ## Open questions
 
-- **O1 — `is-docs-only-push.mjs`:** retain script + tests, drop only the invocation. Deleting it
-  reddens `scripts/tests/entry-point-guard-convention.test.mjs:301` and needs edits to
-  `CLAUDE.md:948` and `CONTRIBUTING.md:586` for no gain. **Settled unless challenged.**
+- **O1 — `is-docs-only-push.mjs`:** retain script + tests + invocation. The invocation guards the
+  early exit when a push is docs-only, preventing the `test:sidecar` scope check from running
+  unnecessarily. Deleting it reddens `scripts/tests/entry-point-guard-convention.test.mjs:301`
+  and needs edits to `CLAUDE.md:948` and `CONTRIBUTING.md:586` for no gain. **Settled unless
+  challenged.**
 - **O2 — `SKIP_CONTENTION_CHECK`** (`verify-cache.mjs:1340`, `:1350`; `CLAUDE.md:927`). With
   hooks no longer running batteries, do the probes still earn their place? Deferred with the
   throttle question.

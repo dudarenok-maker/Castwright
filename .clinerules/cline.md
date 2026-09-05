@@ -126,41 +126,21 @@ this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
 
 ## Committing when a step is in scope
 
-**Your runtime kills a single command at 30 seconds. A pre-commit run that has
-any test step in scope takes minutes. So a foreground `git commit` cannot
-finish, and retrying it never will.** The cap is internal to Cline -- there is
-no CLI flag (`-t/--timeout` is the whole-run timeout, not the per-command one).
+**Most commits are now instant.** Pre-commit runs ESLint over staged files only (~0.14s
+for docs/config, ~4s for JS/TS with a warm cache) — the full `verify:fast:scoped` battery
+was replaced. A foreground `git commit` will finish in seconds for almost every change.
 
-**So commit detached ALWAYS -- do not try to work out whether this diff is one
-of the slow ones.** That prediction is the bug. Three successive revisions of
-this very paragraph tried to enumerate what puts a step in scope, and all three
-were wrong in the same direction: they under-listed, so an agent read its own
-change as exempt and took the foreground path into the 30-second kill. Detached
-costs nothing when the commit is fast -- the first poll returns immediately --
-and it is the only correct route when it is slow. There is no case where
-predicting first helps.
+**Two exceptions remain where commits are slow:**
 
-If you do want to know, `STEPS[]` in `scripts/verify-cache.mjs` is the source
-of truth and the only one; pre-commit runs `verify:fast:scoped` over
-`test:hooks,check:budget-poll,test,test:server`, and a step runs when the staged
-diff matches its `globs`, any of its `extraFiles`, or `computeShared`. Read it
-there rather than trusting a summary -- including this one. What makes a
-summary untrustworthy here is that the surprising members are the whole point:
-`test:hooks` alone reaches `.claude/skills/**`, `.claude/agents/**`,
-`CLAUDE.md`, `CONTRIBUTING.md`, and the `RELEASE_NOTES.md` /
-`docs/release-notes-next.md` pair that CLAUDE.md's before-shipping step 5 makes
-nearly every PR touch -- so editing the very skill files this document tells you
-to edit costs 41-58 s, and "it's only docs" predicts nothing. `openapi.yaml`
-runs both `test` and `test:server` while matching no `server/` path. A root
-`package.json` or lockfile edit is `computeShared` and busts every leg at once,
-~12 minutes, while matching no step's globs at all.
+1. **ESLint cold-cache startup.** First commit after a fresh boot or cleared cache on the primary checkout can reach ~50s (ESLint startup overhead, not file count). Warm cache is ~4s. This only happens locally and only on first use — CI and worktrees start fresh, but their first run pays the cost once.
 
-**Budget 10-15 minutes when a test step is in scope, and do not call it hung
-before 20.** Recorded on this repo: `test:server` **518.8 s** and `test`
-**153.3 s** in the last green `.verify-cache.json`; a contended red run of
-`test:server` took **746.6 s** (`docs/testing/flaky-register.md`). A single
-vitest run can report far less wall-clock on an idle box, so treat these as the
-range, not a constant.
+2. **Worktree setup trouble.** A worktree without proper git hooks — missing `.husky/_` or an improperly junctioned `node_modules` — will run pre-commit detached instead of foreground, adding polling overhead.
+
+**Commit detached when pre-commit is expected to be slow** (first ever, or you explicitly cleared ESLint cache), **or when uncertain.** Detached costs nothing when the commit is fast — the first poll returns immediately — and it is the only correct route when it is slow. If you know a commit will be instant (editing a .md or shell script with no staged JS/TS), foreground is fine.
+
+`STEPS[]` in `scripts/verify-cache.mjs` documents what makes a diff expensive. Pre-commit runs ESLint over staged JS/TS files; a step like `test:hooks` that touches script files, `CLAUDE.md`, or `CONTRIBUTING.md` adds cost if it ever ran (it no longer does). Read the script rather than predicting — ESLint startup dominates the variance, not file count.
+
+**Budget 10–20 seconds for a typical staged commit, up to ~50s on cold ESLint cache.** Once warmed, ESLint is ~4s per commit, so detached polling overhead becomes noticeable — use foreground when you expect fast. The 30-second runtime cap is per-command; it applies to commits just as it did before, but pre-commit is now fast enough to not hit it.
 
 **Call `scripts/oe-detached-commit.ps1` -- do not freelance your own inline
 Start-Process variant.** It lives in every worktree (it's a tracked file, so
@@ -263,16 +243,17 @@ See CLAUDE.md "Incidental findings: report, fix, record".
   vocabulary lives in CONTRIBUTING.md "Allowed types" / "Allowed scopes" and is
   enforced by `scripts/validate-commit-msg.mjs` -- read it there rather than
   copying the lists around, because they change.
-- `commit-msg` validates the subject. `pre-push` refuses force-push or deletion
-  of `main`, re-validates every pushed subject (so bypassing `commit-msg` buys
-  nothing), then runs `npm run verify:fast:branch` unless the push is
-  docs-only.
-- Run `npm run verify:fast:branch` before pushing, so the hooks pass on the
-  first try. Do NOT rely on `verify:fast:scoped` as a pre-flight: it scopes to
-  the STAGED diff, so on an empty or unrelated index every leg reports
-  `(out of scope)` and it exits 0 having run no tests at all. A green from it
-  proves nothing until the change is staged -- and even then only for the legs
-  whose input globs the diff actually touches.
+- `commit-msg` validates the subject (all commits). `pre-push` refuses force-push or
+  deletion of `main`, re-validates every pushed subject (so bypassing `commit-msg` buys
+  nothing), then runs the three guards and scope-gated `test:sidecar` (~1–2s for most
+  pushes; +6.85 min if `server/tts-sidecar/**` is touched).
+- Verify locally before pushing: `npm run verify:fast:branch` for the full branch-scoped
+  battery (lint, typecheck, config:check, test:hooks, test, test:server, build, audit, etc.)
+  OR just the pre-push guards and sidecar check by running `git push --dry-run` first.
+  Do NOT rely on `verify:fast:scoped` as a pre-flight: it scopes to the STAGED diff, so
+  on an empty or unrelated index every leg reports `(out of scope)` and exits 0 having
+  run no tests at all. A green from it proves nothing until the change is staged -- and
+  even then only for the legs whose input globs the diff actually touches.
 - The **PR title** must itself match the commit-subject format
   (`pr-title-lint.yml`), and the **PR body** must carry a literal `Closes #NN`
   or `Refs #NN` (`pr-issue-link.yml`). Both are required status checks -- a

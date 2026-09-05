@@ -1129,6 +1129,13 @@ export function siblingContentionFor(stdout, ownPid) {
   return { busy: count >= SIBLING_CONTENTION_THRESHOLD, count };
 }
 
+/** Returns true if any selected step is affected by LOW_CONCURRENCY.
+ *  These are the vitest-backed steps (pytest, Pester, Playwright, etc. are unaffected). */
+function hasVitestStep(selectedSteps) {
+  const vitestStepNames = new Set(['test', 'test:server', 'test:server-slow', 'test:pinokio']);
+  return selectedSteps.some((step) => vitestStepNames.has(step.name));
+}
+
 // Returns { busy, count }. PowerShell absent / errors (non-Windows CI
 // runners) → { busy:false, count:null } — same fallback shape as
 // detectGpuContention. Cheap (~150-300ms): one Get-CimInstance query.
@@ -1340,8 +1347,10 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
 
   // Contention guard — if a generation run is hammering the GPU, throttle the
   // child test runs (soft: warn + dial down, never block). Skip the probe when
-  // already throttled or explicitly disabled.
-  if (!env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
+  // already throttled, explicitly disabled, or when no selected step is affected
+  // by LOW_CONCURRENCY (vitest-only; pytest, Pester, Playwright are unaffected).
+  const affectedByContention = hasVitestStep(activeSteps);
+  if (affectedByContention && !env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
     const { busy, util } = detectGpuContention();
     if (busy) {
       console.log(`[contention] GPU busy (~${util}% util) — a generation run may be active.`);
@@ -1351,7 +1360,7 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
       env.LOW_CONCURRENCY = '1';
     }
   }
-  if (!env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
+  if (affectedByContention && !env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
     const { busy, count } = detectSiblingContention();
     if (busy) {
       console.log(
@@ -1525,4 +1534,4 @@ if (isDirectInvocation) {
 
 // For tests that want to know the schema version / cache filename without
 // hardcoding string literals.
-export const _internals = { SCHEMA_VERSION, CACHE_FILENAME, toPosix, globToRegex };
+export const _internals = { SCHEMA_VERSION, CACHE_FILENAME, toPosix, globToRegex, hasVitestStep };

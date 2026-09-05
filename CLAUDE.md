@@ -336,7 +336,7 @@ Design rationale:
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
 - `npm run test:server` — Vitest single-run for the server (parallel, excludes the 10 hot files routed to `test:server-slow`).
-- `npm run test:changed` / `npm run test:server:changed` — `vitest run --changed HEAD` for the frontend/server suites respectively, selecting only tests vitest's own dependency graph says the diff (staged + unstaged, vs `HEAD`) affects. Not run standalone in practice — these back pre-commit's `--scope-staged` narrowing (see "Commit gate") — but usable directly for a quick local check.
+- `npm run test:changed` / `npm run test:server:changed` — `vitest run --changed HEAD` for the frontend/server suites respectively, selecting only tests vitest's own dependency graph says the diff (staged + unstaged, vs `HEAD`) affects. Previously backed pre-commit's `--scope-staged` narrowing, but pre-commit now runs ESLint directly and no longer uses these commands. Retained for manual local use — a fast way to re-run only affected tests during development.
 - `npm run test:server-slow` — Vitest single-run for 10 timeout-prone server test files (analyzer/gemini, a parsers PDF test, and routes tests), pinned to one fork via `server/vitest.config.slow.ts`. Runs in the cloud `verify.yml` battery and the full local `npm run verify`, not in pre-push `verify:fast:branch` or `verify:fast` pre-commit. See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
 - `npm run test:server:routes` / `:tts` / `:analyzer` / `:workspace` and `npm run test:components` / `:store` / `:lib` / `:views` — opt-in, manual, subsystem-scoped test runs (`vitest run <subdir>` under the hood) for a fast local loop when you know you're only touching one area. Not part of the automated verify pipeline — not in `STEPS[]`, not cached, not gated by any hook, and carry no coverage guarantee (a `routes/` change that breaks something in `workspace/` isn't caught by `test:server:routes` alone). The four server-side scripts cover 76.9% of `test:server`'s **tests** (file counts differ: `test:server:routes` selects 138 files, not the 146 a raw file search under `server/src/routes/` would find — 8 are in `vitest.config.slow.ts`'s `SLOW_FILES` and excluded from `test:server` itself, so this matches, not a gap); the four frontend scripts cover 86.3% of `test`'s tests (as of 2026-09-02; these figures will drift as test files are added or removed). See `docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md` Decision E.
 - `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
@@ -1207,13 +1207,14 @@ around it (never acceptable — see "Do not use `--no-verify` to bypass" under
 Working practice below; this holds even under contention).
 
 - **A subagent whose `git commit`/`push` is slow does not get to retry it as
-  a second background call.** `verify:fast:branch`/pre-push can legitimately
-  run 15–45+ minutes under load; the fix for "it's taking a while" is to
-  wait, never to fire a second attempt in parallel against the same
-  worktree. A subagent report describing multiple retry attempts against one
-  worktree is reporting a bug it caused, not a completed task — re-dispatch
-  or take over manually rather than trusting its "eventually succeeded"
-  claim.
+  a second background call.** `git commit` is now instant (~0.3s); `git push` is
+  ~1–2s for most pushes, or ~6.85 min if the diff touches `server/tts-sidecar/**` (the only
+  exception is the scope-gated `test:sidecar` step that pre-push runs). Under
+  contention, wall-clock can be longer, but the fix for "it's taking a while" is to
+  wait, never to fire a second attempt in parallel against the same worktree. A subagent
+  report describing multiple retry attempts against one worktree is reporting a bug it
+  caused, not a completed task — re-dispatch or take over manually rather than trusting
+  its "eventually succeeded" claim.
 - **`TaskStop`'s "Successfully stopped" is not proof the underlying OS
   process is gone.** Confirmed three times now: stopping a wrapping
   bash/agent task does not reliably kill the child processes it spawned
