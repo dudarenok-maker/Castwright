@@ -94,23 +94,30 @@ this merges clears it, and the wording of that error is written for exactly that
 window.
 
 The live view carries derived figures — owed count, per-group counts, oldest
-debt — that must be **recomputed** on every edit. Rows can be right while the
-summary strip lies. `npm run check:onbox-register` verifies the owed total, the
-per-group counts and the row IDs across both files, so **adding or removing a
-row here and missing the live view fails CI**. Know its edges, because two of
+debt — that are **generated** on every build. Rows can be right while the
+summary strip lies. `npm run register:build` generates the summary strip and all
+its derived figures; `npm run check:onbox-register` verifies the row IDs are
+unique across the document and sit below their group's allocation floor, and
+that each group's glance-table count matches the rows in its body section. Both
+fail CI when rows are added, removed, or miscounted, so **adding or removing a
+row here and missing the live view build fails CI**. Know its edges, because two of
 them are wide:
 
 - **A wording-only edit does not fail.** Rewording a row, recording a run
   result, changing a hardware note or a criteria link — the most common edit
-  this register gets — changes nothing the check compares. The live view mirrors
-  that prose in its own row bodies and will silently fall behind.
-- **The rest of the summary strip is unchecked** — oldest debt, and the
-  group/blocked/unconfirmed tallies. Recompute those by hand.
-- **The published page is invisible to `check:onbox-register`'s no-flag run.**
-  It only ever reads the two TRACKED files, so "was it published at all, and
+  this register gets — changes nothing either check compares. The live view mirrors
+  that prose in its own row bodies and will silently fall behind (the generator
+  does not rewrite a row's title if you changed only the body; it preserves
+  hand-authored titles).
+- **The summary strip is generated, not hand-edited.** All derived figures —
+  owed count, per-group counts, oldest debt, group/blocked/unconfirmed tallies —
+  are built by `npm run register:build` from the markdown register. Never edit
+  the `## At a glance` section by hand; edit the rows instead and rebuild.
+- **The published page is invisible to CI checks.** Both `register:build` and
+  `check:onbox-register` read only the two TRACKED files, so "was it published at all, and
   was it the right file?" is procedure, not that gate — see the merge step
   below, which gives the specific stale-snapshot race mechanical teeth via a
-  second, explicit mode, but still can't verify by itself that someone ran it.
+  second, explicit mode (`--against-published`), but still can't verify by itself that someone ran it.
 
 **`npm run check:register-row-citations` (#2831) — a separate, narrower
 check.** `check:onbox-register` above only validates the register's own
