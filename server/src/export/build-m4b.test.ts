@@ -28,8 +28,8 @@ import type { BookStateJson } from '../workspace/scan.js';
 
 const toolsPresent = (() => {
   try {
-    const a = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
-    const b = spawnSync('ffprobe', ['-version'], { stdio: 'ignore' }).status === 0;
+    const a = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true }).status === 0;
+    const b = spawnSync('ffprobe', ['-version'], { stdio: 'ignore', windowsHide: true }).status === 0;
     return a && b;
   } catch {
     return false;
@@ -87,7 +87,7 @@ function ffprobeJson(path: string): FfprobeReport {
   const out = spawnSync(
     'ffprobe',
     ['-v', 'error', '-show_streams', '-show_chapters', '-show_format', '-of', 'json', path],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', windowsHide: true },
   );
   if (out.status !== 0) throw new Error(`ffprobe failed: ${out.stderr}`);
   return JSON.parse(out.stdout) as FfprobeReport;
@@ -110,7 +110,7 @@ function probeStik(m4bPath: string): number | null {
   const probe = spawnSync(
     'ffprobe',
     ['-v', 'error', '-show_entries', 'format_tags=media_type', '-of', 'json', m4bPath],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', windowsHide: true },
   );
   if (probe.status === 0) {
     try {

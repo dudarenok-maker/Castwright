@@ -22,7 +22,7 @@ import type { BookStateJson } from '../workspace/scan.js';
 
 const ffmpegPresent = (() => {
   try {
-    return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+    return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true }).status === 0;
   } catch {
     return false;
   }

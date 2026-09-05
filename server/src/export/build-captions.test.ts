@@ -68,7 +68,7 @@ vi.mock('yazl', async (importOriginal) => {
   return { ...real, ZipFile: TestZipFile };
 });
 
-const ffmpegPresent = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+const ffmpegPresent = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true }).status === 0;
 const describeIfFfmpeg = ffmpegPresent ? describe : describe.skip;
 
 let bookDir: string;
@@ -141,7 +141,7 @@ describeIfFfmpeg('buildCaptions', () => {
     expect(text).toContain('00:00:00,000 --> 00:00:01,500');
     // The fixture's segments.json carries no textHash (pre-#1105 shape) —
     // sentence/line granularity can't verify it's still current.
-    expect(result.warning).toMatch(/couldn't fully verify/);
+    expect(result.warning).toMatch(/couldn\u0027t fully verify/);
   });
 
   it('sets no warning when every segment carries a matching textHash', async () => {

@@ -302,6 +302,30 @@ function listSourceFiles(dir: string): string[] {
   return out;
 }
 
+/* The dev-machine counterpart to listSourceFiles(): *.test.ts files
+   themselves. listSourceFiles() deliberately EXCLUDES these (a test-only
+   spawn never ships to a user's production install), which is correct for
+   the prod-flash invariant above but leaves a real gap: a dev box running
+   `npm test`/`npm run test:server` (pre-commit, pre-push, or by hand)
+   executes these files constantly, and an unguarded console-app spawn in one
+   flashes a window on every run just the same — found 2026-09-05 via 14 such
+   spawns (`spawnSync('ffmpeg'/'ffprobe', ...)` presence probes and real
+   encode/probe calls) across server/src/export and server/src/tts test
+   files, none caught by the prod-only scan above. */
+function listTestFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+      out.push(...listTestFiles(full));
+      continue;
+    }
+    if (entry.name.endsWith('.test.ts') || entry.name.endsWith('.spec.ts')) out.push(full);
+  }
+  return out;
+}
+
 /* Blank out comments AND string/template literals so prose that merely
    mentions a spawn call — a doc comment, or a log line like
    "skipping spawn (current sidecar honoured)" — is never matched. Replaced
@@ -495,6 +519,24 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
       offenders,
       `spawns outside server/src missing windowsHide (launcher/installer flash):\n${offenders.join('\n')}`,
     ).toEqual([]);
+  });
+
+  describe('dev-machine invariant: *.test.ts spawns flash windows on every local run', () => {
+    const testFiles = listTestFiles(SRC_ROOT).filter((f) =>
+      readFileSync(f, 'utf8').includes('child_process'),
+    );
+
+    it('finds at least the known ffmpeg/ffprobe test-file spawners (scan is wired up)', () => {
+      expect(testFiles.length).toBeGreaterThanOrEqual(5);
+    });
+
+    it('every child_process spawn in a server/src *.test.ts file passes windowsHide: true', () => {
+      const offenders = testFiles.flatMap((f) => scanFile(f, CALL_RE));
+      expect(
+        offenders,
+        `test-file spawns missing windowsHide (flashes a console window on every local test run):\n${offenders.join('\n')}`,
+      ).toEqual([]);
+    });
   });
 
   describe('lastIndex-leak and fail-open regressions (#2716 PR review, pass 2)', () => {
