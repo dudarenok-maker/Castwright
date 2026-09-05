@@ -19,7 +19,7 @@ import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
 import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber, resolveNotesFile, staleNotesVersion, DEFAULT_NOTES_FILE, buildTagMessage, createAnnotatedTag, execGit } from '../bump-version.mjs';
-import { scrubGitEnv } from '../git-env.mjs';
+import { scrubGitEnv, scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -42,17 +42,11 @@ const MOJIBAKE_EM_DASH = 'â€”'; // should decode to U+2014 —, standalone 
 // which child processes inherit. Without sanitising, the test's `git commit`
 // would write into the PARENT worktree's git instead of the temp fixture —
 // silently creating bogus commits on whatever branch invoked the hook.
-// Case-insensitive match: Windows preserves whatever casing a var was stored
-// under while lookup is case-insensitive, and git honours a lowercase
-// `git_dir` identically to `GIT_DIR` — see git-env.mjs's scrubGitEnv() header
-// for the same trap. A `startsWith('GIT_')` filter alone leaves a `git_dir`
-// (or similar) survivor that still redirects the throwaway repo's commits.
+// Thin wrapper over the shared, broader-than-scrubGitEnv() helper — see
+// git-env.mjs's scrubGitEnv() docstring for the case-insensitivity rationale,
+// and why this needs a separate helper from scrubGitEnv().
 function cleanGitEnv() {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase().startsWith('GIT_')) delete env[key];
-  }
-  return env;
+  return scrubGitEnvForThrowawayRepo();
 }
 
 // Wrap execFileSync to always pass the sanitised env. Every git invocation

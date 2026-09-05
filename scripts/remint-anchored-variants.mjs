@@ -39,15 +39,17 @@
  *     script stays IDEMPOTENT (skips already-anchored variants), so a resume
  *     after any interruption still works. If you DO still hit VRAM pressure on a
  *     small card, lower the warm-window with QWEN_BASE17_IDLE_TTL (seconds).
- *   - The sidecar URL defaults to http://localhost:9000; override with
- *     SIDECAR_URL or LOCAL_TTS_URL.
+ *   - The sidecar URL defaults to http://127.0.0.1:9000 (not "localhost" —
+ *     the sidecar binds 127.0.0.1 by default, and on a box where "localhost"
+ *     resolves ::1 first the request hangs on the IPv6 attempt); override
+ *     with SIDECAR_URL or LOCAL_TTS_URL.
  *   - The qwen voices directory defaults to <AudiobookWorkspace>/voices/qwen;
  *     override with QWEN_VOICES_DIR.
  *
  * Usage:
  *   node scripts/remint-anchored-variants.mjs             # dry run
  *   node scripts/remint-anchored-variants.mjs --apply     # re-mint
- *   SIDECAR_URL=http://localhost:9000 node scripts/remint-anchored-variants.mjs --apply
+ *   SIDECAR_URL=http://127.0.0.1:9000 node scripts/remint-anchored-variants.mjs --apply
  */
 
 import fs from 'node:fs';
@@ -185,7 +187,7 @@ export async function main(argv = process.argv.slice(2), qwenVoicesDirOverride, 
     sidecarUrlOverride ??
     process.env.SIDECAR_URL ??
     process.env.LOCAL_TTS_URL ??
-    'http://localhost:9000'
+    'http://127.0.0.1:9000'
   ).replace(/\/+$/, '');
 
   console.log(`Qwen voices dir : ${QWEN_DIR}`);

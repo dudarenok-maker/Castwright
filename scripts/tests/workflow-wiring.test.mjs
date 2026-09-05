@@ -1080,6 +1080,132 @@ test('ffmpeg install: timeout wrapping is present with correct bounds on all apt
   );
 });
 
+test('lockfile-touched polarity: both frontend and server test steps force full run when lockfile is changed (#2853)', () => {
+  // Mutation proof: a lockfile-only diff can select ZERO tests via `--changed`,
+  // so both steps must force a full run when LOCKFILE_TOUCHED is true.
+  // This test verifies the exact polarity: when LOCKFILE_TOUCHED != "true",
+  // run with --changed; when true (or BASE unset), run full suite.
+  // Reverting to the pre-fix condition (removing LOCKFILE_TOUCHED guard or
+  // inverting the polarity) makes this test fail. Order-guard ensures the
+  // LOCKFILE_TOUCHED assignment precedes the if condition that consumes it.
+
+  // Find both test steps by their exact names.
+  const frontendMatch = source.match(
+    /- name: Frontend tests \+ a11y\n\s*if:[^\n]+\n\s*run: \|\n((?:\s{10}[^\n]*\n)*)/,
+  );
+  const serverMatch = source.match(
+    /- name: Server tests \(fast \+ slow\)\n\s*if:[^\n]+\n\s*run: \|\n((?:\s{10}[^\n]*\n)*)/,
+  );
+
+  assert.ok(frontendMatch, 'Frontend tests + a11y step not found');
+  assert.ok(serverMatch, 'Server tests (fast + slow) step not found');
+
+  const frontendBody = frontendMatch[1];
+  const serverBody = serverMatch[1];
+
+  // Both steps must assign LOCKFILE_TOUCHED from the scopes output.
+  assert.match(
+    frontendBody,
+    /LOCKFILE_TOUCHED="\$\{\{\s*fromJSON\(needs\.detect\.outputs\.scopes\)\.lockfile_touched\s*\}\}"/,
+    'Frontend step does not assign LOCKFILE_TOUCHED from detect scopes',
+  );
+  assert.match(
+    serverBody,
+    /LOCKFILE_TOUCHED="\$\{\{\s*fromJSON\(needs\.detect\.outputs\.scopes\)\.lockfile_touched\s*\}\}"/,
+    'Server step does not assign LOCKFILE_TOUCHED from detect scopes',
+  );
+
+  // Order guard: the LOCKFILE_TOUCHED assignment must come BEFORE the if
+  // statement that consumes it. Moving the assignment after the if would
+  // use an unset/stale variable and restore the #2853 bug.
+  const frontendAssignIdx = frontendBody.indexOf('LOCKFILE_TOUCHED=');
+  const frontendIfIdx = frontendBody.indexOf('[ "$LOCKFILE_TOUCHED"');
+  assert.ok(
+    frontendAssignIdx !== -1,
+    'Frontend step: LOCKFILE_TOUCHED assignment not found',
+  );
+  assert.ok(
+    frontendIfIdx !== -1,
+    'Frontend step: if condition checking LOCKFILE_TOUCHED not found',
+  );
+  assert.ok(
+    frontendAssignIdx < frontendIfIdx,
+    `Frontend step: LOCKFILE_TOUCHED assignment (at ${frontendAssignIdx}) must precede if condition (at ${frontendIfIdx})`,
+  );
+
+  const serverAssignIdx = serverBody.indexOf('LOCKFILE_TOUCHED=');
+  const serverIfIdx = serverBody.indexOf('[ "$LOCKFILE_TOUCHED"');
+  assert.ok(
+    serverAssignIdx !== -1,
+    'Server step: LOCKFILE_TOUCHED assignment not found',
+  );
+  assert.ok(
+    serverIfIdx !== -1,
+    'Server step: if condition checking LOCKFILE_TOUCHED not found',
+  );
+  assert.ok(
+    serverAssignIdx < serverIfIdx,
+    `Server step: LOCKFILE_TOUCHED assignment (at ${serverAssignIdx}) must precede if condition (at ${serverIfIdx})`,
+  );
+
+  // Both steps must have the correct polarity: when LOCKFILE_TOUCHED != "true",
+  // use --changed; otherwise use full run. The `if` condition checks:
+  // [ -n "$BASE" ] && [ "$LOCKFILE_TOUCHED" != "true" ]
+  // If this is true, run --changed; else run full.
+  const correctFrontendPattern = /if\s+\[\s*-n\s+"\$BASE"\s*\]\s+&&\s+\[\s*"\$LOCKFILE_TOUCHED"\s+!=\s+"true"\s*\]\s*;\s+then\s+npx\s+vitest\s+run\s+--changed/;
+  const correctServerPattern = /if\s+\[\s*-n\s+"\$BASE"\s*\]\s+&&\s+\[\s*"\$LOCKFILE_TOUCHED"\s+!=\s+"true"\s*\]\s*;\s+then/;
+
+  assert.match(
+    frontendBody,
+    correctFrontendPattern,
+    'Frontend step does not have correct LOCKFILE_TOUCHED polarity (should check != "true" for --changed branch)',
+  );
+  assert.match(
+    serverBody,
+    correctServerPattern,
+    'Server step does not have correct LOCKFILE_TOUCHED polarity (should check != "true" for --changed branch)',
+  );
+
+  // Verify the else branch runs the full suite (no --changed).
+  assert.match(
+    frontendBody,
+    /else\s+npx\s+vitest\s+run;/,
+    'Frontend step else branch does not run full vitest suite',
+  );
+
+  // For the server step, we need a more structural check because it has
+  // multiple lines in both then and else branches. Extract the entire
+  // if/then/else/fi block and verify:
+  // (1) the then branch (LOCKFILE_TOUCHED != "true") runs --changed
+  // (2) the else branch (LOCKFILE_TOUCHED == "true") runs full suite
+  // Mutation proof: M7 (neuter else to --changed) and M11 (swap then/else bodies)
+  // must both fail this test.
+  const serverIfBlock = serverBody.match(
+    /if\s+\[\s*-n\s+"\$BASE"\s*\]\s+&&\s+\[\s*"\$LOCKFILE_TOUCHED"\s+!=\s+"true"\s*\]\s*;\s+then\n((?:[^\n]*\n)*?)^\s*else\n((?:[^\n]*\n)*?)^\s*fi/m,
+  );
+  assert.ok(
+    serverIfBlock,
+    'Server step: could not extract if/then/else/fi block structure',
+  );
+
+  const serverThenBranch = serverIfBlock[1];
+  const serverElseBranch = serverIfBlock[2];
+
+  // The THEN branch (when LOCKFILE_TOUCHED != "true") must contain --changed.
+  assert.match(
+    serverThenBranch,
+    /--changed/,
+    'Server step: then branch does not use --changed (should run when lockfile NOT touched)',
+  );
+
+  // The ELSE branch (when LOCKFILE_TOUCHED == "true") must NOT contain --changed.
+  assert.doesNotMatch(
+    serverElseBranch,
+    /--changed/,
+    'Server step: else branch contains --changed (should run full suite when lockfile IS touched)',
+  );
+});
+
 test('ffmpeg install: no bare apt-get install ffmpeg in workflows (use install-ffmpeg action)', () => {
   // Issue #2449: unretried `sudo apt-get update && sudo apt-get install -y ffmpeg`
   // hangs on mirror timeouts and burns entire job timeouts. This regression test

@@ -82,3 +82,23 @@ export function scrubGitEnv(env = process.env) {
   }
   return out;
 }
+
+/** A copy of `env` with EVERY key whose name starts with `GIT_` (matched
+ *  case-insensitively) removed — deliberately broader than `scrubGitEnv()`
+ *  above, which is the WRONG helper to reach for here. `scrubGitEnv()`
+ *  exists for production call sites that must still honour `GIT_INDEX_FILE`
+ *  and other `GIT_*` vars outside its narrow allowlist (see the #2216
+ *  correction above). This helper is for tests that spawn git inside a
+ *  throwaway repo built fresh in a temp dir: there is no real index or
+ *  ambient repository state for those to honour, so any inherited `GIT_*`
+ *  var — `GIT_INDEX_FILE`, `GIT_PREFIX`, `GIT_AUTHOR_DATE`, all of it — is
+ *  only ever a hazard, not a value worth preserving. A caller that still
+ *  needs one of them can re-add it after calling this, e.g.
+ *  `{ ...scrubGitEnvForThrowawayRepo(), GIT_AUTHOR_DATE: x }`. */
+export function scrubGitEnvForThrowawayRepo(env = process.env) {
+  const out = { ...env };
+  for (const key of Object.keys(out)) {
+    if (key.toUpperCase().startsWith('GIT_')) delete out[key];
+  }
+  return out;
+}

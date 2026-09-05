@@ -112,6 +112,36 @@ them are wide:
   below, which gives the specific stale-snapshot race mechanical teeth via a
   second, explicit mode, but still can't verify by itself that someone ran it.
 
+**`npm run check:register-row-citations` (#2831) — a separate, narrower
+check.** `check:onbox-register` above only validates the register's own
+internal arithmetic; it says nothing about the `A\d+`/`E\d+` row IDs cited
+*elsewhere* in the repo. `check:register-row-citations` closes that gap for
+one specific, bounded surface: it scans every `.md` file under
+`docs/testing/**` and `docs/features/**`, except the frozen dated-transcript
+paths (`docs/testing/onbox-acceptance-staleness-audit.md` and the `onbox-wave{3,4,5}-results/`
+directories), for a citation matching `row/Row <ID>` or a markdown link into
+this file's own `#a41`/`#e3` anchor, and fails if the cited ID has no current row heading here. A bare `A41`-shaped
+token with neither a "row" word nor a register link is never treated as a
+citation. GitHub issue bodies are explicitly OUT of scope for v1 — that would
+need `gh` API access from a CI script, disproportionate for this pass. A
+citation whose own logical line (including hard-wrapped continuations) contains
+a discharge/removal annotation is printed as a note, not failed — this register's
+own body is full of exactly that shape ("register row A43, discharged 2026-08-26,
+removed from the register"), and those are intentional history, not drift. A
+"nearest citation to the left" rule ties each annotation to its nearest preceding
+citation, preventing cross-contamination when multiple citations appear on the
+same line. **Deliberately NOT this
+checker's job:** confirming the citing prose's *description* of a row still
+matches that row's current title — only that the ID it names still exists.
+That stronger check ("title-text matching") is a genuinely separate,
+harder-to-build capability, filed as its own follow-up rather than attempted
+here — see #2838. This is a different script from the older, broader
+`scripts/check-register-citations.mjs` (`npm run check:register-citations`,
+#2629/#2630), which scans the whole repo tree with a much larger citation
+surface and its own discharge/run-sheet/subject-conflict machinery — the two
+are complementary, not a replacement of one by the other, and neither script
+should be renamed to match the other's npm script name.
+
 **The concurrency hazard this closes (#1931).** Before the live view was
 tracked here, on 2026-07-28 two concurrent sessions each correctly added a
 different row (A20, E8) and republished from their own hand-built snapshot —
@@ -149,33 +179,33 @@ comparison, see the edge list above). The merge step that closes this, run
    local file — this is the CURRENTLY-published register, which may be ahead
    of what you are about to publish.
 2. Run
-   `npm run check:onbox-register -- --against-published <saved-file>`. Unlike
-   `check:onbox-register`'s no-flag run, this comparison is deliberately
-   ONE-DIRECTIONAL: your register having rows the live page doesn't have yet
-   is the normal reason you're publishing, not a defect, so it is never
-   reported here. A row (or group) the live page has that your register
-   lacks is reported ONLY when `origin/main`'s own copy of this register
-   still has it too — the signature of another lane having already
+   `npm run check:onbox-register -- --against-published <saved-file>`. This
+   comparison detects structural drift (rows live vs. in register), and — when
+   the live-view baseline from `origin/main` is available — also detects
+   content drift (per-row body text hash comparison). Your register having rows
+   the live page doesn't have yet is the normal reason you're publishing, not a
+   defect, so it is never reported here. A row (or group) the live page has that
+   your register lacks is reported ONLY when `origin/main`'s own copy of this
+   register still has it too — the signature of another lane having already
    published ahead of you. When `origin/main` also lacks it, the row was a
-   deliberate discharge (by this change or an already-merged one), not a
-   race, and is not reported: discharging a row always makes the
-   still-live page look "ahead" of your working copy in this exact shape,
-   and that is expected. **The command fetches `origin/main` itself, fresh,
-   every run — you do not need to `git fetch` by hand first.** It then reads
-   `FETCH_HEAD`, deliberately NOT the local `origin/main` ref: `git fetch
-   origin main` only guarantees it writes `FETCH_HEAD` — whether it also
-   updates `refs/remotes/origin/main` depends on this checkout's
-   `remote.origin.fetch` refspec actually mapping `refs/heads/main`, which a
-   narrowed refspec can skip while the fetch still exits 0, leaving
-   `origin/main` silently stale even though the fetch just "succeeded". If
-   you ever need to reproduce this baseline by hand for debugging, run
-   `git fetch origin main` followed by `git show FETCH_HEAD:<path>` — NOT
-   `git show origin/main:<path>`, which can read stale (or, in a narrowly-
-   configured clone, entirely unresolvable) content even immediately after a
-   successful fetch. It follows that this step needs network access to
-   `origin`, with no offline fallback: you're about to publish to a remote
-   URL anyway, so an operator who can't reach the network here can't
-   complete step 4 either.
+   deliberate discharge (by this change or an already-merged one), not a race,
+   and is not reported: discharging a row always makes the still-live page look
+   "ahead" of your working copy in this exact shape, and that is expected.
+   **The command fetches `origin/main` itself, fresh, every run — you do not
+   need to `git fetch` by hand first.** It then reads `FETCH_HEAD`, deliberately
+   NOT the local `origin/main` ref: `git fetch origin main` only guarantees it
+   writes `FETCH_HEAD` — whether it also updates `refs/remotes/origin/main`
+   depends on this checkout's `remote.origin.fetch` refspec actually mapping
+   `refs/heads/main`, which a narrowed refspec can skip while the fetch still
+   exits 0, leaving `origin/main` silently stale even though the fetch just
+   "succeeded". If you ever need to reproduce this baseline by hand for
+   debugging, run `git fetch origin main` followed by `git show FETCH_HEAD:<path>`
+   — NOT `git show origin/main:<path>`, which can read stale (or, in a
+   narrowly-configured clone, entirely unresolvable) content even immediately
+   after a successful fetch. It follows that this step needs network access to
+   `origin`, with no offline fallback: you're about to publish to a remote URL
+   anyway, so an operator who can't reach the network here can't complete step 4
+   either.
 3. **If it fails**, do NOT publish. There are two distinct failure shapes,
    named in the error text:
    - **A row/group named as already live and BEHIND** — this message has TWO
@@ -257,6 +287,38 @@ comparison, see the edge list above). The merge step that closes this, run
        branch) to see which specific check fails, then fix THAT on `main`
        first (its own PR) before retrying step 2 here — this can't be fixed
        from your branch, only from `main`.
+   - **A row's content has drifted** (#2599/A41) — the row exists, with the
+     SAME ID, on both the tracked `.html` and the currently-published page,
+     but its own body text hashes differently between the two. This is a
+     DIFFERENT check from the BEHIND check above: it compares your local,
+     working-tree copy of
+     `docs/testing/onbox-acceptance-register-live-view.html` (including any
+     uncommitted edits mid-publish) against the published snapshot, not the
+     register — hashing the register's markdown against the published HTML
+     would flag almost every row, since the two are deliberately different
+     documents that only have to agree on structure, not wording. When tracked
+     and published content differ, the check disambiguates via the baseline
+     (`origin/main`'s copy) to tell a genuine defect apart from an ordinary
+     in-progress publish:
+     - **Your local copy matches the baseline, but the published page doesn't**
+       — this edit is already merged to `origin/main`, yet the live page never
+       caught up. This is the classic A41 signature: PR #2578 review rounds
+       13-18 caught it only by manually byte-diffing the two files, because
+       nothing mechanical compared row content before this check existed. A
+       reported failure of this shape is a genuine defect — do not publish
+       until it's investigated and reconciled.
+     - **The published page matches the baseline, but your local copy doesn't**
+       — you have a local edit not yet merged to `origin/main`, and the
+       published page is simply unchanged (still at baseline) because nothing
+       has been published yet. This is the ordinary, expected pending-publish
+       state — proceed.
+     - **Neither matches the baseline** (all three — tracked, published, and
+       `origin/main` — disagree) — a 3-way content disagreement. The check
+       reports this as a visible warning to stderr (not blocking), since
+       ordinary multi-step publishes (edit, publish again before merging)
+       trigger this and hash-only comparison cannot distinguish from genuine
+       conflicts. If the content seems wrong, investigate manually; otherwise,
+       you can proceed to publish.
 
    **Known limitation:** a row that's live and still genuinely owed but was
    never actually merged into `main` at all (e.g. published straight from a
@@ -868,8 +930,8 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **23 of 60 run (2026-07-29, 2026-07-31, 2026-08-31) · ~37 still owed · 3 run-2 results retracted**
-<!-- stat:a1-still-owed 37 -->
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **38 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04) · ~22 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 22 -->
 <!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
@@ -1018,14 +1080,159 @@ above is left as its own row rather than assumed to also clear full-book
 work, but the specific failure mode this run hit was environmental, not
 side-11 recurring.
 
-**Still owed (~37), and why:**
+**Run 5 — 2026-09-04, Claude Code, isolated worktree `wt-a1-wave11-continue`,
+throwaway fixture book "The Coalfall Commission (A1 wave11)" imported fresh,
+real Qwen 0.6B sidecar, no mocks.** Five more discharged: **C-06** (deleting
+a healthy clone's `.pt` transparently re-derives — one log line, chapter
+completes, `.pt` reappears with a fresh mtime; a repeat render fires no
+further derive), **C-07** (a stale `baseModel` on a present `.pt` also
+triggers exactly one re-derive and refreshes `baseModel` to the sidecar's
+current value — two early attempts against a memory-pressured leftover
+sidecar failed, a clean restart reproduced the pass), **C-08** (a transient
+derive failure — sidecar killed — reports `derive-failed` without persisting
+`engines.qwen.status: 'failed'`; the voice self-heals on the next attempt
+once the sidecar is back, no manual repair), **C-09** (a permanent 4xx
+derive failure — empty `ref_text` — DOES persist `status: 'failed'`, and it
+is genuinely terminal: a retry with nothing changed fails again immediately
+with zero further derive attempts), and **C-14** (the assign-time
+wrong-engine guard, all four documented scenarios: session-default 409,
+character-override 409 naming the character, Coqui-eligible 200, and the
+pending-picker-beats-persisted-default case). **Two more partially run:**
+**C-13**'s wrong-engine half confirmed at render time (exact message shape,
+names both cloned characters, does not claim Qwen unavailable); its
+engine-unavailable contrast was **not** cleanly reproduced — a generation
+request lazily relaunches the sidecar on this box regardless of
+`autoStartSidecar`, so "stop the sidecar" doesn't stay stopped through a
+render, and both attempts instead hit the sidecar's own lazy-load path (one
+completed normally, one hit the pre-existing side-11 `recycle-storm`
+pattern, not a new defect). **D-04**'s splice half confirmed (plain-text
+`chapter_failed`, no `errorCode`, names the voice and `(revoked)`); its
+QA-repair half wasn't reached — the fixture chapter's audio had nothing
+QA-flagged to repair, so the cloned-voice check was never exercised on that
+path. No defects filed this run — every unexpected result traced to this
+box's own known, already-tracked side-11 memory-growth pattern or to a
+test-setup quirk (documented inline in the run sheet), not a new product
+bug. **Timing observation, not filed as a defect:** a chapter render against
+an unreachable sidecar takes 400-850s to fail-fast rather than the
+sub-second failure a revoked voice gets (C-02) — worth a closer look at
+`derive-engine-artifact.ts`'s retry/timeout budgets in a future session, but
+out of scope to chase here. Real Gemini credentials needed for C-17/E-07
+(designed-voice paths) are deliberately absent from this isolated worktree
+per CLAUDE.md's no-secrets rule; still owed, to be attempted from a session
+carrying real credentials. Browser/mic (A-07/A-08/A-09/B-02) and by-ear
+(B-03/E-06) items remain untouched — need a human at a real browser/mic and
+a human ear respectively, neither available to an unattended session.
+
+**Run 6 — 2026-09-04, same session, same worktree/fixture.** Six more
+discharged, including the wave's single highest-value test: **C-01** ⭐
+(revoke landing mid-derive — hit on the 4th attempt after calibrating the
+derive-completion window at ~4.8s on a warm sidecar; the sidecar's own log
+confirms the derive genuinely succeeded a second time at the exact race
+timestamp, and Node's `statusStampMutate` post-derive guard re-purged it
+rather than persisting it as ready — `revokedAt` survived unclobbered, no
+`.pt`/`.json`/`master.wav` survived, chapter failed naming both characters,
+one reading `(derive-failed)` rather than `(revoked)`, the same accepted
+variant already recorded for E-03 in Run 4), **C-04** (title-beat narrator
+gating — weaker variant, this fixture has no title-only-narrator chapter so
+it can't isolate the title beat from the narrator's own body lines, both
+would produce the same failure), **C-12** (atomic `.pt` write — 5 kill-mid-write
+attempts at calibrated delays never caught a truncated file, every attempt
+landed cleanly before or after the write; demonstrates the outcome without
+directly proving concurrency, since the ~3-4s write window is narrower than
+cross-tool-call timing precision here), **C-20** (pause during a repair
+derive — no `chapter_failed`, no persisted `generationState`, clean resume
+afterward), **C-21** (partial erasure — holding an exclusive file handle on
+a healthy clone's `.pt` during revoke reproduced `artifactPurgeIncomplete:
+true` naming the held path on the first attempt), and **D-01** (concurrent
+multi-book render sharing a cloned voice — a second throwaway book imported
+and fully analysed; both the healthy-concurrent and repair-race scenarios
+completed cleanly on a fresh sidecar, one `.pt` file throughout; a first
+repair-race attempt against a memory-pressured leftover sidecar failed both
+books identically, ruled out as two-worker-specific by a single
+non-concurrent retry failing the same way, not filed as a new defect). No
+defects filed this round either — every anomaly traced to session-accumulated
+side-11 memory pressure, resolved by a clean sidecar restart. **C-18
+not attempted** — blocked on a designed voice, which needs `GEMINI_API_KEY`
+(absent from this isolated worktree by design), same as C-17/E-07.
+
+**Run 7 — 2026-09-04, coordinator follow-up (a box reboot interrupted Run 6
+mid-flight; this run resumed after recovery — see the run sheet's Run 7
+notes for the environmental detail).** Also discharges **D-04's QA-repair
+half**, completing D-04 (the splice half was already done in Run 5): the
+chapter's clean audio had nothing QA-flagged by default, so the app's own
+`PUT /api/config` was used to temporarily tighten `qa.seg.minRatio`/
+`maxRatio` (a real, supported sensitivity knob — not a hand-edited file),
+which flagged 22 segments on the *same unchanged* audio including the
+cloned/revoked character; the real (non-dry-run) repair correctly
+re-recorded the non-cloned segments and failed plain-text on the revoked
+one. Thresholds restored afterward. Three more discharged against the
+**primary checkout** (`C:\Claude\Projects\Audiobook-Generator`), the one
+GEMINI_API_KEY-gated group: **C-17** ⭐ (designed self-heal — a fresh
+throwaway book imported via the app's own API, `.pt` deleted, chapter
+regenerated, `instruct`/`designModel` byte-identical after, `baseModel`
+refreshed, re-design confirmed working after clearing a real, correctly-
+diagnosed VRAM/Kokoro contention; **turned out GEMINI_API_KEY was
+unnecessary** — the design route takes caller-supplied persona text, not
+Gemini-generated), **C-18** (stale designed `.pt` deliberately untouched —
+confirmed presence-only, zero derives, hash/mtime unchanged), and **E-07**
+⭐ (a designed voice's forced Coqui derive failure — retained clip moved
+aside — still rendered the chapter, fail-soft to the stock catalogue voice,
+no crash, no new xtts artifact). The throwaway book and the one voice-
+library entry created for these three tests were deleted afterward via the
+app's own delete APIs, confirmed gone from `C:\AudiobookWorkspace` on disk;
+the primary checkout's dev stack was stopped. **Environmental notes, not
+product defects:** this box's `QWEN_DEVICE`/`COQUI_DEVICE` are normally
+pinned to `cuda:1` (16 GB card) by deliberate box policy — GPU1 was
+temporarily lost mid-session (needed the reboot to recover, unrelated to
+this work) and the pin was briefly repointed at `cuda:0` to keep testing,
+then reverted once the reboot restored GPU1; also found that the TTS
+sidecar process is **adopted** across a Node server restart rather than
+respawned, so an env/`.env` change only takes effect on the sidecar once
+its own process is explicitly killed. No defects filed this round.
+
+**Run 8 — 2026-09-04, coordinator follow-up, same worktree.** **C-16**
+discharged in full: minted one fresh clone via the app's own clone API, then
+walked it through all five documented states on `#/voices` → My voices
+(reload between each) — Healthy (no chip), Broken-revoked, Broken-no-master,
+Broken-failed (all three: danger `Needs attention`), Repairable-stale
+(warning `Will re-derive`) — every chip matched exactly, including the
+per-engine pill's `Qwen ⚠`/`Qwen ⟳` icon swap on the two engine-status
+states. Test voice deleted afterward via the app's own delete API. **C-15
+attempted but Blocked, not discharged**: the underlying `cloned-voice-broken`
+mechanism was confirmed correct via a direct `POST
+/api/books/.../generation` call (fast `chapter_failed` SSE event, correct
+`errorCode`/`errorReason` naming the revoked voice) — but the *live browser
+toast* could not be observed, blocked by this session's own severe
+environment instability under heavy concurrent background load: repeated
+SSE-stream stalls, a `POST /generation` 503 specifically from the UI's
+queue-wrapper path (the same direct endpoint call succeeded moments later on
+the same box, so the 503 sits in the queue layer, not the underlying
+generation code), and one full server-process exit (code 1) immediately
+after a correctly-logged failure, cause not isolated. **Found and fixed in
+passing, filed as [#2887](https://github.com/dudarenok-maker/Castwright/issues/2887):**
+`getResolvedSidecarUrl()`'s per-worktree derivation built
+`http://localhost:$PORT` instead of `http://127.0.0.1:$PORT`, unlike every
+other sidecar-URL site in this codebase — a real Windows IPv6/IPv4
+dual-stack defect (verified, via a second reproduction after the fix, that
+it is NOT the cause of the C-15 blockers above). Fixed with a full
+`test:server` pass (538 files, 8201 tests) confirming no regression, after
+finding and fixing 5 genuinely-broken assertions across `qwen-voice.test.ts`
+(×2), `design-voice-core.test.ts`, and
+`synthesise-chapter-derive-vram-partition.test.ts` that depended on the old
+(wrong) `localhost` value — checked each of 16 files referencing
+`localhost:9000` individually rather than blind-replacing, since most were
+self-contained mocks/fixtures unaffected by the real derivation.
+
+**Still owed (~22), and why:**
 - **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
   A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
   with a real microphone.
 - **By ear (2):** B-03, E-06. No instrument substitutes; ECAPA cosines above are
   the objective half only.
-- **Section E — 6 of 9 now run (2026-07-31/08-01, across runs 2 and 3);
-  E-03, E-06 and E-07 still owed, but no longer blocked.**
+- **Section E — 8 of 9 now run (runs 2, 3, 4 and 7); E-06 (by-ear) and E-04's
+  reproduction re-run (see below — the code fix landed, only the on-box
+  confirmation is owed) are what remain.** E-03 discharged Run 4, E-07
+  discharged Run 7.
   **Run 3 (2026-08-01)** added E-01's first genuine exercise — **P**
   (mechanism), **by-ear NEGATIVE**. Owner: *"2 does not sound like 4 much,
   cross language is not working well."* Mechanism passes, perceptual
@@ -1105,10 +1312,21 @@ side-11 recurring.
   whose `segments.json` and the current analysis disagreed (exactly the shape
   both fixture books in that run hit); #1972 has since closed that refusal.
   </details>
-- **The rest of Section C (15) and Section D (2):** not reached. C-08/C-12
-  (deliberate mid-write sidecar kills) and C-01 (revoke racing an in-flight
-  Qwen derive) are untouched and remain the highest-risk unproven behaviour
-  here. E-03 (the Coqui equivalent of C-01) is now discharged (Run 4, above).
+- **Section C — 13 rows discharged in full this session (Runs 5-8): C-01 ⭐,
+  C-04, C-06, C-07, C-08, C-09, C-12, C-14, C-16, C-17 ⭐, C-18, C-20, C-21.**
+  **C-13** is partial — wrong-engine half only, engine-unavailable contrast
+  not reproducible on this box — see Run 5 note. **C-15** is the one row
+  still owed — attempted (Run 8), the underlying mechanism confirmed correct
+  via direct API call, but **Blocked** on this session's own environment
+  instability for the live browser-toast observation (see Run 8 note above);
+  retry on a box that isn't under heavy concurrent background load.
+- **Section D — 3 of 4 discharged as of Run 7 (D-01 full, D-03 pass
+  incidentally from earlier isolation work, D-04 full).** **D-02** (full-book
+  render with a cloned character) remains **Blocked** — the side-11 block it
+  was scoped against is itself now closed as environmental (see Run 4's
+  note above), so a re-attempt on a properly-set-up box may well clear it,
+  but that re-attempt hasn't happened; only the per-character splice
+  substitute has been proven.
 - **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
   a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
   / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
@@ -1142,17 +1360,18 @@ its pid tracking drifts across restarts — minor, unfiled.
 attester — `attestedBy` is overwritten with `personName`, which inverts
 `guardian-of-minor`).
 
-Starred, highest-risk — **C-10 is now discharged (passed 2026-07-29)**; the rest
-remain: **C-01** revoke mid-derive leaves no live `.pt` and `revokedAt` survives ·
-**C-08** a transient failure does not brick a voice · **C-17**
-designed-voice self-heal preserves persona · **C-12** a killed mid-write leaves
-no truncated `.pt` · **E-01** clone → cast on Coqui → generate · **E-02**
-audition-then-revoke refuses Play on the Coqui path · **E-06** the one place
-D-B's synthetic-clip-vs-catalogue quality question can actually be judged, by
-ear · **E-07** a forced designed-derive failure still renders the chapter
-(fail-soft, the opposite policy from cloned's fail-loud).
+Starred, highest-risk — **C-10, C-01, C-08, C-17, C-12, E-01, E-02, and E-07
+are all now discharged** (C-10 2026-07-29; C-01/C-08/C-17/C-12 Run 5/7; E-01
+Run 3 — Run 2's E-01 result was retracted, #1972; E-02 Run 2; E-07 Run 7).
+**C-15 and E-06 are the two still owed**: **C-15**
+the `cloned-voice-broken` toast fires immediately with a help link
+(mechanism confirmed correct via direct API call, Run 8; the live browser
+observation is Blocked on this session's own environment instability, not a
+product defect — retry on a quieter box) · **E-06** the one place D-B's
+synthetic-clip-vs-catalogue quality question can actually be judged, by ear.
 
-**E-01 was attempted and is blocked, not failed.** A Coqui splice reported
+**Historical (Run 1, before Section E was unblocked) — kept for the trap it
+documents, superseded by E-01's Run 3 discharge above.** A Coqui splice reported
 `splice_complete` but wrote no `voices\xtts\` artifacts and left
 `characterSnapshots.wren.voiceEngine` as `qwen` — the character's own
 `ttsEngine: 'qwen'` overrides the requested `modelKey`. To attempt Section E,

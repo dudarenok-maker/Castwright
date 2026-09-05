@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalise, readTagAnnotation } from '../release-body.mjs';
+import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bodyScript = resolve(here, '..', 'release-body.mjs');
@@ -58,17 +59,11 @@ const CONFLICT_FIXTURE =
 // this for real: a stray tag landed in this worktree). Every git
 // invocation below, and every spawned `node release-body.mjs` process,
 // passes this explicit env instead of inheriting process.env.
-// Case-insensitive match: Windows preserves whatever casing a var was stored
-// under while lookup is case-insensitive, and git honours a lowercase
-// `git_dir` identically to `GIT_DIR` — see git-env.mjs's scrubGitEnv() header,
-// and bump-version.test.mjs's identical helper/fix (#2841), for the measured
-// evidence. A `startsWith('GIT_')` filter alone leaves a survivor.
+// Thin wrapper over the shared, broader-than-scrubGitEnv() helper — see
+// git-env.mjs's scrubGitEnv() docstring for the case-insensitivity rationale,
+// and why this needs a separate helper from scrubGitEnv().
 function cleanGitEnv() {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase().startsWith('GIT_')) delete env[key];
-  }
-  return env;
+  return scrubGitEnvForThrowawayRepo();
 }
 
 function gitExec(args, opts = {}) {

@@ -756,7 +756,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 3. **Account for on-box acceptance — a merge gate.** If this PR ships behaviour that only real hardware can prove — a live GPU, a real sidecar, a real analyzer, a real book — or if it discharges acceptance already owed, then **this PR must leave the acceptance state recorded across all three surfaces**, in the same diff:
    - [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) — the row, grouped by hardware prerequisite;
    - the per-feature run sheet (`docs/testing/<feature>-onbox-acceptance.md`) where one exists — the criteria, and the filled-in `Result:` lines once run;
-   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over. `npm run check:onbox-register` cross-checks the owed total, the per-group counts and the row IDs — **not** the rest of the summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stay a manual recompute. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact, but ONE-DIRECTIONAL: it fails only when the live page has a row your register lacks (your register having rows the live page doesn't yet is the normal reason you're publishing, not a defect) — qualified further by #2199 (a live-page row `origin/main`'s own copy also lacks is a discharge, not a defect, and isn't reported either) and by `--discharging <ID>[,<ID>...]` (#2272, for the one shape #2199 can't see: a discharge THIS change made that hasn't merged to `origin/main` yet — publishing runs before merge, so the baseline can't tell it apart from a genuinely-owed row until you name it; naming an ID that isn't actually live-only is refused, not silently accepted) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
+   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over. `npm run check:onbox-register` cross-checks the owed total, the per-group counts and the row IDs — **not** the rest of the summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stay a manual recompute. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact. It detects structural drift (rows live vs. registered) and content drift (per-row body text hash changes from baseline). It fails when the live page has rows your register lacks AND `origin/main` still has them (another lane ahead of you); when your register has rows the live page doesn't yet, that's the normal reason you're publishing, not a defect — qualified further by #2199 (a live-page row `origin/main`'s own copy also lacks is a discharge, not a defect, and isn't reported either) and by `--discharging <ID>[,<ID>...]` (#2272, for the one shape #2199 can't see: a discharge THIS change made that hasn't merged to `origin/main` yet — publishing runs before merge, so the baseline can't tell it apart from a genuinely-owed row until you name it; naming an ID that isn't actually live-only is refused, not silently accepted) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
 
    **Recording blocks the merge; running does not.** Complex work often cannot be accepted at PR time and a PR must not sit open waiting for a contended box — owed acceptance still converts into a row rather than holding the PR. What is no longer optional is the *bookkeeping*: a PR that ships unproven behaviour without a row, or discharges acceptance without recording the outcome, is not finishable.
 
@@ -1214,6 +1214,43 @@ feat/server-foo` and tell the agent in its prompt to check it out as its
   for why the opt-in/draft-batching cost framing in
   [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md)
   is now historical.
+
+### One writer per worktree — commit/push is single-threaded
+
+A worktree's `git commit`/`push` is single-writer. Running more than one
+against the same worktree at a time — two dispatched fix agents, or a
+dispatched agent plus the dispatching session itself — doesn't corrupt the
+repo, but reliably produces the exact contention this repo has hit three
+separate times (2026-08-29, 2026-08-30, 2026-09-04/05): commits bundling
+together, hook batteries competing for CPU/GPU and throwing unrelated flaky
+failures, and — worst — a subagent concluding the contention it caused
+*itself* is an external blocker and reaching for `--no-verify` to route
+around it (never acceptable — see "Do not use `--no-verify` to bypass" under
+Working practice below; this holds even under contention).
+
+- **A subagent whose `git commit`/`push` is slow does not get to retry it as
+  a second background call.** `verify:fast:branch`/pre-push can legitimately
+  run 15–45+ minutes under load; the fix for "it's taking a while" is to
+  wait, never to fire a second attempt in parallel against the same
+  worktree. A subagent report describing multiple retry attempts against one
+  worktree is reporting a bug it caused, not a completed task — re-dispatch
+  or take over manually rather than trusting its "eventually succeeded"
+  claim.
+- **`TaskStop`'s "Successfully stopped" is not proof the underlying OS
+  process is gone.** Confirmed three times now: stopping a wrapping
+  bash/agent task does not reliably kill the child processes it spawned
+  (`git.exe`, `node`/`vitest` workers) on Windows — they can keep running,
+  still holding the git index or burning CPU, after the stop call reports
+  success. Before trusting a worktree is idle, independently check
+  `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like
+  "*<worktree-path>*" }` and `Stop-Process -Force` anything still there —
+  don't rely on the stop confirmation alone.
+- **Before starting your own commit/push in a worktree a subagent was just
+  working in, re-verify the worktree is actually idle** (empty process list
+  per above, `git status` unchanged across a few seconds), not just that the
+  dispatch tool reported the agent "completed" — a completed agent
+  notification can still have live background children of its own still
+  running commits/pushes.
 
 ### Planning agents
 

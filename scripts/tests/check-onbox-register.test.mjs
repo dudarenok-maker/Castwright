@@ -11,8 +11,11 @@ import { tmpdir } from 'node:os';
 import {
   checkRegister,
   checkLiveView,
-  resolveBaselineText,
+  resolveBaselineTexts,
   CANNOT_VERIFY_BASELINE_ERROR,
+  ROW_CONTENT_DRIFT_ERROR_PREFIX,
+  EXTRACTION_ERROR_PREFIX,
+  THREE_WAY_CONTENT_WARNING_PREFIX,
   stripHtmlComments,
   htmlCellText,
   ALLOCATION_FLOOR,
@@ -1788,6 +1791,287 @@ test("#2272: dischargingIds has no effect on the default direction:'both' compar
 });
 
 // ---------------------------------------------------------------------------
+// #2599/A41: per-row content hashing for `--against-published`. A row can
+// keep the same ID and the same per-group count while its own BODY TEXT
+// silently regresses on the published page (PR #2578 review rounds 13-18 —
+// caught only by manual byte-diffing, because nothing mechanical compared
+// row content). Design decision: dudarenok-maker/Castwright#2599 comment
+// 5484697345 — hash each row's body, keyed by ID, comparing only IDs present
+// on BOTH sides.
+//
+// This compares the TRACKED local live view (`options.trackedLiveViewHtml`)
+// against the PUBLISHED snapshot (`checkLiveView`'s second argument) — NOT
+// the register. The register and its HTML twin are deliberately different
+// documents that only have to agree on structure, not row wording — hashing
+// the real committed register against the real committed live view produces
+// a mismatch for nearly every row even in a healthy state (this was checked
+// against this repo's own files while building this check, and is why the
+// end-to-end CLI tests further down, which read both real files, would
+// otherwise turn permanently red). The tracked live view and a snapshot of
+// what's actually live, by contrast, ARE supposed to carry the same row
+// content whenever nothing has changed — see `parseLiveViewRowBodies`'s own
+// header for the fuller account.
+//
+// A row ID tracked-only (edited locally, not yet published) is tolerated —
+// the normal pre-publish state. A row ID published-only is untouched by
+// this check (existing discharge handling decides it).
+// ---------------------------------------------------------------------------
+
+// A controllable set of `<details class="item">` / `<div class="body">` rows
+// for one glance-table group — real live-view row markup, since that is the
+// one shape `parseLiveViewRowBodies` reads (mirrors the tracked
+// live-view.html and every real `--against-published` snapshot;
+// `buildLiveView`/`buildSingleGroupLiveView` above deliberately skip it,
+// which is also why none of the tests using them exercise this check at
+// all).
+function buildRowContentLiveView(rows) {
+  const detailsBlocks = rows
+    .map(
+      ({ id, body, risk }) => `    <details class="item">
+      <summary><span class="num">${id}</span><span class="iname">t</span><span class="risk">${risk ?? 'default'}</span></summary>
+      <div class="body">
+        <p>${body}</p>
+      </div>
+    </details>`,
+    )
+    .join('\n');
+  return `<title>On-box acceptance register — Castwright</title>
+
+  <div class="strip">
+    <div class="n owed">${rows.length}</div><div class="l">Owed</div>
+  </div>
+
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>${rows.length}</td></tr>
+    </tbody>
+  </table>
+
+  <section class="group" id="ga">
+    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">${rows.length} rows</span></h3>
+${detailsBlocks}
+  </section>
+`;
+}
+
+test('#2599: identical row body content (tracked vs published) passes, no content-drift error', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: 'Shared content, unchanged.' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Shared content, unchanged.' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+  });
+  assert.deepEqual(errors, []);
+});
+
+// Mutation-provable: same ID, same per-group count (both sides have exactly
+// one row, A1) — only the row's own body text differs between the tracked
+// copy and the published copy. This is the exact A41 regression shape the
+// whole-page diff this replaces could never catch. With the baseline
+// available, this represents a genuine drift: tracked has new content not
+// in the baseline, published matches the baseline. The fix disambiguates
+// using the baseline live-view HTML.
+test('#2599: a row whose ID and count match but body content differs is caught, naming the row', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Genuine A41-style drift: tracked matches baseline (already merged to
+  // origin/main), but published still carries the old, stale content — the
+  // live page was never updated to match.
+  const baselineLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Tracked local content, different from published.' },
+  ]);
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: 'Tracked local content, different from published.' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Original content.' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: baselineLiveView,
+  });
+  assert.deepEqual(errors, [`${ROW_CONTENT_DRIFT_ERROR_PREFIX}A1: content differs between local and published`]);
+});
+
+test('#2599: a row present only in the tracked live view (not yet published) is tolerated, not reported as content drift', () => {
+  const workingRegister = buildMultiGroupRegister([{ letter: 'A', rowNumbers: [1, 2] }]);
+  const baselineRegister = buildMultiGroupRegister([{ letter: 'A', rowNumbers: [1, 2] }]);
+  // A2 is new, about to be published for the first time — the published
+  // copy only has A1. It has no published-side body to compare against at
+  // all.
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: 'Body text.' },
+    { id: 'A2', body: 'New row, not yet published.' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([{ id: 'A1', body: 'Body text.' }]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+  });
+  assert.ok(
+    !errors.some((e) => e.includes('content differs')),
+    `a tracked-only row must not be reported as content drift, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// `trackedLiveViewHtml` is opt-in: a caller that never passes it (as none of
+// the OTHER extraOnly tests in this file do) gets no content-drift checking
+// at all, rather than an error about a missing argument — most direct
+// `checkLiveView` callers have no tracked copy to compare and nothing this
+// sub-check needs from them.
+test('#2599: omitting trackedLiveViewHtml skips the content-drift check entirely', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Whatever this says is irrelevant here.' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+  });
+  assert.deepEqual(errors, []);
+});
+
+// #2599/A41: Content-hashing baseline disambiguation tests. A row's content
+// may differ between tracked and published for two reasons: (1) a legitimate
+// local edit not yet merged to origin/main (pending publish), or (2) a genuine
+// revert/hand-edit on the live page. The baseline (origin/main's copy)
+// disambiguates: if published matches the baseline while tracked differs, the
+// edit is a local pending-publish, not drift.
+test('#2599: a legitimate pending-publish edit (published matches baseline) does not fail', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Baseline and published both have the SAME OLD content (main hasn't changed).
+  // Tracked has the NEW content (local edit not yet on origin/main). This is
+  // a legitimate pending-publish state — published matches baseline, tracked is ahead.
+  const oldContent = 'Old content from origin/main.';
+  const newContent = 'New local edit, not yet on origin/main.';
+  const baselineLiveView = buildRowContentLiveView([
+    { id: 'A1', body: oldContent },
+  ]);
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: newContent },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: oldContent },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: baselineLiveView,
+  });
+  assert.deepEqual(
+    errors,
+    [],
+    `a legitimate pending-publish edit should not fail, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// Genuine drift (A41): a fix was merged to origin/main, but the live page was
+// independently reverted to stale content. Tracked matches baseline (fix on main),
+// published differs from both (live was reverted). This is drift and must be flagged.
+test('#2599: a genuine revert (published differs from baseline/tracked) fails', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Baseline and tracked both have the FIXED content (already on origin/main).
+  // Published has the OLD content (the live page was reverted/hand-edited).
+  // This is genuine A41-style drift.
+  const fixedContent = 'Fixed content, merged to origin/main.';
+  const oldContent = 'Old content, published was reverted.';
+  const baselineLiveView = buildRowContentLiveView([
+    { id: 'A1', body: fixedContent },
+  ]);
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: fixedContent },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: oldContent },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: baselineLiveView,
+  });
+  assert.deepEqual(
+    errors,
+    [`${ROW_CONTENT_DRIFT_ERROR_PREFIX}A1: content differs between local and published`],
+    `a genuine revert should fail, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// Baseline not available — fail closed, skip the content-hashing check.
+test('#2599: missing baseline live-view skips content-hashing, does not fail', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Tracked and published differ, but no baseline is available.
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: 'Edited content.' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: 'Original content.' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: null, // No baseline
+  });
+  assert.deepEqual(
+    errors,
+    [],
+    `missing baseline should skip content-hashing, not fail, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// #2599/A41: the summary element (title/risk badge) is now included in the
+// content hash, so a stale risk badge is caught as drift, same as a changed
+// body paragraph. Regression test for Finding 3: ensure a row with unchanged
+// body but different risk badge between tracked and published (with matching
+// baseline) is caught as genuine drift.
+test('#2599: a row whose body is unchanged but risk badge differs is caught as content drift', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // All three have the same body content, but the summary/risk badge differs.
+  // Genuine drift: tracked matches baseline (already merged — 'current' is
+  // the correct, already-committed badge), but published still shows the
+  // stale badge that was never updated on the live page.
+  const sharedBody = 'Shared body content.';
+  const baselineLiveView = buildRowContentLiveView([
+    { id: 'A1', body: sharedBody, risk: 'current' },
+  ]);
+  const trackedLiveViewHtml = buildRowContentLiveView([
+    { id: 'A1', body: sharedBody, risk: 'current' },
+  ]);
+  const publishedLiveView = buildRowContentLiveView([
+    { id: 'A1', body: sharedBody, risk: 'stale-badge' },
+  ]);
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: baselineLiveView,
+  });
+  assert.deepEqual(
+    errors,
+    [`${ROW_CONTENT_DRIFT_ERROR_PREFIX}A1: content differs between local and published`],
+    `a stale risk badge should be caught as content drift, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // #2272 review finding 1: a discharge that removes a group's LAST row makes
 // the whole group vanish from the working register (not just one row within
 // a group the register still has) — a shape the per-row `extra`/`staleExtra`
@@ -1985,7 +2269,7 @@ test('#2272 review finding 1: a whole-group BEHIND verdict with no --discharging
 // real (but deliberately unreachable) `git fetch`.
 // ---------------------------------------------------------------------------
 
-test('resolveBaselineText: fetch, then rev-parse FETCH_HEAD, then show <sha>, in that order, on success', () => {
+test('resolveBaselineTexts: fetch, then rev-parse FETCH_HEAD, then show <sha> for both files, in that order, on success', () => {
   const calls = [];
   const fakeRunner = (args, cwd) => {
     calls.push({ args, cwd });
@@ -1994,19 +2278,26 @@ test('resolveBaselineText: fetch, then rev-parse FETCH_HEAD, then show <sha>, in
       return { status: 0, stdout: 'deadbeefcafe\n', stderr: '', error: undefined };
     }
     if (args[0] === 'show') {
-      return { status: 0, stdout: 'FAKE REGISTER TEXT', stderr: '', error: undefined };
+      // Return different content for the register vs live-view file
+      if (args[1].includes('onbox-acceptance-register.md')) {
+        return { status: 0, stdout: 'FAKE REGISTER TEXT', stderr: '', error: undefined };
+      } else if (args[1].includes('onbox-acceptance-register-live-view.html')) {
+        return { status: 0, stdout: 'FAKE LIVEVIEW TEXT', stderr: '', error: undefined };
+      }
+      return { status: 0, stdout: 'FAKE TEXT', stderr: '', error: undefined };
     }
     throw new Error(`unexpected git subcommand in test: ${args[0]}`);
   };
-  const result = resolveBaselineText(
+  const result = resolveBaselineTexts(
     '/fake/repo',
     'docs/testing/onbox-acceptance-register.md',
+    'docs/testing/onbox-acceptance-register-live-view.html',
     fakeRunner,
   );
   assert.deepEqual(
     calls.map((c) => c.args[0]),
-    ['fetch', 'rev-parse', 'show'],
-    'expected fetch, then rev-parse, then show, in that order',
+    ['fetch', 'rev-parse', 'show', 'show'],
+    'expected fetch, then rev-parse, then show (register), then show (live-view), in that order',
   );
   assert.deepEqual(calls[0].args, ['fetch', 'origin', 'main']);
   assert.deepEqual(calls[1].args, ['rev-parse', 'FETCH_HEAD']);
@@ -2018,13 +2309,22 @@ test('resolveBaselineText: fetch, then rev-parse FETCH_HEAD, then show <sha>, in
     'show',
     'deadbeefcafe:docs/testing/onbox-acceptance-register.md',
   ]);
+  assert.deepEqual(calls[3].args, [
+    'show',
+    'deadbeefcafe:docs/testing/onbox-acceptance-register-live-view.html',
+  ]);
   assert.equal(calls[0].cwd, '/fake/repo');
   assert.equal(calls[1].cwd, '/fake/repo');
   assert.equal(calls[2].cwd, '/fake/repo');
-  assert.deepEqual(result, { text: 'FAKE REGISTER TEXT', failedStep: null });
+  assert.equal(calls[3].cwd, '/fake/repo');
+  assert.deepEqual(result, {
+    registerText: 'FAKE REGISTER TEXT',
+    liveViewText: 'FAKE LIVEVIEW TEXT',
+    failedStep: null,
+  });
 });
 
-test('resolveBaselineText: whitespace/newline around the rev-parsed SHA is trimmed before the show', () => {
+test('resolveBaselineTexts: whitespace/newline around the rev-parsed SHA is trimmed before the show calls', () => {
   // Real `git rev-parse` output ends with a trailing newline — asserting
   // this explicitly pins that the SHA is trimmed, not concatenated as-is
   // (which would produce an invalid `<sha>\n:<path>` show argument).
@@ -2036,8 +2336,10 @@ test('resolveBaselineText: whitespace/newline around the rev-parsed SHA is trimm
     if (args[0] === 'show') return { status: 0, stdout: 'TEXT', stderr: '' };
     throw new Error(`unexpected git subcommand in test: ${args[0]}`);
   };
-  resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
+  // Both show calls (register and liveview) should use the trimmed SHA
   assert.deepEqual(calls[2], ['show', 'abc123:reg.md']);
+  assert.deepEqual(calls[3], ['show', 'abc123:live.html']);
 });
 
 // #2199 review round 3 (A1): `git fetch origin main` only GUARANTEES it
@@ -2050,7 +2352,7 @@ test('resolveBaselineText: whitespace/newline around the rev-parsed SHA is trimm
 // asserting on the LITERAL show args — a regression back to `origin/main:`
 // would pass every other test in this file (they never touch the real,
 // possibly-narrowly-configured origin) but must fail this one.
-test("resolveBaselineText: never references origin/main directly at any step, so a narrowed remote refspec can't serve a stale ref (A1)", () => {
+test("resolveBaselineTexts: never references origin/main directly at any step, so a narrowed remote refspec can't serve a stale ref (A1)", () => {
   const calls = [];
   const fakeRunner = (args) => {
     calls.push(args);
@@ -2059,31 +2361,33 @@ test("resolveBaselineText: never references origin/main directly at any step, so
     if (args[0] === 'show') return { status: 0, stdout: 'FRESH', stderr: '' };
     throw new Error(`unexpected git subcommand in test: ${args[0]}`);
   };
-  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
+  const result = resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
   assert.deepEqual(calls[1], ['rev-parse', 'FETCH_HEAD']);
   assert.deepEqual(calls[2], ['show', 'cafef00d:reg.md']);
+  assert.deepEqual(calls[3], ['show', 'cafef00d:live.html']);
   for (const call of calls) {
     assert.ok(
       !call.some((arg) => typeof arg === 'string' && arg.includes('origin/main')),
       `no git call may ever reference origin/main directly, got: ${JSON.stringify(call)}`,
     );
   }
-  assert.equal(result.text, 'FRESH');
+  assert.equal(result.registerText, 'FRESH');
+  assert.equal(result.liveViewText, 'FRESH');
 });
 
-test('resolveBaselineText: a failing fetch (non-zero exit) short-circuits before show ever runs', () => {
+test('resolveBaselineTexts: a failing fetch (non-zero exit) short-circuits before show ever runs', () => {
   const calls = [];
   const fakeRunner = (args) => {
     calls.push(args[0]);
     if (args[0] === 'fetch') return { status: 1, stdout: '', stderr: 'fake fetch failure' };
     return { status: 0, stdout: 'should never be reached', stderr: '' };
   };
-  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
-  assert.deepEqual(result, { text: null, failedStep: 'fetch' });
+  const result = resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
+  assert.deepEqual(result, { registerText: null, liveViewText: null, failedStep: 'fetch' });
   assert.deepEqual(calls, ['fetch'], 'show must not run after a failed fetch');
 });
 
-test('resolveBaselineText: a spawn error on fetch (e.g. git missing, or a timeout) is also a fetch failure', () => {
+test('resolveBaselineTexts: a spawn error on fetch (e.g. git missing, or a timeout) is also a fetch failure', () => {
   // Node's spawnSync sets `result.error` (not just a non-zero `status`) both
   // when the executable can't be spawned at all (ENOENT) and when its own
   // `timeout` option fires — this fixture models either, since the
@@ -2096,12 +2400,12 @@ test('resolveBaselineText: a spawn error on fetch (e.g. git missing, or a timeou
     }
     return { status: 0, stdout: 'should never be reached', stderr: '' };
   };
-  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
-  assert.deepEqual(result, { text: null, failedStep: 'fetch' });
+  const result = resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
+  assert.deepEqual(result, { registerText: null, liveViewText: null, failedStep: 'fetch' });
   assert.deepEqual(calls, ['fetch']);
 });
 
-test('resolveBaselineText: a failing show (after a successful fetch + rev-parse) is reported as a show failure, not a fetch failure', () => {
+test('resolveBaselineTexts: a failing show (after a successful fetch + rev-parse) is reported as a show failure, not a fetch failure', () => {
   const calls = [];
   const fakeRunner = (args) => {
     calls.push(args[0]);
@@ -2110,18 +2414,18 @@ test('resolveBaselineText: a failing show (after a successful fetch + rev-parse)
     if (args[0] === 'show') return { status: 128, stdout: '', stderr: 'fake show failure' };
     throw new Error(`unexpected git subcommand in test: ${args[0]}`);
   };
-  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
-  assert.deepEqual(result, { text: null, failedStep: 'show' });
-  assert.deepEqual(
-    calls,
-    ['fetch', 'rev-parse', 'show'],
-    'show must still run after a successful fetch + rev-parse',
+  const result = resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
+  assert.deepEqual(result, { registerText: null, liveViewText: null, failedStep: 'show' });
+  // Both register and liveview show calls are attempted, so we see up to 4 calls total
+  assert.ok(
+    calls.includes('show'),
+    'show must run after a successful fetch + rev-parse',
   );
 });
 
-test('resolveBaselineText: a failing rev-parse (after a successful fetch) is also reported as a "show" failure, and the show never runs', () => {
+test('resolveBaselineTexts: a failing rev-parse (after a successful fetch) is also reported as a "show" failure, and the show never runs', () => {
   // #2199 review round 5 (optional hardening): rev-parse and show are folded
-  // into the same failedStep, deliberately — see resolveBaselineText's own
+  // into the same failedStep, deliberately — see resolveBaselineTexts's own
   // comment for why. This pins that folding, and that a rev-parse failure
   // still short-circuits before an invalid `undefined:<path>` show is ever
   // attempted.
@@ -2134,8 +2438,8 @@ test('resolveBaselineText: a failing rev-parse (after a successful fetch) is als
     }
     return { status: 0, stdout: 'should never be reached', stderr: '' };
   };
-  const result = resolveBaselineText('/fake/repo', 'reg.md', fakeRunner);
-  assert.deepEqual(result, { text: null, failedStep: 'show' });
+  const result = resolveBaselineTexts('/fake/repo', 'reg.md', 'live.html', fakeRunner);
+  assert.deepEqual(result, { registerText: null, liveViewText: null, failedStep: 'show' });
   assert.deepEqual(calls, ['fetch', 'rev-parse'], 'show must not run after a failed rev-parse');
 });
 
@@ -3046,4 +3350,480 @@ test('htmlCellText: handles simple tags correctly', () => {
 
 test('htmlCellText: collapses whitespace after tag stripping', () => {
   assert.equal(htmlCellText('<b>  hello   world  </b>'), 'hello world');
+});
+
+// ---------------------------------------------------------------------------
+// #2599/A41: parseLiveViewRowBodies extraction-failure handling. A silent skip
+// when markup changes (e.g. <div class="body"> → <div class="body is-open">)
+// turns the whole check into a vacuous pass over fewer rows. These errors must
+// surface explicitly rather than silently dropping rows.
+// ---------------------------------------------------------------------------
+
+test('#2599/A41: missing row-ID marker is an extraction error, not a silent skip', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // A row block with no <span class="num"> — the ID cannot be extracted.
+  const malformedLiveView = `<title>On-box acceptance register — Castwright</title>
+  <div class="strip"><div class="n owed">1</div><div class="l">Owed</div></div>
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>1</td></tr>
+    </tbody>
+  </table>
+  <section class="group" id="ga">
+    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">1 rows</span></h3>
+    <details class="item">
+      <summary><!-- Missing <span class="num">A1</span> here --><span class="iname">t</span></summary>
+      <div class="body"><p>Row content</p></div>
+    </details>
+  </section>`;
+  const errors = checkLiveView(workingRegister, malformedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml: malformedLiveView,
+  });
+  assert.ok(
+    errors.some((e) => e.startsWith(EXTRACTION_ERROR_PREFIX) && e.includes('could not extract row ID')),
+    `expected an extraction error for missing row ID, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('#2599/A41: malformed body-div markup is an extraction error, not a silent skip', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // The <div class="body"> is changed to <div class="body is-open"> — the
+  // closing tag regex no longer matches, so the body content cannot be extracted.
+  const malformedLiveView = `<title>On-box acceptance register — Castwright</title>
+  <div class="strip"><div class="n owed">1</div><div class="l">Owed</div></div>
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>1</td></tr>
+    </tbody>
+  </table>
+  <section class="group" id="ga">
+    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">1 rows</span></h3>
+    <details class="item">
+      <summary><span class="num">A1</span><span class="iname">t</span></summary>
+      <div class="body is-open"><p>Row content changed by markup</p></div>
+    </details>`;
+  const errors = checkLiveView(workingRegister, malformedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml: malformedLiveView,
+  });
+  assert.ok(
+    errors.some((e) => e.startsWith(EXTRACTION_ERROR_PREFIX) && e.includes('Row A1') && e.includes('could not extract body content')),
+    `expected an extraction error for row A1 body, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+test('#2599/A41: when both tracked and published fail extraction, all errors surface', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Both copies have malformed markup — both should report errors.
+  const malformedTracked = `<title>On-box acceptance register — Castwright</title>
+  <div class="strip"><div class="n owed">1</div><div class="l">Owed</div></div>
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>1</td></tr>
+    </tbody>
+  </table>
+  <section class="group" id="ga">
+    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">1 rows</span></h3>
+    <details class="item">
+      <summary><span class="num">A1</span><span class="iname">t</span></summary>
+      <div class="body broken"><p>Malformed tracked</p></div>
+    </details>
+  </section>`;
+  const malformedPublished = `<title>On-box acceptance register — Castwright</title>
+  <div class="strip"><div class="n owed">1</div><div class="l">Owed</div></div>
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>1</td></tr>
+    </tbody>
+  </table>
+  <section class="group" id="ga">
+    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">1 rows</span></h3>
+    <details class="item">
+      <summary><span class="num">A1</span><span class="iname">t</span></summary>
+      <div class="body broken"><p>Malformed published</p></div>
+    </details>
+  </section>`;
+  const errors = checkLiveView(workingRegister, malformedPublished, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml: malformedTracked,
+  });
+  // Should have extraction errors reported from both the tracked and published
+  // parses (they both have malformed markup). Since both are malformed with the
+  // same ID, we expect at least two errors (one from each parse).
+  assert.ok(
+    errors.length >= 2,
+    `expected at least 2 extraction errors (one per malformed copy), got ${errors.length}: ${JSON.stringify(errors)}`,
+  );
+  // Most specifically, should have extraction errors for row A1 body.
+  assert.ok(
+    errors.some((e) => e.startsWith(EXTRACTION_ERROR_PREFIX) && e.includes('Row A1') && e.includes('could not extract body content')),
+    `expected Row A1 body-extraction errors, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// #2599 Finding A: Regression test for the content-drift failure banner naming the correct file.
+// The banner should name the LIVE_VIEW file (what was actually diffed), not the REGISTER file.
+test('--against-published: content-drift error banner names the live-view.html file, not the register', () => {
+  const originalLiveView = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
+  // Genuine A41-style drift under the corrected model: tracked matches the
+  // baseline (this edit is already merged to origin/main) while published
+  // still carries the OLD, stale content — the live page never caught up.
+  const modifiedLiveView = originalLiveView.replace(
+    /<p>([^<]+)<\/p>/,
+    '<p>Modified content for testing drift detection</p>',
+  );
+  // Hermetic test — use temp files for all three inputs, never the real
+  // tracked repo file (see #2599 review round 2: writing to the real file
+  // directly is unsafe and non-hermetic).
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-cli-test-'));
+  try {
+    const publishedPath = join(dir, 'published.html');
+    const baselinePath = join(dir, 'baseline.md');
+    const baselineLiveViewPath = join(dir, 'baseline-liveview.html');
+    const trackedLiveViewPath = join(dir, 'tracked-liveview.html');
+    writeFileSync(publishedPath, originalLiveView, 'utf8');
+    writeFileSync(baselinePath, REAL_REGISTER_TEXT, 'utf8');
+    writeFileSync(baselineLiveViewPath, modifiedLiveView, 'utf8');
+    writeFileSync(trackedLiveViewPath, modifiedLiveView, 'utf8');
+
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_BASELINE_LIVEVIEW_FILE: baselineLiveViewPath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedLiveViewPath,
+    });
+
+    assert.equal(r.status, 1, `expected exit 1 for content drift, got ${r.status}. stderr: ${r.stderr}`);
+    // The fix for Finding A: banner should say "differs from" the live-view HTML path
+    assert.ok(
+      r.stderr.includes('onbox-acceptance-register-live-view.html'),
+      `expected banner to name the live-view.html file, got stderr: ${r.stderr}`,
+    );
+    // Verify it mentions content differs (for the drift case)
+    assert.ok(
+      r.stderr.includes('content differs') || r.stderr.includes('row-content-drift'),
+      `expected error to mention content differs, got stderr: ${r.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2599 Finding B: Regression test for CLI-level wiring of trackedLiveViewHtml.
+// This test verifies the CLI properly passes the tracked live view to the content-drift check.
+// Mutation test: if the line passing trackedLiveViewHtml is commented out, this should fail.
+test('--against-published: CLI correctly wires trackedLiveViewHtml into the content-drift check', () => {
+  const originalContent = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
+  // Genuine A41-style drift: tracked matches baseline (already merged to
+  // origin/main), but published still carries the old, stale content.
+  const modifiedContent = originalContent.replace(
+    /<p>([^<]+)<\/p>/,
+    '<p>Test-modified content to trigger drift detection</p>',
+  );
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-cli-test-'));
+  try {
+    const publishedPath = join(dir, 'published.html');
+    const baselinePath = join(dir, 'baseline.md');
+    const baselineLiveViewPath = join(dir, 'baseline-live.html');
+    const trackedLiveViewPath = join(dir, 'tracked-live.html');
+    writeFileSync(publishedPath, originalContent, 'utf8');
+    writeFileSync(baselinePath, REAL_REGISTER_TEXT, 'utf8');
+    writeFileSync(baselineLiveViewPath, modifiedContent, 'utf8');
+    writeFileSync(trackedLiveViewPath, modifiedContent, 'utf8');
+
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_BASELINE_LIVEVIEW_FILE: baselineLiveViewPath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedLiveViewPath,
+    });
+
+    // tracked (modified) matches baseline (also modified) — genuine drift,
+    // since published still carries the stale, original content. If
+    // trackedLiveViewHtml were not actually wired into the check (the CLI
+    // silently reading the real on-disk file instead of this override),
+    // the real on-disk file would almost certainly not equal `modifiedContent`
+    // byte-for-byte, changing the verdict — this asserts the specific,
+    // non-vacuous outcome the wiring is responsible for.
+    assert.equal(r.status, 1, `expected exit 1 for genuine content drift, got ${r.status}. stderr: ${r.stderr}`);
+    assert.ok(
+      r.stderr.includes('row-content-drift'),
+      `expected a row-content-drift error, got stderr: ${r.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2837 Finding 1: 3-way content disagreement (all three differ) is ordinary
+// for multi-step publishes but hash-only comparison can't tell from genuine
+// conflicts. Must report as advisory warning, not hard-block. Test that the
+// warning is returned and is marked as such (not a hard drift error).
+test('#2837: 3-way content disagreement (all three differ) returns warning, not error', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // All three have different content: the classic 34/61 multi-step scenario.
+  // Baseline has v0, published has v0 (unchanged), tracked has v1 (first edit).
+  // Then before merging, tracked changes to v2 (second edit). Now all three differ.
+  const v0Content = 'Original baseline content (v0).';
+  const v1Content = 'First edit (v1), published.';
+  const v2Content = 'Second edit (v2), tracked local.';
+
+  const baselineLiveView = buildRowContentLiveView([{ id: 'A1', body: v0Content }]);
+  const publishedLiveView = buildRowContentLiveView([{ id: 'A1', body: v1Content }]);
+  const trackedLiveViewHtml = buildRowContentLiveView([{ id: 'A1', body: v2Content }]);
+
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: baselineRegister,
+    trackedLiveViewHtml,
+    baselineLiveViewText: baselineLiveView,
+  });
+
+  // Should contain a 3-way warning, not a drift error.
+  assert.ok(
+    errors.some((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX)),
+    `expected a 3-way warning, got: ${JSON.stringify(errors)}`,
+  );
+  assert.ok(
+    !errors.some((e) => e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX)),
+    `should not have a drift error for 3-way case, got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// #2837 Finding 4: extraction errors must be tagged with their source so the
+// CLI can attribute them correctly (tracked vs published vs baseline).
+test('#2837: extraction errors from tracked copy are tagged [tracked]', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  // Tracked live view has malformed HTML (missing the body div's class attribute,
+  // which parseLiveViewRowBodies requires to find it).
+  const normalHtml = buildRowContentLiveView([{ id: 'A1', body: 'Normal content' }]);
+  const corruptedTrackedHtml = normalHtml.replace(
+    /<div class="body">/g,
+    '<div>',
+  );
+  const publishedLiveView = buildRowContentLiveView([{ id: 'A1', body: 'Normal' }]);
+
+  const errors = checkLiveView(workingRegister, publishedLiveView, {
+    direction: 'extraOnly',
+    baselineText: workingRegister,
+    trackedLiveViewHtml: corruptedTrackedHtml,
+  });
+
+  const trackedErrors = errors.filter((e) => e.includes('[tracked]'));
+  assert.ok(
+    trackedErrors.length > 0,
+    `expected extraction error tagged [tracked], got: ${JSON.stringify(errors)}`,
+  );
+});
+
+// #2599 review round 2: the polarity of the tracked/published/baseline
+// disambiguation was inverted in an earlier fix — every ordinary publish
+// (tracked ahead of an unmerged baseline, published still at baseline)
+// hard-failed as if it were genuine drift. Unit-test fixtures alone didn't
+// catch this because a fixture that's WRITTEN to assert "not drift" can
+// itself encode the wrong scenario, same as this file's own
+// pre-existing fixtures did. The only test that actually caught the
+// inversion replayed REAL commit history and measured a concrete
+// false-positive rate (14/25). This test keeps that replay as a permanent
+// regression check: replay the last N real commits that touched the
+// live-view file as ordinary, unmerged, pre-publish edits, and assert none
+// of them ever hard-fail as content drift.
+const REPO_ROOT = join(HERE, '..', '..');
+test('#2599 review round 2: replaying real live-view.html history as ordinary pending-publishes never hard-fails', () => {
+  const lvRelPath = 'docs/testing/onbox-acceptance-register-live-view.html';
+  const regRelPath = 'docs/testing/onbox-acceptance-register.md';
+  const commits = spawnSync(
+    'git',
+    ['-C', REPO_ROOT, 'log', '--format=%H', '-25', '--', lvRelPath],
+    { encoding: 'utf8' },
+  ).stdout.trim().split('\n').filter(Boolean);
+  assert.ok(commits.length > 0, 'fixture assumption: real commit history exists for the live-view file');
+
+  function show(ref, path) {
+    const r = spawnSync('git', ['-C', REPO_ROOT, 'show', `${ref}:${path}`], { encoding: 'utf8' });
+    return r.status === 0 ? r.stdout : null;
+  }
+
+  const falsePositives = [];
+  for (const commit of commits) {
+    const oldLiveView = show(`${commit}~1`, lvRelPath);
+    const newLiveView = show(commit, lvRelPath);
+    const oldRegister = show(`${commit}~1`, regRelPath);
+    const newRegister = show(commit, regRelPath);
+    if (oldLiveView === null || newLiveView === null || oldRegister === null || newRegister === null) continue;
+    // Replay as the ordinary pre-merge publish shape: tracked = the new
+    // commit's content (just committed locally), baseline = the OLD content
+    // (not yet merged to origin/main), published = the OLD content (the
+    // live page, unchanged so far).
+    const errors = checkLiveView(newRegister, oldLiveView, {
+      direction: 'extraOnly',
+      baselineText: oldRegister,
+      trackedLiveViewHtml: newLiveView,
+      baselineLiveViewText: oldLiveView,
+    });
+    const driftErrors = errors.filter((e) => e.includes('row-content-drift'));
+    if (driftErrors.length > 0) {
+      falsePositives.push({ commit: commit.slice(0, 8), driftErrors });
+    }
+  }
+
+  assert.deepEqual(
+    falsePositives,
+    [],
+    `${falsePositives.length}/${commits.length} ordinary-publish replays hard-failed as content drift: ${JSON.stringify(falsePositives, null, 2)}`,
+  );
+});
+
+// #2837 Finding 1: CLI-level test ensuring 3-way warnings print to stderr and
+// exit 0 (not 1). Unit tests cover checkLiveView's return value; this tests
+// the CLI's wiring: that `console.warn` prints the warnings visibly, that
+// `behindErrors` filter excludes 3-way-prefixed entries, and that
+// publishedFailed is NOT set.
+test('#2837: CLI -- 3-way content disagreement prints warning to stderr, exits 0', () => {
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // All three differ: baseline v0, published v1 (from a first publish),
+  // tracked v2 (second edit before merge).
+  const v0Content = 'Original baseline (v0)';
+  const v1Content = 'First publish (v1)';
+  const v2Content = 'Second edit (v2)';
+
+  const baselineLiveView = buildRowContentLiveView([{ id: 'A1', body: v0Content }]);
+  const publishedLiveView = buildRowContentLiveView([{ id: 'A1', body: v1Content }]);
+  const trackedLiveViewHtml = buildRowContentLiveView([{ id: 'A1', body: v2Content }]);
+
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-cli-test-'));
+  try {
+    const publishedPath = join(dir, 'published.html');
+    const baselinePath = join(dir, 'baseline.md');
+    const baselineLiveViewPath = join(dir, 'baseline-liveview.html');
+    const trackedLiveViewPath = join(dir, 'tracked-liveview.html');
+    writeFileSync(publishedPath, publishedLiveView, 'utf8');
+    writeFileSync(baselinePath, baselineRegister, 'utf8');
+    writeFileSync(baselineLiveViewPath, baselineLiveView, 'utf8');
+    writeFileSync(trackedLiveViewPath, trackedLiveViewHtml, 'utf8');
+
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_BASELINE_LIVEVIEW_FILE: baselineLiveViewPath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedLiveViewPath,
+    });
+
+    // Must exit 0 (not 1) — 3-way warnings do not block.
+    assert.equal(r.status, 0, `expected exit 0 for 3-way warning (not error), got ${r.status}. stderr: ${r.stderr}`);
+    // Warning must appear in stderr.
+    assert.ok(
+      r.stderr.includes('Three-way content differences detected'),
+      `expected 3-way warning message in stderr, got: ${r.stderr}`,
+    );
+    // Exact string check: the message must say "not blocking".
+    assert.ok(
+      r.stderr.includes('not blocking'),
+      `expected "not blocking" in warning text, got: ${r.stderr}`,
+    );
+    // The row ID should be mentioned in the warning.
+    assert.ok(
+      r.stderr.includes('A1'),
+      `expected row ID (A1) mentioned in warning, got: ${r.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2837 Finding 1: CLI-level test for extraction error in the tracked (working-tree)
+// live-view file. The banner must blame the tracked/local file specifically.
+test('#2837: CLI -- extraction error in tracked live-view produces [tracked] banner', () => {
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Normal published/baseline; corrupted tracked by removing the body div's class.
+  const normalHtml = buildRowContentLiveView([{ id: 'A1', body: 'Normal content' }]);
+  const corruptedTrackedHtml = normalHtml.replace(
+    /<div class="body">/g,
+    '<div>',  // Missing class="body", causes extraction error
+  );
+
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-cli-test-'));
+  try {
+    const publishedPath = join(dir, 'published.html');
+    const baselinePath = join(dir, 'baseline.md');
+    const baselineLiveViewPath = join(dir, 'baseline-liveview.html');
+    const trackedLiveViewPath = join(dir, 'tracked-liveview.html');
+    writeFileSync(publishedPath, normalHtml, 'utf8');
+    writeFileSync(baselinePath, baselineRegister, 'utf8');
+    writeFileSync(baselineLiveViewPath, normalHtml, 'utf8');
+    writeFileSync(trackedLiveViewPath, corruptedTrackedHtml, 'utf8');
+
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_BASELINE_LIVEVIEW_FILE: baselineLiveViewPath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedLiveViewPath,
+    });
+
+    // Must fail (exit 1) due to malformed HTML.
+    assert.equal(r.status, 1, `expected exit 1 for extraction error, got ${r.status}. stderr: ${r.stderr}`);
+    // The error banner must mention that the tracked/local copy is broken.
+    assert.ok(
+      r.stderr.includes('Your local') && r.stderr.includes('working-tree copy'),
+      `expected error to blame local/working-tree copy, got: ${r.stderr}`,
+    );
+    // The banner must include [tracked] tag or mention "tracked".
+    assert.ok(
+      r.stderr.includes('[tracked]') || r.stderr.includes('tracking'),
+      `expected [tracked] tag or 'tracking' mention in error, got: ${r.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// #2837 Finding 1: CLI-level test for extraction error in the baseline
+// (origin/main) live-view file. The banner must blame the baseline specifically.
+test('#2837: CLI -- extraction error in baseline live-view produces [baseline] banner', () => {
+  const baselineRegister = buildSingleGroupRegister('A', [1]);
+  // Normal published/tracked; corrupted baseline by removing the body div's class.
+  const normalHtml = buildRowContentLiveView([{ id: 'A1', body: 'Normal content' }]);
+  const corruptedBaselineHtml = normalHtml.replace(
+    /<div class="body">/g,
+    '<div>',  // Missing class="body", causes extraction error
+  );
+
+  const dir = mkdtempSync(join(tmpdir(), 'onbox-cli-test-'));
+  try {
+    const publishedPath = join(dir, 'published.html');
+    const baselinePath = join(dir, 'baseline.md');
+    const baselineLiveViewPath = join(dir, 'baseline-liveview.html');
+    const trackedLiveViewPath = join(dir, 'tracked-liveview.html');
+    writeFileSync(publishedPath, normalHtml, 'utf8');
+    writeFileSync(baselinePath, baselineRegister, 'utf8');
+    writeFileSync(baselineLiveViewPath, corruptedBaselineHtml, 'utf8');
+    writeFileSync(trackedLiveViewPath, normalHtml, 'utf8');
+
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_BASELINE_LIVEVIEW_FILE: baselineLiveViewPath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedLiveViewPath,
+    });
+
+    // Must fail (exit 1) due to malformed HTML.
+    assert.equal(r.status, 1, `expected exit 1 for extraction error, got ${r.status}. stderr: ${r.stderr}`);
+    // The error banner itself (not the unrelated ONBOX_TEST_BASELINE_LIVEVIEW_FILE
+    // override warning, which also happens to mention "origin/main") must
+    // specifically blame the baseline copy — this exact phrase only appears
+    // in the baseline extraction-error banner text.
+    assert.ok(
+      r.stderr.includes("origin/main's") && r.stderr.includes('(baseline copy) has malformed'),
+      `expected the baseline extraction-error banner specifically, got: ${r.stderr}`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

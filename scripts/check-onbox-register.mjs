@@ -29,6 +29,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { scrubGitEnv } from './git-env.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
@@ -69,7 +70,7 @@ import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 // its ID to collide with. This is a widening of the limitation, not a
 // narrowing one, and is worth saying plainly rather than leaving the old,
 // narrower caveat standing.
-function stripFences(text) {
+export function stripFences(text) {
   const lines = text.split('\n');
   let openFence = null;
   let openFenceLine = null;
@@ -239,6 +240,86 @@ export function parseAllRowHeadings(strippedText) {
     found.push({ id: `${match[1]}${match[2]}` });
   }
   return found;
+}
+
+// #2599/A41: per-row content hashing for `--against-published`. Row PROSE is
+// not expected to be word-for-word identical between the markdown register
+// and its hand-authored HTML twin — they are deliberately different
+// documents that only have to agree on structure (this file's own header;
+// `checkLiveView`'s 'both'-direction comment) — so hashing markdown text
+// against HTML text produces a mismatch for nearly every row even in a
+// healthy, nothing-wrong state (confirmed against this repo's own committed
+// register + live view while building this check). The two documents that
+// ARE supposed to carry byte-for-byte the same row content are the TRACKED
+// `docs/testing/onbox-acceptance-register-live-view.html` and whatever is
+// actually live: "the published page IS the tracked live-view.html's own
+// content, wrapped in a publish skeleton" (this file's own header, on why
+// `--against-published` reuses `checkLiveView` rather than a second
+// comparator). So this check hashes the TRACKED copy's row content against
+// the PUBLISHED SNAPSHOT's row content, both HTML, both read with the same
+// extraction — not the register at all. `options.trackedLiveViewHtml` is the
+// CLI's local, working-tree copy of the live view (including any uncommitted
+// edits in the publish workflow); see the CLI layer for where it's read from
+// disk.
+//
+// Splits on each `<details class="item">` row wrapper (the one shape the
+// tracked live view and every `--against-published` snapshot both use — see
+// `parseLiveViewSections`'s own header for the section-level version of this
+// same split-and-scan approach), reads the row ID from its `<span
+// class="num">`, and hashes both the `<summary>` content (ID/title/risk badge)
+// and the `<div class="body">...</div>` content. The summary is included to
+// catch drifts in the risk badge or title, which are part of the row's
+// documented state — a stale risk badge is a content regression like a changed
+// body paragraph. A row whose ID isn't a plain `<Letter><N>` (the
+// Blocked/Unconfirmed sections use `—`) is skipped, the same convention
+// `parseLiveViewSections` already filters on. A block with no matching
+// `<summary>...</summary>` or `<div class="body">...</div>` (an extraction
+// failure, e.g. the markup changed) is an error rather than silently skipped —
+// a silent skip would mean comparing fewer rows than the page carries and
+// reporting a vacuous pass.
+//
+// Returns { bodies, errors: [] } on success, or { bodies, errors } when
+// extraction failures occur. Errors are surface-level extraction problems
+// (missing markup markers, malformed rows) — not structural issues like
+// missing sections, which are handled by checkLiveView's own checks.
+export function parseLiveViewRowBodies(liveViewHtml) {
+  const bodies = new Map();
+  const errors = [];
+  const blocks = liveViewHtml.split(/<details\b[^>]*\bclass="item"[^>]*>/).slice(1);
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
+    const block = blocks[blockIndex];
+    const idMatch = block.match(/<span class="num">([^<]*)<\/span>/);
+    if (!idMatch) {
+      errors.push(
+        `${EXTRACTION_ERROR_PREFIX}Row block ${blockIndex + 1}: could not extract row ID from <span class="num">. The markup may be missing or malformed.`,
+      );
+      continue;
+    }
+    const id = idMatch[1].trim();
+    if (!/^[A-Z]\d+$/.test(id)) continue;
+    const summaryMatch = block.match(/<summary>([\s\S]*?)<\/summary>/);
+    if (!summaryMatch) {
+      errors.push(
+        `${EXTRACTION_ERROR_PREFIX}Row ${id}: could not extract summary content from <summary>. The markup may be missing or malformed.`,
+      );
+      continue;
+    }
+    const bodyMatch = block.match(/<div class="body">([\s\S]*?)<\/div>\s*<\/details>/);
+    if (!bodyMatch) {
+      errors.push(
+        `${EXTRACTION_ERROR_PREFIX}Row ${id}: could not extract body content from <div class="body">. The markup may be missing or malformed (e.g., class attribute was modified).`,
+      );
+      continue;
+    }
+    const summaryText = htmlCellText(summaryMatch[1]);
+    const bodyText = htmlCellText(bodyMatch[1]);
+    bodies.set(id, summaryText + '\n' + bodyText);
+  }
+  return { bodies, errors };
+}
+
+function hashRowContent(plainText) {
+  return createHash('sha256').update(plainText).digest('hex');
 }
 
 // Runs all checks and returns a list of human-readable error strings — empty
@@ -649,6 +730,34 @@ export const CANNOT_VERIFY_BASELINE_ERROR =
 // independently-typed strings that could drift apart.
 export const DISCHARGE_NAME_ERROR_PREFIX = '--discharging named ';
 
+// #2599/A41: the prefix every per-row content-drift error starts with —
+// mirroring DISCHARGE_NAME_ERROR_PREFIX just above for the same reason: one
+// error per drifted row ID, so an identity match (like
+// CANNOT_VERIFY_BASELINE_ERROR) can't cover them, and the CLI layer needs to
+// route this class to its OWN remedy rather than the structural "BEHIND"
+// framing below — a row whose content merely drifted isn't "live-only, merge
+// it in", it's "reconcile which side is actually correct", a different fix
+// entirely. The prefix is deliberately distinctive to avoid accidental
+// collision with other error strings that might happen to start with 'row '.
+export const ROW_CONTENT_DRIFT_ERROR_PREFIX = 'row-content-drift: ';
+
+// #2599 Finding 3: the prefix for extraction errors from live-view HTML parsing.
+// These are distinct from BEHIND/drift errors and need their own remedy message.
+// An extraction failure means the check couldn't parse the HTML, not that
+// content drifted — the operator needs to fix the markup, not reconcile content
+// or merge rows. Routed to its own bucket in the CLI, not the BEHIND bucket.
+export const EXTRACTION_ERROR_PREFIX = 'extraction-error: ';
+
+// #2837 Finding 1: the prefix for 3-way content-difference warnings. A 3-way
+// disagreement between tracked, published, and baseline is ordinarily just a
+// multi-step pending-publish (edit, publish, then edit again before merging) —
+// hash-only comparison cannot distinguish this common shape from a genuine
+// conflict. These are reported as visible warnings (never silent), but do NOT
+// block the publish (do not add to the errors array that drives exit 1). The
+// operator can reconcile manually if needed, but an ordinary multi-step publish
+// must not hard-fail.
+export const THREE_WAY_CONTENT_WARNING_PREFIX = 'three-way-warning: ';
+
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
 //
@@ -732,10 +841,32 @@ export const DISCHARGE_NAME_ERROR_PREFIX = '--discharging named ';
 //     Name the ID of the row you discharged. Under stable row IDs that is
 //     exactly the ID that disappears from the live page — IDs are never
 //     reused, so nothing shifts.
+//
+//     #2599/A41: `options.baselineLiveViewText` is origin/main's copy of the
+//     live-view.html for content-hashing disambiguation. The tracked local
+//     copy may have legitimate pending-publish edits (steps already committed
+//     to the branch but not yet published), which would hash differently from
+//     the published version even though no drift occurred. Comparing against
+//     the baseline disambiguates three cases:
+//     - If tracked matches baseline but published differs → genuine drift:
+//       the published page was reverted or hand-edited independently, so it
+//       now differs from the merged baseline. Report this as an error.
+//     - If published matches baseline but tracked differs → ordinary
+//       pending-publish: the tracked copy has uncommitted local edits ahead
+//       of origin/main, but the live page hasn't changed yet (still at
+//       baseline). This is the normal pre-merge state — don't report.
+//     - If all three differ → unresolvable 3-way conflict: cannot tell which
+//       is correct from hashes alone. Ordinarily this is just a multi-step
+//       edit (publish, then edit again before merging), but hash-only
+//       comparison cannot distinguish from a genuine conflict. Report as an
+//       advisory warning, not a hard error (see THREE_WAY_CONTENT_WARNING_PREFIX).
+//     When the baseline can't be resolved, content hashing is skipped rather
+//     than using a missing baseline as "no drift" — matching the fail-closed
+//     approach the register-side baseline already uses.
 export function checkLiveView(
   markdownText,
   rawLiveViewHtml,
-  { direction = 'both', baselineText, dischargingIds = [] } = {},
+  { direction = 'both', baselineText, dischargingIds = [], trackedLiveViewHtml, baselineLiveViewText } = {},
 ) {
   const errors = [];
   const dischargingSet = new Set(dischargingIds);
@@ -1077,6 +1208,122 @@ export function checkLiveView(
     }
   }
 
+  // #2599/A41: row content drift — a row present in BOTH the TRACKED local
+  // live view and the PUBLISHED snapshot (this is not about presence, which
+  // the checks above already cover) whose body text hash differs. Design
+  // decision, dudarenok-maker/Castwright#2599 comment 5484697345: per-row
+  // hashing, not a whole-page diff — a whole-page diff would flag on every
+  // ordinary content update or legitimate concurrent addition (e.g. #2588's
+  // A48), which is exactly the false-positive shape `extraOnly` already
+  // exists to avoid for structural drift. Compares TRACKED html against
+  // PUBLISHED html, not the register — see `parseLiveViewRowBodies`'s own
+  // header for why. Scoped to 'extraOnly' AND to callers that actually pass
+  // `trackedLiveViewHtml` — this is the pre-publish comparison the row-
+  // content regression (PR #2578 review rounds 13-18, manually byte-diffed
+  // because nothing mechanical caught it) actually needs; the tracked-pair
+  // 'both' comparison was never the gap this closes, and a caller with no
+  // tracked copy to compare (most direct `checkLiveView` unit tests) has
+  // nothing for this sub-check to do.
+  // - A row ID tracked-only (edited locally, not yet on the published page)
+  //   is tolerated — the normal pre-publish state, same mechanism as the
+  //   #2199/#2272 presence checks above, not a new tolerance rule.
+  // - A row ID published-only is untouched by this loop entirely — the
+  //   existing discharge handling above already decides whether that's
+  //   reported.
+  //
+  // #2599: Use baselineLiveViewText (origin/main's copy) to disambiguate
+  // legitimate pending-publish edits from genuine drift. When tracked and
+  // published content differ:
+  // - If tracked matches baseline → this edit is already merged to
+  //   origin/main, but the published page hasn't caught up — the classic
+  //   A41 drift signature. Report it.
+  // - If published matches baseline but tracked doesn't → the tracked copy
+  //   has a local edit not yet merged to origin/main, and the published page
+  //   is simply unchanged (still at baseline) because nothing has been
+  //   published yet — the ordinary pending-publish state. Don't report.
+  // - If neither matches baseline (all three disagree) → a 3-way content
+  //   disagreement; report as an advisory warning (not blocking), since
+  //   ordinary multi-step publishes (edit, publish, edit again before merge)
+  //   trigger this and hash-only comparison cannot distinguish from conflicts.
+  // Fail closed when the baseline isn't available: skip content hashing
+  // rather than treating "baseline unknown" as "no drift".
+  if (direction === 'extraOnly' && typeof trackedLiveViewHtml === 'string') {
+    const { bodies: trackedRowBodies, errors: trackedErrors } = parseLiveViewRowBodies(
+      stripHtmlComments(trackedLiveViewHtml),
+    );
+    const { bodies: publishedRowBodies, errors: publishedErrors } = parseLiveViewRowBodies(liveViewHtml);
+    let baselineRowBodies = null;
+    let baselineErrors = [];
+    if (typeof baselineLiveViewText === 'string') {
+      const result = parseLiveViewRowBodies(stripHtmlComments(baselineLiveViewText));
+      baselineRowBodies = result.bodies;
+      baselineErrors = result.errors;
+    }
+    // Report all extraction failures from the three parses. These are errors rather
+    // than skips: a row that couldn't be extracted means the check compared fewer
+    // rows than the page actually carries and silently reported fewer, a vacuous pass.
+    // Tag each with its source so the CLI can correctly attribute the error to
+    // the right file (tracked local working tree, published live page, or baseline
+    // origin/main copy) — this determines the remedy message shown to the operator.
+    const taggedTrackedErrors = trackedErrors.map((e) => `${EXTRACTION_ERROR_PREFIX}[tracked] ${e.substring(EXTRACTION_ERROR_PREFIX.length)}`);
+    const taggedPublishedErrors = publishedErrors.map((e) => `${EXTRACTION_ERROR_PREFIX}[published] ${e.substring(EXTRACTION_ERROR_PREFIX.length)}`);
+    const taggedBaselineErrors = baselineErrors.map((e) => `${EXTRACTION_ERROR_PREFIX}[baseline] ${e.substring(EXTRACTION_ERROR_PREFIX.length)}`);
+    errors.push(...taggedTrackedErrors, ...taggedPublishedErrors, ...taggedBaselineErrors);
+    for (const [id, trackedBody] of trackedRowBodies) {
+      const publishedBody = publishedRowBodies.get(id);
+      if (publishedBody === undefined) continue;
+      const trackedHash = hashRowContent(trackedBody);
+      const publishedHash = hashRowContent(publishedBody);
+      if (trackedHash !== publishedHash) {
+        // Hashes differ between tracked and published. Disambiguate using the baseline.
+        if (baselineRowBodies === null) {
+          // No baseline — fail closed, skip this check.
+          continue;
+        }
+        const baselineBody = baselineRowBodies.get(id);
+        if (baselineBody === undefined) {
+          // Baseline has no entry for this row — a new row was added
+          // tracked-locally. This is not drift, it's a pre-publish pending add.
+          continue;
+        }
+        const baselineHash = hashRowContent(baselineBody);
+        if (trackedHash === baselineHash) {
+          // Tracked matches baseline (merged to main) — the edit is already
+          // committed to the branch and published. But published differs from
+          // both, so this is A41-style drift: the published page was
+          // independently reverted or hand-edited while baseline stayed current.
+          // Genuine drift. Report it.
+          errors.push(
+            `${ROW_CONTENT_DRIFT_ERROR_PREFIX}${id}: content differs between local and published`,
+          );
+          continue;
+        }
+        if (publishedHash === baselineHash) {
+          // Published matches baseline (unchanged since origin/main), but
+          // tracked differs — the local copy has uncommitted edits not yet
+          // merged to main. This is the ordinary pending-publish state:
+          // published hasn't changed, tracked is ahead with local work about
+          // to be published. Not drift, skip it.
+          continue;
+        }
+        // If trackedHash !== baselineHash AND publishedHash !== baselineHash,
+        // all three differ from each other — can't tell which is the source
+        // of truth. This is ordinarily NOT a conflict: it's just a multi-step
+        // edit before merge (publish v1, then edit to v2 locally before merging).
+        // Hash-only comparison has no way to establish that published is a
+        // checkpoint on the SAME edit trajectory as tracked, vs. a truly
+        // independent third version. So report this as an ADVISORY WARNING
+        // (visible but non-blocking) rather than a hard failure — see
+        // THREE_WAY_CONTENT_WARNING_PREFIX. The operator can reconcile
+        // manually if the content actually looks wrong, but an ordinary
+        // multi-step-publish must not hard-fail the gate.
+        errors.push(
+          `${THREE_WAY_CONTENT_WARNING_PREFIX}${id}: content differs in three-way comparison (local vs published vs origin/main) — this is usually an ordinary multi-step edit before merging, not investigated further; if this row's content seems wrong, check manually`,
+        );
+      }
+    }
+  }
+
   return errors;
 }
 
@@ -1164,21 +1411,42 @@ function runGitCommand(args, cwd) {
 // specifically "`git show` failed" (see that message's own text), trading a
 // small amount of message precision for a third branch with no additional
 // operator action attached to it.
-export function resolveBaselineText(repoRoot, registerPath, gitRunner = runGitCommand) {
+// #2599/A41: fetches both the register and live-view.html baselines from
+// origin/main in one flow. Does a single `git fetch`, then parses the SHA
+// once, and reads both files from it. Returns `{ registerText, liveViewText,
+// failedStep }` — either both texts succeed (failedStep: null), or both are
+// null on any failure (failedStep names the step that failed). This keeps the
+// two reads synchronized on the same commit, and avoids a second
+// fetch+parse that would reopen the residual race `resolveBaselineText`'s own
+// hardening already addresses.
+export function resolveBaselineTexts(
+  repoRoot,
+  registerPath,
+  liveViewPath,
+  gitRunner = runGitCommand,
+) {
   const fetchResult = gitRunner(['fetch', 'origin', 'main'], repoRoot);
   if (fetchResult.error || fetchResult.status !== 0) {
-    return { text: null, failedStep: 'fetch' };
+    return { registerText: null, liveViewText: null, failedStep: 'fetch' };
   }
   const revParseResult = gitRunner(['rev-parse', 'FETCH_HEAD'], repoRoot);
   if (revParseResult.error || revParseResult.status !== 0) {
-    return { text: null, failedStep: 'show' };
+    return { registerText: null, liveViewText: null, failedStep: 'show' };
   }
   const fetchedSha = revParseResult.stdout.trim();
-  const showResult = gitRunner(['show', `${fetchedSha}:${registerPath}`], repoRoot);
-  if (showResult.error || showResult.status !== 0) {
-    return { text: null, failedStep: 'show' };
+  const registerResult = gitRunner(['show', `${fetchedSha}:${registerPath}`], repoRoot);
+  if (registerResult.error || registerResult.status !== 0) {
+    return { registerText: null, liveViewText: null, failedStep: 'show' };
   }
-  return { text: showResult.stdout, failedStep: null };
+  const liveViewResult = gitRunner(['show', `${fetchedSha}:${liveViewPath}`], repoRoot);
+  if (liveViewResult.error || liveViewResult.status !== 0) {
+    return { registerText: null, liveViewText: null, failedStep: 'show' };
+  }
+  return {
+    registerText: registerResult.stdout,
+    liveViewText: liveViewResult.stdout,
+    failedStep: null,
+  };
 }
 
 // process.exit() terminates before Node flushes pending async stdout/stderr
@@ -1374,6 +1642,7 @@ function runCheckOnboxRegisterCli() {
     // `git fetch` failing is exactly the point.
     const repoRoot = fileURLToPath(new URL('..', import.meta.url));
     const baselineFileOverride = process.env.ONBOX_TEST_BASELINE_FILE;
+    const baselineLiveViewFileOverride = process.env.ONBOX_TEST_BASELINE_LIVEVIEW_FILE;
     if (baselineFileOverride) {
       // #2199 review round 4: printed UNCONDITIONALLY whenever the override
       // is active — before the verdict, and on the success path as much as
@@ -1397,8 +1666,14 @@ function runCheckOnboxRegisterCli() {
     let baseline;
     if (baselineFileOverride) {
       try {
+        const registerText = readFileSync(resolve(baselineFileOverride), 'utf8');
+        let liveViewText = null;
+        if (baselineLiveViewFileOverride) {
+          liveViewText = readFileSync(resolve(baselineLiveViewFileOverride), 'utf8');
+        }
         baseline = {
-          text: readFileSync(resolve(baselineFileOverride), 'utf8'),
+          registerText,
+          liveViewText,
           failedStep: null,
         };
       } catch {
@@ -1409,14 +1684,14 @@ function runCheckOnboxRegisterCli() {
         // runs when the TEST-ONLY override is set). Test-only path, but it's
         // the first message a future agent debugging a red test would read,
         // and it was actively wrong about what happened.
-        baseline = { text: null, failedStep: 'override' };
+        baseline = { registerText: null, liveViewText: null, failedStep: 'override' };
       }
     } else {
-      baseline = resolveBaselineText(repoRoot, REGISTER);
+      baseline = resolveBaselineTexts(repoRoot, REGISTER, LIVE_VIEW);
     }
     if (baseline.failedStep) {
       // Named explicitly, distinct from checkLiveView's generic "cannot
-      // verify" error below (which fires too, since baseline.text is null) —
+      // verify" error below (which fires too, since baseline texts are null) —
       // this line is what tells the operator WHICH git call to retry.
       let failureMessage;
       if (baseline.failedStep === 'fetch') {
@@ -1432,10 +1707,10 @@ function runCheckOnboxRegisterCli() {
           'TEST-ONLY baseline-injection seam, not git (no `git fetch` or `git show` ran). ' +
           'Check the path exists and is readable, then try again.';
       } else {
-        // Covers BOTH a `git rev-parse FETCH_HEAD` failure and a `git show
-        // <sha>:<path>` failure — resolveBaselineText folds them into one
+        // Covers BOTH a `git rev-parse FETCH_HEAD` failure and `git show`
+        // failures for either file — resolveBaselineTexts folds them into one
         // `failedStep` (see that function's own comment for why), so this
-        // message deliberately doesn't claim it was specifically `git show`.
+        // message deliberately doesn't claim it was specifically which `show`.
         failureMessage =
           'Resolving what the fetch just wrote (`git rev-parse FETCH_HEAD` or `git show`) ' +
           'failed even though the preceding `git fetch origin main` just succeeded — the ' +
@@ -1444,10 +1719,35 @@ function runCheckOnboxRegisterCli() {
       }
       console.error(failureMessage);
     }
+    // #2599/A41: the row-content-drift sub-check inside `checkLiveView`
+    // compares this TRACKED, working-tree copy of the live view (including
+    // any uncommitted edits mid-publish) against the published snapshot — not
+    // the register — see `parseLiveViewRowBodies`'s own header for why. Read
+    // the same way the no-flag path below reads it.
+    //
+    // TEST-ONLY override, mirroring ONBOX_TEST_BASELINE_FILE /
+    // ONBOX_TEST_BASELINE_LIVEVIEW_FILE above: a CLI-level test that wants to
+    // exercise a specific tracked-vs-published-vs-baseline scenario cannot
+    // control this file's real on-disk content without mutating the actual
+    // repo file (unsafe, non-hermetic — see #2599 review round 2). Fires the
+    // same unconditional WARNING as the other two overrides so this can never
+    // silently reach a real invocation.
+    const trackedLiveViewFileOverride = process.env.ONBOX_TEST_TRACKED_LIVEVIEW_FILE;
+    if (trackedLiveViewFileOverride) {
+      console.error(
+        `WARNING: tracked live-view injected from ONBOX_TEST_TRACKED_LIVEVIEW_FILE=${trackedLiveViewFileOverride}; ` +
+          'this is NOT the real working-tree file and must never be used to gate a publish.',
+      );
+    }
+    const trackedLiveViewHtml = trackedLiveViewFileOverride
+      ? readFileSync(resolve(trackedLiveViewFileOverride), 'utf8')
+      : read(LIVE_VIEW);
     const publishedErrors = checkLiveView(text, publishedHtml, {
       direction: 'extraOnly',
-      baselineText: baseline.text,
+      baselineText: baseline.registerText,
       dischargingIds,
+      trackedLiveViewHtml,
+      baselineLiveViewText: baseline.liveViewText,
     });
     // The fail-closed "cannot verify" case (#2199) does not mean the
     // register IS behind (that's unknown), so it gets its own label rather
@@ -1476,9 +1776,36 @@ function runCheckOnboxRegisterCli() {
     const dischargeNameErrors = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(DISCHARGE_NAME_ERROR_PREFIX));
+    // #2599/A41: content-drift errors are their own class — see
+    // ROW_CONTENT_DRIFT_ERROR_PREFIX's own comment for why they can't share
+    // the structural BEHIND bucket's remedy.
+    const contentDriftErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX));
+    // #2599 Finding 3: extraction errors are their own class — they indicate
+    // malformed HTML markup that must be fixed, not content drift or missing
+    // rows. Must not be routed to the "BEHIND" bucket or its remedy text.
+    const extractionErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(EXTRACTION_ERROR_PREFIX));
+    // #2837 Finding 1: 3-way content-difference warnings are advisory, not
+    // blocking. Extract them so they don't count as errors for the gate, but
+    // still print them visibly so the operator sees them. A multi-step
+    // pending-publish (edit, publish, edit again before merge) looks like a
+    // 3-way disagreement to hash-only comparison, but is ordinarily not a
+    // conflict — the operator can investigate manually if needed.
+    const threeWayWarnings = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX));
     const behindErrors = cannotVerify
       ? []
-      : publishedErrors.filter((e) => !e.startsWith(DISCHARGE_NAME_ERROR_PREFIX));
+      : publishedErrors.filter(
+          (e) =>
+            !e.startsWith(DISCHARGE_NAME_ERROR_PREFIX) &&
+            !e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX) &&
+            !e.startsWith(EXTRACTION_ERROR_PREFIX) &&
+            !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX),
+        );
 
     let publishedFailed = false;
     if (cannotVerify) {
@@ -1494,6 +1821,71 @@ function runCheckOnboxRegisterCli() {
           'Fix the --discharging value(s) named above — each error explains why that ID ' +
             "didn't match — then re-run this command against the SAME saved copy from step 1.",
         );
+      }
+      if (contentDriftErrors.length > 0) {
+        publishedFailed =
+          report(
+            `${publishedPath} (the currently-PUBLISHED page, fetched just now) has row content ` +
+              `that differs from ${LIVE_VIEW}`,
+            contentDriftErrors,
+          ) || publishedFailed;
+        console.error(
+          'Do not publish until this is reconciled. Each row named above has the same ID on ' +
+            'both sides but different body text — check which side is actually correct (the ' +
+            'live page may have been hand-edited or reverted independently of this register, ' +
+            'or this register may simply not have caught up with it yet) and update the other ' +
+            'side to match before re-running this command against the SAME saved copy from step 1.',
+        );
+      }
+      if (extractionErrors.length > 0) {
+        // #2837 Finding 4: tag each extraction error with its source file so
+        // the remedy message correctly identifies which copy is broken.
+        const trackedExtErrors = extractionErrors.filter((e) => e.includes('[tracked]'));
+        const publishedExtErrors = extractionErrors.filter((e) => e.includes('[published]'));
+        const baselineExtErrors = extractionErrors.filter((e) => e.includes('[baseline]'));
+
+        if (trackedExtErrors.length > 0) {
+          publishedFailed =
+            report(
+              `Your local ${LIVE_VIEW} (working-tree copy) has malformed or unreadable HTML markup`,
+              trackedExtErrors,
+            ) || publishedFailed;
+        }
+        if (publishedExtErrors.length > 0) {
+          publishedFailed =
+            report(
+              `${publishedPath} (the currently-PUBLISHED page) has malformed or unreadable HTML markup`,
+              publishedExtErrors,
+            ) || publishedFailed;
+        }
+        if (baselineExtErrors.length > 0) {
+          publishedFailed =
+            report(
+              `origin/main's ${LIVE_VIEW} (baseline copy) has malformed or unreadable HTML markup`,
+              baselineExtErrors,
+            ) || publishedFailed;
+        }
+        console.error(
+          'Do not publish. The HTML structure is corrupted or missing expected elements. ' +
+            'Each error above explains what was unreadable and which file is broken. Check that all ' +
+            '<details class="item">, <span class="num">, <summary>, and <div class="body"> elements ' +
+            'are present and correctly formed in the identified file(s).',
+        );
+      }
+      if (threeWayWarnings.length > 0) {
+        // #2837 Finding 1: Print 3-way warnings visibly but do not set
+        // publishedFailed — these are advisory, not blocking. Ordinary
+        // multi-step publishes (edit, publish, edit again before merge) trigger
+        // them; hash-only comparison cannot distinguish from genuine conflicts.
+        console.warn(
+          '\n⚠️  Three-way content differences detected (not blocking, but check if wrong):',
+        );
+        for (const warning of threeWayWarnings) {
+          const idMatch = warning.match(new RegExp(`^${THREE_WAY_CONTENT_WARNING_PREFIX}([A-Z]\\d+):`));
+          const id = idMatch ? idMatch[1] : 'unknown';
+          const message = warning.substring(THREE_WAY_CONTENT_WARNING_PREFIX.length);
+          console.warn(`  ${id}: ${message}`);
+        }
       }
       if (behindErrors.length > 0) {
         const behindFailed = report(

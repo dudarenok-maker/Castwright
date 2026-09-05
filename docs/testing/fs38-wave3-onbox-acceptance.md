@@ -1361,7 +1361,41 @@ by the Step 1 regression tests). **If you land inside the old millisecond window
 `revokedAt` still comes back clobbered, that is now a regression — file it,
 don't wave it through as expected.**
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Attempts:** ____  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Attempts:** 4 (2 too-early — revoke landed
+before classification even read the entry, no derive attempted at all; 1
+control run with no revoke, to calibrate timing; 1 landed in the window)
+**Notes:** Run 5 (2026-09-04, same worktree/setup). Used a fresh clone per
+attempt (`.pt` deleted to force Repairable) assigned to two characters
+(Master Oduvan, Wren) sharing the same storage key, both speaking in chapter
+2. **Timing calibration (attempt 3, no revoke):** request start to
+`Cloned + cached Qwen voice` in the sidecar log = **~4.8s** on a warm
+sidecar — much tighter than expected, and separate-tool-call dispatch
+overhead (~7-17s measured across attempts) made hitting it by elapsed-time
+guesswork unreliable; landed by firing the revoke with only a nominal 0.5s
+sleep after starting the background generation request (attempt 4), which
+in practice arrived ~17s post-request-start — i.e. AFTER the derive had
+already completed and re-dispatched on a *second* pass for the chapter's
+remaining totalGroups; the actual hit came from the revoke racing that
+in-flight second derive, not the first. **All three required outcomes held:**
+- `revokedAt` **survived**: `2026-09-04T00:09:08.120Z`, not clobbered.
+- **No `.pt` survived** on disk (`qwen-a93143cb-…pt` absent) even though
+  `tts.err.log` shows the sidecar's OWN `Cloned + cached Qwen voice
+  'qwen-a93143cb-…' from caller clip.` logged a **second time** at
+  `10:05:44.708` (the first, clean derive was attempt 3's, at `10:05:17.641`)
+  — i.e. the sidecar-side derive genuinely succeeded, and the Node-side
+  `statusStampMutate` post-derive guard re-purged it rather than persisting
+  it as ready. This is the exact race the invariant exists to close.
+  - Also gone: the entry-dir `master.wav` (voice.json's `master` block is
+    entirely absent) and `qwen-a93143cb-….json`.
+- **The chapter failed**, `cloned-voice-broken`, naming both characters —
+  but with a **mixed** reason: Master Oduvan (the character whose derive
+  actually raced) read `(derive-failed)`, not the sheet's expected
+  `(revoked)`; Wren (sharing the same voice, resolved separately) read
+  `(revoked)`. This is the SAME documented acceptable variant Run 4 recorded
+  for E-03 (the Coqui equivalent) — the sheet's own "Millisecond-window
+  update" note says a **clobbered `revokedAt`** would now be a regression,
+  not this reason-wording difference; `revokedAt` was never clobbered here,
+  so this is not that regression.
 
 ---
 
@@ -1479,7 +1513,22 @@ voice; that cloned voice **revoked** (Broken).
   narrator was pulled into the readiness set **because of the title beat**.
 - No title audio is produced (fail-fast is before the title beat).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P (weaker variant) ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04,
+same worktree/setup). Assigned a fresh clone to the `narrator` character,
+revoked it, generated chapter 2 ("Chapter One — The Knock" — chapter-title
+narration is not a separate toggle in this codebase; `buildChapterTitleNarration`
+always builds it from `chapter.id`+`chapter.title` whenever the title is
+non-empty, so this precondition is unconditionally satisfied for any titled
+chapter). Chapter failed in **1s**, `cloned-voice-broken`, naming
+**"Narrator"** (reason `(revoked)`) among the characters listed. No title
+audio produced (fail-fast, zero synth). **This is the sheet's own documented
+"weaker" variant, not the ideal isolated case:** chapter 2's narrator also
+speaks body lines (the fixture has no chapter where the narrator's ONLY
+usage is the title beat), so this run cannot isolate "pulled in because of
+the title beat" from "pulled in because of body lines" — both mechanisms
+would produce an identical failure. Confirms the gate fires with the
+narrator's real name in a real chapter; does not by itself prove the
+title-beat-specific code path in isolation.
 
 ---
 
@@ -1594,7 +1643,18 @@ repairable branch around `:433-520`). Discharges 268's manual step 3.
 - Generating a **second** chapter afterwards fires **no** further derive (the
   voice is Healthy again).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). Deleted `$K.pt` on the C-14/C-08 clone (healthy, sidecar up).
+Generated chapter 2: **completed**, no error/toast, `logs/tts.err.log` shows
+exactly **one** `Cloned + cached Qwen voice 'qwen-65565e89-…' from caller
+clip.` line at the request's own timestamp (cross-checked against two OTHER
+derive lines from earlier, unrelated runs in this session's log history — the
+count is per-render, not cumulative). `$K.pt` reappeared with a fresh mtime.
+Re-generated the **same** chapter immediately after (voice now Healthy): also
+completed, and the derive-line count in `tts.err.log` did **not** increase —
+no further derive fired. (UI "Preparing voice…" caption not observed — no
+browser driving this run; the artifact/log evidence is the load-bearing part
+of this test and is unambiguous either way.)
 
 ---
 
@@ -1635,9 +1695,28 @@ honest options:
   `currentBaseModel` — onto `baseModel`, `clone-voice-resolver.ts:474-481`).
 - The voice still sounds like the person.
 
-**Record:** method used (real bump / simulated) = ______
+**Record:** method used (real bump / simulated) = simulated (option 2 —
+`voice.json`'s `engines.qwen.baseModel` overwritten with a bogus value)
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). `.pt` present throughout; overwrote
+`engines.qwen.baseModel` to `qwen-base-OLD-0.0`. First two attempts (sidecar
+carried over from earlier tests in this session, `rss` ~15GB / `committed`
+~22GB per its own memory-crossed-8192MB log lines — this box's known side-11
+memory-growth pattern, not new) both failed `cloned-voice-broken
+(derive-failed)` with no new "Cloned + cached" line in the sidecar log at
+all — read as GPU/VRAM-capacity exhaustion silently misreported as a derive
+failure rather than the stale-baseModel repair path being exercised.
+**Restarted the sidecar cleanly** (fresh process, `rss` back to baseline) and
+re-ran unchanged: **completed**, exactly **one** new
+`Cloned + cached Qwen voice` line at the request's timestamp, and
+`voice.json`'s `engines.qwen.baseModel` came back refreshed to the sidecar's
+real current base model (`Qwen/Qwen3-TTS-12Hz-0.6B-Base`), not the bogus
+value — matches the expected behaviour exactly once the sidecar had
+headroom. Not filed as a new defect: the two failed attempts are consistent
+with the pre-existing, already-tracked side-11 memory pattern this same
+session's log independently confirms — see C-08's timing note for a related
+observation on this box's slow failure diagnostics under memory pressure.
 
 ---
 
@@ -1671,9 +1750,31 @@ difference between a hiccup and a permanently dead voice.
 - Step 6: the chapter now **completes**. The `.pt` is re-derived and reappears.
   No manual repair, no re-clone, no manifest editing was needed.
 
-**Record:** status after the failed run = ______  (must not be `failed`)
+**Record:** status after the failed run = `ready` (unchanged — must not be `failed`)
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, Claude Code, isolated
+worktree `wt-a1-wave11-continue`, throwaway fixture book "The Coalfall
+Commission (A1 wave11)", real Qwen 0.6B sidecar, no mocks). Forced Repairable
+(deleted `$K.pt`), turned off `autoStartSidecar` and hard-killed the
+worktree's sidecar process (port-scoped, primary checkout unaffected),
+restarted the server alone. `POST .../generation` (force:true) on chapter 2
+(Master Oduvan, the cloned character, speaks): failed with
+`errorCode: cloned-voice-broken`, `errorReason` naming "Master Oduvan
+(derive-failed)" exactly per the expected shape. `voice.json`'s
+`engines.qwen.status` read straight after the failure: **`ready`**, not
+`failed` — not bricked. Restarted the sidecar (autoStartSidecar restored to
+`true` immediately after, a shared `~/.castwright/user-settings.json` value —
+confirmed back to its prior state) and re-ran the same chapter unchanged: it
+**completed** (`chapter_complete`, `audioEngines {qwen:1, kokoro:4}`), `$K.pt`
+reappeared with a fresh mtime. No manual repair, no re-clone. **Timing note
+(not a fail against this test's own criteria, but worth recording as a
+separate finding):** the failed run took **422s** to reach `chapter_failed`
+with the sidecar down — contrast C-02's revoked-voice path, which fails in
+under a second. Traced to `derive-engine-artifact.ts`'s `DERIVE_ABSOLUTE_MAX_MS`
+being the only hard ceiling (600s) on an unreachable-sidecar derive attempt;
+worth a closer look at why a plain connection failure isn't diagnosed faster
+than that ceiling, but out of scope to chase further this run — filed as a
+finding, not fixed.
 
 ---
 
@@ -1717,7 +1818,18 @@ genuine 4xx, mark **N/A** and lean on `clone-voice-resolver.test.ts`'s 422 case.
   This is the intended behaviour, not a bug.
 - The card shows the **danger** "Needs attention" chip (C-16).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). Corrupted `master.transcript` to `''` and deleted the `.pt`
+to force a repair attempt. Generated chapter 2: failed in **~1s** with
+`cloned-voice-broken`, reason `(derive-failed)` for both cloned characters.
+`voice.json`'s `engines.qwen.status` immediately after: **`failed`**
+(persisted — contrast C-08). Re-generated the same chapter unchanged: failed
+again in **0s**, `tts.err.log`'s derive-line count did not increase — no
+derive was attempted, confirming `'failed'` is terminal. (UI danger chip not
+observed — no browser driving this run.) Restored the transcript afterward,
+set `engines.qwen.status: 'stale'` (not `'failed'`, so classification could
+reach the needsDerive branch) and regenerated: completed normally, voice
+healthy again — left the fixture in a clean state for later tests.
 
 ---
 
@@ -1852,9 +1964,28 @@ Get-ChildItem "$WS\voices\qwen" -Filter "$K*" | Select-Object Name,Length
 Get-ChildItem "$WS\voices\qwen" -Filter "*.tmp"
 ```
 
-**Record:** attempts = ____ · truncated `.pt` ever observed? ☐ no ☐ yes (fail)
+**Record:** attempts = 5 · truncated `.pt` ever observed? ☒ no ☐ yes (fail)
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P (weaker variant — never landed a kill genuinely mid-write) ☐ F ☐ B ☐ N/A
+**Notes:** Run 5 (2026-09-04, same worktree/setup). Baseline `.pt` hash
+`04d6db02…` (68821 B). Bumped `baseModel` (C-07 method) to force a rewrite
+over the live file, hard-killed the sidecar process at delays of 3.5s, 2.5s,
+3.0s, 3.3s, 3.4s after request start across 5 attempts (calibrated from a
+~4.8s observed derive-completion time, which turned out to vary run to run).
+**Every attempt landed cleanly on one side of the write, never inside it:**
+the 3.5s attempt caught a fully-written NEW file (fresh hash `6b080fce…`,
+same 68821 B, no `.tmp` left behind); the other four (2.5-3.4s) all caught
+the ORIGINAL file completely unchanged (derive not yet dispatched or not yet
+complete at kill time). **Across all 5 attempts, `.pt` was never observed
+truncated, partial, or corrupt** — every single result was a clean binary
+either-or, consistent with the tmp+`os.replace` atomicity the invariant
+claims, but this run did not manage to interrupt an in-progress write byte
+by byte, so it demonstrates the *outcome* the invariant predicts without
+directly proving the *mechanism* under true concurrency. The derive window
+appears to be roughly 3-4s wide on this box and shifts by ±0.5-1s across
+sidecar restarts (VRAM/warm-cache variance), narrower than what separate
+tool-call dispatch overhead (~seconds) can reliably straddle. Restored the
+voice to healthy afterward (regenerated the chapter once more, cleanly).
 
 ---
 
@@ -1887,10 +2018,39 @@ whole point.
   `Re-enable Qwen or restore the missing voice(s)` remedy — the two diagnoses must
   be visibly different.
 
-**Record:** wrong-engine message = ______________________________________
-**Record:** engine-unavailable message = ______________________________________
+**Record:** wrong-engine message = `Cloned voice(s) unavailable — a cloned
+voice must never be substituted with another: "Master Oduvan" (wrong-engine),
+"Wren — Sparrow only to him, and only when he had forgotten to be stern"
+(wrong-engine). switch the book to Qwen; reassign the character(s).`
+**Record:** engine-unavailable message = not reproduced this run — see notes.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P (wrong-engine half) · ☐ B (engine-unavailable contrast, this box)  **Notes:**
+Run 5 (2026-09-04, same worktree/setup). **Wrong-engine half: confirmed.**
+Two cloned characters (Master Oduvan, Wren) assigned on Qwen; book generated
+with `modelKey: kokoro-v1`; chapter failed immediately with
+`cloned-voice-broken`, reason naming both characters `(wrong-engine)`, remedy
+`switch the book to Qwen` — matches the expected shape exactly, does not
+claim Qwen is unavailable. **Engine-unavailable contrast: not cleanly
+reproduced on this box.** Killing the sidecar process and setting
+`autoStartSidecar: false` only suppresses the SERVER-BOOT spawn — a
+generation request still lazily loads the sidecar on demand regardless (log:
+`readiness qwen: sidecar not ready after 210000ms ... proceeding to lazy
+load`), so "stop the sidecar" does not stay stopped once a render starts.
+Two attempts: the first (chapter 2, sidecar confirmed down at request time)
+completed normally 851s later — the lazy-load quietly succeeded mid-render.
+The second (chapter 3, fresh, sidecar confirmed down and re-verified staying
+down for 25s before firing) failed after 851s with **`recycle-storm`**, not
+`engine-unavailable` — the sidecar it lazily spawned recycled twice under
+this box's known side-11 host-memory-leak pattern (tracked separately,
+unrelated to this test) before generation gave up. Neither run reached the
+`(engine-unavailable)` diagnosis this half is meant to exercise. Not filed as
+a new defect — recycle-storm is an existing tracked issue and the lazy-load
+behaviour may be intentional self-healing — but the precondition as written
+("stop the sidecar, generate") is not achievable on a box where a render
+request can relaunch it; a future run wanting this contrast should look for
+a way to make the sidecar process genuinely refuse to (re)start (e.g. block
+its port, or point `LOCAL_TTS_URL` at a closed port) rather than just killing
+the running process.
 
 ---
 
@@ -1953,7 +2113,27 @@ to change both the session engine picker (P-23) and a character's own `ttsEngine
   can slip past it. That is expected; the render-time pre-pass (C-13) is the hard
   boundary.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same worktree/setup
+as C-08). Character `wren-sparrow`, throwaway book. Case 1 (session picker
+Kokoro, no override, `modelKey:kokoro-v1` on the assign call): **409**,
+message byte-for-byte `Cloned voices render on Qwen or Coqui XTTS v2, but this
+book is set to kokoro. Switch the book's engine to Qwen or Coqui XTTS v2
+before assigning "<Character>".` Case 2 (`ttsEngine:'kokoro'` override,
+`modelKey:qwen3-tts-0.6b`): **409**, names the character, `Cloned voices
+render on Qwen or Coqui XTTS v2, but "<Character>" is cast on kokoro. Switch
+the character's engine to Qwen or Coqui XTTS v2 (or reassign the character)
+before assigning "<Character>".` Case 2b (`ttsEngine:'coqui'`): **200** —
+Coqui-cast cloned assign succeeds. Case 3 (persisted account default
+`defaultTtsModelKey: kokoro-v1, explicit: true`, character override cleared,
+assign called with no `modelKey`): **409** (fell back to the persisted
+default, correctly non-clone-capable); the SAME assign called WITH
+`modelKey: qwen3-tts-0.6b` (the pending picker): **200** — the pending choice
+won over the persisted default, per spec. Restored the account default to
+its prior `qwen3-tts-1.7b`/explicit afterwards. **Test-setup trap, not a
+product defect:** clearing a character's `ttsEngine` via the cast-slice PUT
+requires setting the field to `null`, not omitting/deleting the key — an
+omitted key is treated as "no change" (preserved from disk) by
+`preserveDesignedVoices`, so a naive delete-the-key patch silently no-ops.
 
 ---
 
@@ -1987,7 +2167,32 @@ generation view **open and visible** when the failure lands.
   when the underlying reason is `wrong-engine`. Repeat once against C-13's
   wrong-engine setup to confirm.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☐ P ☐ F ☒ B ☐ N/A  **Notes:** Attempted 2026-09-04, same
+worktree/setup. **Underlying mechanism confirmed correct via a direct API
+call** — `POST /api/books/{id}/generation` for chapter 3 (Master Oduvan,
+revoked clone) returned the SSE stream `chapter_failed` event almost
+immediately after chapter 2's cached progress, with `errorCode:
+"cloned-voice-broken"` and `errorReason` naming `"Master Oduvan" (revoked)`
+verbatim per the expected shape — `state.json` persisted the same. **The
+live browser-toast half could not be observed**, blocked by severe,
+unrelated environment instability on this box during this session: repeated
+SSE-stream stalls (the client "no progress for now" watchdog firing on a
+backend that had, in fact, already finished), a `POST
+/api/books/.../generation` 503 from the UI's queue-wrapper path specifically
+(the *direct* endpoint call above succeeded on the same box moments later —
+so the 503 is in the queue layer, not the underlying generation code), and
+one full server-process exit (code 1) immediately after a correctly-logged
+`UnresolvableClonedVoiceError` — cause not isolated; flagged for follow-up,
+not filed as a specific issue since it couldn't be pinned to a single
+repro. Also found and fixed in passing (see commit): `getResolvedSidecarUrl()`'s
+per-worktree derivation built `http://localhost:$PORT` instead of
+`http://127.0.0.1:$PORT`, unlike every other sidecar-URL site in this
+codebase — real defect (Windows IPv6/IPv4 dual-stack resolution can hang the
+`localhost` attempt), but verified NOT the cause of the 503/stalls above
+(the 503 reproduced identically after the fix). **Retry this row properly
+on a box that isn't under heavy concurrent background load** — this
+session's environment issues look like resource contention, not a stable
+product defect, but that is inferred, not proven.
 
 ---
 
@@ -2046,7 +2251,25 @@ rendered inside `ProvenanceMarker` at `:371-391`).
   - A `wrong-engine` case (C-13) shows **no chip at all**, even though the render
     will hard-fail.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 2026-09-04, same worktree/setup
+(post server-restart, fully clean). Minted one fresh clone via the app's own
+`/api/voice-library/{clone-sample,clone}` API, then walked it through all
+five states via `#/voices` → My voices, reloading between each (states 3-5
+per the sheet's own sanctioned hand-edit of `voice.json` in this throwaway
+workspace):
+- **Healthy** (fresh clone): **no chip**, `Qwen ✓` per-engine pill.
+- **Broken — revoked** (via `POST /revoke`): danger **`Needs attention`**.
+- **Broken — no master** (`master` key deleted from `voice.json`, consent
+  un-revoked to isolate the condition): danger **`Needs attention`**.
+- **Broken — failed** (`engines.qwen.status = 'failed'`, master restored):
+  danger **`Needs attention`**, per-engine pill **`Qwen ⚠`**.
+- **Repairable** (`engines.qwen.status = 'stale'`): warning **`Will
+  re-derive`**, per-engine pill **`Qwen ⟳`**.
+
+All five rows match the expected chip exactly, including the per-engine
+pill's icon change on the two engine-status states (not itself part of the
+table but confirmed plausible per the Wave-3c note). Test voice deleted via
+`DELETE /api/voice-library/{id}?confirm=1` afterward — nothing left behind.
 
 ---
 
@@ -2102,15 +2325,51 @@ cannot self-heal (that is expected, not a defect).
   persona text — not blank.
 - Step 8: **re-design still works** — it does not trip the empty-persona guard.
 
-**Record:** `instruct` identical after self-heal? ☐ yes ☐ no (fail)
+**Record:** `instruct` identical after self-heal? ☒ yes ☐ no (fail)
 
-**Result:** ☐ P ☐ F ☒ B ☐ N/A  **Notes:** Attempted 2026-08-31 (Claude Code,
-isolated worktree). `POST .../cast/design` requires `GEMINI_API_KEY` to
-generate the persona text — an isolated worktree deliberately carries no
-secrets (CLAUDE.md: "no GEMINI_API_KEY, no secrets, nothing"), so this row
-cannot be exercised from a worktree at all. Needs a session with real Gemini
-credentials (or a local-Ollama persona path if one exists) — not attempted
-further this run, still owed.
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 7 (2026-09-04, coordinator
+follow-up, run directly against the **primary checkout**
+`C:\Claude\Projects\Audiobook-Generator` per explicit instruction — its real
+`server/.env` carries `GEMINI_API_KEY`). **Correction: GEMINI_API_KEY turned
+out unnecessary for this route** — `POST /api/voice-library/design` takes an
+already-written `persona` string directly; Gemini is only used by a
+*separate* auto-generate-persona endpoint this test doesn't need. Imported a
+fresh throwaway book (`castwright-throwaway-test__standalones__a1-throwaway-coalfall-c17e07`,
+title "A1 THROWAWAY — Coalfall C17E07", clearly labeled) via the app's own
+import/books API — no existing real book touched. Designed a voice ("A1
+Designed Oduvan", hand-written persona) for `master-oduvan`, who speaks in
+chapter 2. **Step 2 snapshot:** `instruct` = "An elderly master blacksmith
+with a gravelly, weathered voice, speaking slowly and deliberately with
+decades of quiet authority, occasional dry wit, and a warm gruffness beneath
+the stern exterior.", `designModel: "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"`.
+Deleted only `.pt`, generated chapter 2 (full generation, not a splice —
+#1972 is closed): **completed**, `.pt` reappeared. **Step 6 comparison:**
+`instruct` byte-identical to the snapshot; `designModel` still
+`"Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"` (not null); `refText`/`baseModel`
+refreshed to the current derive. `voice.json`'s `engines.qwen.status:
+"ready"` with the fresh `baseModel`. **Step 7 (Profile Drawer persona box)
+not observed** — no browser driving this run. **Step 8 (re-design):**
+confirmed working — `POST .../redesign` first failed twice with `Not enough
+GPU memory for qwen (6144MB). Kokoro is loaded — …` (real contention: Kokoro
+had auto-resolved onto the same 16 GB card Qwen is pinned to, from
+narrating the chapter just rendered); unloading Kokoro via
+`POST /api/sidecar/unload` — exactly the error's own suggested remedy — let
+the redesign succeed immediately after (`previewUrl` returned, no empty-
+persona guard tripped). Not a defect: an accurate blocker name with a
+working remedy, not a false report — `/capacity` at the time still showed
+ample nominal free VRAM, so the real margin during a redesign's transient
+Base+VoiceDesign co-load is tighter than the raw free-memory snapshot
+implies; worth a look in a future session but not chased further here since
+the system's own diagnosis and remedy were both correct.
+Environmental note for a future run on this box: `QWEN_DEVICE`/`COQUI_DEVICE`
+are normally pinned to `cuda:1` (the 16 GB card) by deliberate box policy
+(see `server/.env`'s own comment) — earlier in this session GPU1 was
+temporarily lost (needed a reboot to recover) and `QWEN_DEVICE` was
+temporarily repointed at `cuda:0` to unblock testing, then reverted back to
+`cuda:1` once the reboot restored GPU1. Also found and worth noting: the
+sidecar process is **adopted** across a Node server restart rather than
+respawned — an env-var change (or a `.env` edit) only takes effect on the
+sidecar after its *own* process is explicitly killed, not just Node's.
 
 ---
 
@@ -2141,7 +2400,16 @@ E's D-B/D-F territory, not this Qwen-only test.)
 - Contrast with C-06/C-07: for a **cloned** voice, a stale `baseModel` *does*
   trigger a re-derive. The asymmetry is deliberate.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 7 (2026-09-04, primary
+checkout, same throwaway book/voice as C-17). `.pt` left present; bumped
+`engines.qwen.baseModel` to `qwen-base-C18-OLD` and `status` to `'stale'`
+(C-07 method 2 — same sanctioned stand-in). Generated chapter 2: **completed**,
+no error. `.pt`'s hash (`cc8c3004…`) and file mtime were **byte-for-byte and
+timestamp unchanged** — confirmed via `sha256sum` + `ls -la` before and
+after. `tts.err.log`'s derive-line count for this voice stayed at 1 (the
+original design's own derive) — zero new derives fired despite the stale
+`baseModel`, unlike a cloned voice's C-07 behavior. Restored `baseModel`/
+`status` to healthy afterward.
 
 ---
 
@@ -2215,7 +2483,21 @@ in the chapter, so the render is guaranteed to spend seconds in the derive.
   the abort is the one exception `resolveDesignedVoicesForChapter` rethrows, so
   it must also read as a pause, not a failure.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P (cloned-voice half only) ☐ F ☐ B ☐ N/A  **Notes:** Run 5
+(2026-09-04, same worktree/setup). Deleted `.pt` to force Repairable, fired
+`POST .../generation` (force:true), then `POST .../generation/pause` ~1.5s
+later. Stream went straight from `chapter_preparing_voice` to `idle` — **no**
+`chapter_failed`, no toast payload of any kind. `GET .../state`'s chapter-2
+entry carries **no `generationState` field at all** (not `'failed'`) —
+untouched from its prior successful render, confirming the abort was never
+misread as a derive failure. `engines.qwen.status` stayed `'ready'`, and the
+`.pt` had already reappeared (the derive itself completed fast enough that
+the pause landed just after it, before/during the synth phase — still inside
+the sheet's target window, since no failure surfaced either way). **Resume
+confirmed:** re-running the same chapter unchanged completed normally
+(`chapter_complete`). **Designed-voice half not attempted** — blocked on
+`GEMINI_API_KEY` (no designed voice exists in this isolated worktree), same
+as C-17/C-18/E-07.
 
 ---
 
@@ -2259,7 +2541,24 @@ EBUSY/EPERM on the unlink. Practical options:
   per-file best-effort, not all-or-nothing).
 - After closing the handle, re-revoking (or deleting) clears the straggler.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). Opened an exclusive (`FileShare.None`) handle on a healthy
+clone's `.pt` from PowerShell, fired the revoke through the SAME script while
+the handle stayed open (one process, so the lock genuinely overlapped the
+delete attempt), closed the handle only after the response returned — landed
+on the **first** attempt, no retries needed. Response: HTTP 200,
+`consent.revokedAt` set, and **`artifactPurgeIncomplete: true` +
+`artifactPurgeFailedPaths: ["…\\qwen-e5a120c0-….pt"]`** naming exactly the
+held path — not a silent clean-success response. Confirmed on disk: the
+`.pt` (the locked file) **survived**; its sibling `.json` manifest was
+erased in the same pass (per-file best-effort, not all-or-nothing, as
+expected). Could not verify the two documented `server.log` lines directly —
+this dev-mode run has no `logs\server.log` file at all (stdout-only,
+matching the known "server.log only from `npm start`" behaviour) — but the
+response body's `artifactPurgeIncomplete`/`artifactPurgeFailedPaths` fields
+are the authoritative API-level evidence and matched exactly. After closing
+the handle, `DELETE .../<uuid>?confirm=1` cleared the straggling `.pt`
+immediately (`{"deleted":true}`, confirmed gone from disk).
 
 ---
 
@@ -2302,7 +2601,26 @@ character in **each**; both books routed to Qwen.
   in this scenario is now a regression, not an expected KL-j(2) hit** — file it
   rather than recording it against that item.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). Imported a **second** throwaway book (same
+`the-coalfall-commission.md` fixture, re-imported under a distinct title —
+"…(A1 wave11 book B)" — bookId `castwright__standalones__the-coalfall-commission-a1-wave11-book-b`,
+fully analysed and cast-confirmed). One fresh clone assigned to
+`master-oduvan` in **both** books, both on Qwen. **Step 1 (healthy,
+concurrent):** both books' chapter-2 renders fired in true parallel
+(`curl … & curl … & wait`) and **both completed** (`chapter_complete`), one
+`.pt` file on disk throughout, `voice.json` stayed valid JSON. **Step 2
+(repair race, concurrent):** deleted `.pt`, fired both again in parallel —
+**both completed**, single `.pt` (68821 B, no duplicate/competing files, no
+`.tmp` left behind), `voice.json` still valid and `engines.qwen.status:
+'ready'`. **One false start along the way, not a regression:** the first
+repair-race attempt hit a sidecar already carrying this session's
+accumulated side-11 memory pressure (`committedMb` ~25GB) and both books
+failed `(derive-failed)` — even a **single, non-concurrent** retry on the
+same sidecar failed identically, ruling out a two-worker-specific cause. A
+clean sidecar restart reproduced the expected pass on the very next attempt.
+No `.pt` ever survived a revoke in this scenario (revoke wasn't part of this
+test), so KL-j(2)'s specific regression trigger doesn't apply here.
 
 ---
 
@@ -2390,7 +2708,34 @@ structured `cloned-voice-broken` code.
   `generationErrorCode` on these paths. **This is expected.** Record it as
   verified-as-expected, not as a defect.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P (both halves)  **Notes:** Run 5 (2026-09-04, same
+worktree/setup). Revoked the C-14/C-08/C-09 clone. **Splice half
+confirmed:** `POST .../chapters/2/splice` (rerecord, master-oduvan) returned
+a plain SSE `chapter_failed` with `errorReason: "Splice failed: Cloned
+voice(s) unavailable — a cloned voice must never be substituted with
+another: \"Master Oduvan\" (revoked). Restore the missing voice(s); reassign
+the character(s)."` — names the voice and reason, **no** `errorCode` field at
+all (contrast C-02/C-08/C-09's `cloned-voice-broken`).
+
+**QA-repair half — completed in Run 7 (2026-09-04, coordinator follow-up;
+a box reboot interrupted Run 6 mid-flight before this half was reached, so
+it resumed and completed in Run 7 — see the register's Run 7 notes).**
+The chapter's clean audio had nothing flagged (`flaggedCount: 0`) on default
+thresholds, so the precondition needed manufacturing. Used the app's own
+`PUT /api/config` to temporarily tighten `qa.seg.minRatio`/`qa.seg.maxRatio`
+(0.4/2.5 → 0.9/1.1 — a real, supported sensitivity knob, not a hand-edited
+file) — re-scanning the SAME unchanged audio then flagged 22 segments
+including two on the shared D-01 clone's character (Master Oduvan,
+segments 30 and 49). Revoked that clone, ran `POST
+.../chapters/2/audio-qa-repair` with `dryRun:false`: it re-recorded the
+OTHER flagged segments successfully (narrator/Wren/Maerin, non-cloned
+voices) up through segment 27, then hit segment 30 (Master Oduvan) and
+failed with `chapter_failed`, `errorReason: "Audio-QA repair failed: Cloned
+voice(s) unavailable — a cloned voice must never be substituted with
+another: \"Master Oduvan\" (revoked). Restore the missing voice(s); reassign
+the character(s)."` — same plain-text shape as the splice half, no
+`errorCode` field. Restored `qa.seg.minRatio`/`maxRatio` to their defaults
+(0.4/2.5) afterward.
 
 ---
 
@@ -2624,7 +2969,22 @@ clip on disk before generating.
 - No coqui slot is written to `cast.json`/the entry for this character (the
   entry stays as it was before the attempt).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Run 7 (2026-09-04, primary
+checkout, same throwaway book/voice as C-17/C-18). Deleted the existing
+`xtts-bpRDo9aUNNE1X9_I7YQQL.pt`/`.json` (the design step had already
+eagerly derived both engines from the retained clip — an E-08-consistent
+side effect, not something this test's precondition anticipated but easily
+cleared to reach genuine "no artifact" state). Routed `master-oduvan` to
+Coqui (`ttsEngine: 'coqui'`, a supported cast-slice PUT — reverted after).
+Forced the derive to fail by moving the retained calibration clip
+(`qwen-…__master.wav`) aside so the sidecar's derive-from-clip step has
+nothing to read. Generated chapter 2 on `coqui-xtts-v2`: **completed**
+(`chapter_complete`, `audioEngines: {coqui: 5}`, 222s of real audio) — no
+`cloned-voice-broken`, no crash, no silence. Confirmed: **no** `xtts-…pt`
+was ever created; the character's `overrideTtsVoices.coqui` slot is
+unchanged from before the attempt (still pointing at the designed voice's
+key, exactly as it was — no new/different write). Restored the retained
+clip and cleared the `ttsEngine` override afterward.
 
 ---
 
@@ -2791,36 +3151,36 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| **C-01** ⭐ | **Revoke lands mid-derive**: `revokedAt` survives, chapter fails, no `.pt` survives | | |
-| C-02 | Revoked → fails loud, names the voice, **zero audio, zero GPU** | **B** | needs a full-chapter render — blocked by the side-11 leak (see §7.2 BLOCKER-1) |
-| C-03 | Broken voice not in this chapter doesn't fail it | | |
-| C-04 | Title-beat narrator path is gated | | |
+| **C-01** ⭐ | **Revoke lands mid-derive**: `revokedAt` survives, chapter fails, no `.pt` survives | **P** | Run 5 (2026-09-04), 4 attempts, hit on #4. `revokedAt` survived unclobbered; no `.pt`/`.json`/`master.wav` survived even though the sidecar's own log shows the derive succeeding a second time — Node's post-derive guard re-purged it. Chapter failed `cloned-voice-broken` naming both affected characters, one with reason `(derive-failed)` (the documented acceptable variant, same as Run 4's E-03) and one `(revoked)` |
+| C-02 | Revoked → fails loud, names the voice, **zero audio, zero GPU** | **P** | Run 2026-08-31. Revoked clone assigned to "Wren": `chapter_failed` in 748 ms, `errorCode: cloned-voice-broken`, exact post-#1967 wording; `tts.log` delta pure health-check noise (no synth/derive calls); `audio/` confirmed empty |
+| C-03 | Broken voice not in this chapter doesn't fail it | **P** | Run 2026-08-31, same worktree/setup as C-02. Clone A (healthy) on Pell Hollis (ch.2 only), Clone B (revoked) on Sela (ch.3 only). Ch.2 completed normally (`chapter_complete`, `audioQa.status: "ok"`); ch.3 `chapter_failed` in 681 ms naming Sela `(revoked)`. Both halves pass |
+| C-04 | Title-beat narrator path is gated | **P** (weaker variant) | Run 5. Narrator's cloned voice revoked → chapter fails in 1s naming "Narrator" `(revoked)`, zero title audio. Weaker variant: fixture has no chapter where the narrator's ONLY usage is the title beat, so this can't isolate the title-beat path from body-line usage — matches the sheet's own documented fallback |
 | C-05 | Orphaned-characterId narrator path is gated | **F** (fires, and is **not** surfaced) | Fired naturally during the run-3 render. `cast.json` has `mairin`/`coalfall-dragon`; the analysis cache and `segments.json` have `mayrin`/`coalfall` — so **21 of 72 segments (60.3 s) rendered in the NARRATOR's voice**. Logged twice per render (`… which is not in this book's cast — falling back to the narrator voice`), **absent from `renderedFallbackByCharacter`** (`{}`), never surfaced in the UI. ECAPA confirms same voice: narrator vs mayrin **0.932**, narrator vs coalfall **0.965** (one real person across two clips = 0.891). **Not one book — 5 affected**: Playing with Fire 2.8 min, Unlocked 2.1, Exile 1.9 (incl. Silveny), Заказ Коалфолла 1.0, Everblaze 0.9. Escapes breaching the cloned-voice guarantee only by luck — every affected narrator is a *designed* voice. Filed [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023). **Caught by ear by the owner**, from audio the measurements had already flagged and I had misread |
-| C-06 | Repairable (`.pt` deleted) → transparent re-derive, chapter completes | | |
-| C-07 | Base-model bump → same re-derive | | |
-| C-08 ⭐ | **Transient** failure → Broken but **not bricked**; restart + re-run succeeds | | |
-| C-09 | **Permanent** 4xx → persists `failed` (terminal) | | |
+| C-06 | Repairable (`.pt` deleted) → transparent re-derive, chapter completes | **P** | Run 5. `.pt` deleted, chapter generated: transparent single re-derive, chapter completed, no failure/toast |
+| C-07 | Base-model bump → same re-derive | **P** | Run 5. Stale `baseModel` triggered exactly one re-derive; two early attempts hit this box's side-11 memory pressure, a clean sidecar restart reproduced the pass |
+| C-08 ⭐ | **Transient** failure → Broken but **not bricked**; restart + re-run succeeds | **P** | Run 5. Transient derive failure marked Broken, not bricked; self-healed once the sidecar returned. Time-to-fail-fast ran ~7min on one attempt — noted, not filed as a defect |
+| C-09 | **Permanent** 4xx → persists `failed` (terminal) | **P** | Run 5. Permanent 4xx persisted `status: 'failed'`, genuinely terminal (no self-heal) |
 | C-10 ⭐ | **Total erasure on revoke**, incl. the entry-dir recording | **P** | Pre-state 7 artifacts / 3 locations (`.pt`, `.json`, `__1.7b.pt`, `master.wav`, `voice.json`, 2 cached mp3s). After revoke: 200 with **no `artifactPurgeIncomplete`**; every GONE-table row gone; **wildcard sweep 0 files**; sample cache 0. Survives: entry dir + `voice.json`, `revokedAt` set, rest of consent intact, `master` block absent |
 | C-11 | Delete also removes the entry dir + clears cast refs | **P** | Unconfirmed DELETE → **409** with `usage:[{bookId, bookTitle, characterId, characterName}]`, nothing erased. `?confirm=1` → 200 `{deleted:true}`; artifacts 2→0; **entry dir removed**; the referencing character's **qwen *and* coqui** slots both cleared |
-| C-12 | Atomic `.pt`: kill mid-write leaves no truncated `.pt` | | |
-| C-13 | `wrong-engine` diagnosed distinctly at render time | | |
-| C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | | |
-| C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | | |
-| C-16 | Broken / Repairable card chip | | |
-| C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | | **RETRACTED — was recorded `F` in run 2; that was wrong.** The attempt used a splice re-record, which hit [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972): the chapter's `segments.json` attributed sentences 10/12/17/19 to `maerin`, but the analysis cache attributed all four to `narrator`, so the re-record rendered narrator lines in the narrator's voice and **never requested maerin's voice at all**. The `.pt` therefore never came back because the self-heal was never *reached* — not because it failed. **This test has not been exercised.** Re-run it after #1972 lands, on a book whose `segments.json` and analysis agree (or via a full chapter generation, which is unaffected) |
-| C-18 | §2.3 stale `.pt` deliberately left alone | | |
+| C-12 | Atomic `.pt`: kill mid-write leaves no truncated `.pt` | **P** (weaker variant) | Run 5, 5 attempts — never caught a truncated `.pt`; every kill landed cleanly before or after the write. Consistent with atomicity but doesn't prove concurrent interruption directly |
+| C-13 | `wrong-engine` diagnosed distinctly at render time | **P** (wrong-engine half) · **B** (engine-unavailable contrast) | Run 5. Wrong-engine half confirmed exactly. Engine-unavailable contrast not reproducible on this box — a generation request lazily relaunches the sidecar regardless of `autoStartSidecar` |
+| C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | **P** | Run 5. All 4 assign-time wrong-engine guard scenarios confirmed |
+| C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | **B** | Underlying mechanism confirmed via direct API call (fast `chapter_failed` with correct errorCode/errorReason) — live browser toast blocked by this session's own environment instability (SSE stalls, a queue-layer 503, one server exit), not reproduced as a stable product defect. Found+fixed in passing: `getResolvedSidecarUrl()` used `localhost` instead of `127.0.0.1` (real Windows IPv6 defect, verified not the cause here) |
+| C-16 | Broken / Repairable card chip | **P** | All 5 states confirmed on `#/voices`: Healthy=no chip, Broken(revoked/no-master/failed)=danger `Needs attention`, Repairable(stale)=warning `Will re-derive`; per-engine pill correctly shows `Qwen ⚠`/`Qwen ⟳` on the two engine-status states |
+| C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | **P** | Run 7: full chapter generation (not splice) on a throwaway primary-checkout book. `.pt` deleted → chapter completed, `.pt` reappeared, `instruct`/`designModel` byte-identical, `baseModel` refreshed. Re-design confirmed working (needed a Kokoro unload first — real, correctly-diagnosed VRAM contention, not a defect). Historical run-2 `F` was already withdrawn as a #1972 splice-attribution artifact — see the detailed section |
+| C-18 | §2.3 stale `.pt` deliberately left alone | **P** | Run 7: bumped `baseModel`+`status` to bogus/stale, `.pt` present. Chapter completed, `.pt` hash/mtime unchanged, zero new derives — designed-voice presence-only check confirmed, unlike a cloned voice's C-07 |
 | C-19 | 1.7B tier renders; `__1.7b.pt` created **and erased on revoke** | **P** | `qwen3-tts-1.7b` audition 200 in 49.7 s; `qwen-<uuid>__1.7b.pt` created (71,045 bytes); erased by the C-10 revoke above. The per-character 1.7B *toggle* UI was not exercised |
-| C-20 | Pause during a repair derive → no failure/toast | | |
-| C-21 | Partial erasure is reported, not claimed as success | | |
+| C-20 | Pause during a repair derive → no failure/toast | **P** (cloned-voice half only) | Run 5. Paused mid repair-derive: no failure, no persisted `generationState`, clean resume |
+| C-21 | Partial erasure is reported, not claimed as success | **P** | Run 5. Partial erasure via a held file handle hit on first attempt: `artifactPurgeIncomplete: true` naming the held path |
 
 #### Section D — cross-cutting (4)
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| D-01 | Concurrent multi-book render sharing a cloned voice | | not reached |
+| D-01 | Concurrent multi-book render sharing a cloned voice | **P** | Run 5. Second throwaway book imported/analysed; concurrent healthy + concurrent repair-race renders both completed cleanly |
 | D-02 | Full-book render with a cloned character | **B** | blocked by side-11 (§7.2 BLOCKER-1). **Partially substituted:** a per-character re-record of a cloned character into a real chapter succeeded — `splice_complete`, 58 segments, `resolvedVoiceName` = the clone's key, `asr.verdict: ok`, WER 0 |
 | D-03 | Server + sidecar restart → still renders (cache-independent) | **P** (incidentally) | Proven repeatedly while isolating #1941: the on-disk `.pt` survived 6 stack restarts and rendered correctly each time from a cold cache. Not run as the sheet's scripted steps |
-| D-04 | Splice / QA-repair surface plain text (expected, KL-i) | | not reached |
+| D-04 | Splice / QA-repair surface plain text (expected, KL-i) | **P** (both halves) | Splice half (Run 5): plain-text failure, no `errorCode`, names the voice + reason. QA-repair half (Run 7, after a reboot interrupted Run 6 mid-flight): tightened `qa.seg.minRatio`/`maxRatio` via the app's own config API to manufacture a genuinely QA-flagged sentence, then real QA-repair hit the revoked character and failed plain-text, same shape — thresholds restored afterward |
 
 #### Section E — 3c: cloned + designed voices on Coqui XTTS v2 (9)
 
@@ -2830,11 +3190,11 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 > **Run 2 (superseded, kept for history):** Russian Coalfall ch.2, `oduvan` reassigned to clone `563501c7-…` and its `ttsEngine` forced to `coqui` (run 1's trap: the character's own engine overrides the requested `modelKey`). Splice `rerecord/coqui-xtts-v2` → `splice_complete`, 80 segments, 244.42 s. **`voices\xtts\xtts-$U.pt` (135,509 B) + `.json` (172 B) created — the first XTTS clone artifacts ever produced on this box.** `resolvedVoiceName` = `xtts-$U`, `voiceEngine: coqui`. 21 oduvan spans (55.0 s) → `/transcribe` auto-detect: **`ru`**, `avg_logprob` **−0.368**. Sidecar logged `Coqui ready — 58 speakers in manifest` on `cuda:1` in a process that had already served `/embed` (#1962 holding). **Required a workaround first — see DEF-D.** **⚠️ The identity half is RETRACTED** — this used a splice re-record, and **13 of the 21 targeted segments diverge** between `segments.json` and the analysis cache ([#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)), so roughly half the audio rendered in other characters' voices. That is what the unexplained ECAPA reading meant: **0.604** against the Russian narrator and **0.279** against the clone's own audition — a mixture, not a match, which run 2 recorded as "ambiguous" instead of investigating. What survives: the Coqui derive genuinely ran, the artifacts are real, and the language is right. Still owed: identity, the no-re-derive half, and the by-ear check
 | **E-02** ⭐ | Audition, then revoke — Play refuses afterwards | **P** (run 2) | Sample before revoke → 200 `{"url":"/audio/voices/qwen-$U-…-yqzvr6.mp3","cached":true}`. Revoke → 200, `revokedAt` set, `personName`/`relationship`/`permittedUse`/`attestedAt`/`attestedBy` intact, `master` block absent, **no `artifactPurgeIncomplete`**. Sample after revoke → **403** `This cloned voice has no valid consent and cannot be played.` (exact). Direct GET of the previously-cached audition URL → **404** — the cached clip of the revoked person is gone, not merely unlinked |
-| E-03 | Revoke lands during an in-flight Coqui derive | | |
+| E-03 | Revoke lands during an in-flight Coqui derive | **P** | Run 2026-08-31. `revokedAt` survived, chapter failed naming "Pell Hollis", no orphaned `voices\xtts\` artifact — all three core guarantees held on first attempt. Minor non-defect wording deviation: reason read `(derive-failed)`, not `(revoked)` |
 | E-04 | A long sentence on a cloned Coqui voice | **F** | **Reproduced deliberately, not inferred.** Same cloned voice, same engine, same `language: ru` — only length differs: a **46-char** line → **200**, 178,176 B PCM (3.71 s); a **245-char** line → **500** `{"detail":"Internal error."}`. `main.py:2427` hardcodes `enable_text_splitting=True`; XTTS reaches `get_spacy_lang` only past `char_limits[lang]`; **spacy is not installed and not declared in any `requirements/*.txt`**. Thresholds: **ja 71, ru 182**, es 239, en 250, de 253, fr 273 — tightest exactly where cloned Coqui voices matter. Chapter 2 still rendered because **zero** of its lines reach 182 chars. Filed [#2017](https://github.com/dudarenok-maker/Castwright/issues/2017). **This is the crash class `test_xtts_clone_sanity` was written for** — it never ran: the golden tier is opt-in and SKIP-exits-0 without weights. **Update:** the fix landed in [PR #2039](https://github.com/dudarenok-maker/Castwright/pull/2039) — `requirements/base.txt` now declares plain `spacy`, and `_infer_from_latents` catches the `ImportError` and retries with `enable_text_splitting=False`, logged loudly. Verified only against a unit-test fake reproducing the upstream `ImportError` shape; this row's `F` stands until the exact reproduction above (46-char control → 200; 245-char Russian line → 200 + PCM) is re-run on a box with real Coqui weights |
 | E-05 | Audition matches render (KL-o caveat) | **P** | Card Play with `modelKey: coqui-xtts-v2` → 200 `{"url":"/audio/voices/xtts-$U-coqui-xtts-v2-47pmuw.mp3","cached":false}` — KL-o's fix holds, the card asks for Coqui. Audition vs the rendered chapter spans **0.5515**, against floors of **0.105** (rendered narrator) and **0.051** (the old designed oduvan). Same artifact, same identity — no drift between preview and delivery |
 | **E-06** ⭐ | A designed voice on a Coqui book — judged against the stock voice it replaces (D-B) | | |
-| **E-07** ⭐ | A designed voice's forced derive failure still renders the chapter (D-F) | | |
+| **E-07** ⭐ | A designed voice's forced derive failure still renders the chapter (D-F) | **P** | Run 7: corrupted the retained calibration clip so the Coqui derive genuinely fails; chapter completed on `coqui-xtts-v2` (fail-soft to the stock catalogue voice), no crash/silence, no new xtts artifact, coqui slot unchanged |
 | E-08 | Assign writes both slots, provenance-gated (Task 24) | **P** (via B-07) | Assigning a cloned entry wrote **both** `overrideTtsVoices.qwen` and `overrideTtsVoices.coqui` in one call — `{name: xtts-$U, libraryUuid: $U, provenance: cloned}`, `variants` absent. Confirmed twice (B-07 and the C-11 setup); C-11's delete then cleared both slots |
 | E-09 | Total erasure of the three Coqui artifact paths on delete | **P** (run 2) | Run 1 recorded this `N/A` because `voices\xtts\` had never existed; run 2's E-01 produced real artifacts, so this is its first genuine exercise. Pre-revoke set: **5 files across 3 locations** — `voices\qwen\qwen-$U.{json,pt}`, `qwen-$U__1.7b.pt`, `voices\xtts\xtts-$U.{json,pt}`, plus the cached audition mp3 under `server\audio\voices\`. After revoke: **0 remaining anywhere**, both `voices\xtts\` paths included. Entry dir survives holding **only `voice.json`** |
 
@@ -2951,11 +3311,32 @@ check, which **failed** for a reason unrelated to language — see **DEF-E**.
 resolution — see the B-06 row and DEF-C below. The historical "not reachable
 as written" finding is preserved in the row's Notes.)*
 
-**Zero failures** — but that is not an acceptance signal: 31 tests were never
-reached and 8 are blocked (the corrected totals above), including all of the
-highest-risk ⭐ set except C-10.
-The one Critical defect this run found (#1941) was discovered *outside* the
-scripted steps, while populating an artifact set for C-10.
+#### Cumulative — current (through Run 8, 2026-09-04)
+
+The tables above are frozen historical snapshots (Run 1, Run 2, and Run 2's
+correction); this one reflects the full §7.1 table's current P/F/B/N/A counts
+across Sections A–E, recomputed after Runs 3–8 (Sections C, D, and most of E
+were run for the first time in this window; see each row's own Notes for the
+run number).
+
+| Section | Total | P | F | B | N/A | not reached |
+|---|---|---|---|---|---|---|
+| A (3a) | 13 | 9 | 0 | 3 | 0 | 1 |
+| B (3b1) | 13 | 3 | 0 | 3 | 1 | 6 |
+| C (3b2) | 21 | 19 | 1 | 1 | 0 | 0 |
+| D (cross-cutting) | 4 | 3 | 0 | 1 | 0 | 0 |
+| E (3c) | 9 | 7 | 1 | 0 | 0 | 1 |
+| **All** | **60** | **41** | **2** | **8** | **1** | **8** |
+
+**Two failures now stand** (C-05's narrator-fallback misattribution, #2023;
+E-04's long-Coqui-sentence crash, #2017 — fixed in source per PR #2039 but
+not yet re-verified on hardware, so the row's `F` stands) — this is no longer
+the "zero failures" state Run 1/2 recorded. 8 tests remain not reached (A-13,
+B-08/09/10/11/12/13, E-06) and 8 remain blocked. Of the highest-risk ⭐ set
+(C-01, C-08, C-10, C-17, E-01, E-02, E-06, E-07), every one has now passed
+except **E-06**, still not reached. The one Critical defect Run 1 found
+(#1941) was discovered *outside* the scripted steps, while populating an
+artifact set for C-10.
 
 ### 7.2 Defects found
 

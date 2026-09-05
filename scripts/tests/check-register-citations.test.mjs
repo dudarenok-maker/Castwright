@@ -298,6 +298,33 @@ test('checkNonexistentIds: paired control — the same discharge word DOES excus
   assert.match(annotated[0], /A9/);
 });
 
+// #2858: idSpecificAnnotationPresent was polarity-blind — it only asked
+// whether a discharge word and a specific ID token co-occur in a clause, not
+// what the discharge word actually asserts. A negated discharge sentence
+// ("was NOT discharged") could therefore be misread as affirmatively
+// excusing a nonexistent-ID citation from Check A's fatal path. This is now
+// closed by wiring idSpecificAnnotationPresent to the same
+// isDischargeAssertionNegated helper dischargedSubjectsMentionedIn already
+// used (#2721/#2846) — this is the synthetic regression fixture proving it,
+// since no row in the real corpus exercises this shape today.
+test('checkNonexistentIds: a NEGATED discharge annotation does not excuse the cited ID (finding #2858)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'Register row: A9 — was NOT discharged; it is still live.\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(annotated.length, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
+});
+
+test('checkNonexistentIds: paired control — the same shape WITHOUT negation still excuses the cited ID (#2858)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'Register row: A9 — was discharged; it is no longer live.\n';
+  const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 1);
+  assert.match(annotated[0], /A9/);
+});
+
 // --- Pass-8 review of PR #2630 (finding O): the clause-bound annotation
 // rule was defeated by ordinary markdown shapes a bare newline (not a blank
 // line) doesn't bound — table rows, list items, a blockquote continuation,

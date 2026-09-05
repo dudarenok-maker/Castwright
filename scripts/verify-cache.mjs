@@ -168,6 +168,13 @@ export const STEPS = [
            test:hooks [cached] and leaves the guard stale-green. Same #1847
            trap as .claude/skills/** above. */
         'docs/testing/**',
+        /* docs/features/** is an input because check-register-row-citations.mjs's
+           scannedFiles() reads every .md file under this directory at RUNTIME
+           (via git ls-files) to resolve register-row citations. Without this
+           glob, a docs/features/**-only diff — exactly the shape that could add
+           or break a citation — prints test:hooks [cached] and leaves the
+           citation checker stale-green. Same #1847 trap as docs/testing/** above. */
+        'docs/features/**',
       ],
       /* preflight-ffmpeg.cjs is an input because ffmpeg-version.test.mjs
          requires it — a diff that breaks the parser must run its own test.
@@ -188,7 +195,13 @@ export const STEPS = [
          and reads the other two as TEXT at RUNTIME, asserting the live view
          still agrees with the markdown. Without them here, a register-only
          diff — precisely the edit that drifts the two apart — prints
-         [cached] and the cross-check sits stale-green. */
+         [cached] and the cross-check sits stale-green.
+         check-register-row-citations.mjs is a parallel check: its scannedFiles()
+         reads docs/testing/** and docs/features/** at RUNTIME (via git ls-files)
+         to resolve register-row citations against the register. Without it here,
+         a docs/testing/**- or docs/features/**-only diff — precisely the edit
+         that could add or break a citation — prints [cached] and the citation
+         checker sits stale-green. Same #1847 runtime-read trap. */
       extraFiles: [
         'scripts/validate-commit-msg.mjs',
         'scripts/preflight-ffmpeg.cjs',
@@ -197,6 +210,7 @@ export const STEPS = [
         'scripts/release-notes-gate.mjs',
         'scripts/bump-version.mjs',
         'scripts/check-onbox-register.mjs',
+        'scripts/check-register-row-citations.mjs',
         'docs/testing/onbox-acceptance-register.md',
         'docs/testing/onbox-acceptance-register-live-view.html',
         // launch.mjs lives at the repo root, outside scripts/**, so the
