@@ -397,7 +397,7 @@ describe('synthesiseChapter — engine-partitioned derive pre-pass (fs-38 Wave 3
     const unloadCalls = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/unload'));
     expect(unloadCalls).toHaveLength(0);
     expect(fetchSpy.mock.calls.map(([url]) => String(url))).toEqual([
-      'http://localhost:9000/qwen/evict-voice',
+      'http://127.0.0.1:9000/qwen/evict-voice',
     ]);
     expect(callOrder).toEqual(['derive:qwen']);
     expect(coquiProvider.calls).toHaveLength(0);

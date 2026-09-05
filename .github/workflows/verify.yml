@@ -274,8 +274,11 @@ jobs:
       # change to src/test/setup.ts (runner-injected, NOT import-reachable)
       # forces a full run via forceRerunTriggers in vitest.config.ts; a root
       # dep/config bump (the `shared` scope) forces a full run via vitest's
-      # default triggers. test:a11y stays always-on as a cheap core-view gate.
-      # See docs/features/118-ci-cost-round-2.md.
+      # default triggers; a lockfile-only OR shared-scope diff forces a full run
+      # via the LOCKFILE_TOUCHED flag (#2853) — note lockfile_touched is
+      # computed as (shared || lockfile-specific-match), so e.g. an .github/actions/**
+      # diff also triggers a full run. test:a11y stays always-on as a cheap
+      # core-view gate. See docs/features/118-ci-cost-round-2.md.
       # test:e2e is a deliberate extra trigger: this step also runs
       # `npm run test:a11y`, which has no STEP of its own, and an e2e-only
       # diff should still exercise the a11y battery. Dropping it would be a
@@ -287,8 +290,9 @@ jobs:
         if: fromJSON(needs.detect.outputs.scopes).step_test || fromJSON(needs.detect.outputs.scopes).step_test_e2e || fromJSON(needs.detect.outputs.scopes).shared
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
+          LOCKFILE_TOUCHED="${{ fromJSON(needs.detect.outputs.scopes).lockfile_touched }}"
           # On a manual dispatch BASE is empty (no PR) → run the full suite.
-          if [ -n "$BASE" ]; then npx vitest run --changed "$BASE"; else npx vitest run; fi
+          if [ -n "$BASE" ] && [ "$LOCKFILE_TOUCHED" != "true" ]; then npx vitest run --changed "$BASE"; else npx vitest run; fi
           npm run test:a11y
 
   server-tests:
@@ -330,14 +334,23 @@ jobs:
       # condition is the union of both steps' keys. Drops the old `sidecar`
       # disjunct deliberately.
       # (was: server || sidecar || shared).
+      #
+      # #2853/#2867: neither lockfile is in either vitest config's
+      # forceRerunTriggers, so `--changed` can select ZERO tests against a
+      # changed dependency tree. `detect`'s scopes blob already carries
+      # `lockfile_touched` (ci-scope.mjs) computed from the same PR diff this
+      # job would otherwise re-derive — reuse it rather than a second
+      # merge-base/git diff call, and force the full (non-`--changed`) run
+      # whenever it is set, even on a PR.
       # leg: test:server
       - name: Server tests (fast + slow)
         if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
         run: |
           cd server
           BASE="${{ github.event.pull_request.base.sha }}"
+          LOCKFILE_TOUCHED="${{ fromJSON(needs.detect.outputs.scopes).lockfile_touched }}"
           # On a manual dispatch BASE is empty (no PR) → run the full suite.
-          if [ -n "$BASE" ]; then
+          if [ -n "$BASE" ] && [ "$LOCKFILE_TOUCHED" != "true" ]; then
             npx vitest run --changed "$BASE"
             npx vitest run --config vitest.config.slow.ts --changed "$BASE"
           else
