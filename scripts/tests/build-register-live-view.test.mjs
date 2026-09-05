@@ -491,3 +491,55 @@ test('--check fails when a committed shell still carries the placeholder class, 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('reconcileOneSection preserves literal $1 and $& in row body text (string.replace special-pattern corruption bug)', () => {
+  // Test the bug where body text containing $1, $&, etc. gets corrupted by
+  // String.prototype.replace's special-pattern interpretation. When the
+  // replacer is a string (not a function), $1 is interpreted as capture group 1,
+  // and $& is the whole match. This test verifies the fix: using a replacer
+  // function instead.
+  const md = `## Group A — setup a
+
+### A1 · title with shell
+### A2 · title without shell
+`;
+  // Create HTML with one existing shell containing $1 and $& in the body
+  const html = `<section class="group" id="ga">
+      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
+      <details class="item">
+        <summary><span class="num">A1</span><span class="iname">title with shell</span><span class="chev">›</span></summary>
+        <div class="body">Shell says: bash deploy.sh $1 and check $& status</div>
+      </details>
+  </section>`;
+
+  const result = reconcileRowShells(md, html);
+
+  // The literal text "$1" and "$&" must appear unchanged in the output
+  assert.match(result, /bash deploy\.sh \$1 and check \$& status/);
+  // And the old match text should NOT be duplicated or substituted
+  assert.doesNotMatch(result, /bash deploy\.sh <section/);
+});
+
+test('reconcileTitledSection preserves literal $1 and $& in row body text (string.replace special-pattern corruption bug)', () => {
+  // Test the same bug in reconcileTitledSection (Blocked/Unconfirmed sections).
+  // The Blocked section uses prefixMatch: false, matching titles exactly (after normalisation).
+  const md = `## Blocked — hardware not available
+
+### Server config
+`;
+  // Create HTML with an existing shell containing $PORT and $& in the body
+  const html = `<section class="group is-blocked" id="blocked">
+      <header><h3 class="gtitle">…<span class="gcount">1 row</span></h3></header>
+      <details class="item">
+        <summary><span class="num">—</span><span class="iname">Server config</span><span class="chev">›</span></summary>
+        <div class="body">Runs on $PORT and status is $& (always check)</div>
+      </details>
+  </section>`;
+
+  const result = reconcileRowShells(md, html);
+
+  // The literal text "$PORT" and "$&" must appear unchanged
+  assert.match(result, /Runs on \$PORT and status is \$& \(always check\)/);
+  // The match should not be substituted/duplicated
+  assert.doesNotMatch(result, /Runs on <section/);
+});

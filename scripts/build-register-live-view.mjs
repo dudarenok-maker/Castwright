@@ -296,7 +296,10 @@ function reconcileTitledSection(html, sectionId, titles, { prefixMatch }) {
   // ORIGINAL html, verbatim and untouched by this function — prepending
   // another '\n' on top of it grew the gap by one line on every rebuild
   // (idempotence failure, Task 8 Step 2).
-  return html.replace(sectionRegex, `${headerAndOpen}${newBody}${closeTag}`);
+  // Use a replacer function instead of a string template to avoid JavaScript's
+  // special-pattern interpretation ($1, $&, etc.) when the replacement text
+  // contains these sequences.
+  return html.replace(sectionRegex, () => `${headerAndOpen}${newBody}${closeTag}`);
 }
 
 export function reconcileRowShells(mdText, html) {
@@ -343,7 +346,10 @@ function reconcileOneSection(html, sectionId, rowIds) {
   const newBody = rowIds
     .map(({ id, title }) => existingShells.get(id) ?? buildPlaceholderShell(id, title))
     .join('\n');
-  return html.replace(sectionRegex, `${headerAndOpen}${newBody}${closeTag}`);
+  // Use a replacer function instead of a string template to avoid JavaScript's
+  // special-pattern interpretation ($1, $&, etc.) when the replacement text
+  // contains these sequences.
+  return html.replace(sectionRegex, () => `${headerAndOpen}${newBody}${closeTag}`);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
