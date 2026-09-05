@@ -490,7 +490,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -500,11 +500,28 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**65 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**64 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-01, merging this branch's wave-10 A28 discharge with
+> **Last change: 2026-09-05 (A29 retry, claude), 65 → 64.** Row **A29** (ORT
+> marker — in-app Qwen3 install click-through, #2192) fully discharged and
+> dropped — **A29 is retired, not reused** (allocate-once). Retried in an
+> isolated worktree (its own bootstrapped sidecar venv, `LOCAL_TTS_PORT=9080`)
+> now that #2632 fixed the hardcoded-`:9000` port contention that blocked the
+> three prior attempts (wave-3 step 2, wave-4 step 8, wave-4 step 5c) and the
+> 2026-08-23 #2621 retry: sidecar confirmed bound to `:9080` from its own log,
+> never touching the box's other live lane's `:9000`; the ONNX GPU runtime
+> swap into the fresh venv completed with zero `WinError 5`/`Accès refusé`;
+> Qwen3-TTS showed installed with no error via real Chrome (package/weights
+> already resident, so the fresh-download transition was instead exercised via
+> Kokoro's genuine install-and-load click-through); and Kokoro's post-install
+> `/health` reported `devices.kokoro: "cuda"` from the live ONNX session
+> (`server/tts-sidecar/main.py:10487`), not CPU. Evidence:
+> `docs/testing/onbox-a29-results/step-1-retry.md`. Run by: claude
+> (Castwright#2916, #2914).
+>
+> **Prior change: 2026-09-01, merging this branch's wave-10 A28 discharge with
 > `main`'s independent ROCm/AMD Blocked-row addition.** This branch
 > (`chore/sidecar-kokoro-cuda-path`) had discharged row **A28** below (66 → 65,
 > Group A 40 → 39); `origin/main` had independently added the Blocked-section
@@ -2882,84 +2899,6 @@ synthetic memory/VRAM hog run alongside it). *Criteria:*
 before/after values. *Cost:* short-to-medium — the VRAM-pressure legs need a
 way to actually saturate the card, which may need a synthetic hog rather
 than a real render.
-
----
-
-### A29 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
-
-Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha
-tester's exact scenario, with the app running. Every other row for this feature
-proves a mechanism; this one is the acceptance criterion the issue was actually
-filed against, and it has not been separately re-confirmed since the fix landed
-(the self-heal proof in §5 exercises boot, not an in-app package install).
-
-- Start the app normally (NVIDIA profile, a bootstrapped sidecar venv).
-- From the app UI, install Qwen3 (Model Manager → the Qwen engine's Install
-  action) — the exact step the original report describes failing.
-- Confirm the install completes with **no** `WinError 5` / `Accès refusé` on any
-  `.dll` under `site-packages/onnxruntime/capi/`.
-- Load Kokoro afterward and confirm it still reports `CUDAExecutionProvider` — the
-  install must not have silently swapped the GPU runtime for CPU en route.
-
-*Needs:* the existing NVIDIA dev box, the app running. *Criteria:* design doc
-§On-box acceptance item 2; run sheet §4 in
-`docs/testing/ort-marker-onbox-acceptance.md`.
-
-> **Wave-3 step 2, 2026-08-20 — STILL OWED, not run, blocker now fixed.** Needs the full app
-> running plus a real click-through of Model Manager → Qwen → Install
-> against a throwaway copy of the sidecar venv — scoped as its own session
-> rather than rushed alongside A28/A30 in the same heartbeat. The blocker that
-> prevented full discharge (the CUDA13/cuDNN9 gap A28 found) is now resolved by
-> PR #2576, which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`
-> (CUDA-12 line). The row remains STILL OWED because neither the app-level test
-> nor the Kokoro GPU-provider check have been re-run against the fixed pin; see
-> evidence doc `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
-
-> **Wave-4 step 8, 2026-08-21 — STILL OWED, GPU-provider sub-check re-run, in-app
-> install still not attempted.** Re-ran only the shared Kokoro GPU-provider
-> sub-check (this row's final check) against the #2534-fixed pin
-> (`onnxruntime-gpu` 1.26.0, commit `6e4eac6c0129b68e8ff47db7b1503f31344248ab`,
-> now on `main` via `4bb738d2`) — same procedure and result as A28 above:
-> `get_available_providers()` reports `CUDAExecutionProvider`, actual session
-> construction still falls back to CPU, root cause confirmed as the missing
-> `nvidia-cudnn-cu12` `[cudnn]` extra, not a #2534 recurrence. Zero discharges;
-> see evidence doc `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`.
-> The in-app Qwen3 install click-through part of this row remains untouched —
-> out of scope for this re-run (see #2561) — and would hit the same cuDNN gap
-> on its own Kokoro-afterward check even once attempted.
-
-> **Wave-4 step 5c, 2026-08-21 — STILL OWED, partially run.** The core #2192
-> repro — clicking Install on Qwen3-TTS Base (0.6B) in Model Manager — ran
-> genuinely in a real browser, against this worktree's own bootstrapped venv,
-> and completed cleanly with **no `WinError 5`**. Screenshots captured. The
-> follow-on check (confirm Kokoro still reports `CUDAExecutionProvider` after
-> install) could **not** be validated: this box's TTS sidecar binds a single
-> hardcoded `:9000` port shared across every worktree, another live agent
-> lane already held it for the whole session, and `POST /api/sidecar/restart`
-> 409'd as a result — a structural box-contention limitation this run,
-> distinct from the already-filed #2534 CUDA13/cuDNN9 gap. Full evidence:
-> `docs/testing/onbox-wave4-results/step-5c-a40.md`.
-
-> **2026-08-23 (Castwright#2621, wave-5 lineage) — STILL OWED, blocked by
-> box-wide sidecar port contention again.** Started this worktree's own app
-> (frontend/API bound the assigned `5293`/`8200` ports, confirmed from the
-> server's own log). At startup the server found another process already
-> listening on the hardcoded `:9000` sidecar port and adopted it instead of
-> spawning its own, so `SIDECAR_VENV_DIR` never took effect for the running
-> app. That pre-existing sidecar (PID 7380, actively `ESTABLISHED` with a live
-> client) was identified before assuming it was safe to use; per the standing
-> rule against disrupting another agent's live process, the Install action was
-> **not** clicked against it — only a read-only `GET /health` was run
-> (`devices: {"kokoro":"cuda","coqui":"cuda","qwen":"cuda"}`, noted only as
-> context that CUDA does work for some venv on this box). Neither the Qwen3
-> install click-through nor the Kokoro-afterward check could be safely run
-> this session — **not attempted, not failed**, same structural class as
-> wave-4 step-5c and now a third piece of evidence for it. **Worth filing
-> separately:** `server/src/tts/spawn-sidecar.ts`/`sidecar-owner.ts`'s
-> hardcoded `9000` vs. `LOCAL_TTS_PORT`'s per-worktree value makes any two
-> worktrees' apps unable to run isolated TTS sessions simultaneously. Evidence:
-> `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
-> (Castwright#2621).
 
 ### A30 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 

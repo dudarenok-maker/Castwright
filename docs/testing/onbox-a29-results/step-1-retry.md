@@ -1,5 +1,8 @@
 # A29 step 1 — Qwen3 install click-through retry (isolated venv + port)
 
+Register row **A29** was discharged in full on 2026-09-05 following this run's
+step-2 verification (Castwright#2914) and no longer appears in the register.
+
 Register row **A29** ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192),
 plan 282), retried per parent [#2913](https://github.com/dudarenok-maker/Castwright/issues/2913)
 now that the sidecar port hardcode ([#2632](https://github.com/dudarenok-maker/Castwright/issues/2632))

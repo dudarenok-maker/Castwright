@@ -847,9 +847,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
               },
               // 'normalised' — a live id-shape match with no history entry
               // (`'normalised-id'` server-side). The repair pass can list
-              // THIS exact shape as damage needing a re-render — register
-              // row A29's own fixture (`docs/testing/onbox-acceptance-
-              // register.md`) is a normalised-id match, not a history one
+              // THIS exact shape as damage needing a re-render — the
+              // fixture below (formerly register row A29, discharged and renumbered since)
+              // is a normalised-id match, not a history one
               // (67-segment `the-torment`, RC2's underscore-vs-hyphen
               // split) — so per #2107's ruling ("only 'exact' means the
               // rendered bytes are fine") this must ALSO carry the note,
