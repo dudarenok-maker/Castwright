@@ -2131,6 +2131,66 @@ function extractHeadingTitleEchoes(text) {
 }
 
 /**
+ * For a single-ID heading, check if a discharge annotation exists in the
+ * section text AND either:
+ *   1. Has NO ID proximate to the discharge word (the A8 case where discharge
+ *      is "bare"), OR
+ *   2. Has the heading's own ID proximate to the discharge word (the A41 case
+ *      with proximity-adjacent discharge)
+ *
+ * This avoids false positives like "B1 was discharged" excusing a nearby
+ * "### A41 · ..." heading, while catching both:
+ *   - "— discharged 2026-08-27" with no ID nearby (the A8 real case)
+ *   - "A41 was discharged" with the heading's own ID nearby (the standard case)
+ *
+ * For multi-ID headings, a discharge annotation must still use the stricter
+ * `idSpecificAnnotationPresent` check, since the same section could contain
+ * multiple IDs and we can't tell which one a bare discharge word refers to
+ * without proximity.
+ *
+ * Pass-1 of #2838's title-drift-annotation relaxation: A8's real case has
+ * a single-ID heading with a discharge annotation in its section, but the
+ * annotation doesn't repeat the ID next to the discharge word (unlike A19,
+ * A31, etc., which do). This relaxation moves A8 from `findings` to
+ * `annotatedFindings` by treating a single-id case more generously.
+ */
+function dischargeAnnotationPresentAnywhere(sectionText, id) {
+  // For single-ID headings, look for discharge in the header section only
+  // (first ~300 chars) to avoid false positives from body text mentioning
+  // other IDs. This covers the criteria-source blockquote region.
+  const HEADER_CHARS = 300;
+  const headerText = sectionText.slice(0, HEADER_CHARS);
+  const headerScanText = stripInlineCodeSpans(headerText);
+
+  const dischargeMatches = [
+    ...headerScanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
+  ];
+  for (const dm of dischargeMatches) {
+    const { start, end } = clauseBounds(headerText, dm.index);
+    if (isDischargeAssertionNegated(headerScanText, dm, start)) continue;
+
+    // Check what ID (if any) is proximate to this discharge word IN THE HEADER.
+    ANY_ID_TOKEN_REGEX.lastIndex = start;
+    let proximateId = null;
+    let occ;
+    while ((occ = ANY_ID_TOKEN_REGEX.exec(headerText)) && occ.index < end) {
+      const dischargeCenter = dm.index + dm[0].length / 2;
+      const occCenter = occ.index + occ[1].length / 2;
+      // If there's an ID within proximity of this discharge word, record it.
+      if (Math.abs(occCenter - dischargeCenter) <= ID_PROXIMITY_CHARS) {
+        proximateId = occ[1];
+        break;
+      }
+    }
+    // Discharge annotation excuses this heading's drift if:
+    //   - No ID is proximate (bare discharge in header), OR
+    //   - The heading's own ID is proximate
+    if (proximateId === null || proximateId === id) return true;
+  }
+  return false;
+}
+
+/**
  * v2 of `check:register-row-citations` (#2838's second task child): flags a
  * heading citation whose title-echo text scores at or below
  * TITLE_DRIFT_RATIO_THRESHOLD against the row's current `.title` AND shares
@@ -2150,6 +2210,13 @@ function extractHeadingTitleEchoes(text) {
  * `annotatedFindings` bucket rather than treated as plain drift, per #2838:
  * all six real-corpus detections were correctly-annotated historical references.
  *
+ * For single-ID headings, a discharge annotation anywhere in the section
+ * counts as excusing the heading, since there's no ambiguity about which ID
+ * the annotation applies to (#2858). For multi-ID headings, the stricter
+ * `idSpecificAnnotationPresent` check (ID must be proximity-adjacent to the
+ * discharge word) still applies, to avoid a discharge for one ID wrongly
+ * excusing another.
+ *
  * @returns {{ findings: string[], annotatedFindings: string[] }}
  */
 export function checkCitationTitleDrift(text, filePath, registerRows) {
@@ -2168,7 +2235,17 @@ export function checkCitationTitleDrift(text, filePath, registerRows) {
         `${filePath}:${lineIndex + 1} — heading cites ${id} — row's current title is ` +
         `"${row.title}" but the heading text says "${titleEcho}" (similarity ${ratio.toFixed(2)}, ` +
         `${shared} shared token(s) — review for drift)`;
-      if (idSpecificAnnotationPresent(enclosingSectionText(lines, lineIndex), id)) {
+
+      const sectionText = enclosingSectionText(lines, lineIndex);
+
+      // For single-ID headings, use relaxed annotation check (discharge word
+      // anywhere in section, or next to this heading's ID). For multi-ID headings,
+      // require ID-proximity to avoid one ID's discharge excusing another's drift.
+      const isAnnotated = ids.length === 1
+        ? dischargeAnnotationPresentAnywhere(sectionText, id)
+        : idSpecificAnnotationPresent(sectionText, id);
+
+      if (isAnnotated) {
         annotatedFindings.push(`${message} — annotated as discharged/removed, not flagged as drift`);
       } else {
         findings.push(message);

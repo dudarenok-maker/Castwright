@@ -2209,6 +2209,152 @@ Other body.
   assert.equal(result.annotatedFindings.length, 0);
 });
 
+test('checkCitationTitleDrift: a single-ID heading with discharge annotation ANYWHERE in section (not ID-adjacent) moves to annotatedFindings', () => {
+  // #2858: reproduces A8's exact shape — single-ID heading with clearly different
+  // title text, whose section CONTAINS a discharge annotation, but the annotation
+  // does not repeat the ID next to the discharge word (unlike A19, A31, etc.).
+  // For single-ID headings, a discharge annotation with no other ID proximate
+  // to the discharge word excuses the heading's drift.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A8 · GPU residency safety + coexistence (plan 222) — steps 1–5
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  // Heading has low similarity to current title, and the section contains a
+  // discharge annotation (no ID next to discharge word). The phrase "Distinct
+  // from B1" comes AFTER the clause boundary (period), so it doesn't affect
+  // the discharge annotation detection.
+  const text = [
+    '## Section header',
+    '',
+    '### A8 · completely different work',
+    '',
+    'Introduction to this section.',
+    '',
+    '> **Criteria source:** some file at :54-59',
+    '> — discharged 2026-08-27, kept for the concrete observation.',
+    '> Distinct from B1/plan 216 (that one is different).',
+    '',
+    'More details about the criteria.',
+    '',
+    '## Next section',
+  ].join('\n');
+  const result = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(result.findings.length, 0, 'single-id drift with discharge annotation (no ID proximate to discharge) should be empty');
+  assert.equal(result.annotatedFindings.length, 1, 'should be in annotated bucket');
+  assert.match(result.annotatedFindings[0], /A8/);
+  assert.match(result.annotatedFindings[0], /annotated as discharged/);
+});
+
+test('checkCitationTitleDrift: a multi-ID heading still requires ID-proximity for annotation (does not use relaxed single-ID logic)', () => {
+  // Negative control — #2858 relaxation applies ONLY to single-ID headings.
+  // Multi-ID headings must still use the strict idSpecificAnnotationPresent check,
+  // where the ID must be proximity-adjacent to the discharge word, to avoid a
+  // discharge for one ID wrongly excusing another (e.g., in "### A6 + A7 · ...",
+  // a discharge annotation for ONLY A6 appearing somewhere in the section must
+  // NOT excuse the other ID's drift).
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A6 · GPU first feature (#1000)
+
+First body.
+
+### A7 · GPU second feature (#1001)
+
+Second body.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  // Multi-ID heading with discharge annotation for ONLY A6 (with proximity).
+  // The heading title ("completely unrelated work") is completely different
+  // from both rows' titles, ensuring drift for both. Only A6's nearby annotation
+  // excuses it; the second row has no annotation and should flag as drift.
+  // Deliberately avoid mentioning any ID in the second discharge phrase.
+  const text = [
+    '## Section for A6 and A7',
+    '',
+    '### A6 + A7 · completely unrelated work',
+    '',
+    'Introduction.',
+    '',
+    '> A6 was discharged long ago.',
+    '',
+    '> Full criteria: some file — discharged in earlier phase.',
+    '',
+    'Final details in this section.',
+    '',
+    '## Next section',
+  ].join('\n');
+  const result = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  // A6 should be annotated (discharge word "discharged" appears next to "A6").
+  const a6Annotated = result.annotatedFindings.some((s) => s.includes('A6'));
+  assert.ok(a6Annotated, 'A6 with proximity annotation should be in annotatedFindings');
+  // A7 should NOT be excused — there's no annotation mentioning A7, only a generic
+  // "discharged" phrase elsewhere in the section. A7 should flag as drift.
+  const a7Drift = result.findings.some((s) => s.includes('A7'));
+  assert.ok(a7Drift, 'A7 without proximity annotation should remain in plain findings');
+});
+
+test('checkCitationTitleDrift: a single-ID heading with NO discharge annotation still flags as drift', () => {
+  // Paired control — a single-ID heading with clearly different title text and
+  // NO discharge annotation anywhere in its section should still flag as drift.
+  // This confirms the relaxation doesn't accidentally excuse everything.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A8 · GPU residency safety + coexistence (plan 222) — steps 1–5
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  // Single-ID heading with low similarity and NO discharge annotation.
+  const text = '### A8 · completely different work\n\nNo annotation in this section.\n';
+  const result = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(result.findings.length, 1, 'single-id drift without annotation should still flag');
+  assert.equal(result.annotatedFindings.length, 0, 'should not be in annotated bucket');
+  assert.match(result.findings[0], /A8/);
+  assert.ok(!result.findings[0].includes('annotated as discharged'));
+});
+
+test('checkCitationTitleDrift: a single-ID heading is NOT excused by a discharge annotation naming a DIFFERENT id', () => {
+  // The relaxed single-ID check's docstring claims this guard exists — pin it
+  // with a real test rather than trusting the comment. A41's own section
+  // contains a discharge word, but it's proximate to "B1", not "A41" — the
+  // relaxation must still require EITHER no proximate id at all OR this
+  // heading's own id; a proximate id belonging to someone else must not
+  // excuse it, or a stray "B1 was discharged" anywhere nearby would silently
+  // mask real drift on an unrelated row.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### A41 · Some real current title (#1234)
+
+Body.
+
+### B1 · other row (#1235)
+
+Other body.
+`;
+  const { rows } = parseRegisterRows(registerText);
+  const text = [
+    '### A41 · completely different unrelated work',
+    '',
+    '> B1 was discharged and no longer exists.',
+    '',
+  ].join('\n');
+  const result = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  assert.equal(result.findings.length, 1, 'a differently-named nearby discharge must not excuse this heading');
+  assert.match(result.findings[0], /A41/);
+  assert.equal(result.annotatedFindings.length, 0);
+});
+
 // --- frozen-path exclusion ---
 
 test('isFrozenPath: excludes the documented frozen globs', () => {
