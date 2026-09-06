@@ -1271,6 +1271,32 @@ Working practice below; this holds even under contention).
   dispatch tool reported the agent "completed" — a completed agent
   notification can still have live background children of its own still
   running commits/pushes.
+- **That process probe matches ITSELF.** The pattern you search for is in the
+  command line of the shell running the search, so a naive
+  `CommandLine -like "*<worktree-path>*"` reports phantom occupants on a
+  completely idle tree (observed 2026-09-06: five "live processes", all of them
+  the probe's own wrappers). Exclude your own **ancestry and that ancestry's
+  children** — excluding just `$PID` is not enough, because the harness spawns a
+  wrapper shell per call that is not on your ancestor chain but is a child of
+  something that is. A probe that always fires is indistinguishable from one
+  that works, so confirm it reports zero on a tree you know is idle before
+  trusting a zero on one you are about to write to.
+
+**Holding a tree against the Open Engine queue** (#3011, design of record:
+[docs/superpowers/specs/2026-09-06-worktree-exclusivity-design.md](docs/superpowers/specs/2026-09-06-worktree-exclusivity-design.md)):
+
+- **Never hand-commit in a worktree that has an open agent ticket.** Commit from
+  the primary checkout, or from a tree no ticket points at.
+- **To hold one anyway, move the ticket to `Parked`** — an existing board state
+  the gate never makes claimable. **Never `Agent Needs Input`**, which means
+  *waiting on a person*: **any comment on it is a resume trigger, including the
+  comment saying not to resume.** That is not hypothetical — it is exactly how
+  a second lane was launched into a tree a human was committing in.
+- **Announcing a park does not park it.** Change the state first.
+- **The tooling cannot see a non-lane writer.** A human, an interactive session,
+  a dispatched fix agent, and an orphaned battery are all invisible to the
+  queue's own exclusivity checks. The rules above are the protection; there is
+  no mechanism behind them.
 
 ### Planning agents
 
