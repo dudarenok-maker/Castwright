@@ -516,7 +516,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 37 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -526,11 +526,32 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**60 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-06 (claude), 62 → 61 — Group A 39 → 38.** Row **A36**
+> **Last change: 2026-09-07 (claude), 61 → 60 — Group A 38 → 37.** Row **A29**
+> (ORT marker — in-app Qwen3 install, #2192) fully discharged and dropped —
+> **A29 is retired, not reused** (allocate-once, same precedent as A28/A36).
+> Chain #2913 → #3020 → #3038 → #3039 → **#3040 (this pass)**: #3020 genuinely
+> reproduced `WinError 5` on the in-app Qwen3 install click-through (the
+> installer never stopped the sidecar before running `pip`, so `qwen-tts`'s
+> transitive `onnxruntime` wheel could not replace the live sidecar's
+> memory-mapped DLL); #3039/PR #3043 fixed it (`withSidecarHeld`, restructuring
+> the installer to hold the sidecar down for the pip step and restore the GPU
+> ONNX runtime afterward). This pass re-ran #3020's exact procedure against the
+> merged fix in a fresh worktree: confirmed Qwen3-TTS genuinely absent (live
+> `packageFault: "missing"` probe) after a fresh venv bootstrap + deliberate
+> uninstall, clicked **Install Qwen3-TTS** for real via Playwright (genuine
+> `POST /api/qwen/install` job, not the installed short-circuit), and the
+> install completed cleanly — **no `WinError 5`**, `"status":"installed"`.
+> Loaded Kokoro afterward and confirmed `devices.kokoro: "cuda"` from the live
+> `/health` response with the model actually resident — also a fix over the
+> pre-fix pass's `"cpu"` reading, apparently a side effect of PR #3043's
+> ORT-restore step. Full evidence:
+> `docs/testing/onbox-a29-results/step-3-post-fix-verify.md`.
+>
+> **Prior change: 2026-09-06 (claude), 62 → 61 — Group A 39 → 38.** Row **A36**
 > (voice reassignment — a rebuilt audition centroid actually scores real audio,
 > #1969/#2700) fully discharged and dropped — **A36 is retired, not reused**
 > (allocate-once, same precedent as A28). The 2026-08-29 on-box run had left
@@ -2977,134 +2998,6 @@ way to actually saturate the card, which may need a synthetic hog rather
 than a real render.
 
 ---
-
-### A29 · ORT marker — the reported bug: in-app Qwen3 install ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only**
-
-Design doc §On-box acceptance, criterion 2 — **this is #2192 itself**, the alpha
-tester's exact scenario, with the app running. Every other row for this feature
-proves a mechanism; this one is the acceptance criterion the issue was actually
-filed against, and it has not been separately re-confirmed since the fix landed
-(the self-heal proof in §5 exercises boot, not an in-app package install).
-
-- Start the app normally (NVIDIA profile, a bootstrapped sidecar venv).
-- From the app UI, install Qwen3 (Model Manager → the Qwen engine's Install
-  action) — the exact step the original report describes failing.
-- Confirm the install completes with **no** `WinError 5` / `Accès refusé` on any
-  `.dll` under `site-packages/onnxruntime/capi/`.
-- Load Kokoro afterward and confirm it still reports `CUDAExecutionProvider` — the
-  install must not have silently swapped the GPU runtime for CPU en route.
-
-*Needs:* the existing NVIDIA dev box, the app running. *Criteria:* design doc
-§On-box acceptance item 2; run sheet §4 in
-`docs/testing/ort-marker-onbox-acceptance.md`.
-
-> **Wave-3 step 2, 2026-08-20 — STILL OWED, not run, blocker now fixed.** Needs the full app
-> running plus a real click-through of Model Manager → Qwen → Install
-> against a throwaway copy of the sidecar venv — scoped as its own session
-> rather than rushed alongside A28/A30 in the same heartbeat. The blocker that
-> prevented full discharge (the CUDA13/cuDNN9 gap A28 found) is now resolved by
-> PR #2576, which re-pinned `ONNXRUNTIME_GPU_CONSTRAINT` to `>=1.26,<1.27`
-> (CUDA-12 line). The row remains STILL OWED because neither the app-level test
-> nor the Kokoro GPU-provider check have been re-run against the fixed pin; see
-> evidence doc `docs/testing/onbox-wave3-results/step-2-ort-marker.md`.
-
-> **Wave-4 step 8, 2026-08-21 — STILL OWED, GPU-provider sub-check re-run, in-app
-> install still not attempted.** Re-ran only the shared Kokoro GPU-provider
-> sub-check (this row's final check) against the #2534-fixed pin
-> (`onnxruntime-gpu` 1.26.0, commit `6e4eac6c0129b68e8ff47db7b1503f31344248ab`,
-> now on `main` via `4bb738d2`) — same procedure and result as A28 above:
-> `get_available_providers()` reports `CUDAExecutionProvider`, actual session
-> construction still falls back to CPU, root cause confirmed as the missing
-> `nvidia-cudnn-cu12` `[cudnn]` extra, not a #2534 recurrence. Zero discharges;
-> see evidence doc `docs/testing/onbox-wave4-results/step-8-a39-a40-rerun.md`.
-> The in-app Qwen3 install click-through part of this row remains untouched —
-> out of scope for this re-run (see #2561) — and would hit the same cuDNN gap
-> on its own Kokoro-afterward check even once attempted.
-
-> **Wave-4 step 5c, 2026-08-21 — STILL OWED, partially run.** The core #2192
-> repro — clicking Install on Qwen3-TTS Base (0.6B) in Model Manager — ran
-> genuinely in a real browser, against this worktree's own bootstrapped venv,
-> and completed cleanly with **no `WinError 5`**. Screenshots captured. The
-> follow-on check (confirm Kokoro still reports `CUDAExecutionProvider` after
-> install) could **not** be validated: this box's TTS sidecar binds a single
-> hardcoded `:9000` port shared across every worktree, another live agent
-> lane already held it for the whole session, and `POST /api/sidecar/restart`
-> 409'd as a result — a structural box-contention limitation this run,
-> distinct from the already-filed #2534 CUDA13/cuDNN9 gap. Full evidence:
-> `docs/testing/onbox-wave4-results/step-5c-a40.md`.
-
-> **2026-08-23 (Castwright#2621, wave-5 lineage) — STILL OWED, blocked by
-> box-wide sidecar port contention again.** Started this worktree's own app
-> (frontend/API bound the assigned `5293`/`8200` ports, confirmed from the
-> server's own log). At startup the server found another process already
-> listening on the hardcoded `:9000` sidecar port and adopted it instead of
-> spawning its own, so `SIDECAR_VENV_DIR` never took effect for the running
-> app. That pre-existing sidecar (PID 7380, actively `ESTABLISHED` with a live
-> client) was identified before assuming it was safe to use; per the standing
-> rule against disrupting another agent's live process, the Install action was
-> **not** clicked against it — only a read-only `GET /health` was run
-> (`devices: {"kokoro":"cuda","coqui":"cuda","qwen":"cuda"}`, noted only as
-> context that CUDA does work for some venv on this box). Neither the Qwen3
-> install click-through nor the Kokoro-afterward check could be safely run
-> this session — **not attempted, not failed**, same structural class as
-> wave-4 step-5c and now a third piece of evidence for it. **Worth filing
-> separately:** `server/src/tts/spawn-sidecar.ts`/`sidecar-owner.ts`'s
-> hardcoded `9000` vs. `LOCAL_TTS_PORT`'s per-worktree value makes any two
-> worktrees' apps unable to run isolated TTS sessions simultaneously. Evidence:
-> `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
-> (Castwright#2621).
-
-> **2026-09-06 (chain #2913 retry, Castwright#2916/#2914/#3015) — STILL OWED,
-> partially run, port isolation resolved.** Confirmed the #2632 per-worktree
-> `LOCAL_TTS_PORT` fix closes the port-contention class that the 2026-08-21
-> wave-4 step 5c and 2026-08-23 wave-5 attempts above hit (not all four prior
-> attempts — wave-3 step 2 was the separate CUDA13/cuDNN9 gap, and wave-4
-> step 8 was explicitly out of scope for the install click-through): sidecar
-> bound to this worktree's own `:9080`, never adopting or contending with
-> another live lane's `:9000`. But this row's own subject, #2192, was **not
-> exercised**: Qwen3-TTS was already fully installed (package + weights)
-> from this worktree's own bootstrap step, so the Model Manager UI showed it
-> already installed with no error — this run only clicked **Re-check** (a
-> refetch), never the actual **Install** action `#2192` describes, because
-> that control does not render once a package is already installed
-> (`src/components/qwen-install.tsx`). No fresh `pip install` ran at all, so
-> there was no DLL write for a `WinError 5`/`Accès refusé` to fire against —
-> the actual criterion 2 scenario never had a chance to run, let alone pass.
-> An initial pass mistakenly discharged this row on that null observation
-> (PR #3015, reverted after review). Genuine redo — a venv confirmed absent
-> Qwen3 before the in-app Install click — filed separately, chain
-> Castwright#2913 → #3020 → #3019. Evidence:
-> `docs/testing/onbox-a29-results/step-1-retry.md` (port-isolation half
-> only; criterion 2 explicitly not validated, see that doc's own correction).
-
-> **2026-09-06 (chain #2913 → #3020, Castwright#3020) — STILL OWED, criterion 2
-> genuinely exercised for the first time across six attempts, and it fails.**
-> In a fresh isolated venv (`LOCAL_TTS_PORT=9200`) confirmed Qwen3-TTS
-> genuinely absent (live `packageFault: "missing"` probe, re-confirmed after a
-> racing background bootstrap job installed it mid-pass and was deliberately
-> uninstalled), then clicked **Install Qwen3-TTS** for real via Playwright: a
-> genuine `POST /api/qwen/install` job (202, not the installed short-circuit)
-> ran for real and failed after ~3.1s. **`WinError 5` / `Access is denied`
-> genuinely reproduced** on `onnxruntime\capi\onnxruntime_providers_shared.dll`
-> — this is #2192's exact scenario, now actually fired instead of skipped.
-> Root cause isolated by a controlled A/B: the in-app install flow
-> (`server/src/tts/qwen-install-bootstrap.ts` → `install-qwen3.mjs`) never
-> stops the sidecar before running `pip`, and `qwen-tts` pulls a fresh
-> `onnxruntime` wheel as a transitive dependency regardless of what the venv
-> already has; the identical `pip` command succeeds once the sidecar process
-> is stopped first. This is a real, reproducible gap distinct from — and not
-> fixed by — #2192/#2534's sidecar-startup ORT-provider-selection work; it is
-> the installer's own pip-vs-live-process DLL conflict. **Kokoro-afterward
-> check read honestly** from the live `/health` response
-> (`devices.kokoro`, not `get_available_providers()`): `"cpu"` throughout,
-> traced to a pre-existing, unrelated gap (`qwen-tts`'s pip resolution pulls
-> plain `onnxruntime` rather than `onnxruntime-gpu`, the same #2534-class
-> CPU-fallback pattern) — not something this pass's install attempt caused.
-> Venv restored and reverified `qwen_install_state: "ready"`; no shared/
-> box-wide resource touched. **Not discharged — a genuine defect, not a false
-> alarm.** Rework filed separately rather than retried silently — tracking
-> parent Castwright#3038, rework #3039, gated verify #3040. Evidence:
-> `docs/testing/onbox-a29-results/step-2-genuine-install.md`.
 
 ### A30 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 
