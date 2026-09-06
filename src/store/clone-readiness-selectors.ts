@@ -135,8 +135,6 @@ function buildInput(
   engine: TtsEngine,
   entries: readonly VoiceLibraryEntry[],
 ): CloneReadinessInput | undefined {
-  if (!characterNeedsCloneCheck(character)) return undefined;
-
   const isLegacy = !characterHasClonedSlot(character) && isLegacyBareQwenSlot(character);
   /* Trap 1 — this is `hasClonedProvenance`, never the library slot and never
      `characterHasClonedSlot`. The legacy shape is the one deliberate
