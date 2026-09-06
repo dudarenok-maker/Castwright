@@ -69,12 +69,6 @@ _Full detail + acceptance:_ [#721](https://github.com/dudarenok-maker/Castwright
 - _Benefit:_ Converts merged-but-unvalidated multi-GPU safety code into a confirmed guarantee, and closes the auto-revert gap so a repeated bad GPU pin self-heals with an operator-visible toast instead of silently degrading.
 _Full detail + acceptance:_ [#1230](https://github.com/dudarenok-maker/Castwright/issues/1230).
 
-#### `fs-38` — cast-time clone gate is silent when a cloned slot has no resolvable libraryUuid (render hard-fails `misconfigured`) ([#2054](https://github.com/dudarenok-maker/Castwright/issues/2054))
-
-- _What:_ Plan 276's cast-time gate (#1980) evaluates a character only when its cloned slot yields a library uuid. `buildInput` (`src/store/clone-readiness-selectors.ts`) returns `undefined` when **no library uuid can be resolved at all** — a slot tagged `provenance: 'cloned'` carrying a missing, empty, or malformed `libraryUuid`. The render does **not** ignore that state: `classifyClonedVoice` (`server/src/tts/clone-voice-resolver.ts`) reports `misconfigured` and the chapter hard-fails. So this is a **false all-clear** — the gate stays silent and the user hits the render failure the feature exists to move earlier. Narrow, but it is the exact failure class that killed revisions 1 and 2 of the plan.
-- _Benefit:_ *Benefit (user):* closes the last silent gap in the cast-time check, so "no warning" reliably means "this cast will render". Found while implementing plan 276 task 8 (the co-oracle contract test). Relates to #1980.
-_Full detail + acceptance:_ [#2054](https://github.com/dudarenok-maker/Castwright/issues/2054).
-
 ## Could — nice to have, low-cost win
 
 #### `fs-17` — Read-along: sentence highlight synced to audio ([#464](https://github.com/dudarenok-maker/Castwright/issues/464))
