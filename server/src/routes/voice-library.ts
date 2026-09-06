@@ -1873,12 +1873,20 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
            language — see #1998's own measurement table). Warn, do not block:
            the owner's v1 decision is expectation-setting, not engine re-
            routing. The comparison is CODE-vs-CODE (`entry.languageCode`
-           against `bookLanguageForClonedCheck`), never code-vs-sidecar-word
-           — comparing against `expectedSidecarLang` would silently fire on
-           every correctly-matched assignment because a BCP-47 code is never
-           equal to its human-readable sidecar name. Pinned by mutation 2 in
-           the paired test block. Uses the honest reader to avoid falsely
-           asserting books with unset language are English. */
+           against `bookLanguageForClonedCheck`), never code-vs-sidecar-word:
+           a BCP-47 code is never equal to a human-readable sidecar name, so
+           a word-valued comparand would fire on every correctly-matched
+           assignment. That is a design rule for this comparison, NOT
+           something the paired mutations demonstrate — an earlier version
+           of this comment claimed mutation 2 pinned it, and it does not
+           (PR #3033 review pass 1, finding 6). `expectedSidecarLang` is
+           assigned only inside the `provenance === 'designed'` branch above,
+           so on THIS path it is permanently `undefined`: swapping the
+           comparand to it reddens on `'en' !== undefined`, never on the
+           code-vs-word distinction, which therefore goes unexercised.
+           Mutation 2 pins a different and real property — that the honest
+           reader is used, so an unset book language is not read as English.
+           Uses that honest reader for exactly that reason. */
         if (entry.provenance === 'cloned') {
           if (
             entry.languageCode &&
