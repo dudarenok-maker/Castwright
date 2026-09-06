@@ -262,10 +262,22 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
         released = resolve;
       });
       let intercepted = false;
+      let signalIntercepted!: () => void;
+      const interceptedSignal = new Promise<void>((resolve) => {
+        signalIntercepted = resolve;
+      });
       const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
         if (!intercepted && path === raceCastPath) {
           intercepted = true;
           const value = await actual.readJson(path); // real bytes, now — happens-before the delete
+          /* Signalled AFTER the real read, not at interceptor entry (PR #2232
+             review, finding 1). The invariant this edge exists to establish is
+             "add-alias's read genuinely happens-before the delete" — resolving on
+             entry would release the delete while the read was still pending, which
+             is harmless while the route holds withCastLock but gives the
+             lock-removed mutation strictly LESS slack than the 300ms sleep did.
+             Signal what the comment actually claims. */
+          signalIntercepted();
           await gate; // hold the RESOLUTION open until released below
           return value;
         }
@@ -284,23 +296,23 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
           .send({ characterId: 'nova', aliasName: 'Supernova' });
         aliasPromise.catch(() => {}); // supertest is lazy — force real dispatch now
         // Let add-alias acquire the cast lock and reach (and get stuck
-        // behind) its intercepted in-lock read. Poll for it (vi.waitFor,
-        // per #2262's precedent in docs/testing/flaky-register.md) rather
-        // than sleeping a fixed duration — this file's first supertest
-        // request pays a cold Express/module-init cost a warmer file (many
-        // prior requests already run) wouldn't, and that cost is not
-        // bounded enough to hardcode: a loaded box can blow well past any
-        // fixed constant, while a fast one clears it in a few ms.
-        await vi.waitFor(
-          () => {
-            if (!intercepted) {
-              throw new Error(
+        // behind) its intercepted in-lock read. Wait for the interceptedSignal,
+        // which resolves only AFTER the real read completes (not at entry) — this
+        // is the genuine happens-before edge, deterministic regardless of machine
+        // load. A poll on a boolean at entry (the old pattern) gave a shorter
+        // critical window than even the 300ms fixed sleep it replaced.
+        await Promise.race([
+          interceptedSignal,
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error(
                 'add-alias never reached its intercepted in-lock read within 5000ms',
-              );
-            }
-          },
-          { timeout: 5_000, interval: 5 },
-        );
+              )),
+              5_000,
+            ),
+          ),
+        ]);
+        expect(intercepted).toBe(true);
 
         const recordRef = getManuscript(manuscriptId)!;
         jobPromise = runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
