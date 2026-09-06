@@ -3547,13 +3547,7 @@ check, which **failed** for a reason unrelated to language — see **DEF-E**.
 resolution — see the B-06 row and DEF-C below. The historical "not reachable
 as written" finding is preserved in the row's Notes.)*
 
-#### Cumulative — current (through Run 8, 2026-09-04)
-
-The tables above are frozen historical snapshots (Run 1, Run 2, and Run 2's
-correction); this one reflects the full §7.1 table's current P/F/B/N/A counts
-across Sections A–E, recomputed after Runs 3–8 (Sections C, D, and most of E
-were run for the first time in this window; see each row's own Notes for the
-run number).
+#### Cumulative — through Run 8 (2026-09-04) [superseded, kept for history]
 
 | Section | Total | P | F | B | N/A | not reached |
 |---|---|---|---|---|---|---|
@@ -3564,15 +3558,42 @@ run number).
 | E (3c) | 9 | 7 | 1 | 0 | 0 | 1 |
 | **All** | **60** | **41** | **2** | **8** | **1** | **8** |
 
-**Two failures now stand** (C-05's narrator-fallback misattribution, #2023;
+**Two failures stood** (C-05's narrator-fallback misattribution, #2023;
 E-04's long-Coqui-sentence crash, #2017 — fixed in source per PR #2039 but
-not yet re-verified on hardware, so the row's `F` stands) — this is no longer
-the "zero failures" state Run 1/2 recorded. 8 tests remain not reached (A-13,
-B-08/09/10/11/12/13, E-06) and 8 remain blocked. Of the highest-risk ⭐ set
-(C-01, C-08, C-10, C-17, E-01, E-02, E-06, E-07), every one has now passed
-except **E-06**, still not reached. The one Critical defect Run 1 found
-(#1941) was discovered *outside* the scripted steps, while populating an
-artifact set for C-10.
+not yet re-verified on hardware). 8 tests remained not reached (A-13,
+B-08/09/10/11/12/13, E-06) and 8 remained blocked. Of the highest-risk ⭐ set
+(C-01, C-08, C-10, C-17, E-01, E-02, E-06, E-07), every one had passed
+except **E-06**, still not reached.
+
+#### Cumulative — current (through wave 12, 2026-09-06/07)
+
+Recomputed after wave 12's #2920/#2923 browser and cosine-identity runs
+(A-07/A-08/A-09/B-01 UI/B-02/C-15 live half, B-08/B-09/B-10, E-04 re-run) and
+#2919's ear-kit staging (B-03/E-06). This table reflects the full §7.1 result
+table's current P/F/B/N/A counts row by row; mixed-result rows (C-13, C-15,
+E-01) are counted under the half that actually discharges the row's core
+claim, consistent with how the Run 8 table above already counted C-13 and
+E-01 — the still-open half of each is named in prose (register row A1's
+"Still owed" section), not double-counted here.
+
+| Section | Total | P | F | B | N/A | not reached |
+|---|---|---|---|---|---|---|
+| A (3a) | 13 | 12 | 0 | 0 | 0 | 1 |
+| B (3b1) | 13 | 7 | 0 | 2 | 1 | 3 |
+| C (3b2) | 21 | 20 | 1 | 0 | 0 | 0 |
+| D (cross-cutting) | 4 | 3 | 0 | 1 | 0 | 0 |
+| E (3c) | 9 | 8 | 0 | 1 | 0 | 0 |
+| **All** | **60** | **50** | **1** | **4** | **1** | **4** |
+
+**One failure now stands** (C-05's narrator-fallback misattribution, #2023 —
+E-04's long-Coqui-sentence crash, #2017, is retired: PR #2039's fix was
+re-verified on real Coqui weights this wave, #2923). 4 tests remain not
+reached (A-13, B-11/12/13) and 4 remain blocked (B-03, B-05, D-02, E-06). Of
+the highest-risk ⭐ set (C-01, C-08, C-10, C-12, C-15, C-17, E-01, E-02, E-06,
+E-07), every one has now passed except **E-06**, whose kit is staged but
+whose Coqui-derive half is blocked on this box's GPU capacity. The one
+Critical defect Run 1 found (#1941) was discovered *outside* the scripted
+steps, while populating an artifact set for C-10.
 
 ### 7.2 Defects found
 

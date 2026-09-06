@@ -956,8 +956,8 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **38 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04) · ~22 still owed · 3 run-2 results retracted**
-<!-- stat:a1-still-owed 22 -->
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **56 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04, 2026-09-06) · 9 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 9 -->
 <!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
@@ -1000,7 +1000,16 @@ chapter loud in 748ms, zero audio, zero GPU work), **C-03** (a Broken voice
 not speaking in the chapter under render doesn't fail it; the same voice does
 fail the chapter it actually speaks in), **E-03** (revoke racing an in-flight
 Coqui derive: `revokedAt` survives, no orphaned artifact, chapter fails
-naming the character — Run 4, see below).
+naming the character — Run 4, see below). **Wave 12 (2026-09-06) additionally
+discharged:** A-07/A-08/A-09 (real-browser recorder/mic-denial/consent-gate,
+#2920), B-02 (record-path clone, #2920), B-08/B-09/B-10 (cast-sample and
+chapter/cross-chapter identity via sidecar cosine, #2923), E-04 (long-Coqui-
+sentence fix re-confirmed on real weights, #2923), and C-15's live-toast half
+(help link + same-chapter dedupe, #2920) — see "Still owed" below for what
+remains of each partially-discharged row. This list is not kept exhaustively
+in sync with every Section C/D/E discharge recorded further below; treat the
+row's own totals table and "Still owed" bullets as authoritative for current
+counts.
 
 **Also proven — the wave's central claim, measured not asserted.** A cloned
 voice renders inside a real book: `wren`'s segments re-recorded into Coalfall
@@ -1249,15 +1258,23 @@ finding and fixing 5 genuinely-broken assertions across `qwen-voice.test.ts`
 `localhost:9000` individually rather than blind-replacing, since most were
 self-contained mocks/fixtures unaffected by the real derivation.
 
-**Still owed (~22), and why:**
-- **Browser/mic (4):** A-07 (recorder webm/opus), A-08 (mic-denial fallback),
-  A-09 (consent gates Continue), B-02 (record-path clone). Need a real browser
-  with a real microphone.
+**Still owed (9), and why — updated wave 12 (2026-09-06/07):**
+- **Browser/mic — DISCHARGED wave 12.** A-07 (recorder webm/opus), A-08
+  (mic-denial fallback), A-09 (consent gates Continue) and B-02 (record-path
+  clone) all ran for real against a real Chromium + real dev stack
+  (#2920, 2026-09-06) and passed. No longer owed.
+- **B-08/B-09/B-10 — DISCHARGED wave 12 (#2923).** Cast-sample and
+  chapter/cross-chapter identity consistency measured via sidecar `/embed`
+  cosine against genuine full-chapter generations, not by ear. No longer owed.
 - **By ear (2):** B-03, E-06. No instrument substitutes; ECAPA cosines above are
-  the objective half only.
-- **Section E — 8 of 9 now run (runs 2, 3, 4 and 7); E-06 (by-ear) and E-04's
-  reproduction re-run (see below — the code fix landed, only the on-box
-  confirmation is owed) are what remain.** E-03 discharged Run 4, E-07
+  the objective half only. Both now have complete-or-attempted ear kits staged
+  (#2919, 2026-09-06 — `LISTEN-fs38-wave12.md`); B-03's kit is complete and
+  awaiting the owner's verdict, E-06's kit is incomplete (its Coqui-derive half
+  still blocked on GPU capacity — see below).
+- **Section E — 8 of 9 discharged as of wave 12; only E-06 (by-ear + GPU
+  capacity) remains.** E-04's reproduction re-run landed this wave: retried on
+  real Coqui weights (#2923, 2026-09-06) and the case that 500'd pre-#2039 now
+  returns 200 — **F retired, row now P.** E-03 discharged Run 4, E-07
   discharged Run 7.
   **Run 3 (2026-08-01)** added E-01's first genuine exercise — **P**
   (mechanism), **by-ear NEGATIVE**. Owner: *"2 does not sound like 4 much,
@@ -1338,21 +1355,29 @@ self-contained mocks/fixtures unaffected by the real derivation.
   whose `segments.json` and the current analysis disagreed (exactly the shape
   both fixture books in that run hit); #1972 has since closed that refusal.
   </details>
-- **Section C — 13 rows discharged in full this session (Runs 5-8): C-01 ⭐,
-  C-04, C-06, C-07, C-08, C-09, C-12, C-14, C-16, C-17 ⭐, C-18, C-20, C-21.**
+- **Section C — 14 rows discharged in full: C-01 ⭐,
+  C-04, C-06, C-07, C-08, C-09, C-12, C-14, C-16, C-17 ⭐, C-18, C-20, C-21,
+  and now C-15 (live half, wave 12).**
   **C-13** is partial — wrong-engine half only, engine-unavailable contrast
-  not reproducible on this box — see Run 5 note. **C-15** is the one row
-  still owed — attempted (Run 8), the underlying mechanism confirmed correct
-  via direct API call, but **Blocked** on this session's own environment
-  instability for the live browser-toast observation (see Run 8 note above);
-  retry on a box that isn't under heavy concurrent background load.
+  not reproducible on this box — see Run 5 note. **C-15's live browser-toast
+  half is now confirmed** (2026-09-06, real dev stack): the toast fires 2.3s
+  after trigger with the exact copy, the help link resolves, and same-chapter
+  dedupe holds — counted P. What's left of C-15 is narrower than before but
+  still owed: a genuinely different chapter's own toast (cross-chapter dedupe)
+  and the wrong-engine reason-neutral repeat, both blocked this session by a
+  saturated shared generation queue, not a known product defect — retry on a
+  quieter box.
 - **Section D — 3 of 4 discharged as of Run 7 (D-01 full, D-03 pass
   incidentally from earlier isolation work, D-04 full).** **D-02** (full-book
-  render with a cloned character) remains **Blocked** — the side-11 block it
-  was scoped against is itself now closed as environmental (see Run 4's
-  note above), so a re-attempt on a properly-set-up box may well clear it,
-  but that re-attempt hasn't happened; only the per-character splice
-  substitute has been proven.
+  render with a cloned character) remains **Blocked** — re-attempted wave 12
+  (2026-09-06) on a properly-set-up box (junctions present, sidecar
+  supervised) and hit a **new, different** blocker: both queued chapters enter
+  Generating but zero `/synthesize` calls ever reach the sidecar, each stalls
+  ~150-190s then silently restarts from scratch — an infinite loop that never
+  dispatches audio. Not side-11 (memory stays flat). Prime suspect is a
+  fabricated cast entry from a stray bracketed stage direction, not
+  root-caused further this session — out of scope for this fold. Still
+  Blocked, for a new reason.
 - **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
   a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
   / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
@@ -1386,15 +1411,14 @@ its pid tracking drifts across restarts — minor, unfiled.
 attester — `attestedBy` is overwritten with `personName`, which inverts
 `guardian-of-minor`).
 
-Starred, highest-risk — **C-10, C-01, C-08, C-17, C-12, E-01, E-02, and E-07
-are all now discharged** (C-10 2026-07-29; C-01/C-08/C-17/C-12 Run 5/7; E-01
-Run 3 — Run 2's E-01 result was retracted, #1972; E-02 Run 2; E-07 Run 7).
-**C-15 and E-06 are the two still owed**: **C-15**
-the `cloned-voice-broken` toast fires immediately with a help link
-(mechanism confirmed correct via direct API call, Run 8; the live browser
-observation is Blocked on this session's own environment instability, not a
-product defect — retry on a quieter box) · **E-06** the one place D-B's
-synthetic-clip-vs-catalogue quality question can actually be judged, by ear.
+Starred, highest-risk — **C-10, C-01, C-08, C-17, C-12, C-15, E-01, E-02, and
+E-07 are all now discharged** (C-10 2026-07-29; C-01/C-08/C-17/C-12 Run 5/7;
+C-15's live half wave 12 (2026-09-06); E-01 Run 3 — Run 2's E-01 result was
+retracted, #1972; E-02 Run 2; E-07 Run 7).
+**E-06 is the one still owed**: the one place D-B's
+synthetic-clip-vs-catalogue quality question can actually be judged, by ear —
+its kit is now staged (wave 12) but the Coqui-derive half of the pair still
+can't be produced on this box's GPU capacity.
 
 **Historical (Run 1, before Section E was unblocked) — kept for the trap it
 documents, superseded by E-01's Run 3 discharge above.** A Coqui splice reported
@@ -2093,6 +2117,22 @@ deliberately-broken Kokoro run; well under an hour total.
 ---
 
 ### A21 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/archive/276-cast-time-derivability-warning.md)) · **single 8 GB card + a real cloned voice**
+
+> **PARTIALLY discharged 2026-09-06 — NOT fully discharged (1 sub-check
+> owed).** First real run, against a real HTTPS server, a real sidecar, and a
+> disposable throwaway book (`docs/testing/clone-readiness-gate-onbox-acceptance.md`).
+> Every step passed for real: the assign-time advisory fired with the exact
+> #1933 wording once the Qwen slot was genuinely broken; **Add transcript**
+> then a real chapter render resolved to the clone's own storage key
+> (`qwen-01e278d6-...`), not a substitute; a genuinely forced `derive-failed`
+> stamp, real **Retry derive**, and the real exported `cloneReadiness`
+> predicate all re-evaluated to the underlying `no-transcript` cause rather
+> than reporting healthy; and the Coqui control produced no gate at all on the
+> same worst-case state. No product defects found, no code changed. **Still
+> owed:** the "listened, sounds like the clone" ear-check in §4 — no audio
+> playback tool was available to this agent, so the resolved-storage-key +
+> `status:ready` evidence stands in for it, which the run sheet itself flags
+> as not sufficient on its own.
 
 The gate's *verdict* is heavily tested — a fixture table, a co-oracle contract
 test binding it to the render's own oracle, an e2e walkthrough. What no suite
