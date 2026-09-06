@@ -1,6 +1,7 @@
-// Unit tests for the verify-cache runner's pure logic (hash composition + cache
-// decision + load/save). No `npm run` spawning — runPipeline itself is exercised
-// by the manual walkthrough in docs/features/archive/50-verify-cache.md. Run via
+// Unit tests for the verify-cache runner. Includes hash composition, cache
+// decision, load/save logic, and acceptance-driven behavioural tests that spawn
+// real `npm run` against throwaway fixture repos — test:server/lint/etc run
+// instantly (a one-line node invocation, not vitest batteries). Entry point:
 // `npm run test:hooks` (node --test, no extra deps).
 
 import { test } from 'node:test';
@@ -39,6 +40,7 @@ import {
   SIBLING_CONTENTION_THRESHOLD,
   isVitestPoolCrash,
   runStepProcess,
+  runPipeline,
   branchDiffFiles,
   stagedDiffFiles,
   sidecarFingerprint,
@@ -1370,15 +1372,12 @@ test('runStepProcess: a step passing on the first attempt records 1 attempt', ()
 
 test('runStepProcess: a fork-pool crash followed by a pass records the true attempt count, summed across attempts', () => {
   const dir = mkTmp();
-  writeFlakyFixture(dir, 'flaky', { failFirst: true });
-  const t0 = Date.now();
+  const marker = writeFlakyFixture(dir, 'flaky', { failFirst: true });
   const result = runStepProcess('flaky', { cwd: dir, env: process.env, retryKey: 'test:server' });
-  const dt = Date.now() - t0;
   assert.equal(result.code, 0);
   assert.equal(result.attempts, 2, 'first attempt crashes, second passes — 2 total attempts');
-  // Each attempt spins for >= 60ms; two attempts must sum to noticeably more
-  // than a single one, proving the elapsed time isn't just the last attempt.
-  assert.ok(dt >= 110, `expected the two attempts' durations to sum (>=110ms), got ${dt}ms`);
+  // The fixture appends to marker on each launch, so 2 attempts → 2 bytes.
+  assert.equal(readFileSync(marker, 'utf8').length, 2, 'marker file must record 2 real process launches');
 });
 
 test('runStepProcess: a non-retriable step always records 1 attempt, even given a crash-shaped failure', () => {
@@ -1847,43 +1846,170 @@ test('hasVitestStep returns FALSE for an empty array', () => {
 // --- Attempt-count wiring verification (#3018) ---
 //
 // Issue #3018 added an `attempts` field to runStepProcess's return value and
-// wired it into the cache write. These tests verify the wiring by examining the
-// per-step loop body in verify-cache.mjs using the same regex-based technique
-// as CHANGED_ONLY_NPM_SCRIPT and detectGpuContention above — running the real
-// pipeline would spawn vitest batteries, so correctness is pinned by reading
-// the source code at the seam where the field is written to the cache entry
-// and where the [pass] console log conditionally includes the attempt count.
+// wired it into the cache write. This test verifies the wiring through
+// runPipeline's actual execution against a throwaway git repo: a fixture
+// package.json maps scripts to one-line node invocations (not vitest, so fast —
+// 1–2 seconds total). Both acceptance criteria are observable end-to-end: the
+// cache entry persists attempts, and the [pass] console line conditionally
+// reports the count.
 
-test('runPipeline writes the attempts field to the cache entry on pass — #3018 acceptance criterion 1', () => {
-  const body = runPipelineLoopBody();
-  // Verify the cache write block includes `attempts` as a field in the object
-  // literal. Deleting this line removes the entire purpose of #3018 — that the
-  // cache persists the attempt count alongside durationMs, so a later run can
-  // know whether a step needed retries.
-  assert.match(
-    body,
-    /cache\.steps\[step\.name\]\s*=\s*\{[^}]*attempts,?[^}]*\}/,
-    'cache.steps[step.name] write must include the attempts field in its object literal — ' +
-      'without it, the attempt count is computed and then thrown away, defeating the ' +
-      'acceptance criterion of persisting it for later analysis',
+test('#3018: runPipeline persists attempts to cache and reports count only on retry', () => {
+  const dir = mkTmp();
+
+  // Initialize a throwaway git repo with a fixture package.json.
+  gitAt(dir, ['init', '-q', '-b', 'main']);
+  gitAt(dir, ['config', 'user.email', 'test@example.com']);
+  gitAt(dir, ['config', 'user.name', 'Test']);
+
+  // Fixture 1: crashes on first run (fork-pool crash shape), passes on retry.
+  const marker1 = join(dir, 'attempts-flaky.txt');
+  writeFileSync(
+    join(dir, 'flaky.mjs'),
+    `import { existsSync, appendFileSync } from 'node:fs';
+const marker = ${JSON.stringify(marker1)};
+const already = existsSync(marker);
+appendFileSync(marker, 'x');
+if (!already) {
+  process.stderr.write('Worker exited unexpectedly\\n');
+  process.exit(1);
+}
+process.exit(0);
+`,
+    'utf8',
   );
+
+  // Fixture 2: always passes on first attempt.
+  const marker2 = join(dir, 'attempts-pass.txt');
+  writeFileSync(
+    join(dir, 'pass.mjs'),
+    `import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(marker2)}, 'x');
+process.exit(0);
+`,
+    'utf8',
+  );
+
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'cache-fixture',
+      private: true,
+      scripts: { 'test:server': 'node flaky.mjs', test: 'node pass.mjs' },
+    }),
+    'utf8',
+  );
+
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  // Capture console output.
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+
+  try {
+    // Criterion 1: retry case → cache.steps[step].attempts = 2
+    // Criterion 2: [pass] line includes "2 attempts" (only when attempts > 1)
+    logs.length = 0;
+    const result1 = runPipeline({
+      argv: ['--steps', 'test:server'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+    });
+    assert.equal(result1, 0);
+
+    const cache1 = loadCache(join(dir, '.verify-cache.json'));
+    assert.equal(cache1.steps['test:server'].attempts, 2);
+    assert.equal(readFileSync(marker1, 'utf8').length, 2, 'marker shows 2 launches');
+
+    const passLine1 = logs.find((l) => l.includes('[pass]') && l.includes('test:server'));
+    assert.ok(passLine1);
+    assert.match(passLine1, /2 attempts/);
+
+    // Criterion 1: first-try case → cache.steps[step].attempts = 1
+    // Criterion 2: [pass] line does NOT include attempt count (only when attempts > 1)
+    logs.length = 0;
+    const result2 = runPipeline({
+      argv: ['--steps', 'test'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+    });
+    assert.equal(result2, 0);
+
+    const cache2 = loadCache(join(dir, '.verify-cache.json'));
+    assert.equal(cache2.steps.test.attempts, 1);
+    assert.equal(readFileSync(marker2, 'utf8').length, 1, 'marker shows 1 launch');
+
+    const passLine2 = logs.find((l) => l.includes('[pass]') && l.includes('test'));
+    assert.ok(passLine2);
+    assert.doesNotMatch(passLine2, /attempts/);
+  } finally {
+    console.log = originalLog;
+  }
 });
 
-test('runPipeline appends the attempt count to [pass] output conditionally, not unconditionally — #3018 acceptance criterion 2', () => {
-  const body = runPipelineLoopBody();
-  // Verify the conditional that controls whether the attempts note is printed.
-  // The note must NOT appear when attempts === 1 (single attempt, no retry).
-  assert.match(
-    body,
-    /const attemptsNote = attempts > 1 \? `.*, \${attempts} attempts` : '';/,
-    'the attempts note must be conditional: printed only when attempts > 1 — ' +
-      'a single successful run has no retry story to tell, so the note stays absent',
+test('#3018: [fail] line reports attempt count when step crashes all retries', () => {
+  const dir = mkTmp();
+
+  // Initialize a throwaway git repo with a fixture package.json.
+  gitAt(dir, ['init', '-q', '-b', 'main']);
+  gitAt(dir, ['config', 'user.email', 'test@example.com']);
+  gitAt(dir, ['config', 'user.name', 'Test']);
+
+  // Fixture: crashes on all 3 attempts (fork-pool crash shape).
+  // Reuse test:server step, overriding it with a script that always fails.
+  const marker = join(dir, 'attempts-allfail.txt');
+  writeFileSync(
+    join(dir, 'allfail.mjs'),
+    `import { appendFileSync } from 'node:fs';
+const marker = ${JSON.stringify(marker)};
+appendFileSync(marker, 'x');
+process.stderr.write('Worker exited unexpectedly\\n');
+process.exit(1);
+`,
+    'utf8',
   );
-  // Verify the note is actually used in the console output.
-  assert.match(
-    body,
-    /\[pass\].*\$\{attemptsNote\}/,
-    '[pass] console line must interpolate attemptsNote — the conditional note ' +
-      'controls whether retry context appears in the output',
+
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'cache-fixture',
+      private: true,
+      scripts: { 'test:server': 'node allfail.mjs' },
+    }),
+    'utf8',
   );
+
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  // Capture console output.
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+
+  try {
+    // Run the pipeline; it will crash all 3 attempts and return non-zero
+    logs.length = 0;
+    const result = runPipeline({
+      argv: ['--steps', 'test:server'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+    });
+    assert.ok(result !== 0, 'pipeline should return non-zero for a failing step');
+
+    // Verify that all 3 attempts were launched (marker file has 3 x's)
+    assert.equal(
+      readFileSync(marker, 'utf8').length,
+      3,
+      'marker shows all 3 attempts were launched',
+    );
+
+    // Criterion: [fail] line must include "3 attempts" to document how many attempts failed
+    const failLine = logs.find((l) => l.includes('[fail]') && l.includes('test:server'));
+    assert.ok(failLine, 'should have a [fail] line for test:server');
+    assert.match(failLine, /3 attempts/, '[fail] line should include attempt count');
+  } finally {
+    console.log = originalLog;
+  }
 });

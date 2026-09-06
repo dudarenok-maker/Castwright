@@ -237,14 +237,16 @@ The original plan here — "run one `test:server --no-cache` on a reaped box and
 timings" — was **not** taken, deliberately. It buys a single sample for ~19 minutes of exclusive
 box time, and this box is rarely idle enough to give that honestly; an earlier attempt to sample it
 became a real 19-minute battery on a box that was mid-cleanup. #3018 instead records the attempt
-count in the cache entry, so **every** future run reports its own decomposition for free, and a
+count in the cache entry, so **every** future run records how many attempts its figure covers, and a
 stale figure can never again be mistaken for a single-attempt cost.
 
-**This is a hard prerequisite for the self-calibrating budget above, not a tidy-up.** That design
-derives the budget as `max(FLOOR, K × lastGreenDurationMs)` — reading `durationMs`
-programmatically. Fed a 3-attempt total, it would set a budget up to **3× too generous**, which is
-the precise failure mode Part 2 exists to prevent: a run that outlives its budget without tripping
-it. Part 2 must consume the per-attempt figure, not the step total.
+**What this buys Part 2 — qualifying the baseline, not changing the budget shape.** The budget shape stays exactly as `:215` settles it: **per-step total, not per-attempt.** A step total is therefore the *correct* unit for `max(FLOOR, K × lastGreenDurationMs)`, and nothing here revises that.
+
+The problem the conflation caused is narrower: that formula calibrates off whichever run happened to be last-green, and an entry inflated by two crashed attempts is **not a representative baseline** for a typical run — the budget silently anchors to an outlier, and nothing recorded let a consumer notice. With the attempt count present, a consumer can qualify the baseline: prefer an entry with `attempts === 1`, and treat `attempts > 1` as uncalibratable, falling back to `FLOOR`.
+
+**Do not derive a per-attempt figure by dividing.** Attempts are not equal length — a crashed attempt aborts early — so `durationMs / attempts` is meaningless. Worked example: crash at 60 s, crash at 60 s, pass at 1100 s gives `{ durationMs: 1220000, attempts: 3 }`; dividing yields 407 s against a true single-pass cost of 1100 s, a budget **~2.7× too tight** that false-positives on every clean run — precisely the failure `:223` cites as the reason 20 min was rejected.
+
+**This does not retroactively qualify the 19.45 min figure in the table above.** Entries written before this change carry no attempt count, so that number remains a step total of unknown composition until the next full local run rewrites it.
 
 **Implementation is an async `spawn` conversion of step execution — the largest piece of work
 here, and its real risk is source-text pins, not caller compatibility.**

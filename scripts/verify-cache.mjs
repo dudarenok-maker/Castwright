@@ -1516,8 +1516,8 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
       retryKey: step.name,
     });
     const dt = Date.now() - t0;
+    const attemptsNote = attempts > 1 ? `, ${attempts} attempts` : '';
     if (code === 0) {
-      const attemptsNote = attempts > 1 ? `, ${attempts} attempts` : '';
       console.log(`[pass] ${step.name} (took ${formatSecs(dt)}${attemptsNote})`);
       // A --changed-only pass covers a NARROWER set of tests than currentHash's
       // declared inputs claim to have verified — caching it under the full
@@ -1535,7 +1535,7 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
         saveCache(cachePath, cache);
       }
     } else {
-      console.log(`[fail] ${step.name} (exit ${code}, took ${formatSecs(dt)})`);
+      console.log(`[fail] ${step.name} (exit ${code}, took ${formatSecs(dt)}${attemptsNote})`);
       return code;
     }
   }
