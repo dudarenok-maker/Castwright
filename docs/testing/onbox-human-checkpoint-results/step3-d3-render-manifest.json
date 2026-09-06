@@ -1,0 +1,32 @@
+{
+  "outer": {
+    "voice": "Craig Gutsy",
+    "text": "明日造市，請於馬羣中任意擇其良者，不必與之論價，吾自給之。又告衆曰：",
+    "sampleRate": 24000,
+    "durSec": 8.630666666666666
+  },
+  "inner": {
+    "voice": "Nova Hogarth",
+    "text": "遠客歸家，可少助以資斧。",
+    "sampleRate": 24000,
+    "durSec": 3.1473333333333335
+  },
+  "innerRef": {
+    "voice": "Nova Hogarth",
+    "text": "新瘳，未應遠涉。",
+    "sampleRate": 24000,
+    "durSec": 2.4966666666666666
+  },
+  "floor": {
+    "voice": "Damien Black",
+    "text": "彭至下馬，相向拱敬。",
+    "sampleRate": 24000,
+    "durSec": 2.87
+  },
+  "merged": {
+    "voice": "Craig Gutsy",
+    "text": "明日造市，請於馬羣中任意擇其良者，不必與之論價，吾自給之。又告衆曰：遠客歸家，可少助以資斧。",
+    "sampleRate": 24000,
+    "durSec": 13.462666666666667
+  }
+}
