@@ -1430,16 +1430,26 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       const speakers = cast.characters.filter((c) => speakingIds.has(c.id));
       const fallbackSet = computeQwenKokoroFallbackSet(speakers, engine);
       if (fallbackSet.length > 0) {
-        /* #1263 — non-English books never park here: `forbidKokoroFallback`
-           is unconditional for them (see the synthesiseChapter call below),
-           so "confirm" (render anyway) could never actually succeed — parking
-           would just offer a button that deterministically re-fails. Fail the
-           chapter immediately instead, naming every undesigned character up
-           front (mirroring the park's own list) rather than letting
-           synthesiseChapter's MissingDesignedVoiceError surface only the
-           first one it happens to hit and forcing an iterative
-           design-retry-design-retry loop. */
-        if (nonEnglishBook) {
+        /* #1263, narrowed by fs-60 (#2962) — a STILL-UNSUPPORTED non-English
+           book (not even Coqui-eligible) never parks here: `forbidKokoroFallback`
+           is unconditional and there is no fallback engine, so "confirm" (render
+           anyway) could never actually succeed — parking would just offer a
+           button that deterministically re-fails. Fail the chapter immediately
+           instead, naming every undesigned character up front (mirroring the
+           park's own list) rather than letting synthesiseChapter's
+           MissingDesignedVoiceError surface only the first one it happens to hit
+           and forcing an iterative design-retry-design-retry loop.
+
+           A Coqui-eligible non-English book is different: synthesiseChapter DOES
+           have a real fallback for it (forbidKokoroFallback + coquiEligible ⇒
+           Task 6's applyQwenFallback substitutes Coqui per character), so it
+           must fall through to the same park-and-confirm path English/Kokoro
+           books use below — otherwise "Proceed anyway" in the voice-readiness
+           gate promises a Coqui fallback this gate never lets the render reach.
+           Before this fix EVERY non-English book hard-failed here regardless of
+           `coquiEligible`, silently defeating fs-60's whole acceptance criterion
+           on the one path (queue-driven "Generate this chapter") real users take. */
+        if (nonEnglishBook && !coquiEligible) {
           const names = fallbackSet.map((c) => c.name ?? c.id).join(', ');
           const plural = fallbackSet.length > 1;
           /* Only remind about the narrator separately when it ISN'T already
