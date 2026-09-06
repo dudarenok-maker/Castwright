@@ -1349,6 +1349,179 @@ def test_clone_voice_route_admission_branch_threads_device_into_clone_voice(
     assert kwargs.get("device") == "cuda:1"
 
 
+def test_clone_voice_route_x_device_hint_overrides_best_fit_placement(
+    monkeypatch, tmp_path
+) -> None:
+    """#3058 — the lazy Coqui derive's per-request escape hatch. Without a
+    hint, unconstrained best-fit picks GPU0 here (much more free headroom).
+    An `X-Device-Hint: cuda:1` header must override that and land the
+    reservation on GPU1 specifically — proving the header value actually
+    reaches `reservation()`/`admit()`'s `pinned` argument, not just that the
+    call succeeds."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.delenv("COQUI_DEVICE", raising=False)
+    monkeypatch.setattr(
+        main._placement,
+        "probe",
+        lambda: [
+            {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 24000, "freeMb": 20000},
+            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 16000, "freeMb": 10000},
+        ],
+    )
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    real_clone_voice = eng.clone_voice
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        calls.append((args, kwargs))
+        return real_clone_voice(*args, **kwargs)
+
+    monkeypatch.setattr(eng, "clone_voice", _spy)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={
+            "X-Sample-Rate": "24000",
+            "X-Voice-Id": "xtts-hint1",
+            "X-Device-Hint": "cuda:1",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert kwargs.get("device") == "cuda:1", (
+        "the header must override unconstrained best-fit (which would pick "
+        "GPU0 here) — got the un-hinted placement instead"
+    )
+
+
+def test_clone_voice_route_without_hint_header_is_unaffected_regression(
+    monkeypatch, tmp_path
+) -> None:
+    """Regression companion to the test above: with NO X-Device-Hint header,
+    behaviour must be exactly what it was before this feature existed —
+    unconstrained best-fit picks the roomier GPU0, same probe as the hinted
+    test."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.delenv("COQUI_DEVICE", raising=False)
+    monkeypatch.setattr(
+        main._placement,
+        "probe",
+        lambda: [
+            {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 24000, "freeMb": 20000},
+            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 16000, "freeMb": 10000},
+        ],
+    )
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    real_clone_voice = eng.clone_voice
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        calls.append((args, kwargs))
+        return real_clone_voice(*args, **kwargs)
+
+    monkeypatch.setattr(eng, "clone_voice", _spy)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={"X-Sample-Rate": "24000", "X-Voice-Id": "xtts-nohint1"},
+    )
+
+    assert resp.status_code == 200
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert kwargs.get("device") == "cuda:0"
+
+
+def test_clone_voice_route_engine_env_pin_still_wins_when_header_absent(
+    monkeypatch, tmp_path
+) -> None:
+    """Regression: an operator-configured COQUI_DEVICE pin must keep working
+    exactly as before when no header is sent — the new `device_hint`
+    variable must never silently replace `_engine_env_pin("coqui")`'s prior
+    role at this call site."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.setenv("COQUI_DEVICE", "cuda:0")
+    monkeypatch.setattr(
+        main._placement,
+        "probe",
+        lambda: [
+            {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 8192, "freeMb": 5000},
+            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 24000, "freeMb": 20000},
+        ],
+    )
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    real_clone_voice = eng.clone_voice
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        calls.append((args, kwargs))
+        return real_clone_voice(*args, **kwargs)
+
+    monkeypatch.setattr(eng, "clone_voice", _spy)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={"X-Sample-Rate": "24000", "X-Voice-Id": "xtts-envpin1"},
+    )
+
+    assert resp.status_code == 200
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert kwargs.get("device") == "cuda:0"
+
+
+def test_clone_voice_route_invalid_hint_falls_back_to_engine_env_pin(
+    monkeypatch, tmp_path
+) -> None:
+    """An unparsable X-Device-Hint must degrade exactly like an invalid
+    registry device value — logged and ignored, never fatal, falling back to
+    whatever this call would have used without a hint (here, the operator's
+    COQUI_DEVICE pin)."""
+    eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.setenv("COQUI_DEVICE", "cuda:0")
+    monkeypatch.setattr(
+        main._placement,
+        "probe",
+        lambda: [
+            {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 8192, "freeMb": 5000},
+            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 24000, "freeMb": 20000},
+        ],
+    )
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    real_clone_voice = eng.clone_voice
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        calls.append((args, kwargs))
+        return real_clone_voice(*args, **kwargs)
+
+    monkeypatch.setattr(eng, "clone_voice", _spy)
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/xtts/clone-voice",
+        content=_pcm_bytes(),
+        headers={
+            "X-Sample-Rate": "24000",
+            "X-Voice-Id": "xtts-badhint1",
+            "X-Device-Hint": "not-a-device",
+        },
+    )
+
+    assert resp.status_code == 200, "an invalid hint must never crash the request"
+    assert len(calls) == 1
+    _args, kwargs = calls[0]
+    assert kwargs.get("device") == "cuda:0"
+
+
 def test_evict_voice_route_rejects_missing_voice_id(monkeypatch, tmp_path) -> None:
     _install_engine(monkeypatch, tmp_path)
     client = TestClient(main.app)
