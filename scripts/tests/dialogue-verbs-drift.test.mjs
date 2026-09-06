@@ -25,7 +25,7 @@ function readCanonicalVerbs() {
   const m = src.match(/DIALOGUE_VERBS[^=]*=\s*\[([\s\S]*?)\];/);
   assert.ok(m, 'could not locate DIALOGUE_VERBS array in dialogue-verbs.ts');
   const withoutComments = m[1].replace(/\/\/[^\n]*/g, '');
-  return [...withoutComments.matchAll(/'([^']+)'/g)].map((x) => x[1]);
+  return [...withoutComments.matchAll(/\u0027([^\u0027]+)\u0027/g)].map((x) => x[1]);
 }
 
 test('the .mjs verb list matches the canonical TS list (no drift)', () => {

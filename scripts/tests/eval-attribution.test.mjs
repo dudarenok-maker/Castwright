@@ -232,7 +232,7 @@ test('CLI: exits 0 for a good cast.json and prints PASS', () => {
     }));
     writeFileSync(gtPath, JSON.stringify(GT));
 
-    const out = spawnSync(process.execPath, [evalScript, castPath, gtPath], { encoding: 'utf8' });
+    const out = spawnSync(process.execPath, [evalScript, castPath, gtPath], { encoding: 'utf8', windowsHide: true });
     assert.equal(out.status, 0, `CLI should exit 0 for PASS. stderr: ${out.stderr}`);
     assert.match(out.stdout, /PASS/, 'stdout should contain PASS');
     assert.match(out.stdout, /RECALL 4\/4/, 'stdout should show recall 4/4');
@@ -255,7 +255,7 @@ test('CLI: exits 1 for a degraded cast.json with low recall', () => {
     }));
     writeFileSync(gtPath, JSON.stringify(GT));
 
-    const out = spawnSync(process.execPath, [evalScript, castPath, gtPath], { encoding: 'utf8' });
+    const out = spawnSync(process.execPath, [evalScript, castPath, gtPath], { encoding: 'utf8', windowsHide: true });
     assert.equal(out.status, 1, `CLI should exit 1 for FAIL. stderr: ${out.stderr}`);
     assert.match(out.stdout, /FAIL/, 'stdout should contain FAIL');
   } finally {

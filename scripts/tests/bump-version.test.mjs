@@ -52,7 +52,7 @@ function cleanGitEnv() {
 // Wrap execFileSync to always pass the sanitised env. Every git invocation
 // in this test goes through this helper.
 function gitExec(args, opts = {}) {
-  return execFileSync('git', args, { ...opts, env: cleanGitEnv() });
+  return execFileSync('git', args, { ...opts, env: cleanGitEnv(), windowsHide: true });
 }
 
 function mkLockfile(name, version) {
@@ -147,6 +147,7 @@ function runBump(dir, args) {
     cwd: dir,
     encoding: 'utf8',
     env: cleanGitEnv(),
+    windowsHide: true,
   });
 }
 
@@ -161,6 +162,7 @@ function runBumpWithEnv(dir, args, envOverrides) {
     cwd: dir,
     encoding: 'utf8',
     env: { ...cleanGitEnv(), ...envOverrides },
+    windowsHide: true,
   });
 }
 
@@ -434,7 +436,7 @@ test('bump-version resolves DEFAULT_NOTES_FILE against repoRoot, not the invocat
     const out = spawnSync(
       'node',
       [resolve(dir, 'scripts', 'bump-version.mjs'), '--level', 'patch', '--notes-file', notes, '--skip-cross-os'],
-      { cwd: resolve(dir, 'server'), encoding: 'utf8', env: cleanGitEnv() },
+      { cwd: resolve(dir, 'server'), encoding: 'utf8', env: cleanGitEnv(), windowsHide: true },
     );
     rmSync(notes, { force: true });
     assert.notEqual(out.status, 0, out.stdout + out.stderr);

@@ -31,7 +31,7 @@ let bookId: string;
 
 function ffmpegAvailable(): boolean {
   try {
-    const out = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    const out = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
     return out.status === 0;
   } catch {
     return false;
@@ -108,7 +108,7 @@ function writeRealMp3(): boolean {
       '64k',
       out,
     ],
-    { stdio: 'ignore' },
+    { stdio: 'ignore', windowsHide: true },
   );
   return r.status === 0 && existsSync(out);
 }
@@ -199,7 +199,7 @@ describe('share-clip route', () => {
         .buffer(true);
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/audio\/mpeg/);
-      expect(res.headers['content-disposition']).toMatch(/^attachment; filename="/);
+      expect(res.headers['content-disposition']).toMatch(/^attachment; filename=\u0022/);
       expect(res.headers['content-disposition']).toMatch(/chapter-one-clip-0s\.mp3/);
       expect(res.body.length).toBeGreaterThan(0);
     });

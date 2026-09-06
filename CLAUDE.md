@@ -335,10 +335,10 @@ Design rationale:
 - `npm run dev` — frontend (Vite, HMR, `:5173`) **and** server (`:8080`) together via `concurrently`; the server auto-starts the TTS sidecar same as `npm start` (per-user `autoStartSidecar`, default on) — it is not frontend-only.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
-- `npm run test:server` — Vitest single-run for the server (parallel, excludes the 10 hot files routed to `test:server-slow`).
-- `npm run test:changed` / `npm run test:server:changed` — `vitest run --changed HEAD` for the frontend/server suites respectively, selecting only tests vitest's own dependency graph says the diff (staged + unstaged, vs `HEAD`) affects. Not run standalone in practice — these back pre-commit's `--scope-staged` narrowing (see "Commit gate") — but usable directly for a quick local check.
-- `npm run test:server-slow` — Vitest single-run for 10 timeout-prone server test files (analyzer/gemini, a parsers PDF test, and routes tests), pinned to one fork via `server/vitest.config.slow.ts`. Runs in the cloud `verify.yml` battery and the full local `npm run verify`, not in pre-push `verify:fast:branch` or `verify:fast` pre-commit. See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
-- `npm run test:server:routes` / `:tts` / `:analyzer` / `:workspace` and `npm run test:components` / `:store` / `:lib` / `:views` — opt-in, manual, subsystem-scoped test runs (`vitest run <subdir>` under the hood) for a fast local loop when you know you're only touching one area. Not part of the automated verify pipeline — not in `STEPS[]`, not cached, not gated by any hook, and carry no coverage guarantee (a `routes/` change that breaks something in `workspace/` isn't caught by `test:server:routes` alone). The four server-side scripts cover 76.9% of `test:server`'s **tests** (file counts differ: `test:server:routes` selects 138 files, not the 146 a raw file search under `server/src/routes/` would find — 8 are in `vitest.config.slow.ts`'s `SLOW_FILES` and excluded from `test:server` itself, so this matches, not a gap); the four frontend scripts cover 86.3% of `test`'s tests (as of 2026-09-02; these figures will drift as test files are added or removed). See `docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md` Decision E.
+- `npm run test:server` — Vitest single-run for the server (parallel, excludes the 11 hot files routed to `test:server-slow`).
+- `npm run test:changed` / `npm run test:server:changed` — `vitest run --changed HEAD` for the frontend/server suites respectively, selecting only tests vitest's own dependency graph says the diff (staged + unstaged, vs `HEAD`) affects. Previously backed pre-commit's `--scope-staged` narrowing, but pre-commit now runs ESLint directly and no longer uses these commands. Retained for manual local use — a fast way to re-run only affected tests during development.
+- `npm run test:server-slow` — Vitest single-run for 11 timeout-prone server test files (analyzer/gemini, a parsers PDF test, and routes tests), pinned to one fork via `server/vitest.config.slow.ts`. Runs in the cloud `verify.yml` battery and the full local `npm run verify`, not in `verify:fast:branch` or `verify:fast` — and, as of ops-2997, not in any git hook (see "Commit gate"). See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
+- `npm run test:server:routes` / `:tts` / `:analyzer` / `:workspace` and `npm run test:components` / `:store` / `:lib` / `:views` — opt-in, manual, subsystem-scoped test runs (`vitest run <subdir>` under the hood) for a fast local loop when you know you're only touching one area. Not part of the automated verify pipeline — not in `STEPS[]`, not cached, not gated by any hook, and carry no coverage guarantee (a `routes/` change that breaks something in `workspace/` isn't caught by `test:server:routes` alone). The four server-side scripts cover 76.9% of `test:server`'s **tests** (file counts differ: `test:server:routes` selects 137 files, not the 146 a raw file search under `server/src/routes/` would find — 9 are in `vitest.config.slow.ts`'s `SLOW_FILES` and excluded from `test:server` itself, so this matches, not a gap); the four frontend scripts cover 86.3% of `test`'s tests (as of 2026-09-02; these figures will drift as test files are added or removed). See `docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md` Decision E.
 - `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
   (log rotation/pruning). Requires Pester >= 5.0; install once with
   `Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck`.
@@ -428,13 +428,13 @@ Design rationale:
   distinct from both a noise line and a normal forced-move line.
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
   Requires one-time `npx playwright install chromium`. Excludes the visual baselines (run via `test:e2e:visual` separately). See `docs/features/archive/37-e2e-playwright.md`.
-- `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Runs in the cloud `verify.yml` PR battery (Ubuntu → `e2e/linux` baselines) and the full local `npm run verify`, not in pre-push `verify:fast:branch`, so visual regressions still surface at PR time rather than only at release.
-- `npm run test:fast` — frontend + server only (matches the pre-commit hook).
+- `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Baselines are per-platform (`e2e/{linux,win32}/**`). Runs in the cloud `verify.yml` PR battery (Ubuntu → `e2e/linux` baselines) and the full local `npm run verify`, not in `verify:fast:branch` — and, as of ops-2997, not in any git hook (see "Commit gate") — so visual regressions still surface at PR time rather than only at release.
+- `npm run test:fast` — frontend + server only. No longer what `pre-commit` runs (ops-2997 — see "Commit gate"): the hook is now a single staged-files ESLint pass, not a battery.
 - `npm run test:all` — frontend + server + server-slow + PowerShell-scripts + sidecar tests (no e2e).
 - `npm run verify` — full battery: typecheck + all tests + e2e + build. No longer the pre-push default (see "Commit gate") — run manually when you want the full local battery (e.g. before a release cut).
 - `npm run verify:quick` — all tests (no e2e, no typecheck, no build) — alias for `test:all`.
-- `npm run verify:fast` — fast tests only (alias for `test:fast`); a manual full-fast run. NOTE: pre-commit actually gates on `verify:fast:scoped` (the scope-filtered variant), not this — see "Commit gate".
-- `npm run verify:fast:branch` — lint + typecheck + config:check + test:hooks + test + test:server + build + test:sidecar + audit + audit:server, each scope-gated to whether the current branch's diff (vs local `main`) touches its inputs. This is the new pre-push default (see "Commit gate") — the fast, branch-scoped smoke check; cloud `verify.yml` is now the actual enforcement gate for everything else.
+- `npm run verify:fast` — fast tests only (alias for `test:fast`); a manual full-fast run. NOTE: `pre-commit` no longer gates on this or on `verify:fast:scoped` (ops-2997 retired that battery from the hook entirely) — see "Commit gate".
+- `npm run verify:fast:branch` — lint + typecheck + config:check + test:hooks + test + test:server + build + test:sidecar + audit + audit:server, each scope-gated to whether the current branch's diff (vs local `main`) touches its inputs. **No longer what `pre-push` invokes** (ops-2997 — see "Commit gate"): pre-push now runs only its guards plus the scope-gated `test:sidecar` step. This script remains for a manual full branch-scoped run — Before-shipping step 7 calls for it — and cloud `verify.yml` is the actual enforcement gate for everything it covers.
 - `npm run audit` — npm audit against the root lockfile, gating on any unwaived high/critical severity advisories (threshold `--audit-level=high`). Waivers live in `audit-waivers.json` at repo root with expiry enforcement. Exit codes: 0 = pass, 1 = unwaived high/critical, 2 = expired waiver(s) or bad CLI args, 3 = audit cannot be trusted (npm audit failed, or its output could not be parsed). See `scripts/check-audit.mjs` for scope and mechanics (#2434).
 - `npm run audit:server` — npm audit against the server lockfile, omitting devDependencies (`--omit=dev` for production/runtime scope only), same gate and severity threshold as root. Exits with the same codes as `audit`. Runs in both `verify.yml` and `verify:fast:branch` (root runs full tree, server scope-gated to `server/package-lock.json` changes). **Note:** both audit steps require network access to npm's advisory database — they cannot run offline.
 - `npm run build` — production build into `dist/`.
@@ -756,17 +756,17 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 3. **Account for on-box acceptance — a merge gate.** If this PR ships behaviour that only real hardware can prove — a live GPU, a real sidecar, a real analyzer, a real book — or if it discharges acceptance already owed, then **this PR must leave the acceptance state recorded across all three surfaces**, in the same diff:
    - [`docs/testing/onbox-acceptance-register.md`](docs/testing/onbox-acceptance-register.md) — the row, grouped by hardware prerequisite;
    - the per-feature run sheet (`docs/testing/<feature>-onbox-acceptance.md`) where one exists — the criteria, and the filled-in `Result:` lines once run;
-   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, group counts, oldest debt) are recomputed, not carried over. `npm run check:onbox-register` cross-checks the owed total, the per-group counts and the row IDs — **not** the rest of the summary strip (oldest debt, the group/blocked/unconfirmed tallies), which stay a manual recompute. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact. It detects structural drift (rows live vs. registered) and content drift (per-row body text hash changes from baseline). It fails when the live page has rows your register lacks AND `origin/main` still has them (another lane ahead of you); when your register has rows the live page doesn't yet, that's the normal reason you're publishing, not a defect — qualified further by #2199 (a live-page row `origin/main`'s own copy also lacks is a discharge, not a defect, and isn't reported either) and by `--discharging <ID>[,<ID>...]` (#2272, for the one shape #2199 can't see: a discharge THIS change made that hasn't merged to `origin/main` yet — publishing runs before merge, so the baseline can't tell it apart from a genuinely-owed row until you name it; naming an ID that isn't actually live-only is refused, not silently accepted) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
+   - **the live view, [`docs/testing/onbox-acceptance-register-live-view.html`](docs/testing/onbox-acceptance-register-live-view.html)** — a hand-authored styled page, **not** a rendering of the markdown. Edit that file here, then publish *it* with the `url` recorded in the register's header, never from scratch. Two ways this breaks silently: publishing *without* the URL mints a *second* register, and publishing the `.md` itself *to* that URL keeps the URL while replacing the styled page with default markdown rendering (this happened four times on 2026-07-31/08-01). Its derived figures (owed count, per-group counts, oldest debt, group/blocked/unconfirmed tallies) are **generated** by `npm run register:build` from the markdown register — they are not hand-edited. `npm run check:onbox-register` validates row IDs for uniqueness, that each group's `next-id` marker sits at or above the shared allocation floor (the floor gates the next id a group may mint, not the ids already in use) AND that every row ID in the group sits strictly below that same `next-id` marker (a row at or above it means the marker itself is stale), confirms each group has both a glance-table row and a body section, and that each group's table count matches its body rows — **not** the summary strip totals, which `register:build` generates. **Immediately before publishing**, run `npm run check:onbox-register -- --against-published <file>` against a locally saved copy of the page currently live at that URL — the same comparator as the tracked-pair check, reused against the live artifact. It detects structural drift (rows live vs. registered) and content drift (per-row body text hash changes from baseline). It fails when the live page has rows your register lacks AND `origin/main` still has them (another lane ahead of you); when your register has rows the live page doesn't yet, that's the normal reason you're publishing, not a defect — qualified further by #2199 (a live-page row `origin/main`'s own copy also lacks is a discharge, not a defect, and isn't reported either) and by `--discharging <ID>[,<ID>...]` (#2272, for the one shape #2199 can't see: a discharge THIS change made that hasn't merged to `origin/main` yet — publishing runs before merge, so the baseline can't tell it apart from a genuinely-owed row until you name it; naming an ID that isn't actually live-only is refused, not silently accepted) — and stop if it disagrees: two lanes can each merge a correct, agreeing edit and still lose a row at publish time if the second one publishes from a build made before the first one's merge landed (#1931's original incident, one level up from the git-side race the tracked-pair check already closes). See the register's own "Live view" section for the full four-step procedure — this is a manual step CI cannot run for you (no network access from a required check).
 
    **Recording blocks the merge; running does not.** Complex work often cannot be accepted at PR time and a PR must not sit open waiting for a contended box — owed acceptance still converts into a row rather than holding the PR. What is no longer optional is the *bookkeeping*: a PR that ships unproven behaviour without a row, or discharges acceptance without recording the outcome, is not finishable.
 
    When adding a row, say what to observe (concretely, not "verify it works"), the hardware prerequisites, and where the criteria live. A row **comes out** only when (a) the acceptance was run on the box and the result recorded, or (b) the repo owner explicitly confirms it was exercised on a live book or books; either way record what was observed, by whom, and when — an outcome, not a deletion. "Tests pass, so it's presumably fine" never removes a row.
 
-   `npm run check:onbox-register` (`.github/workflows/onbox-register-check.yml`, ops-43) mechanically backstops the register's own internal arithmetic — glance-table counts vs. body row headings, and the stated total vs. the glance table — on every PR touching the file. It cannot tell you a row is missing, only that the ones already there don't add up.
+   `npm run check:onbox-register` (`.github/workflows/onbox-register-check.yml`, ops-43) validates the register's internal structure — row ID uniqueness across the whole document, each group's `next-id` marker sitting at or above its group's allocation floor (the floor gates the next id a group may mint, never the ids already in use) and every row ID in the group sitting strictly below that same marker, and glance-table group counts vs. their corresponding body row counts — on every PR touching the file. `npm run register:build` generates and verifies the summary strip figures (owed total, per-group glance-table row). Together they catch structural drift (rows added/removed/miscounted) but neither can verify the published artifact itself — that is procedure, not mechanical gate.
 4. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
 5. **Update the two release-notes documents, in this PR.** Append an entry to `docs/release-notes-next.md` (technical register, PR-refed) AND a matching user-facing, brand-voice line to the in-progress version section at the top of `RELEASE_NOTES.md`. Land both PR-by-PR, not reconstructed from git history at cut time — that's the whole point of this step. The first-PR-after-a-cut bootstrap case (resetting both files) is documented once, in [CONTRIBUTING.md "Release notes"](CONTRIBUTING.md#release-notes) — check there, don't re-derive it. Skip only when the change has no shippable delta (pure docs/process, CI-only, internal chore with no user- or operator-visible effect) — say so explicitly rather than silently omitting.
 6. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [PR review → issue verification](.claude/skills/pr-review-gate/SKILL.md#issue-verification-at-pr-creation)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
-7. **Run `npm run verify:fast:branch`** locally (same battery as pre-push) — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way (see "Commit gate").
+7. **Run `npm run verify:fast:branch`** locally (a manual run of the branch-scoped subset — as of ops-2997, `pre-push` itself no longer runs this automatically, see "Commit gate") — or the full `npm run verify` if you want more than the branch-scoped subset. Cloud `verify.yml` is the required, authoritative gate either way.
 8. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
 9. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
 10. **Independent PR review.** Once every item above is done (or explicitly marked not-applicable) and the branch is pushed, run the mandatory gate via the `pr-review-gate` skill — see [the PR review runbook](.claude/skills/pr-review-gate/SKILL.md). Triage and fold findings before merge.
@@ -888,75 +888,71 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   no-scope catch-all). Merge / Revert / fixup! / squash! commits are exempt.
   Full spec lives in [CONTRIBUTING.md](CONTRIBUTING.md); regression plan is
   [docs/features/archive/38-branching-and-commit-convention.md](docs/features/archive/38-branching-and-commit-convention.md).
-- **pre-commit** (`.husky/pre-commit`): runs `npm run verify:fast:scoped` —
-  validator unit tests + frontend + server tests, but **scope-filtered against
-  the staged diff** (plan 156): a leg whose scope the staged change never
-  touched is skipped (`[skip] … (out of scope)`), so a sidecar-only or
-  docs-only commit runs none of them. Sub-5s on a warm cache. Refuses the
-  commit if any in-scope spec is red. Sidecar (pytest), Pester scripts,
-  Playwright e2e, and typecheck are NOT in pre-commit — they live in
-  pre-push so commits stay snappy. Under `--scope-staged` the `test`/
-  `test:server` steps additionally run vitest's own `--changed HEAD`
-  selection (`test:changed`/`test:server:changed`) instead of the whole
-  suite — a one-file server commit runs only the tests that file's diff
-  touches, not all ~6700. Applies only to an UNSHARED `--scope-staged` diff
-  that is CONFINED to the step's own primary source root with a safe
-  extension (`diffSafeForChangedOnly` — `src/**` for `test`,
-  `server/src/**` for `test:server`, `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`/
-  `.mts`/`.cts` only) — a positive allowlist, not an exclusion list, after
-  three review rounds each found a narrower live gap in "matches this step's
-  declared scope" (a shared root-manifest/lockfile change; a step's own
-  `extraFiles`/server lockfile; a root-level config file matched only via
-  `globs`; a non-JS asset like `src/styles.css` read by its guard tests via
-  `readFileSync`, not import). Any diff outside that allowlist still runs
-  every step's full script, since `--changed` against a file no test's
-  dependency graph actually reaches would otherwise exit 0 having run
-  zero tests. A `--changed`-only pass is also never written to the verify-cache
-  (only a full run is), so it cannot leave behind a cache entry a later
-  `--scope-branch`/CI run would read as `[cached]` and skip. `--scope-branch`
-  (pre-push) always runs the full suite — the narrowing above never applies
-  there — so a change `--changed` misses through an untracked dependency is
-  still caught before merge. (Cloud CI narrows its own PR runs via
-  `vitest run --changed <PR base>` independently — see `verify.yml`'s
-  Frontend/Server test legs — a pre-existing, deliberate design predating
-  this pre-commit optimisation and unrelated to it; pre-push's full local
-  run is the actual full-suite gate before merge, not CI.) If a co-running
-  GPU generation is
-  detected (nvidia-smi) **or a sibling worktree is already running a
-  vitest/verify-cache battery**, the runner warns and throttles test
-  concurrency (`LOW_CONCURRENCY=1`); `SKIP_CONTENTION_CHECK=1` disables both
-  probes.
-  `npm run verify:fast` (no scope filter) remains for a manual full fast run.
+- **pre-commit** (`.husky/pre-commit`): as of ops-2997
+  (docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md), runs
+  `node scripts/hooks/pre-commit-lint.mjs` — ONE ESLint process over the
+  **staged files only** (`git diff --cached --name-only --diff-filter=ACMR`,
+  filtered to JS/TS extensions). An empty staged set exits 0 without spawning
+  anything. Blocks on real lint findings; **passes** (with a warning to
+  stderr) when eslint is missing (a worktree without `node_modules`, a
+  normal state here) or a 60s **per-batch** budget is exceeded (a staged set
+  over 100 lintable files runs several batches, so the hook's worst case is
+  `ceil(files / 100) × 60s`, not 60s) — CI still enforces lint
+  either way. Sub-second on the common case. This REPLACED `npm run
+  verify:fast:scoped` (~13,500 tests, a whole vitest fork pool) — see the
+  design doc's "Problem" section for why that battery was never viable, even
+  healthy: a hook may never spawn a process pool.
 - **pre-push** (`.husky/pre-push`): first runs `scripts/guard-protected-push.mjs`,
-  which refuses a force-push or deletion of a protected branch (`main`) before
-  the battery even starts (a local guard; since 2026-06-14 `main` ALSO has
-  server-side branch protection — a GitHub ruleset blocking force-push +
-  deletion, enabled after the Pro upgrade per `com-4` — so this hook is now
-  belt-and-suspenders; see
+  which refuses a force-push or deletion of a protected branch (`main`) (a
+  local guard; since 2026-06-14 `main` ALSO has server-side branch
+  protection — a GitHub ruleset blocking force-push + deletion, enabled after
+  the Pro upgrade per `com-4` — so this hook is now belt-and-suspenders; see
   [docs/features/163-protected-push-guard.md](docs/features/163-protected-push-guard.md);
-  bypass the local hook intentionally with `git push --no-verify`). Then, unless
-  the push is docs-only (below), runs `npm run verify:fast:branch` — a fast,
-  branch-diff-scoped subset (lint, typecheck, config:check, test:hooks, check:budget-poll, test,
-  test:server, build, test:sidecar, audit, audit:server). Requires npm registry
-  access (unlike other `verify:fast:branch` legs, the audit steps cannot run offline).
-  Refuses the push if any in-scope step fails. This
-  replaced running the full `npm run verify` battery on every push (see
-  [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md))
-  — the heavy legs (e2e, server-slow, scripts, test:pinokio) now run in the
-  cloud instead, which is now the required, enforcing gate (see below).
+  bypass the local hook intentionally with `git push --no-verify`), then
+  `scripts/guard-commit-subjects.mjs`. Then, unless the push is docs-only
+  (below), runs `node scripts/verify-cache.mjs --steps test:sidecar
+  --scope-branch` — ops-2997 dropped `verify:fast:branch`'s ~35-minute
+  battery from this hook entirely (a healthy run's own arithmetic, before any
+  concurrency; see the ops-2997 design doc's "Problem" section) in favour of
+  cloud `verify.yml`, a required status check on `main`, as the enforcing
+  gate. `test:sidecar`, scope-gated to `server/tts-sidecar/**` and
+  input-hashed, is the one exception kept local: it spawns pytest, not a
+  vitest fork pool, and it's the only automatic executor of the 38
+  `pytest.importorskip("torch")` tests CI deliberately can't run (its own
+  lean sidecar install skips torch). Costs ~6.85 min on a sidecar-touching
+  push, and near-zero on a push where the step is out of scope or its input
+  hash is already cached. **"Zero on every other push" is not quite true:**
+  a root `package.json` / `package-lock.json` / `.github/actions/**` change
+  trips `computeShared` (`scripts/verify-cache.mjs`), which puts EVERY step in
+  scope regardless of its own globs — so such a push pays the full ~6.85 min
+  on a cold cache while touching no sidecar file at all.
+  `npm run verify:fast:branch` itself still
+  exists as an npm script for a manual full local run (see Before-shipping
+  step 7) — it is just no longer what this hook invokes.
 
-**Docs-only pushes skip `npm run verify:fast:branch` entirely** — `scripts/is-docs-only-push.mjs`
+**Docs-only pushes skip the local sidecar check entirely** — `scripts/is-docs-only-push.mjs`
 checks the pushed commits' changed-file set against the same doc-glob test as
 CONTRIBUTING.md's "Doc-only PR fast-path" (`docs/**`, root `*.md`, `.github/*.md`);
-a doc-only diff has no runtime surface for tests/build to exercise, so paying
-even the fast local check is wasted time/CPU. Conservative by design: any
-uncertainty (git error, unresolvable merge-base) runs the full selected-steps
-battery rather than guessing.
+a doc-only diff has no runtime surface for `test:sidecar` to exercise, so
+paying even the scope computation is wasted time/CPU. Conservative by design:
+any uncertainty (git error, unresolvable merge-base) runs the sidecar check
+rather than guessing.
 
 `npm run verify` is cache-aware (see
 [docs/features/archive/50-verify-cache.md](docs/features/archive/50-verify-cache.md)):
 each step skips with `[cached]` when its input hash matches the last
 green run. Pass `npm run verify -- --no-cache` to force a full re-run.
+
+**The contention throttle is still live, but no git hook reaches it any more.**
+When a selected step is vitest-backed, `verify-cache.mjs` probes for a
+co-running GPU generation (nvidia-smi) and for a sibling worktree already
+running a vitest/verify-cache battery, and on either it warns and dials the
+child test runs down (`LOW_CONCURRENCY=1`); `SKIP_CONTENTION_CHECK=1` disables
+both probes. As of ops-2997 that only fires on a **manual** run — `npm run
+verify`, `verify:fast`, `verify:fast:branch` — because `pre-commit` no longer
+calls `verify-cache.mjs` at all and `pre-push` calls it only for
+`test:sidecar`, which is pytest, not vitest, so `hasVitestStep` is false and
+the probes are skipped outright.
 
 `npm run verify` also prepends `lint` (ESLint + Prettier via
 `eslint-config-prettier`) and includes `test:a11y` (axe-core on the six
@@ -970,9 +966,10 @@ the `verify.yml` battery runs automatically on every PR by default and is a
 replaces the prior opt-in/label-gated design, which existed to control
 Actions-minute cost while the repo was private; the repo is now public, so
 standard-runner Actions minutes are free and uncapped, and that rationale no
-longer applies. Local pre-push now only runs a fast, branch-scoped subset
-(`verify:fast:branch`) — this cloud run is the real enforcement gate for
-everything else, not redundant insurance. Every leg is still
+longer applies. Local pre-push now runs only its guards plus the
+scope-gated `test:sidecar` check (ops-2997 — see "Commit gate" above) — this
+cloud run is the real enforcement gate for everything else, not redundant
+insurance. Every leg is still
 **scope-filtered** to what the PR's diff actually touched (plan 103 — `git
 diff` against the PR base; a frontend-only PR skips server tests, a
 server-only PR skips Playwright e2e + the frontend unit suite, a root
@@ -1229,13 +1226,14 @@ around it (never acceptable — see "Do not use `--no-verify` to bypass" under
 Working practice below; this holds even under contention).
 
 - **A subagent whose `git commit`/`push` is slow does not get to retry it as
-  a second background call.** `verify:fast:branch`/pre-push can legitimately
-  run 15–45+ minutes under load; the fix for "it's taking a while" is to
-  wait, never to fire a second attempt in parallel against the same
-  worktree. A subagent report describing multiple retry attempts against one
-  worktree is reporting a bug it caused, not a completed task — re-dispatch
-  or take over manually rather than trusting its "eventually succeeded"
-  claim.
+  a second background call.** `git commit` is now instant (~0.3s); `git push` is
+  ~1–2s for most pushes, or ~6.85 min if the diff touches `server/tts-sidecar/**` (the only
+  exception is the scope-gated `test:sidecar` step that pre-push runs). Under
+  contention, wall-clock can be longer, but the fix for "it's taking a while" is to
+  wait, never to fire a second attempt in parallel against the same worktree. A subagent
+  report describing multiple retry attempts against one worktree is reporting a bug it
+  caused, not a completed task — re-dispatch or take over manually rather than trusting
+  its "eventually succeeded" claim.
 - **`TaskStop`'s "Successfully stopped" is not proof the underlying OS
   process is gone.** Confirmed three times now: stopping a wrapping
   bash/agent task does not reliably kill the child processes it spawned
@@ -1288,13 +1286,16 @@ Additional one-time setup:
 Working practice:
 
 - Default loop for non-trivial work: finalize the change → run
-  `npm run verify:fast:branch` (same branch-scoped check pre-push now runs)
-  → open the PR → cloud `verify.yml` (required, opt-out) and the mandatory
-  `pr-review-gate` pass run independently → merge once both are green. Run the
-  full `npm run verify` manually only when you specifically want the full
-  local battery (e.g. before a release cut, or debugging something scope-
-  filtering might be hiding).
-- `npm run verify:fast` matches pre-commit; `npm run verify:quick` is `test:all` without typecheck/build/e2e.
+  `npm run verify:fast:branch` by hand (as of ops-2997, `pre-push` itself no
+  longer runs this — see "Commit gate") → open the PR → cloud `verify.yml`
+  (required, opt-out) and the mandatory `pr-review-gate` pass run
+  independently → merge once both are green. Run the full `npm run verify`
+  manually only when you specifically want the full local battery (e.g.
+  before a release cut, or debugging something scope-filtering might be
+  hiding).
+- `npm run verify:fast` is a manual full-fast run (typecheck is NOT in it;
+  `pre-commit` itself runs neither this nor any battery — see "Commit gate");
+  `npm run verify:quick` is `test:all` without typecheck/build/e2e.
 - **Do not use `--no-verify` to bypass.** If a hook fails:
   1. **Triage first.** Categorise the failure as **related to my change** vs. **pre-existing** (i.e. the same test would fail on `main`). A `git stash && git checkout main && <run the failing test>` round-trip settles it in 30 seconds.
   2. **Related → fix it.** Update the code, the regression doc, and the paired test in the same commit. Then retry.

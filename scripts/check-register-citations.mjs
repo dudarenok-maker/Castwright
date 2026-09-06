@@ -36,7 +36,7 @@
 // gating, whether it belongs in `verify.yml` or its own workflow), not
 // something to wire in blind here; tracked at `#2721`.
 //
-// Three checks, ordered by precision (least to most likely to need
+// Four checks, ordered by precision (least to most likely to need
 // judgment):
 //
 //   A. Nonexistent ID — a cited row ID with no heading in the register.
@@ -236,7 +236,13 @@
 //      live row elsewhere — only a documented historical tie downgrades it
 //      to `annotatedDischarge`.
 //
-// Frozen paths are excluded from all three checks — see isFrozenPath's own
+//   D. Heading title drift — a heading citation (`### <ID> · <title-echo>`)
+//      whose title-echo text no longer matches the cited row's current
+//      `.title` (checkCitationTitleDrift). Advisory only, never fatal even
+//      under --strict — see that function's own header comment for the
+//      threshold rationale and the annotation-exemption it shares with A/C.
+//
+// Frozen paths are excluded from all four checks — see isFrozenPath's own
 // comment for why each one is frozen. This script's own source, its own test
 // fixtures, and the sibling `check-onbox-register.mjs` checker's test
 // fixtures are excluded from scanning entirely (not just Check A/B/C — see
@@ -739,6 +745,21 @@ const ANNOTATION_WINDOW_LINES = 25;
 // paragraph.
 const ID_PROXIMITY_CHARS = 120;
 
+// How close a negation word must sit BEFORE a discharge-word match for
+// isDischargeAssertionNegated to treat it as negating that match — see that
+// function's own comment for why 30 (not the full clause) is the right cap.
+//
+// #2858 NOTE: This 30-char cap was originally measured/tuned for Check C
+// (conflicting subjects). Check A (nonexistent IDs) now reuses the shared
+// isDischargeAssertionNegated helper and this constant without independent
+// re-measurement for Check A's own citation-text shapes. Zero real-corpus hits
+// of a boundary-flip as of this PR (e.g., `"Nothing further owed - A999
+// discharged ..."` at the 30-char boundary), but a future false-negative or
+// false-positive near this cap for Check A specifically should prompt
+// re-measuring the cap for Check A's own text patterns rather than assuming
+// Check C's tuning transfers without measurement.
+const POLARITY_PROXIMITY_CHARS = 30;
+
 // A bare ID token, used to find every ID mention in a section so a discharge
 // word can be bound to the right one(s) — see idSpecificAnnotationPresent's
 // own comment for why "within 120 chars" alone isn't enough.
@@ -883,6 +904,42 @@ function clauseBounds(text, pos) {
 }
 
 /**
+ * Whether the discharge-word match `dm` (against `scanText`, a
+ * stripInlineCodeSpans'd copy) is negated — e.g. "was NOT discharged" or
+ * "un-discharged" — rather than an affirmative discharge/removal assertion.
+ * `clauseStart` bounds the backward scan to the SAME clause `clauseBounds`
+ * already computed for `dm`, so an unrelated negation across a clause/
+ * list-item boundary cannot bleed in.
+ *
+ * Shared by `idSpecificAnnotationPresent` (Check A's fatal-path citation
+ * matcher) and `dischargedSubjectsMentionedIn` (Check C's own-history scan) —
+ * extracted from the latter, pass-11/pass-15/pass-16 review of PR #2846 (see
+ * `dischargedSubjectsMentionedIn`'s own comment for the full history of why
+ * this exists and why the window is backward-only and 30-char-capped, not
+ * clause-wide or bidirectional): a "clause" here is a full paragraph, since
+ * CLAUSE_BOUNDARY_REGEX does not treat ". " as a boundary, and the register's
+ * real affirmative discharge records measure their genuine negations at
+ * 4-10 chars back vs. false suppressions at 85+ chars back in the same
+ * paragraph. The negation-word set is deliberately broad (NOT/no/never/
+ * isn't/aren't/wasn't/weren't/hasn't/haven't/cannot/can't/an "un-" prefix
+ * fused to the discharge word/"far from"/"nothing"), since a first cut of
+ * just "NOT"/"no" missed most real negation phrasings.
+ */
+function isDischargeAssertionNegated(scanText, dm, clauseStart) {
+  const polarityScanStart = Math.max(clauseStart, dm.index - POLARITY_PROXIMITY_CHARS);
+  const polarityContext = scanText.slice(polarityScanStart, dm.index);
+  // Apostrophes are '-escaped (not literal) so this regex literal
+  // doesn't desync spawn-windows-hide.test.ts's quote-tracking scanner --
+  // see that guard's own regexLiteralDesyncsQuoteTracking comment.
+  const hasNegationWord =
+    /\b(?:NOT|no\b(?!\s+longer\s+exists?)|never|isn\u0027t|aren\u0027t|wasn\u0027t|weren\u0027t|hasn\u0027t|haven\u0027t|cannot|can\u0027t|far\s+from|nothing)\b/i.test(
+      polarityContext,
+    );
+  const isUnPrefixed = /un-?discharged\b/i.test(scanText.slice(Math.max(0, dm.index - 10), dm.index + dm[0].length));
+  return hasNegationWord || isUnPrefixed;
+}
+
+/**
  * Whether `sectionText` contains a discharge/removal annotation that
  * actually references `id` — not merely a discharge word somewhere in the
  * section, which a paired injection proved lets unrelated prose excuse a
@@ -952,6 +1009,14 @@ function clauseBounds(text, pos) {
  * that real annotation (measured: `docs/superpowers/plans/2026-08-05-
  * device-token-scope.md`'s `F2`/`F3` citations went from correctly-excused
  * to falsely-flagged the first time this was tried).
+ *
+ * #2858: also polarity-checks the discharge word via the same
+ * `isDischargeAssertionNegated` helper `dischargedSubjectsMentionedIn` uses,
+ * so a negated sentence ("Register row: A18 — was NOT discharged; it is
+ * still live") can no longer be misread as affirmatively excusing A18 from
+ * Check A's fatal nonexistent-ID gate. Measured against the real corpus:
+ * this flips zero of today's citations — see #2858 for the false-positive
+ * analysis of the 4 citations a looser, unshared polarity scan misflagged.
  */
 function idSpecificAnnotationPresent(sectionText, id) {
   const dischargeScanText = stripInlineCodeSpans(sectionText);
@@ -961,6 +1026,7 @@ function idSpecificAnnotationPresent(sectionText, id) {
   if (dischargeMatches.length === 0) return false;
   for (const dm of dischargeMatches) {
     const { start, end } = clauseBounds(sectionText, dm.index);
+    if (isDischargeAssertionNegated(dischargeScanText, dm, start)) continue;
     ANY_ID_TOKEN_REGEX.lastIndex = start;
     let occ;
     while ((occ = ANY_ID_TOKEN_REGEX.exec(sectionText)) && occ.index < end) {
@@ -1340,16 +1406,15 @@ export function findUnclassifiedRunSheetMentions(registerRows) {
  * Pass-11 review of PR #2846 (finding #1, CRITICAL): polarity-check the
  * discharge word — "NOT discharged" (and similar negated contexts like "is
  * why A16 below is not fully discharged") must not match as affirmative
- * discharges. This is a polarity check `idSpecificAnnotationPresent` itself
- * does NOT have (it is unconcerned with polarity, since it only answers
- * whether a discharge word and a specific ID token co-occur in a clause, not
- * what either one asserts) — added here, scoped to `clauseBounds`, because
- * this function's answer of "did this row historically track this subject"
- * is exactly the kind of claim a negated sentence can falsify. Pass-15
- * review (finding new-B, SIGNIFICANT): the negation-word set is deliberately
- * broad (NOT/no/never/isn't/aren't/wasn't/weren't/hasn't/haven't/cannot/
- * can't/an "un-" prefix fused to the discharge word/"far from"/"nothing"),
- * since the first cut (just "NOT"/"no") missed most real negation phrasings.
+ * discharges, scoped to `clauseBounds`, because this function's answer of
+ * "did this row historically track this subject" is exactly the kind of
+ * claim a negated sentence can falsify. Pass-15 review (finding new-B,
+ * SIGNIFICANT): the negation-word set is deliberately broad (NOT/no/never/
+ * isn't/aren't/wasn't/weren't/hasn't/haven't/cannot/can't/an "un-" prefix
+ * fused to the discharge word/"far from"/"nothing"), since the first cut
+ * (just "NOT"/"no") missed most real negation phrasings. #2858: this
+ * polarity check is now shared, via `isDischargeAssertionNegated`, with
+ * `idSpecificAnnotationPresent` — which was polarity-blind until then.
  * Also applies the same ID_PROXIMITY_CHARS cap `idSpecificAnnotationPresent`
  * uses so a subject number far from its discharge word (>120 chars) is not
  * incorrectly attributed to a row that merely MENTIONS it in passing (e.g.
@@ -1368,38 +1433,10 @@ function dischargedSubjectsMentionedIn(rowBodyText) {
     // Get clause bounds first so we can use them for both polarity and subject scanning.
     const { start, end } = clauseBounds(scanText, dm.index);
 
-    // Polarity check: scan for negation markers that would negate the
-    // discharge word. Bound the scan to BOTH the same clause (not a flat
-    // window, so an unrelated negation across a clause/list-item boundary
-    // cannot bleed in -- pass-15/new-B) AND a proximity cap of its own
-    // (pass-16/new-G: clause-bounding alone is too wide -- a "clause" here
-    // is a full paragraph, since CLAUSE_BOUNDARY_REGEX does not treat ". "
-    // as a boundary, and the register's real affirmative discharge
-    // records measure their genuine negations at 4-10 chars back vs. false
-    // suppressions at 85+ chars back in the same paragraph). Recognize a
-    // broad set of negation patterns:
-    // - "NOT", "no" (complete words; "no" excludes "no longer exist(s)",
-    //   since that's one of DISCHARGE_ANNOTATION_REGEX's OWN
-    //   affirmative phrases, not a negation of one)
-    // - "never", "isn't", "aren't", "wasn't", "weren't" (contractions)
-    // - "hasn't", "haven't" (auxiliary verbs with "have")
-    // - "cannot", "can't" (modal verbs)
-    // - "far from" (degree modifier)
-    // - "nothing" (negating existential)
-    const POLARITY_PROXIMITY_CHARS = 30;
-    const polarityScanStart = Math.max(start, dm.index - POLARITY_PROXIMITY_CHARS);
-    const polarityContext = scanText.slice(polarityScanStart, dm.index);
-    // Apostrophes are '-escaped (not literal) so this regex literal
-    // doesn't desync spawn-windows-hide.test.ts's quote-tracking scanner --
-    // see that guard's own regexLiteralDesyncsQuoteTracking comment.
-    const hasNegationWord =
-      /\b(?:NOT|no\b(?!\s+longer\s+exists?)|never|isn\u0027t|aren\u0027t|wasn\u0027t|weren\u0027t|hasn\u0027t|haven\u0027t|cannot|can\u0027t|far\s+from|nothing)\b/i.test(
-        polarityContext,
-      );
-    // Also check if the discharge word itself is prefixed with "un-" (e.g., "undischarged", "un-discharged")
-    const isUnPrefixed = /un-?discharged\b/i.test(scanText.slice(Math.max(0, dm.index - 10), dm.index + dm[0].length));
-    if (hasNegationWord || isUnPrefixed) {
-      // This discharge word is negated, skip it.
+    // Polarity check (#2858: extracted into the shared isDischargeAssertionNegated
+    // helper, also used by idSpecificAnnotationPresent) -- skip a discharge word
+    // that is actually negated ("was NOT discharged", "un-discharged").
+    if (isDischargeAssertionNegated(scanText, dm, start)) {
       continue;
     }
 
@@ -1973,6 +2010,257 @@ export function measureWrongIdEligibleLines(fileTexts, registerRows) {
   };
 }
 
+// --- Check D: heading title drift (advisory, non-fatal) -------------------
+//
+// Measured in docs/testing/register-citation-title-match-tuning.md (#2870,
+// first task child of #2838): plain Jaccard token-overlap between a register
+// row's `.title` and the prose that cites it does NOT cleanly separate real
+// citations from genuine drift on the prose-idiom/label-line surfaces — a
+// prose-idiom citation ("register row A21 recorded in...") almost never
+// restates the row's title by design (it references the row by ID while
+// talking about something else), so its real-corpus floor is
+// indistinguishable from a synthetic mismatch's floor. Only the anchored
+// HEADING surface (`### <ID> · <title-echo>`) carries a usable signal,
+// because a heading's text after `·` tautologically restates the title when
+// nothing has drifted. Per that doc's own recommendation: skip the
+// prose-idiom/label-line surfaces entirely, and for the heading surface,
+// require BOTH a ratio floor AND a minimum shared-content-token count before
+// flagging, and treat the whole thing as advisory — never fails the gate,
+// not even under `--strict` — because the tuning doc's own near-duplicate-
+// title cases (A20/A13, A32/A22) mean even a well-tuned ratio is
+// structurally blind to some real ID swaps; a hard CI gate on a metric known
+// to have that blind spot would train contributors to distrust or route
+// around it.
+
+// Verbatim from the tuning doc's own measurement — do not re-derive.
+const TITLE_DRIFT_STOPWORDS = new Set(
+  `a an the of to in on for and or but with without at by from as is are was
+   were be been being this that these those it its into over under again
+   further then once here there when where why how all any both each few more
+   most other some such no nor not only own same so than too very s t can will
+   just don should now`
+    .split(/\s+/)
+    .filter(Boolean),
+);
+
+// A ratio at or below this is "low similarity" — the tuning doc's own
+// heading-surface recommendation (~0.3). On this repo's real corpus the
+// ratio floor is currently empirically inert: every genuine detection
+// (annotated or not) has shared < TITLE_DRIFT_MIN_SHARED_TOKENS with ratio
+// well under this floor, so shared < 2 alone would flag the same set —
+// annotation-exemption (below) doesn't change this, since it filters
+// findings the ratio+shared gate has already fired on. The floor is kept
+// for the case the mutation tests construct directly: shared === 1 with a
+// very small token union, where ratio is the only thing distinguishing a
+// coincidental one-word overlap from real drift — a case this corpus
+// doesn't currently exercise, not one the code fails to guard.
+const TITLE_DRIFT_RATIO_THRESHOLD = 0.3;
+
+// Minimum non-stopword, non-ID tokens the title and the heading text must
+// share before a low ratio is treated as real drift rather than noise from
+// two short strings — the tuning doc's own "both a ratio floor and a minimum
+// shared-content-token count" recommendation.
+const TITLE_DRIFT_MIN_SHARED_TOKENS = 2;
+
+const TITLE_DRIFT_TOKEN_REGEX = /[a-z0-9]+/g;
+// A bare row-ID-shaped token (e.g. "a6") — stripped from both sides before
+// scoring, same as the tuning doc's `excludeId` measurement.
+const TITLE_DRIFT_ID_TOKEN_REGEX = /^[a-z]\d{1,3}$/;
+// Markdown link pattern: [text](url). Replaces with just the link text to
+// exclude URL boilerplate tokens (github, com, issues, https, etc.) from
+// contributing to the Jaccard similarity computation. The link text itself
+// may be meaningful (e.g. [#1000]) and is preserved; only the URL is dropped.
+const MARKDOWN_LINK_REGEX = /\[([^\]]*)\]\([^)]*\)/g;
+
+/**
+ * Strips markdown link URLs from text, keeping only the link text.
+ * E.g. "foo ([#1234](https://github.com/...)) bar" becomes "foo (#1234) bar",
+ * so the URL's tokens (github, com, issues, https, etc.) don't contribute to
+ * drift scoring. Used by titleDriftTokens to exclude link-boilerplate false
+ * positives from the shared-token count gate.
+ */
+function stripMarkdownLinkUrls(text) {
+  return text.replace(MARKDOWN_LINK_REGEX, '$1');
+}
+
+function titleDriftTokens(text) {
+  const withoutLinks = stripMarkdownLinkUrls(text);
+  const withoutCodeSpans = stripInlineCodeSpans(withoutLinks);
+  const raw = withoutCodeSpans.toLowerCase().match(TITLE_DRIFT_TOKEN_REGEX) ?? [];
+  const tokens = new Set();
+  for (const t of raw) {
+    if (TITLE_DRIFT_STOPWORDS.has(t)) continue;
+    if (TITLE_DRIFT_ID_TOKEN_REGEX.test(t)) continue;
+    tokens.add(t);
+  }
+  return tokens;
+}
+
+/**
+ * Jaccard similarity between two token sets, plus the shared-token count
+ * both the ratio-floor and minimum-shared-token-count gates need. Two empty
+ * token sets score 1 (no content on either side to disagree about) rather
+ * than 0/0 — this never fires in the real corpus (a row title and a heading
+ * echo are never entirely stopwords/IDs) but a defined answer beats NaN
+ * silently propagating into a false flag.
+ */
+function titleDriftScore(titleTokens, proseTokens) {
+  let shared = 0;
+  for (const t of titleTokens) if (proseTokens.has(t)) shared++;
+  const union = titleTokens.size + proseTokens.size - shared;
+  const ratio = union === 0 ? 1 : shared / union;
+  return { ratio, shared };
+}
+
+/**
+ * Every `### <ID> [+ <ID> ...] · <title-echo>` heading citation on `text`,
+ * paired with its trailing title-echo text — the surface the tuning doc
+ * measured as the only one carrying a usable similarity signal (see this
+ * section's header comment). Reuses HEADING_ID_REGEX/splitCitedIds so this
+ * recognises exactly the same heading citations Check A does — no new
+ * surface is invented here.
+ * @returns {{ lineIndex: number, ids: string[], titleEcho: string }[]}
+ */
+function extractHeadingTitleEchoes(text) {
+  const stripped = deBold(stripFences(text));
+  const lines = stripInlineCodeSpans(stripped).split('\n');
+  const citations = [];
+  lines.forEach((line, i) => {
+    const m = line.match(HEADING_ID_REGEX);
+    if (!m) return;
+    const ids = splitCitedIds(m[1]);
+    if (!ids.length) return;
+    const titleEcho = line.slice(m[0].length).trim();
+    citations.push({ lineIndex: i, ids, titleEcho });
+  });
+  return citations;
+}
+
+/**
+ * For a single-ID heading, check if a discharge annotation exists in the
+ * section text AND either:
+ *   1. Has NO ID proximate to the discharge word (the A8 case where discharge
+ *      is "bare"), OR
+ *   2. Has the heading's own ID proximate to the discharge word (the A41 case
+ *      with proximity-adjacent discharge)
+ *
+ * This avoids false positives like "B1 was discharged" excusing a nearby
+ * "### A41 · ..." heading, while catching both:
+ *   - "— discharged 2026-08-27" with no ID nearby (the A8 real case)
+ *   - "A41 was discharged" with the heading's own ID nearby (the standard case)
+ *
+ * For multi-ID headings, a discharge annotation must still use the stricter
+ * `idSpecificAnnotationPresent` check, since the same section could contain
+ * multiple IDs and we can't tell which one a bare discharge word refers to
+ * without proximity.
+ *
+ * Pass-1 of #2838's title-drift-annotation relaxation: A8's real case has
+ * a single-ID heading with a discharge annotation in its section, but the
+ * annotation doesn't repeat the ID next to the discharge word (unlike A19,
+ * A31, etc., which do). This relaxation moves A8 from `findings` to
+ * `annotatedFindings` by treating a single-id case more generously.
+ */
+function dischargeAnnotationPresentAnywhere(sectionText, id) {
+  // For single-ID headings, look for discharge in the header section only
+  // (first ~300 chars) to avoid false positives from body text mentioning
+  // other IDs. This covers the criteria-source blockquote region.
+  const HEADER_CHARS = 300;
+  const headerText = sectionText.slice(0, HEADER_CHARS);
+  const headerScanText = stripInlineCodeSpans(headerText);
+
+  const dischargeMatches = [
+    ...headerScanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
+  ];
+  for (const dm of dischargeMatches) {
+    const { start, end } = clauseBounds(headerText, dm.index);
+    if (isDischargeAssertionNegated(headerScanText, dm, start)) continue;
+
+    // Check what ID (if any) is proximate to this discharge word IN THE HEADER.
+    ANY_ID_TOKEN_REGEX.lastIndex = start;
+    let proximateId = null;
+    let occ;
+    while ((occ = ANY_ID_TOKEN_REGEX.exec(headerText)) && occ.index < end) {
+      const dischargeCenter = dm.index + dm[0].length / 2;
+      const occCenter = occ.index + occ[1].length / 2;
+      // If there's an ID within proximity of this discharge word, record it.
+      if (Math.abs(occCenter - dischargeCenter) <= ID_PROXIMITY_CHARS) {
+        proximateId = occ[1];
+        break;
+      }
+    }
+    // Discharge annotation excuses this heading's drift if:
+    //   - No ID is proximate (bare discharge in header), OR
+    //   - The heading's own ID is proximate
+    if (proximateId === null || proximateId === id) return true;
+  }
+  return false;
+}
+
+/**
+ * v2 of `check:register-citations` (#2838's second task child): flags a
+ * heading citation whose title-echo text scores at or below
+ * TITLE_DRIFT_RATIO_THRESHOLD against the row's current `.title` AND shares
+ * fewer than TITLE_DRIFT_MIN_SHARED_TOKENS non-stopword, non-ID tokens with
+ * it — both conditions per the tuning doc's recommendation, since either
+ * alone over-fires (a low ratio from two merely-short strings, or a low
+ * shared count that's low only because both strings are short). Non-fatal by
+ * design, always — see this section's header comment for why. Only the
+ * heading surface is scored; the prose-idiom and "Register row(s):"
+ * label-line surfaces are skipped entirely per the tuning doc's own finding
+ * that they carry no usable signal there. A nonexistent ID is silently
+ * skipped here — that's Check A's job, not this one's, and double-reporting
+ * it would be noise.
+ *
+ * Heading citations with a nearby discharge/removal annotation (the same
+ * annotation-exemption mechanism Checks A and C use) are moved to a separate
+ * `annotatedFindings` bucket rather than treated as plain drift, per #2838:
+ * all six real-corpus detections were correctly-annotated historical references.
+ *
+ * For single-ID headings, a discharge annotation anywhere in the section
+ * counts as excusing the heading, since there's no ambiguity about which ID
+ * the annotation applies to (#2858). For multi-ID headings, the stricter
+ * `idSpecificAnnotationPresent` check (ID must be proximity-adjacent to the
+ * discharge word) still applies, to avoid a discharge for one ID wrongly
+ * excusing another.
+ *
+ * @returns {{ findings: string[], annotatedFindings: string[] }}
+ */
+export function checkCitationTitleDrift(text, filePath, registerRows) {
+  const findings = [];
+  const annotatedFindings = [];
+  const lines = deBold(stripFences(text)).split('\n');
+  for (const { lineIndex, ids, titleEcho } of extractHeadingTitleEchoes(text)) {
+    const proseTokens = titleDriftTokens(titleEcho);
+    for (const id of ids) {
+      const row = registerRows.get(id);
+      if (!row) continue;
+      const titleTokens = titleDriftTokens(row.title);
+      const { ratio, shared } = titleDriftScore(titleTokens, proseTokens);
+      if (ratio > TITLE_DRIFT_RATIO_THRESHOLD || shared >= TITLE_DRIFT_MIN_SHARED_TOKENS) continue;
+      const message =
+        `${filePath}:${lineIndex + 1} — heading cites ${id} — row's current title is ` +
+        `"${row.title}" but the heading text says "${titleEcho}" (similarity ${ratio.toFixed(2)}, ` +
+        `${shared} shared token(s) — review for drift)`;
+
+      const sectionText = enclosingSectionText(lines, lineIndex);
+
+      // For single-ID headings, use relaxed annotation check (discharge word
+      // anywhere in section, or next to this heading's ID). For multi-ID headings,
+      // require ID-proximity to avoid one ID's discharge excusing another's drift.
+      const isAnnotated = ids.length === 1
+        ? dischargeAnnotationPresentAnywhere(sectionText, id)
+        : idSpecificAnnotationPresent(sectionText, id);
+
+      if (isAnnotated) {
+        annotatedFindings.push(`${message} — annotated as discharged/removed, not flagged as drift`);
+      } else {
+        findings.push(message);
+      }
+    }
+  }
+  return { findings, annotatedFindings };
+}
+
 // --- CLI ------------------------------------------------------------------
 
 class CliExitError extends Error {
@@ -2068,6 +2356,8 @@ export function runCheckRegisterCitationsCli(options = {}) {
 
   const errorsA = [];
   const annotatedA = [];
+  const titleDriftD = [];
+  const annotatedTitleDriftD = [];
   const nonFrozenTexts = new Map();
   let unreadableCount = 0;
   for (const relPath of scannedFiles) {
@@ -2091,6 +2381,9 @@ export function runCheckRegisterCitationsCli(options = {}) {
     const found = checkNonexistentIds(text, relPath, rows);
     errorsA.push(...found.errors);
     annotatedA.push(...found.annotated);
+    const titleDriftResult = checkCitationTitleDrift(text, relPath, rows);
+    titleDriftD.push(...titleDriftResult.findings);
+    annotatedTitleDriftD.push(...titleDriftResult.annotatedFindings);
   }
 
   const errorsB = checkRunSheetLinkage(rows, (p) => readRepoFile(p));
@@ -2140,6 +2433,14 @@ export function runCheckRegisterCitationsCli(options = {}) {
       annotatedDischargeC,
     ],
     ['Run sheets mentioned but not classified as owned (not checked)', unclassifiedRunSheets],
+    [
+      'Check D — heading title drift vs. the row\'s current title (advisory, never fatal — see header comment)',
+      titleDriftD,
+    ],
+    [
+      'Check D — heading title drift, already annotated as discharged/removed (not flagged as drift)',
+      annotatedTitleDriftD,
+    ],
   ];
   if (strict) {
     nonFatalSections.push([

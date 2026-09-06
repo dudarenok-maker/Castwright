@@ -28,6 +28,7 @@ function isGitIgnored(filePath) {
   const result = spawnSync('git', ['check-ignore', '-q', '--no-index', filePath], {
     cwd: repoRoot,
     env: scrubGitEnv(),
+    windowsHide: true,
   });
   if (result.error || result.status === null) {
     throw new Error(

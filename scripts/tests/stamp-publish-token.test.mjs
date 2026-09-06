@@ -107,6 +107,7 @@ function runCli(args, cwd) {
       cwd,
       encoding: 'utf8',
       stdio: 'pipe',
+      windowsHide: true,
     });
     return { code: 0, stdout, stderr: '' };
   } catch (err) {

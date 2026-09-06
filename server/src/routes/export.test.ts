@@ -24,7 +24,7 @@ import { encodePcmToAudio } from '../tts/mp3.js';
 
 const ffmpegPresent = (() => {
   try {
-    return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
+    return spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true }).status === 0;
   } catch {
     return false;
   }
@@ -677,7 +677,7 @@ describeIfFfmpeg('captions export', () => {
     // The fixture's segments.json (this describe block's beforeAll) carries
     // no textHash — round-2-of-plan-review decision: that's surfaced as a
     // persisted job warning, not silently ignored.
-    expect(job.warning).toMatch(/couldn't fully verify/);
+    expect(job.warning).toMatch(/couldn\u0027t fully verify/);
   });
 
   it('does not revoke a sentence-mode export when a word-mode export of the same book completes', async () => {

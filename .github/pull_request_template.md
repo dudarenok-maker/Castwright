@@ -21,7 +21,7 @@ for a partial) — the keyword auto-closes the issue on merge.
 <!--
 Checklist of what was run / what reviewers should look at. Examples:
 
-- [ ] `npm run verify` (pre-push hook) — green
+- [ ] cloud `verify.yml` (required status check) — green
 - [ ] Manual walkthrough in mock mode: <steps>
 - [ ] Reviewer: spot-check <file>:<line> against the regression plan
 -->

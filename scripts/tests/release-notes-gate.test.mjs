@@ -57,6 +57,7 @@ function runGate(dir, args) {
   return spawnSync('node', [resolve(dir, 'scripts', 'release-notes-gate.mjs'), ...args], {
     cwd: dir,
     encoding: 'utf8',
+    windowsHide: true,
   });
 }
 
@@ -298,7 +299,7 @@ test('pasting the suggested marker and re-running still flags genuine corruption
   assert.match(res1.reason, /2 double-UTF-8-encoded mojibake span/);
 
   // Extract the suggested marker line from the failure message
-  const markerMatch = res1.reason.match(/<!-- release-notes-gate: allow "[^"]*" -->/);
+  const markerMatch = res1.reason.match(/<!-- release-notes-gate: allow \u0022[^\u0022]*\u0022 -->/);
   assert.ok(markerMatch, 'should find the suggested marker');
   const suggestedMarker = markerMatch[0];
 
@@ -328,10 +329,10 @@ test('no marker is suggested when the surrounding token would break the marker s
   const text = `He said "CAFÉ™" yesterday.`;
   const res = checkMojibake(text, 'test.md');
   assert.equal(res.ok, false);
-  assert.equal(/<!-- release-notes-gate: allow "[^"]*" -->/.test(res.reason), false, res.reason);
+  assert.equal(/<!-- release-notes-gate: allow \u0022[^\u0022]*\u0022 -->/.test(res.reason), false, res.reason);
   // The right reason: context exists, it just cannot be quoted.
   assert.match(res.reason, /sit inside a word carrying a double-quote/, res.reason);
-  assert.match(res.reason, /terminate the marker's own quoting/, res.reason);
+  assert.match(res.reason, /terminate the marker\u0027s own quoting/, res.reason);
   // And NOT the standalone sentence, which is false for this input.
   assert.equal(/no surrounding word to name/.test(res.reason), false, res.reason);
 });
@@ -347,7 +348,7 @@ test('a genuinely standalone span is told it has no surrounding word to name', (
     /stand alone between spaces, with no surrounding word to name/,
     res.reason,
   );
-  assert.equal(/terminate the marker's own quoting/.test(res.reason), false, res.reason);
+  assert.equal(/terminate the marker\u0027s own quoting/.test(res.reason), false, res.reason);
 });
 
 // #1982 round 2 - the third reason, and the one the whitespace guard CREATES.
@@ -364,7 +365,7 @@ test('no marker is suggested when the span itself straddles whitespace', () => {
   const res = checkMojibake(text, 'test.md');
   assert.equal(res.ok, false);
   // No marker line at all - and in particular not one the allowlist would drop.
-  assert.equal(/<!-- release-notes-gate: allow "[^"]*" -->/.test(res.reason), false, res.reason);
+  assert.equal(/<!-- release-notes-gate: allow \u0022[^\u0022]*\u0022 -->/.test(res.reason), false, res.reason);
   assert.match(res.reason, /straddle a whitespace character themselves/, res.reason);
 });
 
@@ -387,7 +388,7 @@ test('every marker line the gate prints is one its own allowlist accepts', () =>
   for (const body of samples) {
     const res = checkMojibake(body, 'test.md');
     if (res.ok) continue;
-    const m = /<!-- release-notes-gate: allow "([^"]*)" -->/.exec(res.reason);
+    const m = /<!-- release-notes-gate: allow \u0022([^\u0022]*)\u0022 -->/.exec(res.reason);
     if (!m) continue; // nothing offered is always a legal answer
     const pasted = `${m[0]}\n\n${body}`;
     const found = findMojibake(pasted).length;
@@ -416,7 +417,7 @@ test('replaying the suggested markers can never drive a corrupted file green', (
     'ðŸš€', // 4-byte 🚀
   ];
   let text = spans.map((s, n) => `- line ${n} has a ${s} in it\n`).join('');
-  const MARKER_RE = /<!-- release-notes-gate: allow "[^"]*" -->/;
+  const MARKER_RE = /<!-- release-notes-gate: allow \u0022[^\u0022]*\u0022 -->/;
   let rounds = 0;
   let res = checkMojibake(text, 'test.md');
   assert.match(res.reason, /6 double-UTF-8-encoded mojibake span\(s\)/);

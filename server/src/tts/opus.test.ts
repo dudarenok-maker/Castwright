@@ -15,7 +15,7 @@ import { encodePcmToAudio } from './mp3.js';
 
 const ffmpegPresent = (() => {
   try {
-    const result = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' });
+    const result = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
     return result.status === 0;
   } catch {
     return false;
@@ -54,7 +54,7 @@ function decodeOpusToPcmLength(buf: Buffer): Promise<number> {
         '1',
         'pipe:1',
       ],
-      { stdio: ['pipe', 'pipe', 'pipe'] },
+      { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
     );
     const chunks: Buffer[] = [];
     child.stdout.on('data', (c) => chunks.push(c));

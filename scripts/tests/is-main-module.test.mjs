@@ -160,7 +160,7 @@ test('probe.mjs invoked through a symlink/junction still resolves DIRECT (#2291)
   const linkDir = join(linkContainer, 'link');
   try {
     symlinkSync(root, linkDir, IS_WIN ? 'junction' : 'dir');
-    const r = spawnSync(process.execPath, [join(linkDir, 'scripts', 'probe.mjs')], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [join(linkDir, 'scripts', 'probe.mjs')], { encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.match(r.stdout, /^DIRECT/, `expected DIRECT through the link; got: ${JSON.stringify(r.stdout)}`);
   } finally {
@@ -183,7 +183,7 @@ test('probe.mjs invoked through a symlink/junction with --preserve-symlinks-main
     const r = spawnSync(
       process.execPath,
       ['--preserve-symlinks-main', join(linkDir, 'scripts', 'probe.mjs')],
-      { encoding: 'utf8' },
+      { encoding: 'utf8', windowsHide: true },
     );
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.match(r.stdout, /^DIRECT/, `expected DIRECT through the link; got: ${JSON.stringify(r.stdout)}`);
@@ -200,7 +200,7 @@ test('probe.mjs invoked with an unrelated script as argv[1] resolves NOT-DIRECT 
     // Import probe.mjs from a second, unrelated entry file so argv[1] names
     // that file rather than probe.mjs itself.
     writeFileSync(join(root, 'scripts', 'other-entry.mjs'), "import './probe.mjs';\n");
-    const r = spawnSync(process.execPath, [join(root, 'scripts', 'other-entry.mjs')], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [join(root, 'scripts', 'other-entry.mjs')], { encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, `stderr: ${r.stderr}`);
     assert.match(r.stdout, /^NOT-DIRECT/);
   } finally {

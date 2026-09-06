@@ -32,7 +32,7 @@ import { isAgent } from 'std-env';
    vitest.config.slow.ts's SLOW_FILES array. The slow config runs these
    files serially (maxForks=1) and the main config excludes them so we
    never double-run. */
-const SLOW_FILES_TO_EXCLUDE = [
+export const SLOW_FILES_TO_EXCLUDE = [
   'src/analyzer/gemini.test.ts',
   'src/routes/analysis-pipelining.test.ts',
   'src/routes/book-state.test.ts',
@@ -51,6 +51,9 @@ const SLOW_FILES_TO_EXCLUDE = [
   /* Integration route test: supertest against a live Express instance
      (venv bootstrap, offline-stubbed). Serialised (fs-21). */
   'src/routes/venv-bootstrap.route.test.ts',
+  /* mkdtempSync + five sequential dynamic imports in beforeAll; same
+     contention class as the other route e2e tests above (#2947). */
+  'src/routes/analysis.interim-prune-prohibition.e2e.test.ts',
 ];
 
 /* Contention throttle (plan 156). LOW_CONCURRENCY (set manually, or
@@ -195,7 +198,7 @@ export default defineConfig({
          slow-config-only diff selects zero tests from THIS suite — which is
          where force-rerun-triggers.test.ts lives, so the guard protecting the
          slow config could itself be reverted with CI green. (The slow config's
-         own trigger does fire, but it selects only the 10 slow files, and the
+         own trigger does fire, but it selects only the 11 slow files, and the
          guard is not one of them. Nothing creates a module-graph edge either:
          SLOW_FILES has no importers, and the guard reaches both configs via a
          runtime-computed dynamic import that vite cannot record as a dep.) */
