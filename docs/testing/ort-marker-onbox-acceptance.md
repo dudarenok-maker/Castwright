@@ -283,6 +283,24 @@ STILL OWED — partially run. Full evidence:
 > `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
 > (Castwright#2621).
 
+> **2026-09-06 (chain #2913 retry, Castwright#2916/#2914/#3015) — one datum
+> retired, Qwen3 install click-through still not run.** #2632's per-worktree
+> `LOCAL_TTS_PORT` fix genuinely closes the box-wide port-contention class
+> that made wave-4 step 5c's and wave-5's Kokoro-provider checks
+> UNREACHABLE above: this worktree's sidecar bound its own assigned `:9080`,
+> a real in-app Kokoro install + load ran against it, and `GET /health`'s
+> `devices.kokoro` (read from the live ONNX session's own providers, not
+> `get_available_providers()`) reported `"cuda"` — proof the isolated venv's
+> GPU runtime works end to end once a worktree can actually reach its own
+> sidecar. That retires the port-contention *reason* stated in §4.3 above,
+> but does not discharge this row: Qwen3-TTS was already installed from this
+> worktree's own bootstrap, so the Install action never rendered and no
+> fresh `pip install` ran — criterion 2 (a real Install click, watched for
+> `WinError 5`) remains genuinely untested. Full evidence:
+> `docs/testing/onbox-a29-results/step-1-retry.md`. Redo filed separately,
+> chain Castwright#2913 → #3020 → #3019. Run by: claude
+> (Castwright#2916/#2914).
+
 ---
 
 ## 5. Criterion 3 — self-heal on an existing box (DISCHARGED)
