@@ -101,6 +101,9 @@ export interface SidecarSupervisorOpts {
   /** Max ms to wait for the port to free after a graceful recycle before
       falling through to the hard-kill replace. Default 185_000 (180s drain + margin). */
   drainWaitMs?: number;
+  /** Max ms withSidecarHeld() waits for the killed child's exit event after
+      kill() resolves, before rolling the hold back. Default 30_000. */
+  heldExitWaitMs?: number;
 }
 
 export interface SidecarSupervisor {
@@ -138,6 +141,40 @@ export interface SidecarSupervisor {
       sidecar-health.ts). Safe to call when nothing is tripped/exhausted —
       resets an empty streak and respawns as normal. */
   resetAndRespawn: () => Promise<void>;
+  /** #2192 / #3039 — run `fn` with the sidecar held DOWN for a maintenance
+      window (a pip install into the live venv cannot replace a DLL the
+      sidecar has memory-mapped — WinError 5). Kills the current child with
+      auto-respawn suppressed, waits for its actual exit, holds the queue
+      (`recycling()` reads true throughout), runs `fn`, then ALWAYS brings the
+      sidecar back. Deliberately NOT `stop()`+`start()`: those own the
+      supervisor's permanent shutdown state, and a caller that failed between
+      them would leave the sidecar unrecoverable. The hold is a separate,
+      call-scoped flag, released synchronously in this call's own `finally`
+      BEFORE the respawn is attempted — so no outcome of `fn`, and no outcome
+      of the respawn, can leave it set. `fn`'s value/rejection passes through
+      unchanged; a failed respawn is logged and left to the supervisor's
+      normal recovery, never surfaced as `fn`'s failure.
+      Throws (before touching anything) when the sidecar is not ours to stop:
+      an adopted process (`onAdopt` watching), a code-43 hold-down, plain
+      exhaustion, a respawn already in flight, supervision stopped, or a hold
+      already in progress. When no child exists and none is wanted (autoStart
+      off) it runs `fn` under the queue hold and respawns per settings after. */
+  withSidecarHeld: <T>(fn: () => Promise<T>) => Promise<T>;
+}
+
+const DEFAULT_HELD_EXIT_WAIT_MS = 30_000;
+
+/** Resolve true once `p` settles, false if `ms` elapses first. A real timer,
+    not the injectable delayFn: the test seam's instant delay would turn this
+    safety net into a guaranteed timeout. */
+function settledWithin(p: Promise<void>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    void p.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 /* Module-level registry so the POST /api/sidecar/restart route can reach the
@@ -210,9 +247,22 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     adoptedHealthPollMs = DEFAULT_ADOPTED_HEALTH_POLL_MS,
     recycleSidecarFn = defaultRecycleSidecar,
     drainWaitMs = DEFAULT_DRAIN_WAIT_MS,
+    heldExitWaitMs = DEFAULT_HELD_EXIT_WAIT_MS,
   } = opts;
 
   let stopped = false;
+  /* True only inside withSidecarHeld(): the child is down ON PURPOSE and must
+     not be respawned by onChildExit / a pending retry / resetAndRespawn until
+     the hold's own finally releases it. Never set anywhere else, and never
+     survives the call that set it (see withSidecarHeld). */
+  let held = false;
+  /* Resolver for the held child's exit event. kill() settles when taskkill /
+     SIGTERM has been SENT, not when the child has gone — the hold waits on
+     this so `fn` never starts with the process (and its DLLs) still alive,
+     and so the exit is consumed BEFORE the resume spawns a new child (a late
+     exit landing afterwards would null the NEW handle and schedule a
+     duplicate respawn). */
+  let heldExitResolve: (() => void) | null = null;
   let handle: SidecarHandle | null = null;
   let consecutiveFailures = 0;
   let lastSpawnAt = 0;
@@ -286,7 +336,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
   }
 
   async function spawnOnce(expectedOwnedPid: number | null = null): Promise<void> {
-    if (stopped) return;
+    if (stopped || held) return;
     const base = await buildOpts();
     /* spawnSidecar returns null for six distinct reasons. Two are BENIGN
        no-spawns: autoStart===false, and an already-listening HEALTHY sidecar
@@ -448,6 +498,15 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
        see spawnOnce/scheduleRespawnAttempt). */
     const exitedPid = handle?.pid ?? null;
     if (stopped) return; // we killed it on purpose (shutdown) — don't resurrect.
+    if (held) {
+      /* withSidecarHeld() killed it on purpose: consume the exit, keep the
+         queue held, and let the hold's own finally bring the sidecar back. */
+      handle = null;
+      isRecycling = true;
+      heldExitResolve?.();
+      heldExitResolve = null;
+      return;
+    }
     if (restart43Trip !== null) {
       // Already tripped — hold TTS down. Ignore any further exit (nothing
       // should be running to exit, but a belt-and-suspenders guard here means
@@ -497,6 +556,88 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     return spawnOnce();
   }
 
+  async function withSidecarHeld<T>(fn: () => Promise<T>): Promise<T> {
+    /* Every refusal is decided synchronously, before any state moves, so a
+       refused call leaves the supervisor exactly as it found it. */
+    if (held) {
+      throw new Error('The voice engine is already held for another maintenance task — wait for it to finish, then retry.');
+    }
+    if (stopped) throw new Error('The server is shutting down; the voice engine cannot be held.');
+    if (restart43Trip !== null) {
+      throw new Error(
+        'The voice engine is held down after repeated crash-loop exits (code-43 streak) — ' +
+          'fix the device assignment and restart the server before installing.',
+      );
+    }
+    if (consecutiveFailures > maxConsecutiveFailures) {
+      throw new Error(
+        'The voice engine gave up restarting after repeated failures — ' +
+          'use "Restart sidecar" (or restart the server) before installing.',
+      );
+    }
+    /* adoptedWatching is the ONLY state that means "a sidecar is running that
+       we did not spawn": current() is null for it AND for the autoStart-off
+       and mid-respawn states, and recycling() is false for it AND for
+       autoStart-off — neither accessor can tell them apart on its own. */
+    if (adoptedWatching) {
+      throw new Error(
+        'The voice engine on this port was started outside Castwright, so it cannot be ' +
+          'stopped for the install. Stop that process yourself, then retry.',
+      );
+    }
+    if (handle === null && isRecycling) {
+      throw new Error('The voice engine is still starting or restarting — wait a moment, then retry.');
+    }
+
+    held = true;
+    isRecycling = true; // queue holds from here — before the kill, never after it.
+    const h = handle;
+    handle = null;
+    if (h) {
+      /* Arm the exit resolver BEFORE kill(): the exit can land while kill()
+         is still being awaited. */
+      const exited = new Promise<void>((r) => {
+        heldExitResolve = r;
+      });
+      try {
+        await h.kill();
+      } catch (err) {
+        /* killTree never rejects today; if a future one does, the exit wait
+           below is still the authority on whether the child is gone. */
+        warn(`[sidecar] supervisor: kill during the maintenance hold threw (${(err as Error).message}).`);
+      }
+      if (!(await settledWithin(exited, heldExitWaitMs))) {
+        /* Roll back: the child is still alive and still ours. Restoring the
+           handle puts every normal path (restart route, onChildExit) back in
+           charge of it; nothing was installed, so nothing to undo. */
+        held = false;
+        heldExitResolve = null;
+        handle = h;
+        isRecycling = false;
+        throw new Error(
+          `The voice engine did not stop within ${Math.round(heldExitWaitMs / 1000)}s — ` +
+            'it is still running. Retry in a moment.',
+        );
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      /* Release FIRST, synchronously — the respawn below is the one thing here
+         that can still fail, and it must not be able to leave the hold set. */
+      held = false;
+      heldExitResolve = null;
+      try {
+        await spawnOnce();
+      } catch (err) {
+        warn(
+          `[sidecar] supervisor: respawn after the maintenance hold failed (${(err as Error).message}) — ` +
+            'use POST /api/sidecar/restart to bring the sidecar back.',
+        );
+      }
+    }
+  }
+
   return {
     async start() {
       stopped = false;
@@ -505,9 +646,6 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     },
     async stop() {
       stopped = true;
-      isRecycling = true; /* Signal to the queue dispatcher that no sidecar is
-                             currently ready. This must be set BEFORE kill()
-                             so the queue pauses immediately. */
       const h = handle;
       handle = null;
       await h?.kill();
@@ -525,5 +663,6 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
       return consecutiveFailures > maxConsecutiveFailures;
     },
     resetAndRespawn,
+    withSidecarHeld,
   };
 }

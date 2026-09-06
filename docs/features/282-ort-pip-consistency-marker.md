@@ -317,7 +317,16 @@ therefore a shell + log walkthrough, not a browser one:
 5. **Re-boot the server.** Expect no `[ort-marker] recorded …` line the second time —
    `ensureOrtMarker` is idempotent (`noop`).
 6. **Install Qwen3 or Whisper from the app UI (or re-run bootstrap/upgrade).** Expect
-   no `WinError 5`, and `pip check` to stay green afterward.
+   no `WinError 5`, and `pip check` to stay green afterward. For the in-app **Qwen3**
+   install specifically, this no longer depends on the marker being present: since
+   #3039 (register row A29's real finding) `server/src/tts/qwen-install-bootstrap.ts`
+   runs the installer inside the supervisor's `withSidecarHeld` hold — the sidecar is
+   down for the duration, so pip can replace the DLL in any venv state — and then
+   `server/src/tts/ort-restore.ts` re-runs this file's swap (same delete-first /
+   delete-on-failure / write-last marker invariant) for the venv's stamped profile
+   before the sidecar comes back. Expect the server log to show
+   `[qwen-install] onnxruntime after install: already-in-place` on a healthy marked
+   venv, or `swapped` on one the installer had clobbered.
 
 ## Out of scope
 

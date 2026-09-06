@@ -472,6 +472,22 @@ function killTree(pid: number, spawnFn: typeof spawn, ownGroup = false): Promise
   });
 }
 
+/** The accelerator profile the sidecar RUNS with for the venv at `venvDir`:
+    the venv stamp's profile (what the venv was built for), overridable by
+    ACCELERATOR, defaulting to cpu when neither exists (a no-GPU / un-stamped
+    box). No hardware probe — that belongs to the install/upgrade path
+    (`resolveInstallProfile`), not to "what is this venv already". Shared by
+    buildSidecarEnv (below) and the in-app Qwen installer's post-install ORT
+    restore (tts/qwen-install-bootstrap.ts), so the runtime the installer
+    puts back is exactly the one the respawned sidecar will be told to use. */
+export function resolveVenvRuntimeProfile(venvDir: string): string {
+  return resolveProfile({
+    envOverride: process.env.ACCELERATOR ?? null,
+    wizardChoice: readStamp(venvDir)?.profile ?? null, // stamp = the installed profile
+    detected: 'cpu',
+  });
+}
+
 /** Options for {@link buildSidecarEnv}. Mirrors the subset of
     {@link SpawnSidecarOpts} that the env construction actually needs,
     separated so callers and tests can invoke it without an `autoStart`
@@ -587,11 +603,7 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
      cpu + ['CPUExecutionProvider'] (today's auto-detect-safe behaviour). */
   const venvDir =
     process.env.SIDECAR_VENV_DIR ?? join(repoRoot, 'server', 'tts-sidecar', '.venv');
-  const profile = resolveProfile({
-    envOverride: process.env.ACCELERATOR ?? null,
-    wizardChoice: readStamp(venvDir)?.profile ?? null, // stamp = the installed profile
-    detected: 'cpu',
-  });
+  const profile = resolveVenvRuntimeProfile(venvDir);
   env.CASTWRIGHT_ACCELERATOR_PROFILE = profile;
   env.KOKORO_ORT_PROVIDERS = JSON.stringify(ortProviders(profile, process.platform));
 

@@ -11,95 +11,35 @@
  *     total — the multi-GB HF download has no single content-length).
  *   - `detect()` is the filesystem install-state probe (package in the sidecar
  *     venv + Base weights in the HF cache), NOT a PATH check.
+ *   - #2192 / #3039: the install runs with the sidecar HELD DOWN. pip cannot
+ *     replace a DLL a live process has memory-mapped (WinError 5 on
+ *     onnxruntime_providers_shared.dll — reproduced on real hardware in
+ *     docs/testing/onbox-a29-results/step-2-genuine-install.md), and the
+ *     sidecar imports onnxruntime at boot. The hold is the supervisor's own
+ *     scoped primitive (`withSidecarHeld`), which suppresses auto-respawn,
+ *     holds the queue, and always brings the sidecar back — this file never
+ *     touches `stop()`/`start()`. After the installer lands, the venv's ONNX
+ *     runtime is restored for the profile the sidecar runs with (ort-restore.ts),
+ *     still inside the hold, because that swap replaces the same DLLs.
  *
  * State machine:
  *   idle → detecting → installing → installed
  *                          └─ error ↗
  *
- * Dependency-injectable (`spawnFn`, `detectFn`) so the route's vitest harness
- * runs the whole machine offline with no real pip/download.
+ * Dependency-injectable (`spawnFn`, `detectFn`, `holdSidecarFn`,
+ * `restoreOrtFn`, `generationActiveFn`) so the route's vitest harness runs the
+ * whole machine offline with no real pip/download/sidecar.
  */
 
-import { spawn as realSpawn, type ChildProcess, spawnSync } from 'node:child_process';
-import { join, resolve } from 'node:path';
-import {
-  detectQwenInstallStateOnDisk,
-} from './qwen-install-detect.js';
+import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
+import { join } from 'node:path';
+import { detectQwenInstallStateOnDisk } from './qwen-install-detect.js';
 import { getActiveSupervisor } from './sidecar-supervisor.js';
+import { resolveVenvRuntimeProfile } from './spawn-sidecar.js';
+import { restoreOrtRuntime, type OrtRestoreOutcome } from './ort-restore.js';
 import { isAnyGenerationActive } from '../gpu/active-generation-gate.js';
-import type { QwenInstallState } from '../workspace/user-settings.js';
 import { resolveSidecarVenvDir } from '../diagnostics/venv.js';
-// @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
-import { planOrtSwap, applyOrtMarkerWrite } from '../../tts-sidecar/scripts/install-ort.mjs';
-
-/* #3039 — stop the supervised sidecar before running pip, restart it after.
-   `install-qwen3.mjs` runs `pip install qwen-tts`, which pulls a fresh
-   `onnxruntime` wheel as a transitive dependency; the live sidecar has that
-   package's DLL memory-mapped (`onnxruntime_providers_shared.dll` on
-   Windows), so pip's DLL replace fails with WinError 5 / Access is denied
-   whenever the sidecar is still running. Stopping supervision first (not
-   just killing the child — must also suppress auto-respawn) frees
-   the lock for the identical `pip` command that already works once the
-   sidecar is down (confirmed by the manual A/B in
-   docs/testing/onbox-a29-results/step-2-genuine-install.md).
-
-   Four critical pieces:
-   1. Stop must suppress the queue dispatcher so in-flight renders don't drain
-      into the stopped sidecar. This is the supervisor's `recycling()` flag.
-   2. The pip install pulls a fresh, plain CPU `onnxruntime` (since install-
-      qwen3.mjs never invokes install-ort.mjs). On a GPU box this silently
-      clobbers the GPU runtime. After install, re-run the ORT swap to restore it.
-   3. Stop must detect and reject a genuinely adopted sidecar, but not fail on
-      "not yet started" cases (autoStart off, or still booting).
-   4. Restart must respect the code-43 hold-down state, not clear it.
-
-   Finally is unconditional (success or failure) so a failed install never
-   leaves TTS down, BUT a throwing stop/start must be guarded against masking
-   the original install error and leaving the supervisor stranded. */
-async function defaultStopSidecar(): Promise<void> {
-  const supervisor = getActiveSupervisor();
-  if (!supervisor) return; // no autoStart or not yet booted — nothing to stop.
-
-  /* Distinguish genuinely adopted (recycling=false, current=null, meaning a
-     healthy sidecar is already running that we didn't spawn) from "not yet
-     started" (current=null but recycling=true or no spawn was needed). The
-     adopted case cannot be stopped via the supervisor — we don't own it. */
-  const isAdopted = supervisor.current() === null && !supervisor.recycling();
-  if (isAdopted) {
-    throw new Error(
-      'Cannot stop an externally-managed sidecar (handle is null). ' +
-      'Install Qwen3-TTS with the sidecar stopped externally first, ' +
-      'then restart it manually.',
-    );
-  }
-  /* Set isRecycling before killing so the queue dispatcher pauses immediately.
-     For non-adopted cases, current() === null is benign (not started yet) and
-     stop() is a no-op on the handle side. For an owned child, stop() kills it. */
-  await supervisor.stop();
-}
-
-async function defaultStartSidecar(): Promise<void> {
-  const supervisor = getActiveSupervisor();
-  if (!supervisor) return; // no autoStart or not yet booted — nothing to start.
-
-  /* Respect both hold-down states: code-43 trips and plain exhaustion.
-     Both are deliberate give-up conditions that auto-respawn should not clear. */
-  if (supervisor.tripEvent() !== null) {
-    throw new Error(
-      'Sidecar is held down due to repeated code-43 exits ' +
-      '(device assignment too small). ' +
-      'Restart the server with a corrected device assignment to recover.',
-    );
-  }
-  if (supervisor.exhaustedEvent()) {
-    throw new Error(
-      'Sidecar gave up respawning after repeated rapid failures. ' +
-      'Restart the server to reset the backoff counter and try again.',
-    );
-  }
-
-  await supervisor.start();
-}
+import type { QwenInstallState } from '../workspace/user-settings.js';
 
 /* #3039 — pull the actionable line(s) out of the installer's stderr tail.
    pip prints its own routine "[notice] A new release of pip is available…"
@@ -114,51 +54,6 @@ function extractInstallErrorDetail(stderrTail: string): string {
     .split(/[\r\n]+/)
     .filter((line) => line.length > 0 && !/^\[notice\]/i.test(line.trim()));
   return lines.slice(-5).join(' ').trim();
-}
-
-/* #3039 — apply the onnxruntime-gpu swap after qwen install, restoring the GPU
-   runtime if pip clobbered it with the plain CPU build. Pure fs call path if the
-   venv is not present (benign no-op); throws on any pip error. Returns the plan
-   action ('skip' or 'swap') so the caller can log it. */
-async function applyOrtSwapAfterQwenInstall(
-  venvDir: string,
-  repoRoot: string,
-): Promise<'skip' | 'swap'> {
-  // Resolve the accelerator profile (env override, or detect from hardware)
-  const profile = process.env.CASTWRIGHT_ACCELERATOR_PROFILE || 'nvidia'; // default to nvidia for production
-  const platform = process.platform as 'win32' | 'linux' | 'darwin';
-
-  // Get the plan: whether to skip or swap, and which steps to run
-  const plan = planOrtSwap(profile, platform);
-  if (plan.action === 'skip') {
-    return 'skip';
-  }
-
-  // A swap plan: run the pip steps to put the GPU runtime in place
-  const pythonExe = resolve(
-    venvDir,
-    platform === 'win32' ? 'Scripts' : 'bin',
-    platform === 'win32' ? 'python.exe' : 'python',
-  );
-
-  for (const step of plan.steps) {
-    const result = spawnSync(pythonExe, ['-m', 'pip', ...step], {
-      cwd: repoRoot,
-      windowsHide: true,
-    });
-    if (result.status !== 0) {
-      const stderr = result.stderr?.toString('utf8') ?? '';
-      const stdout = result.stdout?.toString('utf8') ?? '';
-      throw new Error(
-        `ORT swap pip step failed (${step[0]}): ${stderr || stdout || result.error?.message || 'unknown error'}`,
-      );
-    }
-  }
-
-  // Marker: record which package now owns the onnxruntime namespace
-  applyOrtMarkerWrite(venvDir, plan);
-
-  return 'swap';
 }
 
 export type QwenInstallJobStatus = 'detecting' | 'installing' | 'installed' | 'error';
@@ -180,14 +75,10 @@ export type QwenSpawnFn = (
   opts?: { cwd?: string; windowsHide?: boolean },
 ) => ChildProcess;
 
-export type QwenOrtSwapFn = (
-  venvDir: string,
-  repoRoot: string,
-) => Promise<'skip' | 'swap'>;
-
 export interface QwenInstallOptions {
   /** Repo root — used to locate install-qwen3.mjs and to probe the venv. */
   repoRoot: string;
+  /** Spawns BOTH the installer script and the post-install pip steps. */
   spawnFn?: QwenSpawnFn;
   /** Stubbable install-state probe (offline tests). Defaults to the on-disk
       detector against repoRoot. */
@@ -196,14 +87,18 @@ export interface QwenInstallOptions {
       install (Base + VoiceDesign) is the default — bespoke voices need the
       VoiceDesign model, so we do NOT pass --skip-design. */
   installArgs?: readonly string[];
-  /** Stubbable sidecar stop/start hooks (offline tests). Default to the real
-      supervisor via getActiveSupervisor() — see the #3039 comment above. */
-  stopSidecarFn?: () => Promise<void>;
-  startSidecarFn?: () => Promise<void>;
-  /** Stubbable ORT swap (pip re-install of GPU onnxruntime after qwen install).
-      Defaults to applyOrtSwapAfterQwenInstall (real pip execution). Tests can
-      inject a no-op. */
-  ortSwapFn?: QwenOrtSwapFn;
+  /** Runs `fn` with the sidecar held down. Defaults to the active
+      supervisor's withSidecarHeld (a plain pass-through when no supervisor
+      is registered — the server has not finished booting, so nothing holds
+      the venv's DLLs). */
+  holdSidecarFn?: <T>(fn: () => Promise<T>) => Promise<T>;
+  /** Restores the venv's ONNX runtime after the installer. Defaults to
+      ort-restore.ts against the sidecar venv, running pip through spawnFn. */
+  restoreOrtFn?: () => Promise<OrtRestoreOutcome>;
+  /** "Is a render in flight" — holding the sidecar would kill it. Defaults
+      to the gpu leaf gate, which fails CLOSED when routes/generation.ts has
+      not registered its accessor (always registered in the real server). */
+  generationActiveFn?: () => boolean;
 }
 
 export class QwenInstallBootstrap {
@@ -215,18 +110,18 @@ export class QwenInstallBootstrap {
   private readonly spawnFn: QwenSpawnFn;
   private readonly detectFn: () => QwenInstallState | Promise<QwenInstallState>;
   private readonly installArgs: readonly string[];
-  private readonly stopSidecarFn: () => Promise<void>;
-  private readonly startSidecarFn: () => Promise<void>;
-  private readonly ortSwapFn: QwenOrtSwapFn;
+  private readonly holdSidecarFn: <T>(fn: () => Promise<T>) => Promise<T>;
+  private readonly restoreOrtFn: () => Promise<OrtRestoreOutcome>;
+  private readonly generationActiveFn: () => boolean;
 
   constructor(opts: QwenInstallOptions) {
     this.repoRoot = opts.repoRoot;
     this.spawnFn = opts.spawnFn ?? (realSpawn as unknown as QwenSpawnFn);
     this.detectFn = opts.detectFn ?? (() => detectQwenInstallStateOnDisk(this.repoRoot));
     this.installArgs = opts.installArgs ?? [];
-    this.stopSidecarFn = opts.stopSidecarFn ?? defaultStopSidecar;
-    this.startSidecarFn = opts.startSidecarFn ?? defaultStartSidecar;
-    this.ortSwapFn = opts.ortSwapFn ?? applyOrtSwapAfterQwenInstall;
+    this.holdSidecarFn = opts.holdSidecarFn ?? defaultHoldSidecar;
+    this.restoreOrtFn = opts.restoreOrtFn ?? (() => this.restoreOrtInSidecarVenv());
+    this.generationActiveFn = opts.generationActiveFn ?? isAnyGenerationActive;
   }
 
   /** Probe install-state without kicking off a job. Used by GET /detect. */
@@ -279,84 +174,51 @@ export class QwenInstallBootstrap {
       return;
     }
 
-    /* Check whether a render is in-flight, but only if we have an active
-       supervisor (there's something to stop). If no supervisor, the sidecar
-       is already down or we're in a test. */
-    const supervisor = getActiveSupervisor();
-    if (supervisor && isAnyGenerationActive()) {
+    /* Holding the sidecar kills whatever it is rendering. Refuse up front
+       rather than let the hold silently abort a chapter. */
+    if (this.generationActiveFn()) {
       throw new Error(
-        'Cannot install while a chapter is being generated. ' +
-        'Wait for the generation to finish, then try again.',
+        'Cannot install while a chapter is being generated. Wait for the generation to finish, then try again.',
       );
     }
 
-    /* #3039 — stop the supervised sidecar before pip runs. This requires four
-       pieces: (1) suppress the queue dispatcher via the recycling() flag;
-       (2) actually run the ORT swap steps to restore the GPU onnxruntime after
-       pip installs the plain CPU build; (3) detect and reject the genuinely
-       adopted-sidecar case, but allow "not yet started" paths; (4) respect
-       code-43 and exhaustion hold-downs on restart. Exception handling: stop/
-       install/restart can all throw. Capture errors separately so a successful
-       install is not masked by a restart failure, and a throwing stop doesn't
-       prevent the finally block restart. */
-    this.transition(job, 'installing', { step: 'Stopping the sidecar…' });
-    let stopError: Error | null = null;
-    let restartError: Error | null = null;
-    let installError: Error | null = null;
-
-    try {
-      await this.stopSidecarFn();
-    } catch (err) {
-      stopError = err instanceof Error ? err : new Error(String(err));
-    }
-
-    if (!stopError) {
+    this.transition(job, 'installing', { step: 'Stopping the voice engine so the installer can update its files…' });
+    /* An installer failure propagates out of the hold (the hold still
+       releases and respawns) and lands as the job's error via start()'s
+       catch. An ORT-restore failure is RETURNED, not thrown: the installer
+       had succeeded by then and the job must say so — thrown, it would read
+       as a failed Qwen install, the misreport the split exists to prevent. */
+    const ort = await this.holdSidecarFn<{ outcome: OrtRestoreOutcome } | { failure: Error }>(async () => {
+      this.update(job, { step: 'Starting installer…' });
+      await this.spawnInstaller(job);
+      /* Still inside the hold: the swap replaces the DLLs the sidecar maps. */
+      this.update(job, { step: 'Checking the ONNX runtime the voice engine needs…' });
       try {
-        this.update(job, { step: 'Starting installer…' });
-        await this.spawnInstaller(job);
-
-        /* Pip installed successfully. The pip call pulled a fresh, plain CPU
-           `onnxruntime` (install-qwen3.mjs never invokes install-ort.mjs, and
-           base.txt has no pin). On a GPU box this silently clobbers the GPU
-           runtime. Run the actual ORT swap steps to restore it. */
-        this.update(job, { step: 'Verifying GPU runtime…' });
-        const venvDir = resolveSidecarVenvDir(this.repoRoot);
-        const action = await this.ortSwapFn(venvDir, this.repoRoot);
-        console.log(`[qwen-install] ORT swap result: ${action}`);
+        return { outcome: await this.restoreOrtFn() };
       } catch (err) {
-        installError = err instanceof Error ? err : new Error(String(err));
+        return { failure: err instanceof Error ? err : new Error(String(err)) };
       }
+    });
+    /* The hold has released here and the supervisor has already attempted
+       its respawn (a failed respawn is the supervisor's to report — it is
+       not an install outcome). */
+    if ('failure' in ort) {
+      this.transition(job, 'error', {
+        error:
+          `Qwen3-TTS installed, but restoring the GPU ONNX runtime afterwards failed: ${ort.failure.message} ` +
+          'Kokoro may run on the CPU until it is repaired — with the app closed, run ' +
+          'server/tts-sidecar/scripts/install-ort.mjs against the sidecar venv python.',
+      });
+      return;
     }
-
-    // Always restart the sidecar, even if stop or install failed, so TTS isn't
-    // left down. Capture restart error separately so it doesn't mask the install
-    // outcome — a successful install with a restart problem reports as installed
-    // (with a warning logged), not as a failure.
-    this.update(job, { step: 'Restarting the sidecar…' });
-    try {
-      await this.startSidecarFn();
-    } catch (err) {
-      restartError = err instanceof Error ? err : new Error(String(err));
-      const msg = (err instanceof Error ? err.message : String(err));
-      console.error(`[qwen-install] sidecar restart failed: ${msg}`);
-    }
-
-    // Report the stop error if present (stop failure prevents install from running).
-    if (stopError) throw stopError;
-    // Report the install error if present (install failure means no progress).
-    if (installError) throw installError;
+    console.log(`[qwen-install] onnxruntime after install: ${ort.outcome}`);
 
     /* Re-probe: the script exited 0, confirm the package + weights actually
        landed. A 0-exit with weights still missing is surfaced as an error so
-       the UI doesn't claim success on a partial install. Restart error is
-       reported as a log warning but does not block a successful install. */
+       the UI doesn't claim success on a partial install. */
     const after = await this.detectFn();
     if (after === 'ready' || after === 'loaded') {
       this.transition(job, 'installed', { step: 'Done. Qwen3-TTS installed.' });
-      // Log restart error as a secondary warning, not a failure
-      if (restartError) {
-        console.warn(`[qwen-install] installed successfully but restart had an issue: ${restartError.message}`);
-      }
     } else {
       this.transition(job, 'error', {
         error:
@@ -364,12 +226,6 @@ export class QwenInstallBootstrap {
             ? 'Installer finished but the Base weights are still missing — the download may have been interrupted. Retry (downloads resume).'
             : 'Installer finished but qwen-tts is still not importable in the sidecar venv. Check the sidecar venv bootstrap.',
       });
-    }
-
-    // If we got here without throwing, but restart failed, throw it now after
-    // recording the install success. This ensures the UI at least sees the install succeeded.
-    if (restartError && (after !== 'ready' && after !== 'loaded')) {
-      throw restartError;
     }
   }
 
@@ -387,28 +243,59 @@ export class QwenInstallBootstrap {
 
   private spawnInstaller(job: QwenInstallJob): Promise<void> {
     const script = join(this.repoRoot, 'server', 'tts-sidecar', 'scripts', 'install-qwen3.mjs');
+    return this.runChild('node', [script, ...this.installArgs], {
+      onStdoutLine: (line) => {
+        const m = line.match(/\[install-qwen3\]\s*(.+)/);
+        if (m) this.update(job, { step: m[1].trim() });
+      },
+      failure: (code, detail) => `install-qwen3.mjs exited with code ${code}.${detail ? ` ${detail}` : ''}`,
+    });
+  }
+
+  /** Default restoreOrtFn: the sidecar venv, the profile the sidecar will
+      run with, pip through the same async spawn seam as the installer. */
+  private restoreOrtInSidecarVenv(): Promise<OrtRestoreOutcome> {
+    const venvDir = resolveSidecarVenvDir(this.repoRoot);
+    const python =
+      process.platform === 'win32'
+        ? join(venvDir, 'Scripts', 'python.exe')
+        : join(venvDir, 'bin', 'python');
+    return restoreOrtRuntime({
+      venvDir,
+      profile: resolveVenvRuntimeProfile(venvDir),
+      platform: process.platform,
+      runPip: (args) =>
+        this.runChild(python, ['-m', 'pip', ...args], {
+          failure: (code, detail) => `pip ${args.join(' ')} exited with code ${code}.${detail ? ` ${detail}` : ''}`,
+        }),
+      log: (m) => console.log(`[qwen-install] ${m}`),
+    });
+  }
+
+  /** Spawn + await one child through spawnFn. Never blocks the event loop —
+      the installer and the pip swap both run for minutes. Resolves on exit 0;
+      rejects with `failure(code, stderrDetail)` otherwise. */
+  private runChild(
+    cmd: string,
+    args: readonly string[],
+    hooks: { onStdoutLine?: (line: string) => void; failure: (code: number | null, detail: string) => string },
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
       let proc: ChildProcess;
       try {
-        /* Piped stdio (NOT inherit) so we can read the script's
-           `[install-qwen3]` step lines and surface the latest to the UI. The
-           script writes via process.stdout.write, so piping captures it. */
-        proc = this.spawnFn('node', [script, ...this.installArgs], {
-          cwd: this.repoRoot,
-          windowsHide: true,
-        });
+        /* Piped stdio (NOT inherit) so the installer's `[install-qwen3]`
+           step lines and pip's stderr can be read. */
+        proc = this.spawnFn(cmd, args, { cwd: this.repoRoot, windowsHide: true });
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)));
         return;
       }
       let stderrTail = '';
-      const onStdout = (b: Buffer): void => {
-        for (const line of b.toString('utf8').split('\n')) {
-          const m = line.match(/\[install-qwen3\]\s*(.+)/);
-          if (m) this.update(job, { step: m[1].trim() });
-        }
-      };
-      const onStderr = (b: Buffer): void => {
+      proc.stdout?.on('data', (b: Buffer) => {
+        if (!hooks.onStdoutLine) return;
+        for (const line of b.toString('utf8').split('\n')) hooks.onStdoutLine(line);
+      });
+      proc.stderr?.on('data', (b: Buffer) => {
         /* Keep only the tail — a pip/HF failure dump can be huge; the last
            few lines carry the actionable error. #3039: widened from 2000 to
            4000 chars so a real error isn't pushed entirely out of the window
@@ -416,21 +303,11 @@ export class QwenInstallBootstrap {
            extractInstallErrorDetail, which then filters those notice lines
            back out. */
         stderrTail = (stderrTail + b.toString('utf8')).slice(-4000);
-      };
-      proc.stdout?.on('data', onStdout);
-      proc.stderr?.on('data', onStderr);
+      });
       proc.on('error', (err) => reject(err));
       proc.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          const detail = extractInstallErrorDetail(stderrTail);
-          reject(
-            new Error(
-              `install-qwen3.mjs exited with code ${code}.${detail ? ` ${detail}` : ''}`,
-            ),
-          );
-        }
+        if (code === 0) resolve();
+        else reject(new Error(hooks.failure(code, extractInstallErrorDetail(stderrTail))));
       });
     });
   }
@@ -456,4 +333,10 @@ export class QwenInstallBootstrap {
     this.active = null;
     this.nextId = 1;
   }
+}
+
+/** Default holdSidecarFn — see QwenInstallOptions.holdSidecarFn. */
+function defaultHoldSidecar<T>(fn: () => Promise<T>): Promise<T> {
+  const supervisor = getActiveSupervisor();
+  return supervisor ? supervisor.withSidecarHeld(fn) : fn();
 }

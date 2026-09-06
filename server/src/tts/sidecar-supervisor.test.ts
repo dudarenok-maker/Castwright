@@ -1167,6 +1167,7 @@ describe('forceSidecarRecycle', () => {
       tripEvent: () => null,
       exhaustedEvent: () => false,
       resetAndRespawn: vi.fn(async () => {}),
+      withSidecarHeld: vi.fn(async (fn) => fn()),
       ...overrides,
     };
   }
@@ -1229,5 +1230,271 @@ describe('forceSidecarRecycle', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('chapter 7 stalled 720s during synthesis'),
     );
+  });
+});
+
+/* ── withSidecarHeld() — the maintenance hold (#2192 / #3039) ──────────────
+ *
+ * The in-app Qwen installer runs pip into the venv the sidecar is running out
+ * of; pip cannot replace a DLL the sidecar has mapped (WinError 5). The hold
+ * kills the child with respawn suppressed, holds the queue, runs the caller's
+ * work, and ALWAYS brings the sidecar back — through its own scoped flag,
+ * never stop()/start(), so no failure inside it can leave supervision
+ * permanently off. These tests use a spawn double whose kill() fires the exit
+ * event on the next tick, the way taskkill → child 'exit' really lands. */
+describe('withSidecarHeld (#2192 / #3039)', () => {
+  afterEach(() => registerActiveSupervisor(null));
+
+  function buildHeld(overrides: Partial<SidecarSupervisorOpts> & { exitOnKill?: boolean } = {}) {
+    const { exitOnKill = true, ...rest } = overrides;
+    const handles: ReturnType<typeof makeHandle>[] = [];
+    let onExit: SpawnSidecarOpts['onExit'];
+    const spawnFn = vi.fn(async (opts: SpawnSidecarOpts): Promise<SidecarHandle | null> => {
+      onExit = opts.onExit;
+      const h = makeHandle();
+      h.kill.mockImplementation(async () => {
+        if (exitOnKill) setTimeout(() => onExit?.(null, 'SIGTERM'), 0);
+      });
+      handles.push(h);
+      return h as SidecarHandle;
+    });
+    const warn = vi.fn();
+    const sup = createSidecarSupervisor({
+      buildOpts: async () => BASE_OPTS,
+      spawnFn,
+      delayFn: async () => {},
+      nowFn: () => 0,
+      warn,
+      log: vi.fn(),
+      backoffsMs: [1],
+      maxConsecutiveFailures: 3,
+      heldExitWaitMs: 2_000,
+      ...rest,
+    });
+    return { sup, spawnFn, handles, warn, exit: (code: number | null) => onExit?.(code, null) };
+  }
+
+  it('[HEADLINE] kills the child, holds the queue for the whole of fn, returns fn\'s value, then respawns', async () => {
+    const { sup, spawnFn, handles } = buildHeld();
+    await sup.start();
+    const seen: boolean[] = [];
+    const result = await sup.withSidecarHeld(async () => {
+      seen.push(sup.recycling(), sup.current() === null, spawnFn.mock.calls.length === 1);
+      return 'installed';
+    });
+    expect(result).toBe('installed');
+    expect(handles[0].kill).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([true, true, true]); // held: queue paused, no child, no respawn yet
+    expect(spawnFn).toHaveBeenCalledTimes(2); // respawned after fn
+    expect(sup.current()).toBe(handles[1]);
+    expect(sup.recycling()).toBe(false);
+  });
+
+  it('fn starts only AFTER the killed child has actually exited (kill() resolving is not proof)', async () => {
+    const { sup, handles, exit } = buildHeld({ exitOnKill: false });
+    await sup.start();
+    let exited = false;
+    handles[0].kill.mockImplementation(async () => {
+      /* kill() resolves first; the exit lands 20ms later — taskkill returns
+         before the process tree has finished tearing down. */
+      setTimeout(() => {
+        exited = true;
+        exit(null);
+      }, 20);
+    });
+    let fnSawExit: boolean | null = null;
+    await sup.withSidecarHeld(async () => {
+      fnSawExit = exited;
+    });
+    expect(fnSawExit).toBe(true);
+  });
+
+  it('a rejecting fn still releases the hold and respawns, and its error passes through unchanged', async () => {
+    const { sup, spawnFn } = buildHeld();
+    await sup.start();
+    await expect(sup.withSidecarHeld(async () => { throw new Error('pip exploded'); })).rejects.toThrow('pip exploded');
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    expect(sup.current()).not.toBeNull();
+    expect(sup.recycling()).toBe(false);
+  });
+
+  it('the killed child\'s exit is consumed by the hold — it neither respawns nor moves the failure counter', async () => {
+    const { sup, spawnFn } = buildHeld();
+    await sup.start();
+    await sup.withSidecarHeld(async () => {
+      await new Promise((r) => setTimeout(r, 20)); // the exit has long since landed
+      expect(spawnFn).toHaveBeenCalledTimes(1);
+    });
+    expect(spawnFn).toHaveBeenCalledTimes(2); // exactly the hold's own respawn, no duplicate
+    expect(sup.exhaustedEvent()).toBe(false);
+  });
+
+  it('resetAndRespawn() during the hold is a no-op — nothing can bring a child up under the hold', async () => {
+    const { sup, spawnFn } = buildHeld();
+    await sup.start();
+    await sup.withSidecarHeld(async () => {
+      await sup.resetAndRespawn();
+      expect(spawnFn).toHaveBeenCalledTimes(1);
+      expect(sup.current()).toBeNull();
+    });
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('forceSidecarRecycle() during the hold no-ops (recycling() is true)', async () => {
+    const { sup } = buildHeld();
+    await sup.start();
+    registerActiveSupervisor(sup);
+    await sup.withSidecarHeld(async () => {
+      expect(await forceSidecarRecycle('test', vi.fn())).toBe(false);
+    });
+  });
+
+  it('[GUARANTEE] a THROWING respawn after the hold is warned, not raised — and the hold is already released, so resetAndRespawn() works afterwards', async () => {
+    const { sup, spawnFn, warn } = buildHeld();
+    await sup.start();
+    // The NEXT spawn is the hold's own respawn — make it throw.
+    spawnFn.mockImplementationOnce(async () => { throw new Error('spawn blew up'); });
+    await expect(sup.withSidecarHeld(async () => 'ok')).resolves.toBe('ok');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('respawn after the maintenance hold failed'));
+    expect(sup.current()).toBeNull();
+    // The hold did not leak: the supervisor's own recovery path still spawns.
+    await sup.resetAndRespawn();
+    expect(spawnFn).toHaveBeenCalledTimes(3);
+    expect(sup.current()).not.toBeNull();
+    expect(sup.recycling()).toBe(false);
+  });
+
+  it('a REFUSED respawn after the hold is retried on the supervisor\'s normal backoff/cap path', async () => {
+    const { sup, spawnFn } = buildHeld();
+    await sup.start();
+    spawnFn.mockImplementationOnce(async (opts: SpawnSidecarOpts) => {
+      opts.onSpawnRefused?.('port still bound');
+      return null;
+    });
+    await sup.withSidecarHeld(async () => {});
+    await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(3)); // refusal → backoff → real spawn
+    expect(sup.current()).not.toBeNull();
+    expect(sup.recycling()).toBe(false);
+  });
+
+  it('[REFUSAL] an adopted sidecar (not our child) is refused before anything moves', async () => {
+    let calls = 0;
+    const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+      calls += 1;
+      if (calls === 1) {
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      }
+      return makeHandle() as SidecarHandle;
+    });
+    let releaseDelay = () => {};
+    const sup = createSidecarSupervisor({
+      buildOpts: async () => BASE_OPTS,
+      spawnFn,
+      probeFn: async () => true,
+      delayFn: () => new Promise<void>((r) => (releaseDelay = r)),
+      warn: vi.fn(),
+      log: vi.fn(),
+    });
+    await sup.start();
+    expect(sup.current()).toBeNull();
+    expect(sup.recycling()).toBe(false); // the exact same accessor readings as autoStart-off …
+    const fn = vi.fn(async () => {});
+    await expect(sup.withSidecarHeld(fn)).rejects.toThrow(/started outside Castwright/); // … yet told apart
+    expect(fn).not.toHaveBeenCalled();
+    expect(sup.recycling()).toBe(false);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    await sup.stop();
+    releaseDelay();
+  });
+
+  it('[REFUSAL] autoStart off (no child, none wanted) is NOT refused: fn runs under the queue hold, then the supervisor re-evaluates settings', async () => {
+    const { sup, spawnFn } = buildHeld({ buildOpts: async () => ({ ...BASE_OPTS, autoStart: false }) });
+    spawnFn.mockImplementation(async () => null); // spawnSidecar's autoStart-off no-spawn
+    await sup.start();
+    expect(sup.current()).toBeNull();
+    expect(sup.recycling()).toBe(false);
+    let duringHold: boolean | null = null;
+    await sup.withSidecarHeld(async () => { duringHold = sup.recycling(); });
+    expect(duringHold).toBe(true);
+    expect(spawnFn).toHaveBeenCalledTimes(2); // re-evaluated after — still off, still null
+    expect(sup.recycling()).toBe(false);
+  });
+
+  it('[REFUSAL] a respawn already in flight (child died, backoff pending) is refused with "retry"', async () => {
+    let releaseDelay = () => {};
+    const { sup, exit } = buildHeld({ delayFn: () => new Promise<void>((r) => (releaseDelay = r)) });
+    await sup.start();
+    exit(1); // crash → handle null, recycling true, respawn parked on delayFn
+    expect(sup.current()).toBeNull();
+    expect(sup.recycling()).toBe(true);
+    await expect(sup.withSidecarHeld(async () => {})).rejects.toThrow(/starting or restarting/);
+    releaseDelay();
+    await sup.stop();
+  });
+
+  it('[REFUSAL] plain exhaustion is refused (the give-up state is not silently reset)', async () => {
+    const { sup, exit } = buildHeld({ maxConsecutiveFailures: 0 });
+    await sup.start();
+    exit(1);
+    expect(sup.exhaustedEvent()).toBe(true);
+    await expect(sup.withSidecarHeld(async () => {})).rejects.toThrow(/gave up restarting/);
+    expect(sup.exhaustedEvent()).toBe(true);
+  });
+
+  it('[REFUSAL] a code-43 trip is refused', async () => {
+    const { sup, spawnFn, exit } = buildHeld();
+    await sup.start();
+    for (let i = 0; i < 3; i += 1) {
+      exit(43);
+      if (i < 2) await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(i + 2));
+    }
+    expect(sup.tripEvent()).not.toBeNull();
+    await expect(sup.withSidecarHeld(async () => {})).rejects.toThrow(/crash-loop exits/);
+    expect(sup.tripEvent()).not.toBeNull();
+  });
+
+  it('[REFUSAL] after stop() the hold is refused', async () => {
+    const { sup } = buildHeld();
+    await sup.start();
+    await sup.stop();
+    await expect(sup.withSidecarHeld(async () => {})).rejects.toThrow(/shutting down/);
+  });
+
+  it('[REFUSAL] a second hold while one is in progress is refused, and does not disturb the first', async () => {
+    const { sup, spawnFn } = buildHeld();
+    await sup.start();
+    let release!: () => void;
+    const first = sup.withSidecarHeld(() => new Promise<string>((r) => (release = () => r('first'))));
+    await new Promise((r) => setTimeout(r, 5));
+    await expect(sup.withSidecarHeld(async () => 'second')).rejects.toThrow(/already held/);
+    release();
+    expect(await first).toBe('first');
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('[ROLLBACK] a child that never exits within heldExitWaitMs: refused, handle restored, queue released, nothing respawned', async () => {
+    const { sup, spawnFn, handles } = buildHeld({ exitOnKill: false, heldExitWaitMs: 10 });
+    await sup.start();
+    const fn = vi.fn(async () => {});
+    await expect(sup.withSidecarHeld(fn)).rejects.toThrow(/did not stop within/);
+    expect(fn).not.toHaveBeenCalled();
+    expect(sup.current()).toBe(handles[0]); // still ours, still in charge
+    expect(sup.recycling()).toBe(false);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    // The hold did not leak: a normal crash-exit still respawns.
+    handles[0].kill.mockImplementation(async () => {});
+    await sup.resetAndRespawn();
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('stop() during the hold wins: the hold releases but respawns nothing', async () => {
+    const { sup, spawnFn } = buildHeld();
+    await sup.start();
+    await sup.withSidecarHeld(async () => {
+      await sup.stop();
+    });
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(sup.current()).toBeNull();
   });
 });

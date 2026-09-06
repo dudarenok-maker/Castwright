@@ -2,10 +2,22 @@
    install offline: stubbed detectFn drives the install-state, stubbed spawnFn
    emits fake `[install-qwen3]` progress + an exit code. No real pip/download. */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { QwenInstallBootstrap } from './qwen-install-bootstrap.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { QwenInstallBootstrap, type QwenInstallOptions } from './qwen-install-bootstrap.js';
 import type { QwenInstallState } from '../workspace/user-settings.js';
+
+/* Every bootstrap under test gets the offline seams: no real supervisor hold,
+   no real pip swap, no fail-closed generation gate (routes/generation.ts is
+   not loaded here, so the real gate would refuse every install). */
+const OFFLINE: Pick<QwenInstallOptions, 'holdSidecarFn' | 'restoreOrtFn' | 'generationActiveFn'> = {
+  holdSidecarFn: (fn) => fn(),
+  restoreOrtFn: async () => 'not-needed',
+  generationActiveFn: () => false,
+};
 
 function makeFakeChild(exitCode: number, opts: { stdout?: string; stderr?: string } = {}) {
   const child = new EventEmitter() as EventEmitter & {
@@ -66,7 +78,7 @@ describe('QwenInstallBootstrap', () => {
         spawned++;
         return makeFakeChild(0, { stdout: '[install-qwen3] Pre-fetching models\n' }) as never;
       },
-      ortSwapFn: async () => 'skip',
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'installed');
@@ -83,7 +95,7 @@ describe('QwenInstallBootstrap', () => {
         spawned++;
         return makeFakeChild(0) as never;
       },
-      ortSwapFn: async () => 'skip',
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'installed');
@@ -95,7 +107,7 @@ describe('QwenInstallBootstrap', () => {
       repoRoot: '/repo',
       detectFn: () => 'not-installed',
       spawnFn: () => makeFakeChild(1, { stderr: 'ERROR: pip failed to resolve qwen-tts\n' }) as never,
-      ortSwapFn: async () => 'skip',
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
@@ -109,7 +121,7 @@ describe('QwenInstallBootstrap', () => {
       repoRoot: '/repo',
       detectFn,
       spawnFn: () => makeFakeChild(0) as never,
-      ortSwapFn: async () => 'skip',
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
@@ -124,7 +136,7 @@ describe('QwenInstallBootstrap', () => {
       repoRoot: '/repo',
       detectFn: () => state,
       spawnFn: () => makeFakeChild(0) as never,
-      ortSwapFn: async () => 'skip',
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
@@ -133,11 +145,23 @@ describe('QwenInstallBootstrap', () => {
     expect(uchecked?.status).toBe('installed');
   });
 
-  /* #3039 — the sidecar must be stopped before pip runs (it holds the
-     onnxruntime DLL pip needs to replace) and restarted afterward, on both
-     the success and the failed-install path. */
-  describe('sidecar stop/restart around the install (#3039)', () => {
-    it('stops the sidecar before spawning and restarts it after a successful install', async () => {
+  /* #2192 / #3039 — the install runs INSIDE the supervisor's maintenance hold
+     (the sidecar maps the onnxruntime DLL pip has to replace), and the ONNX
+     runtime restore runs inside that same hold. The hold is the supervisor's
+     own scoped primitive; here it is a recording pass-through. */
+  describe('install runs inside the sidecar hold (#2192 / #3039)', () => {
+    function recordingHold(calls: string[]): QwenInstallOptions['holdSidecarFn'] {
+      return async (fn) => {
+        calls.push('hold');
+        try {
+          return await fn();
+        } finally {
+          calls.push('release');
+        }
+      };
+    }
+
+    it('[HEADLINE] hold → installer → ORT restore → release, then the job is installed', async () => {
       const calls: string[] = [];
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new QwenInstallBootstrap({
@@ -147,20 +171,19 @@ describe('QwenInstallBootstrap', () => {
           calls.push('spawn');
           return makeFakeChild(0) as never;
         },
-        stopSidecarFn: async () => {
-          calls.push('stop');
+        holdSidecarFn: recordingHold(calls),
+        restoreOrtFn: async () => {
+          calls.push('ort');
+          return 'swapped';
         },
-        startSidecarFn: async () => {
-          calls.push('start');
-        },
-        ortSwapFn: async () => 'skip',
+        generationActiveFn: () => false,
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'installed');
-      expect(calls).toEqual(['stop', 'spawn', 'start']);
+      expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']);
     });
 
-    it('still restarts the sidecar when the installer exits non-zero', async () => {
+    it("an installer failure still releases the hold, skips the ORT restore, and is the job's error", async () => {
       const calls: string[] = [];
       const b = new QwenInstallBootstrap({
         repoRoot: '/repo',
@@ -169,88 +192,80 @@ describe('QwenInstallBootstrap', () => {
           calls.push('spawn');
           return makeFakeChild(1, { stderr: 'ERROR: pip failed\n' }) as never;
         },
-        stopSidecarFn: async () => {
-          calls.push('stop');
+        holdSidecarFn: recordingHold(calls),
+        restoreOrtFn: async () => {
+          calls.push('ort');
+          return 'swapped';
         },
-        startSidecarFn: async () => {
-          calls.push('start');
-        },
-        ortSwapFn: async () => 'skip',
+        generationActiveFn: () => false,
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'error');
-      expect(calls).toEqual(['stop', 'spawn', 'start']);
+      expect(calls).toEqual(['hold', 'spawn', 'release']);
+      expect(b.getJob(job.id)?.error).toMatch(/exited with code 1.*pip failed/);
     });
 
-    it('does not spawn the installer if already installed, and never touches the sidecar', async () => {
+    it('already installed: never enters the hold, never spawns', async () => {
       const calls: string[] = [];
       const b = new QwenInstallBootstrap({
         repoRoot: '/repo',
         detectFn: () => 'ready',
-        spawnFn: () => makeFakeChild(0) as never,
-        stopSidecarFn: async () => {
-          calls.push('stop');
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(0) as never;
         },
-        startSidecarFn: async () => {
-          calls.push('start');
-        },
-        ortSwapFn: async () => 'skip',
+        holdSidecarFn: recordingHold(calls),
+        restoreOrtFn: async () => 'not-needed',
+        generationActiveFn: () => false,
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'installed');
       expect(calls).toEqual([]);
     });
 
-    it('fails when the default sidecar hooks would encounter an adopted sidecar', async () => {
-      /* The production default path with no active supervisor injection
-         would call defaultStopSidecar, which throws on an adopted sidecar
-         (handle === null). With injected hooks this is skipped; without them,
-         it surfaces as an install error. This test uses the real defaults to
-         verify the error path (no supervisor → defaultStopSidecar gets called).
-         We inject a detectFn so the spawn is mocked but the supervisor check
-         is real. Note: getActiveSupervisor returns the _active supervisor if
-         one was registered; without registerActiveSupervisor() being called
-         this is null. defaultStopSidecar/Start only throw if a supervisor
-         exists but is in a bad state. With null supervisor they are no-ops,
-         so this test can proceed to detect() being called. The installed
-         short-circuit (before === 'ready') means the stop/start hooks never
-         run. */
-      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+    it("a refused hold (adopted sidecar, mid-respawn, …) is the job's error, and the installer never runs", async () => {
+      let spawned = 0;
       const b = new QwenInstallBootstrap({
         repoRoot: '/repo',
-        detectFn,
-        spawnFn: () => makeFakeChild(0) as never,
-        ortSwapFn: async () => 'skip',
-      });
-      const job = b.start();
-      await until(() => b.getJob(job.id)?.status === 'installed');
-      // With no active supervisor, defaultStopSidecar is a no-op, so install succeeds.
-      expect(b.getJob(job.id)?.status).toBe('installed');
-    });
-
-    it('errors clearly when stopSidecarFn throws (e.g. adopted sidecar)', async () => {
-      const { fn: detectFn } = detectSequence(['not-installed']);
-      const b = new QwenInstallBootstrap({
-        repoRoot: '/repo',
-        detectFn,
-        spawnFn: () => makeFakeChild(0) as never,
-        stopSidecarFn: async () => {
-          throw new Error('Cannot stop an externally-managed sidecar');
+        detectFn: () => 'not-installed',
+        spawnFn: () => {
+          spawned++;
+          return makeFakeChild(0) as never;
         },
-        ortSwapFn: async () => 'skip',
+        holdSidecarFn: async () => {
+          throw new Error('The voice engine on this port was started outside Castwright, so it cannot be stopped for the install.');
+        },
+        restoreOrtFn: async () => 'not-needed',
+        generationActiveFn: () => false,
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'error');
-      expect(b.getJob(job.id)?.error).toMatch(/externally-managed sidecar/);
+      expect(b.getJob(job.id)?.error).toMatch(/started outside Castwright/);
+      expect(spawned).toBe(0);
     });
 
-    it('reports install as successful even when startSidecarFn throws (e.g. code-43 hold-down)', async () => {
-      /* #3039 Finding 3: a successful install with a restart problem should
-         report as installed (with the restart error logged separately), not as
-         failed. The operator needs to know the Qwen install itself succeeded,
-         even if the sidecar can't be restarted due to a hold-down state. */
-      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+    it('refuses while a chapter is rendering — before the hold, before the installer', async () => {
       const calls: string[] = [];
+      const b = new QwenInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(0) as never;
+        },
+        holdSidecarFn: recordingHold(calls),
+        restoreOrtFn: async () => 'not-needed',
+        generationActiveFn: () => true,
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(b.getJob(job.id)?.error).toMatch(/while a chapter is being generated/);
+      expect(calls).toEqual([]);
+    });
+
+    it('an ORT-restore failure AFTER a successful install is an error that says Qwen landed and what to run — not a failed Qwen install', async () => {
+      const calls: string[] = [];
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new QwenInstallBootstrap({
         repoRoot: '/repo',
         detectFn,
@@ -258,22 +273,131 @@ describe('QwenInstallBootstrap', () => {
           calls.push('spawn');
           return makeFakeChild(0) as never;
         },
-        stopSidecarFn: async () => {
-          calls.push('stop');
+        holdSidecarFn: recordingHold(calls),
+        restoreOrtFn: async () => {
+          calls.push('ort');
+          throw new Error('pip install --force-reinstall --no-deps onnxruntime-gpu>=1.26,<1.27 exited with code 1. network down');
         },
-        startSidecarFn: async () => {
-          calls.push('start');
-          throw new Error('code-43 hold-down: device assignment too small');
+        generationActiveFn: () => false,
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']); // the hold still released
+      const error = b.getJob(job.id)?.error ?? '';
+      expect(error).toMatch(/^Qwen3-TTS installed, but restoring the GPU ONNX runtime/);
+      expect(error).toMatch(/network down/);
+      expect(error).toMatch(/install-ort\.mjs/);
+      expect(error).not.toMatch(/install-qwen3\.mjs exited/);
+    });
+  });
+
+  /* The DEFAULT wiring — the part two earlier rounds got wrong (a marker-only
+     helper standing in for the swap; an env var only the sidecar child
+     carries standing in for the profile). Real resolveVenvRuntimeProfile +
+     real restoreOrtRuntime against a temp venv; only the subprocess is a fake,
+     and it is the SAME spawnFn seam the installer uses, awaited — never a
+     spawnSync. */
+  describe('default ORT restore wiring', () => {
+    const roots: string[] = [];
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
+    });
+
+    function tempRepo(profile: string): { repoRoot: string; sp: string } {
+      const repoRoot = mkdtempSync(join(tmpdir(), 'qwen-install-repo-'));
+      roots.push(repoRoot);
+      const venvDir = join(repoRoot, 'server', 'tts-sidecar', '.venv');
+      const sp = join(venvDir, 'Lib', 'site-packages');
+      mkdirSync(join(sp, 'onnxruntime', 'capi'), { recursive: true });
+      // The venv was built for `profile` — the stamp is what the sidecar reads.
+      writeFileSync(join(venvDir, '.venv-stamp.json'), JSON.stringify({ pythonTag: 'cp312', profile, reqHash: 'x' }));
+      // …but pip just clobbered it with the plain CPU build.
+      writeFileSync(join(sp, 'onnxruntime', 'capi', 'build_and_package_info.py'), "package_name = 'onnxruntime'\n");
+      mkdirSync(join(sp, 'onnxruntime-1.29.0.dist-info'));
+      writeFileSync(join(sp, 'onnxruntime-1.29.0.dist-info', 'INSTALLER'), 'pip\n');
+      writeFileSync(join(sp, 'onnxruntime-1.29.0.dist-info', 'RECORD'), 'x\n');
+      return { repoRoot, sp };
+    }
+
+    it('nvidia-stamped venv: after the installer, pip swaps the GPU runtime back through spawnFn (async), profile from the STAMP not an env var', async () => {
+      vi.stubEnv('ACCELERATOR', undefined);
+      vi.stubEnv('SIDECAR_VENV_DIR', undefined);
+      vi.stubEnv('CASTWRIGHT_ACCELERATOR_PROFILE', 'cpu'); // the sidecar-child-only var: must be IGNORED
+      const { repoRoot, sp } = tempRepo('nvidia');
+      const spawned: { cmd: string; args: string[] }[] = [];
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new QwenInstallBootstrap({
+        repoRoot,
+        detectFn,
+        spawnFn: (cmd, args) => {
+          spawned.push({ cmd, args: [...args] });
+          if (args.includes('--force-reinstall')) {
+            // The GPU wheel landing, as the real pip step would.
+            mkdirSync(join(sp, 'onnxruntime_gpu-1.26.0.dist-info'));
+            writeFileSync(join(sp, 'onnxruntime_gpu-1.26.0.dist-info', 'METADATA'), 'Version: 1.26.0\n');
+          }
+          return makeFakeChild(0) as never;
         },
-        ortSwapFn: async () => 'skip',
+        holdSidecarFn: (fn) => fn(),
+        generationActiveFn: () => false,
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'installed');
-      /* Verify stop and spawn happened (we tried to proceed). The install
-         succeeded (detect() returned 'ready'), so the job is installed despite
-         the restart error. The restart problem is logged as a warning. */
-      expect(calls).toEqual(['stop', 'spawn', 'start']);
-      expect(b.getJob(job.id)?.status).toBe('installed');
+      const venvPython = process.platform === 'win32' ? join('Scripts', 'python.exe') : join('bin', 'python');
+      expect(spawned[0].cmd).toBe('node');
+      expect(spawned[0].args[0]).toMatch(/install-qwen3\.mjs$/);
+      expect(spawned.slice(1).map((s) => s.cmd.endsWith(venvPython))).toEqual([true, true, true]);
+      expect(spawned.slice(1).map((s) => s.args.slice(0, 3))).toEqual([
+        ['-m', 'pip', 'uninstall'],
+        ['-m', 'pip', 'install'],
+        ['-m', 'pip', 'install'],
+      ]);
+      expect(spawned[2].args).toContain('--force-reinstall');
+      expect(existsSync(join(sp, 'onnxruntime-1.26.0.dist-info', 'INSTALLER'))).toBe(true); // marker written last
+    });
+
+    it('cpu-stamped venv: no pip after the installer (plain onnxruntime is correct there)', async () => {
+      vi.stubEnv('ACCELERATOR', undefined);
+      vi.stubEnv('SIDECAR_VENV_DIR', undefined);
+      const { repoRoot } = tempRepo('cpu');
+      const spawned: string[] = [];
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new QwenInstallBootstrap({
+        repoRoot,
+        detectFn,
+        spawnFn: (cmd) => {
+          spawned.push(cmd);
+          return makeFakeChild(0) as never;
+        },
+        holdSidecarFn: (fn) => fn(),
+        generationActiveFn: () => false,
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'installed');
+      expect(spawned).toEqual(['node']);
+    });
+
+    it('a failing pip step surfaces its stderr in the job error (async close path, not spawnSync)', async () => {
+      vi.stubEnv('ACCELERATOR', undefined);
+      vi.stubEnv('SIDECAR_VENV_DIR', undefined);
+      const { repoRoot } = tempRepo('nvidia');
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new QwenInstallBootstrap({
+        repoRoot,
+        detectFn,
+        spawnFn: (_cmd, args) =>
+          (args.includes('uninstall')
+            ? makeFakeChild(1, { stderr: 'ERROR: pip uninstall blew up\n[notice] A new release of pip is available\n' })
+            : makeFakeChild(0)) as never,
+        holdSidecarFn: (fn) => fn(),
+        generationActiveFn: () => false,
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(b.getJob(job.id)?.error).toMatch(/Qwen3-TTS installed, but restoring/);
+      expect(b.getJob(job.id)?.error).toMatch(/pip uninstall blew up/);
+      expect(b.getJob(job.id)?.error).not.toMatch(/A new release/);
     });
   });
 
@@ -305,7 +429,7 @@ describe('QwenInstallBootstrap', () => {
       repoRoot: '/repo',
       detectFn: () => 'not-installed',
       spawnFn: () => makeFakeChild(1, { stderr: stderrFixture }) as never,
-      ortSwapFn: async () => 'skip',
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
