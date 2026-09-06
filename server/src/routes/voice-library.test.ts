@@ -111,6 +111,10 @@ function writeBookOnDisk(
   title: string,
   bookId: string,
   characters: object[],
+  /* `undefined` omits the key entirely; `null` writes the explicit
+     "detection surrendered" state. Both mean unset and must behave
+     identically (#1998) — passing null is how a test pins that. */
+  language?: string | null,
 ) {
   const bookDir = join(workspace, 'books', author, series, title);
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
@@ -130,6 +134,7 @@ function writeBookOnDisk(
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      ...(language !== undefined ? { language } : {}),
     }),
   );
   writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
@@ -3288,7 +3293,7 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
     await seedClonedWithLang('clone-ru-en', 'ru');
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-ru-en', [
       { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
-    ]);
+    ], 'en');
     const res = await request(app)
       .post('/api/voice-library/clone-ru-en/assign')
       .send({ bookId: 'book-clone-ru-en', characterId: 'char-nik' });
@@ -3305,7 +3310,7 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
     await seedClonedWithLang('clone-en-en', 'en');
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-en-en', [
       { id: 'char-ada', name: 'Ada', ttsEngine: 'qwen' },
-    ]);
+    ], 'en');
     const res = await request(app)
       .post('/api/voice-library/clone-en-en/assign')
       .send({ bookId: 'book-clone-en-en', characterId: 'char-ada' });
@@ -3325,18 +3330,56 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
     expect(res.body.warning).toBeUndefined();
   });
 
+  /* #1998 regression test — a cloned voice whose languageCode differs from
+     an UNSET book language must not emit a warning. Absence (missing language
+     key, null, empty, or whitespace) is not English — it's the surrendered-
+     detection state. Comparing against the 'en' default would falsely claim
+     a book is English when it has never set a language, and advice to
+     "Re-clone in English" would be destructive. Pins the fix to use
+     bookStateLanguageOrNull (returns null when unset) instead of
+     bookStateLanguage (defaults to 'en'). */
+  it('does not warn when the cloned voice language differs but the book has no language set', async () => {
+    await seedClonedWithLang('clone-ru-unset', 'ru');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-ru-unset', [
+      { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
+    ]); // no language parameter — book's language is unset (missing key)
+    const res = await request(app)
+      .post('/api/voice-library/clone-ru-unset/assign')
+      .send({ bookId: 'book-clone-ru-unset', characterId: 'char-nik' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* #1998 regression test — same as above, but with book language explicitly
+     set to null (the "detection surrendered" state). Null and missing key
+     must be treated identically. */
+  it('does not warn when the cloned voice language differs but the book language is explicitly null', async () => {
+    await seedClonedWithLang('clone-ru-null', 'ru');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-ru-null', [
+      { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
+    ], null); // explicit null, not a missing key
+    const res = await request(app)
+      .post('/api/voice-library/clone-ru-null/assign')
+      .send({ bookId: 'book-clone-ru-null', characterId: 'char-nik' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
   /* Mutation 1 — invert the comparison so it fires on a MATCH instead of a
      mismatch. The match-case test ("does not warn when…matches") must go
      red. Pins that the guard tests inequality, not just presence.
-     To verify: change `entry.languageCode !== bookLanguage` to
-     `entry.languageCode === bookLanguage`, re-run the match test — fails. */
+     To verify: change `entry.languageCode !== bookLanguageForClonedCheck` to
+     `entry.languageCode === bookLanguageForClonedCheck`, re-run the match
+     test — fails. */
 
-  /* Mutation 2 — change the comparand from `bookLanguage` (BCP-47 code)
-     back to `expectedSidecarLang` (human-readable sidecar word). The match-
-     case test must go red: 'en' !== 'English' is always true, so the guard
-     fires on every correctly-matched assignment. Pins the code-vs-word trap.
-     To verify: change `entry.languageCode !== bookLanguage` to
-     `entry.languageCode !== expectedSidecarLang`, re-run the match test. */
+  /* Mutation 2 — change the comparand from `bookLanguageForClonedCheck`
+     (BCP-47 code, null when unset) back to `bookLanguage` (defaulting to
+     'en'). The regression tests above must go red: a Russian cloned voice
+     against an unset book language would fire the mismatch and emit a false
+     warning. Pins that the code uses the honest reader to avoid defaulting
+     absence to English.
+     To verify: change `entry.languageCode !== bookLanguageForClonedCheck` to
+     `entry.languageCode !== bookLanguage`, re-run the regression tests. */
 });
 
 

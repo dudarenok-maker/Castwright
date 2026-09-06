@@ -63,7 +63,7 @@ import {
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
 import { getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
-import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
+import { findBookByBookId, bookStateLanguage, bookStateLanguageOrNull } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock, withLibraryVoiceLock } from '../workspace/cast-lock.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
@@ -1719,6 +1719,16 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
          mismatch at #1998), so it stays here, outside either `if`, rather than
          being re-derived inside each one. */
       const bookLanguage = bookStateLanguage(located.state);
+      /* #1998 — cloned-voice warning must use the honest reader
+         `bookStateLanguageOrNull`, not the defaulting `bookStateLanguage`.
+         Absence (missing key, null, empty, or whitespace) is not English —
+         it's the "detection surrendered" state. Comparing against the 'en'
+         default would falsely claim a book is English when it has never set
+         a language, and advice to "Re-clone in English" would be destructive
+         on a Russian book whose language is simply unset. Designed voices use
+         `bookLanguage` (the defaulting reader) because they compare against
+         sidecar routing, which requires the routing default. */
+      const bookLanguageForClonedCheck = bookStateLanguageOrNull(located.state);
       let expectedSidecarLang: string | undefined;
       let designedManifest: { language?: string } | null = null;
       if (entry.provenance === 'designed') {
@@ -1863,21 +1873,22 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
            language — see #1998's own measurement table). Warn, do not block:
            the owner's v1 decision is expectation-setting, not engine re-
            routing. The comparison is CODE-vs-CODE (`entry.languageCode`
-           against `bookLanguage`), never code-vs-sidecar-word — comparing
-           against `expectedSidecarLang` would silently fire on every
-           correctly-matched assignment because a BCP-47 code is never equal
-           to its human-readable sidecar name. Pinned by mutation 2 in the
-           paired test block. */
+           against `bookLanguageForClonedCheck`), never code-vs-sidecar-word
+           — comparing against `expectedSidecarLang` would silently fire on
+           every correctly-matched assignment because a BCP-47 code is never
+           equal to its human-readable sidecar name. Pinned by mutation 2 in
+           the paired test block. Uses the honest reader to avoid falsely
+           asserting books with unset language are English. */
         if (entry.provenance === 'cloned') {
           if (
             entry.languageCode &&
-            bookLanguage &&
-            entry.languageCode !== bookLanguage
+            bookLanguageForClonedCheck &&
+            entry.languageCode !== bookLanguageForClonedCheck
           ) {
             let cloneLangName: string | undefined;
             let bookLangName: string | undefined;
             try { cloneLangName = sidecarLanguageName(entry.languageCode); } catch { /* unregistered — skip */ }
-            try { bookLangName = sidecarLanguageName(bookLanguage); } catch { /* unregistered — skip */ }
+            try { bookLangName = sidecarLanguageName(bookLanguageForClonedCheck); } catch { /* unregistered — skip */ }
             if (cloneLangName && bookLangName) {
               languageWarning =
                 `"${character.name ?? characterId}"'s voice was cloned in ${cloneLangName}, but this ` +
