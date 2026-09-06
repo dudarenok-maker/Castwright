@@ -5,7 +5,7 @@ PR #2402, [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700)) â€
 Reproduces the exact false-positive scenario the 2026-08-29 on-box run found
 (`docs/testing/onbox-acceptance-register.md`, row A36 â€” discharged 2026-09-05) against step 1's fix
 (`server/src/audio/render-integrity/{aggregate,audition-centroid,score}.ts`,
-commit c7a1dfac).
+commit 7d12493f).
 
 ## Setup
 

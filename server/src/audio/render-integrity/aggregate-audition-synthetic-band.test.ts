@@ -192,23 +192,22 @@ describe('scoreBook — A36 synthetic-only-pool severity band (register row A36 
     expect(freshRender!.severity).toBe('severe');
   });
 
-  it('band edge mutation-sensitivity: a render at cosine 0.85 is severe with the tight pool — catches severeSigma narrowing mutations', async () => {
+  it('band edge mutation-sensitivity: a render at cosine 0.94 is voice-match with the tight pool — catches severeSigma narrowing mutations', async () => {
     // This test is sensitive to mutations on severeSigma. With severeSigma=3,
-    // pSevere ≈ 0.9119, so cosine 0.85 < pSevere → severe. Reducing severeSigma
-    // (e.g., to 1) would raise pSevere to ~0.927, making 0.85 NOT severe. This
-    // catches unintended narrowing of the severe band.
+    // pSevere ≈ 0.9110 and pBand ≈ 0.9369, so cosine 0.94 > pBand → voice-match.
+    // Reducing severeSigma (e.g., to 1) would raise pSevere to ~0.9456, making
+    // 0.94 < pSevere → severe. This catches unintended narrowing of the severe band.
     mockSyntheticOnlyAudition();
     const dir = mkdtempSync(join(tmpdir(), 'spk-a36-severe-band-narrow-'));
-    await writeThuridBook(dir, 0.85); // Below pSevere with severeSigma=3
+    await writeThuridBook(dir, 0.94); // Between pSevere(1) ≈ 0.9456 and pBand ≈ 0.9369
 
     await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
 
     const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
     const freshRender = verdicts!.find((v) => v.sentenceIds[0] === 99);
     expect(freshRender).toBeDefined();
-    // With severeSigma=3, cosine 0.85 must be severe
-    expect(freshRender!.verdict).toBe('voice-mismatch');
-    expect(freshRender!.severity).toBe('severe');
+    // With severeSigma=3, cosine 0.94 > pBand → voice-match
+    expect(freshRender!.verdict).toBe('voice-match');
   });
 
   it('band edge mutation-sensitivity: a render at cosine 0.945 is voice-match with the tight pool — catches bandSigma narrowing mutations', async () => {

@@ -37,20 +37,22 @@ export interface CharacterCentroid {
    *  Used as the accept-check threshold in the auto-fix route (Task 13). */
   cleanMean: number;
   /** Band boundary at the severe edge (E — severe-edge boundary).
-   *  - When `bandMethod` is 'percentile': a percentile-of-pool value (used on real-anchor
-   *    in-book paths, or on synthetic-only audition pools that fall back due to high dispersion).
+   *  Only 'audition' referenceKind rows carry `bandMethod`. The field's presence/value
+   *  distinguishes post-fix rows (trusted) from pre-fix rows (missing field = rebuild).
+   *  - When `bandMethod` is 'percentile': a percentile-of-pool value (used on both
+   *    real-anchor audition pools AND synthetic-only audition pools that were too dispersed
+   *    for sigma calibration and fell back to percentile computation).
    *  - When `bandMethod` is 'synthetic-sigma': a sigma-based threshold computed from
-   *    mean ± severeSigma × std (used on synthetic-only audition pools with tight clustering).
-   *  Only 'audition' rows carry `bandMethod`. The field's presence/value distinguishes
-   *  post-fix rows (trusted) from pre-fix rows (missing field = rebuild). */
+   *    mean ± severeSigma × std (used only on tight synthetic-only audition pools). */
   pSevere: number;
   /** Band boundary at the inconclusive-band upper boundary (U — inconclusive-band upper boundary).
-   *  - When `bandMethod` is 'percentile': a percentile-of-pool value (used on real-anchor
-   *    in-book paths, or on synthetic-only audition pools that fall back due to high dispersion).
+   *  Only 'audition' referenceKind rows carry `bandMethod`. The field's presence/value
+   *  distinguishes post-fix rows (trusted) from pre-fix rows (missing field = rebuild).
+   *  - When `bandMethod` is 'percentile': a percentile-of-pool value (used on both
+   *    real-anchor audition pools AND synthetic-only audition pools that were too dispersed
+   *    for sigma calibration and fell back to percentile computation).
    *  - When `bandMethod` is 'synthetic-sigma': a sigma-based threshold computed from
-   *    mean ± bandSigma × std (used on synthetic-only audition pools with tight clustering).
-   *  Only 'audition' rows carry `bandMethod`. The field's presence/value distinguishes
-   *  post-fix rows (trusted) from pre-fix rows (missing field = rebuild). */
+   *    mean ± bandSigma × std (used only on tight synthetic-only audition pools). */
   pBand: number;
   /** How this centroid was built:
    *  - 'in-book': from the character's own clean anchor segments (in-book mode)

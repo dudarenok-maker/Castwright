@@ -540,8 +540,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > `severe` on fresh text — the pool's own 6th/10th-percentile band was too
 > tight for a small (N=6), synthetic-only pool. Owner ruling 2026-09-05
 > chose to widen the severity band specifically for synthetic-only pools
-> (#2934). Step 1 (`fix/server-2934-a36-audition-band`, commit c7a1dfac, later
-> corrected on the same branch — see PR #3016's review history) implemented a
+> (#2934). Step 1 (`fix/server-2934-a36-audition-band`, commit 7d12493f) implemented a
 > separately-calibrated, wider `syntheticOnlySpread()` sigma band for that
 > case, leaving the normal (real-anchor) percentile band untouched. Step 2
 > (2026-09-06, same worktree) confirmed both halves for real on live
