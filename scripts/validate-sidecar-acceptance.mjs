@@ -17,9 +17,42 @@ import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const SIDECAR_PREFIX = 'server/tts-sidecar/';
 
+// `git diff --name-only` (the producer -- see sidecar-acceptance-gate.yml)
+// emits a path containing any non-ASCII or control character QUOTED and
+// C-escaped under git's default `core.quotepath=true`, e.g.
+//   "server/tts-sidecar/tests/test_caf\303\251.py"
+// -- a leading double-quote, so a raw startsWith(SIDECAR_PREFIX) does not
+// match and the gate silently does not fire. Unquote before prefix-matching.
+// The \NNN escapes are UTF-8 BYTES, so decoding them per-char yields
+// mojibake for the non-ASCII tail; that is fine and deliberate here, because
+// only the ASCII directory prefix has to survive for the match to be right.
+export function unquoteGitPath(path) {
+  if (typeof path !== 'string') return path;
+  if (path.length < 2 || !path.startsWith('"') || !path.endsWith('"')) return path;
+  const inner = path.slice(1, -1);
+  const simple = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', f: '\f', v: '\v' };
+  let out = '';
+  for (let i = 0; i < inner.length; i += 1) {
+    if (inner[i] !== '\\') {
+      out += inner[i];
+      continue;
+    }
+    const octal = inner.slice(i + 1, i + 4);
+    if (/^[0-7]{3}$/.test(octal)) {
+      out += String.fromCharCode(parseInt(octal, 8));
+      i += 3;
+      continue;
+    }
+    const next = inner[i + 1];
+    out += Object.prototype.hasOwnProperty.call(simple, next) ? simple[next] : next;
+    i += 1;
+  }
+  return out;
+}
+
 export function touchesSidecar(files) {
   if (!Array.isArray(files)) return false;
-  return files.some((f) => typeof f === 'string' && f.startsWith(SIDECAR_PREFIX));
+  return files.some((f) => typeof f === 'string' && unquoteGitPath(f).startsWith(SIDECAR_PREFIX));
 }
 
 // Splits a newline-separated file list (the shape `git diff --name-only`
@@ -34,6 +67,52 @@ export function parseFileList(text) {
     .filter((line) => line.length > 0);
 }
 
+// Both helpMessage() below and CONTRIBUTING.md "Sidecar acceptance
+// fast-path" tell the author to write the acceptance line PLAINLY, not
+// inside a code block. Enforce that rather than merely asking for it: the
+// documented copy-paste example in CONTRIBUTING.md is itself a fenced block
+// carrying a real date and a real row id, so without stripping, pasting that
+// file (or any commented-out draft) into a PR body passes a gate on a PR
+// where nothing was run. Mirrors scripts/validate-pr-issue-link.mjs:29-70,
+// whose own history records a code-span false positive as a real incident.
+//
+// INLINE spans are deliberately NOT stripped here (unlike that sibling):
+// this gate's own recorded-run format REQUIRES the command backtick-wrapped,
+// so stripping inline spans would blank the very token being matched. An
+// inline span wrapping the WHOLE line is already rejected regardless,
+// because both patterns anchor on `^\s*sidecar acceptance:` and a leading
+// backtick is neither whitespace nor the literal prefix.
+//
+// A fenced code block's delimiter must be alone on its own line (optionally
+// indented up to 3 spaces) per CommonMark; a stray mid-line ``` is not a
+// fence and must not open one.
+function stripFencedBlocks(text) {
+  const lines = text.split('\n');
+  const kept = [];
+  let inFence = false;
+  for (const line of lines) {
+    if (/^ {0,3}\u0060{3,}/.test(line)) {
+      inFence = !inFence;
+      kept.push('');
+      continue;
+    }
+    kept.push(inFence ? '' : line);
+  }
+  return kept.join('\n');
+}
+
+// An HTML comment is invisible in the rendered PR body, so a line inside one
+// is not a record of anything. Blanked (rather than deleted) so surrounding
+// lines keep their own line boundaries and cannot coalesce into one line
+// that then matches.
+function stripHtmlComments(text) {
+  return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ' '));
+}
+
+function stripNonPlainText(text) {
+  return stripFencedBlocks(stripHtmlComments(text));
+}
+
 // Checkable format (command, date, outcome) -- NOT free prose. Matches a
 // line of the shape:
 //   Sidecar acceptance: `npm run test:sidecar` -- 2026-09-06 -- passed
@@ -41,15 +120,22 @@ export function parseFileList(text) {
 // trailing flags, e.g. `-- --require-venv`), backtick-wrapped; the date is
 // ISO (YYYY-MM-DD); the outcome is a fixed vocabulary, matched but not
 // itself sufficient -- only "passed" satisfies the gate (see
-// hasPassingRecordedRun below). Separator is `--`, `—`, or `-` with spaces
-// on both sides, to tolerate a PR author's editor auto-converting `--` to
-// an em/en-dash.
+// hasPassingRecordedRun below). Separator is `--`, an em dash, or an en
+// dash, to tolerate a PR author's editor auto-converting `--`; a single
+// ASCII hyphen is NOT accepted (CONTRIBUTING.md documents `--` only).
+//
+// The three backticks are escaped as \u0060 rather than written literally:
+// an unpaired backtick inside a REGEX LITERAL desyncs the source scanner in
+// server/src/spawn-windows-hide.test.ts, which scans scripts/**, and that
+// guard throws rather than silently blanking the rest of this file (#2747).
+// The escape is required INSIDE A REGEX LITERAL only -- elsewhere in this
+// file (comments, strings) a literal backtick is fine and preferred.
 const RECORDED_RUN_PATTERN =
-  /^\s*sidecar acceptance:\s*`(npm run test:sidecar(?:[^`\n]*)?)`\s*(?:--|—|–)\s*(\d{4}-\d{2}-\d{2})\s*(?:--|—|–)\s*(passed|failed)\s*$/im;
+  /^\s*sidecar acceptance:\s*\u0060(npm run test:sidecar(?:[^\u0060\n]*)?)\u0060\s*(?:--|—|–)\s*(\d{4}-\d{2}-\d{2})\s*(?:--|—|–)\s*(passed|failed)\s*$/im;
 
 export function parseRecordedRun(body) {
   if (typeof body !== 'string') return null;
-  const match = body.match(RECORDED_RUN_PATTERN);
+  const match = stripNonPlainText(body).match(RECORDED_RUN_PATTERN);
   if (!match) return null;
   return { command: match[1].trim(), date: match[2], outcome: match[3].toLowerCase() };
 }
@@ -71,7 +157,7 @@ const REGISTER_LINK_PATTERN =
 
 export function parseRegisterLink(body) {
   if (typeof body !== 'string') return null;
-  const match = body.match(REGISTER_LINK_PATTERN);
+  const match = stripNonPlainText(body).match(REGISTER_LINK_PATTERN);
   if (!match) return null;
   return { rowId: match[1] };
 }
