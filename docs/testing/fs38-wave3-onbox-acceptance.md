@@ -2688,9 +2688,79 @@ assigned to a character who speaks in most chapters. Start from a clean state
 - No stray `.tmp` files under `$WS\voices\qwen\`.
 - Record any VRAM/capacity events and which card the run used.
 
-**Record:** chapters = ____ · failures = ____ · re-derives = ____ · card = ______
+**Record:** chapters = 0 of 2 completed · failures = 0 (never reached a terminal
+failure — stalled and silently restarted instead) · re-derives = 0 · card =
+cuda:1 (RTX 5070 Ti, 16 GB) · peak committed = ~10.9 GB (flat) · recycles = 0
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ B  **Notes:** 2026-09-06, wave-12 worktree
+(`wt-fs38-a1-wave12`, branch `chore/ops-fs38-a1-wave12`), server :8270 / sidecar
+:9190. Preconditions verified first: `server/node_modules`, `node_modules`,
+`server/tts-sidecar/.venv` and `server/tts-sidecar/voices` all confirmed real
+junctions to the primary checkout; `POST /api/sidecar/restart` → 200 (supervised,
+not orphaned) before starting.
+
+Imported a **fresh throwaway** copy of the canonical fixture
+(`qa-test-author__standalones__d-02-throwaway-coalfall`, title "D-02 Throwaway
+Coalfall") — no existing book touched. First analysis pass hit the existing
+attribution-drift guard (11/214 ≈ 5%, `Attribution drift exceeded threshold —
+refusing to flip cast.json`) and correctly refused to write cast — used the
+app's own "Start fresh" re-analysis, which passed on the second attempt (7/214
+≈ 3.3%). Cast confirmed with 11 characters detected (one, `[excited] Run, you
+fools — it'll have the lot of you!` filed under "Voice from lane", is itself a
+fabricated character — analysis mis-attributed a bracketed stage direction as
+a speaker name; not something this child's scope covers fixing).
+
+Cloned a real voice via the documented pipeline: `POST
+/api/voice-library/clone-sample` (fixture `C:\fixtures\fs38\F1-clean-20s.wav`,
+`captureMethod=upload`) → `POST /api/voice-library/clone` with a complete
+`self`/`personal` consent record. Produced a genuine Qwen clone,
+`qwen-c1487859-31c1-41d9-8f5a-80d44cbbccce`, advisory fidelity **0.868** cosine
+against the source clip. Assigned it to the protagonist (Wren) via the cast
+drawer's "Or use a voice from My voices" picker — a real cloned voice on a
+real character, not a stock/library-catalogue pick.
+
+Queued the whole book (2 analyzed chapters) and started generation. **This is
+where D-02 fails, and it fails before ever reaching the concern the criterion
+exists to test.** Both chapters immediately needed the "no designed Qwen voice
+for ... → would render in Kokoro" fallback confirmation (the other 9
+characters were never individually designed — `Design full cast` is gated on
+a `GEMINI_API_KEY` this box does not have configured, an environmental
+limitation, not this child's to fix). Confirmed "Render anyway" for both.
+Both chapters flipped to `Generating`, the activity log posted "Generation
+started — Synthesising Chapter N" for each — but **no `/synthesize` request
+ever reached the sidecar**: polled `GET /health` on the sidecar throughout,
+`inflight_synth` stayed `0` the entire time, and `logs\tts.log` shows zero
+`POST /synthesize` lines anywhere near the attempt (only `/health`/`/capacity`
+polling). After ~150–190 s with no progress the UI reported "Worker has gone
+quiet" / chapters flipped to `Stalled`, Chapter 2 reverted to the exact same
+"needs confirmation" fallback prompt as if generation had never been
+attempted, and a **fresh** "Generation started" activity entry appeared —
+i.e. the stack silently restarts the same two chapters from scratch rather
+than failing. Reproduced this full stall→restart cycle **twice** in a row,
+confirming for both chapters each time; never once did a synth call fire.
+
+Because generation never dispatches, none of the criterion's real acceptance
+checks are exercisable: no chapter completed, no re-derive to count, no
+identity to compare across chapters, and — critically — `committed_mb` never
+moved off its flat ~10.9 GB baseline and zero watchdog recycles occurred, so
+**this run cannot confirm OR rule out side-11**; it never got far enough to
+load-test memory at all. This is a **different, new blocker** from the
+2026-07-29 side-11 finding this row previously recorded solely as "B".
+
+Diagnosis, best-effort: the one common factor across every stall is the
+fabricated "Voice from lane" character appearing in the fallback-confirmation
+character list every time. Did not attempt a fix or a workaround (e.g.
+downgrading it to a background bucket) — that would change the cast/test
+setup this run is supposed to report on, and root-causing the stall itself is
+past this child's scope ("Fixing side-11" and anything broader is explicitly
+out of scope; this looks adjacent but distinct). Filed as a fact for whoever
+picks this row up next, not fixed here.
+
+Cleanup: the throwaway book (`qa-test-author__standalones__d-02-throwaway-coalfall`)
+and its stalled generation queue were left in place, on this worktree only, so
+the stall is reproducible for a follow-up — nothing under the operator's real
+books/workspace was touched. The `D-02 QA Clone Speaker` library voice is
+likewise this worktree-local and harmless to leave.
 
 ---
 
@@ -3227,7 +3297,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | ID | Test | Result | Notes |
 |---|---|---|---|
 | D-01 | Concurrent multi-book render sharing a cloned voice | **P** | Run 5. Second throwaway book imported/analysed; concurrent healthy + concurrent repair-race renders both completed cleanly |
-| D-02 | Full-book render with a cloned character | **B** | blocked by side-11 (§7.2 BLOCKER-1). **Partially substituted:** a per-character re-record of a cloned character into a real chapter succeeded — `splice_complete`, 58 segments, `resolvedVoiceName` = the clone's key, `asr.verdict: ok`, WER 0 |
+| D-02 | Full-book render with a cloned character | **B** | 2026-07-29 attempt blocked by side-11 (§7.2 BLOCKER-1). **Partially substituted:** a per-character re-record of a cloned character into a real chapter succeeded — `splice_complete`, 58 segments, `resolvedVoiceName` = the clone's key, `asr.verdict: ok`, WER 0. **2026-09-06 re-run (wave 12): new blocker, NOT side-11.** Junctions verified present; stack up; sidecar supervised (`/restart` → 200). Fresh throwaway import + genuine Qwen clone (0.868 cosine) assigned to the protagonist. Both queued chapters entered `Generating`, but zero `/synthesize` calls ever reached the sidecar (`inflight_synth` stayed 0, `tts.log` shows none) across two full attempts; each stalled ~150–190s ("Worker has gone quiet"), then silently restarted the SAME two chapters from scratch, re-posing the "no designed Qwen voice for ... → would render in Kokoro" confirmation every time — an infinite generate/stall/restart loop that never dispatches audio. `committed_mb` stayed flat (~10.9 GB), no recycles — memory never grows enough to exercise side-11 at all. Prime suspect: a fabricated cast entry from a stray bracketed stage direction (`[excited] Run, you fools — it'll have the lot of you!`) that analysis mis-attributed as a speaking character with no voice, appearing in every stall's confirmation list. Not root-caused further — out of scope for this child. Throwaway book (`qa-test-author__standalones__d-02-throwaway-coalfall`) left in place for follow-up repro, primary checkout untouched. |
 | D-03 | Server + sidecar restart → still renders (cache-independent) | **P** (incidentally) | Proven repeatedly while isolating #1941: the on-disk `.pt` survived 6 stack restarts and rendered correctly each time from a cold cache. Not run as the sheet's scripted steps |
 | D-04 | Splice / QA-repair surface plain text (expected, KL-i) | **P** (both halves) | Splice half (Run 5): plain-text failure, no `errorCode`, names the voice + reason. QA-repair half (Run 7, after a reboot interrupted Run 6 mid-flight): tightened `qa.seg.minRatio`/`maxRatio` via the app's own config API to manufacture a genuinely QA-flagged sentence, then real QA-repair hit the revoked character and failed plain-text, same shape — thresholds restored afterward |
 
