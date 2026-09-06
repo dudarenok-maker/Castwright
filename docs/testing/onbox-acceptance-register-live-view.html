@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">62</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">63</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->2<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->4<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->3<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->10<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->11<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1158,7 +1158,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">10 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">11 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1279,6 +1279,12 @@
         </ul>
         <p class="src">Windows box with Pinokio installed, a pre-existing install with CRLF-mangled <code>requirements/*.txt</code> (or ability to create one by checking out an old release prior to <code>.gitattributes</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2596">#2596</a>, PR #2799 · automated acceptance test in <code>resolve-release.test.js</code>; real-world confirmation that a stale-CRLF install updates without spurious reinstall and that a fresh install normalizes correctly · 10–15 minutes, grouping with <a href="#ge1">E1</a></p>
         <p><b>One-update lag:</b> Updates FROM pre-#2799 releases run the old <code>resolve-release.js</code>, so CRLF normalization only takes effect from the NEXT update onward (see <a href="#ge1">E1</a> and <code>pinokio-scripts/update.js</code> lines 19–28).</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E103</span><span class="iname">`scripts/wt-gc.mjs --prune` — real junction-first teardown ([#3051](https://github.com/dudarenok-maker/Castwright/issues/3051), ops-75 Part 4)</span><span class="risk">Not yet published</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p class="body-placeholder">Not yet published — run `npm run register:build` after adding row content, or fill in manually and re-run --check.</p>
       </div>
     </details>
 
