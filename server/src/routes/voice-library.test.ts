@@ -3297,6 +3297,8 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
     expect(res.body.warning).toMatch(/Russian/);
     expect(res.body.warning).toMatch(/English/);
     expect(res.body.warning).toMatch(/cloned in/);
+    expect(res.body.warning).not.toMatch(/unintelligible/);
+    expect(res.body.warning).toMatch(/less like the person/);
   });
 
   it('does not warn when the cloned voice language matches the book language', async () => {

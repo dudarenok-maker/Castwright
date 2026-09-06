@@ -1880,9 +1880,9 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
             try { bookLangName = sidecarLanguageName(bookLanguage); } catch { /* unregistered — skip */ }
             if (cloneLangName && bookLangName) {
               languageWarning =
-                `"${character.name ?? characterId}"'s voice was cloned in ${cloneLangName} but this ` +
-                `book is ${bookLangName} — the audio will be unintelligible. Re-clone the voice in ` +
-                `${bookLangName} to fix it.`;
+                `"${character.name ?? characterId}"'s voice was cloned in ${cloneLangName}, but this ` +
+                `book is ${bookLangName} — the clone will sound less like the person it was ` +
+                `cloned from. Re-clone the voice in ${bookLangName} to fix it.`;
             }
           }
         }

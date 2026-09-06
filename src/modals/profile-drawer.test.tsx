@@ -2329,7 +2329,7 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
       updated: 1,
       written: ['qwen'],
       warning:
-        '"Ada"\'s voice was cloned in Russian but this book is English — the audio will be unintelligible. Re-clone the voice in English to fix it.',
+        '"Ada"\'s voice was cloned in Russian, but this book is English — the clone will sound less like the person it was cloned from. Re-clone the voice in English to fix it.',
     });
     const clonedEntry: VoiceLibraryEntry = {
       voiceUuid: 'lib-clone-lang',
@@ -2349,7 +2349,7 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
     fireEvent.click(screen.getByTestId('profile-drawer-my-voice-lib-clone-lang'));
 
     expect(await screen.findByTestId('profile-drawer-my-voices-error')).toHaveTextContent(
-      'cloned in Russian but this book is English',
+      'cloned in Russian, but this book is English',
     );
   });
 
