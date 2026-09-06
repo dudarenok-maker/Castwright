@@ -15,6 +15,9 @@ import {
   renderEnvLocal,
   renderLaunchBlock,
   renderServerEnv,
+  extractSlotFromEnvLocal,
+  findClaimedSlots,
+  allocateNextSlot,
 } from '../wt-new.mjs';
 import { parseEnvLocal, parseWorktreePorcelain } from '../wt-list.mjs';
 
@@ -393,4 +396,164 @@ test('renderLaunchBlock includes both npm install lines when install=false', () 
   });
   assert.match(block, /npm install\b.*husky hooks/);
   assert.match(block, /npm install --prefix server/);
+});
+
+
+// ---- extractSlotFromEnvLocal ------------------------------------------------
+
+test('extractSlotFromEnvLocal parses slot from header comment', () => {
+  const env = renderEnvLocal({ slot: 2, branch: 'feat/server-foo', ports: computePorts(2) });
+  assert.equal(extractSlotFromEnvLocal(env), 2);
+});
+
+test('extractSlotFromEnvLocal handles slot 0 (primary)', () => {
+  const env = renderEnvLocal({ slot: 0, branch: 'main', ports: computePorts(0) });
+  assert.equal(extractSlotFromEnvLocal(env), 0);
+});
+
+test('extractSlotFromEnvLocal handles multi-digit slot numbers', () => {
+  const env = renderEnvLocal({ slot: 42, branch: 'feat/server-foo', ports: computePorts(42) });
+  assert.equal(extractSlotFromEnvLocal(env), 42);
+});
+
+test('extractSlotFromEnvLocal returns null when the marker is absent', () => {
+  assert.equal(extractSlotFromEnvLocal('# Some comment\nVITE_PORT=5173\n'), null);
+});
+
+test('extractSlotFromEnvLocal returns null for empty content', () => {
+  assert.equal(extractSlotFromEnvLocal(''), null);
+});
+
+test('extractSlotFromEnvLocal only reads the first line, not a later marker', () => {
+  // The generated marker is a first-line guarantee. A "worktree slot 9" phrase
+  // appearing further down (e.g. a hand-added note) must not be mistaken for it.
+  const env = 'VITE_PORT=5173\n# note: this pairs with worktree slot 9\n';
+  assert.equal(extractSlotFromEnvLocal(env), null);
+});
+
+test('extractSlotFromEnvLocal round-trips every slot renderEnvLocal writes', () => {
+  for (const slot of [0, 1, 5, 20]) {
+    const env = renderEnvLocal({ slot, branch: 'feat/server-test', ports: computePorts(slot) });
+    assert.equal(extractSlotFromEnvLocal(env), slot, `round-trip failed for slot ${slot}`);
+  }
+});
+
+// ---- findClaimedSlots -------------------------------------------------------
+
+// Builds a fixture directory holding one subdirectory per fake worktree, and
+// returns their absolute paths in the order given. A `slot` of null means the
+// tree exists but has no .env.local at all (an EnterWorktree-made tree); a
+// string value is written verbatim as the file's contents.
+function makeWorktreeFixture(t, specs) {
+  const root = mkdtempSync(join(tmpdir(), 'wt-slots-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  return specs.map((spec, i) => {
+    const treePath = join(root, `tree-${i}`);
+    mkdirSync(treePath, { recursive: true });
+    if (spec === null) return treePath;
+    const contents =
+      typeof spec === 'string'
+        ? spec
+        : renderEnvLocal({ slot: spec, branch: `feat/server-t${i}`, ports: computePorts(spec) });
+    writeFileSync(join(treePath, '.env.local'), contents, 'utf8');
+    return treePath;
+  });
+}
+
+test('findClaimedSlots reads the slot each worktree .env.local claims', (t) => {
+  const paths = makeWorktreeFixture(t, [0, 3, 1]);
+  assert.deepEqual(findClaimedSlots(paths), [0, 1, 3]);
+});
+
+test('findClaimedSlots returns an empty list when there are no worktrees', (t) => {
+  makeWorktreeFixture(t, []);
+  assert.deepEqual(findClaimedSlots([]), []);
+});
+
+test('findClaimedSlots ignores a worktree with no .env.local (claims no slot)', (t) => {
+  // #3052: EnterWorktree / Agent isolation:"worktree" trees never write
+  // .env.local. Such a tree must claim nothing and must not block allocation.
+  const paths = makeWorktreeFixture(t, [null, 2, null]);
+  assert.deepEqual(findClaimedSlots(paths), [2]);
+  assert.equal(allocateNextSlot(findClaimedSlots(paths)), 1);
+});
+
+test('findClaimedSlots skips an .env.local with no slot marker', (t) => {
+  const paths = makeWorktreeFixture(t, ['# hand-written\nVITE_PORT=5173\n', 4]);
+  assert.deepEqual(findClaimedSlots(paths), [4]);
+});
+
+test('findClaimedSlots de-duplicates two worktrees claiming the same slot', (t) => {
+  // The #3052 collision state itself: two live trees both stamped slot 2.
+  const paths = makeWorktreeFixture(t, [2, 2, 5]);
+  assert.deepEqual(findClaimedSlots(paths), [2, 5]);
+});
+
+// ---- allocateNextSlot -------------------------------------------------------
+
+test('allocateNextSlot returns 1 when no slots are claimed', () => {
+  assert.equal(allocateNextSlot([]), 1);
+});
+
+test('allocateNextSlot fills the lowest gap: claimed [1,3,4] -> 2', () => {
+  assert.equal(allocateNextSlot([1, 3, 4]), 2);
+});
+
+test('allocateNextSlot returns next after a contiguous run: claimed [1,2,3] -> 4', () => {
+  assert.equal(allocateNextSlot([1, 2, 3]), 4);
+});
+
+test('allocateNextSlot never hands out slot 0, reserved for the primary checkout', () => {
+  // Slot 0 belongs to the primary checkout, so allocation starts at 1 whether
+  // or not a tree has stamped slot 0 — including when nothing is claimed and
+  // when the first claim already sits above the floor.
+  for (const claimed of [[], [0], [0, 1], [1, 3], [0, 2, 3], [4]]) {
+    const got = allocateNextSlot(claimed);
+    assert.ok(got >= 1, `allocateNextSlot(${JSON.stringify(claimed)}) returned ${got}, below the floor`);
+  }
+  assert.equal(allocateNextSlot([0]), 1);
+  assert.equal(allocateNextSlot([0, 1]), 2);
+});
+
+test('allocateNextSlot returns the first gap in a sparse claim: [1,2,5,10] -> 3', () => {
+  assert.equal(allocateNextSlot([1, 2, 5, 10]), 3);
+});
+
+test('allocateNextSlot never returns a slot that is already claimed', () => {
+  const claimedSets = [[], [1], [0, 1], [1, 3, 4], [1, 2, 5, 10], [2, 3], [0, 2, 3, 7]];
+  for (const claimed of claimedSets) {
+    const got = allocateNextSlot(claimed);
+    assert.ok(got >= 1, `slot ${got} for claimed ${JSON.stringify(claimed)} must be >= 1`);
+    assert.ok(
+      !claimed.includes(got),
+      `allocateNextSlot(${JSON.stringify(claimed)}) returned already-claimed slot ${got}`,
+    );
+  }
+});
+
+// The #3052 regression. Old behaviour allocated `slot = <number of worktrees>`.
+// Fixture: five trees were created at slots 0..4, then slots 1 and 2 were torn
+// down. Three trees survive (0, 3, 4), so the old count-based rule hands the
+// next tree slot 3 — colliding head-on with the surviving tree already on 3.
+// The fix allocates the lowest unclaimed slot, 1.
+test('allocateNextSlot does not re-issue a surviving worktree slot after teardown (#3052)', (t) => {
+  const paths = makeWorktreeFixture(t, [0, 3, 4]);
+  const claimed = findClaimedSlots(paths);
+  assert.deepEqual(claimed, [0, 3, 4]);
+
+  const allocated = allocateNextSlot(claimed);
+
+  // Passes only under the fix; the old count-based rule yields paths.length === 3.
+  assert.equal(allocated, 1, 'expected the lowest free slot');
+  assert.notEqual(
+    allocated,
+    paths.length,
+    `old count-based allocation would have returned ${paths.length}, colliding with a live tree`,
+  );
+  assert.ok(!claimed.includes(allocated), 'allocated slot collides with a live worktree');
+
+  // And the collision the old rule caused is a real port clash, not just a
+  // number clash: slot 3 reuses the surviving tree's ports exactly.
+  assert.deepEqual(computePorts(paths.length), computePorts(3));
+  assert.notDeepEqual(computePorts(allocated), computePorts(3));
 });
