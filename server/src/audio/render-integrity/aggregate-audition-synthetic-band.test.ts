@@ -32,6 +32,7 @@ vi.mock('./audition-centroid.js', async (importOriginal) => ({
 
 import { scoreBook } from './aggregate.js';
 import { readVerdicts } from './verdicts-io.js';
+import { readCentroids } from './centroids-io.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 
 // A 2-d unit vector at angle θ, padded to length 8 (matches aggregate.test.ts).
@@ -336,5 +337,81 @@ describe('scoreBook — A36 synthetic-only-pool severity band (register row A36)
     // With the corrected fallback, cosine 0.50 must be severe
     expect(freshRender!.verdict).toBe('voice-mismatch');
     expect(freshRender!.severity).toBe('severe');
+  });
+
+  it('persistedAsRef bandMethod preservation: a post-fix audition row is correctly reused across multiple passes without oscillation', async () => {
+    // Regression test for the exact oscillation bug the reviewer measured:
+    // persistedAsRef dropped the bandMethod field during reuse, causing:
+    // - Pass 1: auditionCentroid calls = 1, bandMethod = "synthetic-sigma"
+    // - Pass 2: auditionCentroid calls = 1 (NOT 2), bandMethod = undefined (STRIPPED)
+    // - Pass 3: auditionCentroid calls = 2, bandMethod = "synthetic-sigma" (REBUILT)
+    // - Pass 4: auditionCentroid calls = 2, bandMethod = undefined (STRIPPED AGAIN)
+    //
+    // The oscillation occurred because persistedAsRef did not include bandMethod
+    // in its returned object, even though it correctly included auditionVoice.
+    // Every other pass lost the field, causing matchesCurrentVoice to reject the
+    // row (missing bandMethod means pre-fix row → always rebuild).
+    //
+    // With the fix (bandMethod included in persistedAsRef), both passes should
+    // be cache-hits and auditionCentroid should never be called.
+    mockSyntheticOnlyAudition();
+    const dir = mkdtempSync(join(tmpdir(), 'spk-a36-bandmethod-persist-'));
+
+    // Pre-pass: write a post-fix audition centroid row with bandMethod field
+    // and valid voice identity, simulating a successful audition from a prior run.
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    writeFileSync(
+      join(dir, 'audio', 'render-integrity.centroids.json'),
+      JSON.stringify({
+        thurid: {
+          characterId: 'thurid',
+          centroid: [1, 0, 0, 0, 0, 0, 0, 0],
+          cleanMean: 0.9629,
+          pSevere: 0.9119, // post-fix sigma-derived value for tight pool
+          pBand: 0.9347,   // post-fix sigma-derived value for tight pool
+          referenceKind: 'audition',
+          auditionVoice: {
+            voiceName: 'qwen-thurid',
+            modelKey: 'qwen3-tts-1.7b',
+            cloned: false,
+          },
+          bandMethod: 'synthetic-sigma', // post-fix field — the key difference from the pre-fix test above
+        },
+      }),
+    );
+    await writeThuridBook(dir, 0.928); // Fresh render at correct-voice cosine
+
+    // Pass 1: scoreBook should recognize the persisted row as a cache-hit
+    // (voice matches, bandMethod present) and NOT call auditionCentroid.
+    // Before the fix, this would have been a cache-hit (no bandMethod stripping yet).
+    auditionSpy.mockClear();
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+    const callsAfterPass1 = auditionSpy.mock.calls.length;
+    expect(callsAfterPass1).toBe(0); // No rebuild — cache hit
+
+    // Read centroids after pass 1; verify bandMethod survived write-back
+    const centroids1 = await readCentroids(dir);
+    expect(centroids1?.thurid?.bandMethod).toBe('synthetic-sigma');
+
+    // Pass 2: run scoreBook again without any changes to the book.
+    // Before the fix, the persisted row would have lost bandMethod in Pass 1's
+    // write-back (persistedAsRef dropped it), so Pass 2 would treat it as pre-fix
+    // and rebuild (auditionCentroid called = 1). After the fix, it remains a
+    // cache-hit and auditionCentroid is NOT called (calls = 0).
+    auditionSpy.mockClear();
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+    const callsAfterPass2 = auditionSpy.mock.calls.length;
+    expect(callsAfterPass2).toBe(0); // Still cache-hit — no oscillation
+
+    // Read centroids after pass 2; verify bandMethod is STILL there (not stripped)
+    const centroids2 = await readCentroids(dir);
+    expect(centroids2?.thurid?.bandMethod).toBe('synthetic-sigma');
+
+    // Verify the fresh render is NOT flagged severe with the sigma-based band
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    const freshRender = verdicts!.find((v) => v.sentenceIds[0] === 99);
+    expect(freshRender).toBeDefined();
+    expect(freshRender!.verdict).not.toBe('voice-mismatch');
+    expect(freshRender!.severity).not.toBe('severe');
   });
 });

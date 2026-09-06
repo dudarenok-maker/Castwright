@@ -185,7 +185,7 @@ type ReferenceOutcome =
 const TOO_SHORT_REF: CharacterReference = { centroid: [], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' };
 
 function persistedAsRef(row: CharacterCentroid): CharacterReference {
-  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice };
+  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice, bandMethod: row.bandMethod };
 }
 
 /** #1969 / A36 — whether a persisted audition centroid's recorded voice identity still matches the
