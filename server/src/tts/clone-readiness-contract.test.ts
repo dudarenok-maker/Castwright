@@ -125,6 +125,29 @@ function verdictsAgree(client: CloneUnready | null, render: RenderReason): boole
   return VERDICT_PAIRS.some((p) => p.client === client && p.render === render);
 }
 
+/* --- Type-level guard: every CloneUnready state must have a VERDICT_PAIRS entry ---
+
+   If you add a new CloneUnready state to clone-readiness.ts without adding a
+   corresponding row to VERDICT_PAIRS, this will fail to compile with a type error.
+   This catches what the contract test itself might miss: a new state paired with
+   no row in the table, which would leave the fixture suite green even though the
+   co-oracle contract would be incomplete. The reasonCopy() exhaustiveness switch
+   in clone-readiness-gate.tsx catches missing UI copy, but that doesn't catch a
+   missing VERDICT_PAIRS row.
+
+   The check works by extracting all client values from VERDICT_PAIRS and asserting
+   they exactly match CloneUnready | null via two-way exclusion (no missing states,
+   no extra states). */
+type VerdictPairsClients = typeof VERDICT_PAIRS[number]['client'];
+type MissingFromPairs = Exclude<CloneUnready | null, VerdictPairsClients>;
+type ExtraInPairs = Exclude<VerdictPairsClients, CloneUnready | null>;
+
+// Force TypeScript to evaluate and error if either type is not 'never'
+function _assertVerdictPairsExhaustiveness(
+  _x: MissingFromPairs extends never ? (ExtraInPairs extends never ? true : never) : never
+) {}
+_assertVerdictPairsExhaustiveness(true);
+
 /* --- Fixture shape ---------------------------------------------------------
 
    One shape, both oracles. `rawStatus`/`versionMismatch` describe the
