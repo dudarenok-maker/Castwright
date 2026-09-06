@@ -31,11 +31,16 @@ this file gets fixed. Anything of general value belongs in `CLAUDE.md` instead.
 - **Skills resolve from `~/.agents/skills/`; a workspace `.claude/skills/` is
   not read.** Both proven by probe (2026-08-13,
   `docs/testing/agent-skill-resolution-probe.md`), as is `~/.cline/skills`
-  being dead. So re-run `npm run skills:sync` after any change under
-  `.claude/skills/pr-review-gate/` -- a per-machine step, since the target is
-  under `$HOME`, so CI cannot run it and a fresh clone has no mirror. Do not
-  read that as an exhaustive list: the loader composes skill roots from its
-  rule directories (`skillsPath: join(<ruleDir>, "skills")`), so workspace
+  being dead. `npm run skills:sync` re-mirrors `.claude/skills/pr-review-gate/`
+  and `.claude/skills/model-routing/` there after a change lands -- a
+  per-machine step, since the target is under `$HOME`, so CI cannot run it
+  and a fresh clone has no mirror. It always reads content from `main`'s
+  committed git blob, never from whatever branch is checked out, so it's
+  safe to run from any branch or worktree once the change has merged (#3001)
+  -- don't run it before merging, since a not-yet-merged change isn't on
+  `main` yet and will just be skipped. Do not read that as an exhaustive
+  list of skill roots: the loader composes skill roots from its rule
+  directories (`skillsPath: join(<ruleDir>, "skills")`), so workspace
   roots may also work. They are untested, and presence in the code is not
   proof -- `~/.cline/skills` sits in that same list and is dead. Treat anything
   beyond the two probed answers as unverified (#2368).

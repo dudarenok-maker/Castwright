@@ -17,9 +17,17 @@
 import { readFileSync } from 'node:fs';
 
 /**
+ * @param {string} text
+ * @returns {string} `text` with every `\r\n` collapsed to `\n`
+ */
+export function normalizeEol(text) {
+  return text.replace(/\r\n/g, '\n');
+}
+
+/**
  * @param {import('node:fs').PathLike} path
  * @returns {string} the file's utf8 text with every `\r\n` collapsed to `\n`
  */
 export function readNormalized(path) {
-  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+  return normalizeEol(readFileSync(path, 'utf8'));
 }

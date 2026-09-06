@@ -16,16 +16,27 @@
 // and every one of those links resolved to a directory the mirror did not
 // write until then.
 //
-// This is a PER-MACHINE, POST-MERGE-ONLY step. CI cannot run it — the target
-// lives under $HOME, which is absent on every fresh clone and every CI
-// runner. Run `npm run skills:sync` from `main` in the primary checkout
-// AFTER a change under .claude/skills/pr-review-gate/ or
-// .claude/skills/model-routing/ has merged — never from the feature branch
-// that made the change. The mirror is shared machine state read by every
-// worktree on the box; syncing from a feature branch overwrites it with that
-// branch's unmerged content and poisons the drift guard for every other lane
-// until someone re-syncs from `main` (see #3001). The script refuses to run
-// outside `main` for this reason (assertOnMainBranch below).
+// This is a PER-MACHINE step. CI cannot run it — the target lives under
+// $HOME, which is absent on every fresh clone and every CI runner.
+//
+// #3001 — the mirror is MACHINE state, not BRANCH state: every worktree on
+// the box shares one ~/.agents/skills/, so whichever content this script
+// last wrote decides what every other lane's drift guard compares against.
+// An earlier version of this script read its canonical source from THIS
+// CHECKOUT's disk copy of .claude/skills/**, gated on the current branch
+// being 'main' — but a branch name is a proxy for the property that
+// actually matters (the mirror holds `main`'s *committed* content), and a
+// dirty `main` checkout (trivial commits and git-ignored artifact work in
+// the primary checkout are both explicitly sanctioned by CLAUDE.md) would
+// still poison the mirror straight through that check. So this script now
+// reads every file's content via `git show main:<path>` (readCommittedOnMain
+// below) regardless of which branch or worktree invoked it — the write is
+// then deterministic given `main`'s current commit, and there is no branch
+// or working-tree state left that can make it wrong. A `FILES` entry that
+// isn't on `main` yet (e.g. a branch that just added a newly-mirrored skill)
+// is skipped with a loud log line rather than failing — the mirror provably
+// cannot hold content `main` doesn't have, and it will pick it up on the
+// first sync after that branch merges. See #3001 for the incident.
 //
 // Three encoding/format traps bit the original hand sync this script
 // replaces. Each produces a file that LOOKS fine and is broken:
@@ -48,7 +59,6 @@ import { scrubGitEnv } from './git-env.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..');
-const SKILLS_ROOT = join(REPO_ROOT, '.claude', 'skills');
 const MIRROR_ROOT = join(homedir(), '.agents', 'skills');
 
 /** Skill-QUALIFIED relative paths, mirroring the store's own layout. Was a
@@ -136,13 +146,17 @@ function assertNoBom(buf, path) {
   }
 }
 
-/** Syncs a single canonical file to its mirrored destination. Exported (in
- *  addition to syncAgentSkills) so tests can exercise the real read/check/
- *  write path against fixture paths, without touching the actual $HOME
- *  mirror. */
-export function syncOneFile(srcPath, destPath, rel) {
-  assertNoBom(readFileSync(srcPath), srcPath);
-  const canonicalContent = readFileSync(srcPath, 'utf8');
+/** Validates a canonical file's raw bytes and builds+writes its mirrored
+ *  destination. Shared by syncOneFile (disk-sourced, below) and
+ *  syncAgentSkills (git-sourced): both must run the exact same checks so
+ *  neither path can diverge from the other. `sourceLabel` names the
+ *  CANONICAL SOURCE in error messages (a disk path for syncOneFile, a
+ *  `main:<path>` git ref for syncAgentSkills) — deliberately not `destPath`,
+ *  since the defect being reported is always in the source, never the
+ *  (not-yet-written) mirror. */
+function writeMirroredFile(rawBuffer, destPath, rel, sourceLabel) {
+  assertNoBom(rawBuffer, sourceLabel);
+  const canonicalContent = rawBuffer.toString('utf8');
   const mirrored = buildMirrorContent(canonicalContent, rel);
 
   // Checked BEFORE the write, like assertNoBom above: `mirrored` already
@@ -150,7 +164,7 @@ export function syncOneFile(srcPath, destPath, rel) {
   // after the write let a malformed canonical source clobber a previously
   // good mirror with an unusable one before the throw ever fired.
   if (basename(rel) === 'SKILL.md' && !mirrored.startsWith('---\n')) {
-    throw new Error(`${srcPath}: frontmatter is not the first line`);
+    throw new Error(`${sourceLabel}: frontmatter is not the first line`);
   }
 
   mkdirSync(dirname(destPath), { recursive: true });
@@ -158,6 +172,37 @@ export function syncOneFile(srcPath, destPath, rel) {
 
   console.log(`wrote ${destPath}`);
   return destPath;
+}
+
+/** Syncs a single canonical file, read from DISK, to its mirrored
+ *  destination. Exported so tests can exercise the real read/check/write
+ *  path against fixture paths, without touching the actual $HOME mirror or
+ *  shelling out to git. Production syncing (syncAgentSkills below) does NOT
+ *  use this — it reads from `main`'s committed git blob instead, since a
+ *  disk read is exactly the bug #3001 fixed (see the module header). */
+export function syncOneFile(srcPath, destPath, rel) {
+  return writeMirroredFile(readFileSync(srcPath), destPath, rel, srcPath);
+}
+
+/** Reads a skills-root-relative path (e.g. 'pr-review-gate/SKILL.md') as it
+ *  is COMMITTED ON `main` — never as it sits on whatever branch is currently
+ *  checked out. Returns `null` (rather than throwing) when the path doesn't
+ *  exist on `main`, so a caller can distinguish "not there yet" (a branch
+ *  that just added a new mirrored file — not an error, see #3001) from a
+ *  real failure. `git show` reads a worktree's shared `.git`, so this
+ *  resolves correctly regardless of which branch this checkout has out. */
+export function readCommittedOnMain(rel, repoRoot = REPO_ROOT) {
+  const gitPath = `.claude/skills/${rel}`;
+  try {
+    return execFileSync('git', ['show', `main:${gitPath}`], {
+      cwd: repoRoot,
+      windowsHide: true,
+      env: scrubGitEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch {
+    return null;
+  }
 }
 
 // Guards the one input the commit-time guard (the exact-list assert in
@@ -174,57 +219,44 @@ export function assertFilesNonEmpty(files) {
   }
 }
 
-// #3001 — the mirror is MACHINE state, not BRANCH state: every worktree on
-// the box shares one ~/.agents/skills/, so whichever branch last ran this
-// script decides what every other lane's drift guard compares against. A
-// feature branch that syncs its own unmerged edit to a mirrored skill
-// poisons the mirror for every unrelated worktree until someone re-syncs
-// from `main` — which is exactly what happened with PR #2999 (see #3001).
-// The old guidance ("re-run after any change under either directory") reads
-// as "run it when you make the change," i.e. from the feature branch, which
-// is precisely the harmful moment. This is a POST-MERGE-ONLY step: the
-// mirror must only ever hold what's on `main`. Exported so the check can be
-// exercised directly, mirroring assertNoBom/assertFilesNonEmpty above.
-export function assertOnMainBranch(branchName) {
-  if (branchName !== 'main') {
-    throw new Error(
-      `sync-agent-skills: refusing to sync from branch '${branchName}' — the mirror ` +
-        "is shared machine state, not branch state, and must only ever hold what's on " +
-        "'main'. This is a POST-MERGE step: merge your change first, check out 'main', " +
-        'then run `npm run skills:sync` again. Syncing from a feature branch poisons the ' +
-        'shared mirror for every other worktree on this machine (see #3001).',
-    );
-  }
-}
-
-function currentBranch() {
-  return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    windowsHide: true,
-    env: scrubGitEnv(),
-  }).trim();
-}
-
-export function syncAgentSkills() {
-  assertOnMainBranch(currentBranch());
-  assertFilesNonEmpty(FILES);
+/**
+ * Syncs every mirrored skill file from `main`'s committed content.
+ *
+ * `files` and `mirrorRoot` default to the real FILES/MIRROR_ROOT but are
+ * overridable so tests can exercise the real end-to-end read-from-git/write
+ * path (including the "not on main yet" skip below) without ever touching
+ * the actual $HOME mirror.
+ *
+ * Returns `{ written, skipped }`: `written` are destination paths actually
+ * written; `skipped` are FILES entries whose content isn't on `main` yet
+ * (see readCommittedOnMain) — not an error, just nothing to sync yet.
+ */
+export function syncAgentSkills(files = FILES, mirrorRoot = MIRROR_ROOT) {
+  assertFilesNonEmpty(files);
   const written = [];
-  for (const rel of FILES) {
-    written.push(syncOneFile(join(SKILLS_ROOT, rel), join(MIRROR_ROOT, rel), rel));
+  const skipped = [];
+  for (const rel of files) {
+    const raw = readCommittedOnMain(rel);
+    if (raw === null) {
+      console.log(`[skip] ${rel} is not on 'main' yet — it will sync once that change merges`);
+      skipped.push(rel);
+      continue;
+    }
+    written.push(writeMirroredFile(raw, join(mirrorRoot, rel), rel, `main:.claude/skills/${rel}`));
   }
-  return written;
+  return { written, skipped };
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
   try {
-    syncAgentSkills();
+    const { written, skipped } = syncAgentSkills();
     console.log(
-      '\nThis is a per-machine step — CI cannot run it (the target lives in ' +
-        '$HOME and is absent on every fresh clone). This is POST-MERGE ONLY: run it ' +
-        'from `main` in the primary checkout after a change under ' +
-        '.claude/skills/pr-review-gate/ or .claude/skills/model-routing/ has merged — ' +
-        'never from the feature branch that made the change (see #3001).',
+      `\nWrote ${written.length}, skipped ${skipped.length} (not yet on 'main'). This is a ` +
+        'per-machine step — CI cannot run it (the target lives in $HOME and is absent on ' +
+        'every fresh clone). Re-run after a change under .claude/skills/pr-review-gate/ or ' +
+        ".claude/skills/model-routing/ has merged to `main` — content is always read from " +
+        "main's committed git blob, never from this checkout's disk, so it's safe to run " +
+        'from any branch or worktree (see #3001).',
     );
   } catch (err) {
     console.error(`skills:sync failed: ${err.message}`);

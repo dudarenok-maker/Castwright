@@ -461,25 +461,30 @@ Design rationale:
   presence is not proof — `~/.cline/skills` is in that same list and was proven
   dead — so it stays unverified pending #2368. A
   **per-machine** step: the target is under `$HOME`, so CI cannot run it and a
-  fresh clone has no mirror. **POST-MERGE ONLY, run from `main` in the
-  primary checkout — never from the feature branch that made the change**
-  (#3001): the mirror is shared machine state read by every worktree on the
-  box, so syncing from a feature branch overwrites it with that branch's
-  unmerged content and blocks every other lane's commits until someone
-  re-syncs from `main`. This was previously worded "re-run after any change
-  under either directory," which read as "run it now, from this branch" and
-  is exactly what caused PR #2999 to poison the mirror out from under the
-  unrelated PR #2998. `sync-agent-skills.mjs` now refuses to run outside
-  `main` for this reason. The drift guard in
-  `scripts/tests/review-gate-mechanism.test.mjs` checks the store root
-  (`~/.agents/skills/`) against what `main` has committed (not against
-  whatever branch is checked out), so it only **skips**, loudly, on a machine
-  with no store at all — once the store exists (e.g. any box where Cline has
-  installed its global skills), the guard **fails** rather than skips if the
-  mirror doesn't match `main`, even if `skills:sync` has never been run on
-  that machine. If this guard fires, do not reflexively re-run
-  `skills:sync` from wherever you are — that is the action that propagates a
-  poisoned mirror; check out `main` in the primary checkout first.
+  fresh clone has no mirror. **The mirror is shared machine state, read by
+  every worktree on the box, and it can only ever hold what's on `main`**
+  (#3001): `sync-agent-skills.mjs` reads every mirrored file's content via
+  `git show main:<path>` — never from this checkout's disk — so the write is
+  deterministic given `main`'s current commit, and **it is safe to run
+  `npm run skills:sync` from any branch or worktree**; a `FILES` entry that
+  isn't on `main` yet (e.g. this very change adding a new mirrored file) is
+  skipped with a loud log line rather than failing, and picks up on the next
+  sync after that change merges. This used to work the other way — reading
+  from disk, gated on the branch being `main` — and a feature branch that
+  synced its own unmerged edit to a mirrored skill overwrote the shared
+  mirror with that content, blocking every other lane's commits until
+  someone re-synced from `main` (PR #2999 vs. PR #2998, #3001). The drift
+  guard in `scripts/tests/review-gate-mechanism.test.mjs` checks the store
+  root (`~/.agents/skills/`) against what `main` has committed via that same
+  `git show` read (imported, not reimplemented, so guard and producer can't
+  diverge), so it only **skips**, loudly, on a machine with no store at all —
+  once the store exists (e.g. any box where Cline has installed its global
+  skills), the guard **fails** rather than skips if the mirror doesn't match
+  `main`, even if `skills:sync` has never been run on that machine. If this
+  guard fires, run `npm run skills:sync` after confirming this machine's
+  local `main` is up to date with `origin/main` — a stale local `main` is the
+  one way this can still go wrong, since the sync reads whatever `main` this
+  machine's git has, not `origin/main` directly.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
   is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not

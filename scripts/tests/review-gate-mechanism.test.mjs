@@ -39,14 +39,14 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { readNormalized } from '../lib/read-normalized.mjs';
-import { scrubGitEnv } from '../git-env.mjs';
+import { readNormalized, normalizeEol } from '../lib/read-normalized.mjs';
 import {
   FILES as MIRRORED_FILES,
   buildMirrorContent,
   syncOneFile,
+  syncAgentSkills,
+  readCommittedOnMain,
   assertFilesNonEmpty,
-  assertOnMainBranch,
 } from '../sync-agent-skills.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -561,42 +561,35 @@ test('MIRRORED_FILES (sync-agent-skills.mjs FILES) is non-empty and names the ex
   ]);
 });
 
-// Reads a skills-root-relative path (e.g. 'pr-review-gate/SKILL.md') as it is
-// COMMITTED ON `main` — not as it sits on whatever branch this worktree
-// happens to have checked out. #3001: the mirror is machine state shared by
-// every worktree on the box, and sync-agent-skills.mjs now refuses to write
-// it from anything but `main` (assertOnMainBranch), so `main` is the only
-// content the mirror can ever legitimately hold. Comparing against the
-// CURRENT checkout's disk copy instead — the old behaviour — made this test
-// fail on a branch with a perfectly legitimate, not-yet-synced in-flight edit
-// to a mirrored skill, which is exactly the false positive that blocked PR
-// #2998 while PR #2999 held an unmerged edit elsewhere on the same machine.
-// `git show` reads a worktree's shared `.git`, so this resolves correctly
-// regardless of which branch is checked out here.
-function readCommittedOnMain(rel) {
-  const gitPath = `.claude/skills/${rel}`;
-  let raw;
-  try {
-    raw = execFileSync('git', ['show', `main:${gitPath}`], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      windowsHide: true,
-      env: scrubGitEnv(),
-    });
-  } catch (err) {
-    throw new Error(`git show main:${gitPath} failed — is local 'main' up to date? (${err.message})`);
-  }
-  return raw.replace(/\r\n/g, '\n');
-}
+test('sync-agent-skills.mjs refuses to report success with an empty file list', () => {
+  // Closes the same wiring gap `assertFilesNonEmpty`'s own comment already
+  // asserts but nothing previously verified end-to-end: this calls the
+  // public `syncAgentSkills()` entry point itself (not just the standalone
+  // guard function), proving the empty-list check actually sits in front of
+  // the write loop rather than merely existing as an unused export.
+  assert.throws(() => syncAgentSkills([]), /FILES is empty/);
+});
 
-test('sync-agent-skills.mjs refuses to run from a branch other than main', () => {
-  // #3001: this is the mechanical half of the fix — it turns "run
-  // skills:sync post-merge from main" from a documentation convention (which
-  // PR #2999's implementer followed literally, reading "re-run after any
-  // change" as "run it now, from this branch") into something the script
-  // itself enforces.
-  assert.throws(() => assertOnMainBranch('chore/some-feature'), /refusing to sync from branch/);
-  assert.doesNotThrow(() => assertOnMainBranch('main'));
+test('syncAgentSkills writes a real, git-sourced mirror for a file on main and skips one that is not, without ever touching the real ~/.agents/skills', () => {
+  // #3001: this is the wiring test for the actual fix, not just its pieces.
+  // Passing an injected `mirrorRoot` here is what makes it safe to exercise
+  // the *real* write path in a unit test: a version of this test that used
+  // the default $HOME mirror would mutate real machine state on every local
+  // test run — exactly the shared-mutable-state hazard this PR closes.
+  const tmpMirror = mkdtempSync(join(tmpdir(), 'skills-sync-wiring-'));
+  try {
+    const result = syncAgentSkills(['pr-review-gate/SKILL.md', 'does/not/exist/on/main.md'], tmpMirror);
+    assert.deepEqual(result.skipped, ['does/not/exist/on/main.md']);
+    assert.deepEqual(result.written, [join(tmpMirror, 'pr-review-gate', 'SKILL.md')]);
+    const written = readFileSync(join(tmpMirror, 'pr-review-gate', 'SKILL.md'), 'utf8');
+    assert.equal(
+      normalizeEol(written),
+      buildMirrorContent(normalizeEol(readCommittedOnMain('pr-review-gate/SKILL.md').toString('utf8')), 'pr-review-gate/SKILL.md'),
+    );
+    assert.ok(!existsSync(join(tmpMirror, 'does')), "a FILES entry not on 'main' must not create any output");
+  } finally {
+    rmSync(tmpMirror, { recursive: true, force: true });
+  }
 });
 
 test('the agent-store mirror matches what main has committed, when it exists', () => {
@@ -605,21 +598,42 @@ test('the agent-store mirror matches what main has committed, when it exists', (
   // would turn every never-synced machine red. The trade is deliberate — but
   // it means a GREEN run here proves nothing about a machine that has not
   // synced, so never report this as "the mirror is in sync".
+  //
+  // Compares against what `main` has COMMITTED (readCommittedOnMain, the
+  // exact same function production syncing uses — imported, not
+  // reimplemented, so the two can never diverge the way they did in #3001)
+  // rather than against the current worktree's disk copy of
+  // `.claude/skills/**`. A branch with a legitimate, not-yet-synced in-flight
+  // edit to a mirrored skill no longer trips this — that false positive is
+  // exactly what blocked PR #2998 while PR #2999 held an unmerged edit
+  // elsewhere on the same machine.
+  //
+  // A `rel` not yet present on `main` (e.g. this very branch just adding a
+  // 5th mirrored file — done for real on 2026-08-14 when model-routing/
+  // joined) is skipped rather than asserted-missing: the mirror provably
+  // cannot hold content `main` doesn't have yet, so failing on it would
+  // deadlock the branch that adds it with no legal remedy (#3001).
   if (!existsSync(AGENT_SKILL_STORE)) {
     console.log(`[skip] no agent-store mirror at ${AGENT_SKILL_STORE} — run npm run skills:sync`);
     return;
   }
   for (const rel of MIRRORED_FILES) {
+    const raw = readCommittedOnMain(rel);
+    if (raw === null) {
+      console.log(`[skip] ${rel} is not on 'main' yet — the mirror can't hold it until that change merges`);
+      continue;
+    }
     const mirrored = join(AGENT_SKILL_STORE, rel);
-    assert.ok(existsSync(mirrored), `mirror is missing ${rel} — run npm run skills:sync from main`);
+    assert.ok(existsSync(mirrored), `mirror is missing ${rel}, which IS on main — run npm run skills:sync`);
     assert.equal(
       readNormalized(mirrored),
-      buildMirrorContent(readCommittedOnMain(rel), rel),
+      buildMirrorContent(normalizeEol(raw.toString('utf8')), rel),
       `${rel} in the shared ~/.agents/skills mirror does not match main's committed copy. ` +
         "This does NOT necessarily mean YOUR branch is wrong — the mirror is shared machine " +
-        "state, and another worktree on this box may have synced an unmerged edit into it " +
-        '(see #3001). Do not blindly run `npm run skills:sync` from here: check out `main` ' +
-        'in the PRIMARY checkout, pull latest, and run it from there.',
+        'state, and another worktree on this box may have synced from a stale local `main` ' +
+        '(see #3001). Run `npm run skills:sync` (it always reads from `main`\'s committed git ' +
+        "blob regardless of which branch runs it, so it's safe to run from anywhere) after " +
+        "confirming this machine's local `main` is up to date with origin.",
     );
   }
 });
