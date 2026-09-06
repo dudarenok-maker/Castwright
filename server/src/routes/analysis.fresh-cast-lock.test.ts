@@ -330,8 +330,20 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
         released();
         resAlias = await aliasPromise;
         /* #2015 — three handoffs now, not one: add-alias releases, the job's
-           locked capture acquires+releases, then the delete acquires. */
-        await new Promise((r) => setTimeout(r, 400));
+           locked capture acquires+releases, then the delete acquires. Poll for
+           the delete to complete (file removal) rather than sleeping a fixed
+           duration, which can fail under lock-contention delays. No
+           resurrection write is possible after resAlias resolves, since the
+           add-alias write has already landed on disk (writeJsonAtomic happens
+           before the HTTP response) and Phase 0 is still gated. */
+        await vi.waitFor(
+          () => {
+            if (existsSync(castPath)) {
+              throw new Error('cast.json still exists; delete has not completed');
+            }
+          },
+          { timeout: 5_000, interval: 10 },
+        );
 
         // Capture disk state NOW, before Phase 0 (still gated) is allowed to
         // proceed to the job's own later, legitimate cast.json write.
