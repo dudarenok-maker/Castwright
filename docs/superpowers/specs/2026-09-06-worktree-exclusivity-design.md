@@ -131,10 +131,21 @@ If this class recurs *between lanes*, that is new information — the two lane-s
 guarded, so a lane-versus-lane collision would mean one of those guards is wrong — and this
 document is wrong. If it recurs between a lane and a human, it is the known limit above.
 
-## Confounder, noted and not addressed
+## Confounder, and how it was settled
 
 `EngineLaneCap` went 1 → 3 in `open-engine` `f741933` at 2026-09-05T20:49Z, ~2h before the
 incident, and #2914 was held back under the old cap earlier the same evening. Causation is not
 established — `answered` sorts rank 0, so the ticket would likely have taken the next freed slot
-under cap 1 as well, delayed rather than prevented. But **any measurement of whether this class
-recurs is confounded while the cap sits at 3**, and it is a one-line revert.
+under cap 1 as well, delayed rather than prevented.
+
+**Resolved 2026-09-06: 3 is now the settled value, not an experiment**
+(`open-engine` PR #66). The caution originally attached to it was retired rather than carried
+forward, because the mechanism it warned about is gone: it watched for pre-commit hooks stalling
+under simultaneous vitest batteries, and ops-2997 removed test batteries from hooks entirely, so
+concurrent lanes can no longer collide that way at all. Two errors in the original were corrected
+at the same time — the cap is **global**, not claude-scoped as its commit subject implied, and
+`MaxLanes` (4) still bounds total concurrency regardless of it.
+
+**So this is no longer a confounder to be removed before measuring — it is the condition being
+measured under.** Any future recurrence of the two-writer class is evidence about the system as it
+is actually configured, not an artefact to be discounted.
