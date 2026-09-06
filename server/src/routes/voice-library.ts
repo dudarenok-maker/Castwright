@@ -717,7 +717,7 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
        with whatever this returns, so a raw response silently downgrades the
        client's copy from the computed status to the persisted one. A
        version-stale-but-`ready` slot then reads `'ready'` on the client
-       instead of `'stale'`, and `cloneReadiness`'s rules 5/6 — gated on
+       instead of `'stale'`, and `cloneReadiness`'s rules 6/7 — gated on
        `slotStatus !== 'ready'` — stop firing. That is a false negative of
        exactly the class that killed rev 2, and the plan's own "Add
        transcript" flow triggers it: the CTA PATCHes, this response lands in
@@ -752,14 +752,14 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
    early return.
 
    [R3] Why this does not reintroduce the loop the `failed` stamp exists to
-   prevent. `cloneReadiness`'s rule 4 (`slotStatus === 'failed'` ->
-   `derive-failed`) is ordered BEFORE rules 5/6 (`missing-master` /
+   prevent. `cloneReadiness`'s rule 5 (`slotStatus === 'failed'` ->
+   `derive-failed`) is ordered BEFORE rules 6/7 (`missing-master` /
    `no-transcript`) — see clone-readiness.ts. Once this route deletes the
    stamp, the predicate re-evaluates the UNDERLYING cause on the next
    check: a derive-failed voice with a blank transcript immediately reports
    `no-transcript` again, and the cast-time gate stays up with the CTA that
    actually fixes it. Only a failure whose cause isn't expressible in rules
-   5-6 (e.g. a transient sidecar OOM) clears to "ready to try" and can fail
+   6-7 (e.g. a transient sidecar OOM) clears to "ready to try" and can fail
    again on the next derive — that residue is real and is why the CTA is
    labelled "Retry derive", not "Fix"; a repeat failure simply re-stamps
    `failed`. The policy `clone-voice-resolver.ts:229-231` protects is that a

@@ -904,8 +904,9 @@ actually be done.
 - **#1984**, **#2128** — live worktrees as of 2026-08-11. #1984 is at revision 7
   with rounds 5/6/7 all failing their gates and **scope growth awaiting owner
   sign-off**. Neither is touched by this sweep.
-- **#2068**, **#2054**, **#1600** — fs-38 Wave 3, which is **paused** with E-04
+- **#2068**, **#1600** — fs-38 Wave 3, which is **paused** with E-04
   failing and on-box at 16/60. They unpause with the wave or not at all.
+  (#2054 closed by PR #3014.)
 
 ### Sequencing
 
@@ -1248,8 +1249,8 @@ re-decremented pending #2765's disposition (see Wave 2) — if #2765 is closed
 as duplicate rather than producing a second fix, #2582 drops out and the real
 total is 57.
 
-**Gated — paused wave, unchanged (2):** #2054, #1600 — fs-38 Wave 3 stays
-paused pending its own unpause decision.
+**Gated — paused wave, unchanged (1):** #1600 — fs-38 Wave 3 stays
+paused pending its own unpause decision. (#2054 closed by PR #3014.)
 
 ### Sequencing
 
@@ -1276,7 +1277,7 @@ paused pending its own unpause decision.
 4. **Wave 7 blocked** — park with a label, or collapse into one tracking
    issue? (Carried, unanswered, from Round 4.)
 5. **Wave 5** — is a GPU sitting available? Fourth round asking.
-6. **fs-38 Wave 3** — stays paused, or unpauses (#2054, #1600)?
+6. **fs-38 Wave 3** — stays paused, or unpauses (#1600)? (#2054 closed by PR #3014.)
 
 ## Invariants to preserve
 

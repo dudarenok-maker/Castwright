@@ -29,6 +29,7 @@ import { isCloneEngine } from './clone-engines.js';
 import type { TtsEngine } from './model-keys.js';
 
 export type CloneUnready =
+  | 'unresolvable-uuid'
   | 'revoked'
   | 'wrong-engine'
   | 'derive-failed'
@@ -37,6 +38,13 @@ export type CloneUnready =
   | 'missing-entry';
 
 export interface CloneReadinessInput {
+  /** false when the character's cloned slot carries no libraryUuid at all,
+      or the value is empty or malformed — so there is nothing to look up.
+      Distinct from `entryFound` (below): that flag means a UUID WAS present
+      but resolved to no voice-library entry. This one fires earlier, and
+      the render classifies both as `misconfigured` (clone-voice-resolver.ts
+      `!libraryUuid` check). */
+  libraryUuidResolvable: boolean;
   /** false when the character's libraryUuid resolves to no voice-library
       entry at all. */
   entryFound: boolean;
@@ -63,27 +71,29 @@ export interface CloneReadinessInput {
 
 /* Rules, in order — the order is the contract (plan 276 Decision 3):
 
-   1. !entryFound              -> 'missing-entry'
-   2. consentRevoked           -> 'revoked'
-   3. !isCloneEngine(engine)
+   1. !libraryUuidResolvable   -> 'unresolvable-uuid'  (#2912)
+   2. !entryFound              -> 'missing-entry'
+   3. consentRevoked           -> 'revoked'
+   4. !isCloneEngine(engine)
       || !characterHasSlot     -> 'wrong-engine'
-   4. slotStatus === 'failed'  -> 'derive-failed'
-   5. slotStatus !== 'ready'
-      && !hasMaster            -> 'missing-master'
+   5. slotStatus === 'failed'  -> 'derive-failed'
    6. slotStatus !== 'ready'
+      && !hasMaster            -> 'missing-master'
+   7. slotStatus !== 'ready'
       && engine === 'qwen'
       && !transcript?.trim()   -> 'no-transcript'
-   7. otherwise                -> null (ready, or needs a derive that will succeed)
+   8. otherwise                -> null (ready, or needs a derive that will succeed)
 
-   Rules 5 and 6 are gated on `slotStatus !== 'ready'` because a `ready` slot
+   Rules 6 and 7 are gated on `slotStatus !== 'ready'` because a `ready` slot
    with a live artifact and no master (or a blank transcript) is a HEALTHY,
-   explicitly supported state (voice-library.ts:1249-1251) — ungated, rule 5
-   would warn on a working voice with no CTA, and rule 6 would tell the user
+   explicitly supported state (voice-library.ts:1249-1251) — ungated, rule 6
+   would warn on a working voice with no CTA, and rule 7 would tell the user
    to "fix" a voice that already renders. Do not simplify this gate away. */
 export function cloneReadiness(input: CloneReadinessInput): CloneUnready | null {
-  const { entryFound, consentRevoked, slotStatus, hasMaster, transcript, engine, characterHasSlot } =
+  const { libraryUuidResolvable, entryFound, consentRevoked, slotStatus, hasMaster, transcript, engine, characterHasSlot } =
     input;
 
+  if (!libraryUuidResolvable) return 'unresolvable-uuid';
   if (!entryFound) return 'missing-entry';
   if (consentRevoked) return 'revoked';
   if (!isCloneEngine(engine) || !characterHasSlot) return 'wrong-engine';
