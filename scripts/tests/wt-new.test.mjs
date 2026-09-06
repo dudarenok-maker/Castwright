@@ -4,7 +4,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseBranchName } from '../lib/branch-name.mjs';
@@ -15,8 +16,16 @@ import {
   renderEnvLocal,
   renderLaunchBlock,
   renderServerEnv,
+  extractSlotFromEnvLocal,
+  findClaimedSlots,
+  collectSlotClaims,
+  listWorktreePaths,
+  allocateNextSlot,
+  main as wtNewMain,
 } from '../wt-new.mjs';
-import { parseEnvLocal, parseWorktreePorcelain } from '../wt-list.mjs';
+import { parseEnvLocal, parseWorktreePorcelain, buildRows } from '../wt-list.mjs';
+import { readSlotClaims } from '../lib/worktree-slot.mjs';
+import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 
 // ---- parseBranchName --------------------------------------------------------
 
@@ -393,4 +402,536 @@ test('renderLaunchBlock includes both npm install lines when install=false', () 
   });
   assert.match(block, /npm install\b.*husky hooks/);
   assert.match(block, /npm install --prefix server/);
+});
+
+
+// ---- extractSlotFromEnvLocal ------------------------------------------------
+
+test('extractSlotFromEnvLocal parses slot from header comment', () => {
+  const env = renderEnvLocal({ slot: 2, branch: 'feat/server-foo', ports: computePorts(2) });
+  assert.equal(extractSlotFromEnvLocal(env), 2);
+});
+
+test('extractSlotFromEnvLocal handles slot 0 (primary)', () => {
+  const env = renderEnvLocal({ slot: 0, branch: 'main', ports: computePorts(0) });
+  assert.equal(extractSlotFromEnvLocal(env), 0);
+});
+
+test('extractSlotFromEnvLocal handles multi-digit slot numbers', () => {
+  const env = renderEnvLocal({ slot: 42, branch: 'feat/server-foo', ports: computePorts(42) });
+  assert.equal(extractSlotFromEnvLocal(env), 42);
+});
+
+test('extractSlotFromEnvLocal returns null when the marker is absent', () => {
+  assert.equal(extractSlotFromEnvLocal('# Some comment\nVITE_PORT=5173\n'), null);
+});
+
+test('extractSlotFromEnvLocal returns null for empty content', () => {
+  assert.equal(extractSlotFromEnvLocal(''), null);
+});
+
+test('extractSlotFromEnvLocal ignores a marker phrase below the settings, not just below line 1', () => {
+  // The scan covers the leading comment block, so it must stop at the first
+  // KEY=value line: a "worktree slot 9" phrase in a hand-added note further
+  // down must not be mistaken for the generated marker.
+  const env = 'VITE_PORT=5173\n# note: this pairs with worktree slot 9\n';
+  assert.equal(extractSlotFromEnvLocal(env), null);
+});
+
+test('extractSlotFromEnvLocal round-trips every slot renderEnvLocal writes', () => {
+  for (const slot of [0, 1, 5, 20]) {
+    const env = renderEnvLocal({ slot, branch: 'feat/server-test', ports: computePorts(slot) });
+    assert.equal(extractSlotFromEnvLocal(env), slot, `round-trip failed for slot ${slot}`);
+  }
+});
+
+// ---- findClaimedSlots -------------------------------------------------------
+
+// Builds a fixture directory holding one subdirectory per fake worktree, and
+// returns their absolute paths in the order given. A `slot` of null means the
+// tree exists but has no .env.local at all (an EnterWorktree-made tree); a
+// string value is written verbatim as the file's contents.
+function makeWorktreeFixture(t, specs) {
+  const root = mkdtempSync(join(tmpdir(), 'wt-slots-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  return specs.map((spec, i) => {
+    const treePath = join(root, `tree-${i}`);
+    mkdirSync(treePath, { recursive: true });
+    if (spec === null) return treePath;
+    const contents =
+      typeof spec === 'string'
+        ? spec
+        : renderEnvLocal({ slot: spec, branch: `feat/server-t${i}`, ports: computePorts(spec) });
+    writeFileSync(join(treePath, '.env.local'), contents, 'utf8');
+    return treePath;
+  });
+}
+
+test('findClaimedSlots reads the slot each worktree .env.local claims', (t) => {
+  const paths = makeWorktreeFixture(t, [0, 3, 1]);
+  assert.deepEqual(findClaimedSlots(paths), [0, 1, 3]);
+});
+
+test('findClaimedSlots returns an empty list when there are no worktrees', () => {
+  assert.deepEqual(findClaimedSlots([]), []);
+});
+
+test('findClaimedSlots ignores a worktree with no .env.local (claims no slot)', (t) => {
+  // #3052: EnterWorktree / Agent isolation:"worktree" trees never write
+  // .env.local. Such a tree must claim nothing and must not block allocation.
+  const paths = makeWorktreeFixture(t, [null, 2, null]);
+  assert.deepEqual(findClaimedSlots(paths), [2]);
+  assert.equal(allocateNextSlot(findClaimedSlots(paths)), 1);
+});
+
+test('findClaimedSlots skips an .env.local with no slot marker', (t) => {
+  const paths = makeWorktreeFixture(t, ['# hand-written\nVITE_PORT=5173\n', 4]);
+  assert.deepEqual(findClaimedSlots(paths), [4]);
+});
+
+test('findClaimedSlots de-duplicates two worktrees claiming the same slot', (t) => {
+  // The #3052 collision state itself: two live trees both stamped slot 2.
+  const paths = makeWorktreeFixture(t, [2, 2, 5]);
+  assert.deepEqual(findClaimedSlots(paths), [2, 5]);
+});
+
+// ---- allocateNextSlot -------------------------------------------------------
+
+test('allocateNextSlot returns 1 when no slots are claimed', () => {
+  assert.equal(allocateNextSlot([]), 1);
+});
+
+test('allocateNextSlot fills the lowest gap: claimed [1,3,4] -> 2', () => {
+  assert.equal(allocateNextSlot([1, 3, 4]), 2);
+});
+
+test('allocateNextSlot returns next after a contiguous run: claimed [1,2,3] -> 4', () => {
+  assert.equal(allocateNextSlot([1, 2, 3]), 4);
+});
+
+test('allocateNextSlot never hands out slot 0, reserved for the primary checkout', () => {
+  // Slot 0 belongs to the primary checkout, so allocation starts at 1 whether
+  // or not a tree has stamped slot 0 — including when nothing is claimed and
+  // when the first claim already sits above the floor.
+  for (const claimed of [[], [0], [0, 1], [1, 3], [0, 2, 3], [4]]) {
+    const got = allocateNextSlot(claimed);
+    assert.ok(got >= 1, `allocateNextSlot(${JSON.stringify(claimed)}) returned ${got}, below the floor`);
+  }
+  assert.equal(allocateNextSlot([0]), 1);
+  assert.equal(allocateNextSlot([0, 1]), 2);
+});
+
+test('allocateNextSlot returns the first gap in a sparse claim: [1,2,5,10] -> 3', () => {
+  assert.equal(allocateNextSlot([1, 2, 5, 10]), 3);
+});
+
+test('allocateNextSlot never returns a slot that is already claimed', () => {
+  const claimedSets = [[], [1], [0, 1], [1, 3, 4], [1, 2, 5, 10], [2, 3], [0, 2, 3, 7]];
+  for (const claimed of claimedSets) {
+    const got = allocateNextSlot(claimed);
+    assert.ok(got >= 1, `slot ${got} for claimed ${JSON.stringify(claimed)} must be >= 1`);
+    assert.ok(
+      !claimed.includes(got),
+      `allocateNextSlot(${JSON.stringify(claimed)}) returned already-claimed slot ${got}`,
+    );
+  }
+});
+
+// The #3052 regression. Old behaviour allocated `slot = <number of worktrees>`.
+// Fixture: five trees were created at slots 0..4, then slots 1 and 2 were torn
+// down. Three trees survive (0, 3, 4), so the old count-based rule hands the
+// next tree slot 3 — colliding head-on with the surviving tree already on 3.
+// The fix allocates the lowest unclaimed slot, 1.
+test('allocateNextSlot does not re-issue a surviving worktree slot after teardown (#3052)', (t) => {
+  const paths = makeWorktreeFixture(t, [0, 3, 4]);
+  const claimed = findClaimedSlots(paths);
+  assert.deepEqual(claimed, [0, 3, 4]);
+
+  const allocated = allocateNextSlot(claimed);
+
+  // Passes only under the fix; the old count-based rule yields paths.length === 3.
+  assert.equal(allocated, 1, 'expected the lowest free slot');
+  assert.notEqual(
+    allocated,
+    paths.length,
+    `old count-based allocation would have returned ${paths.length}, colliding with a live tree`,
+  );
+  assert.ok(!claimed.includes(allocated), 'allocated slot collides with a live worktree');
+
+  // And the collision the old rule caused is a real port clash, not just a
+  // number clash. Oracle is the surviving tree's OWN generated file, read
+  // back off disk — not computePorts() compared against itself, which is
+  // what this assertion used to do (paths.length === 3 by construction, so
+  // `deepEqual(computePorts(paths.length), computePorts(3))` compared one
+  // call with an identical one and passed even with computePorts' body
+  // replaced by `return { ...BASE_PORTS }`).
+  const oldRuleSlot = paths.length; // 3 — exactly what the retired count rule returned
+  const survivor = paths.find(
+    (p) => extractSlotFromEnvLocal(readFileSync(join(p, '.env.local'), 'utf8')) === oldRuleSlot,
+  );
+  assert.ok(survivor, 'fixture must hold a live tree on the slot the old rule would re-issue');
+  const survivorPorts = parseEnvLocal(readFileSync(join(survivor, '.env.local'), 'utf8'));
+  assert.equal(
+    Number(survivorPorts.PORT),
+    computePorts(oldRuleSlot).PORT,
+    'the old count-based slot lands on the live tree\'s own PORT',
+  );
+  assert.notEqual(
+    Number(survivorPorts.PORT),
+    computePorts(allocated).PORT,
+    'the allocated slot must not reuse that live tree\'s PORT',
+  );
+});
+
+// ---- the leading comment block, not just line 1 -----------------------------
+
+test('extractSlotFromEnvLocal finds the marker under a prepended comment line', () => {
+  // CLAUDE.md "Worktree setup" step 5 tells operators to hand-write these
+  // files, and .env.local's own header says "Safe to edit" — so a lane note
+  // above the marker is an expected input. Reading only lines[0] answered
+  // null here, and allocation then re-issued a slot a live tree was holding.
+  const generated = renderEnvLocal({ slot: 1, branch: 'feat/server-foo', ports: computePorts(1) });
+  assert.equal(extractSlotFromEnvLocal(`# lane: keep this tree, mid-work\n${generated}`), 1);
+});
+
+test('extractSlotFromEnvLocal finds the marker under a leading blank line', () => {
+  const generated = renderEnvLocal({ slot: 7, branch: 'feat/server-foo', ports: computePorts(7) });
+  assert.equal(extractSlotFromEnvLocal(`\n${generated}`), 7);
+});
+
+// ---- server/.env is scanned too --------------------------------------------
+
+// Builds fixture worktrees where each spec names the contents of .env.local
+// and/or server/.env — `{ envLocal: 2, serverEnv: 2 }`, a number meaning "the
+// file wt-new.mjs would generate for that slot", a string written verbatim,
+// and an omitted key meaning the file is absent.
+function makeClaimFixture(t, specs) {
+  const root = mkdtempSync(join(tmpdir(), 'wt-claims-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  return specs.map((spec, i) => {
+    const treePath = join(root, `tree-${i}`);
+    mkdirSync(join(treePath, 'server'), { recursive: true });
+    const branch = `feat/server-t${i}`;
+    if (spec.envLocal !== undefined) {
+      const body =
+        typeof spec.envLocal === 'string'
+          ? spec.envLocal
+          : renderEnvLocal({ slot: spec.envLocal, branch, ports: computePorts(spec.envLocal) });
+      writeFileSync(join(treePath, '.env.local'), body, 'utf8');
+    }
+    if (spec.serverEnv !== undefined) {
+      const body =
+        typeof spec.serverEnv === 'string'
+          ? spec.serverEnv
+          : renderServerEnv({ slot: spec.serverEnv, branch, ports: computePorts(spec.serverEnv) });
+      writeFileSync(join(treePath, 'server', '.env'), body, 'utf8');
+    }
+    return treePath;
+  });
+}
+
+test('findClaimedSlots keeps the claim when only server/.env survives', (t) => {
+  // .env.local's own generated header says "safe to delete" — and it is, for
+  // Vite. But the tree's server and sidecar stay bound to the slot's ports,
+  // so the claim must survive that deletion or the next allocation collides
+  // with a live PORT.
+  const paths = makeClaimFixture(t, [{ serverEnv: 1 }, { envLocal: 2, serverEnv: 2 }]);
+  assert.deepEqual(findClaimedSlots(paths), [1, 2]);
+  assert.equal(allocateNextSlot(findClaimedSlots(paths)), 3);
+});
+
+test('findClaimedSlots unions two disagreeing claim files rather than picking one', (t) => {
+  const paths = makeClaimFixture(t, [{ envLocal: 4, serverEnv: 5 }]);
+  assert.deepEqual(findClaimedSlots(paths), [4, 5]);
+});
+
+test('readSlotClaims reports a tree with no generated env file as claiming nothing', (t) => {
+  const [treePath] = makeClaimFixture(t, [{}]);
+  assert.deepEqual(readSlotClaims(treePath), { slots: [], present: 0 });
+});
+
+test('collectSlotClaims counts trees whose generated file yields no slot', (t) => {
+  // A total detection failure must not look like an empty fleet: `silent` is
+  // what main() prints, so an unreadable marker is visible rather than
+  // silently surrendering a live slot.
+  const paths = makeClaimFixture(t, [
+    { envLocal: 1 },
+    { envLocal: '# hand-rewritten, marker lost\nVITE_PORT=5173\n' },
+    {},
+  ]);
+  const claims = collectSlotClaims(paths);
+  assert.deepEqual(claims.slots, [1]);
+  assert.equal(claims.scanned, 3);
+  assert.equal(claims.silent, 1, 'the marker-less generated file counts as a silent skip');
+});
+
+// ---- wt-list reports the claimed slot, not the enumeration index ------------
+
+test('wt-list buildRows reports the slot each tree claims, not its list position', (t) => {
+  // #3052: the slot column used to be `trees.map((tree, slot) => ...)`, the
+  // same count-based premise wt-new.mjs abandoned — so the tool a maintainer
+  // reaches for to diagnose a collision printed N distinct slots over a fleet
+  // that was colliding. Fixture: three trees whose claimed slots are neither
+  // their index nor distinct from one another.
+  const paths = makeClaimFixture(t, [{ envLocal: 5 }, { envLocal: 2, serverEnv: 2 }, { envLocal: 2 }]);
+  const rows = buildRows(paths.map((p) => ({ path: p, branch: 'feat/server-x' })));
+  assert.deepEqual(
+    rows.map((r) => r[0]),
+    ['5', '2', '2'],
+    'index-as-slot would have produced 0, 1, 2 and hidden the duplicate',
+  );
+});
+
+test('wt-list buildRows prints (none) for a tree with no generated env file', (t) => {
+  const paths = makeClaimFixture(t, [{}]);
+  const rows = buildRows(paths.map((p) => ({ path: p, branch: 'feat/server-x' })));
+  assert.equal(rows[0][0], '(none)');
+});
+
+// ---- the composition root: the zero-argument path production uses ----------
+//
+// Everything above drives the pure core through an explicit argument. That
+// left the DEFAULT parameters and main()'s own call — the wiring this change
+// introduced — covered by nothing: four one-line mutations that hand every
+// future worktree slot 1 (`allocateNextSlot(claimed = [])`,
+// `findClaimedSlots(worktreePaths = [])`, `listWorktreePaths()` returning
+// `[]`, and main()'s allocation replaced by a literal `1`) all shipped the
+// suite green. These two tests build a REAL throwaway git repo with REAL
+// worktrees and drive the zero-argument path, so each of those mutations
+// reddens by name.
+
+function gitAt(cwd, args) {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    // Strip every GIT_* var, not just the four scrubGitEnv() drops: an
+    // inherited GIT_DIR / GIT_INDEX_FILE would point these fixture commands
+    // at the REAL repository. Same helper and rationale as
+    // scripts/tests/verify-cache.test.mjs's own cleanGitEnv().
+    env: scrubGitEnvForThrowawayRepo(),
+  });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  return result.stdout;
+}
+
+// A throwaway repo with one real git worktree per requested slot, each
+// carrying the env files renderEnvLocal()/renderServerEnv() actually
+// generate. Layout matches what main() expects: worktrees are siblings of
+// the repo root, since main() resolves `<repoRoot>/../wt-<slug>`.
+function makeRealWorktreeRepo(t, slots, { markerless = [] } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'wt-live-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repo = join(root, 'repo');
+  mkdirSync(join(repo, 'server'), { recursive: true });
+  // main() only writes server/.env for a worktree that carries a
+  // server/package.json, so the fixture repo must have one committed.
+  writeFileSync(join(repo, 'server', 'package.json'), '{"name":"fixture-server"}\n', 'utf8');
+  gitAt(repo, ['init', '-q', '-b', 'main']);
+  gitAt(repo, ['config', 'user.email', 'test@example.com']);
+  gitAt(repo, ['config', 'user.name', 'Test']);
+  gitAt(repo, ['add', '.']);
+  gitAt(repo, ['commit', '-q', '-m', 'base']);
+  // EVERY real clone's primary checkout has a hand-written, git-ignored
+  // server/.env — it is where GEMINI_API_KEY lives — and wt-new.mjs never
+  // writes into the primary checkout, so it carries no slot marker. Written
+  // after the commit and never `git add`ed, exactly as on a real box.
+  //
+  // Without this the fixture's "primary checkout" was `present=0`, a shape no
+  // real clone has, and the silent-skip warning that fires on 100% of genuine
+  // runs was invisible to the suite.
+  writeFileSync(
+    join(repo, 'server', '.env'),
+    '# hand-written by the operator; not generated by wt-new.mjs\nPORT=8080\nGEMINI_API_KEY=fake-key\nWORKSPACE_DIR=../castwright-workspace\n',
+    'utf8',
+  );
+  for (const slot of slots) {
+    const branch = `feat/server-t${slot}`;
+    const treePath = join(root, `wt-t${slot}`);
+    gitAt(repo, ['worktree', 'add', '-q', '-b', branch, treePath, 'main']);
+    const ports = computePorts(slot);
+    writeFileSync(join(treePath, '.env.local'), renderEnvLocal({ slot, branch, ports }), 'utf8');
+    writeFileSync(join(treePath, 'server', '.env'), renderServerEnv({ slot, branch, ports }), 'utf8');
+  }
+  // Linked worktrees whose generated .env.local exists but has lost its
+  // marker — the genuine detection failure the warning exists to surface.
+  for (const name of markerless) {
+    const treePath = join(root, `wt-${name}`);
+    gitAt(repo, ['worktree', 'add', '-q', '-b', `feat/server-${name}`, treePath, 'main']);
+    writeFileSync(join(treePath, '.env.local'), '# hand-rewritten, marker lost\nVITE_PORT=5173\n', 'utf8');
+  }
+  return { root, repo };
+}
+
+// Run `fn` with process.stderr.write captured, returning what it wrote. The
+// silent-skip warning goes to stderr, which no test captured — which is why a
+// warning firing on every real invocation shipped green.
+async function captureStderr(fn) {
+  const chunks = [];
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk) => {
+    chunks.push(String(chunk));
+    return true;
+  };
+  try {
+    const result = await fn();
+    return { result, stderr: chunks.join('') };
+  } finally {
+    process.stderr.write = realWrite;
+  }
+}
+
+// wt-new.mjs's git calls resolve the repository from the process cwd, so the
+// zero-argument path can only be pointed at the fixture by chdir'ing into
+// it. GIT_* vars are stripped for the duration for the same reason gitAt()
+// strips them, and both are restored in a finally.
+// The strip and the chdir both live INSIDE the try, so the finally covers
+// them: with the strip above the try, a throwing chdir (a removed fixture
+// dir, a permissions failure) left every GIT_* var deleted from process.env
+// with nothing to put them back, and every later test in the file then ran
+// against a mutated environment — surfacing as some unrelated test failing.
+async function inRepo(repo, fn) {
+  const savedCwd = process.cwd();
+  const savedGitEnv = {};
+  try {
+    for (const key of Object.keys(process.env)) {
+      if (key.toUpperCase().startsWith('GIT_')) {
+        savedGitEnv[key] = process.env[key];
+        delete process.env[key];
+      }
+    }
+    process.chdir(repo);
+    return await fn();
+  } finally {
+    process.chdir(savedCwd);
+    Object.assign(process.env, savedGitEnv);
+  }
+}
+
+test('findClaimedSlots() and allocateNextSlot() read the live worktree list with NO arguments (#3052)', async (t) => {
+  const { repo } = makeRealWorktreeRepo(t, [1, 2]);
+  await inRepo(repo, () => {
+    assert.equal(listWorktreePaths().length, 3, 'the primary checkout plus both worktrees');
+    assert.deepEqual(findClaimedSlots(), [1, 2], 'the zero-argument scan must see both live trees');
+    assert.equal(allocateNextSlot(), 3, 'the zero-argument allocation must skip both claimed slots');
+  });
+});
+
+test('wt-new main() stamps the allocated slot into the worktree it creates (#3052)', async (t) => {
+  const { root, repo } = makeRealWorktreeRepo(t, [1, 2]);
+  const stdout = [];
+  const realWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk) => {
+    stdout.push(String(chunk));
+    return true;
+  };
+  let code;
+  try {
+    code = await inRepo(repo, () => wtNewMain(['feat/server-fresh', '--no-install']));
+  } finally {
+    process.stdout.write = realWrite;
+  }
+  const printed = stdout.join('');
+  assert.equal(code, 0, printed);
+
+  const created = join(root, 'wt-fresh');
+  const envLocal = readFileSync(join(created, '.env.local'), 'utf8');
+  const serverEnv = readFileSync(join(created, 'server', '.env'), 'utf8');
+
+  // Slots 1 and 2 are live, so the new tree must be stamped 3 — and the port
+  // it binds must be slot 3's, not slot 1's 8090.
+  assert.equal(extractSlotFromEnvLocal(envLocal), 3, `.env.local slot marker\n${printed}`);
+  assert.equal(extractSlotFromEnvLocal(serverEnv), 3, 'server/.env slot marker');
+  assert.equal(Number(parseEnvLocal(envLocal).PORT), computePorts(3).PORT);
+  assert.equal(Number(parseEnvLocal(serverEnv).PORT), computePorts(3).PORT);
+  assert.notEqual(Number(parseEnvLocal(serverEnv).PORT), computePorts(1).PORT);
+
+  // The scan reports what it saw, so a silent total failure cannot pass for
+  // an empty fleet.
+  assert.match(printed, /scanned 3 worktree\(s\); slots claimed: 1, 2/);
+});
+
+// ---- the silent-skip warning: both directions ------------------------------
+//
+// The warning was added so a detection failure could not hide. It then fired
+// on 100% of real invocations, because every clone's primary checkout has a
+// hand-written, marker-less server/.env — and it told the operator that the
+// one structurally-safe tree (slot 0, which allocation starts above and can
+// never issue) was at risk. Both of these tests read stderr, which nothing
+// did before; that is why it shipped.
+
+test('wt-new main() does not warn about the primary checkout’s hand-written server/.env (#3052)', async (t) => {
+  const { repo } = makeRealWorktreeRepo(t, [1, 2]);
+  const { result: code, stderr } = await captureStderr(() =>
+    inRepo(repo, () => wtNewMain(['feat/server-fresh', '--no-install'])),
+  );
+  assert.equal(code, 0, stderr);
+  assert.doesNotMatch(
+    stderr,
+    /WARNING/,
+    'the primary checkout is a known non-claimant; warning about it fires on every real run',
+  );
+  await inRepo(repo, () => {
+    assert.equal(collectSlotClaims().silent, 0, 'the primary checkout must not count as a lost claim');
+  });
+});
+
+test('wt-new main() DOES warn when a LINKED worktree lost its slot marker (#3052)', async (t) => {
+  // Same fixture, plus one linked worktree whose .env.local exists but no
+  // longer carries a marker — the real detection failure, which must stay
+  // visible now that the primary checkout is exempt.
+  const { repo } = makeRealWorktreeRepo(t, [1, 2], { markerless: ['lost'] });
+  const { result: code, stderr } = await captureStderr(() =>
+    inRepo(repo, () => wtNewMain(['feat/server-fresh', '--no-install'])),
+  );
+  assert.equal(code, 0, stderr);
+  assert.match(stderr, /WARNING: 1 linked worktree\(s\)/, stderr || '(nothing written to stderr)');
+  await inRepo(repo, () => {
+    assert.equal(collectSlotClaims().silent, 1, 'exactly the marker-less linked tree');
+  });
+});
+
+test('wt-list buildRows prints slot 0 for the primary checkout, not (none) (#3052)', (t) => {
+  // The primary checkout claims nothing (wt-new never writes into it) but it
+  // IS slot 0 — it runs the stock ports. Printing (none) there reads as
+  // "unknown" for the one slot on the fleet that is certain.
+  const { repo } = makeRealWorktreeRepo(t, [1]);
+  const trees = parseWorktreePorcelain(gitAt(repo, ['worktree', 'list', '--porcelain']));
+  const rows = buildRows(trees);
+  assert.equal(rows[0][0], '0', 'primary checkout');
+  assert.equal(rows[1][0], '1', 'the linked worktree still reports its claimed slot');
+});
+
+test('wt-list port columns read server/.env when .env.local is deleted (#3052)', (t) => {
+  // .env.local's own generated header says "safe to delete" — and Vite is
+  // fine with that — but the server and sidecar stay bound to the slot's
+  // PORT / LOCAL_TTS_PORT via server/.env. Reading only .env.local printed
+  // (default) for both, telling a maintainer the tree was free to collide
+  // with while it was bound to 8120/9040.
+  const paths = makeClaimFixture(t, [{ serverEnv: 4 }]);
+  const [row] = buildRows(paths.map((p) => ({ path: p, branch: 'feat/server-x' })));
+  const ports = computePorts(4);
+  assert.equal(row[0], '4', 'slot column');
+  assert.equal(row[4], String(ports.PORT), 'PORT must come from server/.env');
+  assert.equal(row[5], String(ports.LOCAL_TTS_PORT), 'LOCAL_TTS_PORT must come from server/.env');
+  // VITE_PORT / PLAYWRIGHT_PORT genuinely only live in .env.local, so those
+  // two really do fall back — the row must not invent them.
+  assert.equal(row[3], '(default)', 'VITE_PORT');
+  assert.equal(row[6], '(default)', 'PLAYWRIGHT_PORT');
+});
+
+test('inRepo restores GIT_* vars even when the chdir into the fixture throws', async () => {
+  // The strip used to run before the try, so a throwing chdir left the
+  // process env stripped with nothing to restore it — and the damage would
+  // surface later, as an unrelated test failing.
+  const key = 'GIT_SENTINEL_FOR_INREPO_TEST';
+  const savedCwd = process.cwd();
+  process.env[key] = 'sentinel';
+  try {
+    await assert.rejects(() => inRepo(join(tmpdir(), 'wt-does-not-exist-3052'), async () => 'unreachable'));
+    assert.equal(process.env[key], 'sentinel', 'the GIT_* strip must sit inside the try the finally protects');
+    assert.equal(process.cwd(), savedCwd);
+  } finally {
+    delete process.env[key];
+  }
 });

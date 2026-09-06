@@ -13,7 +13,10 @@
 //
 // What it does:
 //   1. Validates the branch name (CONTRIBUTING.md "Branch naming").
-//   2. Picks a port-offset slot from existing worktree count (slot 0 = main).
+//   2. Picks the lowest port-offset slot not already claimed by a live
+//      worktree's generated .env.local / server/.env (slot 0 = main). #3052:
+//      NOT the worktree count — that re-issued a surviving tree's slot as
+//      soon as an earlier tree was torn down.
 //   3. Creates ../wt-<slug> via `git worktree add -b <branch> <path> <base>`.
 //   4. Writes <worktree>/.env.local with VITE_PORT / PORT / VITE_API_PORT /
 //      LOCAL_TTS_PORT / PLAYWRIGHT_PORT for this slot.
@@ -38,6 +41,13 @@ import { resolve, join } from 'node:path';
 import { parseBranchName } from './lib/branch-name.mjs';
 import { scrubGitEnv } from './git-env.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { parseWorktreePorcelain } from './wt-list.mjs';
+import {
+  extractSlotFromEnvLocal,
+  isPrimaryCheckout,
+  readSlotClaims,
+  SLOT_CLAIM_FILES,
+} from './lib/worktree-slot.mjs';
 
 const BASE_PORTS = {
   VITE_PORT: 5173,
@@ -93,10 +103,89 @@ function gitOrThrow(args, opts = {}) {
   return result.stdout;
 }
 
-export function countExistingWorktrees() {
-  // `git worktree list --porcelain` emits a `worktree <path>` line per tree.
-  const out = gitOrThrow(['worktree', 'list', '--porcelain']);
-  return out.split(/\r?\n/).filter((line) => line.startsWith('worktree ')).length;
+// Re-exported so existing importers keep their entry point; the reader itself
+// lives in scripts/lib/worktree-slot.mjs so wt-list.mjs can share it without
+// closing an import cycle with this file. See that module for why the scan
+// covers the whole leading comment block rather than only line 1, and why it
+// reads server/.env as well as .env.local.
+export { extractSlotFromEnvLocal, SLOT_CLAIM_FILES };
+
+// Absolute paths of every git worktree attached to this repo, primary checkout
+// included. Split out from findClaimedSlots() so that function's filesystem
+// reads can be exercised against a fixture directory without a real repo.
+export function listWorktreePaths() {
+  const porcelain = gitOrThrow(['worktree', 'list', '--porcelain']);
+  return parseWorktreePorcelain(porcelain).map((tree) => tree.path);
+}
+
+// Scan the given worktrees and collect the slots their generated env files
+// claim, reading every file in SLOT_CLAIM_FILES and unioning the result.
+//
+// Returns { slots, scanned, silent }:
+//   slots   — ascending, de-duplicated slot numbers.
+//   scanned — how many worktrees were looked at.
+//   silent  — how many of those HAVE a generated env file but yielded no
+//             slot from any of them. That is a detection failure, not a free
+//             slot, and main() prints it: without the count, "nothing is
+//             claimed" and "the scan found nothing it could read" produce the
+//             same output, so a total failure looks exactly like an empty
+//             fleet and allocation happily re-issues a live slot.
+//
+// A worktree with NO generated env file at all claims nothing and does not
+// count as silent — that is the expected, benign shape for a tree made by
+// EnterWorktree or Agent isolation: "worktree", neither of which writes one.
+// Such trees cannot be detected at all; that limit is unchanged here.
+//
+// Neither does the PRIMARY CHECKOUT, which is excluded from `silent` outright.
+// Every real clone's primary checkout has a hand-written, marker-less
+// `server/.env` — that is where GEMINI_API_KEY lives — so counting it made
+// `silent` >= 1 on every genuine invocation, and a warning with a 100% base
+// rate carries no signal at all. It is also the one tree the warning's own
+// text cannot be true of: it is slot 0 and allocation starts at 1, so its
+// slot can never be re-issued. See isPrimaryCheckout for how it is told apart
+// (a .git directory rather than a `gitdir:` file) — deliberately not "the
+// first entry in the list", which is the positional premise #3052 was.
+//
+// `worktreePaths` defaults to the live worktree list; pass an explicit array
+// to point the scan at a fixture directory.
+export function collectSlotClaims(worktreePaths = listWorktreePaths()) {
+  const claimed = new Set();
+  let scanned = 0;
+  let silent = 0;
+
+  for (const treePath of worktreePaths) {
+    scanned++;
+    const { slots, present } = readSlotClaims(treePath);
+    for (const slot of slots) claimed.add(slot);
+    if (present > 0 && slots.length === 0 && !isPrimaryCheckout(treePath)) silent++;
+  }
+
+  return { slots: Array.from(claimed).sort((a, b) => a - b), scanned, silent };
+}
+
+// The slot list alone — the shape allocateNextSlot() consumes.
+export function findClaimedSlots(worktreePaths = listWorktreePaths()) {
+  return collectSlotClaims(worktreePaths).slots;
+}
+
+// Allocate the lowest slot not already claimed, starting from 1.
+// Slot 0 is reserved for the primary checkout (main branch).
+// Returns the first free slot.
+//
+// `claimed` must be ascending and de-duplicated — the shape findClaimedSlots()
+// returns, which is also the default. Pass an explicit array to test the
+// allocation core without touching git or the filesystem.
+export function allocateNextSlot(claimed = findClaimedSlots()) {
+  let slot = 1;
+  for (const c of claimed) {
+    if (c === slot) {
+      slot++;
+    } else if (c > slot) {
+      // Gap found — use the lowest free slot.
+      return slot;
+    }
+  }
+  return slot;
 }
 
 export function computePorts(slot) {
@@ -272,9 +361,33 @@ export async function main(argv) {
     return 1;
   }
 
-  // Existing worktrees include the main one, so count == slot for the new tree.
-  const slot = countExistingWorktrees();
+  // Allocate the lowest slot not already claimed by reading slot markers
+  // from existing worktrees' generated env files. This avoids collision when
+  // worktrees are torn down and recreated (#3052).
+  //
+  // TOCTOU, deliberately not closed: the claim is only written once the
+  // worktree exists (`git worktree add` below takes seconds), so two
+  // concurrent wt-new.mjs runs can both allocate before either writes its
+  // .env.local and both land on the same slot. The old count-based rule
+  // raced identically, so this is not a regression, and a lock here would be
+  // machine-wide state for a command a human runs by hand a few times a day.
+  // If two lanes are spawned in the same breath, check `node
+  // scripts/wt-list.mjs` for a duplicated slot afterwards.
+  const claims = collectSlotClaims();
+  const slot = allocateNextSlot(claims.slots);
   const ports = computePorts(slot);
+
+  // Say what the scan actually saw. A silent skip is otherwise invisible:
+  // see collectSlotClaims' own comment.
+  process.stdout.write(
+    `[wt-new] scanned ${claims.scanned} worktree(s); slots claimed: ${claims.slots.join(', ') || '(none)'}\n`,
+  );
+  if (claims.silent > 0) {
+    process.stderr.write(
+      `[wt-new] WARNING: ${claims.silent} linked worktree(s) have a ${SLOT_CLAIM_FILES.join(' / ')} ` +
+        `but no readable slot marker — their slots are NOT protected and may be re-issued.\n`,
+    );
+  }
 
   process.stdout.write(`[wt-new] creating worktree at ${worktreePath} on new branch ${args.branch}\n`);
   gitOrThrow(['worktree', 'add', '-b', args.branch, worktreePath, args.from]);
