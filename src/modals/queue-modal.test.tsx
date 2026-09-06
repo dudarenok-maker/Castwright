@@ -51,7 +51,11 @@ const entry = (overrides: Partial<QueueEntry> = {}): QueueEntry => ({
   ...overrides,
 });
 
-const libraryBook = (bookId: string, title: string): LibraryBook =>
+const libraryBook = (
+  bookId: string,
+  title: string,
+  opts?: { language?: string; eligibleTtsEngines?: string[] },
+): LibraryBook =>
   ({
     bookId,
     title,
@@ -64,6 +68,8 @@ const libraryBook = (bookId: string, title: string): LibraryBook =>
     updatedAt: '2026-05-23T00:00:00.000Z',
     series: 'Standalones',
     audioFormat: 'mp3',
+    language: opts?.language,
+    eligibleTtsEngines: opts?.eligibleTtsEngines,
   }) as unknown as LibraryBook;
 
 function renderModal(
@@ -306,6 +312,94 @@ describe('QueueModal', () => {
     );
     expect(screen.getByTestId('queue-entry-a1-confirm-fallback')).toBeInTheDocument();
     expect(screen.getByTestId('queue-entry-a1-skip-fallback')).toBeInTheDocument();
+  });
+
+  it('an awaiting_confirm entry for a Coqui-eligible non-English book names Coqui as the fallback engine', () => {
+    renderModal(
+      [
+        entry({
+          id: 'a1',
+          bookId: 'book-ru',
+          status: 'awaiting_confirm',
+          order: 0,
+          fallbackCharacters: [{ id: 'c1', name: 'Character' }],
+        }),
+      ],
+      {
+        books: [
+          libraryBook('book-ru', 'Russian Book', {
+            language: 'ru',
+            eligibleTtsEngines: ['qwen', 'coqui', 'kokoro'],
+          }),
+        ],
+      },
+    );
+    /* Status line should name Coqui, not Kokoro. */
+    expect(screen.getByTestId('queue-entry-a1-status')).toHaveTextContent(
+      /no designed Qwen voice for Character → would render in Coqui/,
+    );
+    /* aria-label and title should also name Coqui. */
+    const confirmBtn = screen.getByTestId('queue-entry-a1-confirm-fallback');
+    expect(confirmBtn).toHaveAttribute('aria-label', 'Render anyway in Coqui');
+    expect(confirmBtn).toHaveAttribute('title', 'Render anyway (Coqui fallback)');
+  });
+
+  it('an awaiting_confirm entry for an English book names Kokoro as the fallback engine', () => {
+    renderModal(
+      [
+        entry({
+          id: 'a1',
+          bookId: 'book-en',
+          status: 'awaiting_confirm',
+          order: 0,
+          fallbackCharacters: [{ id: 'c1', name: 'Character' }],
+        }),
+      ],
+      {
+        books: [
+          libraryBook('book-en', 'English Book', {
+            language: 'en',
+            eligibleTtsEngines: ['qwen', 'kokoro'],
+          }),
+        ],
+      },
+    );
+    /* English books default to Kokoro. */
+    expect(screen.getByTestId('queue-entry-a1-status')).toHaveTextContent(
+      /no designed Qwen voice for Character → would render in Kokoro/,
+    );
+    const confirmBtn = screen.getByTestId('queue-entry-a1-confirm-fallback');
+    expect(confirmBtn).toHaveAttribute('aria-label', 'Render anyway in Kokoro');
+    expect(confirmBtn).toHaveAttribute('title', 'Render anyway (Kokoro fallback)');
+  });
+
+  it('an awaiting_confirm entry for a non-English book without Coqui support names Kokoro as the fallback', () => {
+    renderModal(
+      [
+        entry({
+          id: 'a1',
+          bookId: 'book-es-no-coqui',
+          status: 'awaiting_confirm',
+          order: 0,
+          fallbackCharacters: [{ id: 'c1', name: 'Character' }],
+        }),
+      ],
+      {
+        books: [
+          libraryBook('book-es-no-coqui', 'Spanish Book (no Coqui)', {
+            language: 'es',
+            eligibleTtsEngines: ['qwen', 'kokoro'],
+          }),
+        ],
+      },
+    );
+    /* Non-English but no Coqui support → falls back to Kokoro. */
+    expect(screen.getByTestId('queue-entry-a1-status')).toHaveTextContent(
+      /no designed Qwen voice for Character → would render in Kokoro/,
+    );
+    const confirmBtn = screen.getByTestId('queue-entry-a1-confirm-fallback');
+    expect(confirmBtn).toHaveAttribute('aria-label', 'Render anyway in Kokoro');
+    expect(confirmBtn).toHaveAttribute('title', 'Render anyway (Kokoro fallback)');
   });
 
   it('Render-anyway POSTs /confirm-fallback', async () => {

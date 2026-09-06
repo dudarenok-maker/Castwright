@@ -38,6 +38,7 @@ import {
   setQueuePaused,
   skipFallbackEntry,
 } from '../store/queue-thunks';
+import { selectFallbackEngineName } from '../store/voice-readiness-selectors';
 import { chaptersActions } from '../store/chapters-slice';
 import { uiActions } from '../store/ui-slice';
 import { IconClose, IconDrag, IconPause, IconPlay, IconRefresh, IconTrash } from '../lib/icons';
@@ -223,6 +224,7 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                 {groupedByBook.map(({ bookId, entries }) => (
                   <BookGroup
                     key={bookId}
+                    bookId={bookId}
                     title={lookupBookTitle(bookId)}
                     entries={entries}
                     inFlightIds={inFlightIds}
@@ -354,6 +356,7 @@ function ActiveGenerationSection({ view, title }: { view: ActiveGenerationView; 
 }
 
 interface BookGroupProps {
+  bookId: string;
   title: string;
   entries: QueueEntry[];
   inFlightIds: Set<string>;
@@ -367,6 +370,7 @@ interface BookGroupProps {
 }
 
 function BookGroup({
+  bookId,
   title,
   entries,
   inFlightIds,
@@ -378,6 +382,8 @@ function BookGroup({
   onConfirmFallback,
   onSkipFallback,
 }: BookGroupProps) {
+  const fallbackEngineName = useAppSelector((s) => selectFallbackEngineName(s, bookId));
+
   const moveUp = (idx: number): void => {
     if (idx <= 0) return;
     const next = [...entries];
@@ -515,7 +521,7 @@ function BookGroup({
                             (entry.fallbackCharacters ?? [])
                               .map((c) => c.name ?? c.id)
                               .join(', ') || 'some characters'
-                          } → would render in Kokoro`
+                          } → would render in ${fallbackEngineName}`
                         : entry.status === 'paused'
                           ? 'Paused'
                           : 'Queued'}
@@ -551,12 +557,12 @@ function BookGroup({
               {entry.status === 'awaiting_confirm' && (
                 /* Loud-fallback gate: this chapter is parked because a Qwen
                    character has no designed voice. "Render anyway" confirms the
-                   Kokoro fallback (→ queued); "Skip" drops the chapter. */
+                   fallback engine (→ queued); "Skip" drops the chapter. */
                 <>
                   <button
                     onClick={() => onConfirmFallback(entry.id)}
-                    aria-label="Render anyway in Kokoro"
-                    title="Render anyway (Kokoro fallback)"
+                    aria-label={`Render anyway in ${fallbackEngineName}`}
+                    title={`Render anyway (${fallbackEngineName} fallback)`}
                     className="px-2 py-1 rounded-full text-xs font-semibold bg-magenta/10 text-magenta hover:bg-magenta/20 min-h-[44px] fine-pointer:min-h-0"
                     data-testid={`queue-entry-${entry.id}-confirm-fallback`}
                   >
