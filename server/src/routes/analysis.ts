@@ -94,7 +94,10 @@ import {
 import {
   deleteAnalysisState,
   writeAnalysisState,
+  readAnalysisLastOutcome,
+  writeAnalysisLastOutcome,
   type AnalysisStateFile,
+  type AnalysisLastOutcome,
 } from '../store/analysis-state.js';
 import type {
   CharacterOutput,
@@ -2976,7 +2979,54 @@ export function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): vo
   for (const warning of job.replay.warnings.values()) send(warning);
 }
 
-function endJob(job: AnalysisJob, finalEv?: unknown): void {
+/** #3004 — true when the dispatch has NOT found a live job to join and the
+    caller did not explicitly request a fresh restart, i.e. exactly the case
+    the rejoin-miss check applies to. Split out as its own pure predicate so
+    the "no live entry found" condition (spec points 1/2) and the "explicit
+    restart" exclusion (point 4) can be asserted directly, without needing to
+    drive a whole job through the dispatch route to prove the boundary. */
+export function shouldCheckForRejoinMiss(
+  existing: Pick<AnalysisJob, 'controller'> | undefined,
+  requestedFresh: boolean,
+): boolean {
+  if (requestedFresh) return false;
+  return !existing || existing.controller.signal.aborted;
+}
+
+/** #3004 — the SSE event a rejoin emits when NO live job was found for the
+    manuscript (see the dispatch block below), so the caller can tell "I
+    joined the still-running job" apart from "no job was found, so a
+    brand-new one silently started." Carries the job's LAST recorded terminal
+    outcome when one is on disk (from `readAnalysisLastOutcome`); a truly
+    novel manuscript that was never analysed has no outcome to attach, so
+    `priorOutcome` is omitted rather than fabricated. Exported for unit
+    testing — the dispatch route only builds and sends this, it doesn't
+    branch on its shape. */
+export function buildRejoinMissEvent(priorOutcome: AnalysisLastOutcome | null): {
+  kind: 'rejoin-miss';
+  reason: string;
+  priorOutcome?: { kind: 'result' | 'error'; code?: string; message?: string; endedAt: number };
+} {
+  return {
+    kind: 'rejoin-miss',
+    reason: 'no tracked job found for this manuscript — starting fresh',
+    ...(priorOutcome
+      ? {
+          priorOutcome: {
+            kind: priorOutcome.kind,
+            code: priorOutcome.code,
+            message: priorOutcome.message,
+            endedAt: priorOutcome.endedAt,
+          },
+        }
+      : {}),
+  };
+}
+
+/* Exported for unit testing (the #3004 last-outcome persistence contract) —
+   production call sites still reach this only via the analyzer loop's own
+   terminal transitions. */
+export function endJob(job: AnalysisJob, finalEv?: unknown): void {
   if (finalEv) broadcastToJob(job, finalEv);
   /* Cold-boot snapshot transition. Fire-and-forget; we still tear
      down subscribers + deregister synchronously below so the route
@@ -2991,6 +3041,40 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
      mid-flight aborts so the pill can render the Resume affordance. */
   const kind = (finalEv as { kind?: string } | undefined)?.kind;
   const code = (finalEv as { code?: string } | undefined)?.code;
+  /* #3004 — record the LAST terminal outcome so a later rejoin that finds no
+     live job can report why. Only for `kind: 'main'`: the rejoin-miss check
+     this feeds lives on the main dispatch path only, and a per-book file
+     shared with subset jobs would let a subset's own ending overwrite the
+     main run's outcome. Only `result`/`error` are recorded — a `finalEv`-less
+     teardown (subscriber-driven cleanup with nothing to report) leaves the
+     prior outcome, if any, exactly as it was.
+     #2165/#2196 — resolve via `liveBookDir(job)` (the CURRENT directory, not
+     the pinned `job.bookDir` copy) and route through the identity-gated
+     delete-only guard, same as the main-success cleanup right below: a
+     book renamed away mid-run must never have this write mkdir the dead
+     pre-rename folder back into existence. */
+  if (job.kind === 'main' && (kind === 'result' || kind === 'error')) {
+    const dirForOutcome = liveBookDir(job);
+    if (dirForOutcome) {
+      const message = (finalEv as { message?: string } | undefined)?.message;
+      void (async () => {
+        const verified = await tryResolveVerifiedBookDir({
+          manuscriptId: job.manuscriptId,
+          candidateBookDir: dirForOutcome,
+          identityBearing: false,
+        });
+        if (!verified) return;
+        await writeAnalysisLastOutcome(verified, {
+          manuscriptId: job.manuscriptId,
+          kind,
+          code,
+          message,
+        });
+      })().catch((err) => {
+        console.warn('[analysis-last-outcome] write failed', err);
+      });
+    }
+  }
   if (job.bookDir) {
     if (!finalEv || kind === 'result') {
       /* Terminal success OR a clean teardown with no final event.
@@ -3231,6 +3315,22 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
        will hit the AnalysisAbortedError catch and call endJob, which
        deregisters only when it's still the current entry. We
        overwrite the map below. */
+  }
+
+  /* #3004 — reaching here means NO live job was found for this manuscript:
+     either `existing` was never set, or it was set but already aborted
+     (stale entry not yet cleaned up). That is exactly the ambiguous case a
+     rejoining caller can't tell apart from "no job was found, so a
+     brand-new one silently started" — signal it with one SSE event before
+     the fresh job below starts. Skipped when `requestedFresh` is true: that
+     is a caller-requested restart, not a rejoin, and it already knows it's
+     starting fresh (point 4 of the fix). A truly novel manuscript — no
+     `analysis-last-outcome.json` on disk because nothing was ever analysed
+     here — has no prior outcome to attach, so the event is skipped rather
+     than fabricating one. */
+  if (shouldCheckForRejoinMiss(existing, requestedFresh)) {
+    const priorOutcome = record.bookDir ? await readAnalysisLastOutcome(record.bookDir) : null;
+    if (priorOutcome) send(buildRejoinMissEvent(priorOutcome));
   }
 
   const job: AnalysisJob = {
