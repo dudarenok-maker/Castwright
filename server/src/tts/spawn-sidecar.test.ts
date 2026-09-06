@@ -85,6 +85,61 @@ describe('spawnSidecar', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('auto-start disabled'));
   });
 
+  it('adopts a healthy externally-started sidecar when autoStart is off (no kill command)', async () => {
+    // Regression test for #2192: with autoStart off and a healthy sidecar running on the port,
+    // the server should adopt it (call onAdoptExisting), NOT kill it via taskkill /PID.
+    // This must be tested with production config (NODE_ENV=production) so neverAdoptSidecar()
+    // returns true and the old code path would have tried to kill it.
+    const oldEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      probeFn.mockResolvedValueOnce(true);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: 1,
+        committedMb: 9000, // healthy
+        recyclePending: false,
+      }));
+      let findPidCalled = false;
+      const findPidFn = vi.fn(async () => {
+        findPidCalled = true;
+        return null; // simulate no PID found (shouldn't even get here)
+      });
+      const onAdoptExisting = vi.fn();
+      const killCalls: any[] = [];
+      const spawnFnWithKillTracking = vi.fn((...args: any[]) => {
+        if (Array.isArray(args[1]) && args[1][0] === 'taskkill') {
+          killCalls.push(args);
+        }
+        return makeFakeChild();
+      });
+
+      const handle = await spawnSidecar({
+        autoStart: false,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        spawnFn: spawnFnWithKillTracking as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        findPidFn,
+        log,
+        warn,
+        onAdoptExisting,
+      });
+
+      expect(handle).toBeNull();
+      expect(spawnFn).not.toHaveBeenCalled();
+      expect(onAdoptExisting).toHaveBeenCalledWith({ host: '127.0.0.1', port: 9000 });
+      // CRITICAL: No taskkill command should fire — we adopt the healthy sidecar, don't kill it
+      expect(killCalls).toHaveLength(0);
+      expect(findPidCalled).toBe(false); // findPidFn should never be called
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('adopting'));
+    } finally {
+      process.env.NODE_ENV = oldEnv;
+    }
+  });
+
   it('reuses an already-listening sidecar when its protocol_version is current', async () => {
     probeFn.mockResolvedValueOnce(true);
     const healthProbeFn = vi.fn(async () => ({

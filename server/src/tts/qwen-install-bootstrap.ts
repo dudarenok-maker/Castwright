@@ -193,7 +193,11 @@ export class QwenInstallBootstrap {
        clobbers the runtime) REGARDLESS of whether the rest of the installer
        script goes on to succeed or fail. If the installer fails, we still need
        to restore/verify the GPU runtime before the hold releases. */
-    const ort = await this.holdSidecarFn<{ outcome: OrtRestoreOutcome } | { failure: Error }>(async () => {
+    const ort = await this.holdSidecarFn<{
+      installerError?: Error;
+      restoreError?: Error;
+      restoreOutcome?: OrtRestoreOutcome;
+    }>(async () => {
       this.update(job, { step: 'Starting installer…' });
       let installerError: Error | null = null;
       try {
@@ -207,37 +211,60 @@ export class QwenInstallBootstrap {
       this.update(job, { step: 'Checking the ONNX runtime the voice engine needs…' });
       try {
         const outcome = await this.restoreOrtFn();
-        if (installerError) {
-          /* Installer failed but restore succeeded. Report the installer error
-             as the primary one (error takes precedence), but note the restore
-             outcome for diagnostics. */
-          return { failure: installerError };
-        }
-        return { outcome };
+        return {
+          installerError: installerError ?? undefined,
+          restoreOutcome: outcome,
+        };
       } catch (err) {
+        const restoreError = err instanceof Error ? err : new Error(String(err));
         if (installerError) {
           /* Both installer and restore failed. Report the installer error as
              primary, but log the restore failure at the console for diagnostics. */
-          console.warn(`[qwen-install] ORT restore also failed: ${err instanceof Error ? err.message : String(err)}`);
-          return { failure: installerError };
+          console.warn(`[qwen-install] ORT restore also failed: ${restoreError.message}`);
         }
-        /* Only restore failed, installer succeeded. */
-        return { failure: err instanceof Error ? err : new Error(String(err)) };
+        return {
+          installerError: installerError ?? undefined,
+          restoreError: restoreError,
+        };
       }
     });
     /* The hold has released here and the supervisor has already attempted
        its respawn (a failed respawn is the supervisor's to report — it is
        not an install outcome). */
-    if ('failure' in ort) {
+    if (ort.installerError) {
+      // Installer failed — report that as the primary error
+      const msg = `Qwen3-TTS installer failed: ${ort.installerError.message}`;
+      if (ort.restoreError) {
+        // Both failed
+        this.transition(job, 'error', {
+          error: `${msg} The ORT runtime restore also failed, so GPU acceleration will be lost. ` +
+            'Retry the install or contact support.',
+        });
+      } else if (ort.restoreOutcome) {
+        // Installer failed but restore succeeded — that's good news
+        this.transition(job, 'error', {
+          error: `${msg} (The GPU ONNX runtime was successfully verified and is still in place.)`,
+        });
+      } else {
+        // Just the installer error
+        this.transition(job, 'error', { error: msg });
+      }
+      return;
+    }
+    if (ort.restoreError) {
+      // Installer succeeded but restore failed
       this.transition(job, 'error', {
         error:
-          `Qwen3-TTS installed, but restoring the GPU ONNX runtime afterwards failed: ${ort.failure.message} ` +
+          `Qwen3-TTS installed, but restoring the GPU ONNX runtime afterwards failed: ${ort.restoreError.message} ` +
           'Kokoro may run on the CPU until it is repaired — with the app closed, run ' +
           'server/tts-sidecar/scripts/install-ort.mjs against the sidecar venv python.',
       });
       return;
     }
-    console.log(`[qwen-install] onnxruntime after install: ${ort.outcome}`);
+    // Both installer and restore succeeded
+    if (ort.restoreOutcome) {
+      console.log(`[qwen-install] onnxruntime after install: ${ort.restoreOutcome}`);
+    }
 
     /* Re-probe: the script exited 0, confirm the package + weights actually
        landed. A 0-exit with weights still missing is surfaced as an error so

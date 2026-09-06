@@ -675,6 +675,18 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
       onAdoptExisting?.({ host, port });
       return null;
     }
+    /* When autoStart is off, a healthy sidecar (freshProtocol && unfitReason === null) is
+       what we want to adopt — the whole point of turning off autoStart. If policyReplace
+       is true (prod config), we still adopt it rather than kill it, because we're not
+       going to spawn a replacement anyway (autoStart off means no spawn). Returning here
+       prevents execution from falling through to the "replace stale sidecar" logic. */
+    if (!autoStart && freshProtocol && unfitReason === null) {
+      log(
+        `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), adopting (autoStart off — not spawning a replacement)`,
+      );
+      onAdoptExisting?.({ host, port });
+      return null;
+    }
     if (!health.looksLikeSidecar) {
       /* Reachable-but-not-ours, or hung/non-HTTP. Never kill an unknown
          process — leave it and let the health route surface TTS-down. This is
