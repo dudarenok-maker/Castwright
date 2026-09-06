@@ -106,7 +106,7 @@ Three defects let it run unchecked:
 - **The GPU probe never fired.** `GPU_BUSY_THRESHOLD = 40` (`verify-cache.mjs:1028`); measured
   utilisation was **0%**. It also cannot be deleted cheaply: `scripts/run-golden-audio.mjs:68`
   imports `maxNvidiaSmiUtil` and `GPU_BUSY_THRESHOLD`, and
-  `scripts/tests/verify-cache.test.mjs:1183-1224` pins `detectGpuContention`'s **source text**.
+  `scripts/tests/verify-cache.test.mjs`'s `detectGpuContention routes through gpuContentionFor, not parseNvidiaSmiUtil directly` test pins `detectGpuContention`'s **source text**.
 - **A second probe exists** — `detectSiblingContention` (`verify-cache.mjs:1131-1145`);
   `SKIP_CONTENTION_CHECK` gates both at `:1340` and `:1350`.
 - **Neither probe explains the failure.** Both set `LOW_CONCURRENCY` on their own process env,
@@ -251,14 +251,14 @@ The problem the conflation caused is narrower: that formula calibrates off which
 **Implementation is an async `spawn` conversion of step execution — the largest piece of work
 here, and its real risk is source-text pins, not caller compatibility.**
 
-- `scripts/tests/verify-cache.test.mjs:1288` extracts `runStepProcess`'s body by regex and
-  `:1298-1302` asserts it contains the literal **`spawnSync('npm', ['run', npmScript]`**. This
+- `verify-cache.test.mjs`'s `#3018: runStepProcess` test extracts `runStepProcess`'s body by regex
+  and asserts it contains the literal **`spawnSync('npm', ['run', npmScript]`**. This
   fails the moment `spawnSync` becomes `spawn`.
-- `:1305-1311` extracts `runPipeline`'s loop body with a regex anchored on a trailing `return
-  0;` at **exactly two-space indent**; `:1332-1341` and `:1391-1399` depend on that match and
-  throw if it fails to locate.
-- **`server/src/spawn-windows-hide.test.ts`** scans `scripts/**` and its `SPAWN_NAMES` (`:134`)
-  covers `spawn` as well as `spawnSync`; the rule (`:459-478`) requires the literal
+- The same file's `#3018: runPipeline persists` and `#3018: [fail] line` tests extract `runPipeline`'s
+  loop body with a regex anchored on a trailing `return 0;` at **exactly two-space indent**; these
+  tests depend on that match and throw if it fails to locate.
+- **`server/src/spawn-windows-hide.test.ts`**'s `SPAWN_NAMES` scanner
+  covers `spawn` as well as `spawnSync`; the rule in that file's spawn-call guard requires the literal
   `windowsHide: true` **inside the call's own balanced-paren argument text**, so hoisting
   options into a variable fails it. This guard will also scan the new reaper, `wt-gc.mjs`, and
   `pre-commit-lint.mjs`.
@@ -370,13 +370,13 @@ register](../../testing/onbox-acceptance-register.md) row.
 | Staged-file selection | extension filter, empty-set short-circuit, missing-eslint **passes**, timeout passes |
 | Step budgets | per-step-total fires; pipeline cap fires independently; **timeout is not retried as a pool crash**; tail-keeping accumulator still matches `isVitestPoolCrash`; both stdio shapes + `shell`/`windowsHide` preserved |
 | **The invariant** | `hook-no-pool.test.mjs` — an **allowlist** of permitted hook invocations |
-| Hook-scope exclusivity | pin that a `.husky/**` diff selects `test:hooks` and nothing else. `verify-cache.test.mjs:647-651` asserts only the positive; true today, **unpinned**. Also fix the stale comment at `:636-646` claiming `.husky/**` matches no step. |
+| Hook-scope exclusivity | `verify-cache.test.mjs`'s `stepTouchedByDiff: a .husky diff matches test:hooks and NOTHING ELSE` test pins that a `.husky/**` diff selects `test:hooks` and nothing else. The prior stale claim (`.husky/**` matches no step) was acknowledged and corrected in the comments above this test. |
 
 Every test asserts against input that would otherwise make the guard fire.
 
-**Source-text pins are part of the work, not a surprise:** `verify-cache.test.mjs:1288-1311` and
-`server/src/spawn-windows-hide.test.ts` must be updated in the same commit as the async
-conversion.
+**Source-text pins are part of the work, not a surprise:** `verify-cache.test.mjs`'s `runStepProcess` and
+`runPipeline` acceptance tests, plus `server/src/spawn-windows-hide.test.ts`'s spawn-call guard,
+must be updated in the same commit as the async conversion.
 
 **On-box acceptance rows are owed** (CLAUDE.md step 3 — a merge gate): the reaper's
 `Win32_Process` classification against real processes, and the budget's kill-the-whole-tree
@@ -447,7 +447,7 @@ the governor entirely.
 
 - **The concurrency governor** — deferred with a measurement plan, above.
 - **Deleting the GPU throttle** — the probe never fired; removal breaks
-  `run-golden-audio.mjs:68` and `verify-cache.test.mjs:1183-1224`. The real defect there (both
+  `run-golden-audio.mjs:68` and `verify-cache.test.mjs`'s `detectGpuContention routes through gpuContentionFor, not parseNvidiaSmiUtil directly` test. The real defect there (both
   probes decide once at entry, never re-evaluate) is a separate issue.
 - `verify-cache.mjs`'s input-hash/STEPS table. **Not local-only:** `ci-scope.mjs:13` imports
   from it and `verify.yml:127` runs it, so CI's per-leg scoping derives from this file. A future
@@ -461,7 +461,8 @@ the governor entirely.
 | # | Question | State |
 |---|---|---|
 | 1 | Is the wedge a concurrency phenomenon at all? | **Still open.** The "two concurrent batteries are enough" claim came from immediate-parent root detection later proved wrong. Its urgency has dropped: since Part 1 **no git hook spawns a pool**, so the hook-driven wedge is structurally impossible and this now governs only Parts 2-6 (manual `verify` runs and OE lanes). Deliberately reproducing it costs ~40 min of a shared box and recreates the failure it studies — not done. |
-| 2 | Is `test:server`'s 19.45 min one attempt or three? | **Answered 2026-09-06: the artifact could not say**, because the attempt count was never recorded. Fixed by #3018 rather than sampled. See Part 2 above. |
+| 2a | Can the artifact tell us the composition? | **Answered 2026-09-06: no**, because the attempt count was never recorded. Fixed by #3018. See Part 2 above. |
+| 2b | What is `test:server`'s 19.45 min broken down by attempts? | **Still open.** Pre-#3018 cache entries carry no attempt count, so the composition of the 19.45 min figure remains unknown. Tracked by **[#3025](https://github.com/dudarenok-maker/Castwright/issues/3025)** — once the artifact records attempts going forward, a future run can re-baseline this figure and qualify it. |
 
 **Part 1 propagation is complete.** `.husky/*` is tracked, so each worktree kept the old ~35-min
 hooks until `main` merged into it. As of 2026-09-06 the sweep is finished: **19/19 worktrees on

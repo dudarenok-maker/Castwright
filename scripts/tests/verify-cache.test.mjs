@@ -4,7 +4,7 @@
 // instantly (a one-line node invocation, not vitest batteries). Entry point:
 // `npm run test:hooks` (node --test, no extra deps).
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync,
@@ -14,6 +14,7 @@ import {
   readdirSync,
   readFileSync,
   copyFileSync,
+  rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -59,6 +60,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_PATH = join(HERE, '..', 'verify-cache.mjs');
 const src = readFileSync(SRC_PATH, 'utf8');
 
+// Track temporary directories created by mkTmp() so we can clean them up after all tests.
+const createdDirs = [];
+
 test('isVitestPoolCrash: true for fork-pool worker crashes, false for red tests', () => {
   // Transient fork-pool process crashes — warrant ONE auto-retry.
   assert.equal(isVitestPoolCrash('Error: [vitest-pool]: Worker forks emitted error.'), true);
@@ -73,8 +77,24 @@ test('isVitestPoolCrash: true for fork-pool worker crashes, false for red tests'
 });
 
 function mkTmp() {
-  return mkdtempSync(join(tmpdir(), 'verify-cache-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'verify-cache-test-'));
+  createdDirs.push(dir);
+  return dir;
 }
+
+// Clean up temporary directories after all tests complete. Best-effort: ignore
+// any failures to remove individual directories (e.g., locked files on Windows).
+// Only remove directories this run created — never glob %TEMP% to avoid deleting
+// another concurrent run's fixtures.
+after(() => {
+  for (const dir of createdDirs) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Ignore failures (locked files, permissions, etc.)
+    }
+  }
+});
 
 function fixedArgs(overrides = {}) {
   return {
@@ -1333,32 +1353,63 @@ test('runStepProcess keys the retriable-pool-crash lookup on retryKey, not the s
 // package.json whose "script" is a one-line node invocation of a local
 // fixture file — milliseconds, not a vitest battery.
 
-function writeFlakyFixture(dir, npmScriptName, { failFirst }) {
-  const marker = join(dir, 'attempts.txt');
-  writeFileSync(
-    join(dir, 'flaky.mjs'),
-    `import { existsSync, appendFileSync } from 'node:fs';
+function writeFlakyFixture(dir, npmScriptName, { failFirst = false, alwaysFail = false } = {}) {
+  // Determine fixture filename and marker name based on failure mode.
+  let fixtureFile;
+  let markerName;
+  if (alwaysFail) {
+    fixtureFile = 'allfail.mjs';
+    markerName = 'attempts-allfail.txt';
+  } else if (failFirst) {
+    fixtureFile = 'flaky.mjs';
+    markerName = 'attempts-flaky.txt';
+  } else {
+    fixtureFile = 'pass.mjs';
+    markerName = 'attempts-pass.txt';
+  }
+  const marker = join(dir, markerName);
+
+  // Generate fixture code based on failure mode.
+  let fixtureCode;
+  if (alwaysFail) {
+    fixtureCode = `import { appendFileSync } from 'node:fs';
+const marker = ${JSON.stringify(marker)};
+appendFileSync(marker, 'x');
+process.stderr.write('Worker exited unexpectedly\\n');
+process.exit(1);
+`;
+  } else if (failFirst) {
+    fixtureCode = `import { existsSync, appendFileSync } from 'node:fs';
 const marker = ${JSON.stringify(marker)};
 const already = existsSync(marker);
 appendFileSync(marker, 'x');
-// A short busy-wait so a real, measurable amount of time elapses on EVERY
-// attempt — proves a summed duration actually accumulates across retries
-// rather than only reflecting the last attempt.
-const until = Date.now() + 60;
-while (Date.now() < until) { /* spin */ }
-if (${JSON.stringify(failFirst)} && !already) {
+if (!already) {
   process.stderr.write('Worker exited unexpectedly\\n');
   process.exit(1);
 }
 process.exit(0);
-`,
-    'utf8',
-  );
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({ name: 'flaky-fixture', private: true, scripts: { [npmScriptName]: 'node flaky.mjs' } }),
-    'utf8',
-  );
+`;
+  } else {
+    // Always pass
+    fixtureCode = `import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(marker)}, 'x');
+process.exit(0);
+`;
+  }
+
+  writeFileSync(join(dir, fixtureFile), fixtureCode, 'utf8');
+
+  // Update or create package.json, merging the new script with existing ones.
+  const packageJsonPath = join(dir, 'package.json');
+  let packageJson;
+  if (existsSync(packageJsonPath)) {
+    packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  } else {
+    packageJson = { name: 'flaky-fixture', private: true, scripts: {} };
+  }
+  packageJson.scripts[npmScriptName] = `node ${fixtureFile}`;
+  writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8');
+
   return marker;
 }
 
@@ -1854,50 +1905,13 @@ test('hasVitestStep returns FALSE for an empty array', () => {
 // reports the count.
 
 test('#3018: runPipeline persists attempts to cache and reports count only on retry', () => {
-  const dir = mkTmp();
-
-  // Initialize a throwaway git repo with a fixture package.json.
-  gitAt(dir, ['init', '-q', '-b', 'main']);
-  gitAt(dir, ['config', 'user.email', 'test@example.com']);
-  gitAt(dir, ['config', 'user.name', 'Test']);
+  const dir = makeGitFixture();
 
   // Fixture 1: crashes on first run (fork-pool crash shape), passes on retry.
-  const marker1 = join(dir, 'attempts-flaky.txt');
-  writeFileSync(
-    join(dir, 'flaky.mjs'),
-    `import { existsSync, appendFileSync } from 'node:fs';
-const marker = ${JSON.stringify(marker1)};
-const already = existsSync(marker);
-appendFileSync(marker, 'x');
-if (!already) {
-  process.stderr.write('Worker exited unexpectedly\\n');
-  process.exit(1);
-}
-process.exit(0);
-`,
-    'utf8',
-  );
+  const marker1 = writeFlakyFixture(dir, 'test:server', { failFirst: true });
 
   // Fixture 2: always passes on first attempt.
-  const marker2 = join(dir, 'attempts-pass.txt');
-  writeFileSync(
-    join(dir, 'pass.mjs'),
-    `import { appendFileSync } from 'node:fs';
-appendFileSync(${JSON.stringify(marker2)}, 'x');
-process.exit(0);
-`,
-    'utf8',
-  );
-
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({
-      name: 'cache-fixture',
-      private: true,
-      scripts: { 'test:server': 'node flaky.mjs', test: 'node pass.mjs' },
-    }),
-    'utf8',
-  );
+  const marker2 = writeFlakyFixture(dir, 'test', { failFirst: false });
 
   gitAt(dir, ['add', '.']);
   gitAt(dir, ['commit', '-q', '-m', 'fixture']);
@@ -1949,36 +1963,10 @@ process.exit(0);
 });
 
 test('#3018: [fail] line reports attempt count when step crashes all retries', () => {
-  const dir = mkTmp();
-
-  // Initialize a throwaway git repo with a fixture package.json.
-  gitAt(dir, ['init', '-q', '-b', 'main']);
-  gitAt(dir, ['config', 'user.email', 'test@example.com']);
-  gitAt(dir, ['config', 'user.name', 'Test']);
+  const dir = makeGitFixture();
 
   // Fixture: crashes on all 3 attempts (fork-pool crash shape).
-  // Reuse test:server step, overriding it with a script that always fails.
-  const marker = join(dir, 'attempts-allfail.txt');
-  writeFileSync(
-    join(dir, 'allfail.mjs'),
-    `import { appendFileSync } from 'node:fs';
-const marker = ${JSON.stringify(marker)};
-appendFileSync(marker, 'x');
-process.stderr.write('Worker exited unexpectedly\\n');
-process.exit(1);
-`,
-    'utf8',
-  );
-
-  writeFileSync(
-    join(dir, 'package.json'),
-    JSON.stringify({
-      name: 'cache-fixture',
-      private: true,
-      scripts: { 'test:server': 'node allfail.mjs' },
-    }),
-    'utf8',
-  );
+  const marker = writeFlakyFixture(dir, 'test:server', { alwaysFail: true });
 
   gitAt(dir, ['add', '.']);
   gitAt(dir, ['commit', '-q', '-m', 'fixture']);
