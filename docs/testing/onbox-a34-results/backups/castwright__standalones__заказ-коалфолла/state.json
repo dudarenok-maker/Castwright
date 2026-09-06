@@ -1,0 +1,86 @@
+{
+  "bookId": "castwright__standalones__заказ-коалфолла",
+  "manuscriptId": "mns_af35ec3ced",
+  "title": "Заказ Коалфолла",
+  "author": "Castwright",
+  "series": "Standalones",
+  "seriesPosition": null,
+  "isStandalone": true,
+  "manuscriptFile": "manuscript.epub",
+  "castConfirmed": true,
+  "chapters": [
+    {
+      "id": 1,
+      "title": "Заказ Коалфолла",
+      "slug": "01-заказ-коалфолла",
+      "duration": "00:00",
+      "excluded": true,
+      "uuid": "5393dc61-3afe-4655-a7c9-5d5e3a24ce55"
+    },
+    {
+      "id": 2,
+      "title": "Глава первая — Стук",
+      "slug": "02-глава-первая-стук",
+      "duration": "04:16",
+      "audioModelKey": "qwen3-tts-0.6b",
+      "audioRenderedAt": "2026-09-06T05:46:11.778Z",
+      "audioEngines": {
+        "qwen": 4,
+        "coqui": 1
+      },
+      "uuid": "3e9e4bed-8921-4d69-a140-033b4803b3d8",
+      "audioQa": {
+        "status": "ok",
+        "reasons": [],
+        "measuredLufs": -16,
+        "truePeakDb": -1.2,
+        "durationSec": 255.69879166666666,
+        "expectedSec": 228.85714285714286,
+        "checkedAt": "2026-09-06T05:46:11.778Z"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Глава вторая — Отливка",
+      "slug": "03-глава-вторая-отливка",
+      "duration": "15:19",
+      "audioModelKey": "qwen3-tts-0.6b",
+      "audioRenderedAt": "2026-08-26T07:54:27.400Z",
+      "audioEngines": {
+        "qwen": 12,
+        "coqui": 1
+      },
+      "uuid": "f7175963-9229-4bf9-b5f0-21879c95867d"
+    }
+  ],
+  "coverGradient": [
+    "#3C194F",
+    "#0F0E0D"
+  ],
+  "createdAt": "2026-06-25T05:16:20.501Z",
+  "updatedAt": "2026-09-06T05:46:11.837Z",
+  "chapterTitleParserVersion": 2,
+  "language": "ru",
+  "schema": 1,
+  "narratorCredit": null,
+  "genre": null,
+  "publicationDate": null,
+  "description": null,
+  "notes": null,
+  "tags": [],
+  "coverImage": {
+    "source": "local",
+    "originalFilename": "cover.jpg",
+    "uploadedAt": "2026-06-25T05:16:20.501Z"
+  },
+  "liveInstruct": false,
+  "analysisProvenance": {
+    "engine": "local",
+    "model": "qwen36-cw-iq4-32k:latest",
+    "at": "2026-08-26T10:11:55.594Z",
+    "structureEngineVersion": 1,
+    "scope": "book",
+    "chaptersCovered": 3,
+    "maxMergedTurnsInParagraph": 2
+  }
+}
