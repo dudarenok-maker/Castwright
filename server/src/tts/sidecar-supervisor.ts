@@ -104,6 +104,15 @@ export interface SidecarSupervisorOpts {
   /** Max ms withSidecarHeld() waits for the killed child's exit event after
       kill() resolves, before rolling the hold back. Default 30_000. */
   heldExitWaitMs?: number;
+  /** Fired synchronously, exactly once per trip, the instant a code-43 streak
+      trips (restart43Trip transitions from null to set) — i.e. right where
+      `tripEvent()` would first start returning non-null. Task 16/16.5's
+      auto-revert route (server/src/gpu/auto-revert.ts) is the real caller:
+      it decides whether the trip is card-specific (revert the offending
+      pin + resetAndRespawn()) or not (leave TTS held down, distinct
+      "unrevertable" toast). Not awaited — the caller fires-and-forgets its
+      own async work; this callback itself must not throw. */
+  onTrip?: (trip: { card: unknown; residentEngines: string[] }) => void;
 }
 
 export interface SidecarSupervisor {
@@ -256,6 +265,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     recycleSidecarFn = defaultRecycleSidecar,
     drainWaitMs = DEFAULT_DRAIN_WAIT_MS,
     heldExitWaitMs = DEFAULT_HELD_EXIT_WAIT_MS,
+    onTrip,
   } = opts;
 
   let stopped = false;
@@ -580,6 +590,11 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
             `this device assignment looks structurally too small. Holding TTS down (no further ` +
             `respawn attempts) until the assignment changes and the server restarts.`,
         );
+        try {
+          onTrip?.(restart43Trip);
+        } catch (e) {
+          warn('[sidecar] supervisor: onTrip callback threw', e);
+        }
         return; // hold TTS down — no respawn.
       }
     }

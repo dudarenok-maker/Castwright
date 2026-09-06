@@ -7856,6 +7856,30 @@ async function mockGetGpuQueueState(): Promise<GpuQueueState> {
   return { queueDepth: 0, devices: [] };
 }
 
+/* Task 16/16.5 (#1230 item 2, #2974) — outcome of the most recent code-43
+   streak trip (server/src/gpu/auto-revert.ts), polled on the same cadence as
+   /api/gpu/queue so useTtsLifecycle can surface the "auto-reverted: ..." or
+   "not tied to a specific GPU card... manual investigation" toast. `null`
+   means nothing has tripped since the server booted. */
+export type GpuTripStatus =
+  | { status: 'reverted'; card: unknown; engines: string[]; toast: string }
+  | { status: 'unrevertable'; toast: string }
+  | null;
+
+async function realGetGpuTripStatus(): Promise<GpuTripStatus> {
+  const res = await fetch('/api/gpu/trip-status');
+  if (!res.ok) {
+    throw new Error(`GPU trip-status probe HTTP ${res.status}`);
+  }
+  return (await res.json()) as GpuTripStatus;
+}
+
+async function mockGetGpuTripStatus(): Promise<GpuTripStatus> {
+  // Mocks never run a real supervisor / code-43 streak — nothing has tripped.
+  await wait(20);
+  return null;
+}
+
 /* fs-18 — one-shot diagnostics board for the Admin watch console. Mirrors the
    DiagnosticsResponse schema in openapi.yaml; see server/src/routes/diagnostics.ts.
    Polled by the Admin view + the top-bar status dot (~30 s cadence). */
@@ -10030,6 +10054,7 @@ const real = {
   getModelInventory: realGetModelInventory,
   removeModel: realRemoveModel,
   getGpuQueueState: realGetGpuQueueState,
+  getGpuTripStatus: realGetGpuTripStatus,
   getDiagnostics: realGetDiagnostics,
   getSetupReadiness: realGetSetupReadiness,
   getModelsStatus: realGetModelsStatus,
@@ -10341,6 +10366,7 @@ const mock = {
   getModelInventory: mockGetModelInventory,
   removeModel: mockRemoveModel,
   getGpuQueueState: mockGetGpuQueueState,
+  getGpuTripStatus: mockGetGpuTripStatus,
   getDiagnostics: mockGetDiagnostics,
   getSetupReadiness: mockGetSetupReadiness,
   getModelsStatus: mockGetModelsStatus,

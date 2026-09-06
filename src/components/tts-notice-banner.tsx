@@ -7,7 +7,14 @@ interface TtsNoticeBannerProps {
   evictionNotice: string | null;
   /** Rose alert line when a Load/Stop returns {status:'error'} or throws. */
   loadErrorNotice: string | null;
-  /** Clears both notices (shared dismiss from useTtsLifecycle). */
+  /** Task 16/16.5 (#1230 item 2, #2974) — amber alert line for a code-43
+      streak trip's outcome: "Auto-reverted: ..." (a pin was reverted and TTS
+      brought back) or "...not tied to a specific GPU card... manual
+      investigation needed." (TTS is still held down). Distinct from
+      `loadErrorNotice` (rose) — this isn't a user-initiated Load/Stop
+      failure, it's the supervisor acting on its own. */
+  tripNotice?: string | null;
+  /** Clears all three notices (shared dismiss from useTtsLifecycle). */
   onDismiss: () => void;
   /** Kokoro's lifecycle. When resident (`state === 'ready'`), a Stop control
       renders here — the same `ModelControlPill` the generation view shows,
@@ -57,6 +64,7 @@ interface TtsNoticeBannerProps {
 export function TtsNoticeBanner({
   evictionNotice,
   loadErrorNotice,
+  tripNotice,
   onDismiss,
   kokoro,
   coqui,
@@ -65,13 +73,30 @@ export function TtsNoticeBanner({
   if (kokoro?.state === 'ready') resident.push({ label: 'Kokoro', lifecycle: kokoro });
   if (coqui?.state === 'ready') resident.push({ label: 'Coqui XTTS', lifecycle: coqui });
 
-  if (!evictionNotice && !loadErrorNotice && resident.length === 0) return null;
+  if (!evictionNotice && !loadErrorNotice && !tripNotice && resident.length === 0) return null;
   return (
     <div className="max-w-[1500px] mx-auto px-3 sm:px-6 mt-2 flex flex-col gap-1">
       {evictionNotice && (
         <p className="inline-flex items-center gap-2 text-[11px] text-emerald-700">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
           {evictionNotice}
+        </p>
+      )}
+      {tripNotice && (
+        <p
+          className="inline-flex items-start gap-2 text-[11px] text-amber-700 max-w-prose"
+          role="alert"
+        >
+          <span className="w-1.5 h-1.5 mt-1 rounded-full bg-amber-500 shrink-0" />
+          <span>{tripNotice}</span>
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label="Dismiss GPU auto-revert notice"
+            className="ml-1 text-amber-600/70 hover:text-amber-800"
+          >
+            <IconClose className="w-3 h-3" />
+          </button>
         </p>
       )}
       {loadErrorNotice && (
