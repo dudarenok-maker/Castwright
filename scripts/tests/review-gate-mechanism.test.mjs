@@ -614,13 +614,13 @@ test('resolveMainSha resolves a local main branch, falls back to origin/main on 
     // Case 1: an ordinary checkout with a local `main` branch.
     const origin = join(tmp, 'origin');
     mkdirSync(origin);
-    execFileSync('git', ['init', '-b', 'main'], gitOpts(origin));
-    execFileSync('git', ['config', 'user.email', 'test@example.com'], gitOpts(origin));
-    execFileSync('git', ['config', 'user.name', 'Test'], gitOpts(origin));
+    execFileSync('git', ['init', '-b', 'main'], { ...gitOpts(origin), windowsHide: true });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { ...gitOpts(origin), windowsHide: true });
+    execFileSync('git', ['config', 'user.name', 'Test'], { ...gitOpts(origin), windowsHide: true });
     writeFileSync(join(origin, 'file.txt'), 'hello\n');
-    execFileSync('git', ['add', 'file.txt'], gitOpts(origin));
-    execFileSync('git', ['commit', '-m', 'initial'], gitOpts(origin));
-    const originMainSha = execFileSync('git', ['rev-parse', 'main'], gitOpts(origin)).trim();
+    execFileSync('git', ['add', 'file.txt'], { ...gitOpts(origin), windowsHide: true });
+    execFileSync('git', ['commit', '-m', 'initial'], { ...gitOpts(origin), windowsHide: true });
+    const originMainSha = execFileSync('git', ['rev-parse', 'main'], { ...gitOpts(origin), windowsHide: true }).trim();
     assert.equal(resolveMainSha(origin), originMainSha, 'a local main branch resolves directly');
 
     // Case 2: the actual CI PR-checkout shape. `git clone` creates a local
@@ -628,10 +628,10 @@ test('resolveMainSha resolves a local main branch, falls back to origin/main on 
     // reproduces "no local main branch, only origin/main" exactly.
     const ciCheckout = join(tmp, 'ci-checkout');
     execFileSync('git', ['clone', origin, ciCheckout], { env: scrubGitEnvForThrowawayRepo(), windowsHide: true });
-    execFileSync('git', ['checkout', '--detach', 'origin/main'], gitOpts(ciCheckout));
-    execFileSync('git', ['branch', '-D', 'main'], gitOpts(ciCheckout));
+    execFileSync('git', ['checkout', '--detach', 'origin/main'], { ...gitOpts(ciCheckout), windowsHide: true });
+    execFileSync('git', ['branch', '-D', 'main'], { ...gitOpts(ciCheckout), windowsHide: true });
     assert.throws(
-      () => execFileSync('git', ['rev-parse', '--verify', 'main'], { ...gitOpts(ciCheckout), stdio: ['pipe', 'pipe', 'pipe'] }),
+      () => execFileSync('git', ['rev-parse', '--verify', 'main'], { ...gitOpts(ciCheckout), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }),
       'sanity check failed: the local main branch should be gone in this fixture',
     );
     assert.equal(
@@ -643,12 +643,12 @@ test('resolveMainSha resolves a local main branch, falls back to origin/main on 
     // Case 3: neither `main` nor `origin/main` resolves at all.
     const noMain = join(tmp, 'no-main');
     mkdirSync(noMain);
-    execFileSync('git', ['init', '-b', 'trunk'], gitOpts(noMain));
-    execFileSync('git', ['config', 'user.email', 'test@example.com'], gitOpts(noMain));
-    execFileSync('git', ['config', 'user.name', 'Test'], gitOpts(noMain));
+    execFileSync('git', ['init', '-b', 'trunk'], { ...gitOpts(noMain), windowsHide: true });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { ...gitOpts(noMain), windowsHide: true });
+    execFileSync('git', ['config', 'user.name', 'Test'], { ...gitOpts(noMain), windowsHide: true });
     writeFileSync(join(noMain, 'file.txt'), 'hello\n');
-    execFileSync('git', ['add', 'file.txt'], gitOpts(noMain));
-    execFileSync('git', ['commit', '-m', 'initial'], gitOpts(noMain));
+    execFileSync('git', ['add', 'file.txt'], { ...gitOpts(noMain), windowsHide: true });
+    execFileSync('git', ['commit', '-m', 'initial'], { ...gitOpts(noMain), windowsHide: true });
     assert.throws(
       () => resolveMainSha(noMain),
       /could not resolve 'main'/,
@@ -685,23 +685,23 @@ test('readCommittedOnMain (and syncAgentSkills end to end) reads main, never wha
   try {
     const repo = join(tmp, 'repo');
     mkdirSync(repo);
-    execFileSync('git', ['init', '-b', 'main'], gitOpts(repo));
-    execFileSync('git', ['config', 'user.email', 'test@example.com'], gitOpts(repo));
-    execFileSync('git', ['config', 'user.name', 'Test'], gitOpts(repo));
+    execFileSync('git', ['init', '-b', 'main'], { ...gitOpts(repo), windowsHide: true });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { ...gitOpts(repo), windowsHide: true });
+    execFileSync('git', ['config', 'user.name', 'Test'], { ...gitOpts(repo), windowsHide: true });
     mkdirSync(join(repo, '.claude', 'skills', 'fake-skill'), { recursive: true });
     writeFileSync(join(repo, '.claude', 'skills', 'fake-skill', 'SKILL.md'), '---\nname: fake-skill\n---\non main\n');
-    execFileSync('git', ['add', '.'], gitOpts(repo));
-    execFileSync('git', ['commit', '-m', 'main commit'], gitOpts(repo));
-    const mainSha = execFileSync('git', ['rev-parse', 'main'], gitOpts(repo)).trim();
+    execFileSync('git', ['add', '.'], { ...gitOpts(repo), windowsHide: true });
+    execFileSync('git', ['commit', '-m', 'main commit'], { ...gitOpts(repo), windowsHide: true });
+    const mainSha = execFileSync('git', ['rev-parse', 'main'], { ...gitOpts(repo), windowsHide: true }).trim();
 
     // Branch off, edit the mirrored file, commit — 'main' never sees this.
-    execFileSync('git', ['checkout', '-b', 'feature'], gitOpts(repo));
+    execFileSync('git', ['checkout', '-b', 'feature'], { ...gitOpts(repo), windowsHide: true });
     writeFileSync(
       join(repo, '.claude', 'skills', 'fake-skill', 'SKILL.md'),
       '---\nname: fake-skill\n---\nunmerged feature edit\n',
     );
-    execFileSync('git', ['add', '.'], gitOpts(repo));
-    execFileSync('git', ['commit', '-m', 'unmerged feature edit'], gitOpts(repo));
+    execFileSync('git', ['add', '.'], { ...gitOpts(repo), windowsHide: true });
+    execFileSync('git', ['commit', '-m', 'unmerged feature edit'], { ...gitOpts(repo), windowsHide: true });
 
     // HEAD is now on 'feature', with content 'main' has never had. 'main'
     // itself is untouched — resolving it must not be affected by HEAD at all.
