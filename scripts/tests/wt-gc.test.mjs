@@ -193,17 +193,33 @@ test('refusalReasons: a clean, merged, pushed, PR-free, non-primary, non-self wo
   assert.deepEqual(refusalReasons(clearFacts()), []);
 });
 
-test('refusalReasons: all six refusals can co-occur', () => {
+test('refusalReasons: refuses a tree marked by `git worktree lock`, quoting the reason', () => {
+  const reasons = refusalReasons(clearFacts({ locked: true, lockReason: 'agent lane in flight' }));
+  assert.deepEqual(reasons, ['locked by `git worktree lock`: agent lane in flight']);
+});
+
+test('refusalReasons: refuses a locked tree even when the lock carries no reason', () => {
+  const reasons = refusalReasons(clearFacts({ locked: true, lockReason: '' }));
+  assert.deepEqual(reasons, ['locked by `git worktree lock`']);
+});
+
+test('refusalReasons: does NOT flag the lock reason when locked is false (proves the flag is read, not always-on)', () => {
+  assert.deepEqual(refusalReasons(clearFacts({ locked: false, lockReason: null })), []);
+});
+
+test('refusalReasons: all seven refusals can co-occur', () => {
   const reasons = refusalReasons({
     isPrimary: true,
     isSelf: true,
+    locked: true,
+    lockReason: 'held',
     dirty: true,
     mergedIntoMain: false,
     hasUpstream: false,
     unpushedCount: 0,
     prAvailable: false,
   });
-  assert.equal(reasons.length, 6);
+  assert.equal(reasons.length, 7);
 });
 
 // ---- classifyWorktree — merged / ahead / PR-state classification ------------
@@ -646,6 +662,57 @@ test('run(): --prune REFUSES a worktree whose branch carries an OPEN PR', () => 
   assert.match(logs.join(''), /SKIP C:\/wt-clean — open PR #3055/);
 });
 
+test('run(): --prune REFUSES a `git worktree lock`d tree, and does not strip its junctions first', () => {
+  // The whole point of the refusal: `git worktree remove --force` DOES refuse
+  // a locked tree (exit 128, `fatal: cannot remove a locked working tree`),
+  // but removeJunctions() runs BEFORE it. Without the refusal the tree
+  // survives stripped of node_modules/.venv/voices and is reported as a
+  // failure — git's backstop protects the directory, not the environment.
+  let junctionsCalled = false;
+  let removeWorktreeCalled = false;
+  const { runners, logs } = makeRunners({
+    canned: {
+      'worktree list --porcelain': {
+        stdout: [
+          'worktree C:/repo',
+          'HEAD aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          'branch refs/heads/main',
+          '',
+          'worktree C:/wt-clean',
+          'HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          'branch refs/heads/feat/clean-merged',
+          'locked agent lane in flight',
+          '',
+        ].join('\n'),
+      },
+    },
+    removeJunctions: () => { junctionsCalled = true; return [junctionEntry()]; },
+    removeWorktree: () => { removeWorktreeCalled = true; return { status: 0, stdout: '', stderr: '' }; },
+  });
+
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
+
+  assert.equal(code, 0);
+  assert.equal(junctionsCalled, false, 'the junction sweep must not run on a locked tree');
+  assert.equal(removeWorktreeCalled, false);
+  assert.match(logs.join(''), /SKIP C:\/wt-clean — locked by `git worktree lock`: agent lane in flight/);
+});
+
+test('run(): the SAME tree unlocked IS pruned — proves the lock refusal reads the marker, not the fixture', () => {
+  let junctionsCalled = false;
+  let removeWorktreeCalled = false;
+  const { runners } = makeRunners({
+    removeJunctions: () => { junctionsCalled = true; return [junctionEntry()]; },
+    removeWorktree: () => { removeWorktreeCalled = true; return { status: 0, stdout: '', stderr: '' }; },
+  });
+
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
+
+  assert.equal(code, 0);
+  assert.equal(junctionsCalled, true);
+  assert.equal(removeWorktreeCalled, true);
+});
+
 test("run(): --prune REFUSES the worktree the process is running from", () => {
   // git worktree remove --force from inside its own tree deletes every file
   // and deregisters the worktree, THEN fails the final rmdir with exit 255 —
@@ -732,32 +799,48 @@ test('run(): gh answering "no PR" reads as none and stays prunable — the two s
   assert.match(logs.join(''), /removed\.\n/);
 });
 
-// ---- gh is only asked when the answer could change the outcome -------------
+// ---- gh: skipped only under --prune, where the answer cannot change anything
 
-test('run(): gh is NOT queried for a row that already carries another refusal', () => {
+test('run(): --prune does NOT query gh for a row that already carries another refusal', () => {
   const { runners, ghCalls } = makeRunners({
     canned: { 'status --porcelain': { stdout: ' M x.txt\n' } },
   });
 
-  run({ prune: false, runners, selfPaths: NO_SELF });
+  run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.deepEqual(ghCalls, [], 'a row that cannot become prunable must not cost a gh round-trip');
 });
 
-test('run(): gh IS queried for a row with no other refusal — the skip can never make a row prunable', () => {
-  const { runners, ghCalls } = makeRunners();
+test('run(): REPORT mode queries gh even for an already-refused row — the table is the product', () => {
+  // The skip was applied to report mode too and made 16 of 18 rows on this
+  // box render `not queried`, blanking exactly the open-PR cells that make
+  // the report readable. Report mode asks about every branched row.
+  const { runners, ghCalls, logs } = makeRunners({
+    canned: { 'status --porcelain': { stdout: ' M x.txt\n' } },
+    ghPrState: () => ({ available: true, pr: { number: 3055, state: 'OPEN' } }),
+  });
 
   run({ prune: false, runners, selfPaths: NO_SELF });
+
+  assert.deepEqual(ghCalls, ['main', 'feat/clean-merged']);
+  assert.match(logs.join(''), /#3055 OPEN/);
+  assert.ok(!logs.join('').includes('not queried'), 'report mode must not blank the PR column');
+});
+
+test('run(): --prune DOES query gh for a row with no other refusal — the skip can never make a row prunable', () => {
+  const { runners, ghCalls } = makeRunners();
+
+  run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.deepEqual(ghCalls, ['feat/clean-merged']);
 });
 
-test('run(): a row skipped for gh renders "not queried", distinct from both "none" and "unknown"', () => {
+test('run(): a row skipped for gh under --prune renders "not queried", distinct from both "none" and "unknown"', () => {
   const { runners, logs } = makeRunners({
     canned: { 'status --porcelain': { stdout: ' M x.txt\n' } },
   });
 
-  run({ prune: false, runners, selfPaths: NO_SELF });
+  run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.match(logs.join(''), /not queried/);
 });

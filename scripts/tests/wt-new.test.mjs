@@ -275,6 +275,53 @@ test('parseWorktreePorcelain handles detached HEAD', () => {
   assert.equal(trees[0].branch, '(detached)');
 });
 
+test('parseWorktreePorcelain captures a `locked <reason>` marker', () => {
+  // Consumed as scripts/wt-gc.mjs's refusal #7. Discarding this line made a
+  // locked worktree read `prunable? yes`: --prune stripped its junctions and
+  // only THEN hit `fatal: cannot remove a locked working tree`.
+  const sample = [
+    'worktree C:/wt/locked',
+    'HEAD abc123',
+    'branch refs/heads/feat/locked',
+    'locked agent lane in flight',
+    '',
+  ].join('\n');
+  const trees = parseWorktreePorcelain(sample);
+  assert.equal(trees[0].locked, true);
+  assert.equal(trees[0].lockReason, 'agent lane in flight');
+});
+
+test('parseWorktreePorcelain captures a bare `locked` marker (lock taken with no reason)', () => {
+  const sample = ['worktree C:/wt/locked', 'HEAD abc123', 'branch refs/heads/feat/locked', 'locked', ''].join('\n');
+  const trees = parseWorktreePorcelain(sample);
+  assert.equal(trees[0].locked, true);
+  assert.equal(trees[0].lockReason, '');
+});
+
+test('parseWorktreePorcelain reports locked:false for an unlocked worktree (proves the flag is read, not always-on)', () => {
+  const sample = ['worktree C:/wt/open', 'HEAD abc123', 'branch refs/heads/feat/open', ''].join('\n');
+  const trees = parseWorktreePorcelain(sample);
+  assert.equal(trees[0].locked, false);
+  assert.equal(trees[0].lockReason, null);
+});
+
+test('parseWorktreePorcelain does not leak one tree\'s lock onto the next', () => {
+  const sample = [
+    'worktree C:/wt/locked',
+    'HEAD abc123',
+    'branch refs/heads/feat/locked',
+    'locked in flight',
+    '',
+    'worktree C:/wt/open',
+    'HEAD def456',
+    'branch refs/heads/feat/open',
+    '',
+  ].join('\n');
+  const trees = parseWorktreePorcelain(sample);
+  assert.equal(trees[0].locked, true);
+  assert.equal(trees[1].locked, false);
+});
+
 test('parseEnvLocal skips comments and blank lines', () => {
   const text = ['# header comment', '', 'VITE_PORT=5183', '   PORT=8090   ', '#PORT=999', ''].join(
     '\n',

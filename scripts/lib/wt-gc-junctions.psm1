@@ -76,7 +76,7 @@ function Get-JunctionsRecursive {
         try {
             $item = Get-Item -LiteralPath $Dir -Force -ErrorAction Stop
         } catch {
-            throw "wt-gc: junction scan could not inspect '$Dir' — the scan is INCOMPLETE and must not be treated as 'no junctions found': $($_.Exception.Message)"
+            throw "wt-gc: junction scan could not inspect '$Dir' -- the scan is INCOMPLETE and must not be treated as 'no junctions found': $($_.Exception.Message)"
         }
         if (Test-IsReparsePoint -Item $item) {
             $found.Add($Dir)
@@ -86,7 +86,7 @@ function Get-JunctionsRecursive {
         try {
             $children = @(Get-ChildItem -LiteralPath $Dir -Directory -Force -ErrorAction Stop)
         } catch {
-            throw "wt-gc: junction scan could not enumerate '$Dir' — the scan is INCOMPLETE and must not be treated as 'no junctions found': $($_.Exception.Message)"
+            throw "wt-gc: junction scan could not enumerate '$Dir' -- the scan is INCOMPLETE and must not be treated as 'no junctions found': $($_.Exception.Message)"
         }
         foreach ($child in $children) {
             Test-JunctionsWalk -Dir $child.FullName
@@ -109,6 +109,10 @@ function Get-JunctionsRecursive {
 # A failed SCAN propagates out of here as a throw (see Get-JunctionsRecursive)
 # rather than being reported as "0 junctions removed" — the caller must not be
 # able to mistake an incomplete scan for a clean tree.
+#
+# The enumeration is repeated AFTER the delete loop and anything still (or
+# newly) reparse-shaped is reported as an un-removed junction — see the
+# comment at that re-scan for the window it closes.
 #
 # Every result object carries exactly these five properties, and
 # scripts/wt-gc.mjs reads them by name (JUNCTION_RESULT_KEYS there):
@@ -160,7 +164,39 @@ function Remove-JunctionsRecursive {
             }
         }
     }
-    return , @($results)
+
+    # RE-SCAN, and report anything still reparse-shaped as an un-removed
+    # junction. The enumerate-then-delete shape above leaves a window: a
+    # junction created after Get-JunctionsRecursive returned -- an `npm
+    # install` or a `wt-new.mjs` finishing inside this tree -- is live and
+    # unseen when the caller goes on to `git worktree remove --force`, which
+    # is exactly the follow-the-link-into-the-primary-checkout case this
+    # module exists to prevent. Narrow (the caller only prunes a merged,
+    # pushed, clean, PR-free, unlocked tree) but not closed by anything else.
+    #
+    # It REPORTS rather than deletes: a junction appearing mid-teardown means
+    # something is actively writing in a tree that is about to be destroyed,
+    # and that is a reason to stop, not to sweep harder. wt-gc.mjs's
+    # `!j.Removed` check turns the entry into a prune failure BEFORE `git
+    # worktree remove` runs. A path that already failed its delete above is
+    # skipped, so it is reported once, not twice.
+    $reported = @{}
+    foreach ($r in @($results)) {
+        if (-not $r.Removed) { $reported[$r.Path] = $true }
+    }
+    $final = New-Object System.Collections.Generic.List[object]
+    foreach ($r in @($results)) { $final.Add($r) }
+    foreach ($path in (Get-JunctionsRecursive -Root $Root)) {
+        if ($reported.ContainsKey($path)) { continue }
+        $final.Add([PSCustomObject]@{
+            Path              = $path
+            Target            = $null
+            Removed           = $false
+            TargetStillExists = $null
+            Error             = "wt-gc: junction present at '$path' AFTER the removal pass -- created between the scan and the delete. Refusing to treat this tree as swept."
+        })
+    }
+    return , @($final.ToArray())
 }
 
 Export-ModuleMember -Function Test-IsReparsePoint, Get-JunctionsRecursive, Remove-JunctionsRecursive

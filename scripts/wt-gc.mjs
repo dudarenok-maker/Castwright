@@ -2,10 +2,21 @@
 // Worktree garbage collector — ops-75 commit-gate rebalance Part 4 (#3051).
 // Design of record: docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md
 // Part 4. See CLAUDE.md "Worktree teardown" for the manual recipe this
-// automates and the hazards it exists to close (12 of 14 orphaned worktree
-// junctions found pointing at the primary checkout's real
-// node_modules/.venv/Kokoro weights on 2026-09-06 — 8.27 GB across 28
-// directories).
+// automates and the hazard it exists to close: on 2026-09-06, 12 of 14
+// worktree junctions were found pointing at the primary checkout's real
+// node_modules/.venv/Kokoro weights, so a `Remove-Item -Recurse` teardown
+// would have followed one into the primary checkout and deleted the target.
+//
+// SCOPE — read this before sizing the tool against that sweep. This operates
+// on the worktrees `git worktree list` REGISTERS, and only those. The 28
+// directories / 8.27 GB the 2026-09-06 sweep counted were ORPHANED
+// directories — ones git no longer knows about — and those are structurally
+// invisible here: they appear in no porcelain, so `wt:gc` neither lists nor
+// reclaims them. What this tool does is stop registered worktrees from
+// BECOMING that: it makes the junction-first teardown recipe routine and
+// refuses to run it on a tree that is not safe to lose. Reclaiming an
+// already-orphaned directory remains the manual recipe in CLAUDE.md
+// "Worktree teardown", and #3051's acceptance list does not ask for it.
 //
 // Usage:
 //   node scripts/wt-gc.mjs            # report only (the default — no mutation)
@@ -15,9 +26,14 @@
 // commits-ahead-of-main, dirty, PR state (when `gh` is available and
 // authenticated), and the prunable?/refusal cell. Unpushed state is not its
 // own column — it surfaces inside the refusal text (`N unpushed commit(s)` /
-// `no upstream configured`), which is where a reader needs it.
+// `no upstream configured`), which is where a reader needs it. REPORT MODE
+// QUERIES `gh` FOR EVERY BRANCHED ROW, including ones already refused on
+// other grounds: in report mode the table IS the product, and a PR column
+// reading `not queried` for 16 of 18 rows is worth less than the round-trips
+// it saves. `--prune` skips the query for an already-refused row, where the
+// answer genuinely cannot change the outcome.
 //
-// Refuses to prune six shapes, always, regardless of --prune. Every one of
+// Refuses to prune seven shapes, always, regardless of --prune. Every one of
 // them fails CLOSED: an unanswerable question is a refusal, never a pass.
 //   1. the primary checkout — never touched. If git cannot answer
 //      `rev-parse --git-common-dir`/`--git-dir`, the tree is TREATED AS the
@@ -45,7 +61,16 @@
 //      PR state could not be determined at all (`gh` missing, unauthenticated
 //      or offline). "gh answered: no PR exists" and "gh could not be asked"
 //      are DIFFERENT answers here and are reported and treated differently:
-//      the first is safe, the second is a refusal.
+//      the first is safe, the second is a refusal;
+//   7. a tree `git worktree lock` marked as locked — git's own, explicit "do
+//      not remove this" signal, which the porcelain already carries
+//      (scripts/wt-list.mjs parses it). Without this refusal a locked tree
+//      cleared every other check, had its junctions unlinked, and only THEN
+//      hit `fatal: cannot remove a locked working tree` — leaving the tree
+//      registered but stripped of node_modules/.venv/voices, i.e. git's
+//      backstop protected the directory and not the environment inside it.
+//      Same shape as refusals 1 and 2: the destructive step must run AFTER
+//      the thing that honours the refusal, not before it.
 //
 // `mergedIntoMain` is computed against the LOCAL `main`
 // (`git merge-base --is-ancestor <head> main`), so a stale local `main`
@@ -53,7 +78,7 @@
 // which is the safe direction; `git fetch && git merge --ff-only main` first
 // if a row you expect to be prunable reads `merged false`.
 //
-// Teardown order for a worktree that clears all three refusals — load-bearing,
+// Teardown order for a worktree that clears every refusal — load-bearing,
 // not incidental (CLAUDE.md "Worktree teardown", #3051's own regression
 // history):
 //   1. Recursively find every reparse-point (junction) directory under the
@@ -68,7 +93,16 @@
 //      (still-present) target — never by trusting a non-throwing call, since
 //      `cmd /c rmdir` from a bash shell is on record silently no-op'ing and
 //      returning 0.
-//   4. Only THEN `git worktree remove --force <path>` — safe now that no
+//   4. RE-SCAN the tree and fail if anything reparse-shaped is still (or
+//      newly) there. Steps 1-3 enumerate once and then delete, so a junction
+//      created in the window between them — an `npm install` or a
+//      `wt-new.mjs` finishing inside that tree — would be live and unseen
+//      when step 5 runs. The re-scan reports it as an un-removed junction
+//      rather than removing it: something is actively writing in a tree this
+//      tool is about to destroy, and that is a reason to stop, not to sweep
+//      harder. Implemented inside Remove-JunctionsRecursive so the check
+//      cannot be skipped by a caller.
+//   5. Only THEN `git worktree remove --force <path>` — safe now that no
 //      junction inside the tree can be followed into the primary checkout.
 //
 // Offline tolerance: every `gh` call goes through scripts/gh.mjs's
@@ -107,13 +141,17 @@ function usage(extra) {
   const lines = [
     'Usage: node scripts/wt-gc.mjs [--prune]',
     '',
-    'Report mode (default): lists worktrees with commits-ahead-of-main,',
-    'merged status, and PR state (when `gh` is available). No mutation.',
+    'Report mode (default): lists the REGISTERED worktrees (`git worktree',
+    'list`) with commits-ahead-of-main, merged status, and PR state (queried',
+    'for every branched row when `gh` is available). No mutation. An orphaned',
+    'directory git no longer knows about is NOT listed — see the file header.',
     '',
     '--prune: actually remove worktrees that clear every refusal (primary',
     "checkout, this process's own worktree, uncommitted changes, not merged",
-    'into main, unpushed commits, an open or undeterminable PR) — junctions',
-    'first, then the worktree itself. See CLAUDE.md "Worktree teardown".',
+    'into main, unpushed commits, an open or undeterminable PR, a `git',
+    'worktree lock`) — junctions first, then the worktree itself. Skips the',
+    '`gh` query for rows already refused on other grounds. See CLAUDE.md',
+    '"Worktree teardown".',
   ];
   if (extra) lines.unshift(`Error: ${extra}`, '');
   return lines.join('\n');
@@ -260,15 +298,16 @@ export function isSelfWorktree(worktreePath, selfPaths) {
 
 /**
  * The mandatory refusal reasons, and nothing else — see this file's header
- * for what each one protects and why. All six fail CLOSED: every `!`-shaped
+ * for what each one protects and why. All seven fail CLOSED: every `!`-shaped
  * test here reads "could not be confirmed safe", not "was confirmed
  * unsafe". `unpushed` covers BOTH "has commits ahead of its upstream" AND
  * "has no upstream configured at all" (hasUpstream: false).
  *
  * `prQueried: false` is the ONE case that suppresses the PR refusals, and
- * run() sets it only for a row that ALREADY carries another refusal — it is
- * a "don't pay for a `gh` round-trip we can't act on" optimisation, never a
- * path to prunable. A row with no other refusal always queries gh.
+ * run() sets it only under --prune, and then only for a row that ALREADY
+ * carries another refusal — it is a "don't pay for a `gh` round-trip we
+ * can't act on" optimisation, never a path to prunable. A row with no other
+ * refusal always queries gh, and report mode always queries.
  *
  * Returns an array; empty means the worktree clears every refusal and is
  * eligible for --prune.
@@ -277,6 +316,10 @@ export function refusalReasons(facts) {
   const reasons = [];
   if (facts.isPrimary) reasons.push('primary checkout — never pruned');
   if (facts.isSelf) reasons.push('the worktree this process is running from — never pruned');
+  if (facts.locked) {
+    const why = facts.lockReason ? `: ${facts.lockReason}` : '';
+    reasons.push(`locked by \`git worktree lock\`${why}`);
+  }
   if (facts.dirty) reasons.push('uncommitted changes');
   if (!facts.mergedIntoMain) reasons.push('not merged into main');
   if (!facts.hasUpstream) reasons.push('no upstream configured — cannot verify it is pushed');
@@ -404,7 +447,21 @@ function gatherFacts(git, tree, isPrimary, isSelf) {
   }
   if (!hasUpstream) unpushedCount = null;
 
-  return { isPrimary, isSelf, dirty, mergedIntoMain, aheadCount, hasUpstream, unpushedCount, unpushedVerified };
+  return {
+    isPrimary,
+    isSelf,
+    // Straight off the porcelain (scripts/wt-list.mjs) — git's own explicit
+    // "do not remove this" marker, read BEFORE the destructive step rather
+    // than discovered by it.
+    locked: tree.locked === true,
+    lockReason: tree.lockReason ?? null,
+    dirty,
+    mergedIntoMain,
+    aheadCount,
+    hasUpstream,
+    unpushedCount,
+    unpushedVerified,
+  };
 }
 
 // ---- Report + prune formatting ---------------------------------------------
@@ -469,14 +526,19 @@ export function run({ prune, runners, selfPaths = [repoRoot, process.cwd()] }) {
 
     const facts = gatherFacts(git, tree, isPrimary, isSelf);
 
-    // Only spend a `gh` round-trip on a row the answer could change. A row
-    // that already carries a refusal cannot become prunable, so querying it
-    // buys nothing and costs one serial network call per worktree (17 of
-    // them on this box). `prQueried: false` suppresses ONLY the PR refusals,
-    // and only for rows that are already refused on other grounds.
+    // Under --prune, only spend a `gh` round-trip on a row the answer could
+    // change: a row that already carries a refusal cannot become prunable, so
+    // querying it buys nothing and costs one serial network call per worktree
+    // (17 of them on this box). `prQueried: false` suppresses ONLY the PR
+    // refusals, and only for rows already refused on other grounds.
+    //
+    // In REPORT mode the table is the product, not an input to a decision, so
+    // every branched row is queried — the skip made 16 of 18 rows render
+    // `not queried` in the PR column, including the open-PR rows that made
+    // the pass-1 blocking finding legible in the first place.
     const otherRefusals = refusalReasons({ ...facts, prQueried: false });
     let prInfo;
-    if (otherRefusals.length > 0) {
+    if (prune && otherRefusals.length > 0) {
       prInfo = { queried: false, available: false, pr: null };
     } else if (tree.branch && tree.branch !== '(detached)') {
       prInfo = ghPrState(tree.branch);

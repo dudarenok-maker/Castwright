@@ -4780,8 +4780,12 @@ Pester test in this PR runs against throwaway fixtures (a scratch dir with a rea
 `New-Item -ItemType Junction`, never a real worktree) — see
 `scripts/tests/wt-gc-junctions.Tests.ps1` and `scripts/tests/wt-gc.test.mjs`. What
 those tests cannot exercise is `--prune` against a REAL worktree carrying real
-junctions into the primary checkout's `node_modules`/`.venv` — exactly the shape
-that produced the 28-orphan, 8.27 GB incident this tool exists to automate away.
+junctions into the primary checkout's `node_modules`/`.venv` — the shape behind the
+2026-09-06 sweep, in which 12 of 14 registered worktrees' junctions pointed at the
+primary checkout's real trees. **Scope:** `wt-gc` reads `git worktree list`, so the
+28 already-ORPHANED directories (8.27 GB) that same sweep counted are invisible to it
+— it exists to stop registered worktrees from becoming those, not to reclaim ones
+that already are. Do not accept this row against an orphan-directory cleanup.
 
 **What to observe, concretely**, on a Windows box with several stale worktrees
 (junctioned per CLAUDE.md's "Worktree setup"):
@@ -4816,7 +4820,21 @@ that produced the 28-orphan, 8.27 GB incident this tool exists to automate away.
   with a deep junction path (the `server/tts-sidecar/.venv` shape under a long
   worktree name), run once under `pwsh` and once under `powershell` (5.1) and confirm
   both either find the junction or FAIL LOUDLY — never a silent `removed 0
-  junction(s)` followed by a successful `git worktree remove`.
+  junction(s)` followed by a successful `git worktree remove`. **Distinguish the two
+  ways 5.1 can fail loudly**, because this criterion could not tell them apart and was
+  briefly disarmed by that: a `ParserError` / `Import-Module` failure means the MODULE
+  did not load and the fail-closed scan was never executed, which is NOT a pass for
+  this bullet. First confirm `powershell.exe -NoProfile -Command "Import-Module
+  scripts\lib\wt-gc-junctions.psm1 -Force"` loads clean, THEN exercise the scan.
+  (`pickPowerShell()` always prefers `pwsh` and has no engine flag, so "run it under
+  5.1" means invoking the `.ps1` through `powershell.exe` by hand.)
+- **A locked worktree is refused, and refused BEFORE the junction sweep.** `git
+  worktree lock <tree> --reason 'in flight'`, then `npm run wt:gc` — the row must read
+  ``no (locked by `git worktree lock`: in flight)``. Then `--prune` and confirm the
+  tree's junctions are still present: `git worktree remove --force` refuses a locked
+  tree on its own, but only after the sweep has already run, so "it survived" is not
+  the criterion — "it survived WITH its `node_modules`/`.venv`/`voices/`" is.
+  `git worktree unlock` afterwards.
 
 *Needs:* a Windows box with `pwsh` **and** Windows PowerShell 5.1 on PATH, at least one
 genuinely prunable worktree with real junctions set up per CLAUDE.md's worktree-setup

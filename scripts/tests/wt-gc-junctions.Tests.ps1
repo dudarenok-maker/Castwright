@@ -227,6 +227,79 @@ Describe 'Remove-JunctionsRecursive' {
     }
 }
 
+# --- The scan -> delete window (#3055 pass 2). Remove-JunctionsRecursive  ---
+# --- enumerates once and then deletes; a junction created in between was   ---
+# --- live and unseen when the caller went on to `git worktree remove       ---
+# --- --force`. It now re-scans and reports anything still there.           ---
+Describe 'Remove-JunctionsRecursive re-scans after the delete pass' {
+    BeforeEach {
+        $script:tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "wtgc-rescan-$([Guid]::NewGuid())"
+        New-Item -ItemType Directory -Path $script:tempDir | Out-Null
+        $global:WtGcScanCount = 0
+        $global:WtGcLateLink = $null
+    }
+    AfterEach {
+        if (Test-Path $script:tempDir) {
+            # Unlink any surviving junction FIRST -- these tests deliberately
+            # leave one live, and Remove-Item -Recurse over it would follow
+            # the link and delete the target, which is the exact hazard the
+            # module under test exists to prevent.
+            Get-ChildItem -Path $script:tempDir -Directory -Force -ErrorAction SilentlyContinue |
+                Where-Object { Test-IsReparsePoint -Item $_ } |
+                ForEach-Object { [System.IO.Directory]::Delete($_.FullName, $false) }
+            Remove-Item $script:tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Remove-Variable -Name WtGcScanCount -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable -Name WtGcLateLink -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It 'reports a junction that appeared AFTER the delete pass as un-removed, and does NOT sweep it' {
+        $target = Join-Path $script:tempDir "real-node-modules"
+        New-Item -ItemType Directory -Path $target | Out-Null
+        $marker = Join-Path $target "package.json"
+        Set-Content -Path $marker -Value '{"name":"real"}' -Encoding utf8
+        $late = Join-Path $script:tempDir "node_modules"
+        New-TestJunction -LinkPath $late -TargetPath $target
+        $global:WtGcLateLink = $late
+
+        # Mocking the enumeration is the only way to place a junction inside
+        # the function's OWN scan->delete window: the first call is the
+        # moment before the `npm install` finishes (clean tree, nothing to
+        # delete), the second is the re-scan. Globals, not $script:, because
+        # a -ModuleName mock body runs in the MODULE's session state and
+        # cannot see this file's script scope.
+        Mock -ModuleName wt-gc-junctions Get-JunctionsRecursive {
+            $global:WtGcScanCount++
+            if ($global:WtGcScanCount -eq 1) { return , @() }
+            return , @($global:WtGcLateLink)
+        }
+
+        $report = Remove-JunctionsRecursive -Root $script:tempDir
+
+        $global:WtGcScanCount | Should -Be 2
+        $report.Count | Should -Be 1
+        $report[0].Path | Should -Be $late
+        $report[0].Removed | Should -BeFalse
+        $report[0].Error | Should -Match 'AFTER the removal pass'
+        # Reported, never swept -- and the target is untouched either way.
+        Test-Path -LiteralPath $late | Should -BeTrue
+        Test-Path -LiteralPath $marker | Should -BeTrue
+    }
+
+    It 'adds NO extra entry when the tree really is clean after the sweep (proves the re-scan is not always-reporting)' {
+        $target = Join-Path $script:tempDir "real-node-modules"
+        New-Item -ItemType Directory -Path $target | Out-Null
+        $link = Join-Path $script:tempDir "node_modules"
+        New-TestJunction -LinkPath $link -TargetPath $target
+
+        $report = Remove-JunctionsRecursive -Root $script:tempDir
+
+        $report.Count | Should -Be 1
+        $report[0].Removed | Should -BeTrue
+        $report[0].Error | Should -BeNullOrEmpty
+    }
+}
+
 # --- Acceptance #4 (#3051): the ReparsePoint gate is source-pinned, and the ---
 # --- pin fails if the gate is changed to `.LinkTarget`.                    ---
 Describe 'ReparsePoint gate is source-pinned (#3051 acceptance 4)' {
@@ -247,7 +320,7 @@ Describe 'ReparsePoint gate is source-pinned (#3051 acceptance 4)' {
         $script:moduleCode | Should -Match '\[System\.IO\.FileAttributes\]::ReparsePoint'
     }
 
-    It 'never gates on .LinkTarget in code — reads empty on this box''s Windows PowerShell 5.1 even for a real junction' {
+    It 'never gates on .LinkTarget in code -- reads empty on this box''s Windows PowerShell 5.1 even for a real junction' {
         # This is the literal acceptance criterion: if a future edit swaps
         # the ReparsePoint-attribute gate above for `.LinkTarget`, THIS
         # assertion goes red, because that edit necessarily introduces the
@@ -298,14 +371,14 @@ Describe 'Get-JunctionsRecursive fails closed on an enumeration error' {
             Should -Throw -ExpectedMessage '*INCOMPLETE*'
     }
 
-    It 'propagates the failure out of Remove-JunctionsRecursive — the caller must never see a clean empty report' {
+    It 'propagates the failure out of Remove-JunctionsRecursive -- the caller must never see a clean empty report' {
         Mock -ModuleName 'wt-gc-junctions' Get-ChildItem { throw 'Access to the path is denied.' }
 
         { Remove-JunctionsRecursive -Root $script:tempDir } |
             Should -Throw -ExpectedMessage '*INCOMPLETE*'
     }
 
-    It 'still returns normally (no throw) when enumeration succeeds — proves the guard is not always-on' {
+    It 'still returns normally (no throw) when enumeration succeeds -- proves the guard is not always-on' {
         $found = Get-JunctionsRecursive -Root $script:tempDir
 
         ($found -is [array]) | Should -BeTrue
@@ -369,7 +442,7 @@ Describe 'wt-gc-junctions.ps1 CLI surface' {
         }
     }
 
-    It 'REJECTS -Action Find — the branch was unreachable and returned strings, not report objects' {
+    It 'REJECTS -Action Find -- the branch was unreachable and returned strings, not report objects' {
         # wt-gc.mjs only ever passes 'Remove'. Had anything routed Find through
         # its report loop, `!j.Removed` would have been truthy for every string
         # and every junction would have read as a failure.
