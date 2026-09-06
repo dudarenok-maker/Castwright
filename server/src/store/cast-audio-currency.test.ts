@@ -89,7 +89,7 @@ describe('isAudioCurrent (#2128 / #2129)', () => {
        substitution (`resolveGroup` had no live row to normalise onto, so it
        fell back to the narrator and stamped `renderedFallbackCharacterId` on
        the segment) must NOT clear just because a stamp exists — register row
-       A29's own shape (`the-torment`, 67 segments). The per-segment
+       A22's own shape (`the-torment`, 67 segments). The per-segment
        `renderedFallbackCharacterId` is the affirmative evidence this tier was
        missing; `== null` (not truthiness) because the field is `string |
        null | undefined` and an empty string would BE a substitution record. */

@@ -111,13 +111,23 @@ with **zero** error state and **zero** browser console errors — no
 real round-trip through the app→server→sidecar chain; it stayed on the same
 ready state with no error.
 
+**Correction (post-review, 2026-09-06): this is a gap, not a footnote.**
 Because the weights/package were already resident, this run could not
 observe a *fresh* "click Install, watch it download" transition for Qwen
-specifically — that transition was, however, fully exercised for Kokoro
-(below), which needed a real download in this worktree. The operation that
-matters for the register's actual regression (#2632) — installing/swapping
-the ONNX GPU runtime into an isolated venv without a `WinError 5` — happened
-during the bootstrap step above, and succeeded cleanly.
+specifically — and that transition is **A29's actual subject, #2192**
+(the reported bug: a real in-app Qwen3 install throwing `WinError 5` on a
+locked `onnxruntime` DLL). The ONNX GPU runtime swap that *did* run cleanly
+here happened during the bootstrap step above, driven by
+`bootstrap-venv.mjs`, not by the in-app Install button #2192 describes —
+it demonstrates #2632 (this worktree's port isolation) holds, and that an
+isolated-venv ONNX swap can succeed in general, but it is **not** a run of
+#2192's own scenario. Kokoro's install below is a different code path
+entirely (`kokoro-install.ts`, ONNX weight files, no `pip`, nothing under
+`site-packages/onnxruntime/capi/`) and does not substitute for it either.
+**Criterion 2 (the in-app Qwen3 install itself) was not exercised by this
+run.** An earlier version of this document treated the bootstrap swap as
+satisfying it — it does not; see the register's own A29 history entry
+for the correction and the redo chain filed to close the gap for real.
 
 ## Step 3 — Kokoro, install then load, confirm no CPU fallback
 
@@ -168,10 +178,12 @@ check, weights download, and load).
 | ONNX GPU runtime swap during bootstrap — no `WinError 5` | ✅ (0 hits scanning the full log) |
 | Sidecar bound its assigned port (`:9080`), not `:9000` | ✅ confirmed via server log + `netstat` |
 | Other lane's `:9000` sidecar left untouched | ✅ same PID/start-time before and after |
-| Qwen3-TTS shows installed, no error, via real Chrome | ✅ (package+weights already present; Re-check round-trip clean) |
-| A genuine install click-through (Kokoro, weights not yet present) completes with no error | ✅ |
+| Qwen3-TTS shows installed, no error, via real Chrome | ⚠️ true but uninformative — package+weights already present, so this is not a fresh-install observation |
+| **#2192's actual criterion 2 — a real in-app Qwen3 Install click on a venv that did not already have it, watched for `WinError 5`** | ❌ **NOT EXERCISED** — see the correction above |
+| Kokoro's own install (a different code path, weights not yet present) completes with no error | ✅ — does not substitute for the row above |
 | Kokoro loads afterward via the app and reports `CUDAExecutionProvider`, not CPU | ✅ (`devices.kokoro: "cuda"` from the live session, both via API proxy and raw sidecar) |
 
 Retry confirms #2632's fix holds: this worktree's sidecar and the box's other
-live lane never collided, and the Qwen3/Kokoro install + load paths complete
-cleanly against a truly isolated venv and port.
+live lane never collided. **A29 itself (#2192) remains owed** — a genuine
+redo against a venv confirmed absent Qwen3 beforehand is filed separately,
+chain Castwright#2913 → #3020 → #3019.

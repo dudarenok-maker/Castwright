@@ -2987,6 +2987,23 @@ filed against, and it has not been separately re-confirmed since the fix landed
 > `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
 > (Castwright#2621).
 
+> **2026-09-06 (chain #2913 retry, Castwright#2916/#2914/#3015) — STILL OWED,
+> partially run, port isolation resolved.** Confirmed the #2632 per-worktree
+> `LOCAL_TTS_PORT` fix genuinely closes the port-contention class the four
+> prior attempts above hit: sidecar bound to this worktree's own `:9080`,
+> never adopting or contending with another live lane's `:9000`. But this
+> row's own subject, #2192, was **not exercised**: the worktree's sidecar
+> venv already had Qwen3-TTS installed from its own bootstrap step, so
+> clicking Install in the app ran a no-op `pip install` that wrote nothing
+> under `site-packages/onnxruntime/capi/` — the actual `WinError 5`/`Accès
+> refusé` scenario this row exists to reproduce never had a chance to fire.
+> An initial pass mistakenly discharged this row on that null observation
+> (PR #3015, reverted after review). Genuine redo — a venv confirmed absent
+> Qwen3 before the in-app Install click — filed separately, chain
+> Castwright#2913 → #3020 → #3019. Evidence:
+> `docs/testing/onbox-a29-results/step-1-retry.md` (port-isolation half
+> only; criterion 2 explicitly not validated, see that doc's own correction).
+
 ### A30 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 
 **Not in the design doc's §On-box acceptance table.** Filed anyway: Task 8 wired
