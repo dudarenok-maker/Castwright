@@ -257,6 +257,16 @@ export function analysisStateJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'analysis-state.json');
 }
 
+/* #3004 — per-book record of the LAST terminal outcome (result/error) an
+   analysis job ended with, keyed by manuscriptId. Sibling to
+   analysis-state.json but deliberately never deleted on success: unlike the
+   running-state snapshot (which disappears once the pill has nothing to
+   show), this file's whole purpose is to answer "what happened to the job
+   that USED to be here" for a rejoin that finds no live job. */
+export function analysisLastOutcomeJsonPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'analysis-last-outcome.json');
+}
+
 /** fs-58 follow-up — per-chapter checkpointed script-review findings, keyed
     by chapterId, with a book-scoped `nextVersion` counter at the top level.
     Sibling to analysis-state.json. See script-review-ledger.ts for the I/O. */

@@ -14,9 +14,11 @@ import {
   readAnalysisState,
   writeAnalysisState,
   deleteAnalysisState,
+  readAnalysisLastOutcome,
+  writeAnalysisLastOutcome,
   type AnalysisStateFile,
 } from './analysis-state.js';
-import { analysisStateJsonPath } from '../workspace/paths.js';
+import { analysisStateJsonPath, analysisLastOutcomeJsonPath } from '../workspace/paths.js';
 
 let bookDir: string;
 
@@ -161,6 +163,89 @@ describe('analysis-state store', () => {
     const fsMod = await import('node:fs/promises');
     await fsMod.writeFile(analysisStateJsonPath(bookDir), '{ not valid', 'utf8');
     const got = await readAnalysisState(bookDir);
+    expect(got).toBeNull();
+  });
+});
+
+/* #3004 — the last-outcome file feeding the analysis rejoin-miss signal.
+   Deliberately separate from analysis-state.json above: this file is never
+   deleted on success (the whole point is to answer "what did the job that
+   used to be here end with"), so its round-trip + malformed-JSON contract
+   is worth its own describe block rather than folding into the state tests. */
+describe('analysis-last-outcome store (#3004)', () => {
+  it('readAnalysisLastOutcome returns null when no file exists', async () => {
+    const got = await readAnalysisLastOutcome(bookDir);
+    expect(got).toBeNull();
+  });
+
+  it('writeAnalysisLastOutcome then readAnalysisLastOutcome round-trips an error outcome', async () => {
+    await writeAnalysisLastOutcome(bookDir, {
+      manuscriptId: 'm_test',
+      kind: 'error',
+      code: 'attribution_drift',
+      message: 'drift exceeded threshold',
+    });
+    const got = await readAnalysisLastOutcome(bookDir);
+    expect(got).not.toBeNull();
+    expect(got).toMatchObject({
+      manuscriptId: 'm_test',
+      kind: 'error',
+      code: 'attribution_drift',
+      message: 'drift exceeded threshold',
+    });
+    expect(typeof got!.endedAt).toBe('number');
+    expect(got!.endedAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('round-trips a clean success outcome distinctly from an error', async () => {
+    /* The whole point of this file: a caller must be able to tell "it
+       already finished successfully" apart from "it crashed" — not just
+       "it's gone." */
+    await writeAnalysisLastOutcome(bookDir, {
+      manuscriptId: 'm_test',
+      kind: 'result',
+    });
+    const got = await readAnalysisLastOutcome(bookDir);
+    expect(got!.kind).toBe('result');
+    expect(got!.code).toBeUndefined();
+  });
+
+  it('lands on disk under .audiobook/analysis-last-outcome.json', async () => {
+    await writeAnalysisLastOutcome(bookDir, { manuscriptId: 'm_test', kind: 'result' });
+    const raw = readFileSync(analysisLastOutcomeJsonPath(bookDir), 'utf8');
+    const parsed = JSON.parse(raw) as { manuscriptId: string; kind: string };
+    expect(parsed.manuscriptId).toBe('m_test');
+    expect(parsed.kind).toBe('result');
+  });
+
+  it('a later write overwrites the earlier outcome (only the LAST one matters)', async () => {
+    await writeAnalysisLastOutcome(bookDir, {
+      manuscriptId: 'm_test',
+      kind: 'error',
+      code: 'aborted',
+    });
+    await writeAnalysisLastOutcome(bookDir, { manuscriptId: 'm_test', kind: 'result' });
+    const got = await readAnalysisLastOutcome(bookDir);
+    expect(got!.kind).toBe('result');
+  });
+
+  it('trims message to 256 chars so the file does not bloat on a stack trace', async () => {
+    const long = 'Y'.repeat(1024);
+    await writeAnalysisLastOutcome(bookDir, {
+      manuscriptId: 'm_test',
+      kind: 'error',
+      code: 'unknown_manuscript',
+      message: long,
+    });
+    const got = await readAnalysisLastOutcome(bookDir);
+    expect(got!.message).toHaveLength(256);
+    expect(got!.message).toBe('Y'.repeat(256));
+  });
+
+  it('readAnalysisLastOutcome returns null when the file is malformed JSON', async () => {
+    const fsMod = await import('node:fs/promises');
+    await fsMod.writeFile(analysisLastOutcomeJsonPath(bookDir), '{ not valid', 'utf8');
+    const got = await readAnalysisLastOutcome(bookDir);
     expect(got).toBeNull();
   });
 });

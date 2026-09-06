@@ -27,7 +27,7 @@
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { analysisStateJsonPath } from '../workspace/paths.js';
+import { analysisStateJsonPath, analysisLastOutcomeJsonPath } from '../workspace/paths.js';
 
 /** Persistable shape — minimal subset of AnalysisStreamSnapshot.
     Anything ephemeral (heartbeats, log lines, in-flight ETA) is
@@ -127,4 +127,57 @@ export async function deleteAnalysisState(bookDir: string): Promise<void> {
     /* Swallow — the file is non-load-bearing. Worst case it lingers
        and the next phase-boundary write overwrites it. */
   }
+}
+
+/** #3004 — the LAST terminal outcome a `kind: 'main'` job ended with for a
+    manuscript, so a rejoin that finds no live job can tell "it already
+    finished" apart from "it crashed" apart from "nothing was ever tracked
+    here." Deliberately narrower than {@link AnalysisStateFile}: only the two
+    terminal shapes endJob ever reports (`result`, `error`) are recorded —
+    there is no `running`/`paused` case here because this file's only reader
+    is the rejoin-miss check, which only fires when NO live job exists. */
+export interface AnalysisLastOutcome {
+  manuscriptId: string;
+  kind: 'result' | 'error';
+  /** Present for `kind: 'error'` — e.g. `aborted` for a pause/displacement,
+      or a real failure code (attribution_drift, cast_incomplete, ...). */
+  code?: string;
+  message?: string;
+  /** ms since epoch the job ended. */
+  endedAt: number;
+}
+
+/** Read the last-outcome file. Returns null when absent or unparseable —
+    both are treated as "no prior outcome is known." The rejoin-miss check
+    in analysis.ts uses this to decide whether to emit a payload (when present
+    and valid) or a payload-less rejoin-miss event (when absent/corrupt). In
+    either case, the event fires — there is no "stays silent" case anymore. */
+export async function readAnalysisLastOutcome(
+  bookDir: string,
+): Promise<AnalysisLastOutcome | null> {
+  const path = analysisLastOutcomeJsonPath(bookDir);
+  if (!existsSync(path)) return null;
+  try {
+    return await readJson<AnalysisLastOutcome>(path);
+  } catch {
+    return null;
+  }
+}
+
+/** Atomic write, same pattern as {@link writeAnalysisState}. Unlike that
+    file, this one is NEVER deleted on success — the whole point is to
+    answer "what did the job that used to be here end with," including a
+    clean success, for as long as no new job has ended since. Throws on
+    terminal failure; the caller (endJob) swallows because losing this
+    record is non-fatal — worst case a later rejoin just stays silent. */
+export async function writeAnalysisLastOutcome(
+  bookDir: string,
+  outcome: Omit<AnalysisLastOutcome, 'endedAt'>,
+): Promise<void> {
+  const payload: AnalysisLastOutcome = {
+    ...outcome,
+    message: outcome.message ? outcome.message.slice(0, 256) : undefined,
+    endedAt: Date.now(),
+  };
+  await writeJsonAtomic(analysisLastOutcomeJsonPath(bookDir), payload);
 }
