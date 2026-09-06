@@ -43,8 +43,16 @@
    wrapper. The outcome is real and worth gating; which specific call site
    delivers it is not something this test can pin without also breaking on a
    configuration production never runs (removing the upstream lock, which
-   nothing in production ever does). See the assertion at the bottom of the
-   `it` body for what mutation actually reddens this test. */
+   nothing in production ever does).
+
+   WHICH assertion gates this test: the `vi.waitFor` poll for the delete, not
+   the `expect(castExistsAfterRace)` at the bottom. Under the mutations that
+   break the invariant, add-alias's write lands before the poll ever observes
+   an absent file, so the poll throws and the bottom assertion is never
+   reached. An earlier version of this header sent the reader to the bottom
+   assertion; that was wrong (PR #3060 review pass 1, finding 1), and naming
+   the reddening assertion correctly is precisely what #3022's decision asked
+   for. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
@@ -437,17 +445,20 @@ describe('#1981 Task 11 — "Start fresh" cannot be resurrected by a racing cast
 
         /* Settle window, RESTORED (PR #3009 review pass 2, finding 1). The poll
            above returns at the first instant of absence, so sampling absence
-           immediately after it is tautological — that assertion could not
-           fail, and a real resurrection would instead surface as the poll's own
-           "delete has not completed" message, blaming contention for what is
-           actually a resurrection. The regression this file exists to catch is
-           a write landing AFTER the delete, so the sample has to be taken at a
-           moment the poll did not choose. Both properties kept: poll for the
-           delete (no fixed duration gating "has it happened yet"), THEN settle
-           before sampling. A fixed duration is correct here and is not the
-           mistake this PR fixes elsewhere — it is a window for a late
-           writer to be caught in, not a guess at how long something takes, so
-           erring long only makes the check stronger. */
+           immediately after it would be tautological, so the sample is taken
+           at a moment the poll did not choose.
+
+           Be honest about what this currently buys: NOTHING on today's code
+           path. Per the reasoning above, no writer exists between the poll
+           seeing the file gone and this sample, so this window waits 400ms for
+           something that cannot happen, and the assertion it feeds cannot fail
+           (PR #3060 review pass 1, finding 2). It is retained as a FORWARD
+           guard, not as the gate: the invariant is "must not be resurrected",
+           and a writer added later between the delete and stage 1 would be
+           caught here and NOT by the poll, which exits at the first instant of
+           absence. If that ever stops being worth 400ms, delete the window and
+           the assertion together rather than leaving an assertion that reads
+           like a gate. The gate is the poll above. */
         await new Promise((r) => setTimeout(r, RESURRECTION_SETTLE_MS));
 
         // Capture disk state NOW, before Phase 0 (still gated) is allowed to
@@ -476,13 +487,18 @@ describe('#1981 Task 11 — "Start fresh" cannot be resurrected by a racing cast
          already serialised against the job well before the job reaches the
          delete — which is exactly why asserting this outcome does not, by
          itself, prove the delete's own `withCastLock` is doing anything (see
-         the file header). What this assertion DOES catch: removing cast-lock
-         protection from BOTH `readPriorCastForMerge` and the delete block
-         together, which lets the job race straight through to the delete
-         while add-alias is still mid-write — the actual "Start fresh
-         resurrects the roster" bug #1981 Task 11 exists to prevent. Verified
-         by mutation; see the PR description for the mutation and its
-         verbatim red output. */
+         the file header).
+
+         This assertion is NOT what catches the mutation, despite reading like
+         it (PR #3060 review pass 1, finding 1). Removing cast-lock protection
+         from both `readPriorCastForMerge` and the delete block does redden the
+         test — at the POLL above, because add-alias's write lands before the
+         poll ever sees the file gone, so execution never reaches this line.
+         Review pass 1 measured which single-site removals redden it too:
+         add-alias's own wrapper (`cast-aliases.ts`) does; the delete's wrapper
+         alone and `readPriorCastForMerge`'s alone do not — the latter being
+         the #1981 Task 11 line this file is named for, and the disclosure
+         #3022 signed up for when it chose to retarget. */
       expect(castExistsAfterRace).toBe(false);
     },
     /* Runaway backstop, not a synchronisation deadline. 60_000 is this suite's
