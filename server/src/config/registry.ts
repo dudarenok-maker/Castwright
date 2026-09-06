@@ -293,17 +293,35 @@ export const KNOBS: ConfigKnob[] = [
   },
   // Per-language ASR max WER (#1084 scaffold). The ASR gate's English-tuned 0.4
   // cap went live on non-English books at 3a56bf74 without per-language
-  // validation; these override knobs default to the global maxWer so behaviour
-  // is unchanged until the owed on-box calibration tunes each language.
+  // validation. On-box calibration (D1, docs/testing/onbox-batch-results/d1.md):
+  // a real GPU-rendered chapter each for es/fr/de/ru (Coalfall demo books, PR
+  // #1568 casts) run through the real ASR content-QA gate, per-line WER
+  // distribution inspected (58-80 scored lines/language). The dominant driver
+  // of the observed >0.4 tail in all four languages was a short-reference-line
+  // Whisper trailing-filler-token insertion artifact (not the two risks this
+  // row set out to check — gendered-number mismatch and Russian oblique-case
+  // declension — which this run's dialogue didn't happen to exercise), so each
+  // default was raised only modestly (0.45, each language's own p75-p80 band)
+  // and deliberately kept BELOW 0.5: segment-asr-qa.test.ts pins real
+  // substitution-heavy content drift (half a short sentence's words wrong) at
+  // WER 0.5-0.6, and raising past that would blunt genuine-drift detection to
+  // chase this run's noise. All four stay comfortably below the independent
+  // `qa.asr.catastrophicWer` floor (0.85), so this does not weaken the
+  // catastrophic-mismatch backstop (segment-asr-qa.ts's
+  // `Math.max(catastrophicWer, maxWer)`). `perLanguageMaxWer()` now treats a
+  // per-language default that differs from the global as itself the signal
+  // that a language has been calibrated (previously the scaffold only ever
+  // honoured an explicit env/app override, so editing these defaults alone
+  // would have been silently inert).
   // resolveAsrThresholds(_, language) consults qa.asr.maxWer.<lang> when set.
   {
     key: 'qa.asr.maxWer.es',
     env: 'SEG_ASR_MAX_WER_ES',
     group: 'qa-gates',
     label: 'ASR max WER (Spanish)',
-    help: 'Spanish-specific WER drift cap; defaults to the global ASR max WER until tuned on-box (#1084).',
+    help: 'Spanish-specific WER drift cap; calibrated on-box from a real chapter render (#1084, D1): 58 scored lines, p75/p80 0.20/0.29, kept below 0.5 to preserve genuine-drift detection.',
     type: 'number', min: 0, max: 1, step: 0.05,
-    default: 0.4,
+    default: 0.45,
     apply: 'live', risk: 'low',
   },
   {
@@ -311,9 +329,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'SEG_ASR_MAX_WER_RU',
     group: 'qa-gates',
     label: 'ASR max WER (Russian)',
-    help: 'Russian-specific WER drift cap; defaults to the global ASR max WER until tuned on-box (#1084).',
+    help: 'Russian-specific WER drift cap; calibrated on-box from a real chapter render (#1084, D1): 79 scored lines, p75/p80 0.33/0.50, kept below 0.5 to preserve genuine-drift detection.',
     type: 'number', min: 0, max: 1, step: 0.05,
-    default: 0.4,
+    default: 0.45,
     apply: 'live', risk: 'low',
   },
   {
@@ -321,9 +339,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'SEG_ASR_MAX_WER_FR',
     group: 'qa-gates',
     label: 'ASR max WER (French)',
-    help: 'French-specific WER drift cap; defaults to the global ASR max WER until tuned on-box (#1084).',
+    help: 'French-specific WER drift cap; calibrated on-box from a real chapter render (#1084, D1): 58 scored lines, p75/p80 0.40/0.40, kept below 0.5 to preserve genuine-drift detection.',
     type: 'number', min: 0, max: 1, step: 0.05,
-    default: 0.4,
+    default: 0.45,
     apply: 'live', risk: 'low',
   },
   {
@@ -331,9 +349,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'SEG_ASR_MAX_WER_DE',
     group: 'qa-gates',
     label: 'ASR max WER (German)',
-    help: 'German-specific WER drift cap; defaults to the global ASR max WER until tuned on-box (#1084).',
+    help: 'German-specific WER drift cap; calibrated on-box from a real chapter render (#1084, D1): 80 scored lines, p75/p80 0.27/0.33, kept below 0.5 to preserve genuine-drift detection (see segment-asr-qa.test.ts\'s pinned 0.5/0.6-WER German drift cases).',
     type: 'number', min: 0, max: 1, step: 0.05,
-    default: 0.4,
+    default: 0.45,
     apply: 'live', risk: 'low',
   },
   {

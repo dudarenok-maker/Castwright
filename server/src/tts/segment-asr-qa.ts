@@ -157,18 +157,27 @@ function baseSubtag(language?: string | null): string {
   return (language ?? '').toLowerCase().split('-')[0];
 }
 
-/** Per-language ASR `maxWer` override (#1084 scaffold). Returns the configured
-    value ONLY when an operator has explicitly set this language's knob (env or
-    app override); otherwise undefined, so the global `maxWer` (including its own
-    override) applies. The per-language knobs default to the global value, so
-    behaviour is unchanged until the owed on-box calibration tunes them. */
+/** Per-language ASR `maxWer` override (#1084 scaffold). An operator's explicit
+    env/app override for this language always wins. Absent that, a CALIBRATED
+    per-language knob — its own registry `default` deliberately set away from
+    the global `qa.asr.maxWer` knob's default by an on-box run (D1,
+    docs/testing/onbox-batch-results/d1.md) — applies too, so calibration
+    actually takes effect without requiring an operator to also set an env var.
+    A language whose knob default still EQUALS the global default (never
+    calibrated, e.g. zh/ja) instead falls through to undefined, so the global
+    `maxWer` (including its own live override) cascades to it — an operator
+    changing the global knob still reaches every not-yet-calibrated
+    language. */
 function perLanguageMaxWer(language?: string | null): number | undefined {
   const lang = baseSubtag(language);
   if (!lang) return undefined;
   const knob = allKnobs().find((k) => k.key === `qa.asr.maxWer.${lang}`);
   if (!knob) return undefined;
   const state = resolveKnob(knob);
-  return state.source === 'default' ? undefined : (state.effective as number);
+  if (state.source !== 'default') return state.effective as number;
+  const globalKnob = allKnobs().find((k) => k.key === 'qa.asr.maxWer');
+  if (globalKnob && knob.default !== globalKnob.default) return knob.default as number;
+  return undefined;
 }
 
 export function resolveAsrThresholds(
