@@ -3464,6 +3464,40 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
     expect(res.body.warning).not.toMatch(/cloned in Russian/);
     expect(res.body.warning).not.toMatch(/book is English/);
   });
+
+  /* #1998 regression test — when the cloned voice's languageCode is
+     unregistered (throws), the lookup returns undefined and the warning is
+     skipped. Mirrors the designed-voice test at line 3150. Pins both
+     directions of the dual-lookup contract: clone code unregistered,
+     book language registered. */
+  it('does not 500 (and does not warn) when the cloned voice language is unregistered — skips the comparison instead of throwing', async () => {
+    await seedClonedWithLang('clone-pt-en', 'pt'); // pt is unregistered
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-pt-en', [
+      { id: 'char-ines', name: 'Ines', ttsEngine: 'qwen' },
+    ], 'en'); // Book is English (registered)
+    const res = await request(app)
+      .post('/api/voice-library/clone-pt-en/assign')
+      .send({ bookId: 'book-clone-pt-en', characterId: 'char-ines' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* #1998 regression test — when the book's language is unregistered (throws),
+     the lookup returns undefined and the warning is skipped. Mirrors the
+     designed-voice test but tests the OTHER sidecarLanguageName call.
+     Pins both directions of the dual-lookup contract: clone code registered,
+     book language unregistered. */
+  it('does not 500 (and does not warn) when the book language is unregistered — skips the comparison instead of throwing', async () => {
+    await seedClonedWithLang('clone-en-pt', 'en'); // Clone is English (registered)
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-en-pt', [
+      { id: 'char-ines', name: 'Ines', ttsEngine: 'qwen' },
+    ], 'pt'); // pt is unregistered
+    const res = await request(app)
+      .post('/api/voice-library/clone-en-pt/assign')
+      .send({ bookId: 'book-clone-en-pt', characterId: 'char-ines' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
 });
 
 
