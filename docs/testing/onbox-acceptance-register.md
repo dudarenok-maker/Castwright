@@ -551,13 +551,13 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 6 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 7 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**47 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**48 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
@@ -587,6 +587,29 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > each row's own update block. Group A: 34 → 32. `next-id` markers unaffected
 > (allocate-once IDs are never reused, so a drop never frees or renumbers a
 > slot).
+
+> **Last change: 2026-09-10, adding E104** (#3047, ops-71 Part 3, claude): the
+> stale-battery reaper's `classify()` and its census/kill-scoping/never-blocks-push
+> orchestration are unit- and mutation-tested in-PR, but `Win32_Process`
+> classification against real, running processes on a real box cannot be.
+> Row **E104** (renumbered from a same-`next-id` collision with #3051's own
+> E103 allocation — the register's IDs allocate once, globally, so the
+> second PR to land moves; #3051 landed first). 47 → 48 owed, Group E
+> 6 → 7. `next-id` bumped E104 → E105 in the same change. This lands on
+> top of every register change the parent branch had already merged (the
+> 2-card-boot + Pinokio batch chain, #2950, the A34 repair-and-retest
+> chain, #2903, PR #3061's X-Device-Hint A106 addition, and the
+> Mechanical batch 2 chain's A35/A102 discharges, #2960) — verified by
+> row-ID-set diff against the true `git merge-base`, not this branch's own
+> stale base. `npm run check:onbox-register` green.
+
+> **Prior change: 2026-09-09, two independent single-row changes merged together —
+> net 49 → 49, Group A 34 → 34.** New row **A106** added for #3058's
+> `X-Device-Hint` derive placement (PR #3061, claude), AND **A34 DISCHARGED and
+> removed** (#2905, A34 repair-and-retest chain #2903/#2435, claude) — these two
+> PRs branched from the same 49-owed base independently, so their deltas net to
+> zero on the totals even though both are real, substantive changes; see each
+> row/removal note below for what actually happened.
 >
 > **Prior change: 2026-09-09, A34 DISCHARGED and removed** (#2905, repair-and-retest
 > chain #2903/#2435). The row's own criterion was met on a real re-analysis of
@@ -4894,7 +4917,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E104 -->
+<!-- next-id: E105 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9/E103). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -5301,6 +5324,38 @@ genuinely prunable worktree with real junctions set up per CLAUDE.md's worktree-
 recipe, and a second checkout to run the prune from.
 *Cost:* 10–15 minutes. *Criteria:* this issue's acceptance list (#3051) and the
 design doc's Part 4 (`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`).
+
+### E104 · ops-71 stale-battery reaper — `Win32_Process` classification against real processes ([#3047](https://github.com/dudarenok-maker/Castwright/issues/3047), Part 3 of [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)) · **any Windows dev box; no GPU needed**
+
+`scripts/reap-stale-batteries.mjs`'s `classify()` is unit-tested against a synthetic
+11-battery fixture (`scripts/tests/reap-stale-batteries.test.mjs`), and every guard
+in it is mutation-verified (deletion → a named test reddens → restored). What no
+test in the repo can prove is the thing this row exists for: that
+`collectProcessSnapshot()`'s single `Get-CimInstance Win32_Process` query, run
+against REAL processes on a real box, actually reports the shapes `classify()`
+assumes — `ParentProcessId` correctly reflecting a live parent vs. a dead/reused
+one, `CreationDate` parsing to the right relative ordering for the PID-reuse guard,
+and `UserModeTime`/`KernelModeTime` actually growing at the CPU-s/min rates the
+thresholds are calibrated against (2/min dead, 30–100/min healthy for a vitest
+subtree).
+
+**What to observe, concretely:** on a Windows dev box with a few real batteries
+running (e.g. a `vitest`/`npm run test:server` battery, a real `git commit`, and
+the TTS sidecar's `python.exe` if it's up), run `npm run doctor` (report-only) and
+confirm: (1) every root's command line and verdict look right by eye — no live
+battery misclassified as `reap`, no `python.exe`/`git.exe` subtree flagged; (2) run
+it again ~10+ minutes later and confirm a subtree that has genuinely gone idle
+since the first run now shows `stalled-rate`; (3) start a battery, then kill its
+owning terminal/agent process out from under it (simulating the 2026-09-05
+incident) and confirm the ORPHANED subtree shows `orphaned-unreachable` even while
+still burning CPU, and that `npm run doctor -- --kill` reaps it. Separately confirm
+`git push` (which now runs the pre-push census automatically) still completes in
+about the same time as before this change — the design's own budget is ~300ms for
+the query — and that `logs/reaper-census.jsonl` accumulates one entry per push with
+every root's command line present (the exact thing the 2026-09-05 census omitted).
+
+*Needs:* a Windows dev box, no GPU. *Cost:* ~20 minutes across a few pushes.
+*Criteria:* the four observations above; issue #3047's acceptance list.
 
 ## Group G — GitHub Actions itself
 

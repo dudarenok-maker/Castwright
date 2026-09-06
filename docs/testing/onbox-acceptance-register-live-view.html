@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">47</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">48</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->1<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->6<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->7<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1018,7 +1018,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">6 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">7 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1087,6 +1087,19 @@
         </ul>
         <div class="flag"><b>The fail-closed scan is the half no fixture can prove.</b> The junction walk THROWS on any enumeration error instead of answering &ldquo;no junctions found&rdquo; — an empty result meaning <i>the scan failed</i> is otherwise indistinguishable from one meaning <i>there are none</i>, and the caller acts on the second by running the recursive remove. Measured: a junction at a 394-character path is found by <code>pwsh</code>, while Windows PowerShell 5.1 raised <code>PathTooLongException</code> inside <code>Get-ChildItem</code> and returned <code>{&quot;items&quot;: []}</code>, exit 0, no warning. Run the scan under <b>each</b> engine against a deep real junction path and confirm both either find it or fail loudly — never a silent <code>removed 0 junction(s)</code> followed by a successful removal. <b>Distinguish the two ways 5.1 can fail loudly:</b> a <code>ParserError</code> / <code>Import-Module</code> failure means the module never LOADED and the fail-closed scan was never executed — that is not a pass for this bullet, and it is how this criterion was briefly disarmed. Per engine, from the repo root: <code>&lt;engine&gt; -NoProfile -Command &quot;Import-Module .\scripts\lib\wt-gc-junctions.psm1 -Force; &#39;LOADED OK&#39;; Get-JunctionsRecursive -Root &#39;&lt;tree&gt;&#39; | ConvertTo-Json -Compress&quot;</code>, with <code>&lt;engine&gt;</code> being <code>pwsh</code> then <code>powershell.exe</code>. <b>The leading <code>.\</code> is required</b> — <code>Import-Module</code> treats a bare relative path as a MODULE NAME and searches <code>$env:PSModulePath</code>, so the same command WITHOUT the <code>.\</code> fails with <code>Modules_ModuleNotFound</code> on both engines, which is character-for-character the disqualifying signature above and would guarantee a false FAIL. <code>LOADED OK</code> must print before any scan output; then the scan must list the junction or throw. <b><code>Get-JunctionsRecursive</code> (read-only) rather than the <code>.ps1</code> wrapper, deliberately:</b> <code>wt-gc-junctions.ps1</code>&#39;s <code>[ValidateSet(&#39;Remove&#39;)]</code> leaves <code>Remove</code> as its only action, so running the wrapper under <code>pwsh</code> would unlink the junction the 5.1 run needs and the second engine would legitimately find nothing — which this same bullet calls a failure. (<code>pickPowerShell()</code> always prefers <code>pwsh</code> and offers no engine flag, which is why the 5.1 half must be driven by hand at all.) Exercise the destructive <code>-Action Remove</code> path once, afterwards, via the prune bullets above.</div>
         <p class="src">A Windows box with <code>pwsh</code> <b>and</b> Windows PowerShell 5.1 on PATH, at least one genuinely prunable worktree with real junctions per CLAUDE.md&#39;s worktree-setup recipe, and a second checkout to run the prune from · 10–15 min · <a href="https://github.com/dudarenok-maker/Castwright/issues/3051">#3051</a> (ops-75 Part 4) · criteria: that issue&#39;s acceptance list and <code>docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md</code> Part 4</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E104</span><span class="iname">ops-71 stale-battery reaper &#8212; <code>Win32_Process</code> classification against real processes</span><span class="risk">any Windows dev box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>scripts/reap-stale-batteries.mjs</code>&#39;s <code>classify()</code> is unit-tested against a synthetic 11-battery fixture (<code>scripts/tests/reap-stale-batteries.test.mjs</code>), and every guard in it is mutation-verified (deletion &#8594; a named test reddens &#8594; restored). What no test in the repo can prove is the thing this row exists for: that <code>collectProcessSnapshot()</code>&#39;s single <code>Get-CimInstance Win32_Process</code> query, run against REAL processes on a real box, actually reports the shapes <code>classify()</code> assumes &#8212; <code>ParentProcessId</code> correctly reflecting a live parent vs. a dead/reused one, <code>CreationDate</code> parsing to the right relative ordering for the PID-reuse guard, and <code>UserModeTime</code>/<code>KernelModeTime</code> actually growing at the CPU-s/min rates the thresholds are calibrated against (2/min dead, 30&#8211;100/min healthy for a vitest subtree).</p>
+        <ul>
+          <li>Run <code>npm run doctor</code> (report-only) on a box with a few real batteries running (e.g. a <code>vitest</code>/<code>npm run test:server</code> battery, a real <code>git commit</code>, and the TTS sidecar&#39;s <code>python.exe</code> if it&#39;s up) and confirm every root&#39;s command line and verdict look right by eye &#8212; no live battery misclassified as <code>reap</code>, no <code>python.exe</code>/<code>git.exe</code> subtree flagged.</li>
+          <li>Run it again ~10+ minutes later and confirm a subtree that has genuinely gone idle since the first run now shows <code>stalled-rate</code>.</li>
+          <li>Start a battery, then kill its owning terminal/agent process out from under it (simulating the 2026-09-05 incident) and confirm the orphaned subtree shows <code>orphaned-unreachable</code> even while still burning CPU, and that <code>npm run doctor -- --kill</code> reaps it.</li>
+          <li>Confirm <code>git push</code> (which now runs the pre-push census automatically) still completes in about the same time as before this change, and that <code>logs/reaper-census.jsonl</code> accumulates one entry per push with every root&#39;s command line present &#8212; the exact thing the 2026-09-05 census omitted.</li>
+        </ul>
+        <p class="src">A Windows dev box, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3047">#3047</a>, Part 3 of <a href="../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md">the commit-gate rebalance design</a> &#183; the four observations above; issue #3047&#39;s acceptance list &#183; ~20 minutes across a few pushes</p>
       </div>
     </details>
 
