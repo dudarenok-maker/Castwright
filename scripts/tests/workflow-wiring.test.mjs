@@ -236,18 +236,119 @@ const scopeKeysOf = (condition) =>
     .sort()
     .join('|');
 
-test('setup steps depend on the same scope keys as the leg they support', () => {
-  // Legs are tagged explicitly rather than found by "first step whose if:
-  // mentions this key". That heuristic is wrong twice over: setup steps
-  // PRECEDE their leg in every job, so first-match returns another setup
-  // step; and slugs nest (step_test is a substring of step_test_hooks /
-  // step_test_e2e; step_test_server of step_test_server_slow), so a
-  // substring match binds the wrong leg entirely.
-  const legs = new Map(
-    [...source.matchAll(/# leg: ([a-z:0-9-]+)\n\s*- name: [^\n]+\n\s*if: ([^\n]+)\n/g)].map(
+// Legs are tagged explicitly rather than found by "first step whose if:
+// mentions this key". That heuristic is wrong twice over: setup steps
+// PRECEDE their leg in every job, so first-match returns another setup
+// step; and slugs nest (step_test is a substring of step_test_hooks /
+// step_test_e2e; step_test_server of step_test_server_slow), so a
+// substring match binds the wrong leg entirely.
+//
+// The marker grammar is deliberately narrow -- lowercase letters, digits,
+// `:` and `-`. A marker outside it (e.g. the ` (Windows)` suffix the first
+// draft of the windows-tests job used) parses as NOTHING, silently, which
+// is how both Windows leg steps came to sit outside every guard in this
+// file while a `legs.size >= N` floor still passed on the Ubuntu markers
+// alone (#3053 review). A leg that must exist therefore belongs in
+// REQUIRED_LEGS below, not behind a count.
+const parseLegs = (src) =>
+  new Map(
+    [...src.matchAll(/# leg: ([a-z:0-9-]+)\n\s*- name: [^\n]+\n\s*if: ([^\n]+)\n/g)].map(
       ([, leg, condition]) => [leg, condition.trim()],
     ),
   );
+
+// Leg identifier -> the scope keys its `if:` must depend on, order-independent
+// (scopeKeysOf's `|`-joined sorted form). Named, not counted: a count cannot
+// see a leg whose marker stopped parsing, and cannot see a leg whose gate was
+// widened or narrowed either.
+//
+// The two Windows legs are their OWN entries rather than aliases of the
+// Ubuntu ones, because the jobs genuinely differ: Ubuntu's `test:server` runs
+// the fast AND slow suites (hence step_test_server_slow), while the Windows
+// job runs `npm run test:server`, which excludes the slow files -- so a PR
+// touching only a slow test file must not start a Windows leg that cannot
+// execute it. Ubuntu's `test` additionally carries step_test_e2e; Windows
+// runs no e2e.
+const REQUIRED_LEGS = {
+  test: 'shared|step_test|step_test_e2e',
+  'test:server': 'shared|step_test_server|step_test_server_slow',
+  'test:windows': 'shared|step_test',
+  'test:server:windows': 'shared|step_test_server',
+};
+
+test('every required leg is present and gated on exactly its own scope keys', () => {
+  const legs = parseLegs(source);
+  const problems = [];
+  for (const [leg, expectedKeys] of Object.entries(REQUIRED_LEGS)) {
+    const condition = legs.get(leg);
+    if (condition === undefined) {
+      problems.push(
+        `'# leg: ${leg}' is absent or unparseable (markers found: ${[...legs.keys()].join(', ')})`,
+      );
+      continue;
+    }
+    const actual = scopeKeysOf(condition);
+    if (actual !== expectedKeys) {
+      problems.push(
+        `# leg: ${leg}\n  has keys:      ${actual || '(none)'}\n  expected keys: ${expectedKeys}`,
+      );
+    }
+  }
+  assert.deepEqual(
+    problems,
+    [],
+    `required leg marker(s) missing or re-gated:\n${problems.join('\n')}`,
+  );
+});
+
+// The structural half of the same finding (#3053 review pass 2, N3).
+// REQUIRED_LEGS above names four legs; a NAMED list cannot see a fifth one
+// arriving unmarked, and neither can the `legs.size >= 11` floor below --
+// measured headroom at the time was 19 markers against a floor of 11, i.e.
+// 8 legs could go unparseable with every assertion in this file still
+// green. That is exactly how this PR's own first draft shipped two Windows
+// steps outside every guard here.
+//
+// So assert the INVARIANT rather than a list: every step whose `if:`
+// references the derived scopes is immediately preceded by its `- name:`
+// line and, above that, a marker inside the parseable grammar. 29 such
+// steps today, 0 exceptions. A new leg with no marker, or with a marker
+// outside the grammar (the ` (Windows)` suffix, an uppercase letter, a
+// trailing comment), fails HERE, whether or not anyone remembers to add it
+// to REQUIRED_LEGS.
+const MARKER_LINE = /^\s*# (?:leg|supports): [a-z:0-9-]+\s*$/;
+
+test('every derived step carries a parseable # leg:/# supports: marker', () => {
+  const lines = source.split('\n');
+  const derived = [];
+  const unmarked = [];
+  lines.forEach((line, i) => {
+    if (!/^\s*if: .*fromJSON\(needs\.detect\.outputs\.scopes\)/.test(line)) return;
+    derived.push(i);
+    const nameLine = lines[i - 1] ?? '';
+    const markerLine = lines[i - 2] ?? '';
+    if (!/^\s*- name: /.test(nameLine) || !MARKER_LINE.test(markerLine)) {
+      unmarked.push(
+        `${workflowPath}:${i + 1}\n  step:   ${nameLine.trim() || '(no `- name:` directly above the if:)'}\n  marker: ${markerLine.trim() || '(none)'}`,
+      );
+    }
+  });
+
+  // Anti-vacuity: a scan that finds no derived steps at all would report
+  // "every one is marked" while proving nothing.
+  assert.ok(
+    derived.length >= 25,
+    `expected >= 25 derived step conditions, found ${derived.length} — the scan broke or the workflow lost its legs`,
+  );
+  assert.deepEqual(
+    unmarked,
+    [],
+    `derived step(s) with no parseable '# leg:'/'# supports:' marker — they sit outside every guard in this file:\n${unmarked.join('\n')}`,
+  );
+});
+
+test('setup steps depend on the same scope keys as the leg they support', () => {
+  const legs = parseLegs(source);
   const setups = [
     ...source.matchAll(/# supports: ([a-z:0-9-]+)\n\s*- name: ([^\n]+)\n\s*if: ([^\n]+)\n/g),
   ];
@@ -256,7 +357,9 @@ test('setup steps depend on the same scope keys as the leg they support', () => 
   // Playwright, plus Setup Python + Bootstrap sidecar venv for test:sidecar);
   // 13 legs (the full checklist of named leg steps, including "openapi:types"
   // and "test:sidecar" which have no LEGACY_GATES entry below but still carry
-  // markers for documentation/binding purposes).
+  // markers for documentation/binding purposes). These floors catch wholesale
+  // deletion only -- REQUIRED_LEGS above is what catches a single leg going
+  // missing or unparseable.
   assert.ok(setups.length >= 9, `expected >= 9 '# supports:' declarations, found ${setups.length}`);
   assert.ok(legs.size >= 11, `expected >= 11 '# leg:' declarations, found ${legs.size}`);
 
