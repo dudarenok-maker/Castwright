@@ -4078,6 +4078,37 @@ def _engine_env_pin(engine_id: str) -> Optional[str]:
     return None
 
 
+def _parse_device_hint(raw: Optional[str]) -> Optional[str]:
+    """Validate/normalise an X-Device-Hint header value into a concrete
+    `admit()`/`reservation()` `pinned` device key, or None when the header
+    is absent/blank/unparsable.
+
+    Deliberately reuses the SAME grammar `_engine_env_pin` applies to
+    `COQUI_DEVICE`/`QWEN_DEVICE` (`_resolve_uuid_to_index` for the
+    `cuda-uuid:UUID` form, then `_parse_device` for `cuda:N`/`rocm:N`) rather
+    than inventing a second parser that could silently drift from the
+    registry's own validation. An unparsable value is handled exactly like
+    an invalid registry device value: it never raises and never crashes the
+    process — it just fails to produce a concrete pin, so the caller falls
+    back to whatever it would have used had no hint been supplied at all."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    resolved = _resolve_uuid_to_index(raw)
+    if raw.startswith("cuda-uuid:") and resolved is None:
+        log.warning(
+            "X-Device-Hint=%s did not match any visible GPU (uuid_unresolved) — ignoring hint.",
+            raw,
+        )
+        return None
+    fam, idx = _parse_device(resolved)
+    if fam in ("cuda", "rocm") and idx is not None:
+        return _report_rocm_device_key(f"{fam}:{idx}")
+    if fam not in ("auto",):
+        log.warning("X-Device-Hint=%s is not a valid device key — ignoring hint.", raw)
+    return None
+
+
 # --- Cross-vendor capacity probe (task 1, vram-aware-placement) ---
 #
 # GET /capacity feeds the capacity-aware placement admission check: before
@@ -11809,6 +11840,17 @@ async def xtts_clone_voice(req: Request) -> Response:
 
     ref_audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
 
+    # X-Device-Hint (optional) — a per-REQUEST device override for this one
+    # /xtts/clone-voice call, distinct from COQUI_DEVICE's process-lifetime
+    # pin. Used by the lazy Coqui derive (derive-engine-artifact.ts via
+    # clone-voice-resolver.ts) to land THIS derive on a specific GPU (e.g.
+    # cuda:1) while Qwen stays resident elsewhere, without ever touching the
+    # engine's own env pin. Absent header -> byte-for-byte the prior
+    # behaviour (falls through to `_engine_env_pin("coqui")`); an invalid
+    # header value is treated the same as an invalid registry device value
+    # (see `_parse_device_hint`) — logged and ignored, never fatal.
+    device_hint = _parse_device_hint(req.headers.get("X-Device-Hint"))
+
     global _inflight_synth
     _inflight_synth += 1
     try:
@@ -11817,7 +11859,7 @@ async def xtts_clone_voice(req: Request) -> Response:
             async with _placement.reservation(
                 "coqui", None, {},
                 cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
-                pinned=_engine_env_pin("coqui"),
+                pinned=device_hint if device_hint is not None else _engine_env_pin("coqui"),
             ) as adm:
                 if "noCapacity" in adm:
                     return _no_capacity(adm)

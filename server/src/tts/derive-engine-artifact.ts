@@ -46,6 +46,15 @@ export interface DeriveArtifactInput {
       coherent, not contradictory — manifest language = the reference clip's,
       request language = the book's. */
   language?: string;
+  /** #3058 — a per-REQUEST device override for this one derive call, sent as
+      `X-Device-Hint`. Distinct from the engine's process-lifetime
+      `COQUI_DEVICE`/`QWEN_DEVICE` pin: this lets a single derive land on a
+      specific GPU (e.g. the lazy Coqui self-heal derive, which must avoid
+      contending with a co-resident Qwen for the same card) without touching
+      the engine's own device for its whole lifetime. Omitted for every
+      caller except `clone-voice-resolver.ts`'s lazy Coqui derive — leave
+      unset here to get today's behaviour unchanged. */
+  deviceHint?: string;
 }
 
 export interface DeriveArtifactResult {
@@ -113,6 +122,9 @@ export async function deriveEngineArtifact(
      free-text headers above). */
   if (input.language) {
     headers['X-Language'] = input.language;
+  }
+  if (input.deviceHint) {
+    headers['X-Device-Hint'] = input.deviceHint;
   }
 
   /* Bound the call even when the caller supplied no signal — see the note on
