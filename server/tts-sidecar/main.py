@@ -4270,6 +4270,19 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # CTranslate2's own weights/buffers aren't. The device-wide delta remains
     # in place for the COLD "asr" key only, where it keeps working as #2094
     # designed it.
+    #
+    # #2930/#3012 disproved that theory too, on real CUDA hardware: CTranslate2
+    # never routes ANY of its work — weights or per-forward activations alike —
+    # through PyTorch's caching allocator, so `_observed_mb` structurally reads
+    # 0 for `asr.warm` regardless of load state. The learned estimate is
+    # confirmed stuck on this 128 MB seed permanently under the current
+    # measurement technique; see docs/testing/onbox-e12-results/
+    # step-1-rework-run.md and `FootprintTable.snapshot()` (which now makes
+    # this observable via `GET /debug/memory`'s `footprints` block). A real
+    # fix needs either a CTranslate2-side memory query or reverting to the
+    # device-wide delta with the same foreign-PID/concurrent-reservation
+    # guards `reservation()` already has for the cold "asr" key above — not
+    # done here; tracked in #3036.
     "asr.warm": 128,
     "spk": 200,
 }

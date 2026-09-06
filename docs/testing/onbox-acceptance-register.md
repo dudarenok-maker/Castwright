@@ -539,8 +539,9 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > live (`sample_count` stayed 0 through 6 resident calls). A documented,
 > evidence-backed "cannot converge as claimed" conclusion discharges the row per
 > the acceptance criteria's own OR branch; see
-> `docs/testing/onbox-e12-results/step-1-rework-run.md`. 65 → 64 owed, Group E
-> 13 → 12.
+> `docs/testing/onbox-e12-results/step-1-rework-run.md`. The underlying defect
+> this row tracked is still live and unfixed — #3036 tracks it now that this
+> row no longer does. 65 → 64 owed, Group E 13 → 12.
 >
 > **Prior change: 2026-09-01, merging this branch's wave-10 A28 discharge with
 > `main`'s independent ROCm/AMD Blocked-row addition.** This branch
