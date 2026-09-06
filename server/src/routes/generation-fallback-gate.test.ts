@@ -394,7 +394,7 @@ describe('fs-2 never-cross-language generation gate', () => {
     expect(lastSynthArgs?.cast?.every((c) => c.ttsEngine === 'qwen')).toBe(true);
   }, 10_000);
 
-  it('fs-60 (#2962): PARKS — not fails — a cross-language reused voice on a Coqui-eligible non-English book; confirming renders it through the Coqui fallback', async () => {
+  it('fs-60 (#1005): PARKS — not fails — a cross-language reused voice on a Coqui-eligible non-English book; confirming renders it through the Coqui fallback', async () => {
     /* Before this fix, EVERY non-English book hard-failed here regardless of
        Coqui eligibility (see the removed #1263 tests this replaces) — an
        on-box live-render walkthrough (A5, #2962) found that live behaviour

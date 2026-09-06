@@ -362,8 +362,15 @@ number by being unable to check is worse than no instrument at all.
 
 ### A5 · fs-60 XTTS per-language engine eligibility (plan 249)
 
-- **Verdict:** DISCHARGED
-- **Evidence:** `docs/features/archive/249-fs60-xtts-language-eligibility.md`
+- **Verdict:** STILL OWED *(as this audit found it. A5 was discharged later, on
+  2026-09-06, by the mechanical-batch-1 on-box run — not by this audit, whose
+  header states twice that it discharged nothing. The verdict below is left as
+  written because this document is a point-in-time record; the register, not
+  this file, carries current state. Plan 249 has since flipped to `stable` and
+  moved to `docs/features/archive/`, so the path quoted below is its
+  pre-archive location and the frontmatter/body text quoted from it is what it
+  said at audit time.)*
+- **Evidence:** `docs/features/249-fs60-xtts-language-eligibility.md`
   frontmatter `status: active` (`:2`); header (`:9`) reads "Live-GPU
   acceptance owed (mock-mode e2e only...)"; body (`:58`) states verbatim:
   "**Explicitly not covered — Live-GPU acceptance is owed.** The e2e spec

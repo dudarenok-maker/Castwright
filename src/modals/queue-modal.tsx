@@ -261,13 +261,13 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                     }}
                     onConfirmFallback={(entryId) => {
                       /* Loud-fallback gate: render this parked chapter anyway
-                         (in Kokoro). awaiting_confirm → queued + confirmed; the
+                         with the fallback engine. awaiting_confirm → queued + confirmed; the
                          dispatcher re-claims it and the worker renders through. */
                       dispatch(confirmFallbackEntry(entryId)).catch(() => {});
                     }}
                     onSkipFallback={(entryId) => {
                       /* Loud-fallback gate: skip this parked chapter rather than
-                         render undesigned voices in Kokoro. awaiting_confirm →
+                         render undesigned voices with the fallback engine. awaiting_confirm →
                          removed. */
                       dispatch(skipFallbackEntry(entryId)).catch(() => {});
                     }}

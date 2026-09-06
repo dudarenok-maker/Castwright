@@ -55,7 +55,7 @@ owner: null
 - Vitest frontend (`src/store/voice-readiness-selectors.test.ts`) — invariant 8's agreement property, table-driven across English / Coqui-eligible / Kokoro-eligible-non-English (the fs-70 state) / both-eligible: `voiceReadinessGateMessage` always contains `selectFallbackEngineName`, and the hard block fires only when neither fallback is eligible.
 - Playwright e2e (`e2e/generation/coqui-fallback-non-english.spec.ts`) — asserts the picker unlocks Coqui as a manually selectable engine for a Coqui-eligible non-English book, the voice-readiness gate shows the "Proceed anyway" affordance naming Coqui, and the rendered "Fallback (Coqui)" status pill — via direct redux dispatch, since mock mode can't produce a server-only render-time fallback.
 
-**Explicitly not covered — Live-GPU acceptance is owed.** The e2e spec above is mock-mode UI-seam + pill coverage only; the real render-time Coqui fallback (the sidecar actually falling back to a Coqui voice mid-chapter, and the Qwen/Coqui evict-and-reload sequencing under real VRAM pressure) has not been exercised on an 8 GB box. This plan's status stays `active`, not `stable`, until that walkthrough runs.
+**Live-GPU acceptance — DISCHARGED 2026-09-06.** This paragraph previously read "Explicitly not covered — Live-GPU acceptance is owed", and that is what kept the plan `active`. It was discharged by register row **A5**, whose walkthrough is the one described below: the real render-time Coqui fallback ran on an 8 GB box (`renderedFallbackEngine: "coqui"` observed in `segments.json`), bullets 1–4 PASS. Bullet 5 is N/A / superseded — the still-unsupported-language contrast it asked for can no longer be created, because a language outside the registry throws before the gate is reached. The run also produced a real product fix; see the Ship notes. The e2e spec above remains mock-mode UI-seam + pill coverage only, which is why the on-box run was needed rather than optional.
 
 ### Manual acceptance walkthrough
 
@@ -73,7 +73,7 @@ Run in mock mode (`npm run dev:mock`) for the UI-seam parts; the render-time fal
 - **XTTS languages beyond the five Qwen-aligned ones** (zh-cn, ja, ko, ar, hi, nl, pl, tr, cs, hu, it, pt) — `fs-70` (#1303).
 - **Cross-book/cross-language voice-identity check** (an srv-36 extension, catching a translated-edition voice drifting from its source-language counterpart) — `fs-71` (#1304).
 - **Recalibrating `ENGINE_VRAM_COST`'s `qwen` weight** to reflect real batched-workload VRAM (vs. the coarse `qwen:1` concurrency-slot heuristic) — a separate, riskier change affecting every existing Qwen-concurrency decision app-wide, deliberately not attempted here (design spec §4).
-- **Live-GPU acceptance** of the real render-time Coqui fallback and the Qwen/Coqui evict-and-reload sequencing on an 8 GB box — owed, tracked via this plan staying `active` and the `fs-60` BACKLOG row.
+- **Live-GPU acceptance** of the real render-time Coqui fallback and the Qwen/Coqui evict-and-reload sequencing on an 8 GB box — **no longer owed**: register row A5 (discharged 2026-09-06 and removed from the register) is that walkthrough, which is why this plan is now `stable` and archived.
 
 ### Accepted v1 limitations (explicitly not solved by this plan)
 

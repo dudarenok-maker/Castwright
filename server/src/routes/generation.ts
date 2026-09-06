@@ -1430,7 +1430,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       const speakers = cast.characters.filter((c) => speakingIds.has(c.id));
       const fallbackSet = computeQwenKokoroFallbackSet(speakers, engine);
       if (fallbackSet.length > 0) {
-        /* #1263, narrowed by fs-60 (#2962) — a STILL-UNSUPPORTED non-English
+        /* #1263, narrowed by fs-60 (#1005) — a STILL-UNSUPPORTED non-English
            book (not even Coqui-eligible) never parks here: `forbidKokoroFallback`
            is unconditional and there is no fallback engine, so "confirm" (render
            anyway) could never actually succeed — parking would just offer a

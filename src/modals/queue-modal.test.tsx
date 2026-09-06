@@ -359,12 +359,13 @@ describe('QueueModal', () => {
         books: [
           libraryBook('book-en', 'English Book', {
             language: 'en',
-            eligibleTtsEngines: ['qwen', 'kokoro'],
+            eligibleTtsEngines: ['qwen', 'coqui', 'kokoro'],
           }),
         ],
       },
     );
-    /* English books default to Kokoro. */
+    /* English books default to Kokoro even when Coqui is available, since
+       the selector prioritizes non-English books for Coqui. */
     expect(screen.getByTestId('queue-entry-a1-status')).toHaveTextContent(
       /no designed Qwen voice for Character → would render in Kokoro/,
     );
