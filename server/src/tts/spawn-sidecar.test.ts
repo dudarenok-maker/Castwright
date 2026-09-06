@@ -129,7 +129,11 @@ describe('spawnSidecar', () => {
       });
 
       expect(handle).toBeNull();
-      expect(spawnFn).not.toHaveBeenCalled();
+      // The mock actually wired into this call is spawnFnWithKillTracking, not
+      // the outer beforeEach spawnFn — asserting the latter passed vacuously
+      // regardless of behaviour (#3043 N6). killCalls (below) is the real,
+      // load-bearing assertion that nothing was spawned.
+      expect(spawnFnWithKillTracking).not.toHaveBeenCalled();
       expect(onAdoptExisting).toHaveBeenCalledWith({ host: '127.0.0.1', port: 9000 });
       // CRITICAL: No taskkill command should fire — we adopt the healthy sidecar, don't kill it
       expect(killCalls).toHaveLength(0);
