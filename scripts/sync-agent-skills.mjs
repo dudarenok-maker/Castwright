@@ -184,17 +184,61 @@ export function syncOneFile(srcPath, destPath, rel) {
   return writeMirroredFile(readFileSync(srcPath), destPath, rel, srcPath);
 }
 
+/** Resolves the commit SHA that "`main`'s committed content" means, in a way
+ *  that works both on a normal checkout (a local `main` branch) and on a CI
+ *  checkout of a pull request, which leaves NO local `main` branch — only
+ *  `refs/remotes/origin/main` (`actions/checkout` on a `pull_request` event
+ *  checks out a detached `refs/pull/N/merge`; `fetch-depth: 0` populates
+ *  `origin/*` remote-tracking refs but creates no local branches). A bare
+ *  `git show main:<path>` in that environment fails to resolve `main` at
+ *  all, for EVERY path — silently, since git raises the exact same "unknown
+ *  revision" error whether the ref itself is missing or just that path
+ *  within it is. Left uncaught upstream, this repo's own drift guard and
+ *  `readCommittedOnMain` (below) treat "ref does not resolve" identically to
+ *  "path is not on `main` yet" (a legitimate skip, see #3001) — so a
+ *  checkout where `main` doesn't resolve at all made `syncAgentSkills` skip
+ *  every single file and print `Wrote 0, skipped N`, exit 0, having verified
+ *  nothing. Caught for real in CI on this PR's own head (job "Hooks tests",
+ *  a required status check) rather than only reasoned about — see #3008.
+ *  Resolving the ref ONCE, loudly, and separately from the per-path
+ *  existence check below is what turns that into a real failure instead of
+ *  a silent no-op. Exported so tests can point it at a throwaway repo. */
+export function resolveMainSha(repoRoot = REPO_ROOT) {
+  for (const ref of ['main', 'origin/main']) {
+    try {
+      return execFileSync('git', ['rev-parse', '--verify', ref], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        windowsHide: true,
+        env: scrubGitEnv(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+    } catch {
+      continue;
+    }
+  }
+  throw new Error(
+    `sync-agent-skills: could not resolve 'main' in ${repoRoot} (checked a local ` +
+      "'main' branch, then 'origin/main'). This is not a full git checkout, or " +
+      "'origin/main' hasn't been fetched — the mirror cannot be synced without it.",
+  );
+}
+
 /** Reads a skills-root-relative path (e.g. 'pr-review-gate/SKILL.md') as it
- *  is COMMITTED ON `main` — never as it sits on whatever branch is currently
- *  checked out. Returns `null` (rather than throwing) when the path doesn't
- *  exist on `main`, so a caller can distinguish "not there yet" (a branch
- *  that just added a new mirrored file — not an error, see #3001) from a
- *  real failure. `git show` reads a worktree's shared `.git`, so this
+ *  is COMMITTED at `mainSha` — never as it sits on whatever branch is
+ *  currently checked out. Returns `null` (rather than throwing) when the
+ *  path doesn't exist AT THAT COMMIT, so a caller can distinguish "not there
+ *  yet" (a branch that just added a new mirrored file — not an error, see
+ *  #3001) from "`main` itself doesn't resolve" (resolveMainSha's job, above
+ *  — a real failure, not a per-path one). `mainSha` is a caller-resolved
+ *  commit, not the literal ref name `main`, precisely so this function
+ *  cannot silently re-introduce the ref-resolution bug resolveMainSha
+ *  exists to catch. `git show` reads a worktree's shared `.git`, so this
  *  resolves correctly regardless of which branch this checkout has out. */
-export function readCommittedOnMain(rel, repoRoot = REPO_ROOT) {
+export function readCommittedOnMain(rel, mainSha, repoRoot = REPO_ROOT) {
   const gitPath = `.claude/skills/${rel}`;
   try {
-    return execFileSync('git', ['show', `main:${gitPath}`], {
+    return execFileSync('git', ['show', `${mainSha}:${gitPath}`], {
       cwd: repoRoot,
       windowsHide: true,
       env: scrubGitEnv(),
@@ -222,27 +266,31 @@ export function assertFilesNonEmpty(files) {
 /**
  * Syncs every mirrored skill file from `main`'s committed content.
  *
- * `files` and `mirrorRoot` default to the real FILES/MIRROR_ROOT but are
- * overridable so tests can exercise the real end-to-end read-from-git/write
- * path (including the "not on main yet" skip below) without ever touching
- * the actual $HOME mirror.
+ * `files`, `mirrorRoot` and `repoRoot` default to the real FILES/MIRROR_ROOT/
+ * REPO_ROOT but are overridable so tests can exercise the real end-to-end
+ * resolve-ref/read-from-git/write path (including the "not on main yet"
+ * skip below) without ever touching the actual $HOME mirror.
  *
- * Returns `{ written, skipped }`: `written` are destination paths actually
- * written; `skipped` are FILES entries whose content isn't on `main` yet
- * (see readCommittedOnMain) — not an error, just nothing to sync yet.
+ * Resolves `main` to a commit SHA ONCE, via resolveMainSha (which throws
+ * loudly if `main` doesn't resolve at all — see its own comment for why that
+ * must be separate from the per-path check below). Returns `{ written,
+ * skipped }`: `written` are destination paths actually written; `skipped`
+ * are FILES entries whose content isn't at that commit yet (see
+ * readCommittedOnMain) — not an error, just nothing to sync yet.
  */
-export function syncAgentSkills(files = FILES, mirrorRoot = MIRROR_ROOT) {
+export function syncAgentSkills(files = FILES, mirrorRoot = MIRROR_ROOT, repoRoot = REPO_ROOT) {
   assertFilesNonEmpty(files);
+  const mainSha = resolveMainSha(repoRoot);
   const written = [];
   const skipped = [];
   for (const rel of files) {
-    const raw = readCommittedOnMain(rel);
+    const raw = readCommittedOnMain(rel, mainSha, repoRoot);
     if (raw === null) {
-      console.log(`[skip] ${rel} is not on 'main' yet — it will sync once that change merges`);
+      console.log(`[skip] ${rel} is not at ${mainSha.slice(0, 8)} ('main') yet — it will sync once that change merges`);
       skipped.push(rel);
       continue;
     }
-    written.push(writeMirroredFile(raw, join(mirrorRoot, rel), rel, `main:.claude/skills/${rel}`));
+    written.push(writeMirroredFile(raw, join(mirrorRoot, rel), rel, `${mainSha}:.claude/skills/${rel}`));
   }
   return { written, skipped };
 }
