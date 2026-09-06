@@ -59,6 +59,7 @@ describe('SYNTHETIC_ONLY_CUTOFFS', () => {
   it('exports the sigma-band calibration constants', () => {
     expect(SYNTHETIC_ONLY_CUTOFFS.severeSigma).toBe(3);
     expect(SYNTHETIC_ONLY_CUTOFFS.bandSigma).toBe(1.5);
+    expect(SYNTHETIC_ONLY_CUTOFFS.dispersionStdThreshold).toBe(0.05);
   });
 });
 

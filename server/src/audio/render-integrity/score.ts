@@ -83,6 +83,10 @@ export const CUTOFFS = {
 export const SYNTHETIC_ONLY_CUTOFFS = {
   severeSigma: 3,
   bandSigma: 1.5,
+  /** Dispersion detection threshold: when pool std dev exceeds this, the pool is
+   *  considered too loose/degenerate for the sigma-band calibration (which assumes
+   *  a tight cluster). Fall back to percentile-of-pool instead, which is proven safe. */
+  dispersionStdThreshold: 0.05,
 } as const;
 
 /**
@@ -114,12 +118,12 @@ export function syntheticOnlySpread(cosines: number[]): { pSevere: number; pBand
   const sigmaPSevere = mean - SYNTHETIC_ONLY_CUTOFFS.severeSigma * std;
   const sigmaPBand = mean - SYNTHETIC_ONLY_CUTOFFS.bandSigma * std;
 
-  // Dispersion detection: the calibration assumes a tight pool (std < ~0.05).
-  // When std is much larger (absolute threshold alone), the pool contains
-  // degenerate outliers and the sigma-based band can collapse to unbounded
-  // or negative values. Fall back to the same percentile-of-pool computation
-  // the real-anchor path uses, which is proven safe.
-  const isDispersed = std > 0.05;
+  // Dispersion detection: the calibration assumes a tight pool.
+  // When std exceeds the threshold, the pool contains degenerate outliers and
+  // the sigma-based band can collapse to unbounded or negative values. Fall back
+  // to the same percentile-of-pool computation the real-anchor path uses, which
+  // is proven safe.
+  const isDispersed = std > SYNTHETIC_ONLY_CUTOFFS.dispersionStdThreshold;
 
   if (isDispersed) {
     // Percentile-of-pool fallback: use the SAME percentiles as the real-anchor
