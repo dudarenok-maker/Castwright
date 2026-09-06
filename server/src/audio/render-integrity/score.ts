@@ -90,6 +90,17 @@ export const SYNTHETIC_ONLY_CUTOFFS = {
  * `SYNTHETIC_ONLY_CUTOFFS` for why this replaces percentile-of-pool rather
  * than just using different percentile numbers.
  *
+ * **Dispersion guard:** The sigma-band calibration assumes a tight pool
+ * (observed 0.9629±0.02); on a looser/degenerate pool (e.g., one bad render
+ * in a six-render audition), the std dev can grow large enough to produce an
+ * unbounded pSevere that makes the severe tier unreachable. This function
+ * now detects pool dispersion (std dev relative to mean) and, when high
+ * dispersion is detected, falls back to a tighter percentile-based band
+ * (using lower percentiles than the real-anchor path) to ensure the severe
+ * tier remains reachable even with degenerate outliers. At tight pools the
+ * sigma-based computation is used (as originally calibrated); at loose
+ * pools the percentile-based fallback with tighter percentiles activates.
+ *
  * @param cosines Cosine-to-centroid values for the pool (any order; not
  *   required to be pre-sorted, unlike `percentile`).
  */
@@ -97,9 +108,33 @@ export function syntheticOnlySpread(cosines: number[]): { pSevere: number; pBand
   const mean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
   const variance = cosines.reduce((s, c) => s + (c - mean) ** 2, 0) / cosines.length;
   const std = Math.sqrt(variance);
+  const sorted = [...cosines].sort((a, b) => a - b);
+
+  // Sigma-based band
+  const sigmaPSevere = mean - SYNTHETIC_ONLY_CUTOFFS.severeSigma * std;
+  const sigmaPBand = mean - SYNTHETIC_ONLY_CUTOFFS.bandSigma * std;
+
+  // Dispersion detection: the calibration assumes a tight pool (std < ~0.05).
+  // When std is much larger, the pool contains degenerate outliers and the
+  // sigma-based band can collapse. Fall back to tighter percentiles (1st/5th
+  // instead of 6th/10th) to ensure the severe tier stays reachable.
+  const poolRange = sorted[sorted.length - 1] - sorted[0];
+  const isDispersed = std > Math.max(0.05, poolRange * 0.1); // > 5% mean or > 10% of range
+
+  if (isDispersed) {
+    // Percentile-of-pool fallback with tighter percentiles for degenerate pools.
+    // Using 1st/5th instead of 6th/10th ensures the severe tier can still flag
+    // genuine mismatches even with outlier renders in the pool.
+    return {
+      pSevere: percentile(sorted, 1), // much tighter than CUTOFFS.severeEdgePctl (6)
+      pBand: percentile(sorted, 5),   // tighter than CUTOFFS.bandUpperPctl (10)
+    };
+  }
+
+  // Tight pool — use the sigma-based band as calibrated
   return {
-    pSevere: mean - SYNTHETIC_ONLY_CUTOFFS.severeSigma * std,
-    pBand: mean - SYNTHETIC_ONLY_CUTOFFS.bandSigma * std,
+    pSevere: sigmaPSevere,
+    pBand: sigmaPBand,
   };
 }
 

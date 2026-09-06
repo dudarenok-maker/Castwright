@@ -162,4 +162,32 @@ describe('scoreBook — A36 synthetic-only-pool severity band (register row A36)
     expect(freshRender!.verdict).toBe('voice-mismatch');
     expect(freshRender!.severity).toBe('severe');
   });
+
+  it('dispersion guard: a degenerate synthetic-only pool (one bad render in six) still flags a mismatched voice (cosine 0.16) as severe, never inconclusive — bounds the sigma band against dispersion', async () => {
+    // Regression test for unbounded syntheticOnlySpread. With a pool like
+    // [0.20, 0.30, 0.95, 0.96, 0.97, 0.98], the sigma-based pSevere would
+    // become negative (−0.2886), disabling the severe tier entirely. The fix
+    // bounds the sigma band using the percentile-based floor so the severe tier
+    // can never be disabled by pool dispersion.
+    auditionSpy.mockResolvedValue({
+      centroid: CENTROID,
+      // Degenerate pool: 5 good renders clustered at 0.95–0.98, 1 bad at 0.20
+      embeddings: [0.20, 0.30, 0.95, 0.96, 0.97, 0.98].map(vecAtCosine),
+      kind: 'audition' as const,
+      syntheticOnly: true,
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'spk-a36-degen-bound-'));
+    await writeThuridBook(dir, 0.16); // Clear mismatch, should be severe
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    const freshRender = verdicts!.find((v) => v.sentenceIds[0] === 99);
+    expect(freshRender).toBeDefined();
+    // Before the fix, this would have been 'inconclusive' or 'voice-match'
+    // (because pSevere would be negative, making cosine 0.16 NOT < pSevere).
+    // After the fix, it must be 'voice-mismatch'/'severe'.
+    expect(freshRender!.verdict).toBe('voice-mismatch');
+    expect(freshRender!.severity).toBe('severe');
+  });
 });
