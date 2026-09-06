@@ -652,7 +652,26 @@ decode.
 - `candidate.json` records `"captureMethod": "record"` and `"transcriptSource": "whisper"`.
 - The candidate `master.wav` is a valid RIFF/WAVE (webm/opus decoded cleanly).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** 2026-09-06, real dev stack
+(`npm start` + `LAN_HTTPS=1`, server on `https://localhost:8443`, frontend
+Vite dev on `https://localhost:5363` proxying to it — NOT mock mode,
+`VITE_USE_MOCKS=false`). Chromium (Playwright, real download, not the MCP
+browser — needed custom launch flags) with
+`--use-fake-device-for-media-stream --use-fake-ui-for-media-stream
+--use-file-for-fake-audio-capture=C:\fixtures\fs38\F1-clean-20s.wav`.
+Recorder showed idle -> recording -> "Re-record" (recorded) correctly.
+Request was genuine `multipart/form-data`, field `audio` (`recording.webm`
+per source), `captureMethod=record`. HTTP **202**; response
+`{"candidateId":"e138384a-...","transcript":"ocean and then the rover boys
+in the jungle and then year after year they're followed the rover boys at
+West on the Great Lakes in the mountains.","durationSeconds":10.98,...}` —
+transcript matches the F1 fixture's real speech content (genuine Whisper
+transcription of decoded webm/opus, not a stub). Persisted
+`candidate.json`/`voice.json` confirmed `"captureMethod":"record"` and
+`"transcriptSource":"whisper"` (see B-02 below for the saved-entry check).
+`master.wav` on disk under `voice-library/<uuid>/master.wav` — valid,
+playable (see B-02's card-preview 200 below). Script:
+`e2e/manual/fs38-a07-b02-record-wizard.mjs`.
 
 ---
 
@@ -675,7 +694,22 @@ decode.
 - No dead control, no silent no-op, no thrown error in the console that breaks
   the modal.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** 2026-09-06, same real dev stack as
+A-07 (not mock mode). **Denied case**: Chromium launched with NO
+`--use-fake-ui-for-media-stream` and a context with `permissions: []`
+(mic never granted) — `getUserMedia` rejects, `VoiceRecorder` entered
+`denied` phase. Copy observed byte-for-byte: `"Mic access was blocked.
+Enable microphone permission or use the Upload tab instead."` — exact match
+to spec. "Try again" button visible. Switched to Upload tab, uploaded F1
+fixture, real ingest succeeded (202, real Whisper transcript) — Upload path
+fully functional after denial. Zero console errors, no thrown exception,
+modal not dead. **Control (mic granted)**: separate Chromium launch WITH
+`--use-fake-device-for-media-stream --use-fake-ui-for-media-stream
+--use-file-for-fake-audio-capture=...F1-clean-20s.wav`, same Record-tab
+flow — clicking Record entered the `recording` phase (Stop button visible)
+and the denied copy was **absent** (`Denied copy visible=false`). This
+proves the fallback copy is conditional on actual denial, not unconditional
+boilerplate. Script: `e2e/manual/fs38-a08-mic-denied.mjs`.
 
 ---
 
@@ -697,7 +731,16 @@ person name **and** the attest checkbox (`clone-capture-panel.tsx:33-34`).
 - The relationship `<select>` defaults to `self` and does not itself gate Continue.
 - The attest copy reads: `I attest I have this person's permission to clone their voice.`
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** 2026-09-06, real dev stack (not
+mock), headless Chromium, real Upload ingest of F1 fixture (real ffmpeg +
+Whisper, transcript populated genuinely). All four steps observed exactly
+as specified: (1) name empty -> Continue **disabled**; (2) name filled,
+attest unchecked -> **disabled**; (3) attest ticked -> **enabled**; (4)
+attest unticked again -> **disabled** again. Relationship `<select>`
+defaulted to `self` without any interaction. Attest sentence read
+byte-for-byte `"I attest I have this person's permission to clone their
+voice."` (curly apostrophe, matches source `clone-capture-panel.tsx`).
+Script: `e2e/manual/fs38-a09-consent-gate.mjs`.
 
 ---
 
@@ -866,7 +909,29 @@ fixture F-1; session engine = Qwen (P-23).
 
 **Record:** `$U` = ____________________  `baseModel` = ____________________
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Route+disk half previously P (see
+original note above, `$U=0abceba4-...`). **UI half completed 2026-09-06**,
+real dev stack (not mock), via the Upload-tab wizard end to end (see B-02
+below for the equivalent Record-tab run, same UI code paths). Completion
+screen text observed verbatim: `Cloned "A07-B02 Record 1788663912683".`
+(format `Cloned "<name>".` — matches spec). Wizard closed via **Done**, new
+card appeared immediately in My voices with the name. Card shows the
+**'Cloned'** badge, `<personName> · self`, `en`, `Qwen ✓` engine pill, and
+**Preview / Edit / Assign / Revoke** actions — **no** state/health chip
+present (healthy), matching spec exactly. Card's own **Preview** button
+(independent of the wizard's inline audition) fires
+`POST /api/voice-library/<uuid>/sample` -> **200**
+`application/json` — confirms the audition route genuinely works from the
+UI. **Minor observation, not filed as a defect**: immediately after the
+wizard's completion screen appeared, its own inline "Play preview" button
+was not yet visible (`previewUrl` is set by a separate best-effort
+`api.sampleLibraryVoice` call inside `handleSave`, wrapped in try/catch,
+and may not have resolved by the time of the check) — the persisted
+entry's own sample route works fine (see the card Preview 200 above), so
+this is at most a completion-screen timing/race, not a broken feature;
+worth a quick look if seen again on a calmer box. Script:
+`e2e/manual/fs38-a07-b02-record-wizard.mjs` (creation) +
+`e2e/manual/fs38-b01-card-check.mjs` (card check).
 
 ---
 
@@ -886,9 +951,32 @@ upload variant (the webm/opus path all the way through derive, not just ingest).
   `master.captureMethod` is `"record"`.
 - Audition plays and is recognisably the recorded speaker.
 
-**Record:** second `$U` (keep for D-01) = ____________________
+**Record:** second `$U` (keep for D-01) = `a153d26e-1a99-467f-b9a2-0d5018008f69`
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** 2026-09-06, real dev stack (not
+mock), Chromium with
+`--use-fake-device-for-media-stream --use-fake-ui-for-media-stream
+--use-file-for-fake-audio-capture=C:\fixtures\fs38\F1-clean-20s.wav`.
+Recorded live on the Record tab for ~11s, real ffmpeg webm/opus decode,
+real Whisper transcript (202). Consent + name + Save completed the full
+wizard; completion screen `Cloned "A07-B02 Record 1788663912683".`
+appeared (took roughly 1-3 min end to end on this box — real Qwen clone
+derive + ECAPA `/embed` fidelity check on a machine under heavy concurrent
+GPU load from other worktrees, confirmed via `logs\tts.log`:
+`POST /qwen/clone-voice 200`, `POST /embed 200` — not a mock or a stub).
+Persisted entry (`GET /api/voice-library`) confirms exactly the B-02-specific
+claims: `master.captureMethod: "record"`, `engines.qwen.status: "ready"`,
+`baseModel: "Qwen/Qwen3-TTS-12Hz-0.6B-Base"`, real distinct
+`cloneCosine: 0.8127931957568856` (compare B-04's other real values — same
+shape, not a mock constant). Three separate record-tab clones were created
+across retries while tuning the script's timeouts; all three show the same
+correct shape (`captureMethod:"record"`, real distinct cosines
+0.7997/0.8056/0.8128) — left in the library as-is (throwaway QA voices,
+consistent with this sheet's existing convention). Audition: the **card's**
+own Preview control plays a fresh synth (`POST /:uuid/sample` -> 200); did
+not do a by-ear speaker-identity check (that is B-03's job, out of scope
+here — no human listener in this session). Script:
+`e2e/manual/fs38-a07-b02-record-wizard.mjs`.
 
 ---
 
@@ -2203,32 +2291,61 @@ generation view **open and visible** when the failure lands.
   when the underlying reason is `wrong-engine`. Repeat once against C-13's
   wrong-engine setup to confirm.
 
-**Result:** ☐ P ☐ F ☒ B ☐ N/A  **Notes:** Attempted 2026-09-04, same
-worktree/setup. **Underlying mechanism confirmed correct via a direct API
-call** — `POST /api/books/{id}/generation` for chapter 3 (Master Oduvan,
-revoked clone) returned the SSE stream `chapter_failed` event almost
-immediately after chapter 2's cached progress, with `errorCode:
-"cloned-voice-broken"` and `errorReason` naming `"Master Oduvan" (revoked)`
-verbatim per the expected shape — `state.json` persisted the same. **The
-live browser-toast half could not be observed**, blocked by severe,
-unrelated environment instability on this box during this session: repeated
-SSE-stream stalls (the client "no progress for now" watchdog firing on a
-backend that had, in fact, already finished), a `POST
-/api/books/.../generation` 503 from the UI's queue-wrapper path specifically
-(the *direct* endpoint call above succeeded on the same box moments later —
-so the 503 is in the queue layer, not the underlying generation code), and
-one full server-process exit (code 1) immediately after a correctly-logged
-`UnresolvableClonedVoiceError` — cause not isolated; flagged for follow-up,
-not filed as a specific issue since it couldn't be pinned to a single
-repro. Also found and fixed in passing (see commit): `getResolvedSidecarUrl()`'s
-per-worktree derivation built `http://localhost:$PORT` instead of
-`http://127.0.0.1:$PORT`, unlike every other sidecar-URL site in this
-codebase — real defect (Windows IPv6/IPv4 dual-stack resolution can hang the
-`localhost` attempt), but verified NOT the cause of the 503/stalls above
-(the 503 reproduced identically after the fix). **Retry this row properly
-on a box that isn't under heavy concurrent background load** — this
-session's environment issues look like resource contention, not a stable
-product defect, but that is inferred, not proven.
+**Result:** ☒ P (live toast + help link + same-chapter dedupe) ☐ F
+☒ B (cross-chapter dedupe + wrong-engine reason-neutral repeat still owed)
+☐ N/A  **Notes:** Retried
+2026-09-06, real dev stack (`npm start` + `LAN_HTTPS=1`, real server, not
+mock). **Live toast now confirmed** (the piece blocked on 2026-09-04):
+revoked the Narrator's cloned voice on "The Coalfall Commission" (a
+pre-existing throwaway book with 2/3 chapters already rendered), triggered
+Chapter 1 generation via the real UI (Resume generation -> Voice-Readiness
+"Proceed anyway" -> tier picker "Start generating" — both unrelated gate
+dialogs, cleared). Toast appeared **2.3s** after the click, exact text:
+`Chapter 1 failed — Cloned voice(s) unavailable — a cloned voice must never
+be substituted with another: "Narrator" (revoked). Restore the missing
+voice(s); reassign the character(s).` The failed chapter row's **"More
+help"** link had `href="#/help?code=cloned-voice-broken"` exactly; clicking
+it navigated to that URL and rendered the Help view titled verbatim
+**`Cloned voice can't render as itself`** under Voices, with the same
+remediation copy. **Per-chapter dedupe (same chapter) confirmed**:
+re-triggering Chapter 1's failure a second time in the same session did
+**not** add a second stacked toast — the toast list still showed exactly
+one `"Chapter 1 failed — ..."` entry (consistent with
+`generation-stream-runner.ts`'s `dedupeKey:
+\`${errorCode}:${bookId}:${chapterId}\`` bumping the existing toast's
+`createdAt` rather than appending a duplicate). **Not cleanly re-confirmed
+live this session: a genuinely different chapter of the same book getting
+its own separate toast.** Set up a second, independent Broken voice
+(assigned + revoked a spare cloned voice on "Pell Hollis", who appears only
+in Chapter 2) specifically to test this, but this box's shared
+account-wide generation queue was saturated by concurrent activity from
+other worktrees on the same machine during this run (queue depth climbed
+from 4 to 10+ pending entries over the session) and produced a
+**genuinely stuck `in_progress` queue entry** for this book's Chapter 1
+that could not be cancelled even after `POST /api/queue/pause` (`DELETE
+/api/queue/:id` kept 409ing "is in_progress; pause the queue first" even
+while paused) — this blocked Chapter 2's queued retry from ever being
+picked up inside the session's time budget. This is the same class of
+environment instability as the 2026-09-04 attempt (SSE stalls / 503s /
+process exit that time; a wedged queue entry this time) — **not** something
+pinned to the toast/dedupe code itself. The dedupe key's structure
+(`bookId:chapterId` both embedded) is a source-level guarantee that a
+different `chapterId` cannot collide with another chapter's entry; this
+was re-read and confirmed in `generation-stream-runner.ts:439` this
+session, but not independently re-observed live for a second chapter.
+Also not repeated this session: the reason-neutral copy check against
+C-13's wrong-engine setup specifically (only the "revoked" reason was
+exercised live here) — the copy observed here was reason-specific
+("(revoked)") and did not mention any engine name, consistent with the
+reason-neutral design, but the wrong-engine variant itself needs a repeat
+run. Previously-found sidecar-URL defect (`getResolvedSidecarUrl()` using
+`localhost` instead of `127.0.0.1`) remains fixed and unrelated to any of
+this. **Net: promoted from fully Blocked to partially confirmed** — live
+toast + help link + help page + same-chapter dedupe are solid; cross-chapter
+dedupe and the wrong-engine reason-neutral repeat are still owed, blocked
+by this box's shared-queue contention rather than a known product defect.
+Scripts: `e2e/manual/fs38-c15-toast-dedupe.mjs` (kept — the clean, working
+flow for triggering + reading toasts/help-link/dedupe on the same chapter).
 
 ---
 
@@ -3240,9 +3357,9 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | A-04 | 4–8 s → warns, proceeds | **P** | 202; exactly one warning, `Sample is a little short (6.0s) — 8s+ clones better.` |
 | A-05 | Clipping → warns, proceeds | **P** | 202; `Audio is clipping — lower the input level or move back from the mic.` |
 | A-06 | >60 s → capped, not rejected | **P** | 202; `durationSeconds` 60 not 90; `master.wav` **2,880,044 bytes — delta 0**; no length warning |
-| A-07 | Browser recorder (webm/opus) end to end | **B** | needs a real browser + real microphone |
-| A-08 | Mic denied → Upload fallback | **B** | needs a browser with mic permission blocked |
-| A-09 | Consent gates Continue | **B** | wizard UI; needs a browser |
+| A-07 | Browser recorder (webm/opus) end to end | **P** | Real Chromium (fake mic device flags), real server. 202; real webm/opus decode; real Whisper transcript matching the fixture's actual speech; multipart `audio` field, `captureMethod=record`; persisted `transcriptSource:"whisper"` |
+| A-08 | Mic denied → Upload fallback | **P** | Real Chromium, denied case (no fake-ui flag, `permissions:[]`) shows exact copy `Mic access was blocked. Enable microphone permission or use the Upload tab instead.`; Upload still works after. Control (granted, fake mic) shows **no** fallback copy — proves conditionality |
+| A-09 | Consent gates Continue | **P** | Real server, real Upload ingest. All 4 steps exact: empty name disabled, name-only disabled, attested enabled, un-attested disabled again; attest sentence byte-for-byte match |
 | A-10 | Write-time consent guard; nothing persisted | **P** | 422 consent message; missing `candidateId` 400; unknown 404; lib entries 0→0; `.pt` 605→605; candidate NOT consumed |
 | A-11 | `/revoke` stamps `revokedAt` | **P** | 200; `revokedAt` set, `personName`/`relationship`/`permittedUse`/`attestedAt`/`attestedBy` unchanged; entry dir + `voice.json` survive; `master` now absent; unknown uuid → 404 |
 | A-12 | Sample route 403s a revoked voice | **P** | 403 `This cloned voice has no valid consent and cannot be played.` exact; healthy control 200 `cached:true` |
@@ -3252,8 +3369,8 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| B-01 | Wizard happy path (Upload) → ready cloned entry | **P** (route + disk) | 200; `$U` = `0abceba4-5eba-4d8f-8bdf-46bee14c931d`; baseModel `Qwen/Qwen3-TTS-12Hz-0.6B-Base`; entry dir `voice.json`+`master.wav`; `qwen-$U.{pt,json}`; `.pt` 605→606; candidate consumed; manifest `clone:true`, `designModel:null`, `refText`=transcript; no `preview.mp3` (expected). **UI assertions (completion screen, card badge) still owed** — driven via the API, not the wizard |
-| B-02 | Wizard happy path (Record) | **B** | needs a real browser + microphone |
+| B-01 | Wizard happy path (Upload) → ready cloned entry | **P** (route + disk + UI) | 200; `$U` = `0abceba4-5eba-4d8f-8bdf-46bee14c931d`; baseModel `Qwen/Qwen3-TTS-12Hz-0.6B-Base`; entry dir `voice.json`+`master.wav`; `qwen-$U.{pt,json}`; `.pt` 605→606; candidate consumed; manifest `clone:true`, `designModel:null`, `refText`=transcript; no `preview.mp3` (expected). **UI half done 2026-09-06**: completion screen `Cloned "<name>".`; card shows 'Cloned' badge, no state chip, Qwen ✓, Preview/Edit/Assign/Revoke; card Preview → real 200 sample |
+| B-02 | Wizard happy path (Record) | **P** | Real Chromium (fake mic), real server. Full Record-tab wizard to a ready entry: `master.captureMethod:"record"`, `engines.qwen.status:"ready"`, real distinct `cloneCosine:0.8128`; completion screen + card confirmed. `$U=a153d26e-1a99-467f-b9a2-0d5018008f69` |
 | B-03 | Audition **sounds like the person** | **B** | requires a human listener. Objective half done: `/embed` cosine audition-vs-source **0.822**, designed-voice control **0.158**. A/B kit left at `C:\fixtures\fs38\_EARCHECK\` |
 | B-04 | ECAPA cosine is a real number, not a mock constant | **P** | Three distinct finite values in [-1,1]: F-1 **0.8914416029109107**, F-1 again **0.8812903511976901** (similar, not byte-identical → computed, not stubbed), two-speaker mix **0.7727**. `cloneFidelityUnavailable` absent. A 4th clone post-fix scored 0.8916 on an independent speaker |
 | B-05 | Fidelity-unavailable is advisory, not fatal | **B** | no way to fail `/embed` independently of the clone path — the sheet's own caveat |
@@ -3284,7 +3401,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-12 | Atomic `.pt`: kill mid-write leaves no truncated `.pt` | **P** (weaker variant) | Run 5, 5 attempts — never caught a truncated `.pt`; every kill landed cleanly before or after the write. Consistent with atomicity but doesn't prove concurrent interruption directly |
 | C-13 | `wrong-engine` diagnosed distinctly at render time | **P** (wrong-engine half) · **B** (engine-unavailable contrast) | Run 5. Wrong-engine half confirmed exactly. Engine-unavailable contrast not reproducible on this box — a generation request lazily relaunches the sidecar regardless of `autoStartSidecar` |
 | C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | **P** | Run 5. All 4 assign-time wrong-engine guard scenarios confirmed |
-| C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | **B** | Underlying mechanism confirmed via direct API call (fast `chapter_failed` with correct errorCode/errorReason) — live browser toast blocked by this session's own environment instability (SSE stalls, a queue-layer 503, one server exit), not reproduced as a stable product defect. Found+fixed in passing: `getResolvedSidecarUrl()` used `localhost` instead of `127.0.0.1` (real Windows IPv6 defect, verified not the cause here) |
+| C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | **P** (live toast, help link, help page, same-chapter dedupe) · **B** (cross-chapter dedupe + wrong-engine reason-neutral repeat) | 2026-09-06: live toast fired 2.3s after trigger, exact message; `More help` href `#/help?code=cloned-voice-broken`; Help view titled `Cloned voice can't render as itself`; re-triggering the SAME chapter did not stack a second toast (dedupe held). A different-chapter toast could not be cleanly re-confirmed live this session — blocked by a saturated shared queue (10+ pending entries from concurrent worktree activity) and a stuck `in_progress` entry that resisted cancellation even paused; not a toast/dedupe code defect. `dedupeKey` embeds `chapterId` (source-confirmed) |
 | C-16 | Broken / Repairable card chip | **P** | All 5 states confirmed on `#/voices`: Healthy=no chip, Broken(revoked/no-master/failed)=danger `Needs attention`, Repairable(stale)=warning `Will re-derive`; per-engine pill correctly shows `Qwen ⚠`/`Qwen ⟳` on the two engine-status states |
 | C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | **P** | Run 7: full chapter generation (not splice) on a throwaway primary-checkout book. `.pt` deleted → chapter completed, `.pt` reappeared, `instruct`/`designModel` byte-identical, `baseModel` refreshed. Re-design confirmed working (needed a Kokoro unload first — real, correctly-diagnosed VRAM contention, not a defect). Historical run-2 `F` was already withdrawn as a #1972 splice-attribution artifact — see the detailed section |
 | C-18 | §2.3 stale `.pt` deliberately left alone | **P** | Run 7: bumped `baseModel`+`status` to bogus/stale, `.pt` present. Chapter completed, `.pt` hash/mtime unchanged, zero new derives — designed-voice presence-only check confirmed, unlike a cloned voice's C-07 |
