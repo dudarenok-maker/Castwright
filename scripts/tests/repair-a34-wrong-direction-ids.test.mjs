@@ -67,7 +67,7 @@ test('isAsciiKebabId: uppercase -> false (kebab ids are lowercase only)', () => 
 });
 
 // ---------------------------------------------------------------------------
-// normaliseForMatch — must stay byte-identical to server/src/util/text-match.ts
+// normaliseForMatch — must stay behaviour-identical to server/src/util/text-match.ts
 // ---------------------------------------------------------------------------
 
 test('normaliseForMatch: lowercases and collapses whitespace', () => {
@@ -85,6 +85,38 @@ test('normaliseForMatch: folds smart quotes and dashes', () => {
 
 test('normaliseForMatch: same name, same result regardless of case', () => {
   assert.equal(normaliseForMatch('Одуван'), normaliseForMatch('одуван'));
+});
+
+/* Edge-trim class, pinned character by character.
+
+   normaliseForMatch's isEdge regex writes its quote and backtick as \uXXXX
+   escapes rather than literally, because an unpaired quote/backtick inside a
+   regex literal desyncs the source scanner in
+   server/src/spawn-windows-hide.test.ts, which fails loud on that shape for
+   every file under scripts/ (#2747, closed by #2764). That rewrite is
+   behaviour-preserving, and these cases are what makes that claim testable
+   rather than prose: each of the four class members is asserted to be
+   trimmed at BOTH edges, and one non-member is asserted to survive, so
+   dropping or adding a member from the class turns one of them red.
+
+   The '`' case is the one with no other coverage in this file at all: the
+   smart-quote test above reaches '"' via folding and the whitespace test
+   reaches \s, but nothing else exercises the backtick or a bare apostrophe. */
+test('normaliseForMatch: edge-trim class strips whitespace, ", \u0027 and ` at both edges', () => {
+  assert.equal(normaliseForMatch('\u0060oduvan\u0060'), 'oduvan');
+  assert.equal(normaliseForMatch("'oduvan'"), 'oduvan');
+  assert.equal(normaliseForMatch('"oduvan"'), 'oduvan');
+  assert.equal(normaliseForMatch(' \toduvan\t '), 'oduvan');
+  // Mixed, and repeated: the trim loops run until a non-member is reached.
+  assert.equal(normaliseForMatch(' \u0060"\u0027oduvan\u0027"\u0060 '), 'oduvan');
+});
+
+test('normaliseForMatch: edge-trim class does NOT strip a non-member', () => {
+  // '-' and '.' are deliberately outside the class; if either were added,
+  // this goes red. Guards the "unchanged class" claim in the other
+  // direction from the test above.
+  assert.equal(normaliseForMatch('-oduvan-'), '-oduvan-');
+  assert.equal(normaliseForMatch('.oduvan.'), '.oduvan.');
 });
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ owner: null
 
 # Cast-authoritative character identity (#2040)
 
-> Status: active — Waves 1-3 shipped code + tests; on-box acceptance owed (A29, A30; the former B3 discharged 2026-08-21)
+> Status: active — Waves 1-3 shipped code + tests; on-box acceptance owed (A22, A30; the former B3 discharged 2026-08-21)
 > Key files: `server/src/store/cast-resolve.ts`, `server/src/store/cast-id-history.ts`,
 > `server/src/store/remap-fresh-to-prior.ts`, `server/src/audio/segments-io.ts`,
 > `server/src/routes/cast-reject-orphan.ts`, `server/src/routes/cast-link-orphan.ts`,
@@ -584,7 +584,7 @@ Three rows tracked (A30 partially discharged 2026-08-05 — see below) — see
 and the run sheet
 [`docs/testing/cast-id-drift-onbox-acceptance.md`](../testing/cast-id-drift-onbox-acceptance.md):
 
-- **A29** (Wave 1) — re-rendering an already-drifted real chapter puts the
+- **A22** (Wave 1) — re-rendering an already-drifted real chapter puts the
   character's own voice on their lines, confirmed by listening, not only by the
   JSON fields.
 - **B3** (Wave 2) — a real analyzer re-analysing an already-drifted real book

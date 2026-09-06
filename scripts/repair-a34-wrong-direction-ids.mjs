@@ -131,7 +131,7 @@ export function isAsciiKebabId(id) {
   return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(id);
 }
 
-/** Verbatim copy of `server/src/util/text-match.ts`'s `normaliseForMatch`
+/** Behaviour-identical copy of `server/src/util/text-match.ts`'s `normaliseForMatch`
  *  (lowercase, smart-quote/dash/ellipsis folding, edge-trim, whitespace
  *  collapse) — the module doc comment's "import or replicate this one
  *  exactly" call: replicated rather than imported because it is small,
@@ -140,7 +140,9 @@ export function isAsciiKebabId(id) {
  *  deliberately free of (see `repair-cast-id-drift.mjs`'s own test file for
  *  the same tradeoff already made there for its pure helpers). If
  *  `text-match.ts` ever changes this function, this copy must change with
- *  it — there is no third place either may drift to. */
+ *  it — there is no third place either may drift to. Not textually
+ *  identical: this copy escapes the isEdge class's quote/backtick as
+ *  \uXXXX (see that line's own comment). Same class, same outputs. */
 export function normaliseForMatch(s) {
   const stripped = String(s)
     .toLowerCase()
@@ -150,7 +152,13 @@ export function normaliseForMatch(s) {
     .replace(/…/g, '...');
   let a = 0;
   let b = stripped.length;
-  const isEdge = (ch) => /[\s"'`]/.test(ch);
+  /* The quote and backtick are written as \uXXXX escapes rather than
+     literally: an unpaired quote/backtick inside a regex literal desyncs the
+     source scanner in server/src/spawn-windows-hide.test.ts, which fails loud
+     on that shape (#2747, closed by #2764) for every file under scripts/.
+     The character class is unchanged - whitespace, ", ' and ` - which the
+     "edge-trim class" tests below pin character by character. */
+  const isEdge = (ch) => /[\s\u0022\u0027\u0060]/.test(ch);
   while (a < b && isEdge(stripped[a])) a += 1;
   while (b > a && isEdge(stripped[b - 1])) b -= 1;
   return stripped.slice(a, b).replace(/\s+/g, ' ');

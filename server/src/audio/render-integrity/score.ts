@@ -52,6 +52,99 @@ export const CUTOFFS = {
   minDurationSec: MIN_DURATION_SEC,
 } as const;
 
+/**
+ * A36 (2026-09-05 owner ruling) — distinct, wider calibration used ONLY when
+ * a character's reference pool is small AND synthetic-only (Option-B Phase B:
+ * anchors dropped for a bimodal split, or Phase A with zero real anchors to
+ * begin with — see `AuditionCentroidResult.syntheticOnly` in
+ * audition-centroid.ts). `CUTOFFS`'s percentile cutoffs assume a pool whose
+ * scatter reflects real render-to-render variance; a same-engine,
+ * same-conditions synthetic-only pool clusters far tighter than that (the
+ * register's own observed case: N=6, cosines 0.9629±0.02), so a percentile
+ * near the bottom of that tight cluster sits ABOVE a correctly-cast voice's
+ * real re-render cosine (observed 0.928/0.934) — a false 'voice-mismatch'/
+ * 'severe' flag on a correct render (srv-36 register row A36 — discharged 2026-09-05).
+ *
+ * Uses mean/std-dev sigma bands instead of percentile-of-pool: at N=6,
+ * percentile-of-pool is really "near the sample minimum" (see `percentile`'s
+ * behaviour at low pctl on a tiny array), which is exactly the tight-cluster
+ * problem, not a fix for it. Sigma widths are picked so the register's own
+ * false-positive case clears the severe edge:
+ *   severeSigma=3  → well below the observed 0.928/0.934 correct-voice
+ *                    cosines (no longer 'severe') for the register's own
+ *                    pinned pool (mean 0.9629, population std≈0.0173).
+ *   bandSigma=1.5  → both 0.928 and 0.934 land 'inconclusive' (never
+ *                    'severe') against that same pool — the fix's actual
+ *                    requirement; a clearly-matching render still resolves
+ *                    'voice-match' well above this edge.
+ * The normal (real-anchor) path is entirely unaffected — this band is never
+ * consulted unless `syntheticOnly` is set.
+ */
+export const SYNTHETIC_ONLY_CUTOFFS = {
+  severeSigma: 3,
+  bandSigma: 1.5,
+  /** Dispersion detection threshold: when pool std dev exceeds this, the pool is
+   *  considered too loose/degenerate for the sigma-band calibration (which assumes
+   *  a tight cluster). Fall back to percentile-of-pool instead, which is proven safe. */
+  dispersionStdThreshold: 0.05,
+} as const;
+
+/**
+ * Mean/std-dev-based spread for a small synthetic-only audition pool — see
+ * `SYNTHETIC_ONLY_CUTOFFS` for why this replaces percentile-of-pool rather
+ * than just using different percentile numbers.
+ *
+ * **Dispersion guard:** The sigma-band calibration assumes a tight pool
+ * (observed 0.9629±0.02); on a looser/degenerate pool (e.g., one bad render
+ * in a six-render audition), the std dev can grow large enough to produce an
+ * unbounded pSevere that makes the severe tier unreachable. This function
+ * detects pool dispersion and, when detected, falls back to the percentile-of-pool
+ * computation the real-anchor path already uses, which is proven safe (no
+ * regression vs the pre-fix baseline). The sigma-band calibration is retained
+ * for tight pools where the tight-cluster assumption holds.
+ *
+ * @param cosines Cosine-to-centroid values for the pool (any order; not
+ *   required to be pre-sorted, unlike `percentile`).
+ * @returns Spread thresholds plus a flag indicating whether the sigma band (tight pool)
+ *   or percentile fallback (loose pool) was used.
+ */
+export function syntheticOnlySpread(cosines: number[]): { pSevere: number; pBand: number; usedSigmaBand: boolean } {
+  const mean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
+  const variance = cosines.reduce((s, c) => s + (c - mean) ** 2, 0) / cosines.length;
+  const std = Math.sqrt(variance);
+  const sorted = [...cosines].sort((a, b) => a - b);
+
+  // Sigma-based band
+  const sigmaPSevere = mean - SYNTHETIC_ONLY_CUTOFFS.severeSigma * std;
+  const sigmaPBand = mean - SYNTHETIC_ONLY_CUTOFFS.bandSigma * std;
+
+  // Dispersion detection: the calibration assumes a tight pool.
+  // When std exceeds the threshold, the pool contains degenerate outliers and
+  // the sigma-based band can collapse to unbounded or negative values. Fall back
+  // to the same percentile-of-pool computation the real-anchor path uses, which
+  // is proven safe.
+  const isDispersed = std > SYNTHETIC_ONLY_CUTOFFS.dispersionStdThreshold;
+
+  if (isDispersed) {
+    // Percentile-of-pool fallback: use the SAME percentiles as the real-anchor
+    // path (CUTOFFS.severeEdgePctl/bandUpperPctl). This ensures a dispersed
+    // synthetic-only pool behaves identically to the pre-fix baseline (safe,
+    // no regression), while tight pools retain the sigma-band calibration.
+    return {
+      pSevere: percentile(sorted, CUTOFFS.severeEdgePctl),
+      pBand: percentile(sorted, CUTOFFS.bandUpperPctl),
+      usedSigmaBand: false,
+    };
+  }
+
+  // Tight pool — use the sigma-based band as calibrated
+  return {
+    pSevere: sigmaPSevere,
+    pBand: sigmaPBand,
+    usedSigmaBand: true,
+  };
+}
+
 // ── percentile ─────────────────────────────────────────────────────────────
 
 /**
@@ -107,13 +200,17 @@ export function cosineToCentroid(vec: number[], centroid: number[]): number {
  *
  * @param cosine      Cosine similarity of this segment's embedding to the
  *                    character's centroid (from `cosineToCentroid`).
- * @param spread      The character's own percentile cutoffs:
- *                    - `pSevere`: percentile value at `CUTOFFS.severeEdgePctl`
- *                      (E — the severe-edge boundary).
- *                    - `pBand`: percentile value at `CUTOFFS.bandUpperPctl`
- *                      (U — the inconclusive-band upper boundary).
- *                    Passed in by the aggregate (Task 9) after calling
- *                    `percentile()` on the character's clean cosine distribution.
+ * @param spread      The character's band boundaries (may be computed by different methods):
+ *                    - `pSevere`: band boundary at the severe edge (E).
+ *                    - `pBand`: band boundary at the inconclusive-band upper boundary (U).
+ *                    Computed by the aggregate after either:
+ *                    (a) calling `percentile()` on the character's clean cosine
+ *                        distribution (real-anchor path), producing percentile values, or
+ *                    (b) calling `syntheticOnlySpread()` for synthetic-only audition pools,
+ *                        which may return sigma-based thresholds (tight pool) or percentile
+ *                        values from the dispersion fallback (loose/degenerate pool).
+ *                    Check the `bandMethod` field in CharacterCentroid to determine which
+ *                    computation method was used (stored when persisting the centroid).
  * @param durationSec Rendered segment duration in seconds.
  * @returns           `{ verdict: Verdict; severity: 'severe'|'inconclusive'|null }`.
  *
