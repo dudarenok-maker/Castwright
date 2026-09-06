@@ -82,6 +82,11 @@ const SERIES = 'Standalones';
 const TITLE = 'Fresh Lock Book';
 const CHAPTER_BODY = 'Nova said the plan out loud.';
 
+/* Shared synchronization-wait budget (finding 4, PR #3009 review pass 1) —
+   one named constant so a raised timeout can't silently diverge from a
+   hardcoded copy in an error message. */
+const SYNC_WAIT_TIMEOUT_MS = 5_000;
+
 let workspaceRoot: string;
 let app: Express;
 
@@ -306,9 +311,9 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
           new Promise<never>((_, reject) =>
             setTimeout(
               () => reject(new Error(
-                'add-alias never reached its intercepted in-lock read within 5000ms',
+                `add-alias never reached its intercepted in-lock read within ${SYNC_WAIT_TIMEOUT_MS}ms`,
               )),
-              5_000,
+              SYNC_WAIT_TIMEOUT_MS,
             ),
           ),
         ]);
@@ -322,9 +327,28 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
         });
         jobPromise.catch(() => {}); // don't let a later stub-shape error surface here
 
-        // Generous head start: the delete either completes immediately
-        // (unlocked — the bug window) or queues behind add-alias's held
-        // lock (locked — the fix). Not a tight window either way.
+        // Finding 3 (PR #3009 review pass 1) — a `clearAnalysisCache`-completion
+        // signal was tried here as a replacement for this fixed sleep. It
+        // deadlocks: `readPriorCastForMerge` (analysis.ts:3535, unconditional
+        // whenever bookDir exists, and unconditionally BEFORE this
+        // `requestedFresh` block) takes the SAME cast lock add-alias is
+        // holding open below, so the job cannot reach `clearAnalysisCache`
+        // (analysis.ts:3639) — let alone signal its completion — until
+        // add-alias's lock is released. But `released()` below is gated on
+        // that very signal, so nothing ever fires; observed
+        // `LockAcquisitionTimeoutError` after 10s and the test's own 5s wait
+        // timing out. That also means a duration-free synchronization point
+        // for this head start does not exist with the current interceptor
+        // shape: the job cannot even attempt this lock until add-alias
+        // releases it, so there is no earlier test-visible edge to poll or
+        // await. Kept as the pre-existing fixed sleep; the fact that it does
+        // not gate anything meaningful is the subject of the "CRITICAL CHECK"
+        // finding below the core assertion — this needs a design pass (filed as #3022), not a
+        // synchronization swap, so it is deliberately left rather than
+        // "fixed" into something else. Generous head start: the delete either
+        // completes immediately (unlocked — the bug window) or queues behind
+        // add-alias's held lock (locked — the fix). Not a tight window either
+        // way.
         await new Promise((r) => setTimeout(r, 100));
 
         released();
@@ -342,7 +366,7 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
               throw new Error('cast.json still exists; delete has not completed');
             }
           },
-          { timeout: 5_000, interval: 10 },
+          { timeout: SYNC_WAIT_TIMEOUT_MS, interval: 10 },
         );
 
         // Capture disk state NOW, before Phase 0 (still gated) is allowed to
@@ -363,7 +387,17 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
       expect(resAlias!.status).toBe(200);
       /* The core assertion: whichever side acquired the lock first,
          cast.json ends up deleted, never resurrected with add-alias's stale
-         snapshot. */
+         snapshot.
+
+         #3022 — READ THIS BEFORE TRUSTING THIS TEST AS A GATE. It does not
+         currently detect removal of the `withCastLock` at analysis.ts:3660,
+         the regression it was written for: replacing that wrapper with a
+         passthrough leaves this test fully green (verified twice, PR #3009).
+         `readPriorCastForMerge` (analysis.ts:220, called unconditionally at
+         :3535, BEFORE this block) takes the same cast lock, so add-alias's
+         write has already landed by the time the job reaches the delete at
+         all — the ordering is forced upstream whether or not the delete is
+         wrapped. #3022 names the decision owed. */
       expect(castExistsAfterRace).toBe(false);
     },
     30_000,
