@@ -3419,7 +3419,9 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
   /* Precedence pin: #1933 clonedAdvisory vs #1998 languageWarning
      When a cloned entry triggers BOTH conditions (OTHER engine blocked AND
      language mismatch), the advisory (clonedAdvisory) must win per the
-     documented precedence on line 1944: `clonedAdvisory ?? languageWarning`.
+     documented precedence `clonedAdvisory ?? languageWarning` (no line number
+     here deliberately — the previous one cited 1944, drifted twice inside this
+     PR alone, and was wrong by 31 lines when review pass 2 caught it).
      This test pins which operand wins by asserting the response warning is
      the advisory text, NOT the language text — both directions. Swapping the
      operator to `languageWarning ?? clonedAdvisory` makes this test red. */
@@ -3489,15 +3491,12 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
        the guard one-directional: a future advisory string that absorbed the
        language wording would still satisfy the positive match while the
        precedence silently inverted. This repo has shipped the one-directional
-       version of this mistake three times in one PR (#2998), so the negative
-       side is written in the same edit as the positive one. */
-    expect(res.body.warning).not.toMatch(/cloned in Russian/);
-    expect(res.body.warning).not.toMatch(/sound less like the person/);
-
-    // Explicitly assert the response warning is NOT the language warning text.
-    // This proves clonedAdvisory won, not languageWarning.
+       version of that mistake three times in one PR (#2998), so the negative
+       side belongs in the same edit as the positive one. Three distinct
+       fragments of the #1998 message, none of which may appear. */
     expect(res.body.warning).not.toMatch(/cloned in Russian/);
     expect(res.body.warning).not.toMatch(/book is English/);
+    expect(res.body.warning).not.toMatch(/sound less like the person/);
   });
 
   /* #1998 regression test — when the cloned voice's languageCode is

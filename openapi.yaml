@@ -2641,8 +2641,7 @@ paths:
                         never code-versus-sidecar-word. Absent for an entry with no
                         `languageCode` (unknown source language); for a book with no
                         language set; for a matching-language cloned voice; or when
-                        either language is not registered with the sidecar. When both
-                        (#1933) and (#1998) apply, the (#1933) advisory takes priority.
+                        either language is not registered with the sidecar.
                       - (#1933) set when a CLONED entry's OTHER clone-capable engine
                         (not the one this assign routed to) is not derivable — its
                         slot is terminally failed, or has no derivable source (no
