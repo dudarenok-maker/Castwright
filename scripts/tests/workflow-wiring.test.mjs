@@ -301,6 +301,52 @@ test('every required leg is present and gated on exactly its own scope keys', ()
   );
 });
 
+// The structural half of the same finding (#3053 review pass 2, N3).
+// REQUIRED_LEGS above names four legs; a NAMED list cannot see a fifth one
+// arriving unmarked, and neither can the `legs.size >= 11` floor below --
+// measured headroom at the time was 19 markers against a floor of 11, i.e.
+// 8 legs could go unparseable with every assertion in this file still
+// green. That is exactly how this PR's own first draft shipped two Windows
+// steps outside every guard here.
+//
+// So assert the INVARIANT rather than a list: every step whose `if:`
+// references the derived scopes is immediately preceded by its `- name:`
+// line and, above that, a marker inside the parseable grammar. 29 such
+// steps today, 0 exceptions. A new leg with no marker, or with a marker
+// outside the grammar (the ` (Windows)` suffix, an uppercase letter, a
+// trailing comment), fails HERE, whether or not anyone remembers to add it
+// to REQUIRED_LEGS.
+const MARKER_LINE = /^\s*# (?:leg|supports): [a-z:0-9-]+\s*$/;
+
+test('every derived step carries a parseable # leg:/# supports: marker', () => {
+  const lines = source.split('\n');
+  const derived = [];
+  const unmarked = [];
+  lines.forEach((line, i) => {
+    if (!/^\s*if: .*fromJSON\(needs\.detect\.outputs\.scopes\)/.test(line)) return;
+    derived.push(i);
+    const nameLine = lines[i - 1] ?? '';
+    const markerLine = lines[i - 2] ?? '';
+    if (!/^\s*- name: /.test(nameLine) || !MARKER_LINE.test(markerLine)) {
+      unmarked.push(
+        `${workflowPath}:${i + 1}\n  step:   ${nameLine.trim() || '(no `- name:` directly above the if:)'}\n  marker: ${markerLine.trim() || '(none)'}`,
+      );
+    }
+  });
+
+  // Anti-vacuity: a scan that finds no derived steps at all would report
+  // "every one is marked" while proving nothing.
+  assert.ok(
+    derived.length >= 25,
+    `expected >= 25 derived step conditions, found ${derived.length} — the scan broke or the workflow lost its legs`,
+  );
+  assert.deepEqual(
+    unmarked,
+    [],
+    `derived step(s) with no parseable '# leg:'/'# supports:' marker — they sit outside every guard in this file:\n${unmarked.join('\n')}`,
+  );
+});
+
 test('setup steps depend on the same scope keys as the leg they support', () => {
   const legs = parseLegs(source);
   const setups = [

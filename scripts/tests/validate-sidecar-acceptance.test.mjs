@@ -15,7 +15,10 @@ import {
   parseRecordedRun,
   hasPassingRecordedRun,
   hasRegisterLink,
+  parseRegisterLink,
   passesSidecarAcceptanceGate,
+  helpMessage,
+  loadRegisterRowIds,
 } from '../validate-sidecar-acceptance.mjs';
 
 // Synthetic register row IDs, used ONLY as fixtures for this validator's
@@ -30,6 +33,18 @@ import {
 const row = (group, n) => `${group}${n}`;
 const FIXTURE_ROW_ID = row('A', 101);
 const FIXTURE_ROW_ID_ALT = row('E', 101);
+
+// The gate now checks that a cited row EXISTS (#3053 review pass 2, N1), so
+// every syntax-level assertion below hands it this explicit set rather than
+// the real register -- keeping the pattern fixtures synthetic, exactly as
+// the comment above requires.
+const FIXTURE_ROWS = new Set([FIXTURE_ROW_ID, FIXTURE_ROW_ID_ALT, row('C', 2)]);
+
+// The real register's row ids, for the existence half. Read through the
+// SAME parser the validator uses, so a fixture id can never drift from what
+// the register actually contains.
+const REAL_ROW_IDS = loadRegisterRowIds();
+const A_REAL_ROW_ID = [...REAL_ROW_IDS].sort()[0];
 
 const scriptPath = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -156,7 +171,7 @@ const acceptedRegisterLinks = [
 
 for (const body of acceptedRegisterLinks) {
   test(`hasRegisterLink accepts: ${JSON.stringify(body)}`, () => {
-    assert.equal(hasRegisterLink(body), true);
+    assert.equal(hasRegisterLink(body, FIXTURE_ROWS), true);
   });
 }
 
@@ -172,7 +187,7 @@ const rejectedRegisterLinks = [
 
 for (const body of rejectedRegisterLinks) {
   test(`hasRegisterLink rejects: ${JSON.stringify(body)}`, () => {
-    assert.equal(hasRegisterLink(body), false);
+    assert.equal(hasRegisterLink(body, FIXTURE_ROWS), false);
   });
 }
 
@@ -205,6 +220,7 @@ test('passesSidecarAcceptanceGate: a sidecar-touching PR with a register link pa
     passesSidecarAcceptanceGate(
       ['server/tts-sidecar/main.py'],
       `Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row ${FIXTURE_ROW_ID}`,
+      FIXTURE_ROWS,
     ),
     true,
   );
@@ -236,8 +252,11 @@ test('a register link inside a fenced code block does NOT satisfy the gate', () 
     `Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row ${FIXTURE_ROW_ID}`,
     FENCE,
   ].join('\n');
-  assert.equal(hasRegisterLink(body), false);
-  assert.equal(passesSidecarAcceptanceGate(['server/tts-sidecar/main.py'], body), false);
+  assert.equal(hasRegisterLink(body, FIXTURE_ROWS), false);
+  assert.equal(
+    passesSidecarAcceptanceGate(['server/tts-sidecar/main.py'], body, FIXTURE_ROWS),
+    false,
+  );
 });
 
 test('an acceptance line inside an HTML comment does NOT satisfy the gate', () => {
@@ -357,12 +376,32 @@ test('CLI: a sidecar-touching PR with a passing recorded run passes', () => {
   assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
 });
 
-test('CLI: a sidecar-touching PR with a register link passes', () => {
+// The CLI reads the REAL register, so this fixture must cite a row that
+// really exists -- taken from the register through the validator's own
+// loader rather than hard-coded, so it cannot go stale.
+test('CLI: a sidecar-touching PR citing a REAL register row passes', () => {
+  const result = runCli(
+    'server/tts-sidecar/main.py\n',
+    `Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row ${A_REAL_ROW_ID}`,
+  );
+  assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
+});
+
+// ... and the same line citing a row that does NOT exist must fail, with the
+// id named. Before #3053 review pass 2's N1 fix this exited 0: the gate
+// checked the id's SHAPE and never that it was a row.
+test('CLI: a sidecar-touching PR citing a NONEXISTENT register row fails', () => {
+  assert.equal(
+    REAL_ROW_IDS.has(FIXTURE_ROW_ID),
+    false,
+    `fixture is stale -- ${FIXTURE_ROW_ID} is now a real register row, so this test would pass vacuously`,
+  );
   const result = runCli(
     'server/tts-sidecar/main.py\n',
     `Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row ${FIXTURE_ROW_ID}`,
   );
-  assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
+  assert.equal(result.status, 1, `expected exit 1, got ${result.status}\nstderr: ${result.stderr}`);
+  assert.match(result.stderr, new RegExp(`Cited register row ${FIXTURE_ROW_ID} does not exist`));
 });
 
 test('CLI: a sidecar-touching PR with a FAILED recorded run still fails the gate', () => {
@@ -371,4 +410,162 @@ test('CLI: a sidecar-touching PR with a FAILED recorded run still fails the gate
     'Sidecar acceptance: `npm run test:sidecar` -- 2026-09-06 -- failed',
   );
   assert.equal(result.status, 1, `expected exit 1, got ${result.status}\nstderr: ${result.stderr}`);
+});
+
+// --- N1: the cited row must EXIST, and prose is not a citation --------------
+// #3053 review pass 2. The link half checked the SHAPE of an id and nothing
+// else, under a whole-pattern /i flag that made `[A-Z]` match lowercase too
+// -- so a body whose own words were "NOT RUN" satisfied a REQUIRED check by
+// parsing "until Q3." as a row citation.
+
+const SIDECAR_FILES = ['server/tts-sidecar/main.py'];
+
+const bodiesThatSayNothingWasRun = {
+  'NOT RUN ... blocked until Q3':
+    'Sidecar acceptance: NOT RUN. docs/testing/onbox-acceptance-register.md\n' +
+    'has no row yet; blocked on box time until Q3.',
+  'deferred, will file in v2':
+    'Sidecar acceptance: deferred, see docs/testing/onbox-acceptance-register.md — will file in v2',
+  'a made-up row id': `Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row ${row('Z', 999)}`,
+};
+
+for (const [label, body] of Object.entries(bodiesThatSayNothingWasRun)) {
+  test(`a body that records no run does NOT satisfy the gate: ${label}`, () => {
+    assert.equal(passesSidecarAcceptanceGate(SIDECAR_FILES, body), false);
+  });
+}
+
+// The PATTERN half, separated from the EXISTENCE half on purpose: with only
+// the existence check in place, prose still PARSES as a citation and merely
+// fails to resolve, so a later widening of the id pattern would go unnoticed.
+// This pins that ordinary prose is not a citation at all.
+test('prose that merely mentions the register parses as NO citation', () => {
+  const proseBodies = [
+    'Sidecar acceptance: NOT RUN. docs/testing/onbox-acceptance-register.md\nhas no row yet; blocked on box time until Q3.',
+    'Sidecar acceptance: deferred, see docs/testing/onbox-acceptance-register.md — will file in v2',
+    // lowercase id-shaped token: the old whole-pattern /i flag made `[A-Z]`
+    // match this too
+    'Sidecar acceptance: docs/testing/onbox-acceptance-register.md row a1',
+  ];
+  for (const body of proseBodies) {
+    assert.equal(parseRegisterLink(body), null, `parsed a citation out of prose: ${body}`);
+  }
+});
+
+test('a register link whose row does not exist does NOT satisfy the gate', () => {
+  const body = `Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row ${FIXTURE_ROW_ID}`;
+  // Guard the guard: the syntax half must still match, so the rejection is
+  // proven to come from the EXISTENCE check and not from the pattern.
+  assert.equal(hasRegisterLink(body, new Set([FIXTURE_ROW_ID])), true);
+  assert.equal(hasRegisterLink(body, REAL_ROW_IDS), false);
+  assert.equal(passesSidecarAcceptanceGate(SIDECAR_FILES, body), false);
+});
+
+test('a register link naming a REAL row still satisfies the gate', () => {
+  assert.ok(A_REAL_ROW_ID, 'the register parsed to zero rows -- fixture is broken');
+  assert.equal(
+    passesSidecarAcceptanceGate(
+      SIDECAR_FILES,
+      `Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row ${A_REAL_ROW_ID}`,
+    ),
+    true,
+  );
+});
+
+// An unreadable register must fail CLOSED -- "cannot read the register" must
+// never read as "any id is fine".
+test('loadRegisterRowIds returns an empty set (fail closed) when the register is unreadable', () => {
+  const missing = new URL('file:///nonexistent-register-that-should-not-exist.md');
+  assert.equal(loadRegisterRowIds(missing).size, 0);
+});
+
+// The gate's own help text must not be a passing body. It used to be: it
+// carried a real ISO date, `passed`, and `row A101` -- an id that has never
+// existed -- so "check goes red -> copy the example -> check goes green" was
+// the honest path.
+test('helpMessage() fed whole as a PR body does NOT satisfy the gate', () => {
+  const help = helpMessage();
+  // Guard the guard: if the examples ever stop being present at all, this
+  // test would pass vacuously.
+  assert.ok(
+    help.includes('Sidecar acceptance: `npm run test:sidecar`'),
+    'helpMessage no longer shows the recorded-run example -- fixture is stale',
+  );
+  assert.ok(
+    help.includes('Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row'),
+    'helpMessage no longer shows the register-link example -- fixture is stale',
+  );
+  assert.equal(passesSidecarAcceptanceGate(SIDECAR_FILES, help), false);
+});
+
+// --- N2: the other three CommonMark spellings of "inside a code block" ------
+// The first round stripped backtick fences only. A tilde fence, a 4-space
+// indent, a tab indent, and an inline span opened by a trailing backtick on
+// the previous line all still satisfied the gate while rendering as code.
+
+const RUN_LINE = 'Sidecar acceptance: `npm run test:sidecar` -- 2026-09-06 -- passed';
+const LINK_LINE = `Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row ${FIXTURE_ROW_ID_ALT}`;
+const TILDE_FENCE = '~'.repeat(3);
+
+const codeBlockSpellings = {
+  'four-space-indented code block': ['Nothing was run.', '', `    ${RUN_LINE}`].join('\n'),
+  'tab-indented code block': ['Nothing was run.', '', `\t${RUN_LINE}`].join('\n'),
+  'tilde-fenced code block': [TILDE_FENCE, RUN_LINE, TILDE_FENCE].join('\n'),
+  'inline span opened on the previous line': [
+    'Draft, do not read as a record: `',
+    RUN_LINE,
+    '`',
+  ].join('\n'),
+};
+
+for (const [label, body] of Object.entries(codeBlockSpellings)) {
+  test(`a recorded run inside a ${label} does NOT satisfy the gate`, () => {
+    assert.equal(hasPassingRecordedRun(body), false);
+    assert.equal(passesSidecarAcceptanceGate(SIDECAR_FILES, body), false);
+  });
+}
+
+// The register-link half shares the anchors and the stripping, so it must
+// behave identically -- checked rather than assumed.
+const linkCodeBlockSpellings = {
+  'four-space-indented code block': ['Nothing was run.', '', `    ${LINK_LINE}`].join('\n'),
+  'tab-indented code block': ['Nothing was run.', '', `\t${LINK_LINE}`].join('\n'),
+  'tilde-fenced code block': [TILDE_FENCE, LINK_LINE, TILDE_FENCE].join('\n'),
+  'inline span opened on the previous line': [
+    'Draft, do not read as a record: `',
+    LINK_LINE,
+    '`',
+  ].join('\n'),
+};
+
+for (const [label, body] of Object.entries(linkCodeBlockSpellings)) {
+  test(`a register link inside a ${label} does NOT satisfy the gate`, () => {
+    assert.equal(hasRegisterLink(body, FIXTURE_ROWS), false);
+    assert.equal(passesSidecarAcceptanceGate(SIDECAR_FILES, body, FIXTURE_ROWS), false);
+  });
+}
+
+// The stripping must not be so broad that it eats honest bodies. Each of
+// these carries code ELSEWHERE and a plainly-written acceptance line, and
+// must still pass -- otherwise the fix above is just a rejection of
+// everything.
+const honestBodiesWithCodeElsewhere = {
+  'after a tilde-fenced sample': [TILDE_FENCE, 'a sample', TILDE_FENCE, '', RUN_LINE].join('\n'),
+  'after a paragraph carrying an inline span': ['See `npm test` first.', '', RUN_LINE].join('\n'),
+  'after an indented code block': ['Sample:', '', '    some code', '', RUN_LINE].join('\n'),
+  'indented up to three spaces (still a paragraph, not code)': `   ${RUN_LINE}`,
+};
+
+for (const [label, body] of Object.entries(honestBodiesWithCodeElsewhere)) {
+  test(`a plainly-written acceptance line still passes: ${label}`, () => {
+    assert.equal(hasPassingRecordedRun(body), true);
+    assert.equal(passesSidecarAcceptanceGate(SIDECAR_FILES, body), true);
+  });
+}
+
+// A tilde line inside a backtick fence is content, not a close -- otherwise
+// the fence state machine reopens and lines after it stop being stripped.
+test('a tilde line inside a backtick fence does not close it', () => {
+  const body = [FENCE, TILDE_FENCE, RUN_LINE, FENCE].join('\n');
+  assert.equal(hasPassingRecordedRun(body), false);
 });

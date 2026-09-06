@@ -609,7 +609,7 @@ in the PR body:
 
 ```
 Sidecar acceptance: `npm run test:sidecar` -- 2026-09-06 -- passed
-Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row A101
+Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row <ID>
 ```
 
 The first form is checked field-by-field — a literal
@@ -617,7 +617,14 @@ The first form is checked field-by-field — a literal
 outcome of `passed` or `failed`; only `passed` satisfies the gate. Free
 prose ("ran the sidecar tests, all good") does not. The second form points
 at a specific register row rather than re-running locally — useful when
-acceptance is already tracked there. See
+acceptance is already tracked there. `<ID>` must name a row that **actually
+exists** in the register: the gate parses the register (with
+`check-register-citations.mjs`'s own row parser) and rejects an id it does
+not find, so "blocked until Q3" or "will file in v2" is not a citation. And
+"plainly" is enforced, not merely asked for — a line inside a backtick or
+tilde fence, inside an HTML comment, indented by four spaces or a tab, or
+inside an inline code span opened on an earlier line, does not satisfy the
+gate. See
 [`scripts/validate-sidecar-acceptance.mjs`](scripts/validate-sidecar-acceptance.mjs)
 for the exact patterns and
 [docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md](docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)
