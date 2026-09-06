@@ -37,6 +37,8 @@
 > co-residency A20's first bullet needs (register `:969`, run sheet §2). Do not
 > give them separate sittings.
 
+> **A5 was discharged on 2026-09-06 and removed from the register** — bullets 1–4 PASS (via a real product fix to `generation.ts`'s per-chapter fallback gate, which hard-failed every non-English book regardless of Coqui eligibility), bullet 5 N/A / superseded. The ID is kept here as a historical citation under the register's "annotate, don't renumber" rule.
+
 ## Preconditions
 
 Stated once for the sitting; do not repeat per row.
@@ -158,11 +160,15 @@ up.
 
 ### A5 · fs-60 XTTS per-language engine eligibility (plan 249) — step 6
 
-> **Criteria source:** [`../features/249-fs60-xtts-language-eligibility.md`](../features/249-fs60-xtts-language-eligibility.md)
-> `:53-66` (five-step walkthrough). Re-resolved: plan frontmatter `status: active`;
-> body `:9` "Live-GPU acceptance owed (mock-mode e2e only)… stays `active`,
-> not `stable`, until that walkthrough runs" — re-read verbatim, still true.
-> STILL OWED.
+> **A5 was discharged on 2026-09-06 and removed from the register** — bullets 1–4 PASS (via a real product fix to `generation.ts`'s per-chapter fallback gate, which hard-failed every non-English book regardless of Coqui eligibility), bullet 5 N/A / superseded. The ID is kept here as a historical citation under the register's "annotate, don't renumber" rule.
+
+> **Criteria source:** [`../features/archive/249-fs60-xtts-language-eligibility.md`](../features/archive/249-fs60-xtts-language-eligibility.md)
+> `:53-66` (five-step walkthrough). That re-resolution read "plan frontmatter
+> `status: active`; body `:9` 'Live-GPU acceptance owed (mock-mode e2e only)…
+> stays `active`, not `stable`, until that walkthrough runs' — re-read verbatim,
+> still true. STILL OWED." **That is now discharged, not owed** — step 6 below
+> IS that walkthrough, it ran on 2026-09-06, and plan 249 moves to `stable` in
+> the same PR.
 
 6. **(A5) Coqui-fallback banner, engine picker, real render, hard-block check.**
    On the same Russian Coalfall book, open the undesigned character's row and
@@ -174,7 +180,17 @@ up.
    confirm the **old hard block** still applies there — this is the
    "supported-but-undesigned falls back, unsupported still blocks" contrast
    the row exists to prove.
-   - Result:
+   - Result: **PASS (bullets 1–4), 2026-09-06.** The Coqui-fallback banner
+     appeared instead of a hard block, the engine picker offered Coqui, and the
+     render produced `renderedFallbackEngine: "coqui"` in `segments.json`.
+     Required a real product fix, not a workaround: `generation.ts`'s
+     per-chapter gate hard-failed EVERY non-English book regardless of
+     `coquiEligible`, so the queue path could not reach the fallback at all
+     (now `nonEnglishBook && !coquiEligible`). **Bullet 5 is N/A / superseded**
+     — the still-unsupported-language contrast it asks for can no longer be
+     created on this build, because a language outside the registry throws at
+     `generation.ts:851` before this gate is reached. Full evidence:
+     [`onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`](onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md).
 
 ### A16 · fe-16 Qwen auto-load on a Russian book (plan 165) — step 7
 

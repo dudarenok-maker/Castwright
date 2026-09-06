@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-09-06
 owner: null
 ---
 
 # fs-60 — Coqui XTTS per-language engine eligibility (gap-fill beyond Qwen)
 
-> Status: active — code + automated tests land in this PR; Live-GPU acceptance owed (mock-mode e2e only; see "Out of scope" and the BACKLOG `fs-60` row).
+> Status: stable — code + automated tests shipped; Live-GPU acceptance discharged via register row A5 (discharged 2026-09-06 and removed from the register).
 > Key files: `server/src/tts/voice-mapping.ts` (`ENGINE_LANGUAGE_SUPPORT`), `server/src/tts/language.ts` (`resolveEligibleEngines`), `server/src/workspace/scan.ts` (`eligibleTtsEngines` computed field), `server/src/tts/synthesise-chapter.ts` (`applyQwenFallback`, `evictQwenForCoquiPhase`, `synthGroupsSerialized`), `server/src/routes/generation.ts` + `chapter-splice.ts` + `chapter-qa-repair.ts` (the three enforcement sites), `server/tts-sidecar/main.py` (per-request `language` param on `/synthesize`), `server/src/config/registry.ts` (`tts.preload.kokoro` default), `src/views/cast.tsx` (non-English banner), `src/modals/voice-readiness-gate.tsx` + `src/store/voice-readiness-selectors.ts` (`selectHasNoFallbackEngine`, `selectFallbackEngineName`), `src/modals/profile-drawer.tsx` (`lockedToQwen`), `src/lib/voice-status.ts` (Fallback (Coqui) pill), `openapi.yaml` (`LibraryBook.eligibleTtsEngines`).
 > URL surface: `#/books/<id>/cast` (banner + engine picker), `#/books/<id>/manuscript` (voice-readiness gate modal).
 > OpenAPI ops: `GET /api/books` (library list — carries the new `eligibleTtsEngines` field per book), `POST /api/books/{id}/generate` (per-chapter render — the fallback/serialization behavior).
@@ -55,7 +55,7 @@ owner: null
 - Vitest frontend (`src/store/voice-readiness-selectors.test.ts`) — invariant 8's agreement property, table-driven across English / Coqui-eligible / Kokoro-eligible-non-English (the fs-70 state) / both-eligible: `voiceReadinessGateMessage` always contains `selectFallbackEngineName`, and the hard block fires only when neither fallback is eligible.
 - Playwright e2e (`e2e/generation/coqui-fallback-non-english.spec.ts`) — asserts the picker unlocks Coqui as a manually selectable engine for a Coqui-eligible non-English book, the voice-readiness gate shows the "Proceed anyway" affordance naming Coqui, and the rendered "Fallback (Coqui)" status pill — via direct redux dispatch, since mock mode can't produce a server-only render-time fallback.
 
-**Explicitly not covered — Live-GPU acceptance is owed.** The e2e spec above is mock-mode UI-seam + pill coverage only; the real render-time Coqui fallback (the sidecar actually falling back to a Coqui voice mid-chapter, and the Qwen/Coqui evict-and-reload sequencing under real VRAM pressure) has not been exercised on an 8 GB box. This plan's status stays `active`, not `stable`, until that walkthrough runs.
+**Live-GPU acceptance — DISCHARGED 2026-09-06.** This paragraph previously read "Explicitly not covered — Live-GPU acceptance is owed", and that is what kept the plan `active`. It was discharged by register row **A5**, whose walkthrough is the one described below: the real render-time Coqui fallback ran on an 8 GB box (`renderedFallbackEngine: "coqui"` observed in `segments.json`), bullets 1–4 PASS. Bullet 5 is N/A / superseded — the still-unsupported-language contrast it asked for can no longer be created, because a language outside the registry throws before the gate is reached. The run also produced a real product fix; see the Ship notes. The e2e spec above remains mock-mode UI-seam + pill coverage only, which is why the on-box run was needed rather than optional.
 
 ### Manual acceptance walkthrough
 
@@ -73,7 +73,7 @@ Run in mock mode (`npm run dev:mock`) for the UI-seam parts; the render-time fal
 - **XTTS languages beyond the five Qwen-aligned ones** (zh-cn, ja, ko, ar, hi, nl, pl, tr, cs, hu, it, pt) — `fs-70` (#1303).
 - **Cross-book/cross-language voice-identity check** (an srv-36 extension, catching a translated-edition voice drifting from its source-language counterpart) — `fs-71` (#1304).
 - **Recalibrating `ENGINE_VRAM_COST`'s `qwen` weight** to reflect real batched-workload VRAM (vs. the coarse `qwen:1` concurrency-slot heuristic) — a separate, riskier change affecting every existing Qwen-concurrency decision app-wide, deliberately not attempted here (design spec §4).
-- **Live-GPU acceptance** of the real render-time Coqui fallback and the Qwen/Coqui evict-and-reload sequencing on an 8 GB box — owed, tracked via this plan staying `active` and the `fs-60` BACKLOG row.
+- **Live-GPU acceptance** of the real render-time Coqui fallback and the Qwen/Coqui evict-and-reload sequencing on an 8 GB box — **no longer owed**: register row A5 (discharged 2026-09-06 and removed from the register) is that walkthrough, which is why this plan is now `stable` and archived.
 
 ### Accepted v1 limitations (explicitly not solved by this plan)
 
@@ -89,6 +89,8 @@ Run in mock mode (`npm run dev:mock`) for the UI-seam parts; the render-time fal
 3. **The chapter's anchor group is exempt from the Qwen/Coqui serialization guarantee.** The very first body group is rendered by a standalone `synthGroup` call (to fix the chapter's sample-rate anchor, per plan 107/113) BEFORE `synthGroupsSerialized` is ever reached (`synthesise-chapter.ts:1411-1417`, comment at `:1597-1601`). If the sole Qwen-routed speaker in a chapter happens to land at sentence index 0 and every other speaker falls back to Coqui, that anchor's Qwen render and the body's later Coqui render phase DO co-reside (the anchor call finishes and returns before the body dispatch begins, but Qwen is not explicitly evicted between the two) — a narrow, accepted gap rather than a redesign of the sample-rate-anchor mechanism. The mirror case is the same accepted class: a Coqui anchor at index 0 with a Qwen-only body (or any single-engine body) short-circuits `synthGroupsSerialized` to its passthrough branch, so no evict fires and the anchor's engine co-resides with the body's — again because the anchor is never routed through the serialization wrapper, by design.
 4. **A FAILED evict now renders through instead of aborting the chapter** (#1893, shipped in #1898). `evictQwenForCoquiPhase` throws on a non-ok `/unload` and its `fetch` rejects on a dead socket; that call had no failure isolation, so a transient sidecar hiccup killed a chapter that would otherwise have rendered — at up to three call sites per chapter, since the segment-QA and ASR re-record rounds share the same wrapper. It is now best-effort: a failure logs a named warning and the Coqui phase proceeds (an abort still propagates, and the call is bounded by `callTimeoutMs` with the signal forwarded). **This weakens invariant #4 above from a guarantee to a success-path property** — when the `/unload` fails, Coqui does load alongside a still-resident Qwen. Accepted because a VRAM-hygiene eviction is not a correctness gate and should not cost the user a rendered chapter; the residual 8 GB OOM risk is what on-box register row **A5** exists to settle, and a crash/recycle-storm outcome there is the trigger to revisit the policy (retry-then-abort rather than warn-and-continue). **Note for anyone recalibrating `ENGINE_VRAM_COST`** per limitation #1 above: that recalibration must not assume within-chapter co-residency is impossible.
 
+> **A5 was discharged on 2026-09-06 and removed from the register** — bullets 1–4 PASS (via a real product fix to `generation.ts`'s per-chapter fallback gate, which hard-failed every non-English book regardless of Coqui eligibility), bullet 5 N/A / superseded. The ID is kept here as a historical citation under the register's "annotate, don't renumber" rule.
+
 ### Other follow-ups owed (not accepted limitations — cleanup opportunities noted in review)
 
 - ~~The 5-engine default array duplicated across profile-drawer / cast / voice-readiness-selectors.~~ **Done (#1534)** — hoisted to `ALL_TTS_ENGINES` (`src/lib/tts-models.ts`); all three read it.
@@ -98,4 +100,4 @@ Run in mock mode (`npm run dev:mock`) for the UI-seam parts; the render-time fal
 
 ## Ship notes
 
-(Filled in when status flips to `stable` — i.e. once Live-GPU acceptance runs. See the `fs-60` row in `docs/BACKLOG.md` for the tracking pointer.)
+- 2026-09-06 (PR [#3031](https://github.com/dudarenok-maker/Castwright/pull/3031), commit `abb667e1`): fs-60 per-chapter fallback gate was hard-failing every non-English book regardless of `coquiEligible`. A5 acceptance walkthrough found the generation-path fallback gate never narrowed when fs-60 added Coqui fallback; a `nonEnglishBook && !coquiEligible` hard-fail now gates only the genuinely unsupported languages, and Coqui-eligible books proceed to confirmation + render. Fixed via `server/src/routes/generation.ts` narrowing (verified live: segments.json shows `renderedFallbackEngine: coqui` per line, Cast view shows Fallback (Coqui) pill). Replaces four test cases that pinned the buggy behavior with one asserting park-then-confirmed-render.
