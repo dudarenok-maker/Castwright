@@ -4270,6 +4270,19 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # CTranslate2's own weights/buffers aren't. The device-wide delta remains
     # in place for the COLD "asr" key only, where it keeps working as #2094
     # designed it.
+    #
+    # #2930/#3012 disproved that theory too, on real CUDA hardware: CTranslate2
+    # never routes ANY of its work — weights or per-forward activations alike —
+    # through PyTorch's caching allocator, so `_observed_mb` structurally reads
+    # 0 for `asr.warm` regardless of load state. The learned estimate is
+    # confirmed stuck on this 128 MB seed permanently under the current
+    # measurement technique; see docs/testing/onbox-e12-results/
+    # step-1-rework-run.md and `FootprintTable.snapshot()` (which now makes
+    # this observable via `GET /debug/memory`'s `footprints` block). A real
+    # fix needs either a CTranslate2-side memory query or reverting to the
+    # device-wide delta with the same foreign-PID/concurrent-reservation
+    # guards `reservation()` already has for the cold "asr" key above — not
+    # done here; tracked in #3036.
     "asr.warm": 128,
     "spk": 200,
 }
@@ -4357,6 +4370,25 @@ class FootprintTable:
             return
         key = self._key(engine, model, cfg, resident)
         self._obs.setdefault(key, deque(maxlen=_FOOTPRINT_WINDOW)).append(int(observed_mb))
+
+    def snapshot(self) -> dict[str, dict[str, Any]]:
+        """Per-key {seed_mb, learned_mb, sample_count} for every key that has
+        either a seed or at least one recorded observation — the read-back
+        `/debug/memory` needs (rework of #3011/#3012): without this, whether
+        a key's learned estimate has moved off its seed is unobservable from
+        outside the process. `learned_mb` is 0 (not None) below
+        `_FOOTPRINT_MIN_SAMPLES`, matching `peak_mb`'s own fallback-to-seed
+        semantics; `sample_count` is what tells the two apart."""
+        keys = set(SEED_FOOTPRINTS_MB) | set(self._obs)
+        out: dict[str, dict[str, Any]] = {}
+        for key in sorted(keys):
+            dq = self._obs.get(key)
+            out[key] = {
+                "seed_mb": SEED_FOOTPRINTS_MB.get(key, 0),
+                "learned_mb": self._learned_mb(key),
+                "sample_count": len(dq) if dq is not None else 0,
+            }
+        return out
 
 
 def _device_reserve_mb(total_mb: int, cap: int) -> int:
@@ -10965,6 +10997,14 @@ def debug_memory() -> dict[str, Any]:
     # inactive_split/num_alloc_retries), the instrument #1996's design
     # decision needs. Additive: the `cuda` block above is untouched.
     out["memory_stats"] = _cuda_memory_stats_per_device()
+    # #3012 — FootprintTable per-key seed-vs-learned state, previously
+    # unobservable from outside the process (see the class's `snapshot()`
+    # docstring). Guarded the same way as every other block here: a broken
+    # read degrades to omission, never a 500.
+    try:
+        out["footprints"] = _placement.footprints.snapshot()
+    except Exception:
+        pass
     return out
 
 

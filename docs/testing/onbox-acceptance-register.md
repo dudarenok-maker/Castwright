@@ -520,17 +520,37 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 11 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**63 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-06 (E9/E10/E101 chain, #2948, claude), 65 → 63 —
+> **Last change: 2026-09-06, discharging E12** (#2682, PR #2799 chain via #2930,
+> claude): the E12 rework (#3012) added `FootprintTable.snapshot()` +
+> `GET /debug/memory`'s new `footprints` block (per-key seed/learned/sample-count,
+> previously unobservable from outside the process), then root-caused the 0.0 MB
+> torch-CUDA-counter anomaly step 1 (#2932) had flagged and step 2's verify
+> (#2931) FAILed on: `faster-whisper`'s CTranslate2 backend never routes any CUDA
+> work — weights or per-forward activations — through PyTorch's caching
+> allocator, so `_observed_mb()` structurally cannot see any of its activity. A
+> live re-run (1 cold + 6 resident `/transcribe` calls, zero `noCapacity`
+> refusals) confirmed the consequence directly: `asr.warm`'s `sample_count`
+> stayed 0 through all 6 resident calls. This is a documented, evidence-backed
+> "cannot converge as claimed" conclusion, discharging the row per its own
+> acceptance criteria's OR branch — see
+> `docs/testing/onbox-e12-results/step-1-rework-run.md`. The underlying defect
+> this row tracked is still live and unfixed — #3036 tracks it now that this row
+> no longer does. This merges on top of the independent E9/E10/E101 chain below
+> (63 → 62 owed, Group E 11 → 10; the two changes touched disjoint rows in the
+> same group and never saw each other). `next-id` markers unaffected
+> (allocate-once IDs are never reused or renumbered).
+>
+> **Prior change: 2026-09-06 (E9/E10/E101 chain, #2948, claude), 65 → 63 —
 > Group E 13 → 11.** Step 4 of the chain folded all three rows' on-box
 > results: **E10** (`npm run stop` four-way discrimination, #2632/PR #2635)
 > and **E101** (shared-run-dir owner-note collision, #2641/PR #2754) both
@@ -4716,41 +4736,6 @@ normalizes correctly. Issue #2596 and PR #2799 body.
 **One-update lag:** Updates FROM pre-#2799 releases run the old `resolve-release.js`, 
 so CRLF normalization only takes effect from the NEXT update onward (see E1 and 
 `pinokio-scripts/update.js` lines 19–28).
-
-### E12 · ASR warm footprint measurement via torch allocator peak ([#2682](https://github.com/dudarenok-maker/Castwright/issues/2682), PR #2799) · **GPU with CTranslate2/faster-whisper resident**
-
-PR #2799 changes how `asr.warm` (the learned warmup footprint for Whisper ASR) is 
-measured in the TTS sidecar (`server/tts-sidecar/main.py`). Previously, footprint was 
-estimated via a snapshot of free GPU memory before and after warm load. Now it is 
-measured via torch's allocator peak (the highest VRAM allocated during the entire 
-warm-up). This is more reliable than free-memory deltas because:
-
-- Free-memory measurements race against other concurrent processes and can miss 
-  spikes that spike-then-release.
-- Allocator peak is the actual peak VRAM the warm forward actually used, captured 
-  from the torch/CUDA allocator itself.
-
-However, the allocator-peak measurement is unproven on real hardware with a live 
-CTranslate2-backed ASR session (the pytest only stubs `_observed_mb` to a fixed 
-test value and doesn't exercise the real forward).
-
-- Load the TTS sidecar with `faster-whisper` engine resident on a GPU.
-- Trigger a real ASR warm-up via the app (e.g. during a repair/re-synthesis pass that 
-  needs the ASR transcription gate, or an explicit `POST /transcribe` call with sample PCM 
-  data).
-- Confirm that `asr.warm`'s learned footprint **moves off its 128 MB seed value** after 
-  the real warm forward completes — i.e., the allocator-peak measurement produces a 
-  positive, observed value that is recorded, not dropped.
-- Verify the recorded value matches the expected range for CTranslate2+faster-whisper 
-  on this box's GPU (typically a few hundred MB, depending on model size and CUDA 
-  compute capacity).
-
-*Needs:* a GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar 
-with ASR enabled (`SEG_ASR_ENABLED=1`) and configured to use GPU (`ASR_DEVICE=cuda`). *Cost:* short — one real ASR warm-up sequence 
-during a render or via manual endpoint. *Criteria:* the allocator-peak measurement in 
-`server/tts-sidecar/main.py`'s `FootprintTable` class must observe a positive value 
-recorded via its `record()` method when a real forward runs, not a stubbed test value. 
-Issue #2682 and PR #2799 body.
 
 ## Group G — GitHub Actions itself
 
