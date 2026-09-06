@@ -296,6 +296,7 @@ test.describe('Plan 276 — cast-time clone-readiness gate', () => {
     const row = page.getByTestId(`clone-readiness-row-${TEST_CHARACTER_ID}`);
     await expect(row).toBeVisible();
     await expect(row.getByText(TEST_CHARACTER_NAME, { exact: true })).toBeVisible();
+    await expect(row.getByText('Qwen', { exact: true })).toBeVisible();
     await expect(row.getByText(/doesn.t specify which voice to use/i)).toBeVisible();
     await expect(row.getByRole('button', { name: 'Assign a different voice' })).toBeVisible();
   });
