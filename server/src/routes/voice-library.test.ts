@@ -3380,6 +3380,90 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
      absence to English.
      To verify: change `entry.languageCode !== bookLanguageForClonedCheck` to
      `entry.languageCode !== bookLanguage`, re-run the regression tests. */
+
+  /* Precedence pin: #1933 clonedAdvisory vs #1998 languageWarning
+     When a cloned entry triggers BOTH conditions (OTHER engine blocked AND
+     language mismatch), the advisory (clonedAdvisory) must win per the
+     documented precedence on line 1944: `clonedAdvisory ?? languageWarning`.
+     This test pins which operand wins by asserting the response warning is
+     the advisory text, NOT the language text — both directions. Swapping the
+     operator to `languageWarning ?? clonedAdvisory` makes this test red. */
+  it('precedence: clonedAdvisory (OTHER engine blocked) wins over languageWarning (language mismatch) on assign', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    // A cloned entry with Russian language code. The qwen engine is ready
+    // (can be routed to), but the coqui engine is failed (blocked). Both
+    // conditions will be evaluated: language mismatch (ru vs en) AND other
+    // engine unusable (coqui failed).
+    await writeEntry({
+      voiceUuid: 'clone-both-conditions',
+      name: 'Both Warnings Voice',
+      provenance: 'cloned',
+      tags: [],
+      pinned: false,
+      languageCode: 'ru', // Russian — will mismatch English book
+      engines: {
+        qwen: { status: 'ready', baseModel: 'qwen3-0.6b' }, // routed engine
+        xtts: { status: 'failed' }, // OTHER engine blocked, triggers advisory
+      },
+      master: {
+        clipFile: 'master.wav',
+        sampleRate: 24_000,
+        durationSeconds: 5,
+        transcript: 'hello there',
+        transcriptSource: 'whisper',
+        captureMethod: 'record',
+        languageCode: 'ru',
+      },
+      consent: {
+        personName: 'Test',
+        relationship: 'family-with-permission',
+        permittedUse: 'personal',
+        attestedAt: '2026-01-01T00:00:00Z',
+        attestedBy: 'test',
+      },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    // Write the master clip to disk so the routed engine is not blocked.
+    writeFileSync(join(vl.entryDir('clone-both-conditions'), 'master.wav'), 'fake-wav-bytes');
+
+    // Book with English language, different from the Russian clone.
+    writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-both-conditions',
+      [{ id: 'char-ivan', name: 'Ivan', ttsEngine: 'qwen' }],
+      'en', // English book
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/clone-both-conditions/assign')
+      .send({ bookId: 'book-both-conditions', characterId: 'char-ivan' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeDefined();
+
+    // The advisory message names the OTHER engine (Coqui XTTS v2).
+    // Swapping the ?? operator makes this assertion fail, proving the
+    // operator precedence is pinned.
+    expect(res.body.warning).toMatch(/Coqui XTTS v2.*failed to derive/);
+    expect(res.body.warning).toMatch(/Assigned/);
+    /* Both directions, deliberately. Asserting only which message WON leaves
+       the guard one-directional: a future advisory string that absorbed the
+       language wording would still satisfy the positive match while the
+       precedence silently inverted. This repo has shipped the one-directional
+       version of this mistake three times in one PR (#2998), so the negative
+       side is written in the same edit as the positive one. */
+    expect(res.body.warning).not.toMatch(/cloned in Russian/);
+    expect(res.body.warning).not.toMatch(/sound less like the person/);
+
+    // Explicitly assert the response warning is NOT the language warning text.
+    // This proves clonedAdvisory won, not languageWarning.
+    expect(res.body.warning).not.toMatch(/cloned in Russian/);
+    expect(res.body.warning).not.toMatch(/book is English/);
+  });
 });
 
 
