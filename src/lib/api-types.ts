@@ -9229,10 +9229,12 @@ export interface operations {
                          *     - (#1998) set when a CLONED voice's `languageCode` (BCP-47,
                          *       persisted by the clone pipeline at validation time) differs
                          *       from the book's language. The comparison is code-versus-code
-                         *       (`entry.languageCode` against the book's `language` code),
+                         *       (`entry.languageCode` against the book's language code),
                          *       never code-versus-sidecar-word. Absent for an entry with no
-                         *       `languageCode` (unknown source language) and for a
-                         *       matching-language cloned voice.
+                         *       `languageCode` (unknown source language); for a book with no
+                         *       language set; for a matching-language cloned voice; or when
+                         *       either language is not registered with the sidecar. When both
+                         *       (#1933) and (#1998) apply, the (#1933) advisory takes priority.
                          *     - (#1933) set when a CLONED entry's OTHER clone-capable engine
                          *       (not the one this assign routed to) is not derivable — its
                          *       slot is terminally failed, or has no derivable source (no
