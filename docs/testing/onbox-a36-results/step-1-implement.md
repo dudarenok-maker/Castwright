@@ -1,7 +1,7 @@
 # A36 step 1 — synthetic-only pool severity band (implement + test)
 
 Parent: #2934 (A36 audition-band chain). Register row A36 ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969),
-PR #2402, [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700)). Owner ruling 2026-09-05.
+PR #2402, [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700)) — discharged 2026-09-05. Owner ruling 2026-09-05.
 
 ## What changed
 

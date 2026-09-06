@@ -1,9 +1,9 @@
 # A36 step 2 — real on-box confirmation of the widened synthetic-only band
 
 Parent: #2934 (A36 audition-band chain). Register row A36 ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969),
-PR #2402, [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700)). Owner ruling 2026-09-05.
+PR #2402, [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700)) — discharged 2026-09-05. Owner ruling 2026-09-05.
 Reproduces the exact false-positive scenario the 2026-08-29 on-box run found
-(`docs/testing/onbox-acceptance-register.md`, row A36) against step 1's fix
+(`docs/testing/onbox-acceptance-register.md`, row A36 — discharged 2026-09-05) against step 1's fix
 (`server/src/audio/render-integrity/{aggregate,audition-centroid,score}.ts`,
 commit c7a1dfac).
 

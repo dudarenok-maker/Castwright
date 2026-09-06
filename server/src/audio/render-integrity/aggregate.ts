@@ -290,7 +290,7 @@ async function resolveCharacterReference(
     .map((v) => cosineToCentroid(Array.from(v), centroidArr))
     .sort((a, b) => a - b);
   const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
-  // A36 — a small, synthetic-only pool (no real anchors blended in; see
+  // A36 (discharged 2026-09-05) — a small, synthetic-only pool (no real anchors blended in; see
   // AuditionCentroidResult.syntheticOnly) clusters far tighter than real
   // render-to-render variance, so the normal percentile cutoffs over-flag a
   // correctly-cast voice on fresh text as 'voice-mismatch'/'severe' (srv-36

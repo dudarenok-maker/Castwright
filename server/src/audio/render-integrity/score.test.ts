@@ -63,7 +63,7 @@ describe('SYNTHETIC_ONLY_CUTOFFS', () => {
 });
 
 describe('syntheticOnlySpread', () => {
-  // Register row A36's own observed shape: a tight, small (N=6) synthetic-only
+  // Register row A36's own observed shape (discharged 2026-09-05): a tight, small (N=6) synthetic-only
   // pool clustered around 0.9629, spread ±0.02 — and the two real correct-voice
   // re-render cosines (0.928, 0.934) that a plain percentile-of-pool cutoff
   // false-flagged 'voice-mismatch'/'severe' against this exact cluster.

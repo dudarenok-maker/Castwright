@@ -1,4 +1,4 @@
-/* A36 (parent #2934, register row A36, #1969/#2402/#2700) regression.
+/* A36 (parent #2934, register row A36 — discharged 2026-09-05, #1969/#2402/#2700) regression.
 
    2026-08-29 real on-box finding: a correctly-cast voice, re-rendered against
    fresh text, was false-flagged 'voice-mismatch'/'severe' because its
@@ -76,7 +76,7 @@ function writeThuridBook(dir: string, freshRenderCosine: number) {
   return writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
 }
 
-describe('scoreBook — A36 synthetic-only-pool severity band (register row A36)', () => {
+describe('scoreBook — A36 synthetic-only-pool severity band (register row A36 — discharged 2026-09-05)', () => {
   beforeEach(() => auditionSpy.mockClear());
 
   it('reproduces the exact 2026-08-29 shape and confirms the fix: correct-voice fresh render (cosine 0.928) is no longer voice-mismatch/severe', async () => {

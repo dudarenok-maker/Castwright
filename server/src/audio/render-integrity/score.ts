@@ -63,7 +63,7 @@ export const CUTOFFS = {
  * register's own observed case: N=6, cosines 0.9629±0.02), so a percentile
  * near the bottom of that tight cluster sits ABOVE a correctly-cast voice's
  * real re-render cosine (observed 0.928/0.934) — a false 'voice-mismatch'/
- * 'severe' flag on a correct render (srv-36 register row A36).
+ * 'severe' flag on a correct render (srv-36 register row A36 — discharged 2026-09-05).
  *
  * Uses mean/std-dev sigma bands instead of percentile-of-pool: at N=6,
  * percentile-of-pool is really "near the sample minimum" (see `percentile`'s
