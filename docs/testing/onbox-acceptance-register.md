@@ -516,7 +516,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 38 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
@@ -526,11 +526,38 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-06, discharging E12** (#2682, PR #2799 chain via #2930,
+> **Last change: 2026-09-06 (claude), 62 → 61 — Group A 39 → 38.** Row **A36**
+> (voice reassignment — a rebuilt audition centroid actually scores real audio,
+> #1969/#2700) fully discharged and dropped — **A36 is retired, not reused**
+> (allocate-once, same precedent as A28). The 2026-08-29 on-box run had left
+> one criterion owed: a genuinely wrong voice was correctly flagged
+> `voice-mismatch`/`severe` against a synthetic-only Phase B audition
+> centroid, but the correctly-cast voice itself was ALSO false-flagged
+> `severe` on fresh text — the pool's own 6th/10th-percentile band was too
+> tight for a small (N=6), synthetic-only pool. Owner ruling 2026-09-05
+> chose to widen the severity band specifically for synthetic-only pools
+> (#2934). Step 1 (`fix/server-2934-a36-audition-band`, commit 7d12493f) implemented a
+> separately-calibrated, wider `syntheticOnlySpread()` sigma band for that
+> case, leaving the normal (real-anchor) percentile band untouched. Step 2
+> (2026-09-06, same worktree) confirmed both halves for real on live
+> Coqui/XTTS hardware, unmocked `scoreBook()`: the correctly assigned voice
+> (`Claribel Dervla`), rendered on fresh text, scored `cosine=0.90230` →
+> `inconclusive` (the false positive is gone, under the widened
+> `pBand=0.91747`); a genuinely wrong voice (`Damien Black`) against the same
+> synthetic-only centroid scored `cosine=0.16213` → `voice-mismatch`/`severe`
+> (mismatch detection intact). Both of this row's outstanding halves now
+> hold, so the row discharges in full. Full evidence:
+> `docs/testing/onbox-a36-results/step-3-onbox.md`. This lands on top of the
+> independent E12/E9/E10/E101 discharges below (62 owed at that point; the two
+> chains touched disjoint rows and never saw each other). `next-id` unaffected
+> (Group A still A106, Group E unaffected; allocate-once IDs are never reused
+> or renumbered).
+>
+> **Prior change: 2026-09-06, discharging E12** (#2682, PR #2799 chain via #2930,
 > claude): the E12 rework (#3012) added `FootprintTable.snapshot()` +
 > `GET /debug/memory`'s new `footprints` block (per-key seed/learned/sample-count,
 > previously unobservable from outside the process), then root-caused the 0.0 MB
@@ -3509,95 +3536,6 @@ short — one idle render, explicit unloads for all three models, one reading.
 > resident together, as in the original #1976 report) — this run's simplified
 > single-model case is suggestive but doesn't rule out a leak that only shows
 > up with all three models' allocators interacting.
-
-### A36 · Voice reassignment: a rebuilt audition centroid actually scores real audio, not just discards the stale one ([#1969](https://github.com/dudarenok-maker/Castwright/issues/1969), PR [#2402](https://github.com/dudarenok-maker/Castwright/pull/2402), [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700)) · **Coqui/XTTS resident, real cloned voice with enough anchor-eligible audio to clear `MIN_DURATION_SEC`**
-
-Split out 2026-08-27 from the just-discharged A34 (voice reassignment vs.
-persisted audition centroid). That row's on-box run (reassigning Ivo to a
-cloned voice) proved the first of the row's two criteria — a reassignment
-discards the stale old-voice reference rather than silently reusing it,
-confirmed via `matchesCurrentVoice()` returning false — but it hit
-`referenceKind: "too-short"` in `resolveCharacterReference`
-(`server/src/audio/render-integrity/aggregate.ts:266-273`) because Ivo's
-cloned-voice sample was too short for `auditionCentroid()` to build a real
-centroid. The row's second, still-unmet criterion: **a rebuilt reference,
-not the failed flag, is what a real render produces** — i.e. the rebuild
-must actually succeed and correctly score real audio, not merely be
-attempted.
-
-- Reassign a thin-on-anchors character to a new voice with **enough**
-  anchor-eligible audio that `auditionCentroid()` returns a genuine
-  `resolved` outcome (not `too-short`) for the new voice.
-- Confirm the new centroid's `cleanMean`/`pSevere`/`pBand` are real
-  (non-zero) values, distinct from the old voice's pre-reassignment values —
-  a genuine rebuild, not a stale carry-over and not an absorbing `too-short`.
-- Confirm a genuinely mismatched voice against that new centroid still
-  triggers `voice-mismatch`/`severe`, and the correctly-assigned new voice
-  does not.
-
-*Needs:* a working TTS engine (Coqui/XTTS) + a real book + a cloned or
-designed voice with a long enough sample to clear `MIN_DURATION_SEC` (3.0s
-per synthesis group). *Criteria:* full text in [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700).
-*Cost:* short, opportunistic — rides along with any cloned-voice reassignment
-test that happens to produce a long-enough sample.
-
-> **PARTIALLY run 2026-08-29 (claude) — the first two criteria are met for
-> real on real hardware; the third (mismatch detection in both directions)
-> surfaced a genuine new defect and is NOT met.** Live Coqui/XTTS resident
-> on-box (RTX 4070 8GB, `cuda:0`, DeepSpeed+fp16), no mocking: a throwaway
-> fixture (`mkdtemp`, never the operator's book) gave a synthetic character
-> only 2 in-book anchor vectors (well below `AUDITION_POOL_TARGET_N=6`, a
-> genuine deficit of 4) plus 6 real evidence quotes (~30-45 words each,
-> pulled from `the-coalfall-commission.md`) and a voice assignment to the
-> real catalogue voice `Claribel Dervla`. Calling `scoreBook()` unmocked
-> made real network calls to the live sidecar: 6 real XTTS renders (RTF
-> ~0.58-0.68, all clearing `MIN_DURATION_SEC`), each embedded for real via
-> `/embed` (ECAPA, 192-d). The 2 synthetic anchors were far enough from the
-> real embeddings to trigger `buildCentroid`'s bimodal check, so
-> `auditionCentroid` correctly ran its Phase B (anchors dropped, synthetic-
-> only pool topped up and rebuilt) — itself a real exercise of a code path
-> `aggregate-audition-pool-real.test.ts` never reaches.
-> — **Criterion 1 MET:** persisted `referenceKind: "audition"`, not
-> `"too-short"`.
-> — **Criterion 2 MET:** real, non-placeholder, non-degenerate values —
-> `cleanMean=0.9629`, `pSevere=0.9409`, `pBand=0.9446`, all finite, all
-> distinct from the synthetic old-voice anchors (which scored `cosine ≈
-> -0.004` to `-0.005` against the new centroid — correctly discarded as
-> `voice-mismatch`/`severe`, confirming the stale reference is genuinely
-> gone, not silently reused).
-> — **Criterion 3 mismatch direction #1 (genuinely wrong voice) MET:** a
-> real render of `Damien Black` (a clearly different catalogue voice)
-> against the same text scored `cosine≈0.16-0.18` and was correctly flagged
-> `voice-mismatch`/`severe` in two independent probes (a generic sentence
-> and a book-register narrative line neither in the evidence pool).
-> — **Criterion 3 mismatch direction #2 (correctly-assigned voice) NOT
-> MET — new defect found:** a real render of the CORRECT voice
-> (`Claribel Dervla`) against fresh text — tried twice, once with a short
-> generic sentence (`cosine=0.928`) and once with a book-register narrative
-> line matched in length/style to the evidence pool but not one of the 6
-> quotes that built it (`cosine=0.934`) — **both scored `voice-mismatch`/
-> `severe`**, i.e. a false positive on the very voice the character is
-> actually cast to. Root cause: `pSevere`/`pBand` are the 6th/10th
-> percentile of the pool's OWN cosines-to-centroid (`score.ts`), which for
-> a synthetic-only Phase B pool of just 6 renders — all the same engine,
-> same voice, same controlled acoustic conditions — clusters far tighter
-> (severe/band boundary within ~0.02 of cleanMean) than the natural
-> cosine variance of a genuinely-correct NEW render on different content.
-> This is a sharper version of the already-documented "thin ~0.05-wide
-> over-flag band for the tightest voices" calibration caveat in
-> `score.ts` (Task 16, real in-book anchors), not a new mechanism — but it
-> is worse here because the audition-only pool is both smaller (N=6) and
-> more homogeneous (no real recording variance) than any in-book anchor
-> set the calibration was tuned against.
-> **Still owed:** this criterion, and — new — a decision on whether/how
-> to widen the severity band for small, synthetic-only Phase B pools (a
-> calibration/design question, not fixed here: the existing percentile
-> mechanism isn't wrong on its own terms, it just wasn't validated against
-> a pool this tight before). Recommend a follow-up issue scoped to that
-> specifically before this row can close. Full log/observation detail
-> (render RTFs, per-render text, raw cosines) is in this run's session
-> record; no code was changed by this run — the fixture and probe scripts
-> used were throwaway and were not committed.
 
 ### A37 · Russian dash-attributed dialogue — doubled-comma collapse pause by ear ([#2059](https://github.com/dudarenok-maker/Castwright/issues/2059), PR #2688) · **Coqui/XTTS resident, Russian text; no clone needed**
 

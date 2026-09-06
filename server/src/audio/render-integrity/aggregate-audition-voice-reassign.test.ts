@@ -134,10 +134,14 @@ describe("scoreBook — audition centroid reuse is gated on the character's curr
       modelKey: 'qwen3-tts-1.7b',
       cloned: false,
     });
+    // A36 fix: rows written by Pass 1 now carry bandMethod field
+    expect(c.bandMethod).toBeDefined();
 
-    // Pass 2 — identical voice: reuse the persisted centroid, no new render.
+    // Pass 2 — identical voice: the row from Pass 1 now has bandMethod, so it's
+    // reused (no new auditionCentroid call). Before the A36 fix, pre-fix rows
+    // without bandMethod would also be reused here, but now they're rebuilt once.
     await scoreBook(dir, CHAPTERS);
-    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    expect(auditionSpy).toHaveBeenCalledTimes(1); // still 1, row was reused
 
     // Pass 3 — voice reassigned: the stale reference is discarded and rebuilt.
     await writeThuridBook(dir, { resolvedVoiceName: 'qwen-other' });
