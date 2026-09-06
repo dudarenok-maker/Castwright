@@ -190,4 +190,57 @@ describe('scoreBook — A36 synthetic-only-pool severity band (register row A36)
     expect(freshRender!.verdict).toBe('voice-mismatch');
     expect(freshRender!.severity).toBe('severe');
   });
+
+  it('A36 fix: a pre-fix persisted audition row (without bandMethod field) is rebuilt with the new sigma-band logic instead of being reused — a correct-voice fresh render (0.928) is no longer flagged severe', async () => {
+    // Regression test for the persisted-row cache-hit path: a pre-fix row
+    // written with percentile-derived pSevere/pBand (from the register's
+    // 2026-08-29 values) survives the upgrade and is returned verbatim,
+    // short-circuiting before auditionCentroid is called. This false-positive
+    // the fix: detect pre-fix rows (missing bandMethod field) and rebuild them.
+    mockSyntheticOnlyAudition();
+    const dir = mkdtempSync(join(tmpdir(), 'spk-a36-prefix-persist-'));
+    await writeThuridBook(dir, 0.928);
+
+    // Pre-pass: write a pre-fix audition centroid row (no bandMethod field) with
+    // the register's own recorded percentile-derived values. This simulates a
+    // book scored before the fix landed.
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    writeFileSync(
+      join(dir, 'audio', 'render-integrity.centroids.json'),
+      JSON.stringify({
+        thurid: {
+          characterId: 'thurid',
+          centroid: [1, 0, 0, 0, 0, 0, 0, 0],
+          cleanMean: 0.9629,
+          pSevere: 0.9409, // pre-fix percentile-derived value
+          pBand: 0.9446,   // pre-fix percentile-derived value
+          referenceKind: 'audition',
+          auditionVoice: {
+            voiceName: 'qwen-thurid',
+            modelKey: 'qwen3-tts-1.7b',
+            cloned: false,
+            // deliberately omit bandMethod to simulate pre-fix row
+          },
+        },
+      }),
+    );
+
+    // Pass 1 (post-fix): scoreBook encounters the pre-fix row. The fix requires
+    // it to detect the missing bandMethod field and rebuild via auditionCentroid.
+    // Without the fix, the persisted row would be returned verbatim, and the
+    // fresh render at cosine 0.928 would be flagged voice-mismatch/severe
+    // (0.928 < pSevere 0.9409) — the A36 false positive.
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    // Verify auditionCentroid was called (i.e., the persisted row was rejected)
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+
+    // Verify the fresh render is NOT flagged severe with the new sigma band
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(verdicts).not.toBeNull();
+    const freshRender = verdicts!.find((v) => v.sentenceIds[0] === 99);
+    expect(freshRender).toBeDefined();
+    expect(freshRender!.verdict).not.toBe('voice-mismatch');
+    expect(freshRender!.severity).not.toBe('severe');
+  });
 });

@@ -51,6 +51,11 @@ export interface CharacterCentroid {
    *  non-audition row) — an 'audition' row with no recorded voice is treated as unknown and
    *  rebuilt rather than trusted. */
   auditionVoice?: AuditionVoiceRef;
+  /** A36 fix — detection of pre-fix persisted audition rows. Records which band-computation
+   *  method was used ('percentile' = pre-fix, 'synthetic-sigma' = post-fix with sigma band
+   *  for synthetic-only pools). Only present on 'audition' rows built after this fix;
+   *  pre-fix rows carry none and are rebuilt to apply the new sigma-band logic. */
+  bandMethod?: 'percentile' | 'synthetic-sigma';
 }
 
 const CENTROIDS_FILENAME = 'render-integrity.centroids.json';

@@ -160,6 +160,10 @@ interface CharacterReference {
    *  current chapter audio). Carried on the persisted row so a match-checked
    *  reuse rewrites the same identity back instead of silently dropping it. */
   auditionVoice?: AuditionVoiceRef;
+  /** A36 fix — band-computation method used ('synthetic-sigma' = post-fix,
+   *  or 'percentile' = original/pre-fix). Carried on persisted 'audition' rows
+   *  so pre-fix rows can be detected and rebuilt with the new logic. */
+  bandMethod?: 'percentile' | 'synthetic-sigma';
 }
 
 /** Discriminates the three things that can happen when a character's
@@ -184,14 +188,22 @@ function persistedAsRef(row: CharacterCentroid): CharacterReference {
   return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice };
 }
 
-/** #1969 — whether a persisted audition centroid's recorded voice identity still matches the
- *  character's CURRENT render identity. A mismatch — or no recorded identity at all (a legacy
- *  row written before #1969, or a character whose current voice info is absent) — means the
- *  reference may describe a speaker the character no longer is, so it must not be trusted as-is:
- *  the caller discards and rebuilds it. */
+/** #1969 / A36 — whether a persisted audition centroid's recorded voice identity still matches the
+ *  character's CURRENT render identity, AND it was computed with the current band-derivation method.
+ *  A mismatch — or no recorded identity at all (a legacy row written before #1969, or a character
+ *  whose current voice info is absent) — or a pre-fix band method (missing bandMethod field or
+ *  'percentile' value, pre-sigma-band rows) — means the reference may describe a speaker the
+ *  character no longer is, or it was computed with outdated band logic, so it must not be trusted
+ *  as-is: the caller discards and rebuilds it. */
 function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacter): boolean {
   const r = row.auditionVoice;
   if (row.referenceKind !== 'audition' || r == null) return false;
+  // A36 fix: a persisted audition row without bandMethod field is a pre-fix row
+  // (written before this fix). Such rows must be rebuilt to apply the current
+  // band-computation logic, especially for synthetic-only pools which changed from
+  // percentile-derived to sigma-derived bands. Once rebuilt, rows carry bandMethod
+  // and can be reused on subsequent passes.
+  if (row.bandMethod === undefined) return false;
   // language is compared STRICTLY: a recorded language — or the absence of one —
   // must equal the current voice's language. A legacy row that recorded no language
   // while the book now has one is a mismatch -> rebuild once, then it records the
@@ -287,7 +299,11 @@ async function resolveCharacterReference(
   const { pSevere, pBand } = audition.syntheticOnly
     ? syntheticOnlySpread(cosines)
     : { pSevere: percentile(cosines, CUTOFFS.severeEdgePctl), pBand: percentile(cosines, CUTOFFS.bandUpperPctl) };
-  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', auditionVoice: { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned } } };
+  // A36 fix: tag the band method used (synthetic-sigma for post-fix synthetic-only
+  // pools, percentile for the original logic). Pre-fix rows lack this field entirely,
+  // allowing us to detect and rebuild them with the current band-computation logic.
+  const bandMethod = audition.syntheticOnly ? ('synthetic-sigma' as const) : ('percentile' as const);
+  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', bandMethod, auditionVoice: { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned } } };
 }
 
 // ── Per-chapter segment lookup ─────────────────────────────────────────────
