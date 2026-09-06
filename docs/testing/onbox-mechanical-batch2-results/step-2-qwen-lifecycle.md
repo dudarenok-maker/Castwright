@@ -1,5 +1,5 @@
 # Step 2 — A24 design-contention wait + A105 base17 eviction guard + A35
-# three-model stranded VRAM — PARTIAL, in progress
+# three-model stranded VRAM — PARTIAL, in progress (3rd run adds A105 bullet 2)
 
 Run 2026-09-06, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
@@ -122,6 +122,66 @@ wait state; noted for the next run rather than reported as a result.
 Design itself (`ivan-petrovich`) completed cleanly and was left in a normal
 resting state (not aborted) — cleanup below reflects that.
 
+## A105 bullet 2 — mid-load `/unload` (3rd run, 2026-09-07)
+
+**Real result: 200 confirmed (not 500); the in-flight load itself was NOT
+interrupted by the race.**
+
+At the start of this run the sidecar (this worktree's own, port 9170) was
+fully idle — no engine resident, `inflight_synth: 0` — so no other lane's
+state was touched. This box had two other python sidecar processes visible
+in `tasklist` at the time (other worktrees' lanes) but their GPU0 usage was
+negligible and none were interacted with.
+
+Sequence, driven directly against the sidecar (not through the server route
+or UI — same class of plain REST call the earlier runs on this file used):
+1. Fired `POST :9170/load {"engine":"qwen","model":"1.7b"}` backgrounded —
+   this is the documented on-demand base17 trigger (`main.py:5841`'s own
+   comment: "Loaded on demand via `/load {model:\"1.7b\"}`").
+2. ~1 s later, `GET /health` — confirmed `qwen_base17_loaded: false` still,
+   `committed_mb: 7864.5` (up from an idle-book baseline; the load was
+   genuinely in flight, not yet resident).
+3. ~1 s after that (≈2 s into the load), fired
+   `POST :9170/unload {"engine":"qwen","model":"1.7b"}`.
+
+Observed:
+- The `/unload` call returned **`200 {"status":"idle"}`** immediately
+  (0.2 s) — not 500, matching the row's expectation.
+- The backgrounded `/load` call was **not aborted or errored** by the race —
+  it ran to completion at 10.3 s total and returned its own `200
+  {"status":"ready"}`. A follow-up `/health` confirmed `qwen_base17_loaded:
+  true` and `committed_mb: 8528.7` — i.e. the model that was "in flight" at
+  the moment `/unload` fired ended up resident anyway a few seconds later.
+- Calling `/unload` again afterward (against the now-actually-resident
+  model) returned the same `200 {"status":"idle"}`, and `committed_mb`
+  dropped to `4476.8` — a ≈4.0 GB delta, in the same ballpark as the row's
+  documented ~3.4 GB figure (some variance expected: this box's
+  `committed_mb` includes this worktree's own process overhead alongside
+  the model, and no other engine was loaded to net that out precisely).
+  `GET /health`'s device-level `free_mb` field did NOT move across any of
+  these three states (stayed `7411` throughout) — that field reads from the
+  driver at the whole-GPU level on a box shared by multiple concurrent
+  sidecars, so it is not a reliable per-engine signal here; `committed_mb`
+  (this process's own CUDA allocator accounting) is the field that actually
+  tracked the load/unload.
+
+**Bullet 2 verdict (partial):** the literal assertion in the row — mid-load
+`/unload` returns 200, not 500 — is confirmed. What this run's timing did
+NOT prove is the deeper claim implied by "immediate unload in the logs":
+whether `unload_base17()`'s bounded wait actually holds up completion of
+the racing `/load` and lets it finish before nulling, or whether (as
+observed here) `/unload` arriving before `_base17` is assigned is simply a
+no-op that has nothing to null yet, letting the in-flight load complete
+unaffected either way. Both would produce the exact same external HTTP
+result (200 idle, model resident moments later) with `curl`-level
+timing — distinguishing them needs either the sidecar's own log line for
+which branch fired, or a lock small enough to land the race deliberately.
+`server/tts-sidecar/*.log` was not captured this run (stdout is written to
+the console the sidecar was launched from, not a file this run had access
+to) — the next run should check whether `_ensure_base17_loaded` writes an
+identifiable log line, or add a temporary one, rather than relying on
+timing to separate the two cases.
+
 ## Remaining scope — not attempted this session
 
 - **A24 bullets 2-4**: forcing a genuinely wedged design (bullet 2), the
@@ -135,10 +195,14 @@ resting state (not aborted) — cleanup below reflects that.
   fixture setup, not code — see its own section above; the fixture's single
   chapter needs to be reset to unsynthesized (or a new chapter added) before
   the wait state this bullet needs can even be reached.
-- **A105 (5 bullets)**: base17-vs-design co-residency, the mid-load
-  `/unload` 200 vs 500 check, the Kokoro/VoiceDesign mutual-exclusion
-  arbiter in both directions, the two-overlapping-designs case, and driving
-  `Base17ContentionTimeoutError` deliberately — none were driven.
+- **A105 bullets 1, 3, 4, 5**: base17-vs-design co-residency (bullet 1), the
+  Kokoro/VoiceDesign mutual-exclusion arbiter in both directions (bullet 3),
+  the two-overlapping-designs case (bullet 4), and driving
+  `Base17ContentionTimeoutError` deliberately (bullet 5) — none were driven.
+  Bullet 2 (mid-load `/unload` 200 vs 500) was driven this session — see its
+  own section above — with one open sub-question (log-line vs. race-timing
+  distinction) flagged for whoever picks up bullet 1/3/4/5 next, since they
+  all touch the same `_ensure_base17_loaded`/arbiter code path.
 - **A35 (4 bullets)**: the three-model (Qwen Base + base17 + Whisper)
   residency scenario, its two real 120 s idle-TTL waits
   (`ASR_IDLE_TTL`, `QWEN_BASE17_IDLE_TTL`), and the `/debug/memory`
@@ -146,17 +210,18 @@ resting state (not aborted) — cleanup below reflects that.
 
 **Why stopped here:** each of the remaining bullets needs its own precisely
 timed real race (or, for A35, two back-to-back 120 s real waits) against a
-sidecar this box is already sharing with three other live lanes — the same
-class of multi-hour, contention-sensitive real-hardware work the ledger's
-#2993 entry hit for the same reason. Continuing past bullet 1 inside this
+sidecar this box is already sharing with other live lanes — the same class
+of multi-hour, contention-sensitive real-hardware work the ledger's #2993
+entry hit for the same reason. Continuing past A105 bullet 2 inside this
 run's remaining budget would mean either rushing the timing (an unreliable
 pass/fail read, indistinguishable from a false pass) or reporting results
 never actually observed. Neither is acceptable, so the claim is being left
 parked (Agent Working, still assigned, no AGENT DONE/BLOCKED/FAILED) rather
 than closed. Setup above (fixture book already in place, unload sequence
-already known to work, exact endpoints already traced) should let the next
-run start directly on A24 bullet 2 instead of repeating this
-reconnaissance.
+already known to work, exact endpoints already traced, A105 bullet 2's
+`/load`+`/unload` race pattern now demonstrated directly against the raw
+sidecar) should let the next run start directly on A24 bullet 2 or A105
+bullet 1 instead of repeating this reconnaissance.
 
 ## Cleanup / state at time of writing
 
@@ -175,10 +240,13 @@ reconnaissance.
   a book/chapter reset before attempting bullet 4 again, or should switch to
   a different, never-synthesized fixture entirely.
 - No other lane's process was touched.
+- This run's own base17 load/unload cycles left this worktree's sidecar back
+  at idle (`qwen_base17_loaded: false`, `qwen_loaded: false`) — no lingering
+  residency from the A105 bullet 2 race above.
 
-**Still not finished after two runs.** A24 bullets 2-4, A105 (5 bullets),
-and A35 (4 bullets) remain undriven — same reasoning as above: forcing each
-race and waiting out A35's two real 120 s idle TTLs needs sustained,
+**Still not finished after three runs.** A24 bullets 2-4, A105 bullets 1 and
+3-5, and A35 (4 bullets) remain undriven — same reasoning as above: forcing
+each race and waiting out A35's two real 120 s idle TTLs needs sustained,
 carefully sequenced real-hardware time this run's own budget did not stretch
 to either. Parking again (Agent Working, still assigned) rather than
 reporting AGENT DONE against unfinished scope.
