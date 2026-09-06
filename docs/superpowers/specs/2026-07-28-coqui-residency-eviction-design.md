@@ -46,7 +46,7 @@ incident.** That drove the choice of a reactive design over a proactive one (§3
 
 - The cited plan `docs/features/270-fs38-wave3c-xtts.md` does not exist; 270 is
   the OpenAPI setup surface. The relevant plans are
-  `docs/features/249-fs60-xtts-language-eligibility.md` and
+  `docs/features/archive/249-fs60-xtts-language-eligibility.md` and
   `267-fs38-wave3-voice-clone.md`.
 - The issue frames the constraint as "don't over-trigger on the common 'next
   chapter uses Qwen' case." Real, but secondary — §2 covers the binding one.

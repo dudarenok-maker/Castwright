@@ -38,7 +38,7 @@
 | `docs/wiki/Advanced-Settings.md` | Knob's user-facing row (§9) | 4 |
 | `server/src/gpu/describe-vram-blockers.ts` + `.test.ts` | Drop the now-redundant Coqui blocker entry | 5 |
 | `server/tts-sidecar/tests/test_asr_spk_idle_evict.py` | **New.** ASR + ECAPA unload/forward race | 6 |
-| `docs/features/249-fs60-xtts-language-eligibility.md` | Cross-reference the new reclaim | 7 |
+| `docs/features/archive/249-fs60-xtts-language-eligibility.md` | Cross-reference the new reclaim | 7 |
 | `docs/testing/onbox-acceptance-register.md` | New row grouped with A19 | 7 |
 | `docs/release-notes-next.md`, `RELEASE_NOTES.md` | Shipping notes | 7 |
 
@@ -1272,7 +1272,7 @@ git commit -m "fix(sidecar): guard ASR and ECAPA unloads against an in-flight fo
 ### Task 7: Documentation, on-box acceptance, release notes
 
 **Files:**
-- Modify: `docs/features/249-fs60-xtts-language-eligibility.md`
+- Modify: `docs/features/archive/249-fs60-xtts-language-eligibility.md`
 - Modify: `docs/testing/onbox-acceptance-register.md`
 - Modify: `docs/release-notes-next.md`, `RELEASE_NOTES.md`
 

@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-09-06
 owner: null
 ---
 
 # fs-60 — Coqui XTTS per-language engine eligibility (gap-fill beyond Qwen)
 
-> Status: active — code + automated tests land in this PR; Live-GPU acceptance owed (mock-mode e2e only; see "Out of scope" and the BACKLOG `fs-60` row).
+> Status: stable — code + automated tests shipped; Live-GPU acceptance discharged via register row A5 (discharged 2026-09-06 and removed from the register).
 > Key files: `server/src/tts/voice-mapping.ts` (`ENGINE_LANGUAGE_SUPPORT`), `server/src/tts/language.ts` (`resolveEligibleEngines`), `server/src/workspace/scan.ts` (`eligibleTtsEngines` computed field), `server/src/tts/synthesise-chapter.ts` (`applyQwenFallback`, `evictQwenForCoquiPhase`, `synthGroupsSerialized`), `server/src/routes/generation.ts` + `chapter-splice.ts` + `chapter-qa-repair.ts` (the three enforcement sites), `server/tts-sidecar/main.py` (per-request `language` param on `/synthesize`), `server/src/config/registry.ts` (`tts.preload.kokoro` default), `src/views/cast.tsx` (non-English banner), `src/modals/voice-readiness-gate.tsx` + `src/store/voice-readiness-selectors.ts` (`selectHasNoFallbackEngine`, `selectFallbackEngineName`), `src/modals/profile-drawer.tsx` (`lockedToQwen`), `src/lib/voice-status.ts` (Fallback (Coqui) pill), `openapi.yaml` (`LibraryBook.eligibleTtsEngines`).
 > URL surface: `#/books/<id>/cast` (banner + engine picker), `#/books/<id>/manuscript` (voice-readiness gate modal).
 > OpenAPI ops: `GET /api/books` (library list — carries the new `eligibleTtsEngines` field per book), `POST /api/books/{id}/generate` (per-chapter render — the fallback/serialization behavior).
@@ -100,4 +100,4 @@ Run in mock mode (`npm run dev:mock`) for the UI-seam parts; the render-time fal
 
 ## Ship notes
 
-(Filled in when status flips to `stable` — i.e. once Live-GPU acceptance runs. See the `fs-60` row in `docs/BACKLOG.md` for the tracking pointer.)
+- 2026-09-06 (PR [#3031](https://github.com/dudarenok-maker/Castwright/pull/3031), commit `abb667e1`): fs-60 per-chapter fallback gate was hard-failing every non-English book regardless of `coquiEligible`. A5 acceptance walkthrough found the generation-path fallback gate never narrowed when fs-60 added Coqui fallback; a `nonEnglishBook && !coquiEligible` hard-fail now gates only the genuinely unsupported languages, and Coqui-eligible books proceed to confirmation + render. Fixed via `server/src/routes/generation.ts` narrowing (verified live: segments.json shows `renderedFallbackEngine: coqui` per line, Cast view shows Fallback (Coqui) pill). Replaces four test cases that pinned the buggy behavior with one asserting park-then-confirmed-render.

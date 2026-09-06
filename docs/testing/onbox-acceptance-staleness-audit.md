@@ -362,8 +362,8 @@ number by being unable to check is worse than no instrument at all.
 
 ### A5 · fs-60 XTTS per-language engine eligibility (plan 249)
 
-- **Verdict:** STILL OWED
-- **Evidence:** `docs/features/249-fs60-xtts-language-eligibility.md`
+- **Verdict:** DISCHARGED
+- **Evidence:** `docs/features/archive/249-fs60-xtts-language-eligibility.md`
   frontmatter `status: active` (`:2`); header (`:9`) reads "Live-GPU
   acceptance owed (mock-mode e2e only...)"; body (`:58`) states verbatim:
   "**Explicitly not covered — Live-GPU acceptance is owed.** The e2e spec
