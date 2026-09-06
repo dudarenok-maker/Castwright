@@ -519,18 +519,69 @@ setup rather than repeatedly loading and evicting models.
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
-| **D** | Multi-language TTS render + ASR | 3 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
+| **D** | Multi-language TTS render + ASR | 2 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**65 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-01, merging this branch's wave-10 A28 discharge with
+> **Last change: 2026-09-06, human-checkpoint batch step 8 (#2985), 65 → 61.**
+> Folded steps 1-7's on-box evidence into the 11 rows this batch covers.
+> **Four rows fully DISCHARGED and removed** (their full original criterion
+> was met with real, unambiguous evidence — citing the evidence file rather
+> than keeping the row per the 2026-08-22 discharge ruling):
+> **D3** (Group D 3 → 2) — the re-open bound's recovered turn, voiced through
+> the real Coqui/XTTS sidecar on a real Gutenberg zh corpus paragraph, passed
+> three independent objective proxies (ASR, boundary-silence, voice-identity
+> cosine) all unambiguous, matching the same objective-proxy methodology this
+> register's own A18 precedent already accepted;
+> **E4** (Group E) — a real Qwen render forced to `tts.qwen.device: "cpu"` on
+> this worktree's own isolated sidecar completed twice without crashing,
+> confirmed slow (RTF 5.2–6.3×) and confirmed actually running on CPU (VRAM
+> untouched), exactly the row's own criterion;
+> **E6** (Group E) — observation 6 (the venv-bootstrap failure path), the
+> row's one remaining debt since wave 4, induced a genuine "Setup failed"
+> card with the server's real error text plus a working "Try again" (fresh
+> job id), via env-scoped isolation that never touched the shared, junctioned
+> venv;
+> **E8** (Group E) — all four bullets (direct-port revoke, forwarder 403
+> naming the correct non-default port, no-control-plus-single-explanation on
+> `castwright.local` at 4 devices, and the security cross-device-delete 403)
+> confirmed exactly as written, run with the required non-default
+> `LAN_HTTPS_PORT=9443`.
+> Net: Group D 3 → 2, Group E 13 → 10, **65 → 61 owed**. `next-id` markers
+> unaffected (allocate-once — D3/E4/E6/E8 retire, not reused).
+> **Seven rows narrowed in place, not discharged** (real evidence recorded,
+> genuine remaining human/dev judgment named specifically) — no count
+> change: **A11** (Cancel-path confirmed; audible-delta-on-approve half
+> staged for a human ear, exact clips named), **A18 item 2** (marked
+> BLOCKED-ACQUISITION — this dev box confirmed still static-FFmpeg, needs a
+> genuinely shared-FFmpeg box), **A22** (3 of 4 bullets confirmed decisively;
+> bullet 2's `characterSnapshots` artifact has a real, traced gap — a
+> hyphen/underscore id mismatch — flagged for a human/dev call on whether it
+> needs its own fix), **A23** (§8.7's real re-render done; embedding evidence
+> for `coalfall-dragon` explicitly ambiguous and `mairin` has no numeric
+> baseline at all — exact clip timestamps named for the still-owed human
+> listen), **E2** (3 of 4 bullets confirmed; the real-phone mkcert-install +
+> pairing bullet marked BLOCKED-ACQUISITION — needs a real phone), **E3**
+> (bullets 1-2 confirmed; bullet 3's bare-LAN-IP rejection confirmed in
+> practical effect but returns 401 with a different message than the row's
+> literal 403-loopback wording — flagged for a human/dev call on whether
+> that's an acceptable equivalent), **E5** (all three remaining touch
+> controls still owed, now with real diagnostic findings: two show real
+> click-through but no measurable `:active` style change under this
+> session's touch method, one is structurally unreachable dead code —
+> both flagged as specific follow-up questions rather than left as a bare
+> "still owed"). Full evidence for all eleven rows:
+> `docs/testing/onbox-human-checkpoint-results/step{1..7}-*.md`. Refs #2978,
+> #2435.
+>
+> **Prior change: 2026-09-01, merging this branch's wave-10 A28 discharge with
 > `main`'s independent ROCm/AMD Blocked-row addition.** This branch
 > (`chore/sidecar-kokoro-cuda-path`) had discharged row **A28** below (66 → 65,
 > Group A 40 → 39); `origin/main` had independently added the Blocked-section
@@ -1619,6 +1670,22 @@ the row and the toast. *Shipped* 2026-06-03 (`affa489`, closes #469).
 leave the live `.pt` untouched** — plus an audible delta on approve. *First landed*
 **2026-06-01**.
 
+> **Step 1 of the human-checkpoint batch, 2026-09-06 — Cancel-path DISCHARGED,
+> audible-delta half STILL OWED.** Drove the real redesign flow
+> (`POST /redesign` / `/redesign/discard` / `/redesign/promote`) against a real
+> cast voice. The live `.pt`'s SHA-256 is byte-identical across before-redesign,
+> after-preview-staged, and after-Cancel — Cancel is confirmed non-destructive,
+> and a same-persona Approve afterward *does* change the hash, proving the
+> stability isn't just an inert key. Rendered both sides of a deliberately
+> distinct persona pair; their real sidecar `/embed` cosine is **0.246**
+> (genuinely different speaker signature). **Remaining human checkpoint:**
+> listen to `docs/testing/onbox-human-checkpoint-results/a11-current.mp3` vs
+> `a11-proposed.mp3` and judge whether the audible delta reads as a
+> *deliberate* redesign (matches the persona change) rather than an arbitrary
+> regeneration artifact — the cosine number supports "genuinely different" but
+> not "coherently redesigned," which only an ear can judge. Full evidence:
+> `docs/testing/onbox-human-checkpoint-results/step1-a11-a18.md`.
+
 ### A12 · Device-pin resolution survives a respawn ([#1870](https://github.com/dudarenok-maker/Castwright/pull/1870), closes [#1857](https://github.com/dudarenok-maker/Castwright/issues/1857)) · **2-card boot**
 
 `buildSidecarEnv` now hands the sidecar the raw `cuda-uuid:` literal instead of a
@@ -1904,7 +1971,8 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
   A separate finding came out of it: a clone rendered in a language other than its source clip's loses most of its speaker identity on XTTS — 0.600 (English) → 0.229 (Russian), same derive. Filed as [#1998](https://github.com/dudarenok-maker/Castwright/issues/1998).
 
-- **2. Latent equivalence — PARTIALLY DISCHARGED.** Decode equivalence was **measured** during PR #1978's review, on the still-hot-patched box, by running both decoders side by side against the same WAV: **max difference 0.0**, mono and stereo-downmix alike, so the replacement is bit-identical to the loader it replaces rather than merely similar. What remains is the *audible* end of it — derive the same cloned voice with and without the `patched_xtts_load_audio()` wrap on a shared-FFmpeg box and confirm the rendered output is equivalent. Cheap once item 1 can run.
+- **2. Latent equivalence — PARTIALLY DISCHARGED, remaining half BLOCKED-ACQUISITION.** Decode equivalence was **measured** during PR #1978's review, on the still-hot-patched box, by running both decoders side by side against the same WAV: **max difference 0.0**, mono and stereo-downmix alike, so the replacement is bit-identical to the loader it replaces rather than merely similar. What remains is the *audible* end of it — derive the same cloned voice with and without the `patched_xtts_load_audio()` wrap on a shared-FFmpeg box and confirm the rendered output is equivalent. Cheap once item 1 can run.
+  **Step 1 of the human-checkpoint batch, 2026-09-06 — checked live, not assumed:** `import torchcodec` on this box still fails (`OSError: Could not load this library: …libtorchcodec_core5.dll` / `…core4.dll`) — this dev box is genuinely still static-FFmpeg (reverted 2026-07-31), not the shared-FFmpeg box this item's own precondition needs. Per the ticket's own instruction, this run did **not** reconfigure the shared box's FFmpeg/torchcodec install to manufacture that precondition — doing so would risk A18 item 1's own discharge and every other row depending on the current static-FFmpeg state. **Missing precondition, named specifically:** a box with a genuinely shared FFmpeg install (not this dev box). Full evidence: `docs/testing/onbox-human-checkpoint-results/step1-a11-a18.md`.
 - **3. Install-time verification — DISCHARGED 2026-07-31.** Both failure directions now run on a real install, and they produce **different** messages, which was the whole point of the marker line:
 
   | Scenario | exit | marker in stdout | branch selected |
@@ -2184,6 +2252,29 @@ re-rendering). *Criteria:* the run sheet
 [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md).
 *Cost:* short — two single-chapter re-renders on an already-imported,
 already-analysed book.
+
+> **Step 2 of the human-checkpoint batch, 2026-09-06 — 3 of 4 bullets
+> CONFIRMED, one real gap found in bullet 2, not papered over.** Re-rendered
+> both chapters against the real production workspace. **Bullet 1
+> (`characterSnapshots` entry) does NOT appear** for either `the-torment` or
+> `lightning-dave` — root cause read from source: `speakingIds`
+> (`server/src/audio/finalize-chapter-write.ts:287`) is built from the raw,
+> hyphenated `segment.characterId`, never the resolver's normalised-id
+> output, so `buildCharacterSnapshots` never sees a match. **Bullet 2
+> (audibly different voice) is CONFIRMED, clear-cut:** pipeline-native
+> `/embed` cosine, Torment-internal mean **0.8107** vs. Torment-vs-narrator
+> mean **0.1154** (21 vs. 105 pairs) — considerably more decisive than A18's
+> own 0.229-vs-0.014 precedent. **Bullet 3 (negative control) CONFIRMED:**
+> `pool-player-2` unchanged, still narrator-substituted, no snapshot entry.
+> **Bullet 4 (Cast-screen banner) CONFIRMED exactly:** live browser check
+> shows `the-torment`/`lightning-dave` no longer in "needs your decision",
+> `pool-player-2` still does. **Remaining question for a human:** bullet 1's
+> literal `characterSnapshots` criterion fails for a real reason (the
+> hyphen/underscore id mismatch above) even though the user-visible banner
+> is unaffected (it resolves independently via `buildCastResolver`) — decide
+> whether this is worth its own fix issue or is an acceptable, cosmetic gap
+> given the banner already reads correctly. Full evidence:
+> `docs/testing/onbox-human-checkpoint-results/step2-a22-a23.md`.
 
 ---
 
@@ -2610,6 +2701,28 @@ already-analysed workspace, then one chapter re-render.
 > `docs/testing/onbox-wave4-results/step-5e-cast-screen-browser-rows.md`.
 > `docs/testing/onbox-sitting-cloning-identity.md` still correctly lists this
 > row for §8.7.
+
+> **Step 2 of the human-checkpoint batch, 2026-09-06 — §8.7's real re-render
+> done, human-listen debt narrowed to specific clips, not discharged.**
+> Re-rendered *Заказ Коалфолла* chapter 2 for real against the production
+> workspace: `audioQa.status: "ok"`, segments carry the canonical
+> post-repair ids (`mairin`, `coalfall-dragon`) directly with their own
+> `characterSnapshots` entries and distinct `voiceName`s. Pipeline-native
+> `/embed` cosine for `coalfall-dragon` (internal mean **0.7723** vs.
+> narrator mean **0.5643**) shows a real but noticeably smaller gap than
+> A22's Torment result or A18's own precedent — **stated explicitly as
+> ambiguous, not clear-cut**, plausibly a genuine vocal-timbre similarity or
+> a thin (5/17) sample. `mairin` has only one sampled segment this chapter —
+> no numeric baseline at all. §8.8 (banner cross-check) independently
+> reconfirmed clean on the real book (no orphan chip for either character).
+> **This run does not discharge §8.7** — the row's own text is right that a
+> real render plus a human ear is what closes it, and the embedding evidence
+> here is exactly the ambiguous case that calls for the ear rather than
+> replacing it. **Named clips for the human check**, this fresh chapter-2
+> render: `mairin` at `startSec` 38.94–39.98 / 39.98–42.30 / 46.14–48.62;
+> `coalfall-dragon` at 116.94–118.86 / 187.37–189.13 / 199.05–203.53, against
+> any narrator line in the same chapter. Full evidence:
+> `docs/testing/onbox-human-checkpoint-results/step2-a22-a23.md`.
 
 ### A24 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070), [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678), PR [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797)) · **single 8 GB card; the deviceKey qualification (bullet 5) needs the 2-card boot**
 
@@ -4149,34 +4262,6 @@ The Qwen VoiceDesign pipeline is merged, but the **zh/ja** Coalfall placeholder
 artifacts were never produced. Run the shipped pipeline against them. Distinct from
 D1's five languages, which are done.
 
-### D3 · The re-open bound's recovered turn actually sounds right when voiced ([#2315](https://github.com/dudarenok-maker/Castwright/issues/2315), plan [`docs/superpowers/plans/2026-08-13-primary-pair-straddle.md`](../superpowers/plans/2026-08-13-primary-pair-straddle.md))
-
-The re-open bound (`scanQuoteRuns`, `server/src/analyzer/dialogue-structure/parser.ts`)
-changes run boundaries on real books in all seven supported languages — 1,231
-corpus paragraphs, dominated by `zh` (744) and `fr` (232). Every test in the PR
-scores the recovered span's *text* (never lost, never mid-word) and, separately,
-whether the tag-clause guard keeps a speaker attached — neither measures whether
-the recovered turn *sounds* acceptable once voiced, which is a judgement only a
-real render + a human ear can make.
-
-**What to observe:** generate a chapter of a `zh` or `ja` book that contains a
-continuation paragraph — the design doc's worked example
-(`docs/superpowers/specs/2026-08-13-primary-pair-straddle-design.md` § "What it
-fixes, on real books") quotes two, one already in the Gutenberg corpus this PR's
-own instruments read. Confirm the previously-swallowed inner turn now renders as
-its **own** speech turn, in the character's own cast voice rather than merged
-into the narration/tag reading of the turn before it, and that the boundary
-doesn't land mid-word or drop a syllable. A `ru` or `de` chapter containing one
-of the 3/97 `ru`/`de` corpus paragraphs this PR changes is a secondary, lower-
-priority check — `zh`/`ja` carry the bulk of the real-book delta (744+75 of
-1,231) and are also the two scripts with no case distinction for the CJK-blind
-part of defect 2's corpus proxy, so they are the shapes least covered by any
-other instrument in the PR.
-
-No hardware prerequisite beyond a working TTS engine (Kokoro/Coqui/Qwen, any) —
-listed here rather than under Group A because the debt is about *listening*
-to real output, not about VRAM or a specific card.
-
 ---
 
 ## Group E — not the GPU box
@@ -4254,6 +4339,21 @@ phone** installs the mkcert root CA and completes pairing over `castwright.local
 forcing `LAN_HTTPS=0` or deleting the certs degrades to loopback HTTP without a crash.
 *Shipped* 2026-07-12 after four review rounds.
 
+> **Step 4 of the human-checkpoint batch, 2026-09-06 — 3 of 4 bullets
+> CONFIRMED, phone-pairing bullet BLOCKED-ACQUISITION.** Real
+> `npm run start:lan` boot (non-default `LAN_HTTPS_PORT=9443`, per the
+> register's own non-default-port note): cert-provisioned log line printed
+> verbatim, `https://castwright.local:9443/` loaded the full app shell with
+> no cert warning (only the expected unpaired-401s in console), and
+> degrading to `LAN_HTTPS=0`/plain HTTP served `/api/info` 200 with no crash.
+> **The phone bullet is the one this run cannot supply:** from the host's
+> Admin panel, "Authorize a device" generated a genuine pairing QR/link
+> (`https://castwright.local/#/pair?c=…`), but installing the mkcert root CA
+> and completing pairing from a real phone's own OS trust store is a
+> device-side flow no desktop browser stand-in reduces. **Missing precondition:**
+> a real phone to install the cert and pair. Full evidence:
+> `docs/testing/onbox-human-checkpoint-results/step4-e2-e3-e8.md`.
+
 ### E3 · Pair from `castwright.local` (plan 256)
 
 "On-box acceptance owed — pair a real phone from `https://castwright.local/#/admin`"
@@ -4264,28 +4364,24 @@ request still gets the loopback-only 403 guidance.
 **Same session as E2** — shares the phone + host setup, and E2 is what made
 `castwright.local` the natural URL this depends on.
 
-### E4 · fe-51 engine-recommendation CPU caveat (plan 259)
-
-"On-box acceptance item (real hardware, not mock mode) — owed" (`:183-191`). The
-wizard's CPU caveat claims a low/no-VRAM user can force Qwen onto CPU via the
-voice-engine device setting and still render — slow, not crashing. Never confirmed on
-real hardware. The plan names its own fallback if it turns out false: soften
-`CAVEAT_VRAM` at `server/src/tts/engine-recommendation.ts:34`.
-
-*Needs a real box but specifically the **CPU** path* — pairs naturally with Group B's
-CPU-only sub-cases.
-
-> **Correction, 2026-08-21.** The owner ruled E4 is runnable, not
-> hardware-blocked like the ops-35 ffmpeg floor / ops-36 golden-assembly
-> Blocked rows or B2-step-7 — `tts.qwen.device` is a real
-> user-facing registry knob (`server/src/config/registry.ts:676-682`), not a
-> machine-level hardware constraint. **Wave-4 step 5f attempt, STILL OWED:**
-> port `:9000` was already held by another lane's live sidecar process for
-> the whole session (confirmed via `Get-NetTCPConnection`), so this row could
-> not be safely isolated this run without restarting a sidecar process this
-> worktree does not own — recorded STILL OWED for that reason, not for any
-> hardware limitation. Full evidence:
-> `docs/testing/onbox-wave4-results/step-5f-e4-cpu-caveat.md`.
+> **Step 4 of the human-checkpoint batch, 2026-09-06 — bullets 1-2 CONFIRMED,
+> bullet 3 confirmed in effect but with a literal-text mismatch worth a
+> decision.** A genuine non-loopback client (Playwright's own Chromium
+> navigating `https://castwright.local`, mDNS-resolved, mkcert-trusted, zero
+> cert warnings — the `claude-in-chrome` tool the issue named wasn't
+> connected in this runtime, so this stood in as the client) authorized with
+> `POST /api/pair/redeem-browser` → **201**, and the paired device showed up
+> in `GET /api/devices` and the admin device list under its chosen name.
+> **Bullet 3, checked against a bare LAN IP (`https://192.168.86.20:9443`):**
+> got **401** `"Missing or invalid LAN access token…"`, not the literal
+> loopback-only **403** guidance the row text names — because a bare-IP
+> caller fails the earlier, broader token-gate check before ever reaching the
+> loopback/friendly-hostname-only 403 branch. **Same practical effect** (a
+> bare LAN IP still cannot pair or manage devices) **but a different status
+> code and message than the row's literal wording** — a human/dev call is
+> owed on whether that's an acceptable equivalent or whether the row's text
+> (or the code's branch order) should be reconciled. Full evidence:
+> `docs/testing/onbox-human-checkpoint-results/step4-e2-e3-e8.md`.
 
 ### E5 · fe-39 touch press-feedback — DevTools smoke-check ([#1795](https://github.com/dudarenok-maker/Castwright/pull/1795))
 
@@ -4306,83 +4402,33 @@ wizard "Review ›" chip, voice-library drag icon. Minutes, any machine.
 > missing or broken control. Full evidence:
 > `docs/testing/onbox-wave4-results/step-5d-e5-e7-observations.md`.
 
-### E6 · fe-57 venv-bootstrap progress card — the fix nothing automated can prove ([#1883](https://github.com/dudarenok-maker/Castwright/issues/1883), plan [270](../features/270-openapi-setup-surface.md))
-
-`src/components/venv-bootstrap.tsx` declared `status: 'installing'` — a value
-`server/src/tts/venv-bootstrap.ts` **never emits** (its states are `detecting` /
-`bootstrapping` / `installed` / `error`; `'installing'` is the sibling ollama/coqui/kokoro
-vocabulary, copied here by mistake). So the in-progress branch was dead in production: through
-a real multi-minute venv bootstrap the card never rendered and the user saw the idle
-"Set up the voice engine runtime" button the whole time. **The suite stayed green because the
-component's own tests mocked `'installing'` too** — a placebo over a wire value the server
-cannot produce.
-
-The fix is now typed against the generated contract, so that class of drift is a compile
-error, and an `it.each(['detecting','bootstrapping'])` regression pins the card. **But every
-one of those tests mocks `fetch`.** No automated test has ever driven this component from a
-real bootstrap job, which is precisely how the bug survived in the first place.
-
-Needs a box with **no** `server/tts-sidecar/.venv` (delete it, or a fresh clone). Any machine,
-no GPU. ~2 GB download, several minutes — that duration is the point.
-
-Observe:
-
-1. Setup Wizard → voice-engine step with the venv absent → the "Set up the voice engine
-   runtime" button.
-2. Click it. **Within ~1.5 s the progress card must appear** — spinner, "Setting up the voice
-   engine runtime…", and a live `job.step` line. Before this fix, nothing happened here.
-3. Watch the step text **change** as the job advances (`Starting venv bootstrap…` → pip
-   output). This proves the poll loop and the card are wired to the same job, not just that a
-   card rendered once.
-4. Let it finish → the green "Voice engine runtime ready" card, and `onBootstrapped` refetches
-   so the parent's status flips without a reload.
-5. **The `detecting` window is brief** — if you miss it, that is fine; step 2 covers the
-   pre-terminal render. Do not report a missed `detecting` frame as a failure.
-6. Failure path, if cheap to induce (e.g. no Python 3.12 on PATH): the red "Setup failed" card
-   with the server's message, and a working "Try again".
-
-> **Wave-3 step 7, 2026-08-20 — split, server half DISCHARGED, rendered half
-> OPERATOR.** The job/poll wiring underneath the card (`POST
-> /api/setup/venv/bootstrap`, `GET /api/setup/venv/bootstrap/:id`) was run
-> for real against a genuinely absent venv (this worktree's own, never
-> deleted from a live one) — a real 8m49s `bootstrap-venv.mjs` subprocess
-> with distinct polled step values across the whole run and a genuine
-> terminal `installed` state, independently confirmed via `detect` and the
-> filesystem. This is the exact wiring the row's own text says "no
-> automated test has ever driven... from a real bootstrap job," proven
-> not-mocked. **Observations 1, 2, 4, 5, 6 remain owed** — they are rendered-
-> page states (spinner, card timing, green ready card, refetch-without-
-> reload, failure card) with no API-only substitute stated in the row.
-> **Still owed to the operator** — observations 1, 2, 4, 5, 6 above have not
-> been run; this row is not discharged, only its server/poll half is.
-> **Correction, 2026-08-20:** this row previously stated the join to
-> `onbox-sitting-device-browser.md` as if it had already happened; it had
-> not — the pack's own row list and minute total were never updated to
-> include E7 (confirmed empty diff against the pack file across all of wave
-> 3). That gap is fixed in the same round: E7 is now folded into
-> `onbox-sitting-device-browser.md` alongside E1, E2, E3, E5, E6, E9, E10,
-> and `onbox-sitting-plan.md` §2.1/§2.2 are corrected to move E7's
-> rendered-half debt from the wave-3 agent-runnable set to that operator
-> pack — the same pattern already used for A32/A41.
-> `docs/testing/onbox-wave3-results/step-7-e7-e8.md`.
->
-> **Wave-4 step 5d, 2026-08-21 — split further, shrinks.** Observations 1, 2,
-> the timing/no-flash behaviour, 4 (green ready card), and 5 (refetch
-> without reload) are all **DISCHARGED** live, via a real ~8m55s
-> `bootstrap-venv.mjs` subprocess against a genuinely absent venv, in a real
-> browser tab held open the whole run. Two genuine findings, not failures,
-> flagged alongside: (a) `sidecarVenvPresent()` can read "ready" before pip
-> install actually finishes — a follow-up worth its own issue, not a fail of
-> this row; (b) the auto-transition on completion lands on the setup
-> **summary board**, not a lingering ready-card inside the step-voice
-> drill-down — a UX note, not evidence against "no reload". **Observation 6
-> (the failure path, e.g. no Python 3.12 on PATH) was NOT attempted** —
-> inducing a real failure now would mean breaking a venv that just finished a
-> real 9-minute install, or interrupting a live subprocess, both of which
-> risk the shared box. Observation 6 is this row's one remaining debt. Full
-> evidence: `docs/testing/onbox-wave4-results/step-5d-e5-e7-observations.md`.
-
----
+> **Step 6 of the human-checkpoint batch, 2026-09-06 — all three remaining
+> controls attempted for real, all STILL OWED, with real diagnostic
+> findings.** Pushed a real book all the way through import → Ollama
+> analysis → Kokoro render → a resume bookmark, to get a populated library
+> (the environment gap wave-4 stopped at). Real synthesized touch (CDP
+> `Input.dispatchTouchEvent`, `hasTouch:true` Pixel-7 profile) reached all
+> reachable controls and produced genuine click-through (real navigation on
+> every tap), but: **continue-listening play badge** and **"Add book" tile**
+> showed **no measurable `:active`-driven style change** under this session's
+> touch method — checked three ways (150ms/500ms sampling, an inserted
+> `touchMove`, a `touchstart` listener reading `:active` count directly),
+> all came back empty/unchanged. **Voice-library drag icon is structurally
+> unreachable, not just untested** — traced in source: the Cast view's two
+> `VoiceLibraryPanel` call sites both pass `onTapAssign` unconditionally, so
+> the drag-icon branch is dead code there; the one call site that omits it
+> (the global `/#/voices` page) still marks the icon `hidden md:inline`,
+> CSS-invisible below the 768px breakpoint a touch viewport needs. **Two
+> remaining questions for a human:** (1) is the `:active` non-firing a real
+> regression, or an artifact of this session's shared Playwright-MCP
+> Chromium instance (wave-4's own discharged fourth control saw a real
+> color change under nominally the same CDP-touch method, but from a
+> different, standalone Playwright process) — retest via a standalone
+> script or real device/DevTools touch emulation before concluding
+> anything; (2) is the drag-icon dead code worth its own cleanup issue, or
+> intentional now that touch users are meant to use the `Assign` pill
+> instead. Full evidence:
+> `docs/testing/onbox-human-checkpoint-results/step6-e5.md`.
 
 ### E7 · ORT marker — the Pinokio update path ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **group with E1**
 
@@ -4423,61 +4469,6 @@ than taking some code path only the server-mediated call exercises.
 profile. *Cost:* 20–40 minutes, sharing setup with E1. *Criteria:* design doc
 §On-box acceptance item 4; run sheet §6 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
-
-### E8 · revoke is loopback-only — the forwarder boundary and the copy that replaces the button ([#2269](https://github.com/dudarenok-maker/Castwright/issues/2269), PR [#2280](https://github.com/dudarenok-maker/Castwright/pull/2280), plan [225](../features/225-lan-browser-device-auth.md)) · **group with E2/E3**
-
-`DELETE /api/devices/:id` is now gated to true loopback. Nothing automated reaches
-the real boundary: the server test **fabricates** a request object with
-`req.ip = '127.0.0.2'`, and the frontend test **stubs** `window.location`. Both are
-correct unit tests and neither has ever seen the actual `:443` forwarder, which is
-what makes the host's own browser non-loopback in the first place
-(`lan-port-forwarder.ts` dials upstream with `localAddress: '127.0.0.2'`, and it is
-host-blind, so a phone on `castwright.local` is indistinguishable from the desktop
-there). The narrowing is also user-visible, and the replacement copy is the only
-thing standing between an owner and "the button vanished with no explanation."
-
-- From **`https://localhost:<port>`** (the direct port, NOT the `:443` shortcut):
-  Revoke a device — it succeeds and the row drops out of the list. This is the one
-  address the feature leaves working; if it fails, the gate is too tight.
-- From **`https://localhost/`** (port 443, through the forwarder): the Revoke
-  button still **renders** — `isLoopbackHost()` is a hostname-only client-side
-  heuristic that cannot see the forwarder — and pressing it returns 403. Confirm
-  the error shown is the actionable sentence naming the direct-port address, **not**
-  a raw `revoke failed (403)`, **and that the port in it is the one you actually
-  bound** (see the run-with-a-non-default-port note below).
-- From **`https://castwright.local` on a phone**: no Revoke control on any row, and
-  the explanation renders **once below the device list, not once per row**. Check
-  this with **at least 3 paired devices** — per-row rendering was the shape caught
-  in review, and with one device the bug is invisible. Confirm it is legible at
-  phone width and does not crush the label/date columns.
-- **The security half, and the reason the row exists:** from a paired phone (or any
-  LAN device holding a valid credential), call `DELETE /api/devices/<the host's own
-  record id>` directly — the id is in `GET /api/devices`, which that device can
-  read. Expect **403**, and confirm afterwards via the host UI that the host's
-  record is **still live, not revoked**. Before #2269 this succeeded and locked the
-  owner out of their own install.
-
-**Run this with a NON-DEFAULT `LAN_HTTPS_PORT`** — e.g. `LAN_HTTPS_PORT=9443`.
-This is not a nicety, it is what makes two of the bullets above mean anything.
-Every one of these hint strings hardcoded `https://localhost:8443` until
-[#2278](https://github.com/dudarenok-maker/Castwright/issues/2278) (PR
-[#2294](https://github.com/dudarenok-maker/Castwright/pull/2294)) made them read
-the actually-bound port. **On a default-port box the old hardcoded string and the
-new dynamic one render identically**, so the run would pass without proving the
-fix — the same trap the automated tests avoid by pinning 9443 rather than 8443.
-A non-default port also exercises the case the fix exists for: an operator who
-moved the port had, until #2278, no way to discover the one address revoke works
-from. (Note production auto-rebind can move the port again beyond whatever you
-set; the bound value is the one in the server's own startup line.)
-
-*Needs:* the LAN HTTPS server running with the `:443` forwarder actually bound
-(`npm run start:lan`; no elevation required on Windows — see plan 283's ship
-notes), a **non-default `LAN_HTTPS_PORT`** per the note above, plus a phone or
-second machine paired over `castwright.local`. *Cost:* 15–20 minutes; shares its
-whole setup with E2 and E3, so run the three together. *Criteria:* PR
-[#2280](https://github.com/dudarenok-maker/Castwright/pull/2280) body and PR
-[#2294](https://github.com/dudarenok-maker/Castwright/pull/2294) body; plan 225
-§Invariants item 6.
 
 ### E9 · `measure-attribution.mjs` against the real workspace ([#1984](https://github.com/dudarenok-maker/Castwright/issues/1984) Wave 1, [plan](../superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md)) · **real workspace, no GPU needed**
 

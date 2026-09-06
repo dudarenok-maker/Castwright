@@ -1144,15 +1144,6 @@
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1600">#1600</a></p>
       </div>
     </details>
-    <details class="item">
-      <summary><span class="num">D3</span><span class="iname">The recovered turn sounds right when voiced</span><span class="risk">Ear-only</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>The re-open bound changes run boundaries on real books in all seven supported languages — <b>1,231 corpus paragraphs</b>, dominated by <span lang="zh">zh</span> (744) and fr (232). Every test in the PR scores the recovered span's <i>text</i> (never lost, never mid-word) and, separately, whether the tag-clause guard keeps a speaker attached. Neither measures whether the recovered turn <b>sounds</b> acceptable once voiced — a judgement only a real render and a human ear can make.</p>
-        <p><b>What to observe:</b> generate a chapter of a <span lang="zh">zh</span> or <span lang="ja">ja</span> book containing a continuation paragraph (the design doc quotes two, one already in the Gutenberg corpus this PR's own instruments read). Confirm the previously-swallowed inner turn now renders as its <b>own</b> speech turn, in the character's own cast voice rather than merged into the narration/tag reading of the turn before it, and that the boundary lands neither mid-word nor a syllable short.</p>
-        <p>A ru or de chapter is a secondary, lower-priority check — <span lang="zh">zh</span>/<span lang="ja">ja</span> carry the bulk of the real-book delta (744+75 of 1,231) and are the two scripts with no case distinction, so they are the shapes least covered by any other instrument in the PR.</p>
-        <p class="src">No hardware prerequisite beyond a working TTS engine (Kokoro/Coqui/Qwen, any) — listed here rather than under Group A because the debt is about <i>listening</i> to real output, not about VRAM or a specific card · <a href="https://github.com/dudarenok-maker/Castwright/issues/2315">#2315</a></p>
-      </div>
-    </details>
   </section>
 
   <!-- E -->
@@ -1187,41 +1178,12 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">E4</span><span class="iname">fe-51 engine-recommendation CPU caveat (plan 259)</span><span class="risk low">Pairs with group B</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>The wizard's CPU caveat claims a low/no-VRAM user can force Qwen onto CPU via the voice-engine device setting and still render — slow, not crashing. <b>Never confirmed on real hardware.</b></p>
-        <p>The plan names its own fallback if it turns out false: soften <code>CAVEAT_VRAM</code> at <code>server/src/tts/engine-recommendation.ts:34</code>.</p>
-        <p class="src">Needs a real box but specifically the <b>CPU</b> path — pairs naturally with Group B's CPU-only sub-cases · <code>plan 259:183-191</code></p>
-        <div class="flag"><b>Correction, 2026-08-21.</b> The owner ruled E4 is runnable, not hardware-blocked like the ops-35 ffmpeg floor / ops-36 golden-assembly Blocked rows or B2-step-7 — <code>tts.qwen.device</code> is a real user-facing registry knob, not a machine-level hardware constraint. <b>Wave-4 attempt, STILL OWED:</b> port <code>:9000</code> was already held by another lane's live sidecar process for the whole session, so this row could not be safely isolated this run without restarting a sidecar this worktree does not own.</div>
-      </div>
-    </details>
-    <details class="item">
       <summary><span class="num">E5</span><span class="iname">fe-39 touch press-feedback — DevTools smoke-check</span><span class="risk low">Minutes, any machine</span><span class="chev">›</span></summary>
       <div class="body">
         <p>The behavioural touch-flash is confirmed by construction but not by an automated test (jsdom cannot compile the variant); a one-time DevTools touch-emulation check is the spec's accepted proof.</p>
         <p>Four controls: continue-listening play badge, “Add book” tile, wizard “Review ›” chip, voice-library drag icon.</p>
         <div class="flag"><b>Wave-4 step 5d, 2026-08-21 — 1 of 4 DISCHARGED, shrinks.</b> The wizard "Review ›" chip is <b>DISCHARGED</b> via real synthesized touch (CDP <code>Input.dispatchTouchEvent</code>, <code>hasTouch:true</code>). The other three controls (continue-listening play badge, "Add book" tile, voice-library drag icon) are <b>STILL OWED</b> — this worktree's workspace has 0 books, a genuine environment limitation, not a missing control.</div>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/pull/1795">#1795</a></p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">E6</span><span class="iname">fe-57 venv-bootstrap progress card</span><span class="risk hot">A placebo test hid this</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p><code>venv-bootstrap.tsx</code> declared <code>status: 'installing'</code> — a value the server <b>never emits</b> (its states are <code>detecting</code> / <code>bootstrapping</code> / <code>installed</code> / <code>error</code>; <code>'installing'</code> is the sibling ollama/coqui/kokoro vocabulary, copied here by mistake). The in-progress branch was dead in production: through a real multi-minute bootstrap the card never rendered and the user saw the idle button the whole time.</p>
-        <div class="flag"><b>The suite stayed green because the component's own tests mocked <code>'installing'</code> too</b> — a placebo over a wire value the server cannot produce. The fix is now typed against the generated contract, so that drift is a compile error — but <b>every one of those tests still mocks <code>fetch</code></b>. No automated test has ever driven this component from a real bootstrap job, which is precisely how the bug survived.</div>
-        <p>Needs a box with <b>no</b> <code>server/tts-sidecar/.venv</code> (delete it, or a fresh clone). Any machine, no GPU. ~2 GB download, several minutes — that duration is the point.</p>
-        <ul>
-          <li>Setup Wizard → voice-engine step with the venv absent → the “Set up the voice engine runtime” button.</li>
-          <li>Click it. <b>Within ~1.5 s the progress card must appear</b> — spinner, “Setting up the voice engine runtime…”, and a live <code>job.step</code> line. Before this fix, nothing happened here.</li>
-          <li>Watch the step text <b>change</b> as the job advances. This proves the poll loop and the card are wired to the same job, not just that a card rendered once.</li>
-          <li>Let it finish → the green “Voice engine runtime ready” card, and <code>onBootstrapped</code> refetches so the parent flips without a reload.</li>
-          <li>The <code>detecting</code> window is brief — <b>a missed <code>detecting</code> frame is not a failure.</b></li>
-          <li>Failure path, if cheap to induce (no Python 3.12 on PATH): the red “Setup failed” card with the server's message, and a working “Try again”.</li>
-        </ul>
-        <div class="flag"><b>Wave-3 step 7, 2026-08-20 — split, server half DISCHARGED, rendered half OPERATOR.</b> The job/poll wiring (<code>POST/GET /api/setup/venv/bootstrap</code>) was run for real against a genuinely absent venv — a real 8m49s <code>bootstrap-venv.mjs</code> subprocess with distinct polled step values and a genuine terminal <code>installed</code> state, confirmed via <code>detect</code> and the filesystem. <b>Observations 1, 2, 4, 5, 6 remain owed</b> — rendered-page states with no API-only substitute. <b>Still owed to the operator</b> — this row is not discharged, only its server/poll half is. <b>Correction, 2026-08-20:</b> this row previously stated the join to <code>onbox-sitting-device-browser.md</code> as if it had already happened; it had not — the pack's own row list and minute total were never updated to include E7. Fixed in the same round: E7 is now folded into <code>onbox-sitting-device-browser.md</code> alongside E1, E2, E3, E5, E6, E9, E10, and <code>onbox-sitting-plan.md</code> §2.1/§2.2 are corrected to move E7's rendered-half debt from the wave-3 agent-runnable set to that operator pack — the same pattern already used for A32/A41. <code>docs/testing/onbox-wave3-results/step-7-e7-e8.md</code></div>
-        <div class="flag"><b>Wave-4 step 5d, 2026-08-21 — split further, shrinks.</b> Observations 1, 2, the timing/no-flash behaviour, 4 (green ready card), and 5 (refetch without reload) are all <b>DISCHARGED</b> live via a real ~8m55s <code>bootstrap-venv.mjs</code> subprocess. Two genuine findings flagged, not failures: <code>sidecarVenvPresent()</code> can read "ready" before pip install finishes; the auto-transition lands on the summary board, not the step-voice drill-down. <b>Observation 6 (the failure path) was NOT attempted</b> — inducing a real failure now would risk a venv that just finished a real install. Observation 6 is this row's one remaining debt.</div>
-
-        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1883">#1883</a> · plan 270</p>
       </div>
     </details>
     <details class="item">
@@ -1235,20 +1197,6 @@
           <li><b>In the same session, also run a fresh Install</b> and confirm the same outcome — a second shape of this criterion, not a separate row.</li>
         </ul>
         <p class="src">A machine with Pinokio, an existing pre-fix install, nvidia profile · 20–40 min, sharing setup with E1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 4</p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">E8</span><span class="iname">Revoke is loopback-only — the forwarder boundary</span><span class="risk">Every test fabricates the peer or stubs location</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p><code>DELETE /api/devices/:id</code> is now gated to true loopback. Nothing automated reaches the real boundary: the server test <b>fabricates</b> a request with <code>req.ip = &#39;127.0.0.2&#39;</code>, and the frontend test <b>stubs</b> <code>window.location</code>. Neither has ever seen the actual <code>:443</code> forwarder — which is what makes the host&#39;s own browser non-loopback, because it dials upstream with <code>localAddress: &#39;127.0.0.2&#39;</code> and is host-blind, so a phone on <code>castwright.local</code> is indistinguishable from the desktop there.</p>
-        <ul>
-          <li>From <b><code>https://localhost:&lt;port&gt;</code></b> (the direct port, not the <code>:443</code> shortcut): Revoke succeeds and the row drops out. This is the one address the feature leaves working — if it fails, the gate is too tight.</li>
-          <li>From <b><code>https://localhost/</code></b> (port 443, through the forwarder): the button still <b>renders</b> (<code>isLoopbackHost()</code> is hostname-only and cannot see the forwarder) and returns 403. Confirm the error is the actionable sentence naming the direct-port address, <b>not</b> a raw <code>revoke failed (403)</code> — <b>and that the port in it is the one you actually bound</b> (see the non-default-port note below).</li>
-          <li>From <b><code>castwright.local</code> on a phone</b>: no Revoke control on any row, and the explanation renders <b>once below the list, not once per row</b> — check with <b>at least 3 paired devices</b>, since with one device that bug is invisible. Confirm it stays legible at phone width.</li>
-          <li><b>The security half, and the reason this row exists:</b> from a paired phone, call <code>DELETE /api/devices/&lt;the host&#39;s own record id&gt;</code> (the id is in <code>GET /api/devices</code>, which that device can read). Expect <b>403</b>, then confirm via the host UI that the host&#39;s record is <b>still live</b>. Before #2269 this succeeded and locked the owner out of their own install.</li>
-        </ul>
-        <div class="flag"><b>Run this with a NON-DEFAULT <code>LAN_HTTPS_PORT</code></b> (e.g. <code>9443</code>) — it is what makes two of the bullets above mean anything. Every one of these hint strings hardcoded <code>https://localhost:8443</code> until <a href="https://github.com/dudarenok-maker/Castwright/issues/2278">#2278</a> (<a href="https://github.com/dudarenok-maker/Castwright/pull/2294">PR #2294</a>) made them read the actually-bound port, so <b>on a default-port box the old hardcoded string and the new dynamic one render identically</b> and the run would pass without proving the fix — the same trap the automated tests avoid by pinning 9443 rather than 8443. It also exercises the case the fix exists for: an operator who moved the port had no way to discover the one address revoke works from. Production auto-rebind can move the port again beyond whatever you set; the bound value is the one in the server&#39;s own startup line.</div>
-        <p class="src">LAN HTTPS with the <code>:443</code> forwarder actually bound (no elevation needed on Windows), a <b>non-default <code>LAN_HTTPS_PORT</code></b>, plus a phone paired over <code>castwright.local</code> · 15–20 min, shares setup with E2/E3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/2269">#2269</a> · <a href="https://github.com/dudarenok-maker/Castwright/pull/2280">PR #2280</a> · <a href="https://github.com/dudarenok-maker/Castwright/pull/2294">PR #2294</a> · plan 225 invariant 6</p>
       </div>
     </details>
     <details class="item">
