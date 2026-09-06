@@ -50,7 +50,7 @@ function state(
 }
 
 describe('selectCloneReadinessVerdicts', () => {
-  it('rule 7 silence: a real coqui CAST slot stays silent even though the library entry has no xtts slot yet (characterHasSlot must read the CAST slot, never the library slot)', () => {
+  it('rule 8 silence: a real coqui CAST slot stays silent even though the library entry has no xtts slot yet (characterHasSlot must read the CAST slot, never the library slot)', () => {
     const c = char({
       ttsEngine: 'coqui',
       overrideTtsVoices: { coqui: { name: 'v1', libraryUuid: 'v1', provenance: 'cloned' } },
@@ -96,7 +96,7 @@ describe('selectCloneReadinessVerdicts', () => {
     expect(verdicts).toEqual([expect.objectContaining({ reason: 'derive-failed' })]);
   });
 
-  it('rule 7 silence: a qwen-cloned voice on a coqui-routed character with BOTH cast slots present (post-#1933 assign) does not fire', () => {
+  it('rule 8 silence: a qwen-cloned voice on a coqui-routed character with BOTH cast slots present (post-#1933 assign) does not fire', () => {
     const c = char({
       ttsEngine: 'coqui',
       overrideTtsVoices: {

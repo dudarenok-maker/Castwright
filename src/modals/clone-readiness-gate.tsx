@@ -130,7 +130,7 @@ function CloneVerdictRow({
   const onRetryDerive = async () => {
     /* `isCloneEngine` narrows `verdict.engine` (`TtsEngine`) to `CloneEngine`
        for the retry route's param type. Always true at runtime here — rule
-       4 (`derive-failed`) is only reached after rule 3 confirms the engine
+       5 (`derive-failed`) is only reached after rule 4 confirms the engine
        IS clone-capable (clone-readiness.ts) — but TypeScript can't see that
        from the verdict's shape, so the guard makes it explicit rather than
        casting. */

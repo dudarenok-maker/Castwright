@@ -16,7 +16,7 @@
       slot for THIS engine — never the library entry's slot (a Qwen clone has
       no `xtts` library slot, so reading the library slot makes the ordinary
       Coqui-routed case misreport `wrong-engine`) and never the engine-
-      agnostic `characterHasClonedSlot` (which would make rule 3 true for
+      agnostic `characterHasClonedSlot` (which would make rule 4 true for
       every cloned character, reinstating the generic-substitution trap).
    2. Library slot lookup goes through `manifestSlotFor` — `coqui` maps to
       manifest slot `xtts`. Never index `entry.engines.coqui`.

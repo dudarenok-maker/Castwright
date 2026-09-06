@@ -40,7 +40,7 @@
  *   A. The same broken-qwen cast, routed to Coqui instead of Qwen -> NO gate
  *      (the check is engine-aware, not a blanket "this voice is broken").
  *   B. A healthy cloned voice with BOTH cast slots present (clip + transcript
- *      intact) on a Coqui-routed character -> NO gate (rule 7 silence),
+ *      intact) on a Coqui-routed character -> NO gate (rule 8 silence),
  *      reached through the real, un-intercepted mock fixture. */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -308,7 +308,7 @@ test.describe('Plan 276 — cast-time clone-readiness gate', () => {
     await setSessionModelKey(page, 'coqui-xtts-v2');
     /* No interceptor here — `lib-cloned-demo` reaches the client exactly as
        the real (un-intercepted) mock fixture defines it: qwen AND xtts both
-       `ready`, transcript `'demo'`. Rule 7 silence. */
+       `ready`, transcript `'demo'`. Rule 8 silence. */
 
     await clickApproveCast(page);
     await confirmTierPromptIfPresent(page);

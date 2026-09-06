@@ -207,11 +207,11 @@ Rules, in order — the order is the contract:
    `no-transcript`. **[R3]**
 7. otherwise → `null` (ready, or needs a derive that will succeed).
 
-**[R3] Why rules 5 and 6 are gated on `!== 'ready'`.** `classifyClonedVoice` only
+**[R3] Why rules 6 and 7 are gated on `!== 'ready'`.** `classifyClonedVoice` only
 reaches `missing-master` *via* `needsDerive` (`clone-voice-resolver.ts:241-246`): a
 `ready` slot with a live `.pt` and no master is **healthy**, an explicitly
-supported state (`voice-library.ts:1249-1251`). Ungated, rule 5 warns on a working
-voice with no CTA, and rule 6 would tell the user to "fix" a voice that renders —
+supported state (`voice-library.ts:1249-1251`). Ungated, rule 6 warns on a working
+voice with no CTA, and rule 7 would tell the user to "fix" a voice that renders —
 after which Decision 6's write would flip `transcriptSource` on a healthy entry.
 Rev 2 died on a false negative here; ungated, rev 3 would have overcorrected into a
 false positive. The gate is sound client-side precisely because of Decision 2's
@@ -222,7 +222,7 @@ slot whose `.pt` was deleted — is the disk-integrity gap Decision 2 accepts.
 `characterHasSlot` is the **cast** slot: `hasClonedProvenance(character, engine)`
 (`clone-engines.ts:113-124`), single-engine. It is **not**
 `characterHasClonedSlot`, which takes one argument and is engine-*agnostic*
-("cloned on ANY clone-capable engine", `:77-94`) — wiring that in makes rule 3 true
+("cloned on ANY clone-capable engine", `:77-94`) — wiring that in makes rule 4 true
 for any cloned character, reinstating the generic-substitution trap. And it is
 **not** the library entry's slot: a voice cloned on Qwen has no `xtts` slot
 (`voice-library.ts:1126` writes only `qwen`), so reading the library slot makes the
@@ -340,8 +340,8 @@ binary case exactly: a qwen-routed character has only `coqui` as a candidate.
 The routed-engine exclusion is **semantically right but not currently
 distinguishable by any test**, and that was verified rather than assumed:
 re-including the routed engine recomputes `characterHasSlot` to the same value
-that produced the `wrong-engine` verdict, so it always self-rejects on rule 3.
-It is kept as defence against a third clone-capable engine or a relaxed rule 3.
+that produced the `wrong-engine` verdict, so it always self-rejects on rule 4.
+It is kept as defence against a third clone-capable engine or a relaxed rule 4.
 Do not delete it as dead, and do not write a test that pretends to cover it.
 
 The per-candidate formula is unchanged:
@@ -431,11 +431,11 @@ derive rewrites the slot with its own version stamp. Nothing else needs resettin
 
 **[R3] Why this does not reintroduce the loop it exists to prevent.** Clearing a
 stamp is not a fix, and a CTA that silently reported success would recreate #1980.
-It does not, because rule 4 is ordered *before* rules 5 and 6: once the stamp is
+It does not, because rule 5 is ordered *before* rules 6 and 7: once the stamp is
 gone, the predicate re-evaluates the **underlying cause**. A `derive-failed` voice
 with a blank transcript immediately reports `no-transcript` and the gate stays up
 with the CTA that actually fixes it. Only a failure whose cause is not expressible
-in rules 5–6 (a sidecar OOM, say) clears to `null` and can fail again — that
+in rules 6–7 (a sidecar OOM, say) clears to `null` and can fail again — that
 residue is real, is why the CTA is labelled "Retry derive" rather than "Fix", and
 a repeated failure simply re-stamps.
 
@@ -480,9 +480,9 @@ after round 3 — including two of rev 3's own that were themselves placebos.
   present, Coqui → `null`. *The most important case* — rev 1's fatal bug and the
   ordinary healthy path.
 - `no-transcript` on Qwen; the identical input on Coqui → `null`.
-- `slotStatus: 'ready'` + blank transcript + Qwen → `null`. Mutation: ungate rule 6
+- `slotStatus: 'ready'` + blank transcript + Qwen → `null`. Mutation: ungate rule 7
   → red. **[R3]** (rev 3's false positive)
-- `slotStatus: 'ready'` + `hasMaster: false` → `null`. Mutation: ungate rule 5 →
+- `slotStatus: 'ready'` + `hasMaster: false` → `null`. Mutation: ungate rule 6 →
   red. **[R3]**
 - `slotStatus: 'stale'` + blank transcript + Qwen → `no-transcript`.
   **[R4] Mutation corrected:** rev 3 named "restore rev 2's
@@ -490,13 +490,13 @@ after round 3 — including two of rev 3's own that were themselves placebos.
   guard is false for a `'stale'` input by construction, so it cannot redden any
   fixture, and an implementer who runs it as written gets a green suite and a
   false all-clear. The mutation that actually targets this case is **narrowing
-  rule 6's gate from `slotStatus !== 'ready'` to `slotStatus === undefined`**
+  rule 7's gate from `slotStatus !== 'ready'` to `slotStatus === undefined`**
   (i.e. "only warn if never derived"), which is the plausible wrong
   implementation. Verified red on exactly this case.
 - `entryFound: false` → `missing-entry`. **[R3]**
-- **[R4] One case per verdict — rules 2, 4 and 5 must each be asserted
+- **[R4] One case per verdict — rules 2, 5 and 6 must each be asserted
   positively**, on an otherwise-healthy input: `consentRevoked` → `revoked`,
-  `slotStatus: 'failed'` → `derive-failed`, and (on **Coqui**, so rule 6 cannot
+  `slotStatus: 'failed'` → `derive-failed`, and (on **Coqui**, so rule 7 cannot
   supply the verdict instead) `!hasMaster` → `missing-master`. Without these,
   each of those three rules can be **deleted outright** with the whole suite
   still green — measured, not hypothesised. Every mutation rev 3 named probes a

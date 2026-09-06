@@ -5,7 +5,7 @@
    rendered when one exists" is satisfiable by a single always-on button).
 
    `selectCloneReadinessVerdicts` is mocked — it has its own exhaustive
-   suite at `src/store/clone-readiness-selectors.test.ts` (rule 7 silence,
+   suite at `src/store/clone-readiness-selectors.test.ts` (rule 8 silence,
    the C1 regression, the characterHasSlot trap, etc.); this file's job is
    the CONSUMER: given a verdict, does the modal render the right row, the
    right CTA, and nothing else. */
