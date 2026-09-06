@@ -36,9 +36,17 @@ export interface CharacterCentroid {
   /** Mean cosine of the anchor-eligible set against this centroid.
    *  Used as the accept-check threshold in the auto-fix route (Task 13). */
   cleanMean: number;
-  /** Percentile value at CUTOFFS.severeEdgePctl (E — severe-edge boundary). */
+  /** Band boundary at the severe edge (E — severe-edge boundary). Either a percentile value
+   *  (when `bandMethod` is 'percentile'), or a sigma-based threshold (when `bandMethod` is
+   *  'synthetic-sigma' and the pool is tight), or a percentile value from the dispersion
+   *  fallback (when `bandMethod` is 'synthetic-sigma' but pool dispersion triggered the
+   *  percentile fallback). Check the `bandMethod` field to determine which computation was used. */
   pSevere: number;
-  /** Percentile value at CUTOFFS.bandUpperPctl (U — inconclusive-band upper boundary). */
+  /** Band boundary at the inconclusive-band upper boundary (U — inconclusive-band upper boundary).
+   *  Either a percentile value (when `bandMethod` is 'percentile'), or a sigma-based threshold
+   *  (when `bandMethod` is 'synthetic-sigma' and the pool is tight), or a percentile value from
+   *  the dispersion fallback (when `bandMethod` is 'synthetic-sigma' but pool dispersion triggered
+   *  the percentile fallback). Check the `bandMethod` field to determine which computation was used. */
   pBand: number;
   /** How this centroid was built:
    *  - 'in-book': from the character's own clean anchor segments (in-book mode)

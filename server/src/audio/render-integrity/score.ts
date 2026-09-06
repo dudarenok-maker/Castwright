@@ -193,13 +193,17 @@ export function cosineToCentroid(vec: number[], centroid: number[]): number {
  *
  * @param cosine      Cosine similarity of this segment's embedding to the
  *                    character's centroid (from `cosineToCentroid`).
- * @param spread      The character's own percentile cutoffs:
- *                    - `pSevere`: percentile value at `CUTOFFS.severeEdgePctl`
- *                      (E — the severe-edge boundary).
- *                    - `pBand`: percentile value at `CUTOFFS.bandUpperPctl`
- *                      (U — the inconclusive-band upper boundary).
- *                    Passed in by the aggregate (Task 9) after calling
- *                    `percentile()` on the character's clean cosine distribution.
+ * @param spread      The character's band boundaries (may be computed by different methods):
+ *                    - `pSevere`: band boundary at the severe edge (E).
+ *                    - `pBand`: band boundary at the inconclusive-band upper boundary (U).
+ *                    Computed by the aggregate after either:
+ *                    (a) calling `percentile()` on the character's clean cosine
+ *                        distribution (real-anchor path), producing percentile values, or
+ *                    (b) calling `syntheticOnlySpread()` for synthetic-only audition pools,
+ *                        which may return sigma-based thresholds (tight pool) or percentile
+ *                        values from the dispersion fallback (loose/degenerate pool).
+ *                    Check the `bandMethod` field in CharacterCentroid to determine which
+ *                    computation method was used (stored when persisting the centroid).
  * @param durationSec Rendered segment duration in seconds.
  * @returns           `{ verdict: Verdict; severity: 'severe'|'inconclusive'|null }`.
  *
