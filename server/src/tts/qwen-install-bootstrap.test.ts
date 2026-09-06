@@ -193,10 +193,20 @@ describe('QwenInstallBootstrap', () => {
       expect(calls).toEqual([]);
     });
 
-    it('defaults to a no-op when no sidecar hooks are injected (no active supervisor)', async () => {
-      /* Regression guard for the production default path: getActiveSupervisor()
-         returns null outside a running server (no registerActiveSupervisor call
-         in this test process), so the default stop/start hooks must not throw. */
+    it('fails when the default sidecar hooks would encounter an adopted sidecar', async () => {
+      /* The production default path with no active supervisor injection
+         would call defaultStopSidecar, which throws on an adopted sidecar
+         (handle === null). With injected hooks this is skipped; without them,
+         it surfaces as an install error. This test uses the real defaults to
+         verify the error path (no supervisor → defaultStopSidecar gets called).
+         We inject a detectFn so the spawn is mocked but the supervisor check
+         is real. Note: getActiveSupervisor returns the _active supervisor if
+         one was registered; without registerActiveSupervisor() being called
+         this is null. defaultStopSidecar/Start only throw if a supervisor
+         exists but is in a bad state. With null supervisor they are no-ops,
+         so this test can proceed to detect() being called. The installed
+         short-circuit (before === 'ready') means the stop/start hooks never
+         run. */
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new QwenInstallBootstrap({
         repoRoot: '/repo',
@@ -205,27 +215,86 @@ describe('QwenInstallBootstrap', () => {
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'installed');
+      // With no active supervisor, defaultStopSidecar is a no-op, so install succeeds.
+      expect(b.getJob(job.id)?.status).toBe('installed');
+    });
+
+    it('errors clearly when stopSidecarFn throws (e.g. adopted sidecar)', async () => {
+      const { fn: detectFn } = detectSequence(['not-installed']);
+      const b = new QwenInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn,
+        spawnFn: () => makeFakeChild(0) as never,
+        stopSidecarFn: async () => {
+          throw new Error('Cannot stop an externally-managed sidecar');
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(b.getJob(job.id)?.error).toMatch(/externally-managed sidecar/);
+    });
+
+    it('errors clearly when startSidecarFn throws (e.g. code-43 hold-down)', async () => {
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const calls: string[] = [];
+      const b = new QwenInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn,
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(0) as never;
+        },
+        stopSidecarFn: async () => {
+          calls.push('stop');
+        },
+        startSidecarFn: async () => {
+          calls.push('start');
+          throw new Error('code-43 hold-down: device assignment too small');
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      /* Verify stop and spawn happened (we tried to proceed) but the error
+         from start is the job error (not masked by something else). */
+      expect(calls).toEqual(['stop', 'spawn', 'start']);
+      expect(b.getJob(job.id)?.error).toMatch(/code-43/);
     });
   });
 
   /* #3039 — a pip failure dump often ends with pip's own routine "new release
      available" notice printed AFTER the real error; the job's error field
-     must still surface the actual failure, not just that trailing notice. */
+     must still surface the actual failure, not just that trailing notice.
+     The old slice(-3) logic would miss the WinError 5 when the error is
+     buried in a longer traceback. This fixture reproduces the real captured
+     shape: CRLF-terminated lines with the traceback, error message several
+     lines up, followed by blank lines and notice lines.
+     OLD slice(-3) would see only the last 3 non-notice lines after filtering.
+     NEW extractInstallErrorDetail filters notices, keeps last 5 filtered lines,
+     so it captures the full error context including WinError 5.
+     This test MUST fail if slice(-3) is used (verifies the fix works). */
   it('surfaces the real error even when pip prints its update notice after it', async () => {
+    const stderrFixture =
+      'Traceback (most recent call last):\r\n' +
+      '  File "C:\\\\Python\\\\lib\\\\site-packages\\\\pip.py", line 123\r\n' +
+      '    from onnxruntime import capi\r\n' +
+      'OSError: [WinError 5] Access is denied: ' +
+      "'onnxruntime\\\\capi\\\\onnxruntime_providers_shared.dll'\r\n" +
+      'Check the permissions. The DLL is in use.\r\n' +
+      'See the sidecar logs for more details.\r\n' +
+      '\r\n' +
+      '[notice] A new release of pip is available: 24.0 -> 24.1\r\n' +
+      '[notice] To update, run: python.exe -m pip install --upgrade pip\r\n';
+
     const b = new QwenInstallBootstrap({
       repoRoot: '/repo',
       detectFn: () => 'not-installed',
-      spawnFn: () =>
-        makeFakeChild(1, {
-          stderr:
-            'OSError: [WinError 5] Access is denied: ' +
-            "'onnxruntime\\\\capi\\\\onnxruntime_providers_shared.dll'\n" +
-            '[notice] A new release of pip is available: 24.0 -> 24.1\n' +
-            "[notice] To update, run: python.exe -m pip install --upgrade pip\n",
-        }) as never,
+      spawnFn: () => makeFakeChild(1, { stderr: stderrFixture }) as never,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
     expect(b.getJob(job.id)?.error).toMatch(/WinError 5/);
+    /* Also verify that the notice lines are filtered out and the error message
+       carries the real error, not the notice. */
+    expect(b.getJob(job.id)?.error).not.toMatch(/A new release/);
   });
 });

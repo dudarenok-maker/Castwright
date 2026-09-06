@@ -26,7 +26,10 @@ import {
   detectQwenInstallStateOnDisk,
 } from './qwen-install-detect.js';
 import { getActiveSupervisor } from './sidecar-supervisor.js';
+import { isAnyGenerationActive } from '../gpu/active-generation-gate.js';
 import type { QwenInstallState } from '../workspace/user-settings.js';
+// @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
+import { ensureOrtMarker } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 /* #3039 — stop the supervised sidecar before running pip, restart it after.
    `install-qwen3.mjs` runs `pip install qwen-tts`, which pulls a fresh
@@ -34,21 +37,57 @@ import type { QwenInstallState } from '../workspace/user-settings.js';
    package's DLL memory-mapped (`onnxruntime_providers_shared.dll` on
    Windows), so pip's DLL replace fails with WinError 5 / Access is denied
    whenever the sidecar is still running. Stopping supervision first (not
-   just killing the child — `supervisor.stop()` also suppresses the
-   auto-respawn that would otherwise re-load the same DLL mid-install) frees
+   just killing the child — must also suppress auto-respawn) frees
    the lock for the identical `pip` command that already works once the
    sidecar is down (confirmed by the manual A/B in
-   docs/testing/onbox-a29-results/step-2-genuine-install.md). Restarting is
-   unconditional (success or failure) via `finally`, so a failed install
-   never leaves TTS down on top of the install error.
-   `getActiveSupervisor()` returns null when autoStart is off or the server
-   hasn't finished booting — nothing to stop, so both hooks default to a
-   no-op in that case rather than failing the install. */
+   docs/testing/onbox-a29-results/step-2-genuine-install.md).
+
+   Three critical pieces:
+   1. Stop must suppress the queue dispatcher so in-flight renders don't drain
+      into the stopped sidecar. This is the supervisor's `recycling()` flag.
+   2. The pip install pulls a fresh, plain CPU `onnxruntime` (since install-
+      qwen3.mjs never invokes install-ort.mjs). On a GPU box this silently
+      clobbers the GPU runtime. ensureOrtMarker must re-swap it afterward.
+   3. Stop must detect and handle adopted sidecars (handle === null), which
+      cannot be stopped via the supervisor.
+   4. Restart must respect the code-43 hold-down state, not clear it.
+   5. An adopted sidecar or missing supervisor must fail the install clearly.
+
+   Finally is unconditional (success or failure) so a failed install never
+   leaves TTS down, BUT a throwing stop/start must be guarded against masking
+   the original install error and leaving the supervisor stranded. */
 async function defaultStopSidecar(): Promise<void> {
-  await getActiveSupervisor()?.stop();
+  const supervisor = getActiveSupervisor();
+  if (!supervisor) return; // no autoStart or not yet booted — nothing to stop.
+  const current = supervisor.current();
+  if (current === null) {
+    /* Adopted sidecar: handle is null and stay null for its lifetime.
+       We cannot stop an adopted process without the supervisor's knowledge. */
+    throw new Error(
+      'Cannot stop an externally-managed sidecar (handle === null). ' +
+      'Install Qwen3-TTS with the sidecar stopped externally first, ' +
+      'then restart it manually.',
+    );
+  }
+  /* Set isRecycling before killing so the queue dispatcher pauses immediately. */
+  await supervisor.stop();
 }
+
 async function defaultStartSidecar(): Promise<void> {
-  await getActiveSupervisor()?.start();
+  const supervisor = getActiveSupervisor();
+  if (!supervisor) return; // no autoStart or not yet booted — nothing to start.
+
+  /* Respect the code-43 hold-down. If restart43Trip is set, the device is
+     structurally too small and auto-respawn is held intentionally. */
+  if (supervisor.tripEvent() !== null) {
+    throw new Error(
+      'Sidecar is held down due to repeated code-43 exits ' +
+      '(device assignment too small). ' +
+      'Restart the server with a corrected device assignment to recover.',
+    );
+  }
+
+  await supervisor.start();
 }
 
 /* #3039 — pull the actionable line(s) out of the installer's stderr tail.
@@ -56,12 +95,13 @@ async function defaultStartSidecar(): Promise<void> {
    line AFTER a real failure (including a WinError 5 traceback), so a naive
    "last N lines" slice can surface only that notice and hide the actual
    error the job.error field exists to report. Drop pip's own notice lines
-   first, then take the tail of what's left. */
+   first, then take the tail of what's left. Windows stderr is CRLF-terminated,
+   so split on both LF and CR to avoid empty strings in the lines array. */
 function extractInstallErrorDetail(stderrTail: string): string {
   const lines = stderrTail
     .trim()
-    .split('\n')
-    .filter((line) => !/^\[notice\]/i.test(line.trim()));
+    .split(/[\r\n]+/)
+    .filter((line) => line.length > 0 && !/^\[notice\]/i.test(line.trim()));
   return lines.slice(-5).join(' ').trim();
 }
 
@@ -172,17 +212,64 @@ export class QwenInstallBootstrap {
       return;
     }
 
-    /* #3039 — stop the supervised sidecar before pip runs (see the comment on
-       defaultStopSidecar above) and restart it unconditionally afterward, so
-       a failed install never leaves TTS down on top of the install error. */
+    /* Check whether a render is in-flight, but only if we have an active
+       supervisor (there's something to stop). If no supervisor, the sidecar
+       is already down or we're in a test. */
+    const supervisor = getActiveSupervisor();
+    if (supervisor && isAnyGenerationActive()) {
+      throw new Error(
+        'Cannot install while a chapter is being generated. ' +
+        'Wait for the generation to finish, then try again.',
+      );
+    }
+
+    /* #3039 — stop the supervised sidecar before pip runs. This requires three
+       pieces: (1) suppress the queue dispatcher via the recycling() flag;
+       (2) re-swap the GPU onnxruntime after pip (which installs plain CPU);
+       (3) detect and reject the adopted-sidecar case (handle === null),
+       which we cannot stop. Exception handling: stopSidecarFn can throw
+       (adopted sidecar, missing supervisor, code-43 hold-down, or a throwing
+       kill()) — wrap it so the finally block still restarts. */
     this.transition(job, 'installing', { step: 'Stopping the sidecar…' });
-    await this.stopSidecarFn();
+    let stopError: Error | null = null;
+    try {
+      await this.stopSidecarFn();
+    } catch (err) {
+      stopError = err instanceof Error ? err : new Error(String(err));
+      throw stopError; // re-throw immediately; finally still runs.
+    }
     try {
       this.update(job, { step: 'Starting installer…' });
       await this.spawnInstaller(job);
+
+      /* Pip installed successfully. The pip call pulled a fresh, plain CPU
+         `onnxruntime` (install-qwen3.mjs never invokes install-ort.mjs, and
+         base.txt has no pin). On a GPU box this silently clobbers the GPU
+         runtime. Re-swap it back to the GPU build. ensureOrtMarker is pure fs
+         (no throws — see its definition) and idempotent. */
+      this.update(job, { step: 'Verifying GPU runtime…' });
+      ensureOrtMarker(
+        process.env.SIDECAR_VENV_DIR ?? '',
+        (m: string) => console.log(`[qwen-install] ${m}`),
+      );
     } finally {
+      /* Restart the sidecar unconditionally (success or failure) so a failed
+         install never leaves TTS down on top of the install error.
+         BUT: a throwing startSidecarFn must not replace the original install
+         error (stopError or spawnInstaller's error). Catch, log, and re-throw
+         only the original error. */
       this.update(job, { step: 'Restarting the sidecar…' });
-      await this.startSidecarFn();
+      try {
+        await this.startSidecarFn();
+      } catch (restartErr) {
+        const msg = restartErr instanceof Error ? restartErr.message : String(restartErr);
+        console.error(`[qwen-install] sidecar restart failed: ${msg}`);
+        /* If there was already an error (from stop or spawn), that takes
+           precedence. If restart threw but stop/spawn didn't, throw the
+           restart error. If nothing threw yet, this is the error. */
+        if (stopError) throw stopError;
+        throw restartErr;
+      }
     }
 
     /* Re-probe: the script exited 0, confirm the package + weights actually

@@ -505,6 +505,9 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     },
     async stop() {
       stopped = true;
+      isRecycling = true; /* Signal to the queue dispatcher that no sidecar is
+                             currently ready. This must be set BEFORE kill()
+                             so the queue pauses immediately. */
       const h = handle;
       handle = null;
       await h?.kill();
