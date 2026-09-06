@@ -2989,14 +2989,20 @@ filed against, and it has not been separately re-confirmed since the fix landed
 
 > **2026-09-06 (chain #2913 retry, Castwright#2916/#2914/#3015) — STILL OWED,
 > partially run, port isolation resolved.** Confirmed the #2632 per-worktree
-> `LOCAL_TTS_PORT` fix genuinely closes the port-contention class the four
-> prior attempts above hit: sidecar bound to this worktree's own `:9080`,
-> never adopting or contending with another live lane's `:9000`. But this
-> row's own subject, #2192, was **not exercised**: the worktree's sidecar
-> venv already had Qwen3-TTS installed from its own bootstrap step, so
-> clicking Install in the app ran a no-op `pip install` that wrote nothing
-> under `site-packages/onnxruntime/capi/` — the actual `WinError 5`/`Accès
-> refusé` scenario this row exists to reproduce never had a chance to fire.
+> `LOCAL_TTS_PORT` fix closes the port-contention class that the 2026-08-21
+> wave-4 step 5c and 2026-08-23 wave-5 attempts above hit (not all four prior
+> attempts — wave-3 step 2 was the separate CUDA13/cuDNN9 gap, and wave-4
+> step 8 was explicitly out of scope for the install click-through): sidecar
+> bound to this worktree's own `:9080`, never adopting or contending with
+> another live lane's `:9000`. But this row's own subject, #2192, was **not
+> exercised**: Qwen3-TTS was already fully installed (package + weights)
+> from this worktree's own bootstrap step, so the Model Manager UI showed it
+> already installed with no error — this run only clicked **Re-check** (a
+> refetch), never the actual **Install** action `#2192` describes, because
+> that control does not render once a package is already installed
+> (`src/components/qwen-install.tsx`). No fresh `pip install` ran at all, so
+> there was no DLL write for a `WinError 5`/`Accès refusé` to fire against —
+> the actual criterion 2 scenario never had a chance to run, let alone pass.
 > An initial pass mistakenly discharged this row on that null observation
 > (PR #3015, reverted after review). Genuine redo — a venv confirmed absent
 > Qwen3 before the in-app Install click — filed separately, chain
