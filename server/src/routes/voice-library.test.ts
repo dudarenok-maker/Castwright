@@ -111,6 +111,10 @@ function writeBookOnDisk(
   title: string,
   bookId: string,
   characters: object[],
+  /* `undefined` omits the key entirely; `null` writes the explicit
+     "detection surrendered" state. Both mean unset and must behave
+     identically (#1998) — passing null is how a test pins that. */
+  language?: string | null,
 ) {
   const bookDir = join(workspace, 'books', author, series, title);
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
@@ -130,6 +134,7 @@ function writeBookOnDisk(
       coverGradient: ['#000', '#fff'],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      ...(language !== undefined ? { language } : {}),
     }),
   );
   writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
@@ -3254,6 +3259,290 @@ describe('POST /:uuid/assign — designed-voice language mismatch warning (#1953
     expect(res.body.warning).toBeUndefined();
   });
 });
+
+/* #1998 — cloned-voice language mismatch warning. Sibling of the designed-
+   voice warning (#1953) above: when a cloned voice's `languageCode` (the
+   BCP-47 code the clone pipeline validated and persisted) differs from the
+   book's language, the assign succeeds with a 200 but attaches a warning
+   naming the character, the clone's language, and the book's. The comparison
+   is CODE-vs-CODE (`entry.languageCode` against the normalised `bookLanguage`,
+   with `bookLanguageForClonedCheck` gating presence only), never
+   code-vs-sidecar-word. That last part is a DESIGN RULE, not something the
+   mutations below demonstrate: `expectedSidecarLang` is undefined on the
+   cloned path, so swapping to it reddens on `'en' !== undefined` rather than
+   on code-vs-word (PR #3033 review pass 1 finding 6, pass 2 finding C). */
+describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)', () => {
+  async function seedClonedWithLang(voiceUuid: string, languageCode?: string) {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    await writeEntry({
+      voiceUuid, name: 'Clone Voice', provenance: 'cloned',
+      tags: [], pinned: false, languageCode,
+      engines: { qwen: { status: 'ready', baseModel: 'qwen3-0.6b' } },
+      master: {
+        clipFile: 'master.wav', sampleRate: 24_000, durationSeconds: 5,
+        transcript: 'hello there', transcriptSource: 'whisper',
+        captureMethod: 'record', languageCode,
+      },
+      consent: {
+        personName: 'Test', relationship: 'family-with-permission',
+        permittedUse: 'personal', attestedAt: '2026-01-01T00:00:00Z',
+        attestedBy: 'test',
+      },
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    writeFileSync(join(vl.entryDir(voiceUuid), 'master.wav'), 'fake-wav-bytes');
+  }
+
+  it('warns (200) when a cloned voice in Russian is assigned to an English book', async () => {
+    await seedClonedWithLang('clone-ru-en', 'ru');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-ru-en', [
+      { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
+    ], 'en');
+    const res = await request(app)
+      .post('/api/voice-library/clone-ru-en/assign')
+      .send({ bookId: 'book-clone-ru-en', characterId: 'char-nik' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toMatch(/Nikolai/);
+    expect(res.body.warning).toMatch(/Russian/);
+    expect(res.body.warning).toMatch(/English/);
+    expect(res.body.warning).toMatch(/cloned in/);
+    expect(res.body.warning).not.toMatch(/unintelligible/);
+    expect(res.body.warning).toMatch(/less like the person/);
+  });
+
+  it('does not warn when the cloned voice language matches the book language', async () => {
+    await seedClonedWithLang('clone-en-en', 'en');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-en-en', [
+      { id: 'char-ada', name: 'Ada', ttsEngine: 'qwen' },
+    ], 'en');
+    const res = await request(app)
+      .post('/api/voice-library/clone-en-en/assign')
+      .send({ bookId: 'book-clone-en-en', characterId: 'char-ada' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  it('does not warn when the cloned voice has no languageCode (unknown language)', async () => {
+    await seedClonedWithLang('clone-undef');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-undef', [
+      { id: 'char-ada', name: 'Ada', ttsEngine: 'qwen' },
+    ], 'en'); // Book IS set to English, so the absence of entry.languageCode suppresses the warning
+    const res = await request(app)
+      .post('/api/voice-library/clone-undef/assign')
+      .send({ bookId: 'book-clone-undef', characterId: 'char-ada' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* #1998 regression test — a cloned voice whose languageCode differs from
+     an UNSET book language must not emit a warning. Absence (missing language
+     key, null, empty, or whitespace) is not English — it's the surrendered-
+     detection state. Comparing against the 'en' default would falsely claim
+     a book is English when it has never set a language, and advice to
+     "Re-clone in English" would be destructive. Pins the fix to use
+     bookStateLanguageOrNull (returns null when unset) instead of
+     bookStateLanguage (defaults to 'en'). */
+  it('does not warn when the cloned voice language differs but the book has no language set', async () => {
+    await seedClonedWithLang('clone-ru-unset', 'ru');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-ru-unset', [
+      { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
+    ]); // no language parameter — book's language is unset (missing key)
+    const res = await request(app)
+      .post('/api/voice-library/clone-ru-unset/assign')
+      .send({ bookId: 'book-clone-ru-unset', characterId: 'char-nik' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* #1998 regression test — same as above, but with book language explicitly
+     set to null (the "detection surrendered" state). Null and missing key
+     must be treated identically. */
+  it('does not warn when the cloned voice language differs but the book language is explicitly null', async () => {
+    await seedClonedWithLang('clone-ru-null', 'ru');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-ru-null', [
+      { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
+    ], null); // explicit null, not a missing key
+    const res = await request(app)
+      .post('/api/voice-library/clone-ru-null/assign')
+      .send({ bookId: 'book-clone-ru-null', characterId: 'char-nik' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* #1998 regression test — normalisation: book language "ru-RU" (BCP-47 full
+     form) must be treated as matching a clone with "ru" (normalised form).
+     Both normalise to 'ru'. If the comparand is unnormalised, this test fails
+     with a false warning that Russian matches Russian. */
+  it('does not warn when book language is ru-RU and cloned voice is ru (normalisation)', async () => {
+    await seedClonedWithLang('clone-ru-full', 'ru');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-ru-full', [
+      { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
+    ], 'ru-RU'); // Full BCP-47 form, normalises to 'ru'
+    const res = await request(app)
+      .post('/api/voice-library/clone-ru-full/assign')
+      .send({ bookId: 'book-ru-full', characterId: 'char-nik' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* #1998 regression test — normalisation: book language "RU" (uppercase) must
+     be treated as matching a clone with "ru" (lowercase). Both normalise to 'ru'.
+     If the comparand is unnormalised, this test fails with a false warning. */
+  it('does not warn when book language is RU and cloned voice is ru (case normalisation)', async () => {
+    await seedClonedWithLang('clone-ru-case', 'ru');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-ru-case', [
+      { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
+    ], 'RU'); // Uppercase, normalises to 'ru'
+    const res = await request(app)
+      .post('/api/voice-library/clone-ru-case/assign')
+      .send({ bookId: 'book-ru-case', characterId: 'char-nik' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* Mutations these tests pin. Described by BEHAVIOUR, not as literal string
+     swaps — the previous wording named `entry.languageCode !==
+     bookLanguageForClonedCheck`, which stopped existing when review pass 2's
+     finding A split the readers, leaving mutation 2's instruction identical
+     to the shipped code: a no-op whose "must go red" tests stayed green.
+     Three consecutive review rounds found a stale claim in this block, each
+     fixing only the instance it saw (pass 3, finding 1).
+
+     Mutation 1 — make the comparison fire on a MATCH instead of a mismatch
+     (invert the `!==`). The match-case test must go red. Pins that the guard
+     tests inequality, not merely presence.
+
+     Mutation 2 — drop the presence conjunct, so the guard consults only the
+     VALUE reader (which defaults an unset language to 'en'). The unset-language
+     regression tests must go red: a Russian clone against a book with no
+     language would fire and emit a false "this book is English". Pins that
+     PRESENCE comes from the honest reader.
+
+     Mutation 3 — take the comparison VALUE from the presence reader instead
+     of the normalising one. The `ru-RU` and `RU` tests must go red. Pins that
+     the VALUE is normalised, so a book stored in BCP-47 long or upper form
+     still matches an equivalent clone code (pass 2, finding A). */
+
+  /* Precedence pin: #1933 clonedAdvisory vs #1998 languageWarning
+     When a cloned entry triggers BOTH conditions (OTHER engine blocked AND
+     language mismatch), the advisory (clonedAdvisory) must win per the
+     documented precedence `clonedAdvisory ?? languageWarning` (no line number
+     here deliberately — the previous one cited 1944, drifted twice inside this
+     PR alone, and was wrong by 31 lines when review pass 2 caught it).
+     This test pins which operand wins by asserting the response warning is
+     the advisory text, NOT the language text — both directions. Swapping the
+     operator to `languageWarning ?? clonedAdvisory` makes this test red. */
+  it('precedence: clonedAdvisory (OTHER engine blocked) wins over languageWarning (language mismatch) on assign', async () => {
+    const { writeEntry } = await import('../workspace/voice-library.js');
+    // A cloned entry with Russian language code. The qwen engine is ready
+    // (can be routed to), but the coqui engine is failed (blocked). Both
+    // conditions will be evaluated: language mismatch (ru vs en) AND other
+    // engine unusable (coqui failed).
+    await writeEntry({
+      voiceUuid: 'clone-both-conditions',
+      name: 'Both Warnings Voice',
+      provenance: 'cloned',
+      tags: [],
+      pinned: false,
+      languageCode: 'ru', // Russian — will mismatch English book
+      engines: {
+        qwen: { status: 'ready', baseModel: 'qwen3-0.6b' }, // routed engine
+        xtts: { status: 'failed' }, // OTHER engine blocked, triggers advisory
+      },
+      master: {
+        clipFile: 'master.wav',
+        sampleRate: 24_000,
+        durationSeconds: 5,
+        transcript: 'hello there',
+        transcriptSource: 'whisper',
+        captureMethod: 'record',
+        languageCode: 'ru',
+      },
+      consent: {
+        personName: 'Test',
+        relationship: 'family-with-permission',
+        permittedUse: 'personal',
+        attestedAt: '2026-01-01T00:00:00Z',
+        attestedBy: 'test',
+      },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    // Write the master clip to disk so the routed engine is not blocked.
+    writeFileSync(join(vl.entryDir('clone-both-conditions'), 'master.wav'), 'fake-wav-bytes');
+
+    // Book with English language, different from the Russian clone.
+    writeBookOnDisk(
+      dir,
+      'Della Renwick',
+      'The Hollow Tide',
+      'Book One',
+      'book-both-conditions',
+      [{ id: 'char-ivan', name: 'Ivan', ttsEngine: 'qwen' }],
+      'en', // English book
+    );
+
+    const res = await request(app)
+      .post('/api/voice-library/clone-both-conditions/assign')
+      .send({ bookId: 'book-both-conditions', characterId: 'char-ivan' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeDefined();
+
+    // The advisory message names the OTHER engine (Coqui XTTS v2).
+    // Swapping the ?? operator makes this assertion fail, proving the
+    // operator precedence is pinned.
+    expect(res.body.warning).toMatch(/Coqui XTTS v2.*failed to derive/);
+    expect(res.body.warning).toMatch(/Assigned/);
+    /* Both directions, deliberately. Asserting only which message WON leaves
+       the guard one-directional: a future advisory string that absorbed the
+       language wording would still satisfy the positive match while the
+       precedence silently inverted. This repo has shipped the one-directional
+       version of that mistake three times in one PR (#2998), so the negative
+       side belongs in the same edit as the positive one. Three distinct
+       fragments of the #1998 message, none of which may appear. */
+    expect(res.body.warning).not.toMatch(/cloned in Russian/);
+    expect(res.body.warning).not.toMatch(/book is English/);
+    expect(res.body.warning).not.toMatch(/sound less like the person/);
+  });
+
+  /* #1998 regression test — when the cloned voice's languageCode is
+     unregistered (throws), the lookup returns undefined and the warning is
+     skipped. Mirrors its designed-voice sibling in the #1953 block (named by
+     block rather than line: a line citation in this file has now rotted
+     twice). Pins both
+     directions of the dual-lookup contract: clone code unregistered,
+     book language registered. */
+  it('does not 500 (and does not warn) when the cloned voice language is unregistered — skips the comparison instead of throwing', async () => {
+    await seedClonedWithLang('clone-pt-en', 'pt'); // pt is unregistered
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-pt-en', [
+      { id: 'char-ines', name: 'Ines', ttsEngine: 'qwen' },
+    ], 'en'); // Book is English (registered)
+    const res = await request(app)
+      .post('/api/voice-library/clone-pt-en/assign')
+      .send({ bookId: 'book-clone-pt-en', characterId: 'char-ines' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* #1998 regression test — when the book's language is unregistered (throws),
+     the lookup returns undefined and the warning is skipped. Mirrors the
+     designed-voice test but tests the OTHER sidecarLanguageName call.
+     Pins both directions of the dual-lookup contract: clone code registered,
+     book language unregistered. */
+  it('does not 500 (and does not warn) when the book language is unregistered — skips the comparison instead of throwing', async () => {
+    await seedClonedWithLang('clone-en-pt', 'en'); // Clone is English (registered)
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-en-pt', [
+      { id: 'char-ines', name: 'Ines', ttsEngine: 'qwen' },
+    ], 'pt'); // pt is unregistered
+    const res = await request(app)
+      .post('/api/voice-library/clone-en-pt/assign')
+      .send({ bookId: 'book-clone-en-pt', characterId: 'char-ines' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+});
+
 
 /* Fix wave 2 (review) — the guard's first cut computed the effective engine
    purely from the PERSISTED account default (getResolvedTtsModelKey()), which

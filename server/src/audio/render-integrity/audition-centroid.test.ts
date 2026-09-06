@@ -390,6 +390,73 @@ describe('auditionCentroid', () => {
     expect(callIdx).toBe(8);
   });
 
+  // ── A36 — syntheticOnly discriminator ──────────────────────────────────────
+  // The structural marker aggregate.ts keys the synthetic-only severity band
+  // off (score.ts's SYNTHETIC_ONLY_CUTOFFS): true iff the RETURNED pool
+  // contains no real in-book anchors, regardless of which phase produced it.
+
+  it('syntheticOnly=false when real anchors alone already meet target (no new renders)', async () => {
+    const synthFn = async (): Promise<SynthesizeOutput> => makeSynthOut(ABOVE_FLOOR_PCM);
+    const embedFn = async (): Promise<Float32Array> => axisVec(0, 0);
+    const existingAnchors = [axisVec(0, 0), axisVec(0, 1), axisVec(0, 2)];
+
+    const result = await auditionCentroid(CHARACTER, { synthFn, embedFn, targetN: 3, margin: 1, existingAnchors });
+
+    expect(result!.syntheticOnly).toBe(false);
+  });
+
+  it('syntheticOnly=false when real anchors are blended with new synthetic top-up renders', async () => {
+    const synthFn = async (): Promise<SynthesizeOutput> => makeSynthOut(ABOVE_FLOOR_PCM);
+    let embedIdx = 0;
+    const embedFn = async (): Promise<Float32Array> => axisVec(0, embedIdx++);
+    const existingAnchors = [axisVec(0, 0)]; // partial — tops up with new renders
+
+    const result = await auditionCentroid(CHARACTER, { synthFn, embedFn, targetN: 3, margin: 1, existingAnchors });
+
+    expect(result!.kind).toBe('audition');
+    expect(result!.syntheticOnly).toBe(false);
+  });
+
+  it('syntheticOnly=true when there are zero anchors to begin with (Phase A, pool is entirely new renders)', async () => {
+    const synthFn = async (): Promise<SynthesizeOutput> => makeSynthOut(ABOVE_FLOOR_PCM);
+    let embedIdx = 0;
+    const embedFn = async (): Promise<Float32Array> => axisVec(0, embedIdx++);
+
+    const result = await auditionCentroid(CHARACTER, { synthFn, embedFn, targetN: 3, margin: 1 });
+
+    expect(result!.kind).toBe('audition');
+    expect(result!.syntheticOnly).toBe(true);
+  });
+
+  it('syntheticOnly=true on a too-short outcome with zero anchors', async () => {
+    const synthFn = async (): Promise<SynthesizeOutput> => makeSynthOut(BELOW_FLOOR_PCM);
+    const embedFn = async (): Promise<Float32Array> => axisVec(0, 0);
+
+    const result = await auditionCentroid(CHARACTER, { synthFn, embedFn, targetN: 2, margin: 0 });
+
+    expect(result!.kind).toBe('too-short');
+    expect(result!.syntheticOnly).toBe(true);
+  });
+
+  it('syntheticOnly=true after a Phase B bimodal blend drops the real anchors (the register\'s own A36 shape)', async () => {
+    const synthFn = async (): Promise<SynthesizeOutput> => makeSynthOut(ABOVE_FLOOR_PCM);
+    let embedIdx = 0;
+    const embedFn = async (): Promise<Float32Array> => axisVec(1, embedIdx++);
+    const existingAnchors = [axisVec(0, 0)]; // 1 anchor, dropped once bimodal trips
+
+    const result = await auditionCentroid(CHARACTER, {
+      synthFn,
+      embedFn,
+      targetN: 4,
+      margin: 2,
+      existingAnchors,
+    });
+
+    expect(result!.kind).toBe('audition');
+    // Phase B's fallback pool is synthetics only — the anchor was discarded.
+    expect(result!.syntheticOnly).toBe(true);
+  });
+
   it('respects targetN/margin overrides — a wider margin absorbs more floor failures before giving up', async () => {
     let callIdx = 0;
     const synthFn = async (): Promise<SynthesizeOutput> => {

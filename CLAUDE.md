@@ -1298,6 +1298,30 @@ Working practice below; this holds even under contention).
   queue's own exclusivity checks. The rules above are the protection; there is
   no mechanism behind them.
 
+**Verify where a dispatched agent actually wrote**
+([#3044](https://github.com/dudarenok-maker/Castwright/issues/3044)):
+
+- **Capture the primary checkout's `git status --porcelain` before a dispatch
+  round and again after each agent returns.** Any entry that is not yours is a
+  **failed dispatch** — revert it and re-dispatch; do not adopt it. This is the
+  same before/after tree check the [`pr-review-gate`
+  skill](.claude/skills/pr-review-gate/SKILL.md#the-tree-check) already runs
+  around a reviewer pass, applied to the tree the agent was told *not* to touch.
+- **Check every tree the dispatch does not own**, not just the primary. The
+  observed writes went to the primary because that is the path most likely to be
+  resolved against by mistake, but nothing about the mechanism is specific to it.
+- **Inspecting the diff cannot tell you this happened.** Four occurrences are on
+  record across at least two sessions, and in the clearest one the content was
+  *byte-for-byte correct* — near-identical to entries already properly committed
+  on the branch that owned them. It is a path bug, not a content bug, so the
+  change looks right in every way except where it is. Had it been committed it
+  would have landed on `main` with no PR, and collided with two open ones.
+- **Do not rely on the brief.** Every occurrence involved a brief that already
+  named the absolute worktree path, in some cases with an explicit "do NOT work
+  anywhere else". Strengthening the prose has been tried and has not held; the
+  agent is not misunderstanding the instruction, it is resolving a path against
+  the wrong root mid-task.
+
 ### Planning agents
 
 Plan agents (`subagent_type: "Plan"`) design strategies but don't write code,

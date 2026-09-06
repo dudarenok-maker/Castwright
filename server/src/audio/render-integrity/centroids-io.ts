@@ -36,9 +36,23 @@ export interface CharacterCentroid {
   /** Mean cosine of the anchor-eligible set against this centroid.
    *  Used as the accept-check threshold in the auto-fix route (Task 13). */
   cleanMean: number;
-  /** Percentile value at CUTOFFS.severeEdgePctl (E — severe-edge boundary). */
+  /** Band boundary at the severe edge (E — severe-edge boundary).
+   *  Only 'audition' referenceKind rows carry `bandMethod`. The field's presence/value
+   *  distinguishes post-fix rows (trusted) from pre-fix rows (missing field = rebuild).
+   *  - When `bandMethod` is 'percentile': a percentile-of-pool value (used on both
+   *    real-anchor audition pools AND synthetic-only audition pools that were too dispersed
+   *    for sigma calibration and fell back to percentile computation).
+   *  - When `bandMethod` is 'synthetic-sigma': a sigma-based threshold computed from
+   *    mean ± severeSigma × std (used only on tight synthetic-only audition pools). */
   pSevere: number;
-  /** Percentile value at CUTOFFS.bandUpperPctl (U — inconclusive-band upper boundary). */
+  /** Band boundary at the inconclusive-band upper boundary (U — inconclusive-band upper boundary).
+   *  Only 'audition' referenceKind rows carry `bandMethod`. The field's presence/value
+   *  distinguishes post-fix rows (trusted) from pre-fix rows (missing field = rebuild).
+   *  - When `bandMethod` is 'percentile': a percentile-of-pool value (used on both
+   *    real-anchor audition pools AND synthetic-only audition pools that were too dispersed
+   *    for sigma calibration and fell back to percentile computation).
+   *  - When `bandMethod` is 'synthetic-sigma': a sigma-based threshold computed from
+   *    mean ± bandSigma × std (used only on tight synthetic-only audition pools). */
   pBand: number;
   /** How this centroid was built:
    *  - 'in-book': from the character's own clean anchor segments (in-book mode)
@@ -51,6 +65,15 @@ export interface CharacterCentroid {
    *  non-audition row) — an 'audition' row with no recorded voice is treated as unknown and
    *  rebuilt rather than trusted. */
   auditionVoice?: AuditionVoiceRef;
+  /** A36 fix — detection of pre-fix persisted audition rows. Records which band-computation
+   *  method was used on post-fix audition centroid rows:
+   *  - 'percentile': percentile-of-pool method (used on real-anchor paths, or on synthetic-only
+   *    pools that triggered the dispersion fallback due to high std dev > 0.05).
+   *  - 'synthetic-sigma': sigma-based method (mean ± sigma × std; used only on tight synthetic-only
+   *    pools with low std dev ≤ 0.05).
+   *  Pre-fix rows lack this field entirely — they are detected and rebuilt to apply the current
+   *  band-computation logic. Only present on 'audition' referenceKind rows. */
+  bandMethod?: 'percentile' | 'synthetic-sigma';
 }
 
 const CENTROIDS_FILENAME = 'render-integrity.centroids.json';

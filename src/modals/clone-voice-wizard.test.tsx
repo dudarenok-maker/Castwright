@@ -95,6 +95,15 @@ describe('CloneVoiceWizard', () => {
     expect(screen.getByTestId('clone-voice-wizard-name')).toBeInTheDocument();
   });
 
+  /* #2898 — the language hint must appear before a clip is captured, and be
+     gone (superseded by phase 2's name/save UI) once the user has moved on. */
+  it('shows the language hint during capture, not once phase 2 starts', () => {
+    renderWizard();
+    expect(screen.getByTestId('clone-voice-wizard-language-hint')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('fake-continue'));
+    expect(screen.queryByTestId('clone-voice-wizard-language-hint')).toBeNull();
+  });
+
   it('Save dispatches cloneVoice with the candidateId + consent and renders the fidelity warning', async () => {
     cloneVoiceApi.mockResolvedValue({
       voiceUuid: 'lib-clone-x', name: 'Mum', provenance: 'cloned', tags: [], pinned: false,

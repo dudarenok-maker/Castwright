@@ -99,7 +99,16 @@ export function CloneVoiceWizard({ onClose }: Props) {
           </div>
 
           <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
-            {!ready && <CloneCapturePanel onReady={(r) => setReady(r)} />}
+            {!ready && (
+              <>
+                <p data-testid="clone-voice-wizard-language-hint" className="text-[11px] text-ink/50">
+                  Record or upload in the language you want this voice to read — voices
+                  here can be cast in any book, and a clip in a different language will
+                  sound markedly less like the speaker.
+                </p>
+                <CloneCapturePanel onReady={(r) => setReady(r)} />
+              </>
+            )}
 
             {ready && !saved && (
               <>
