@@ -513,21 +513,29 @@ describe('sidecar supervisor (srv-15)', () => {
           recyclePending: true,
         })),
         recycleSidecarFn,
-        delayFn: async () => {},
+        /* A real macrotask tick, not an instant resolve — this watch never
+           exits on its own (the port stays up by design here), so a
+           microtask-only delay would starve the timer queue this test's own
+           waitFor runs on. */
+        delayFn: () => new Promise((r) => setTimeout(r, 0)),
         adoptedPollMs: 1,
         adoptedHealthPollMs: 1,
         warn: vi.fn(),
         log: vi.fn(),
       });
       await sup.start();
-      // Give the watch loop many ticks to do the wrong thing if it is going to.
-      await vi.waitFor(() => expect(probeFn.mock.calls.length).toBeGreaterThan(5));
+      try {
+        // Give the watch loop many ticks to do the wrong thing if it is going to.
+        await vi.waitFor(() => expect(probeFn.mock.calls.length).toBeGreaterThan(5));
 
-      expect(recycleSidecarFn).not.toHaveBeenCalled();
-      expect(spawnFn).toHaveBeenCalledTimes(1); // the boot call, and nothing since
-      // The queue is not held: with autoStart off no sidecar is ever wanted
-      // from us, so there is nothing on the way to release it.
-      expect(sup.recycling()).toBe(false);
+        expect(recycleSidecarFn).not.toHaveBeenCalled();
+        expect(spawnFn).toHaveBeenCalledTimes(1); // the boot call, and nothing since
+        // The queue is not held: with autoStart off no sidecar is ever wanted
+        // from us, so there is nothing on the way to release it.
+        expect(sup.recycling()).toBe(false);
+      } finally {
+        await sup.stop(); // the watch loop only exits on `stopped`
+      }
     });
 
     it('clears the adopt flag when the external sidecar disappears, without respawning', async () => {

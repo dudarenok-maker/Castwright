@@ -184,7 +184,7 @@ describe('spawnSidecar', () => {
     ];
 
     for (const { name, health } of unfitCases) {
-      it(`${name}: no kill, no spawn, no refusal, no adopt`, async () => {
+      it(`${name}: no kill, no spawn, no refusal, but still watched so an install hold refuses it (#3043 Door 1)`, async () => {
         probeFn.mockResolvedValueOnce(true);
         const killCalls: unknown[][] = [];
         const trackingSpawn = vi.fn((...args: unknown[]) => {
@@ -214,8 +214,14 @@ describe('spawnSidecar', () => {
         expect(trackingSpawn).not.toHaveBeenCalled();
         // Never even asked which PID owns the port — nothing here is ours to act on.
         expect(findPidFn).not.toHaveBeenCalled();
-        // Not adopted either: the supervisor must not report a usable sidecar.
-        expect(onAdoptExisting).not.toHaveBeenCalled();
+        // Still reported via onAdoptExisting: not because we treat it as ours,
+        // but because it is a live process sitting on the venv's port, and
+        // withSidecarHeld's adoptedWatching refusal is the only thing standing
+        // between an install and pip-ing straight into a venv this process
+        // still has DLLs open in (#3043 Door 1 — the original version of this
+        // fix only watched the FIT case, leaving an unfit-but-live sidecar
+        // unwatched and the install hold unable to refuse against it).
+        expect(onAdoptExisting).toHaveBeenCalledWith({ host: '127.0.0.1', port: 9000 });
         // And no refusal, which would drive a retry loop toward a spawn that
         // `if (!autoStart)` will never perform.
         expect(onSpawnRefused).not.toHaveBeenCalled();

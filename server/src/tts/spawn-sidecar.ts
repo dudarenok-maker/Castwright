@@ -688,14 +688,20 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
        drive a retry/backoff loop toward a spawn that `if (!autoStart)` will
        never perform, holding isRecycling true and the queue with it. So this
        returns either way — adopt a healthy one, leave anything else strictly
-       alone (#3043 B1). */
+       alone (#3043 B1).
+       An UNFIT (or unrecognised) process on the port still gets onAdoptExisting
+       — not because we'd ever treat it as our sidecar, but because whatever it
+       is, it is a live process sitting on this venv's port, and withSidecarHeld
+       must refuse an install against it exactly as it would a healthy adopted
+       one (#3043 B2/Door-1: the earlier version only armed the watchdog for the
+       fit case, leaving withSidecarHeld free to pip-install straight into a
+       venv still held open by an unfit-but-live sidecar). */
     if (!autoStart) {
       if (freshProtocol && unfitReason === null) {
         log(
           `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), adopting it ` +
             '(auto-start disabled — this server does not own the sidecar).',
         );
-        onAdoptExisting?.({ host, port });
       } else {
         warn(
           `[sidecar] something is listening on :${port} that we would not adopt ` +
@@ -709,6 +715,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
             'NOT touching it. TTS may be unavailable until it is restarted manually.',
         );
       }
+      onAdoptExisting?.({ host, port });
       return null;
     }
     if (!health.looksLikeSidecar) {
