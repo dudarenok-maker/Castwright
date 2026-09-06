@@ -3400,21 +3400,28 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
     expect(res.body.warning).toBeUndefined();
   });
 
-  /* Mutation 1 — invert the comparison so it fires on a MATCH instead of a
-     mismatch. The match-case test ("does not warn when…matches") must go
-     red. Pins that the guard tests inequality, not just presence.
-     To verify: change `entry.languageCode !== bookLanguageForClonedCheck` to
-     `entry.languageCode === bookLanguageForClonedCheck`, re-run the match
-     test — fails. */
+  /* Mutations these tests pin. Described by BEHAVIOUR, not as literal string
+     swaps — the previous wording named `entry.languageCode !==
+     bookLanguageForClonedCheck`, which stopped existing when review pass 2's
+     finding A split the readers, leaving mutation 2's instruction identical
+     to the shipped code: a no-op whose "must go red" tests stayed green.
+     Three consecutive review rounds found a stale claim in this block, each
+     fixing only the instance it saw (pass 3, finding 1).
 
-  /* Mutation 2 — change the comparand from `bookLanguageForClonedCheck`
-     (BCP-47 code, null when unset) back to `bookLanguage` (defaulting to
-     'en'). The regression tests above must go red: a Russian cloned voice
-     against an unset book language would fire the mismatch and emit a false
-     warning. Pins that the code uses the honest reader to avoid defaulting
-     absence to English.
-     To verify: change `entry.languageCode !== bookLanguageForClonedCheck` to
-     `entry.languageCode !== bookLanguage`, re-run the regression tests. */
+     Mutation 1 — make the comparison fire on a MATCH instead of a mismatch
+     (invert the `!==`). The match-case test must go red. Pins that the guard
+     tests inequality, not merely presence.
+
+     Mutation 2 — drop the presence conjunct, so the guard consults only the
+     VALUE reader (which defaults an unset language to 'en'). The unset-language
+     regression tests must go red: a Russian clone against a book with no
+     language would fire and emit a false "this book is English". Pins that
+     PRESENCE comes from the honest reader.
+
+     Mutation 3 — take the comparison VALUE from the presence reader instead
+     of the normalising one. The `ru-RU` and `RU` tests must go red. Pins that
+     the VALUE is normalised, so a book stored in BCP-47 long or upper form
+     still matches an equivalent clone code (pass 2, finding A). */
 
   /* Precedence pin: #1933 clonedAdvisory vs #1998 languageWarning
      When a cloned entry triggers BOTH conditions (OTHER engine blocked AND
@@ -3501,7 +3508,9 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
 
   /* #1998 regression test — when the cloned voice's languageCode is
      unregistered (throws), the lookup returns undefined and the warning is
-     skipped. Mirrors the designed-voice test at line 3150. Pins both
+     skipped. Mirrors its designed-voice sibling in the #1953 block (named by
+     block rather than line: a line citation in this file has now rotted
+     twice). Pins both
      directions of the dual-lookup contract: clone code unregistered,
      book language registered. */
   it('does not 500 (and does not warn) when the cloned voice language is unregistered — skips the comparison instead of throwing', async () => {
