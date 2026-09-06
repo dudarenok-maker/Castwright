@@ -187,15 +187,41 @@ export class QwenInstallBootstrap {
        releases and respawns) and lands as the job's error via start()'s
        catch. An ORT-restore failure is RETURNED, not thrown: the installer
        had succeeded by then and the job must say so — thrown, it would read
-       as a failed Qwen install, the misreport the split exists to prevent. */
+       as a failed Qwen install, the misreport the split exists to prevent.
+
+       The ORT restore must run whenever the pip step has executed (which
+       clobbers the runtime) REGARDLESS of whether the rest of the installer
+       script goes on to succeed or fail. If the installer fails, we still need
+       to restore/verify the GPU runtime before the hold releases. */
     const ort = await this.holdSidecarFn<{ outcome: OrtRestoreOutcome } | { failure: Error }>(async () => {
       this.update(job, { step: 'Starting installer…' });
-      await this.spawnInstaller(job);
-      /* Still inside the hold: the swap replaces the DLLs the sidecar maps. */
+      let installerError: Error | null = null;
+      try {
+        await this.spawnInstaller(job);
+      } catch (err) {
+        installerError = err instanceof Error ? err : new Error(String(err));
+      }
+      /* Still inside the hold: the swap replaces the DLLs the sidecar maps.
+         Run the restore even if the installer failed, as the pip step may have
+         already clobbered the runtime. */
       this.update(job, { step: 'Checking the ONNX runtime the voice engine needs…' });
       try {
-        return { outcome: await this.restoreOrtFn() };
+        const outcome = await this.restoreOrtFn();
+        if (installerError) {
+          /* Installer failed but restore succeeded. Report the installer error
+             as the primary one (error takes precedence), but note the restore
+             outcome for diagnostics. */
+          return { failure: installerError };
+        }
+        return { outcome };
       } catch (err) {
+        if (installerError) {
+          /* Both installer and restore failed. Report the installer error as
+             primary, but log the restore failure at the console for diagnostics. */
+          console.warn(`[qwen-install] ORT restore also failed: ${err instanceof Error ? err.message : String(err)}`);
+          return { failure: installerError };
+        }
+        /* Only restore failed, installer succeeded. */
         return { failure: err instanceof Error ? err : new Error(String(err)) };
       }
     });

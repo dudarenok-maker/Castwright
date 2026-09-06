@@ -201,7 +201,7 @@ describe('QwenInstallBootstrap', () => {
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'error');
-      expect(calls).toEqual(['hold', 'spawn', 'release']);
+      expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']);
       expect(b.getJob(job.id)?.error).toMatch(/exited with code 1.*pip failed/);
     });
 
@@ -437,5 +437,34 @@ describe('QwenInstallBootstrap', () => {
     /* Also verify that the notice lines are filtered out and the error message
        carries the real error, not the notice. */
     expect(b.getJob(job.id)?.error).not.toMatch(/A new release/);
+  });
+
+  it('[REGRESSION] an installer failure still attempts ORT restore (both outcomes reported, error takes precedence)', async () => {
+    // Fixture: installer fails (exit code 1) with a clear error message
+    const installerError = 'HuggingFace download failed: connection timeout\n';
+    const restoreOutcome = 'swapped'; // restore succeeds
+    let restoreCalled = false;
+
+    const b = new QwenInstallBootstrap({
+      repoRoot: '/repo',
+      detectFn: () => 'not-installed',
+      spawnFn: () => makeFakeChild(1, { stderr: installerError }) as never,
+      holdSidecarFn: (fn) => fn(),
+      restoreOrtFn: async () => {
+        restoreCalled = true;
+        return restoreOutcome;
+      },
+      generationActiveFn: () => false,
+    });
+    const job = b.start();
+    await until(() => b.getJob(job.id)?.status === 'error');
+
+    // Verify that:
+    // 1. The restore function WAS called despite installer failure
+    expect(restoreCalled).toBe(true);
+    // 2. The job reports the installer error (not the restore outcome, since error takes precedence)
+    expect(b.getJob(job.id)?.error).toMatch(/HuggingFace download failed/);
+    // 3. The job status is error (not installed)
+    expect(b.getJob(job.id)?.status).toBe('error');
   });
 });

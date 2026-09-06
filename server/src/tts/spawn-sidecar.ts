@@ -634,11 +634,6 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     platform = process.platform,
   } = opts;
 
-  if (!autoStart) {
-    log('[sidecar] auto-start disabled (user pref or DISABLE_AUTOSTART_SIDECAR=1)');
-    return null;
-  }
-
   if (await probeFn(host, port)) {
     /* Something already holds :port. Before honouring it (the old behaviour),
        handshake on /health so a STALE sidecar — an older build whose protocol
@@ -739,6 +734,11 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     }
     log(`[sidecar] replaced stale sidecar (killed pid=${stalePid}); spawning current build.`);
     /* fall through to the normal spawn below */
+  }
+
+  if (!autoStart) {
+    log('[sidecar] auto-start disabled (user pref or DISABLE_AUTOSTART_SIDECAR=1)');
+    return null;
   }
 
   const isWindows = platform === 'win32';

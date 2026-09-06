@@ -79,7 +79,9 @@ describe('spawnSidecar', () => {
 
     expect(handle).toBeNull();
     expect(spawnFn).not.toHaveBeenCalled();
-    expect(probeFn).not.toHaveBeenCalled();
+    // probeFn IS now called to detect if an externally-started sidecar is running
+    // (so onAdoptExisting can be signaled even when autoStart is off)
+    expect(probeFn).toHaveBeenCalledWith('127.0.0.1', 9000);
     expect(log).toHaveBeenCalledWith(expect.stringContaining('auto-start disabled'));
   });
 
