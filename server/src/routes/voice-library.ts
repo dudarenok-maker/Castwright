@@ -1719,15 +1719,25 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
          mismatch at #1998), so it stays here, outside either `if`, rather than
          being re-derived inside each one. */
       const bookLanguage = bookStateLanguage(located.state);
-      /* #1998 — cloned-voice warning must use the honest reader
-         `bookStateLanguageOrNull`, not the defaulting `bookStateLanguage`.
-         Absence (missing key, null, empty, or whitespace) is not English —
-         it's the "detection surrendered" state. Comparing against the 'en'
-         default would falsely claim a book is English when it has never set
-         a language, and advice to "Re-clone in English" would be destructive
-         on a Russian book whose language is simply unset. Designed voices use
-         `bookLanguage` (the defaulting reader) because they compare against
-         sidecar routing, which requires the routing default. */
+      /* #1998 — the cloned-voice warning splits the two readers, taking
+         PRESENCE from the honest one and VALUE from the normalising one. Same
+         composition as chapter-splice.ts (:115 presence, :342 value); do not
+         collapse it back to a single reader.
+
+         Presence must come from `bookStateLanguageOrNull`, because absence
+         (missing key, null, empty, whitespace) is the "detection surrendered"
+         state, not English. `bookStateLanguage` defaults it to 'en', which
+         made the route claim a book was English when it had never said so and
+         advise a destructive re-clone.
+
+         The VALUE must still come from `bookStateLanguage`, because that
+         reader also NORMALISES, and `entry.languageCode` is always stored
+         normalised (:1220). Reading the raw `state.language` for the
+         comparison regressed exactly that way (PR #3033 review pass 2,
+         finding A): a book stored as "ru-RU", "RU" or " ru " no longer
+         matched a 'ru' clone, and since `sidecarLanguageName` normalises
+         internally, both sides rendered as "Russian" — so the user was told
+         their Russian clone mismatched their Russian book. */
       const bookLanguageForClonedCheck = bookStateLanguageOrNull(located.state);
       let expectedSidecarLang: string | undefined;
       let designedManifest: { language?: string } | null = null;
@@ -1873,7 +1883,9 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
            language — see #1998's own measurement table). Warn, do not block:
            the owner's v1 decision is expectation-setting, not engine re-
            routing. The comparison is CODE-vs-CODE (`entry.languageCode`
-           against `bookLanguageForClonedCheck`), never code-vs-sidecar-word:
+           against the NORMALISED `bookLanguage`; `bookLanguageForClonedCheck`
+           is the presence guard only — see the split above), never
+           code-vs-sidecar-word:
            a BCP-47 code is never equal to a human-readable sidecar name, so
            a word-valued comparand would fire on every correctly-matched
            assignment. That is a design rule for this comparison, NOT
@@ -1885,18 +1897,18 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
            comparand to it reddens on `'en' !== undefined`, never on the
            code-vs-word distinction, which therefore goes unexercised.
            Mutation 2 pins a different and real property — that the honest
-           reader is used, so an unset book language is not read as English.
-           Uses that honest reader for exactly that reason. */
+           reader gates presence, so an unset book language is not read as
+           English. */
         if (entry.provenance === 'cloned') {
           if (
             entry.languageCode &&
             bookLanguageForClonedCheck &&
-            entry.languageCode !== bookLanguageForClonedCheck
+            entry.languageCode !== bookLanguage
           ) {
             let cloneLangName: string | undefined;
             let bookLangName: string | undefined;
             try { cloneLangName = sidecarLanguageName(entry.languageCode); } catch { /* unregistered — skip */ }
-            try { bookLangName = sidecarLanguageName(bookLanguageForClonedCheck); } catch { /* unregistered — skip */ }
+            try { bookLangName = sidecarLanguageName(bookLanguage); } catch { /* unregistered — skip */ }
             if (cloneLangName && bookLangName) {
               languageWarning =
                 `"${character.name ?? characterId}"'s voice was cloned in ${cloneLangName}, but this ` +

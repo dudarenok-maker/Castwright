@@ -3265,8 +3265,12 @@ describe('POST /:uuid/assign — designed-voice language mismatch warning (#1953
    BCP-47 code the clone pipeline validated and persisted) differs from the
    book's language, the assign succeeds with a 200 but attaches a warning
    naming the character, the clone's language, and the book's. The comparison
-   is CODE-vs-CODE (`entry.languageCode` against `bookLanguage`), never
-   code-vs-sidecar-word — mutation 2 below pins that trap. */
+   is CODE-vs-CODE (`entry.languageCode` against the normalised `bookLanguage`,
+   with `bookLanguageForClonedCheck` gating presence only), never
+   code-vs-sidecar-word. That last part is a DESIGN RULE, not something the
+   mutations below demonstrate: `expectedSidecarLang` is undefined on the
+   cloned path, so swapping to it reddens on `'en' !== undefined` rather than
+   on code-vs-word (PR #3033 review pass 1 finding 6, pass 2 finding C). */
 describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)', () => {
   async function seedClonedWithLang(voiceUuid: string, languageCode?: string) {
     const { writeEntry } = await import('../workspace/voice-library.js');
@@ -3322,7 +3326,7 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
     await seedClonedWithLang('clone-undef');
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-clone-undef', [
       { id: 'char-ada', name: 'Ada', ttsEngine: 'qwen' },
-    ]);
+    ], 'en'); // Book IS set to English, so the absence of entry.languageCode suppresses the warning
     const res = await request(app)
       .post('/api/voice-library/clone-undef/assign')
       .send({ bookId: 'book-clone-undef', characterId: 'char-ada' });
@@ -3361,6 +3365,37 @@ describe('POST /:uuid/assign — cloned-voice language mismatch warning (#1998)'
     const res = await request(app)
       .post('/api/voice-library/clone-ru-null/assign')
       .send({ bookId: 'book-clone-ru-null', characterId: 'char-nik' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* #1998 regression test — normalisation: book language "ru-RU" (BCP-47 full
+     form) must be treated as matching a clone with "ru" (normalised form).
+     Both normalise to 'ru'. If the comparand is unnormalised, this test fails
+     with a false warning that Russian matches Russian. */
+  it('does not warn when book language is ru-RU and cloned voice is ru (normalisation)', async () => {
+    await seedClonedWithLang('clone-ru-full', 'ru');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-ru-full', [
+      { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
+    ], 'ru-RU'); // Full BCP-47 form, normalises to 'ru'
+    const res = await request(app)
+      .post('/api/voice-library/clone-ru-full/assign')
+      .send({ bookId: 'book-ru-full', characterId: 'char-nik' });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeUndefined();
+  });
+
+  /* #1998 regression test — normalisation: book language "RU" (uppercase) must
+     be treated as matching a clone with "ru" (lowercase). Both normalise to 'ru'.
+     If the comparand is unnormalised, this test fails with a false warning. */
+  it('does not warn when book language is RU and cloned voice is ru (case normalisation)', async () => {
+    await seedClonedWithLang('clone-ru-case', 'ru');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-ru-case', [
+      { id: 'char-nik', name: 'Nikolai', ttsEngine: 'qwen' },
+    ], 'RU'); // Uppercase, normalises to 'ru'
+    const res = await request(app)
+      .post('/api/voice-library/clone-ru-case/assign')
+      .send({ bookId: 'book-ru-case', characterId: 'char-nik' });
     expect(res.status).toBe(200);
     expect(res.body.warning).toBeUndefined();
   });
