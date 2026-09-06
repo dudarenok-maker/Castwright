@@ -88,12 +88,16 @@ async function setUpBook(title: string): Promise<{ bookDir: string; manuscriptId
   return { bookDir, manuscriptId };
 }
 
-async function buildJob(manuscriptId: string, bookDir: string): Promise<AnalysisJob> {
+async function buildJob(
+  manuscriptId: string,
+  bookDir: string,
+  opts: { kind?: 'main' | 'subset'; subscribers?: Set<unknown> } = {},
+): Promise<AnalysisJob> {
   const job = {
     controller: new AbortController(),
-    subscribers: new Set(),
+    subscribers: opts.subscribers ?? new Set(),
     manuscriptId,
-    kind: 'main',
+    kind: opts.kind ?? 'main',
     bookDir,
     engine: 'gemini',
     replay: {
@@ -108,10 +112,17 @@ async function buildJob(manuscriptId: string, bookDir: string): Promise<Analysis
     lastDiskWriteAt: 0,
   } as unknown as AnalysisJob;
 
-  /* Register the job into the in-flight map, matching how the real route
-     code registers jobs at line ~3400. The staleness guard in endJob
-     (line ~3070) checks if the job is still the current entry in the map;
-     without registration, every job fails the check and skips the write. */
+  /* Register the job into the in-flight map WITH ITS FINAL kind, matching
+     how the real route code registers jobs at line ~3400 — kind must be set
+     before registration, not mutated after, or the job ends up registered
+     in the wrong map (jobMapFor(job.kind) reads the CURRENT kind at
+     registration time). A subset job whose kind was flipped after
+     registration into the main map would fail the staleness guard for the
+     wrong reason (map mismatch) rather than the intended kind==='main'
+     scope check — see the "subset kind" test below. The staleness guard in
+     endJob (line ~3070) checks if the job is still the current entry in the
+     map; without registration, every job fails the check and skips the
+     write. */
   const { __testRegisterJobForTest } = await import('./analysis.js');
   __testRegisterJobForTest(job);
 
@@ -241,12 +252,49 @@ describe('#3004 endJob persists the terminal outcome (analysis-last-outcome.json
     const { removeManuscript } = await import('../store/manuscripts.js');
 
     try {
-      const job = await buildJob(manuscriptId, bookDir);
-      (job as unknown as { kind: string }).kind = 'subset';
+      const job = await buildJob(manuscriptId, bookDir, { kind: 'subset' });
       endJob(job, { kind: 'error', code: 'cast_incomplete' });
       await new Promise((r) => setTimeout(r, 200));
       const { readAnalysisLastOutcome } = await import('../store/analysis-state.js');
       expect(await readAnalysisLastOutcome(bookDir)).toBeNull();
+    } finally {
+      removeManuscript(manuscriptId);
+    }
+  }, 30_000);
+
+  it('a real subscriber gets res.end() called after the async outcome write, not left hanging', async () => {
+    /* Pins the SSE-hang fix (pass-2/round-3 review): job.subscribers must be
+       snapshotted BEFORE job.subscribers.clear() runs, since the async
+       outcomeWritePromise's .then() callback only sees whatever was captured
+       at endJob-call time, not whatever the live Set contains once the
+       promise resolves. A job with an EMPTY subscribers set (every other
+       test in this file) can never exercise that race — this one attaches a
+       real subscriber first. Before the fix, `ended` below stays false. */
+    const { bookDir, manuscriptId } = await setUpBook('Subscriber Book');
+    const { endJob } = await import('./analysis.js');
+    const { removeManuscript } = await import('../store/manuscripts.js');
+
+    try {
+      let ended = false;
+      const subscriber = {
+        send: () => {},
+        res: { end: () => { ended = true; } },
+        keepAlive: setInterval(() => {}, 60_000),
+      };
+      const subscribers = new Set([subscriber]);
+      const job = await buildJob(manuscriptId, bookDir, { subscribers: subscribers as unknown as Set<unknown> });
+
+      try {
+        endJob(job, { kind: 'error', code: 'cast_incomplete', message: 'subscriber-close test' });
+        const deadline = Date.now() + 2_000;
+        while (!ended && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+      } finally {
+        clearInterval(subscriber.keepAlive);
+      }
+
+      expect(ended).toBe(true);
     } finally {
       removeManuscript(manuscriptId);
     }
