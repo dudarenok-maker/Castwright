@@ -3,8 +3,9 @@
 Issue: [#2955](https://github.com/dudarenok-maker/Castwright/issues/2955) · Parent
 [#2948](https://github.com/dudarenok-maker/Castwright/issues/2948), campaign #2435.
 
-Confirms register row **E101** (`docs/testing/onbox-acceptance-register.md`
-`### E101`): when two checkouts share ONE `.run/` directory (via
+Confirms register row **E101** (now discharged and removed from the register;
+was `docs/testing/onbox-acceptance-register.md` `### E101`): when two
+checkouts share ONE `.run/` directory (via
 `APP_RUN_DIR`), the port-keyed TTS owner-note files
 (`.run/tts.owner.<port>.json`) coexist without collision instead of both
 writing to one fixed filename. Mechanism under test:
