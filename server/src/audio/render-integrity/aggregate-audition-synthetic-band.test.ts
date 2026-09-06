@@ -191,6 +191,71 @@ describe('scoreBook — A36 synthetic-only-pool severity band (register row A36)
     expect(freshRender!.severity).toBe('severe');
   });
 
+  it('band edge mutation-sensitivity: a render at cosine 0.85 is severe with the tight pool — catches severeSigma narrowing mutations', async () => {
+    // This test is sensitive to mutations on severeSigma. With severeSigma=3,
+    // pSevere ≈ 0.9119, so cosine 0.85 < pSevere → severe. Reducing severeSigma
+    // (e.g., to 1) would raise pSevere to ~0.927, making 0.85 NOT severe. This
+    // catches unintended narrowing of the severe band.
+    mockSyntheticOnlyAudition();
+    const dir = mkdtempSync(join(tmpdir(), 'spk-a36-severe-band-narrow-'));
+    await writeThuridBook(dir, 0.85); // Below pSevere with severeSigma=3
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    const freshRender = verdicts!.find((v) => v.sentenceIds[0] === 99);
+    expect(freshRender).toBeDefined();
+    // With severeSigma=3, cosine 0.85 must be severe
+    expect(freshRender!.verdict).toBe('voice-mismatch');
+    expect(freshRender!.severity).toBe('severe');
+  });
+
+  it('band edge mutation-sensitivity: a render at cosine 0.945 is voice-match with the tight pool — catches bandSigma narrowing mutations', async () => {
+    // This test is sensitive to mutations on bandSigma. With bandSigma=1.5,
+    // pBand ≈ 0.937, so cosine 0.945 > pBand → voice-match. Narrowing bandSigma
+    // (e.g., to 0.5) would raise pBand to ~0.954, making 0.945 < pBand →
+    // inconclusive. This catches unintended narrowing of the band edge.
+    mockSyntheticOnlyAudition();
+    const dir = mkdtempSync(join(tmpdir(), 'spk-a36-band-edge-narrow-'));
+    await writeThuridBook(dir, 0.945); // Above pBand with bandSigma=1.5
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    const freshRender = verdicts!.find((v) => v.sentenceIds[0] === 99);
+    expect(freshRender).toBeDefined();
+    // With bandSigma=1.5, cosine 0.945 must be voice-match
+    expect(freshRender!.verdict).toBe('voice-match');
+    expect(freshRender!.severity).toBeNull();
+  });
+
+  it('moderately-dispersed pool: a pool with moderate variance triggers the dispersion guard — a correct match (cosine 0.92) within the high subcluster remains voice-match, not disabled by dispersion', async () => {
+    // Test the dispersion-guard fallback with a moderately-dispersed pool.
+    // Pool: [0.35, 0.40, 0.45, 0.90, 0.92, 0.94] — std ≈ 0.262, which exceeds
+    // the dispersion threshold and triggers percentile-based fallback.
+    // A cosine 0.92 in the high subcluster should remain voice-match even though
+    // the sigma-based band would collapse (mean-1.5σ ≈ 0.35). The dispersion
+    // guard must bound it properly via percentiles (pBand ≈ 0.37).
+    auditionSpy.mockResolvedValue({
+      centroid: CENTROID,
+      embeddings: [0.35, 0.40, 0.45, 0.90, 0.92, 0.94].map(vecAtCosine),
+      kind: 'audition' as const,
+      syntheticOnly: true,
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'spk-a36-mod-dispersed-'));
+    await writeThuridBook(dir, 0.92); // High subcluster, should remain voice-match
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    const freshRender = verdicts!.find((v) => v.sentenceIds[0] === 99);
+    expect(freshRender).toBeDefined();
+    // Cosine 0.92 is well above pBand, so it must be voice-match
+    // (confirming the dispersion guard doesn't disable the band)
+    expect(freshRender!.verdict).toBe('voice-match');
+    expect(freshRender!.severity).toBeNull();
+  });
+
   it('A36 fix: a pre-fix persisted audition row (without bandMethod field) is rebuilt with the new sigma-band logic instead of being reused — a correct-voice fresh render (0.928) is no longer flagged severe', async () => {
     // Regression test for the persisted-row cache-hit path: a pre-fix row
     // written with percentile-derived pSevere/pBand (from the register's
