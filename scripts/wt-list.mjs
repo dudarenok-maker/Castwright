@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scrubGitEnv } from './git-env.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { readSlotClaims } from './lib/worktree-slot.mjs';
 
 const PORT_VARS = ['VITE_PORT', 'PORT', 'LOCAL_TTS_PORT', 'PLAYWRIGHT_PORT'];
 
@@ -77,17 +78,24 @@ function formatTable(rows) {
   return [fmt(header), widths.map((w) => '-'.repeat(w)).join('  '), ...rows.map(fmt)].join('\n');
 }
 
-export function main() {
-  const porcelain = gitOrThrow(['worktree', 'list', '--porcelain']);
-  const trees = parseWorktreePorcelain(porcelain);
-  if (trees.length === 0) {
-    process.stdout.write('No worktrees found.\n');
-    return 0;
-  }
-  const rows = trees.map((tree, slot) => {
+// One table row per worktree. The `slot` column reports the slot the tree
+// actually CLAIMS — read from its generated env files through the same
+// helper scripts/wt-new.mjs allocates against — not the tree's position in
+// `git worktree list`.
+//
+// #3052: it used to be the enumeration index, which is the very "slot ==
+// position in the worktree list" premise wt-new.mjs stopped using. That made
+// this table report N distinct slots over a fleet where three trees shared
+// PORT=8250 — the tool a maintainer reaches for to diagnose a slot collision
+// denied the collision existed. A tree claiming two different slots (its
+// .env.local and server/.env disagreeing, e.g. one hand-edited) prints both,
+// joined by "/", rather than silently picking one.
+export function buildRows(trees) {
+  return trees.map((tree) => {
     const ports = readPortsFor(tree.path) ?? {};
+    const { slots } = readSlotClaims(tree.path);
     return [
-      slot,
+      slots.length > 0 ? slots.join('/') : '(none)',
       tree.path,
       tree.branch ?? '(unknown)',
       ports.VITE_PORT ?? '(default)',
@@ -96,7 +104,16 @@ export function main() {
       ports.PLAYWRIGHT_PORT ?? '(default)',
     ];
   });
-  process.stdout.write(formatTable(rows) + '\n');
+}
+
+export function main() {
+  const porcelain = gitOrThrow(['worktree', 'list', '--porcelain']);
+  const trees = parseWorktreePorcelain(porcelain);
+  if (trees.length === 0) {
+    process.stdout.write('No worktrees found.\n');
+    return 0;
+  }
+  process.stdout.write(formatTable(buildRows(trees)) + '\n');
   return 0;
 }
 
