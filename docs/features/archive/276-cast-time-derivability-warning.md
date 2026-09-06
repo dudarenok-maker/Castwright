@@ -89,6 +89,7 @@ all its force from unactionability. Decisions 6 and 7 remove that.
 | `derive-failed` | **Retry derive** | Decision 7 — clears the terminal stamp; the predicate then re-evaluates the *underlying* cause |
 | `wrong-engine` | **Cast on _<engine>_** | sets `character.ttsEngine`; offered only when Decision 5's `castOnEngine` **[R4]** is non-null, and it names the engine |
 | `missing-entry` **[R3]** | **Assign a different voice** | opens the cast profile drawer — the library entry is gone, so re-assignment is the only repair |
+| `unresolvable-uuid` (#2054) | **Assign a different voice** | reuses `missing-entry`'s CTA — the character's own cloned slot carries no resolvable `libraryUuid`, so re-assignment is the only repair that works here |
 | `revoked`, `missing-master` | *(none)* | explanatory copy only — consent withdrawal and a discarded clip have no in-app repair |
 
 **No "switch the book engine back" CTA.** Rev 2 promised one; it cannot be built
@@ -156,10 +157,14 @@ Three things follow, all required:
    it is blind to exactly this class. Rev 3 fed both sides raw entries and would
    have missed it.
 
-**What stays invisible — accepted.** Whether the `.pt` exists on disk, and whether
-the master clip file still exists. This check catches **artifact-metadata**
-problems, not **disk-integrity** ones; a manifest naming a since-deleted clip still
-reaches the render. Every state #1980 is about is metadata-visible. Do not "fix"
+**What stays invisible — accepted.** This decision accepts a **disk-integrity**
+gap and nothing else: whether the `.pt` exists on disk, and whether the master
+clip file still exists. A manifest naming a since-deleted clip still reaches the
+render — that residue is deliberate, and it is the only thing this decision signs
+off on. It does **not** cover a **metadata-visible** state, and must not be cited
+for one: every state #1980 is about is metadata-visible, and so is a cloned slot
+whose `libraryUuid` is missing, empty or malformed — that case is caught by the
+`unresolvable-uuid` `CloneUnready` state (#2054), not accepted here. Do not "fix"
 this by restoring the endpoint without re-reading this section.
 
 ## Decision 3 — a purpose-built predicate, one shared module
