@@ -836,7 +836,7 @@ describe('PATCH /api/voice-library/:voiceUuid', () => {
        (src/store/voice-library-slice.ts:237-240) REPLACES the slice's entry
        with this response, so if PATCH returns the raw persisted status while
        GET returns the computed one, the client's copy silently downgrades
-       after any edit — and `cloneReadiness`'s rules 5/6, gated on
+       after any edit — and `cloneReadiness`'s rules 6/7, gated on
        `slotStatus !== 'ready'`, stop firing. The plan's own "Add transcript"
        CTA triggers exactly this path.
 

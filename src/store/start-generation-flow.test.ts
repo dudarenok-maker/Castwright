@@ -166,7 +166,7 @@ describe('startGenerationFlow thunk', () => {
       expect(dispatch).toHaveBeenCalledWith(uiActions.openCloneReadinessGate({ bookId: 'b1' }));
     });
 
-    it('does not fire — and starts generation normally — for a qwen-cloned voice on a coqui-routed character carrying BOTH cast slots (rule 7 silence)', async () => {
+    it('does not fire — and starts generation normally — for a qwen-cloned voice on a coqui-routed character carrying BOTH cast slots (rule 8 silence)', async () => {
       const cast = [
         char({
           ttsEngine: 'coqui',

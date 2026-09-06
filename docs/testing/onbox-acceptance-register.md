@@ -520,28 +520,55 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 12 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**64 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-06, discharging E12** (#2682, PR #2799 chain via #2930):
-> the E12 rework (#3012) root-caused the 0.0 MB torch-allocator anomaly this row's
-> own acceptance criterion depended on — `faster-whisper`'s CTranslate2 backend
-> never routes any CUDA work, weights or per-forward activations, through
-> PyTorch's caching allocator, so `asr.warm`'s learned estimate structurally
-> cannot converge under the current `_observed_mb`-based measurement, confirmed
-> live (`sample_count` stayed 0 through 6 resident calls). A documented,
-> evidence-backed "cannot converge as claimed" conclusion discharges the row per
-> the acceptance criteria's own OR branch; see
+> **Last change: 2026-09-06, discharging E12** (#2682, PR #2799 chain via #2930,
+> claude): the E12 rework (#3012) added `FootprintTable.snapshot()` +
+> `GET /debug/memory`'s new `footprints` block (per-key seed/learned/sample-count,
+> previously unobservable from outside the process), then root-caused the 0.0 MB
+> torch-CUDA-counter anomaly step 1 (#2932) had flagged and step 2's verify
+> (#2931) FAILed on: `faster-whisper`'s CTranslate2 backend never routes any CUDA
+> work — weights or per-forward activations — through PyTorch's caching
+> allocator, so `_observed_mb()` structurally cannot see any of its activity. A
+> live re-run (1 cold + 6 resident `/transcribe` calls, zero `noCapacity`
+> refusals) confirmed the consequence directly: `asr.warm`'s `sample_count`
+> stayed 0 through all 6 resident calls. This is a documented, evidence-backed
+> "cannot converge as claimed" conclusion, discharging the row per its own
+> acceptance criteria's OR branch — see
 > `docs/testing/onbox-e12-results/step-1-rework-run.md`. The underlying defect
-> this row tracked is still live and unfixed — #3036 tracks it now that this
-> row no longer does. 65 → 64 owed, Group E 13 → 12.
+> this row tracked is still live and unfixed — #3036 tracks it now that this row
+> no longer does. This merges on top of the independent E9/E10/E101 chain below
+> (63 → 62 owed, Group E 11 → 10; the two changes touched disjoint rows in the
+> same group and never saw each other). `next-id` markers unaffected
+> (allocate-once IDs are never reused or renumbered).
+>
+> **Prior change: 2026-09-06 (E9/E10/E101 chain, #2948, claude), 65 → 63 —
+> Group E 13 → 11.** Step 4 of the chain folded all three rows' on-box
+> results: **E10** (`npm run stop` four-way discrimination, #2632/PR #2635)
+> and **E101** (shared-run-dir owner-note collision, #2641/PR #2754) both
+> PASSED for real (`docs/testing/onbox-e9-e10-e101-results/step-2-e10.md`,
+> `step-3-e101.md`) and are fully discharged and REMOVED outright — both
+> claims this register existed to prove now have real, PID-verified evidence
+> and nothing is left owed on either row. **E9** is KEPT: item (2) (the
+> dash-stripped re-run invariance check) is discharged — re-run against
+> current `main` (`76aa7c6d`, descendant of the final fix mechanism attempt 4
+> `5a60b088` plus the P1/P2 regression fixes) and the criterion **still
+> fails** on `Ночной дозор`, the same real, reproducible residual gap wave
+> 3/4 already characterized, not a new regression (`step-1-e9.md`). A FAIL is
+> a valid, complete discharge of the *re-run debt* itself — fresh evidence is
+> now on record, so item (2) no longer owes a re-run, even though its
+> underlying property gap remains unfixed. Item (3) (post-D18 re-analysis)
+> was explicitly out of this chain's scope and stays owed, riding Group C's
+> own session. `next-id` markers unaffected (allocate-once IDs are never
+> reused or renumbered).
 >
 > **Prior change: 2026-09-01, merging this branch's wave-10 A28 discharge with
 > `main`'s independent ROCm/AMD Blocked-row addition.** This branch
@@ -3000,6 +3027,29 @@ filed against, and it has not been separately re-confirmed since the fix landed
 > `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
 > (Castwright#2621).
 
+> **2026-09-06 (chain #2913 retry, Castwright#2916/#2914/#3015) — STILL OWED,
+> partially run, port isolation resolved.** Confirmed the #2632 per-worktree
+> `LOCAL_TTS_PORT` fix closes the port-contention class that the 2026-08-21
+> wave-4 step 5c and 2026-08-23 wave-5 attempts above hit (not all four prior
+> attempts — wave-3 step 2 was the separate CUDA13/cuDNN9 gap, and wave-4
+> step 8 was explicitly out of scope for the install click-through): sidecar
+> bound to this worktree's own `:9080`, never adopting or contending with
+> another live lane's `:9000`. But this row's own subject, #2192, was **not
+> exercised**: Qwen3-TTS was already fully installed (package + weights)
+> from this worktree's own bootstrap step, so the Model Manager UI showed it
+> already installed with no error — this run only clicked **Re-check** (a
+> refetch), never the actual **Install** action `#2192` describes, because
+> that control does not render once a package is already installed
+> (`src/components/qwen-install.tsx`). No fresh `pip install` ran at all, so
+> there was no DLL write for a `WinError 5`/`Accès refusé` to fire against —
+> the actual criterion 2 scenario never had a chance to run, let alone pass.
+> An initial pass mistakenly discharged this row on that null observation
+> (PR #3015, reverted after review). Genuine redo — a venv confirmed absent
+> Qwen3 before the in-app Install click — filed separately, chain
+> Castwright#2913 → #3020 → #3019. Evidence:
+> `docs/testing/onbox-a29-results/step-1-retry.md` (port-isolation half
+> only; criterion 2 explicitly not validated, see that doc's own correction).
+
 ### A30 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 
 **Not in the design doc's §On-box acceptance table.** Filed anyway: Task 8 wired
@@ -4196,7 +4246,7 @@ to real output, not about VRAM or a specific card.
 
 <!-- next-id: E103 -->
 
-Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5/E6/E8 for front-end acceptance), or platform-independent infrastructure (E1/E7/E9/E10/E11/E12/E101). E1/E7/E11 group on the Pinokio box; E6/E9/E10 need two live checkouts.
+Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5/E6/E8 for front-end acceptance), or platform-independent infrastructure (E1/E7/E9/E11/E12). E1/E7/E11 group on the Pinokio box; E6 needs two live checkouts.
 
 ### E1 · ops-16 Pinokio installer ([#822](https://github.com/dudarenok-maker/Castwright/issues/822)) · **macOS is the gap**
 
@@ -4546,12 +4596,30 @@ same run completed the **D13 re-gate**, whose verdict is *drop the `drifted`
 state* — the owner confirmed this 2026-08-14, closed as #2357: see the run
 sheet §5 and spec §D13 re-gated → *Re-gate outcome*.
 
-**Still owed:** (2) the dash-stripped re-run invariance check (Task 9's paired
-assertion — run twice, second time over scratch-path copies of each cache with
-every leading dash stripped, diff every field of every row); (3) re-analysing
-one book post-D18 to confirm `demotedNarrator`/`modelNarrator` actually
-populate outside a unit fixture. **Both need GPU/analysis time this pass did
-not spend**, which is why the row stays rather than closing.
+**Still owed:** (3) re-analysing one book post-D18 to confirm
+`demotedNarrator`/`modelNarrator` actually populate outside a unit fixture —
+explicitly out of scope for the E9/E10/E101 chain (#2948), rides Group C's own
+session. **Needs GPU/analysis time this pass did not spend**, which is why the
+row stays rather than closing.
+
+**Item (2) DISCHARGED 2026-09-06** (E9/E10/E101 chain, #2948 step 1,
+`docs/testing/onbox-e9-e10-e101-results/step-1-e9.md`): re-run against current
+`main` (`76aa7c6d951839aa655aab9b44cecf6fc3836adb`, confirmed a descendant of
+the final fix mechanism — attempt 4, commit `5a60b088`, plus the two later
+P1/P2 blocking-regression fixes from PR #2577's review rounds). Both passes
+run for real (straight, then dash-stripped over a scratch-path copy of every
+cache file, originals restored and verified byte-identical after). 22 of 23
+books: zero diffs. **`Ночной дозор` still diverges** — same field names, same
+direction, same order of magnitude as every prior observation
+(`narratorIdSpoken` 229→223, `share` 0.1302→0.1273, `unattributedSpeech` 9→7,
+`splitSpeech` 337→346, `tagNarratorSpan` 544→536, plus one additional small
+per-chapter shift in chapter 9 not previously reported). **The criterion still
+FAILS on real data** — this is not a new regression, it is the same residual
+real-data gap wave 3/4 already characterized. Per this chain's own framing, a
+FAIL is a valid, complete discharge of the *re-run debt* itself (fresh
+evidence recorded against the fully-current fix): item (2) no longer owes a
+re-run, though the underlying property gap it measures remains unfixed and is
+not itself claimed as closed by this note.
 
 *Needs:* a checkout (or worktree with `server/handoff/cache/` populated from
 one) whose cache holds the real 20-book library's analyses, `cd server && npm
@@ -4636,89 +4704,6 @@ exists. *Criteria:* spec §On-box acceptance
 > that step itself — this note folds its verdict in per wave-5 step 6.
 > Evidence: `docs/testing/onbox-wave5-results/step-3-e9.md`.
 
-### E10 · `npm run stop` sweeps the RIGHT checkout's sidecar, Vite, AND server (#2632, PR #2635) · **two live checkouts, no GPU needed**
-
-`scripts/stop-app.mjs`/`stop-app.ps1`'s belt-and-braces orphan sweep now
-resolves every per-checkout port it sweeps — `LOCAL_TTS_PORT`, `PORT`, and
-(PowerShell only) `VITE_PORT` — via `scripts/lib/sidecar-sweep-port.mjs`/
-`.psm1`, instead of hardcoding the factory defaults `:9000`/`:8080`/`:5173`.
-Pass 8 found the first cut of this fix resolved only the TTS port and left
-the other three base ports (`:5173`, `:8080`, `:8443`) hardcoded — the
-primary checkout's own values — so `npm run stop` run from a worktree
-following the `npm run dev` workflow force-killed the **primary's** Vite and
-server while leaving the worktree's own Vite/server untouched, the exact
-inversion of this branch's headline claim. The first follow-up fix resolved
-`PORT` from this checkout's own `server/.env` and `VITE_PORT` from its own
-`.env.local` the same way `LOCAL_TTS_PORT` already was, sweeping neither
-when unconfigured rather than guessing the primary's value.
-
-A second follow-up removed `:8443` (LAN HTTPS) from the sweep entirely,
-rather than resolving it the same way: unlike `PORT`/`VITE_PORT`, config
-alone can't establish ownership of the currently-bound process even when
-THIS checkout's own `server/.env` sets `LAN_HTTPS=1`. Two reasons: (a) in
-production (`stop-app.mjs`'s launcher always sets `NODE_ENV=production`),
-`listenWithAutoRebind` (`server/src/index.ts`) auto-rebinds `LAN_HTTPS_PORT`
-on conflict, so the configured value is only a `startPort`, not necessarily
-where the process actually listens; (b) even in dev (`stop-app.ps1`'s world,
-where dev mode never rebinds — a losing checkout's server exits with an
-actionable `EADDRINUSE` instead), "my config says `LAN_HTTPS=1`" only means
-*this checkout would hold `:8443` if it won the race*, not that it currently
-does. There is no owner-note file for the main server's bound port the way
-`.run/tts.owner.<port>.json` exists for the sidecar, so neither script has an
-authoritative source to settle it — the sweep now sweeps nothing for
-`:8443` rather than guess. This is a **coverage tradeoff, not a defect**: an
-orphaned LAN-HTTPS listener with no surviving PID file is no longer
-auto-reaped by either script and needs a manual kill (`netstat -ano | findstr
-:8443`) — accepted because a live-but-wrong guess can force-kill a different
-checkout's server, and killing nothing is always safer than that.
-
-The resolver and the swept-port-list assembly are both unit-tested against
-real temp files (`scripts/tests/sidecar-sweep-port.test.mjs`/`.Tests.ps1`),
-including mutation-style guards pinning that `:8443` never re-enters either
-script's base-port list, but nothing in this PR executes `stop-app.ps1`/
-`.mjs` end to end against real listeners — the actual claim this branch
-exists to make (*"in a worktree, `npm run stop` stops my whole stack and
-none of the primary's"*) has never been observed. Two checkouts each
-running a live stack is "a real sidecar" in this register's own vocabulary
-(see A1, D-group entries).
-
-*Needs:* two checkouts of this repo (e.g. the primary + a `wt-new.mjs`
-worktree, e.g. slot 1: `VITE_PORT=5183`, `PORT`/`VITE_API_PORT=8090`,
-`LOCAL_TTS_PORT=9010`), each with **all three** of Vite, the server, and the
-sidecar live (`npm start` / `npm run dev`) so each checkout owns a
-`tts.owner.<port>.json` note. From the worktree, run `npm run stop` and observe
-**four** things, not just the sidecar pair: (1) the worktree's own sidecar
-(`:9010`) dies; (2) the primary's sidecar (`:9000`) survives; (3) the
-worktree's own Vite (`:5183`) and server (`:8090`) die; (4) the **primary's**
-Vite (`:5173`) and server (`:8080`) survive — this last pair is the one pass
-8 found broken and is the one an operator must not skip. Then repeat after a
-clean shutdown of the worktree's sidecar (so `tts.owner.<port>.json` is absent
-and the sweep falls back to `server/.env`/`.env.local`) and confirm the same
-four-way discrimination holds. **Optionally**, if exercising the LAN-HTTPS
-path too: start the primary with `LAN_HTTPS=1` (so it's listening on
-`:8443`), then from the worktree run `npm run stop` and confirm the
-**primary's `:8443` also survives** — it should, because `:8443` is no
-longer in either script's sweep list at all; this is a smoke check on the
-removal, not a new required step for every run of this row. On Windows
-PowerShell only (`stop-app.ps1` force-kills; `stop-app.mjs`, the prod
-launcher, only warns and never runs Vite, so its own check is limited to
-(1)/(2)/the server pair of (3)/(4)). **A fifth observation, in the PRIMARY
-checkout itself** (#2632 N46): with no `.env.local` and no `PORT` line in
-`server/.env` — the primary checkout's actual today-state, and the default
-for anything derived from `server/.env.example` — `Get-PortsToSweep`'s
-`-BasePorts` resolves to an empty array at the `stop-app.ps1` call site.
-Run `scripts/stop-app.ps1` there (with nothing needing to actually be
-running — this observation is about the script not throwing, not about
-what it kills) and confirm: no red `ParameterBindingValidationException`/
-`Cannot bind argument` block appears, and the script still reports its
-outcome truthfully (`[OK] nothing to stop`, or the correct sweep line if a
-listener is present) rather than silently swallowing the error and printing
-a false "nothing to stop" while a raw exception scrolled past above it.
-*Cost:* under 2 minutes, no live stack needed for this one. *Criteria:*
-this PR's description (§On-box acceptance) and `docs/features/` plan 43's
-stop-script contract, plus `scripts/lib/sidecar-sweep-port.mjs`'s own
-module-level comment for the exact fallback order being exercised.
-
 ### E11 · Pinokio Install/Update: requirements CRLF normalization ([#2596](https://github.com/dudarenok-maker/Castwright/issues/2596), PR #2799) · **Windows box with pre-existing Pinokio install**
 
 PR #2799 adds `renormalizeRequirementsCrlf()` to `pinokio-scripts/lib/resolve-release.js`, 
@@ -4751,64 +4736,6 @@ normalizes correctly. Issue #2596 and PR #2799 body.
 **One-update lag:** Updates FROM pre-#2799 releases run the old `resolve-release.js`, 
 so CRLF normalization only takes effect from the NEXT update onward (see E1 and 
 `pinokio-scripts/update.js` lines 19–28).
-
-### E101 · Port-keyed TTS owner notes prevent collision when servers share a run directory (#2641, PR #2754) · **no GPU needed**
-
-Before #2641, the TTS sidecar owner-note file was fixed at `.run/tts.owner.json`
-regardless of which port the sidecar was listening on. When two different server
-instances on different ports both used the same `.run` directory — set via
-`APP_RUN_DIR` environment variable pointing to a shared location — they would
-both try to write to this single fixed filename. Whichever wrote last would
-silently clobber the other's note, losing the ownership information (PID, port,
-lineage). A server reading the note later would find stale or wrong data about
-which sidecar it was supposed to manage.
-
-#2641 fixes this by keying the owner-note filename by port: each sidecar now
-writes to `.run/tts.owner.<port>.json`. When two instances share a `.run`
-directory, each gets its own file. The sidecar-sweep logic that reads owner
-notes to decide which listeners to kill also resolves the port, so it correctly
-discriminates: a sweep from port 8090 reads `tts.owner.8090.json` only and leaves
-`tts.owner.9000.json` untouched.
-
-The claim is never tested by E10 — that row's setup uses **two separate
-checkouts with two separate `.run/` directories**, so the fixed filename never
-collided even before this fix. E10 verifies the sweep correctly uses different
-ports; this row verifies the port-keying prevents collision when the run
-directory **is** shared.
-
-*Needs:* two checkouts of this repo, both with live TTS sidecars and servers on
-**different ports**, both pointing to the **same `.run/` directory**. The most
-straightforward setup: primary checkout at default ports (`PORT=8080`,
-`LOCAL_TTS_PORT=9000`) + worktree at slot 1 (`PORT=8090`, `LOCAL_TTS_PORT=9010`),
-then override both to share one `.run` by setting `APP_RUN_DIR=/abs/path/shared-run-dir` in
-**both** checkouts' `server/.env` before starting, so each server will write its
-owner note there instead of in its own checkout's `.run/`.
-
-Run `npm start` or `npm run dev` in each checkout. From the primary, observe:
-**(1)** `.run/tts.owner.9000.json` exists and contains the primary's sidecar PID;
-**(2)** `.run/tts.owner.9010.json` also exists (written by the worktree's
-sidecar) and contains a different PID. Both files coexist in the shared `.run`
-directory without collision — this is the core fix of #2641. Verify by inspecting
-file contents directly (e.g., `cat /abs/path/shared-run-dir/tts.owner.*.json`);
-the port-keyed naming prevents the overwrite-collision that would have occurred
-before this fix. 
-
-**Note:** Verifying the port-based sweep's behavior in a shared-run-dir configuration
-is not currently a safe on-box test, because the PID file (`.run/tts.pid`) is not
-port-keyed — only the owner notes are. When two servers share a run directory, both
-write to the same `tts.pid`, and whichever started last overwrites the first. Running
-`npm run stop` from either checkout can then kill the wrong process (the one whose
-PID happens to be in the file, not the one whose checkout the stop was issued from),
-defeating the separation the port-keyed owner notes provide. The actual #2641 fix
-(port-keyed owner-note filenames) is verified above; the sweep's correctness in
-this shared-run-dir scenario will require #2641 to be extended to port-key the PID
-files as well.
-
-*Cost:* 5–10 minutes to set up and run. Needs two live sidecars on the same host.
-*Criteria:* this PR's description (§On-box acceptance), the
-`.run/tts.owner.<port>.json` keying in `server/src/tts/sidecar-owner.ts`
-(the Node server that writes owner notes), and `scripts/lib/sidecar-sweep-port.mjs`
-and `.psm1` (the sweep logic that reads notes and falls back to config).
 
 ## Group G — GitHub Actions itself
 
