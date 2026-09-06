@@ -1742,41 +1742,45 @@ opportunistic.
 
 ### A16 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
 
-> **PARTIALLY evidenced 2026-07-31 — NOT discharged.** Corrected after
-> [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) was
-> understood; the original entry claimed a full discharge and was wrong.
+> **PARTIALLY evidenced 2026-09-06/07 — NOT discharged (6 of 7 sub-checks
+> pass; 1 staged for human review).** Re-run in full per this update, on
+> `chore/ops-analyzer-render-batch`, once [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)
+> and [#1969](https://github.com/dudarenok-maker/Castwright/issues/1969) were
+> both confirmed merged and present. Full evidence, raw SSE logs, audio
+> clips and embedding vectors:
+> [`onbox-batch-results/a16.md`](onbox-batch-results/a16.md).
 >
-> **What still stands — the fix works, proven at the synthesis boundary.** Three
-> direct `POST /synthesize` calls on the same cloned voice, raw PCM transcribed
-> with Whisper auto-detect and embedded with `/embed`:
+> **The chapter-level criterion this row was withdrawn over now passes for
+> real**, via a genuine full-chapter batch render (not a splice), on a
+> cloned Qwen voice cast onto a Russian character (Одуван, "Заказ
+> Коалфолла" chapter 2): Whisper auto-detect → `ru`, `avg_logprob −0.428`,
+> cosine 0.800 against the English source clip (same band as this row's
+> existing English 0.865 / German 0.809 rows). `resolvedVoiceName` held the
+> clone's storage key across **four** separate chapter renders, including
+> one after a real sidecar restart — never silently substituted. The title
+> beat (the chapter's one un-batched `/synthesize` call) transcribed as
+> clearly Russian, no English accent. A real designed-and-restarted-sidecar
+> voice (a second character, Рен) rendered the same content/language/
+> identity (cosine 0.891 between pre- and post-restart takes) both times,
+> not byte-identical (expected — Qwen3-TTS sampling is stochastic), but
+> never silently switched voice or language.
 >
-> | Call | detected | `avg_logprob` | cos vs source clip |
-> |---|---|---|---|
-> | English text + `language: English` | `en` | −0.258 | 0.865 |
-> | **German text + `language: German`** | **`de`** | −0.699 | **0.809** |
-> | German text, language omitted (pre-fix) | `en` | −0.904 | 0.876 |
->
-> Row 3 reproduces the shipped bug live — German in, English phonetics out,
-> transcript garbage. Row 2 is the fix, with the cloned identity intact at 0.809
-> against a ~0.03 different-speaker floor. This is real evidence and does not
-> depend on the splice path.
->
-> **What is withdrawn.** The row's actual criterion is *"render a non-English
-> **chapter** with a cloned voice and transcribe the output"*. That chapter
-> render used a splice re-record, so most of what was measured was **narrator**
-> audio, not the clone — the rendered lines scored **0.949** against the
-> chapter's own narrator. The `de` / −0.233 figure is therefore a measurement of
-> the wrong audio: it shows the chapter rendered in German, not that *a cloned
-> voice* did. `resolvedVoiceName` said otherwise, and that is the field #1972
-> falsifies.
->
-> **To finish this row:** re-run the chapter-level criterion once #1972 has
-> landed, on a book whose `segments.json` and analysis agree — or via a full
-> chapter generation, which is unaffected by the defect. The remaining
-> sub-checks (designed self-heal → restart → identical; the QA
-> `voice-mismatch` check, blocked on
-> [#1969](https://github.com/dudarenok-maker/Castwright/issues/1969)) are
-> unchanged.
+> **What is still open:** the QA-report `voice-mismatch` check (this row's
+> last bullet). After discovering and removing a real stale-data trap (this
+> session's copied book carried a pre-existing, weeks-old
+> `render-integrity.json`/`embeddings.json` from its original workspace,
+> and `qa.speaker.enabled` defaults OFF in a fresh checkout so none of
+> three renders ever refreshed it — see `a16.md`'s Bullet 7 for the full
+> trail), a genuinely fresh, uncontaminated scoring pass still flags **1 of
+> 8** scored lines for the cloned character as `voice-mismatch` (cosine
+> 0.764 against a 0.83–0.90 cluster, `pSevere` 0.793). `expectedEngine`/
+> `renderedEngine` both correctly resolve to `qwen` in this clean run — the
+> historical #1969 failure mode (a stale reference surviving a voice
+> reassignment) is demonstrably **not** what produced this flag — but the
+> row's literal "zero mismatch rows" bar isn't met, so this row stays open
+> pending a human listen to the one flagged line (`a16.md` names the exact
+> clip/segment) to judge genuine synthesis glitch vs. a tight
+> percentile-cutoff false positive on a small per-character sample.
 
 Before this fix a cloned Qwen voice rendered **every** book, in every language, as
 English — `QwenEngine.synthesize` took the caller's language and ignored it, and a
