@@ -414,7 +414,7 @@ describe('snapshotsConsistent', () => {
 });
 
 describe('classifySnapshotEvidence (#2134)', () => {
-  test("'no-evidence': real rendered segments, zero snapshot entries — the exact register-row-A29 the-torment/lightning-dave shape", () => {
+  test("'no-evidence': real rendered segments, zero snapshot entries — the exact register-row-A22 the-torment/lightning-dave shape", () => {
     assert.equal(classifySnapshotEvidence({ segments: 67, snapshots: [] }), 'no-evidence');
   });
 
@@ -1121,7 +1121,7 @@ describe('planBookRepairs', () => {
     assert.match(plan.reportOnly[0].reason, /disagree across chapters/);
   });
 
-  test("#2134 round 2: a Tier B (id-shape) match with real rendered segments but NO characterSnapshots evidence under its own key STILL auto-records, annotated 'no-evidence' — the register-row-A29 the-torment shape", () => {
+  test("#2134 round 2: a Tier B (id-shape) match with real rendered segments but NO characterSnapshots evidence under its own key STILL auto-records, annotated 'no-evidence' — the register-row-A22 the-torment shape", () => {
     // 'the-torment' normalises the same as live 'the_torment' and carries
     // NO name evidence anywhere (no cacheNameIndex/bakNameIndex entry) —
     // this is the real workspace's actual the-torment shape: Tier B only
@@ -1139,7 +1139,7 @@ describe('planBookRepairs', () => {
     // Round 2 (independent review, 2026-08-05): 'no-evidence' is no longer
     // a veto — characterSnapshots is written only for a LIVE id at render
     // time, so its ABSENCE here means the narrator was substituted at
-    // render time (the actual A29 damage this pass exists to fix), not a
+    // render time (the actual A22 damage this pass exists to fix), not a
     // reason to distrust the alias. This id — real workspace evidence —
     // is one of the two aliases (with coalfall) that a round-1 veto would
     // have wrongly blocked, per the owner-accepted register row A30 write.
@@ -1162,7 +1162,7 @@ describe('planBookRepairs', () => {
     assert.equal(plan.autoRecord[0].snapshotEvidence, 'no-evidence');
   });
 
-  test("#2134 round 2: a Tier A (name) match with real rendered segments but no characterSnapshots evidence ALSO auto-records, annotated 'no-evidence' — the register-row-A29 lightning-dave shape", () => {
+  test("#2134 round 2: a Tier A (name) match with real rendered segments but no characterSnapshots evidence ALSO auto-records, annotated 'no-evidence' — the register-row-A22 lightning-dave shape", () => {
     // 'lightning-dave' matches via an unambiguous CACHE name ("Lightning
     // Dave" == live "Lightning Dave") — the real workspace's actual
     // lightning-dave shape is Tier A (dry-run evidence string: `analysis
@@ -2777,12 +2777,12 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
     assert.equal(orphans.size, 0);
   });
 
-  test("CRITICAL (#2107, widened by owner decision): an id resolving via 'normalised-id' is now an orphan too — register row A29's the-torment/lightning-dave real-workspace counter-example", () => {
+  test("CRITICAL (#2107, widened by owner decision): an id resolving via 'normalised-id' is now an orphan too — register row A22's the-torment/lightning-dave real-workspace counter-example", () => {
     // A narrower first version of this fix kept 'normalised-id' out of
     // orphans, reasoning it can't depend on the mutable supersededBy table
     // so it can't post-date the render. Independent review found that
     // proves only that no RENAME happened, not that the rendered bytes are
-    // correct — register row A29 records a real case where a
+    // correct — register row A22 records a real case where a
     // 'normalised-id' match was rendered BEFORE Wave 1's resolver existed
     // at all, substituting the narrator regardless of tier. The owner
     // decided: over-reporting is the safe failure direction for a one-shot

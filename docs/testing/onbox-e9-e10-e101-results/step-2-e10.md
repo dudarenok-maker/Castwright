@@ -3,8 +3,9 @@
 Issue: [#2959](https://github.com/dudarenok-maker/Castwright/issues/2959) · Parent
 [#2948](https://github.com/dudarenok-maker/Castwright/issues/2948), campaign #2435.
 
-Confirms register row **E10** (`docs/testing/onbox-acceptance-register.md`
-`### E10`): does `npm run stop` (`scripts/stop-app.ps1`) stop only the checkout
+Confirms register row **E10** (now discharged and removed from the register;
+was `docs/testing/onbox-acceptance-register.md` `### E10`): does `npm run stop`
+(`scripts/stop-app.ps1`) stop only the checkout
 it is run from, leaving a second, separate checkout's sidecar/Vite/server
 completely untouched — including the pass-8-regression pair (the **other**
 checkout's Vite+server surviving), which the row's own text says was found

@@ -50,7 +50,7 @@ function state(
 }
 
 describe('selectCloneReadinessVerdicts', () => {
-  it('rule 7 silence: a real coqui CAST slot stays silent even though the library entry has no xtts slot yet (characterHasSlot must read the CAST slot, never the library slot)', () => {
+  it('rule 8 silence: a real coqui CAST slot stays silent even though the library entry has no xtts slot yet (characterHasSlot must read the CAST slot, never the library slot)', () => {
     const c = char({
       ttsEngine: 'coqui',
       overrideTtsVoices: { coqui: { name: 'v1', libraryUuid: 'v1', provenance: 'cloned' } },
@@ -96,7 +96,7 @@ describe('selectCloneReadinessVerdicts', () => {
     expect(verdicts).toEqual([expect.objectContaining({ reason: 'derive-failed' })]);
   });
 
-  it('rule 7 silence: a qwen-cloned voice on a coqui-routed character with BOTH cast slots present (post-#1933 assign) does not fire', () => {
+  it('rule 8 silence: a qwen-cloned voice on a coqui-routed character with BOTH cast slots present (post-#1933 assign) does not fire', () => {
     const c = char({
       ttsEngine: 'coqui',
       overrideTtsVoices: {
@@ -181,6 +181,44 @@ describe('selectCloneReadinessVerdicts', () => {
   it('a plain, non-cloned cast produces no verdicts at all', () => {
     const c = char({ ttsEngine: 'kokoro' });
     expect(selectCloneReadinessVerdicts(state([c], []), 'b1')).toEqual([]);
+  });
+
+  describe('unresolvable-uuid (#2054) — a cloned slot whose libraryUuid cannot be resolved', () => {
+    it('a cloned slot with NO libraryUuid at all is named by the gate, not silently dropped — mutation 1 target: restoring buildInput\'s old `undefined` return for this case must turn this test red', () => {
+      const c = char({
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'v1', provenance: 'cloned' } },
+      });
+      const verdicts = selectCloneReadinessVerdicts(state([c], []), 'b1');
+      expect(verdicts).toEqual([
+        expect.objectContaining({ characterId: 'c1', reason: 'unresolvable-uuid', castOnEngine: null }),
+      ]);
+    });
+
+    it('a cloned slot with an empty-string libraryUuid also reports unresolvable-uuid', () => {
+      const c = char({
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'v1', libraryUuid: '', provenance: 'cloned' } },
+      });
+      const verdicts = selectCloneReadinessVerdicts(state([c], []), 'b1');
+      expect(verdicts).toEqual([expect.objectContaining({ reason: 'unresolvable-uuid' })]);
+    });
+
+    it('a cloned slot with a malformed (non-string) libraryUuid also reports unresolvable-uuid', () => {
+      const c = char({
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'v1', libraryUuid: 12345 as unknown as string, provenance: 'cloned' },
+        },
+      });
+      const verdicts = selectCloneReadinessVerdicts(state([c], []), 'b1');
+      expect(verdicts).toEqual([expect.objectContaining({ reason: 'unresolvable-uuid' })]);
+    });
+
+    it('mutation 2 control: a non-cloned (designed) slot with no libraryUuid at all still produces no gate, whatever its uuid field looks like — must stay green when unresolvable-uuid is wired correctly, and go red if that branch is widened to also fire on non-cloned slots', () => {
+      const c = char({ ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'v1' } } });
+      expect(selectCloneReadinessVerdicts(state([c], []), 'b1')).toEqual([]);
+    });
   });
 
   describe('legacy bare-uuid qwen slot (#1891) — a qwen libraryUuid with NO provenance field', () => {
