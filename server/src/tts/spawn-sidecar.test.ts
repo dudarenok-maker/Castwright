@@ -140,6 +140,137 @@ describe('spawnSidecar', () => {
     }
   });
 
+  /* #3043 B1 — autoStart off means "this server does not own the sidecar on
+     this port". Adopting a healthy one is the whole point of the probe; every
+     OWNERSHIP action on anything else is off-limits, because `if (!autoStart)`
+     guarantees no replacement is coming. Before this, an UNFIT listener took
+     the replace branch and taskkill'd a process this server never started —
+     and then returned null without spawning anything. */
+  describe('autoStart off never takes an ownership action on an UNADOPTABLE listener', () => {
+    const unfitCases: Array<{
+      name: string;
+      health: Awaited<ReturnType<NonNullable<Parameters<typeof spawnSidecar>[0]['healthProbeFn']>>>;
+    }> = [
+      {
+        name: 'a STALE-protocol sidecar',
+        health: {
+          reachable: true,
+          looksLikeSidecar: true,
+          protocolVersion: 0,
+          committedMb: 9000,
+          recyclePending: false,
+        },
+      },
+      {
+        name: 'a sidecar that reports recycle_pending',
+        health: {
+          reachable: true,
+          looksLikeSidecar: true,
+          protocolVersion: 1,
+          committedMb: 9000,
+          recyclePending: true,
+        },
+      },
+      {
+        name: 'a FOREIGN process that does not answer as our sidecar',
+        health: {
+          reachable: true,
+          looksLikeSidecar: false,
+          protocolVersion: null,
+          committedMb: null,
+          recyclePending: false,
+        },
+      },
+    ];
+
+    for (const { name, health } of unfitCases) {
+      it(`${name}: no kill, no spawn, no refusal, no adopt`, async () => {
+        probeFn.mockResolvedValueOnce(true);
+        const killCalls: unknown[][] = [];
+        const trackingSpawn = vi.fn((...args: unknown[]) => {
+          if (Array.isArray(args[1]) && args[1][0] === 'taskkill') killCalls.push(args);
+          return makeFakeChild();
+        });
+        const findPidFn = vi.fn(async () => 4242);
+        const onAdoptExisting = vi.fn();
+        const onSpawnRefused = vi.fn();
+
+        const handle = await spawnSidecar({
+          autoStart: false,
+          modelKey: 'kokoro-v1',
+          repoRoot,
+          spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
+          probeFn,
+          healthProbeFn: async () => health,
+          findPidFn,
+          log,
+          warn,
+          onAdoptExisting,
+          onSpawnRefused,
+        });
+
+        expect(handle).toBeNull();
+        expect(killCalls).toHaveLength(0);
+        expect(trackingSpawn).not.toHaveBeenCalled();
+        // Never even asked which PID owns the port — nothing here is ours to act on.
+        expect(findPidFn).not.toHaveBeenCalled();
+        // Not adopted either: the supervisor must not report a usable sidecar.
+        expect(onAdoptExisting).not.toHaveBeenCalled();
+        // And no refusal, which would drive a retry loop toward a spawn that
+        // `if (!autoStart)` will never perform.
+        expect(onSpawnRefused).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('NOT touching it'));
+      });
+    }
+
+    /* The production launch config (NODE_ENV=production ⇒ neverAdoptSidecar())
+       makes even a perfectly HEALTHY external sidecar take policyReplace. With
+       autoStart off it must still be adopted, never replaced. */
+    it('a HEALTHY sidecar under the production never-adopt policy is adopted, not killed', async () => {
+      const oldEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      try {
+        probeFn.mockResolvedValueOnce(true);
+        const killCalls: unknown[][] = [];
+        const trackingSpawn = vi.fn((...args: unknown[]) => {
+          if (Array.isArray(args[1]) && args[1][0] === 'taskkill') killCalls.push(args);
+          return makeFakeChild();
+        });
+        const findPidFn = vi.fn(async () => 4242);
+        const onAdoptExisting = vi.fn();
+        const onSpawnRefused = vi.fn();
+
+        const handle = await spawnSidecar({
+          autoStart: false,
+          modelKey: 'kokoro-v1',
+          repoRoot,
+          spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
+          probeFn,
+          healthProbeFn: async () => ({
+            reachable: true,
+            looksLikeSidecar: true,
+            protocolVersion: 1,
+            committedMb: 9000,
+            recyclePending: false,
+          }),
+          findPidFn,
+          log,
+          warn,
+          onAdoptExisting,
+          onSpawnRefused,
+        });
+
+        expect(handle).toBeNull();
+        expect(killCalls).toHaveLength(0);
+        expect(findPidFn).not.toHaveBeenCalled();
+        expect(onSpawnRefused).not.toHaveBeenCalled();
+        expect(onAdoptExisting).toHaveBeenCalledWith({ host: '127.0.0.1', port: 9000 });
+      } finally {
+        process.env.NODE_ENV = oldEnv;
+      }
+    });
+  });
+
   it('reuses an already-listening sidecar when its protocol_version is current', async () => {
     probeFn.mockResolvedValueOnce(true);
     const healthProbeFn = vi.fn(async () => ({
@@ -1311,7 +1442,7 @@ describe('spawnSidecar', () => {
       expect(onSpawnRefused).toHaveBeenCalledWith(expect.stringContaining('no pid'));
     });
 
-    it('does NOT fire when autoStart is false (benign)', async () => {
+    it('does NOT fire when autoStart is false and nothing is listening', async () => {
       const onSpawnRefused = vi.fn();
 
       const handle = await spawnSidecar({
@@ -1320,6 +1451,36 @@ describe('spawnSidecar', () => {
         repoRoot,
         spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
         probeFn,
+        log,
+        warn,
+        onSpawnRefused,
+      });
+
+      expect(handle).toBeNull();
+      expect(onSpawnRefused).not.toHaveBeenCalled();
+    });
+
+    /* #3043 B1 — a refusal drives the supervisor's retry/backoff loop and
+       holds isRecycling true. With autoStart off there is no spawn at the end
+       of that loop for it to reach, so refusing is never the right answer
+       however unadoptable the listener is. */
+    it('does NOT fire when autoStart is false and a FOREIGN process holds the port', async () => {
+      probeFn.mockResolvedValueOnce(true);
+      const onSpawnRefused = vi.fn();
+
+      const handle = await spawnSidecar({
+        autoStart: false,
+        modelKey: 'kokoro-v1',
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn: async () => ({
+          reachable: true,
+          looksLikeSidecar: false,
+          protocolVersion: null,
+          committedMb: null,
+          recyclePending: false,
+        }),
         log,
         warn,
         onSpawnRefused,

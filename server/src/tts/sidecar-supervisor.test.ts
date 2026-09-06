@@ -483,6 +483,82 @@ describe('sidecar supervisor (srv-15)', () => {
     expect(sup.current()).toBe(handles[0]);
   });
 
+  /* #3043 B1, second door. With autoStart off the adopt signal must still
+     arm (it is what makes an install hold refuse rather than pip into a live
+     venv), but the watchdog behind it must take NO ownership action: the
+     drain path POSTs /recycle to a process this server never started, and the
+     respawn behind it is a no-op because `if (!autoStart) return null` — so
+     the operator's sidecar is asked to exit and nothing brings it back. */
+  describe('an adopted sidecar with autoStart off is observed, never drained or replaced', () => {
+    const AUTOSTART_OFF = { ...BASE_OPTS, autoStart: false };
+
+    it('never drains and never respawns, however unfit the sidecar reports itself', async () => {
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      });
+      const probeFn = vi.fn(async () => true); // the operator's sidecar stays up
+      const recycleSidecarFn = vi.fn(async () => true);
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => AUTOSTART_OFF,
+        spawnFn,
+        probeFn,
+        // Reports recycle_pending on every poll — the fitness trigger that
+        // sends an OWNED adopt down drainThenRespawn.
+        healthProbeFn: vi.fn(async () => ({
+          reachable: true,
+          looksLikeSidecar: true,
+          protocolVersion: 1,
+          committedMb: 9000,
+          recyclePending: true,
+        })),
+        recycleSidecarFn,
+        delayFn: async () => {},
+        adoptedPollMs: 1,
+        adoptedHealthPollMs: 1,
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start();
+      // Give the watch loop many ticks to do the wrong thing if it is going to.
+      await vi.waitFor(() => expect(probeFn.mock.calls.length).toBeGreaterThan(5));
+
+      expect(recycleSidecarFn).not.toHaveBeenCalled();
+      expect(spawnFn).toHaveBeenCalledTimes(1); // the boot call, and nothing since
+      // The queue is not held: with autoStart off no sidecar is ever wanted
+      // from us, so there is nothing on the way to release it.
+      expect(sup.recycling()).toBe(false);
+    });
+
+    it('clears the adopt flag when the external sidecar disappears, without respawning', async () => {
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      });
+      const probes = [true, false];
+      let pi = 0;
+      const probeFn = vi.fn(async () => probes[Math.min(pi++, probes.length - 1)]);
+      const warn = vi.fn();
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => AUTOSTART_OFF,
+        spawnFn,
+        probeFn,
+        delayFn: async () => {},
+        adoptedPollMs: 1,
+        warn,
+        log: vi.fn(),
+      });
+      await sup.start();
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('nothing will replace it')),
+      );
+      expect(spawnFn).toHaveBeenCalledTimes(1);
+      /* The flag is cleared, so a later install hold is refused on evidence
+         rather than against a sidecar that is already gone. */
+      await expect(sup.withSidecarHeld(async () => 'ran')).resolves.toBe('ran');
+    });
+  });
+
   /* Fitness watchdog: an adopted sidecar that stays TCP-up but becomes
      leak-saturated (committed over the adopt ceiling) must be replaced too —
      the 2026-06-02 "stuck after restart" left a fresh server bolted onto a
@@ -1307,6 +1383,29 @@ describe('withSidecarHeld (#2192 / #3039)', () => {
       fnSawExit = exited;
     });
     expect(fnSawExit).toBe(true);
+  });
+
+  /* #3043 M1 — stop() during the hold's exit-wait. onChildExit's `stopped`
+     guard used to return BEFORE the `held` branch, swallowing the exit: the
+     wait then timed out at heldExitWaitMs and took the rollback path, which
+     restores a handle to an already-dead child and marks a shut-down
+     supervisor queue-ready. Settling the waiter is not a respawn. */
+  it('a stop() during the exit-wait still settles the wait — no false timeout, no rollback onto a dead child', async () => {
+    const { sup, handles, exit } = buildHeld({ exitOnKill: false, heldExitWaitMs: 50 });
+    await sup.start();
+    handles[0].kill.mockImplementation(async () => {
+      /* Ctrl+C lands first, then the child's real exit — the shutdown
+         ordering this guard is about. */
+      setTimeout(() => {
+        void sup.stop();
+        exit(null);
+      }, 5);
+    });
+    /* Before the fix this REJECTED with "did not stop within 0s" after the
+       full exit-wait, because the exit was swallowed by the stopped guard. */
+    await expect(sup.withSidecarHeld(async () => 'ran')).resolves.toBe('ran');
+    // No rollback: a dead child was not restored as the live handle.
+    expect(sup.current()).toBeNull();
   });
 
   it('a rejecting fn still releases the hold and respawns, and its error passes through unchanged', async () => {

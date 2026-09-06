@@ -99,7 +99,18 @@ export interface QwenInstallOptions {
       to the gpu leaf gate, which fails CLOSED when routes/generation.ts has
       not registered its accessor (always registered in the real server). */
   generationActiveFn?: () => boolean;
+  /** How long a child (the installer, or a pip step) may produce NO output at
+      all before it is killed and reported as stalled. Idle time, not wall
+      clock: the HF prefetch legitimately runs for many minutes but never goes
+      quiet for long, whereas a stalled download never settles at all — and a
+      child that never settles holds the sidecar down and the queue held with
+      it, with POST /api/sidecar/restart inert behind the hold (#3043 M2). */
+  childIdleTimeoutMs?: number;
 }
+
+/** 30 minutes of complete silence from a child. Far past any healthy step's
+    quiet window, far short of "forever". */
+const DEFAULT_CHILD_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 export class QwenInstallBootstrap {
   private jobs = new Map<string, QwenInstallJob>();
@@ -113,6 +124,7 @@ export class QwenInstallBootstrap {
   private readonly holdSidecarFn: <T>(fn: () => Promise<T>) => Promise<T>;
   private readonly restoreOrtFn: () => Promise<OrtRestoreOutcome>;
   private readonly generationActiveFn: () => boolean;
+  private readonly childIdleTimeoutMs: number;
 
   constructor(opts: QwenInstallOptions) {
     this.repoRoot = opts.repoRoot;
@@ -122,6 +134,7 @@ export class QwenInstallBootstrap {
     this.holdSidecarFn = opts.holdSidecarFn ?? defaultHoldSidecar;
     this.restoreOrtFn = opts.restoreOrtFn ?? (() => this.restoreOrtInSidecarVenv());
     this.generationActiveFn = opts.generationActiveFn ?? isAnyGenerationActive;
+    this.childIdleTimeoutMs = opts.childIdleTimeoutMs ?? DEFAULT_CHILD_IDLE_TIMEOUT_MS;
   }
 
   /** Probe install-state without kicking off a job. Used by GET /detect. */
@@ -183,16 +196,18 @@ export class QwenInstallBootstrap {
     }
 
     this.transition(job, 'installing', { step: 'Stopping the voice engine so the installer can update its files…' });
-    /* An installer failure propagates out of the hold (the hold still
-       releases and respawns) and lands as the job's error via start()'s
-       catch. An ORT-restore failure is RETURNED, not thrown: the installer
-       had succeeded by then and the job must say so — thrown, it would read
-       as a failed Qwen install, the misreport the split exists to prevent.
+    /* Two INDEPENDENT facts come back out of the hold, and neither may be
+       reported as the other (#3043 S1):
 
-       The ORT restore must run whenever the pip step has executed (which
-       clobbers the runtime) REGARDLESS of whether the rest of the installer
-       script goes on to succeed or fail. If the installer fails, we still need
-       to restore/verify the GPU runtime before the hold releases. */
+       - whether the installer script succeeded, and
+       - what the ORT restore did.
+
+       The restore must run whenever the pip step has executed — which is what
+       clobbers the runtime — REGARDLESS of whether the rest of the installer
+       goes on to succeed or fail, and it runs inside the hold because that is
+       where the sidecar is down and the DLLs are replaceable. So neither
+       outcome can be thrown past the other: both are RETURNED, and the
+       reporting below picks the message for the pair. */
     const ort = await this.holdSidecarFn<{
       installerError?: Error;
       restoreError?: Error;
@@ -211,48 +226,46 @@ export class QwenInstallBootstrap {
       this.update(job, { step: 'Checking the ONNX runtime the voice engine needs…' });
       try {
         const outcome = await this.restoreOrtFn();
-        return {
-          installerError: installerError ?? undefined,
-          restoreOutcome: outcome,
-        };
+        return { installerError: installerError ?? undefined, restoreOutcome: outcome };
       } catch (err) {
         const restoreError = err instanceof Error ? err : new Error(String(err));
-        if (installerError) {
-          /* Both installer and restore failed. Report the installer error as
-             primary, but log the restore failure at the console for diagnostics. */
-          console.warn(`[qwen-install] ORT restore also failed: ${restoreError.message}`);
-        }
-        return {
-          installerError: installerError ?? undefined,
-          restoreError: restoreError,
-        };
+        return { installerError: installerError ?? undefined, restoreError };
       }
     });
     /* The hold has released here and the supervisor has already attempted
        its respawn (a failed respawn is the supervisor's to report — it is
-       not an install outcome). */
+       not an install outcome).
+
+       Log what the restore did on EVERY path, including the installer-failure
+       one — that path is the only reason the restore runs there at all, so a
+       silent record of it would be no record (#3043 N2). */
+    if (ort.restoreError) {
+      console.warn(`[qwen-install] onnxruntime after install: restore FAILED — ${ort.restoreError.message}`);
+    } else {
+      console.log(`[qwen-install] onnxruntime after install: ${ort.restoreOutcome}`);
+    }
+
+    /* The installer's own failure is the job's error, verbatim — the restore's
+       outcome is context appended to it, never a substitute for it. Reporting
+       an installer failure through the restore-failed sentence told the
+       operator the install had landed when it had not, blamed a step that had
+       often SUCCEEDED, and named the wrong repair (#3043 S1). */
     if (ort.installerError) {
-      // Installer failed — report that as the primary error
-      const msg = `Qwen3-TTS installer failed: ${ort.installerError.message}`;
-      if (ort.restoreError) {
-        // Both failed
-        this.transition(job, 'error', {
-          error: `${msg} The ORT runtime restore also failed, so GPU acceleration will be lost. ` +
-            'Retry the install or contact support.',
-        });
-      } else if (ort.restoreOutcome) {
-        // Installer failed but restore succeeded — that's good news
-        this.transition(job, 'error', {
-          error: `${msg} (The GPU ONNX runtime was successfully verified and is still in place.)`,
-        });
-      } else {
-        // Just the installer error
-        this.transition(job, 'error', { error: msg });
-      }
+      this.transition(job, 'error', {
+        error:
+          `${ort.installerError.message} ` +
+          (ort.restoreError
+            ? `Restoring the GPU ONNX runtime afterwards also failed: ${ort.restoreError.message} ` +
+              'Kokoro may run on the CPU until it is repaired — with the app closed, run ' +
+              'server/tts-sidecar/scripts/install-ort.mjs against the sidecar venv python. ' +
+              'Then retry the install (downloads resume).'
+            : 'The GPU ONNX runtime was checked and is intact. Retry the install (downloads resume).'),
+      });
       return;
     }
     if (ort.restoreError) {
-      // Installer succeeded but restore failed
+      /* The install DID land; only the runtime restore after it failed. Saying
+         so is the whole point of keeping the two facts apart. */
       this.transition(job, 'error', {
         error:
           `Qwen3-TTS installed, but restoring the GPU ONNX runtime afterwards failed: ${ort.restoreError.message} ` +
@@ -260,10 +273,6 @@ export class QwenInstallBootstrap {
           'server/tts-sidecar/scripts/install-ort.mjs against the sidecar venv python.',
       });
       return;
-    }
-    // Both installer and restore succeeded
-    if (ort.restoreOutcome) {
-      console.log(`[qwen-install] onnxruntime after install: ${ort.restoreOutcome}`);
     }
 
     /* Re-probe: the script exited 0, confirm the package + weights actually
@@ -344,11 +353,45 @@ export class QwenInstallBootstrap {
         return;
       }
       let stderrTail = '';
+      /* Idle watchdog (#3043 M2). Rearmed on every byte either stream emits,
+         so a slow-but-live download is never touched; a child that has gone
+         completely quiet is killed and reported, which is what releases the
+         hold — without it the sidecar stays down indefinitely and the one
+         documented recovery route (POST /api/sidecar/restart) is inert behind
+         `if (stopped || held) return`. */
+      let idleTimer: NodeJS.Timeout | null = null;
+      let settled = false;
+      const clearIdle = (): void => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = null;
+      };
+      const armIdle = (): void => {
+        clearIdle();
+        idleTimer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          try {
+            proc.kill();
+          } catch {
+            /* already gone — the reject below is still the outcome */
+          }
+          reject(
+            new Error(
+              `${cmd} produced no output for ${Math.round(this.childIdleTimeoutMs / 60_000)} minutes ` +
+                'and was stopped as stalled. The voice engine has been released. Retry the install (downloads resume).',
+            ),
+          );
+        }, this.childIdleTimeoutMs);
+        idleTimer.unref?.();
+      };
+      armIdle();
       proc.stdout?.on('data', (b: Buffer) => {
+        armIdle();
         if (!hooks.onStdoutLine) return;
         for (const line of b.toString('utf8').split('\n')) hooks.onStdoutLine(line);
       });
       proc.stderr?.on('data', (b: Buffer) => {
+        armIdle();
         /* Keep only the tail — a pip/HF failure dump can be huge; the last
            few lines carry the actionable error. #3039: widened from 2000 to
            4000 chars so a real error isn't pushed entirely out of the window
@@ -357,8 +400,16 @@ export class QwenInstallBootstrap {
            back out. */
         stderrTail = (stderrTail + b.toString('utf8')).slice(-4000);
       });
-      proc.on('error', (err) => reject(err));
+      proc.on('error', (err) => {
+        clearIdle();
+        if (settled) return;
+        settled = true;
+        reject(err);
+      });
       proc.on('close', (code) => {
+        clearIdle();
+        if (settled) return; // the idle watchdog already reported this child
+        settled = true;
         if (code === 0) resolve();
         else reject(new Error(hooks.failure(code, extractInstallErrorDetail(stderrTail))));
       });

@@ -183,7 +183,7 @@ describe('QwenInstallBootstrap', () => {
       expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']);
     });
 
-    it("an installer failure still releases the hold, skips the ORT restore, and is the job's error", async () => {
+    it("an installer failure still releases the hold, still runs the ORT restore, and is the job's error", async () => {
       const calls: string[] = [];
       const b = new QwenInstallBootstrap({
         repoRoot: '/repo',
@@ -203,6 +203,10 @@ describe('QwenInstallBootstrap', () => {
       await until(() => b.getJob(job.id)?.status === 'error');
       expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']);
       expect(b.getJob(job.id)?.error).toMatch(/exited with code 1.*pip failed/);
+      /* #3043 S1 — the installer's failure is reported AS an installer
+         failure. It used to be wrapped in the restore-failed sentence, which
+         claimed the install had landed. */
+      expect(b.getJob(job.id)?.error).not.toMatch(/Qwen3-TTS installed/);
     });
 
     it('already installed: never enters the hold, never spawns', async () => {
@@ -408,9 +412,12 @@ describe('QwenInstallBootstrap', () => {
      buried in a longer traceback. This fixture reproduces the real captured
      shape: CRLF-terminated lines with the traceback, error message several
      lines up, followed by blank lines and notice lines.
-     OLD slice(-3) would see only the last 3 non-notice lines after filtering.
-     NEW extractInstallErrorDetail filters notices, keeps last 5 filtered lines,
-     so it captures the full error context including WinError 5.
+     The OLD code filtered NOTHING: it split the raw CRLF text and took the
+     last 3 lines, which on this shape are a blank line and pip's two
+     [notice] lines — so the real error never reached the operator at all.
+     NEW extractInstallErrorDetail filters notices FIRST, then keeps the last
+     5 remaining lines, so it captures the full error context including
+     WinError 5.
      This test MUST fail if slice(-3) is used (verifies the fix works). */
   it('surfaces the real error even when pip prints its update notice after it', async () => {
     const stderrFixture =
@@ -439,32 +446,139 @@ describe('QwenInstallBootstrap', () => {
     expect(b.getJob(job.id)?.error).not.toMatch(/A new release/);
   });
 
-  it('[REGRESSION] an installer failure still attempts ORT restore (both outcomes reported, error takes precedence)', async () => {
-    // Fixture: installer fails (exit code 1) with a clear error message
-    const installerError = 'HuggingFace download failed: connection timeout\n';
-    const restoreOutcome = 'swapped'; // restore succeeds
-    let restoreCalled = false;
+  /* #3043 S1 — the installer's own outcome and the ORT restore's outcome are
+     INDEPENDENT facts, and the job's error must never report one as the
+     other. Three failing combinations, each with its own distinguishable
+     message; substring-matching the embedded installer text alone cannot tell
+     them apart, which is exactly how the misreport shipped. */
+  describe('the installer outcome and the restore outcome are reported separately', () => {
+    const failingInstaller = (): unknown =>
+      makeFakeChild(1, { stderr: 'ERROR: HuggingFace download failed: connection timeout\n' });
 
+    it('installer FAILS + restore SUCCEEDS: reports the installer failure, says the runtime is intact, points at a retry', async () => {
+      let restoreCalled = false;
+      const b = new QwenInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => failingInstaller() as never,
+        holdSidecarFn: (fn) => fn(),
+        restoreOrtFn: async () => {
+          restoreCalled = true;
+          return 'swapped';
+        },
+        generationActiveFn: () => false,
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      const error = b.getJob(job.id)?.error ?? '';
+
+      // The restore still runs on the installer-failure path (that is the fix
+      // this path exists for) — but it SUCCEEDED here...
+      expect(restoreCalled).toBe(true);
+      // ...so the message must not blame it, must not claim Qwen landed, and
+      // must not send the operator to install-ort.mjs.
+      expect(error).toMatch(/HuggingFace download failed/);
+      expect(error).not.toMatch(/Qwen3-TTS installed/);
+      expect(error).not.toMatch(/restoring the GPU ONNX runtime afterwards failed/);
+      expect(error).not.toMatch(/install-ort\.mjs/);
+      expect(error).toMatch(/runtime was checked and is intact/);
+      expect(error).toMatch(/Retry the install/);
+    });
+
+    it('installer FAILS + restore FAILS: reports the installer failure AND names the runtime repair', async () => {
+      const b = new QwenInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => failingInstaller() as never,
+        holdSidecarFn: (fn) => fn(),
+        restoreOrtFn: async () => {
+          throw new Error('pip uninstall onnxruntime exited with code 1.');
+        },
+        generationActiveFn: () => false,
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      const error = b.getJob(job.id)?.error ?? '';
+
+      expect(error).toMatch(/HuggingFace download failed/);
+      expect(error).not.toMatch(/Qwen3-TTS installed/);
+      // Both facts present, in that order — the installer's first.
+      expect(error).toMatch(/pip uninstall onnxruntime exited with code 1/);
+      expect(error).toMatch(/install-ort\.mjs/);
+      expect(error.indexOf('HuggingFace')).toBeLessThan(error.indexOf('pip uninstall'));
+    });
+
+    it('installer SUCCEEDS + restore FAILS: reports that Qwen DID land and only the runtime needs repair', async () => {
+      const b = new QwenInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => makeFakeChild(0) as never,
+        holdSidecarFn: (fn) => fn(),
+        restoreOrtFn: async () => {
+          throw new Error('pip uninstall onnxruntime exited with code 1.');
+        },
+        generationActiveFn: () => false,
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      const error = b.getJob(job.id)?.error ?? '';
+
+      expect(error).toMatch(/Qwen3-TTS installed, but restoring the GPU ONNX runtime afterwards failed/);
+      expect(error).toMatch(/install-ort\.mjs/);
+      // Nothing from an installer failure — there wasn't one.
+      expect(error).not.toMatch(/HuggingFace/);
+    });
+  });
+
+  /* #3043 M2 — a child that never settles used to hold the sidecar down and
+     the queue held forever, with POST /api/sidecar/restart inert behind the
+     hold. The idle watchdog kills it and turns it into an ordinary job error,
+     which is what releases the hold. */
+  it('a child that goes completely silent is killed and reported as stalled, releasing the hold', async () => {
+    const calls: string[] = [];
+    let killed = false;
     const b = new QwenInstallBootstrap({
       repoRoot: '/repo',
       detectFn: () => 'not-installed',
-      spawnFn: () => makeFakeChild(1, { stderr: installerError }) as never,
-      holdSidecarFn: (fn) => fn(),
+      spawnFn: () => {
+        calls.push('spawn');
+        /* A child that emits nothing and never closes — the stalled-download
+           shape. makeFakeChild always settles, so this one is hand-built. */
+        const proc = new EventEmitter() as EventEmitter & {
+          stdout: EventEmitter;
+          stderr: EventEmitter;
+          kill: () => boolean;
+        };
+        proc.stdout = new EventEmitter();
+        proc.stderr = new EventEmitter();
+        proc.kill = () => {
+          killed = true;
+          return true;
+        };
+        return proc as never;
+      },
+      holdSidecarFn: async (fn) => {
+        calls.push('hold');
+        try {
+          return await fn();
+        } finally {
+          calls.push('release');
+        }
+      },
       restoreOrtFn: async () => {
-        restoreCalled = true;
-        return restoreOutcome;
+        calls.push('ort');
+        return 'not-needed';
       },
       generationActiveFn: () => false,
+      childIdleTimeoutMs: 20,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
 
-    // Verify that:
-    // 1. The restore function WAS called despite installer failure
-    expect(restoreCalled).toBe(true);
-    // 2. The job reports the installer error (not the restore outcome, since error takes precedence)
-    expect(b.getJob(job.id)?.error).toMatch(/HuggingFace download failed/);
-    // 3. The job status is error (not installed)
-    expect(b.getJob(job.id)?.status).toBe('error');
+    expect(killed).toBe(true);
+    // The hold released — without that the sidecar never comes back.
+    expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']);
+    expect(b.getJob(job.id)?.error).toMatch(/no output for .* minutes/);
+    expect(b.getJob(job.id)?.error).toMatch(/stalled/);
   });
 });

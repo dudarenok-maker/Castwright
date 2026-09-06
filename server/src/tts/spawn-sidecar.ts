@@ -32,6 +32,7 @@ import { formatTimestamp } from '../logger.js';
 import { allKnobs } from '../config/registry.js';
 import { resolveKnob, resolveKnobForSidecarEnv, isEnvValueRejected } from '../config/resolver.js';
 import { resolveSidecarPort } from './sidecar-owner.js';
+import { resolveSidecarVenvDir } from '../diagnostics/venv.js';
 import { readStamp } from '../../tts-sidecar/scripts/venv-migration.mjs';
 // @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
 import { resolveProfile, ortProviders } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
@@ -601,8 +602,11 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
      un-stamped box). We inject the profile + the Kokoro ORT provider list (JSON)
      so main.py never re-derives them; an absent venv stamp + no override yields
      cpu + ['CPUExecutionProvider'] (today's auto-detect-safe behaviour). */
-  const venvDir =
-    process.env.SIDECAR_VENV_DIR ?? join(repoRoot, 'server', 'tts-sidecar', '.venv');
+  /* Through the shared resolver, not a second inlined `SIDECAR_VENV_DIR ??` —
+     the profile below is DERIVED from this path, so a drift here would silently
+     drift the profile the sidecar runs with away from the one the installer
+     restored against (#3043 M5). */
+  const venvDir = resolveSidecarVenvDir(repoRoot);
   const profile = resolveVenvRuntimeProfile(venvDir);
   env.CASTWRIGHT_ACCELERATOR_PROFILE = profile;
   env.KOKORO_ORT_PROVIDERS = JSON.stringify(ortProviders(profile, process.platform));
@@ -675,16 +679,36 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
       onAdoptExisting?.({ host, port });
       return null;
     }
-    /* When autoStart is off, a healthy sidecar (freshProtocol && unfitReason === null) is
-       what we want to adopt — the whole point of turning off autoStart. If policyReplace
-       is true (prod config), we still adopt it rather than kill it, because we're not
-       going to spawn a replacement anyway (autoStart off means no spawn). Returning here
-       prevents execution from falling through to the "replace stale sidecar" logic. */
-    if (!autoStart && freshProtocol && unfitReason === null) {
-      log(
-        `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), adopting (autoStart off — not spawning a replacement)`,
-      );
-      onAdoptExisting?.({ host, port });
+    /* autoStart off means "this server does not own the sidecar on this port".
+       Probing is still worth doing — a healthy external sidecar is exactly what
+       the operator turned autoStart off to run, and onAdoptExisting arms the
+       watchdog that makes an install hold REFUSE rather than pip into a live
+       venv (#3043 pass 1). But every OWNERSHIP ACTION below is off-limits here:
+       killTree would reap a process we did not start, and onSpawnRefused would
+       drive a retry/backoff loop toward a spawn that `if (!autoStart)` will
+       never perform, holding isRecycling true and the queue with it. So this
+       returns either way — adopt a healthy one, leave anything else strictly
+       alone (#3043 B1). */
+    if (!autoStart) {
+      if (freshProtocol && unfitReason === null) {
+        log(
+          `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), adopting it ` +
+            '(auto-start disabled — this server does not own the sidecar).',
+        );
+        onAdoptExisting?.({ host, port });
+      } else {
+        warn(
+          `[sidecar] something is listening on :${port} that we would not adopt ` +
+            `(${
+              !health.looksLikeSidecar
+                ? 'it does not look like our sidecar'
+                : !freshProtocol
+                  ? `protocol ${health.protocolVersion === null ? 'missing' : `v${health.protocolVersion}`} < v${EXPECTED_PROTOCOL_VERSION}`
+                  : (unfitReason ?? 'unfit')
+            }), but auto-start is disabled — ` +
+            'NOT touching it. TTS may be unavailable until it is restarted manually.',
+        );
+      }
       return null;
     }
     if (!health.looksLikeSidecar) {
