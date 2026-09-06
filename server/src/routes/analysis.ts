@@ -3007,9 +3007,14 @@ export function buildRejoinMissEvent(priorOutcome: AnalysisLastOutcome | null): 
   reason: string;
   priorOutcome?: { kind: 'result' | 'error'; code?: string; message?: string; endedAt: number };
 } {
+  const reason = priorOutcome
+    ? priorOutcome.kind === 'error'
+      ? `previous job ended with error (${priorOutcome.code ?? 'unknown'})`
+      : 'previous job completed — starting fresh'
+    : 'no tracked job found for this manuscript — starting fresh';
   return {
     kind: 'rejoin-miss',
-    reason: 'no tracked job found for this manuscript — starting fresh',
+    reason,
     ...(priorOutcome
       ? {
           priorOutcome: {
@@ -3053,26 +3058,39 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
      delete-only guard, same as the main-success cleanup right below: a
      book renamed away mid-run must never have this write mkdir the dead
      pre-rename folder back into existence. */
+  let outcomeWritePromise: Promise<void> | null = null;
   if (job.kind === 'main' && (kind === 'result' || kind === 'error')) {
     const dirForOutcome = liveBookDir(job);
     if (dirForOutcome) {
       const message = (finalEv as { message?: string } | undefined)?.message;
-      void (async () => {
-        const verified = await tryResolveVerifiedBookDir({
-          manuscriptId: job.manuscriptId,
-          candidateBookDir: dirForOutcome,
-          identityBearing: false,
+      /* Staleness guard: a displaced job's late-arriving endJob must not
+         overwrite a NEWER job's outcome with its own stale one. Same idiom
+         as the map deregistration 75 lines below. */
+      const targetMap = jobMapFor(job.kind);
+      if (targetMap.get(job.manuscriptId) === job) {
+        outcomeWritePromise = (async () => {
+          const verified = await tryResolveVerifiedBookDir({
+            manuscriptId: job.manuscriptId,
+            candidateBookDir: dirForOutcome,
+            /* Full identity-bearing path (default true): the write creates
+               a file, so we must verify the path still belongs to the correct
+               manuscript. The delete-only fast path below is for cleanup only
+               and permits resurrection of a stale path; creating a new file
+               must not. See #2196 for the rename-induced contamination case. */
+            identityBearing: true,
+            expectedBookId: undefined,
+          });
+          if (!verified) return;
+          await writeAnalysisLastOutcome(verified, {
+            manuscriptId: job.manuscriptId,
+            kind,
+            code,
+            message,
+          });
+        })().catch((err) => {
+          console.warn('[analysis-last-outcome] write failed', err);
         });
-        if (!verified) return;
-        await writeAnalysisLastOutcome(verified, {
-          manuscriptId: job.manuscriptId,
-          kind,
-          code,
-          message,
-        });
-      })().catch((err) => {
-        console.warn('[analysis-last-outcome] write failed', err);
-      });
+      }
     }
   }
   if (job.bookDir) {
@@ -3119,12 +3137,28 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
       void persistTerminalSnapshot(job, 'halted', finalEv as { code: string; message?: string });
     }
   }
-  for (const sub of job.subscribers) {
-    clearInterval(sub.keepAlive);
-    try {
-      sub.res.end();
-    } catch {
-      /* socket already gone */
+  /* #3004 — if an outcome write is in flight, don't end the response
+     until it's complete. This ensures a rejoining client sees the
+     persisted outcome file when it reconnects and re-reads. */
+  if (outcomeWritePromise) {
+    void outcomeWritePromise.then(() => {
+      for (const sub of job.subscribers) {
+        clearInterval(sub.keepAlive);
+        try {
+          sub.res.end();
+        } catch {
+          /* socket already gone */
+        }
+      }
+    });
+  } else {
+    for (const sub of job.subscribers) {
+      clearInterval(sub.keepAlive);
+      try {
+        sub.res.end();
+      } catch {
+        /* socket already gone */
+      }
     }
   }
   job.subscribers.clear();
@@ -3324,13 +3358,25 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      brand-new one silently started" — signal it with one SSE event before
      the fresh job below starts. Skipped when `requestedFresh` is true: that
      is a caller-requested restart, not a rejoin, and it already knows it's
-     starting fresh (point 4 of the fix). A truly novel manuscript — no
-     `analysis-last-outcome.json` on disk because nothing was ever analysed
-     here — has no prior outcome to attach, so the event is skipped rather
-     than fabricating one. */
+     starting fresh (point 4 of the fix).
+
+     The event is emitted REGARDLESS of whether a persisted outcome file
+     exists. A truly novel manuscript (never analysed here) has no file and
+     no outcome to attach; a job that crashed or was interrupted before
+     endJob's async write completed also has no file, but the job still died
+     and the caller needs to know it. Both cases require the event. The
+     priorOutcome is attached when available, omitted when the file is absent
+     or unparseable (via buildRejoinMissEvent(null)). */
   if (shouldCheckForRejoinMiss(existing, requestedFresh)) {
     const priorOutcome = record.bookDir ? await readAnalysisLastOutcome(record.bookDir) : null;
-    if (priorOutcome) send(buildRejoinMissEvent(priorOutcome));
+    /* Validate the persisted outcome's manuscript id against the current
+       request, in case a book rename mid-job left a stale outcome from a
+       different book in the path. */
+    if (priorOutcome && priorOutcome.manuscriptId === manuscriptId) {
+      send(buildRejoinMissEvent(priorOutcome));
+    } else {
+      send(buildRejoinMissEvent(null));
+    }
   }
 
   const job: AnalysisJob = {

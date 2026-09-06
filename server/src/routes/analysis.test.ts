@@ -8793,4 +8793,111 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       if (i >= 0) arr.splice(i, 1);
     }
   });
+
+  it('#3004 — rejoin-miss event fires after a terminal job outcome, with the persisted error payload', async () => {
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter } = await import('./analysis.js');
+    const { putManuscript } = await import('../store/manuscripts.js');
+
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const manuscriptId = `test-rejoin-miss-${Date.now()}-${Math.random()}`;
+    const g = globalThis as Record<string, unknown>;
+
+    // Set up a manuscript so it passes the initial lookup
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Test Rejoin Miss Book',
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: 'Test body',
+      chapterHints: [{ id: 1, title: 'Chapter One', body: 'Test body' }],
+      bookDir: null,
+    });
+
+    // Set language in the override to pass the pre-flight gate,
+    // then mark it for failure in the main loop.
+    g.__analysis_test_book_language_override = {
+      manuscriptId,
+      language: 'en',
+    };
+    if (!Array.isArray(g.__analysis_test_book_language_unset)) g.__analysis_test_book_language_unset = [];
+    (g.__analysis_test_book_language_unset as string[]).push(manuscriptId);
+
+    try {
+      // Make the initial POST to start an analysis job that will fail with language_unset
+      const startRes = await supertest(app)
+        .post(`/api/manuscripts/${manuscriptId}/analysis`)
+        .send({})
+        .buffer(true);
+
+      expect(startRes.status).toBe(200);
+
+      // Parse the SSE response to find the error event
+      const lines = startRes.text.split('\n');
+      let foundError = false;
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if ((data as Record<string, unknown>).kind === 'error') {
+              foundError = true;
+              const errorCode = (data as Record<string, unknown>).code as string;
+              expect(errorCode).toBe('language_unset');
+            }
+          } catch {
+            // Skip lines that aren't valid JSON
+          }
+        }
+      }
+
+      expect(foundError).toBe(true, 'should have received an error event in the first response');
+
+      // Small delay to allow the outcome file to be written
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Now make a rejoin POST and check for rejoin-miss event
+      const rejoinRes = await supertest(app)
+        .post(`/api/manuscripts/${manuscriptId}/analysis`)
+        .send({})
+        .buffer(true);
+
+      expect(rejoinRes.status).toBe(200);
+
+      // Parse the rejoin response
+      const rejoinLines = rejoinRes.text.split('\n');
+      let foundRejoinMiss = false;
+
+      for (const line of rejoinLines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            if ((data as Record<string, unknown>).kind === 'rejoin-miss') {
+              foundRejoinMiss = true;
+              // Should contain the persisted error outcome
+              const priorOutcome = (data as Record<string, unknown>).priorOutcome as Record<string, unknown> | undefined;
+              expect(priorOutcome).toBeDefined();
+              expect(priorOutcome?.kind).toBe('error');
+              expect(priorOutcome?.code).toBe('language_unset');
+            }
+          } catch {
+            // Skip lines that aren't valid JSON
+          }
+        }
+      }
+
+      expect(foundRejoinMiss).toBe(true, 'should have received a rejoin-miss event in the rejoin response');
+    } finally {
+      delete g.__analysis_test_book_language_override;
+      const arr = g.__analysis_test_book_language_unset as string[];
+      const i = arr.indexOf(manuscriptId);
+      if (i >= 0) arr.splice(i, 1);
+    }
+  });
 });
