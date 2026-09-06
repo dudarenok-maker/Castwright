@@ -88,8 +88,8 @@ async function setUpBook(title: string): Promise<{ bookDir: string; manuscriptId
   return { bookDir, manuscriptId };
 }
 
-function buildJob(manuscriptId: string, bookDir: string): AnalysisJob {
-  return {
+async function buildJob(manuscriptId: string, bookDir: string): Promise<AnalysisJob> {
+  const job = {
     controller: new AbortController(),
     subscribers: new Set(),
     manuscriptId,
@@ -107,6 +107,15 @@ function buildJob(manuscriptId: string, bookDir: string): AnalysisJob {
     },
     lastDiskWriteAt: 0,
   } as unknown as AnalysisJob;
+
+  /* Register the job into the in-flight map, matching how the real route
+     code registers jobs at line ~3400. The staleness guard in endJob
+     (line ~3070) checks if the job is still the current entry in the map;
+     without registration, every job fails the check and skips the write. */
+  const { __testRegisterJobForTest } = await import('./analysis.js');
+  __testRegisterJobForTest(job);
+
+  return job;
 }
 
 /** `writeAnalysisLastOutcome` inside `endJob` is fire-and-forget (`void`,
@@ -131,7 +140,7 @@ describe('#3004 endJob persists the terminal outcome (analysis-last-outcome.json
     const { removeManuscript } = await import('../store/manuscripts.js');
 
     try {
-      endJob(buildJob(manuscriptId, bookDir), { kind: 'result' });
+      endJob(await buildJob(manuscriptId, bookDir), { kind: 'result' });
       const outcome = await waitForOutcome(bookDir);
       expect(outcome).not.toBeNull();
       expect(outcome!.kind).toBe('result');
@@ -148,7 +157,7 @@ describe('#3004 endJob persists the terminal outcome (analysis-last-outcome.json
     const { removeManuscript } = await import('../store/manuscripts.js');
 
     try {
-      endJob(buildJob(manuscriptId, bookDir), {
+      endJob(await buildJob(manuscriptId, bookDir), {
         kind: 'error',
         code: 'cast_incomplete',
         message: 'synthetic phase-0 failure',
@@ -170,7 +179,7 @@ describe('#3004 endJob persists the terminal outcome (analysis-last-outcome.json
     const { removeManuscript } = await import('../store/manuscripts.js');
 
     try {
-      endJob(buildJob(manuscriptId, bookDir), { kind: 'error', code: 'aborted' });
+      endJob(await buildJob(manuscriptId, bookDir), { kind: 'error', code: 'aborted' });
       const outcome = await waitForOutcome(bookDir);
       expect(outcome).not.toBeNull();
       expect(outcome!.kind).toBe('error');
@@ -186,11 +195,11 @@ describe('#3004 endJob persists the terminal outcome (analysis-last-outcome.json
     const { removeManuscript } = await import('../store/manuscripts.js');
 
     try {
-      endJob(buildJob(manuscriptId, bookDir), { kind: 'error', code: 'cast_incomplete' });
+      endJob(await buildJob(manuscriptId, bookDir), { kind: 'error', code: 'cast_incomplete' });
       const first = await waitForOutcome(bookDir);
       expect(first!.kind).toBe('error');
 
-      endJob(buildJob(manuscriptId, bookDir), { kind: 'result' });
+      endJob(await buildJob(manuscriptId, bookDir), { kind: 'result' });
       const deadline = Date.now() + 2_000;
       let finalOutcome = first;
       while (finalOutcome?.kind !== 'result' && Date.now() < deadline) {
@@ -212,11 +221,11 @@ describe('#3004 endJob persists the terminal outcome (analysis-last-outcome.json
     const { removeManuscript } = await import('../store/manuscripts.js');
 
     try {
-      endJob(buildJob(manuscriptId, bookDir), { kind: 'result' });
+      endJob(await buildJob(manuscriptId, bookDir), { kind: 'result' });
       const first = await waitForOutcome(bookDir);
       expect(first!.kind).toBe('result');
 
-      endJob(buildJob(manuscriptId, bookDir), undefined);
+      endJob(await buildJob(manuscriptId, bookDir), undefined);
       await new Promise((r) => setTimeout(r, 100));
       const { readAnalysisLastOutcome } = await import('../store/analysis-state.js');
       const after = await readAnalysisLastOutcome(bookDir);
@@ -232,7 +241,7 @@ describe('#3004 endJob persists the terminal outcome (analysis-last-outcome.json
     const { removeManuscript } = await import('../store/manuscripts.js');
 
     try {
-      const job = buildJob(manuscriptId, bookDir);
+      const job = await buildJob(manuscriptId, bookDir);
       (job as unknown as { kind: string }).kind = 'subset';
       endJob(job, { kind: 'error', code: 'cast_incomplete' });
       await new Promise((r) => setTimeout(r, 200));

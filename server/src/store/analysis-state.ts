@@ -148,8 +148,10 @@ export interface AnalysisLastOutcome {
 }
 
 /** Read the last-outcome file. Returns null when absent or unparseable —
-    both equivalent to "no prior outcome is known," which the rejoin-miss
-    check treats as "never analysed here before" and stays silent for. */
+    both are treated as "no prior outcome is known." The rejoin-miss check
+    in analysis.ts uses this to decide whether to emit a payload (when present
+    and valid) or a payload-less rejoin-miss event (when absent/corrupt). In
+    either case, the event fires — there is no "stays silent" case anymore. */
 export async function readAnalysisLastOutcome(
   bookDir: string,
 ): Promise<AnalysisLastOutcome | null> {
