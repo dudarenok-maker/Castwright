@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">65</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">64</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->2<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->4<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->3<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->13<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->12<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1158,7 +1158,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">13 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">12 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1288,20 +1288,6 @@
         </ul>
         <p class="src">Windows box with Pinokio installed, a pre-existing install with CRLF-mangled <code>requirements/*.txt</code> (or ability to create one by checking out an old release prior to <code>.gitattributes</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2596">#2596</a>, PR #2799 · automated acceptance test in <code>resolve-release.test.js</code>; real-world confirmation that a stale-CRLF install updates without spurious reinstall and that a fresh install normalizes correctly · 10–15 minutes, grouping with <a href="#ge1">E1</a></p>
         <p><b>One-update lag:</b> Updates FROM pre-#2799 releases run the old <code>resolve-release.js</code>, so CRLF normalization only takes effect from the NEXT update onward (see <a href="#ge1">E1</a> and <code>pinokio-scripts/update.js</code> lines 19–28).</p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">E12</span><span class="iname">ASR warm footprint measurement via torch allocator peak</span><span class="risk">GPU with CTranslate2/faster-whisper resident</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>PR #2799 changes how <code>asr.warm</code> (the learned warmup footprint for Whisper ASR) is measured in the TTS sidecar (<code>server/tts-sidecar/main.py</code>). Previously, footprint was estimated via a snapshot of free GPU memory before and after warm load. Now it is measured via torch&#39;s allocator peak (the highest VRAM allocated during the entire warm-up). This is more reliable than free-memory deltas because they race against other concurrent processes and can miss spikes that spike-then-release, whereas allocator peak is the actual peak VRAM the warm forward actually used, captured from the torch/CUDA allocator itself.</p>
-        <p>However, the allocator-peak measurement is unproven on real hardware with a live CTranslate2-backed ASR session — the pytest only stubs <code>_observed_mb</code> to a fixed test value and doesn&#39;t exercise the real forward.</p>
-        <ul>
-          <li>Load the TTS sidecar with <code>faster-whisper</code> engine resident on a GPU.</li>
-          <li>Trigger a real ASR warm-up via the app (e.g. during a repair/re-synthesis pass that needs the ASR transcription gate, or an explicit <code>POST /transcribe</code> call with sample PCM data).</li>
-          <li>Confirm that <code>asr.warm</code>&#39;s learned footprint <b>moves off its 128 MB seed value</b> after the real warm forward completes — i.e., the allocator-peak measurement produces a positive, observed value that is recorded, not dropped.</li>
-          <li>Verify the recorded value matches the expected range for CTranslate2+faster-whisper on this box&#39;s GPU (typically a few hundred MB, depending on model size and CUDA compute capacity).</li>
-        </ul>
-        <p class="src">GPU with CTranslate2 and faster-whisper weights installed, TTS sidecar with ASR enabled (<code>SEG_ASR_ENABLED=1</code>) and configured to use GPU (<code>ASR_DEVICE=cuda</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2682">#2682</a>, PR #2799 · the allocator-peak measurement in <code>server/tts-sidecar/main.py</code>&#39;s <code>FootprintTable</code> class must observe a positive value recorded via its <code>record()</code> method when a real forward runs, not a stubbed test value · short — one real ASR warm-up sequence during a render or via manual endpoint</p>
       </div>
     </details>
     <details class="item">
