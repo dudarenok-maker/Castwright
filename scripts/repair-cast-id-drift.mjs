@@ -2037,6 +2037,20 @@ export const AUTO_REBIND_RANGE = 20;
  *  the probed set loses no real safety coverage — every port that COULD
  *  exist in the rebind range is still fully probed, and the fail-closed
  *  property is unaffected either way. */
+/** Standing, permanent non-Castwright services on this box's real workspace
+ *  host that would otherwise read as "possibly live" on every future
+ *  `--apply` run forever, because they hold their port permanently and are
+ *  never one of this repo's own servers. Operator-approved exception
+ *  (Castwright#2906, 2026-09-06): `llama-swap` (`C:\Claude\llama-swap`) sits
+ *  on 8090, inside the default HTTP probe range (8080-8099), and is
+ *  unrelated LLM-inference infrastructure this script has no business
+ *  probing for. Skipping known entries here — rather than each script's
+ *  `main()` routing around the probe with a narrowed `PORT` — keeps every
+ *  script that reuses `probePortRangeRefused` fail-closed for the ports that
+ *  actually matter to it. Add an entry only for a port that is standing and
+ *  permanent, never for a one-off "server happens to be down right now". */
+export const KNOWN_STANDING_PORTS = new Set([8090]);
+
 export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
   // C1 (pre-merge review, 2026-08-05): validate startPort itself BEFORE
   // building the candidate list, not merely clamp the list. main() derives
@@ -2055,7 +2069,8 @@ export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
   // Two-sided on purpose — the old one-sided `<= 65535` clamp let a
   // negative startPort (e.g. PORT=-1) through to net.connect uncaught.
   if (!Number.isInteger(startPort) || startPort < 1 || startPort > 65535) return [startPort];
-  const ports = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i).filter((p) => p <= 65535);
+  const ports = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i)
+    .filter((p) => p <= 65535 && !KNOWN_STANDING_PORTS.has(p));
   const results = await Promise.all(ports.map((p) => probePortRefused(p, host)));
   return ports.filter((_, i) => !results[i]);
 }
