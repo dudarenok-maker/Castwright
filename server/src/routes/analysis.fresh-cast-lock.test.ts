@@ -400,6 +400,20 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
          wrapped. #3022 names the decision owed. */
       expect(castExistsAfterRace).toBe(false);
     },
-    30_000,
+    /* Runaway backstop, not a synchronisation deadline — deliberately
+       generous (finding 5, PR #3009 review pass 1). Measured: the test BODY,
+       which is all this budget covers, ran 10.4s then 22.0s across two
+       back-to-back isolation runs on an UNLOADED box — a 2.1x spread with no
+       contention at all, the second within 8s of the old 30_000. (The ~21-24s
+       file totals usually quoted here include transform/setup/import, which
+       sit OUTSIDE this budget; quoting those understates how tight it was.)
+       Two of six runs under `flake-repro.mjs --cpu-load` blew it outright.
+       Raising it is NOT the "wider constant" mistake this PR fixes elsewhere:
+       that sleep gated an ASSERTION on a timing guess, while this only bounds
+       a hang. The real detectors are the internal bounded waits
+       (SYNC_WAIT_TIMEOUT_MS above, withKeyLock's 10s per #2260), which held
+       across all six contended runs and fail naming what never happened; this
+       catches only what they cannot see, so generosity costs no diagnostic. */
+    120_000,
   );
 });
