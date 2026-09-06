@@ -13,9 +13,9 @@ name: Verify
 # It runs only the LEGS whose scope actually changed (git diff against the PR
 # base) — a PR that touches only `src/**` skips the server tests; a
 # server-only PR skips the frontend unit suite + Playwright e2e; etc. Local
-# pre-push now only runs a fast, branch-diff-scoped subset
-# (`verify:fast:branch`) — this cloud run is the actual enforcement gate for
-# everything else, not redundant insurance.
+# pre-push now runs only the three branch-protection guards plus scope-gated
+# `test:sidecar` (~1-2s for most pushes; +6.85 min if server/tts-sidecar/** touched) —
+# this cloud run is the actual enforcement gate for everything else, not redundant insurance.
 #
 # JOB-PER-LEG, NOT ONE JOB (2026-07-10 — supersedes the single-job design):
 # originally every leg ran as a sequential step inside one job, because

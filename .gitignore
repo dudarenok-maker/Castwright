@@ -92,6 +92,15 @@ guardrail-tmp-*/
 # eslint.config.mjs ignore).
 budget-poll-tmp-*/
 
+# pre-commit-lint-e2e.test.mjs: lint fixtures planted inside the repo tree so the
+# flat config's base path applies and so the hook's own existsSync(repoRoot/f)
+# check passes. Cleaned up by the test, but an interrupted run must not leave a
+# staged/untracked stray. UNLIKE guardrail-tmp-*/ and budget-poll-tmp-*/ above,
+# this one is deliberately NOT added to eslint.config.mjs's ignores: the hook
+# under test spawns eslint WITHOUT --no-ignore, so an eslint-ignored fixture
+# would be skipped and the dirty-file test could never go red.
+precommit-lint-tmp-*/
+
 # Verify-cache (per-step input hashes for `npm run verify`; never committed).
 .verify-cache.json
 .verify-cache.json.tmp
