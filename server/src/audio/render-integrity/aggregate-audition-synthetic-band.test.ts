@@ -308,6 +308,11 @@ describe('scoreBook — A36 synthetic-only-pool severity band (register row A36 
     expect(freshRender).toBeDefined();
     expect(freshRender!.verdict).not.toBe('voice-mismatch');
     expect(freshRender!.severity).not.toBe('severe');
+
+    // Verify the persisted centroid's bandMethod is set correctly (tight pool → sigma band)
+    const centroids = await readCentroids(dir);
+    expect(centroids).not.toBeNull();
+    expect(centroids!.thurid.bandMethod).toBe('synthetic-sigma');
   });
 
   it('dispersion fallback correction: the corrected fallback (percentile 6/10) flags cosine 0.50 as severe with the review pool', async () => {
@@ -337,6 +342,11 @@ describe('scoreBook — A36 synthetic-only-pool severity band (register row A36 
     // With the corrected fallback, cosine 0.50 must be severe
     expect(freshRender!.verdict).toBe('voice-mismatch');
     expect(freshRender!.severity).toBe('severe');
+
+    // Verify the persisted centroid's bandMethod is set correctly (dispersed pool → percentile fallback)
+    const centroids = await readCentroids(dir);
+    expect(centroids).not.toBeNull();
+    expect(centroids!.thurid.bandMethod).toBe('percentile');
   });
 
   it('persistedAsRef bandMethod preservation: a post-fix audition row is correctly reused across multiple passes without oscillation', async () => {
