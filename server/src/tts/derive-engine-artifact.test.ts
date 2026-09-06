@@ -197,3 +197,53 @@ describe('deriveEngineArtifact — X-Language (#1951)', () => {
     expect(headersOf(spy)['X-Language']).toBeUndefined();
   });
 });
+
+/* #3058 — a per-request device override for /xtts/clone-voice, sent as
+   X-Device-Hint. Only clone-voice-resolver.ts's lazy Coqui derive supplies
+   `deviceHint`; every other caller leaves it undefined, so the header must
+   be sent only when explicitly provided and never invented as a default. */
+describe('deriveEngineArtifact — X-Device-Hint (#3058)', () => {
+  function headersOf(spy: ReturnType<typeof vi.spyOn>) {
+    const [, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    return init.headers as Record<string, string>;
+  }
+
+  it('sends X-Device-Hint on a coqui derive when input.deviceHint is set', async () => {
+    const spy = vi
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(okResponse(Buffer.from([1]), { 'X-Sample-Rate': '24000' }));
+    await deriveEngineArtifact(
+      'u1',
+      'coqui',
+      { masterPcm: Buffer.from([9]), sampleRate: 24000, deviceHint: 'cuda:1' },
+      { sidecarUrl: 'http://sidecar:9000' },
+    );
+    expect(headersOf(spy)['X-Device-Hint']).toBe('cuda:1');
+  });
+
+  it('sends X-Device-Hint on a qwen derive too (the header is engine-agnostic on the wire)', async () => {
+    const spy = vi
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(okResponse(Buffer.from([1]), { 'X-Sample-Rate': '24000' }));
+    await deriveEngineArtifact(
+      'abc',
+      'qwen',
+      { masterPcm: Buffer.from([9]), sampleRate: 24000, refText: 't', deviceHint: 'cuda:0' },
+      { sidecarUrl: 'http://sidecar:9000' },
+    );
+    expect(headersOf(spy)['X-Device-Hint']).toBe('cuda:0');
+  });
+
+  it('omits X-Device-Hint entirely when deviceHint is not supplied — today\'s behaviour, unchanged', async () => {
+    const spy = vi
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(okResponse(Buffer.from([1]), { 'X-Sample-Rate': '24000' }));
+    await deriveEngineArtifact(
+      'u1',
+      'coqui',
+      { masterPcm: Buffer.from([9]), sampleRate: 24000 },
+      { sidecarUrl: 'http://sidecar:9000' },
+    );
+    expect(headersOf(spy)['X-Device-Hint']).toBeUndefined();
+  });
+});

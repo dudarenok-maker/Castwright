@@ -8,6 +8,7 @@
 import type { VoiceLibraryEntry, VoiceLibraryEngineStatus } from '../workspace/voice-library.js';
 import type { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
+import { getLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 // Review C-1 — type-only: this module's whole design is injected deps for
 // testability, so the REAL purgeCloneArtifacts is wired in by the caller
 // (synthesise-chapter.ts's buildDefaultCloneResolverDeps), never imported
@@ -874,6 +875,20 @@ export interface ResolveDesignedVoiceDeps {
  *  `UnresolvableClonedVoiceError` or any other error; that separation from
  *  `resolveClonedVoicesForChapter`'s fail-loud contract is the whole point
  *  of this being a different function. */
+/** #3058 — the lazy Coqui derive below (the designed-voice self-heal, run
+    mid-chapter while Qwen may already be resident and generating) must never
+    contend with Qwen for the same GPU, or it can trip a vram-spill failure.
+    `cuda:1` is the fixed target — this repo currently has no per-box
+    discovery of WHICH card Qwen is actually on, only whether a second card
+    exists at all — so this only fires the hint when the last-known GPU list
+    (`getLastKnownGpuDevices()`, kept warm by `GET /api/gpu/devices`) actually
+    reports an index-1 card. Absent/stale/single-GPU boxes get `undefined`
+    (today's behaviour, unchanged) rather than a hint pointing at a card that
+    doesn't exist. */
+function lazyCoquiDeriveDeviceHint(): string | undefined {
+  return getLastKnownGpuDevices().some((d) => d.idx === 1) ? 'cuda:1' : undefined;
+}
+
 export async function resolveDesignedVoicesForChapter(
   requests: DesignedVoiceRequest[],
   deps: ResolveDesignedVoiceDeps,
@@ -1002,6 +1017,7 @@ export async function resolveDesignedVoicesForChapter(
             sampleRate: master.sampleRate,
             refText: master.refText,
             auditionText: REPAIR_AUDITION_TEXT,
+            deviceHint: lazyCoquiDeriveDeviceHint(),
           },
           { signal: deps.signal },
         );

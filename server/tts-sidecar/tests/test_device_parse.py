@@ -167,3 +167,61 @@ def test_codec_device_pref_passes_through_plain_values(monkeypatch):
     for raw, expected in (("cpu", "cpu"), ("auto", "auto"), ("cuda:1", "cuda:1")):
         monkeypatch.setenv("QWEN_CODEC_DEVICE", raw)
         assert main._codec_device_pref() == expected
+
+
+# ── #3058 — _parse_device_hint (X-Device-Hint header validation) ───────────
+#
+# Reuses the exact same grammar `_engine_env_pin` applies to COQUI_DEVICE/
+# QWEN_DEVICE (`_resolve_uuid_to_index` + `_parse_device`), so these tests
+# mirror the _read_device_env / _engine_env_pin tests above rather than
+# inventing new coverage of the underlying grammar.
+
+
+def test_parse_device_hint_none_or_blank_is_no_hint():
+    assert main._parse_device_hint(None) is None
+    assert main._parse_device_hint("") is None
+    assert main._parse_device_hint("   ") is None
+
+
+def test_parse_device_hint_accepts_plain_indexed_cuda():
+    assert main._parse_device_hint("cuda:1") == "cuda:1"
+    assert main._parse_device_hint("CUDA:0") == "cuda:0"
+
+
+def test_parse_device_hint_resolves_uuid_form(monkeypatch):
+    monkeypatch.setattr(
+        main, "_enumerate_cuda_devices",
+        lambda tm=None: [{"uuid": "GPU-1", "idx": 1, "name": "x", "total_mb": 16000, "free_mb": 14000}],
+    )
+    assert main._parse_device_hint("cuda-uuid:GPU-1") == "cuda:1"
+
+
+def test_parse_device_hint_unresolved_uuid_is_ignored_not_fatal(monkeypatch, caplog):
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [])
+    with caplog.at_level("WARNING"):
+        assert main._parse_device_hint("cuda-uuid:GONE") is None
+    assert any("uuid_unresolved" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_device_hint_malformed_value_is_ignored_not_fatal(caplog):
+    """Mirrors how an invalid registry device value degrades today (see
+    `_engine_env_pin`/`_parse_device`): never raises, never crashes the
+    process -- just fails to produce a concrete pin."""
+    with caplog.at_level("WARNING"):
+        assert main._parse_device_hint("banana") is None
+        assert main._parse_device_hint("cuda:x") is None  # unindexed after malformed-index parse
+    assert any("not a valid device key" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_device_hint_auto_is_no_hint_without_warning(caplog):
+    with caplog.at_level("WARNING"):
+        assert main._parse_device_hint("auto") is None
+    assert not any("X-Device-Hint" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_device_hint_normalises_admitted_rocm(monkeypatch):
+    """#2813's vocabulary rule applies here too: the admission ledger's own
+    candidate keys are 'rocm:N' on a ROCm box, so a hint must be re-tagged
+    the same way _engine_env_pin already is, or it could never match."""
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: True)
+    assert main._parse_device_hint("cuda:1") == "rocm:1"

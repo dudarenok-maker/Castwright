@@ -4,7 +4,7 @@
    single-name constructor is the 3b1 applyQwenFallback backstop and must
    keep producing byte-identical messages — this pins that contract before
    T5 adds the classifier/orchestrator on top. */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   UnresolvableClonedVoiceError,
   classifyClonedVoice,
@@ -17,6 +17,7 @@ import {
 } from './clone-voice-resolver.js';
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from './model-paths.js';
+import { setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 
 describe('UnresolvableClonedVoiceError', () => {
   it('fromList carries the structured broken voices and a readable message', () => {
@@ -2064,6 +2065,109 @@ describe('resolveDesignedVoicesForChapter', () => {
       // runs for a coqui derive (main.py's coqui clone_voice writes a
       // SEPARATE xtts-<uuid>.json, never touching qwen-<uuid>.json).
       expect(deps.writeSidecarManifest).not.toHaveBeenCalled();
+    });
+
+    /* #3058 — the lazy Coqui derive's per-request device hint. This is the
+       ONLY call site in the codebase that ever sends `deviceHint`; every
+       other derive call (the qwen branch just above, and every branch of
+       `resolveClonedVoicesForChapter` below) must keep omitting it. */
+    describe('#3058 — lazy Coqui derive device hint', () => {
+      afterEach(() => {
+        setLastKnownGpuDevices([]); // restore the no-GPU-list-yet default
+      });
+
+      it('passes deviceHint "cuda:1" when the last-known GPU list reports an index-1 card', async () => {
+        setLastKnownGpuDevices([
+          { uuid: 'GPU-0', idx: 0 },
+          { uuid: 'GPU-1', idx: 1 },
+        ]);
+        const entry = designedEntry();
+        const deps = makeDesignedDeps({
+          readEntry: vi.fn(async (uuid: string) => (uuid === 'lib-designed' ? entry : null)),
+          ptExists: vi.fn(async () => false),
+          readDesignedMasterPcm: vi.fn(async () => ({
+            pcm: Buffer.alloc(1000),
+            sampleRate: 24000,
+            refText: '',
+            manifest: {},
+          })),
+          deriveEngineArtifact: vi.fn(async () => ({
+            previewPcm: Buffer.alloc(0),
+            sampleRate: 24000,
+            coquiVersion: 'v2.0.5',
+            modelId: 'tts_models/multilingual/multi-dataset/xtts_v2',
+          })),
+        });
+
+        await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          deps,
+        );
+
+        expect(deps.deriveEngineArtifact).toHaveBeenCalledWith(
+          'lib-designed',
+          'coqui',
+          expect.objectContaining({ deviceHint: 'cuda:1' }),
+          { signal: undefined },
+        );
+      });
+
+      it('omits deviceHint (undefined) when the GPU list has no index-1 card — never hints at a device that does not exist', async () => {
+        setLastKnownGpuDevices([{ uuid: 'GPU-0', idx: 0 }]);
+        const entry = designedEntry();
+        const deps = makeDesignedDeps({
+          readEntry: vi.fn(async (uuid: string) => (uuid === 'lib-designed' ? entry : null)),
+          ptExists: vi.fn(async () => false),
+          readDesignedMasterPcm: vi.fn(async () => ({
+            pcm: Buffer.alloc(1000),
+            sampleRate: 24000,
+            refText: '',
+            manifest: {},
+          })),
+          deriveEngineArtifact: vi.fn(async () => ({
+            previewPcm: Buffer.alloc(0),
+            sampleRate: 24000,
+            coquiVersion: 'v2.0.5',
+            modelId: 'tts_models/multilingual/multi-dataset/xtts_v2',
+          })),
+        });
+
+        await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          deps,
+        );
+
+        const [, , input] = deps.deriveEngineArtifact.mock.calls[0];
+        expect(input.deviceHint).toBeUndefined();
+      });
+
+      it('omits deviceHint from the QWEN branch even when an index-1 card is known — the hint is coqui-lazy-derive-only', async () => {
+        setLastKnownGpuDevices([
+          { uuid: 'GPU-0', idx: 0 },
+          { uuid: 'GPU-1', idx: 1 },
+        ]);
+        const deps = makeDesignedDeps({
+          ptExists: vi.fn(async () => false),
+          readDesignedMasterPcm: vi.fn(async (uuid: string) =>
+            uuid === 'lib-designed'
+              ? {
+                  pcm: Buffer.alloc(1000),
+                  sampleRate: 24000,
+                  refText: 'A calibration line.',
+                  manifest: { voiceId: 'qwen-lib-designed', refText: 'A calibration line.' },
+                }
+              : null,
+          ),
+        });
+
+        await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'qwen' as const }],
+          deps,
+        );
+
+        const [, , input] = deps.deriveEngineArtifact.mock.calls[0];
+        expect(input.deviceHint).toBeUndefined();
+      });
     });
 
     /* GATE 1 M-2 — the stamp used to be `coquiVersion: result.coquiVersion ?? ''`.
