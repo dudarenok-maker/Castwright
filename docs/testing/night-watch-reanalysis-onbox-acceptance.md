@@ -647,8 +647,78 @@ Seven further gaps this attempt exposed, all folded into the sections above:
   clear after ~2.5 h. Fixed under
   [#2304](https://github.com/dudarenok-maker/Castwright/issues/2304).
 - **C1 — cloud pass on `gemma-4-31b-it` incl. script-review:** _Result:_
-- **C1 — per-minute 429 retried, not misclassified:** _Result:_
+  **BLOCKED (2026-09-07).** Two independent live attempts (07:03:59–07:04:00.9,
+  then 07:05:38–07:06:01.3) both died in Phase 0 on Chapter 1 with a byte-identical
+  `GeminiContentBlockedError (reason=PROHIBITED_CONTENT)`. Zero of nine chapters
+  completed either time; script-review was never reached (it runs only after a
+  roster and attributed sentences exist). The block is deterministic, per the
+  code's own design comment — a third attempt would reproduce it.
+- **C1 — per-minute 429 retried, not misclassified:** _Result:_ **NOT OBSERVED,
+  either way (2026-09-07).** The run never got far enough into real request volume
+  to hit Google's per-minute cap. The only rate-limiter event seen was the app's
+  own proactive TPM throttle (`{"reason":"tpm","waitMs":60196}`) before Chapter 2's
+  call even went out — correctly classified, but not a live 429 from Gemini.
 - **C1 — working `localInputFraction` for zero truncation drops:** _Result:_
+  **NOT EXERCISED (2026-09-07).** The run died in Phase 0, before any stage-2 call
+  that `localInputFraction` governs — no truncation data of any kind was produced.
+
+**2026-09-05 → 2026-09-07 — Group C step 4's predecessor session (steps 1-3,
+#2896/#2895/#2894). C2/C3/C4 (per the register's current numbering) batched on
+one 9-chapter local run; C1 taken separately as a primary-checkout cloud pass.**
+Full detail in `docs/testing/onbox-wave11-group-c-results/step-{1-setup,
+2-c2c3c4-run,3-c1-cloud}.md`; only the headline figures are repeated here.
+
+Throwaway `mns_a_x7EBUule`, local Ollama `qwen38-cw-iq3-80k` (the operator's
+named replacement for the sheet's stale `qwen36-cw-iq4-32k` citation, which is
+not present on this box), GPU-pinned to the 5070 Ti via a second independent
+`ollama serve` instance on port 11435 (the shared daemon on 11434 was never
+stopped or reconfigured), structure engine on, `allowCloudFallback: false`.
+Phase-1 ran to completion across all 9 chapters in ≈4 h 01 m, then refused to
+persist: the drift guard demoted 1,805/12,171 (≈15%) sentences to `narrator`
+during an orphan-id cleanup pass and declined to flip `cast.json`/`state.json`
+— a genuine terminal state (both processes CPU-idle, no new log lines for 48+
+minutes), not a stall, and not touched per the issue's own instruction.
+
+Per-chapter narrated-speech share (the #2306 metric) this run:
+
+```
+ch  narrator/total   share   source dash-opening
+ 1     78/519        15.0%          358
+ 2    193/458        42.1%          403
+ 3     80/153        52.3%          162
+ 4     69/204        33.8%           91
+ 5     51/473        10.8%           63
+ 6      0/261         0.0%           59
+ 7    145/367        39.5%          106
+ 8    208/388        53.6%          113
+ 9      0/315         0.0%          183
+```
+
+Unweighted mean ≈27.5% — close to the historical 30.3% baseline and nowhere near
+the 2026-08-12/13 run's 87.4% collapse recorded above. **The collapse did not
+reproduce in this full 9-chapter run.**
+
+- **C2 (register's current #2253 row) — structural invariant:** _Result:_
+  **NARROWED further.** `unresolved=` populated every chapter (179–1166),
+  `flagged=` at conflict scale (0–69/chapter), escalation fires on all nine
+  chapters, ch5 dash-opening no longer collapses to narrator (10.8%, well under
+  the historical 87.4%). The one clause this run still cannot satisfy —
+  `state.json`'s `analysisProvenance.report` carrying a populated `unresolved`
+  — is unreachable only because the drift guard refused to persist, a separate
+  mechanism from the invariant itself.
+- **C3 (register's current #2304 row) — ch8 repeat-loop reproducer:** _Result:_
+  **STILL OWED, absence not evidence either way.** The named ch8/offset19
+  repeat-loop did not recur; the only repeat-loop this run saw was ch1/offset13,
+  caught on first occurrence. Ch8 hit a different failure family (Dialogue
+  collapse / Low coverage across attempts 2–3) and finished whole — 1,437
+  sentences, 11 sections, no truncation.
+- **C4 (register's current #2325/#2342 row) — collapse guard:** _Result:_
+  **DISCHARGED.** The guard fired precisely on every genuine collapse/coverage
+  breach (dialogue collapse on chapters 1,2,3,4,5,7,8; markers-lost once on ch5;
+  low-coverage once on ch8) and stayed silent on healthy chapters (ch6, ch9, both
+  0.0% narrator share, no guard firings). Source-dash-opening vs. attributed
+  non-narrator-speech ratios land solidly healthy on every chapter (0.45–6.70;
+  only ch3 sits near the 0.5 escalation line, still on the healthy side).
 
 ---
 

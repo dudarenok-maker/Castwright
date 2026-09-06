@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">65</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">64</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -211,7 +211,7 @@
     <tbody>
       <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->39<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->2<!-- END GENERATED:glance:B --></td></tr>
-      <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->4<!-- END GENERATED:glance:C --></td></tr>
+      <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->3<!-- END GENERATED:glance:D --></td></tr>
       <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->13<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
@@ -934,7 +934,7 @@
       </div>
     </header>
     <details class="item">
-      <summary><span class="num">C1</span><span class="iname">Free-tier Gemma cloud pass completes end to end</span><span class="risk low">Narrowed · take opportunistically</span><span class="chev">›</span></summary>
+      <summary><span class="num">C1</span><span class="iname">Free-tier Gemma cloud pass completes end to end</span><span class="risk hot">STILL OWED · deterministic PROHIBITED_CONTENT block found 09-07</span><span class="chev">›</span></summary>
       <div class="body">
         <div class="flag"><b>Narrowed 2026-08-13 from three items to one.</b> Two came out on merit:
         <b>429 classification is already covered offline</b> — <code>gemini.test.ts</code> carries four
@@ -970,6 +970,7 @@
         by <code>manuscriptId</code> only, so re-analyzing the library entry would overwrite the qwen36
         sentences and cast the owner is keeping for generation.</p>
         <div class="flag"><b>Wave-3 step 6, 2026-08-20 — STILL OWED, not run.</b> Blocked on a genuinely missing credential: this worktree's <code>server/.env</code> has no <code>GEMINI_API_KEY</code>, and no other channel supplied one. The primary checkout's <code>server/.env</code> was deliberately <b>not</b> read, opened, or copied (a named secret-leak shape, #2345). <code>docs/testing/onbox-wave3-results/step-6-group-c.md</code>.</div>
+        <div class="flag"><b>Group C step 3, 2026-09-07 — STILL OWED, new deterministic finding.</b> Two independent, live, real-API attempts (throwaway <code>mns_KwZCcqh6JG</code>, the primary checkout's already-running server, a genuine per-request <code>model</code> override so the concurrent session's own work was never touched) both died in Phase 0 on Chapter 1 with <code>GeminiContentBlockedError (reason=PROHIBITED_CONTENT)</code> — byte-identical failure signature both times, ≈1.9 s and ≈23 s to failure. This falsifies this row's premise that <code>gemma-4-31b-it</code> is safe for this book because it is "RECITATION-filter-immune" — Google's separate <code>PROHIBITED_CONTENT</code> classifier fires on this exact Chapter 1 text on <code>gemma-4-31b-it</code> too, deterministically. Zero of nine chapters completed either attempt, so none of the three acceptance criteria could be exercised. <b>Do not re-run this row as-is expecting a different result.</b> <code>docs/testing/onbox-wave11-group-c-results/step-3-c1-cloud.md</code>.</div>
 
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1685">#1685</a> — narrowed to 1 item 2026-08-13 · was <b>C3</b> before 2026-08-06</p>
       </div>
@@ -1002,12 +1003,12 @@
         <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>. <b>Do not
         re-run this row until #2306 lands</b>: a repeat pass costs 12 h and would reproduce the same
         number, since nothing in the engine changed.</div>
-        <p><b>What is still owed</b>, once #2306 is understood:</p>
+        <div class="flag"><b>Narrowed further, Group C step 2, 2026-09-05.</b> A real 9-chapter end-to-end re-analysis (throwaway <code>mns_a_x7EBUule</code>, local Ollama, GPU-pinned instance) confirmed every log-visible criterion this row asks for: <code>unresolved=</code> populated on every chapter (179–1166), <code>flagged=</code> at conflict scale (0–69/chapter), <code>escalated</code>/<code>escalationAccepted</code> both fire, and ch5's dash-opening sentences no longer collapse to narrator (10.8% final, against the historical 87.4%) — the collapse did not reproduce book-wide either (mean ≈27.5% across chapters). <b>What is still owed</b> is the one criterion this run could not reach: <code>state.json</code>'s <code>analysisProvenance.report</code> carrying a populated <code>unresolved</code>. The run's own drift guard refused to persist <code>cast.json</code>/<code>state.json</code> at all (1,805/12,171 ≈ 15% of sentences demoted to narrator during an orphan-id cleanup pass, above the guard's 15% threshold) — a separate mechanism from the structural invariant itself, not evidence the invariant failed. <code>docs/testing/onbox-wave11-group-c-results/step-2-c2c3c4-run.md</code>.</div>
+        <p><b>What is still owed</b>, once the drift guard clears:</p>
         <ul>
-          <li>ch5's dash-opening sentences are no longer rewritten to <code>narrator</code> — the
-          criterion that failed above.</li>
           <li><code>state.json</code>'s <code>analysisProvenance.report</code> carries a populated
-          <code>unresolved</code> key. Not read off the 2026-08-13 pass.</li>
+          <code>unresolved</code> key — unreachable so far because the run's drift guard refuses to
+          persist when >15% of sentences get demoted to narrator during orphan-id cleanup.</li>
         </ul>
         <p><b>Residual risk not covered by this row:</b> the invariant activates for Russian, Spanish
         and French, but Ночной дозор is Russian-only — Spanish and French ship on unit coverage plus
@@ -1069,56 +1070,10 @@
         <a href="https://github.com/dudarenok-maker/Castwright/issues/2306">#2306</a>; this row is
         not, and can be taken on any local re-analysis that reaches ch8.</p>
         <div class="flag"><b>Wave-3 step 6, 2026-08-20 — STILL OWED-blocked.</b> Rides C2's session per this row's own text; blocked by the same live-confirmed #2288-open state. The ch8 reproducer and its log-line criteria are unchanged and unexercised. <code>docs/testing/onbox-wave3-results/step-6-group-c.md</code>.</div>
+        <div class="flag"><b>Group C step 2, 2026-09-05 — STILL OWED, no change.</b> The 9-chapter end-to-end re-run that batched C2/C3/C4 together did not reproduce this row's named reproducer (ch8, <code>repeat-loop</code> at offset 19); the only <code>repeat-loop</code> observed was a different chapter/offset (ch1, offset 13), caught on first occurrence. Ch8 hit a different failure family entirely (<code>Dialogue collapse</code>/<code>Low coverage</code> across attempts 2–3) and finished whole — 1,437 sentences across 11 sections, no truncation. A new data point, but not evidence for or against this row's specific mechanism, which simply was not exercised. <code>docs/testing/onbox-wave11-group-c-results/step-2-c2c3c4-run.md</code>.</div>
 
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2304">#2304</a> ·
         added 2026-08-13</p>
-      </div>
-    </details>
-<details class="item">
-      <summary><span class="num">C4</span><span class="iname">The dialogue-collapse guard fires on a real collapse and stays quiet on a healthy book</span><span class="risk">Calibrated on ONE book, two runs</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p><b>Why this cannot be closed by the unit tests.</b> The guard's whole calibration rests on
-        <b>one</b> Cyrillic book, nine chapters, two runs — the 2026-08-06 pass (per-chapter narrated
-        speech halves 32.4 18.0 3.8 39.3 3.2 2.0 27.6 33.8 20.8, <b>max 39.3%</b>) and the
-        2026-08-12/13 collapse (93.1 93.7 94.8 97.5 86.5 72.2 84.3 74.6 91.8, <b>min 72.2%</b>). The
-        60% threshold sits in a 33-point gap between two runs of the <em>same</em> book. Every
-        automated test feeds the guard a fixture built to breach or not breach it; none can say
-        whether a <em>different</em> real Russian, French or Spanish book lands in that gap. Replaying
-        the metric over all 82 cached analyses on this box found <b>exactly one</b> with an evaluable
-        speech population (4,240 speech halves, 19.9% narrated); the only other two Cyrillic books
-        hold <b>19</b> and <b>15</b> speech halves, both under the 20 floor. No offline work can widen
-        this — a second dash-language book has to be imported.</p>
-        <p><b>Observe, on a real local re-analysis:</b></p>
-        <ul>
-          <li>a <b>healthy</b> dash-convention book completes with no <code>attribution-collapse</code>
-          chapter failure, and the per-chapter narrated-speech share logged for each chapter sits below
-          60%. Record the actual percentages — the distribution is worth far more than a pass/fail,
-          because it is what says whether 60% has real headroom or got lucky;</li>
-          <li>the guard's <b>retry</b> fires on a section that breaches, and the kept take is the
-          <em>less</em> collapsed one (#2342 made the scoring see the collapse dimension at all —
-          confirm the better take survived, not merely that a retry happened);</li>
-          <li>a chapter that still breaches reports <b><code>attribution-collapse</code></b> with the
-          cast-focused copy, <b>not</b> <code>attribution-incomplete</code>'s "did not cover every
-          sentence / a retry usually fills the gaps" — that copy was factually wrong for this failure
-          class until #2342, and this is the only place the corrected wiring is exercised end to end;</li>
-          <li>the <b>marker-loss</b> control does not false-positive: the source's dash-opening count
-          and the attributed speech-half count are logged for at least one chapter, and the second is
-          well above half the first. Both real runs measured ~246→213 and ~241→209, so near-parity is
-          expected and a ratio approaching 0.5 is what to escalate.</li>
-        </ul>
-        <p><b>Hardware prerequisite:</b> no GPU needed — local Ollama analyzer only, as with the rest
-        of Group C. Best taken in the same session as C2/C3 rather than as its own long run.</p>
-        <p><b>Where the criteria live:</b> this row, plus the calibration in
-        <code>docs/features/247-dialogue-structure-attribution.md</code>. Related but distinct: the
-        #1984 attribution-collapse <em>visibility</em> strand measures and surfaces collapse; this
-        guard <em>acts</em> on it during analysis. They share a name and nothing else — do not
-        discharge one against the other.</p>
-        <div class="flag"><b>Not discharged by a green <code>npm run test:server</code>.</b> The
-        guard's tests are fixture-driven by construction; that is the point of this row.</div>
-        <div class="flag"><b>Wave-3 step 6, 2026-08-20 — STILL OWED-blocked.</b> Same live-confirmed #2288-open block. Both halves of this row's criterion remain unexercised, recorded as two separate still-owed observations. Even once #2288 clears, the healthy-book half may need a second Cyrillic/dash-convention book imported — only one of this box's 82 cached analyses had an evaluable speech population. <code>docs/testing/onbox-wave3-results/step-6-group-c.md</code>.</div>
-        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2325">#2325</a> ·
-        <a href="https://github.com/dudarenok-maker/Castwright/issues/2342">#2342</a> · added
-        2026-08-13</p>
       </div>
     </details>
   </section>

@@ -518,7 +518,7 @@ setup rather than repeatedly loading and evicting models.
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 39 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
-| **C** | One *Ночной дозор* re-analysis session | 4 |
+| **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 3 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
@@ -526,11 +526,27 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**65 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**64 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-01, merging this branch's wave-10 A28 discharge with
+> **Last change: 2026-09-07, Group C step 4 (branch `docs/docs-2616-onbox-group-c`),
+> 65 → 64 — Group C 4 → 3.** Folded steps 1-3's evidence (the C2/C3/C4 local batch
+> run and the C1 cloud attempt, both this same session) into the register: **C4
+> DISCHARGED and removed** — the guard fired correctly on every real collapse/
+> coverage breach observed, stayed quiet on every healthy chapter, and every
+> final per-chapter ratio landed on the healthy side of its threshold. **C2
+> NARROWED further** — the structural invariant (unresolved/flagged populated
+> at the right scale, no ch5 dash-opening collapse, no reproduction of #2306's
+> narrator-collapse) is now confirmed live end-to-end; only the `state.json`
+> persistence criterion remains, blocked on the run's own drift guard refusing
+> to commit. **C1 and C3 STILL OWED, no criteria change** — C1 gained a new
+> deterministic finding (`gemma-4-31b-it` is also `PROHIBITED_CONTENT`-blocked
+> on this book's Chapter 1, falsifying the row's RECITATION-only premise); C3's
+> named ch8/offset19 reproducer simply did not occur this run. Evidence:
+> `docs/testing/onbox-wave11-group-c-results/step-{1-setup,2-c2c3c4-run,3-c1-cloud}.md`.
+>
+> **Prior change: 2026-09-01, merging this branch's wave-10 A28 discharge with
 > `main`'s independent ROCm/AMD Blocked-row addition.** This branch
 > (`chore/sidecar-kokoro-cuda-path`) had discharged row **A28** below (66 → 65,
 > Group A 40 → 39); `origin/main` had independently added the Blocked-section
@@ -3981,6 +3997,30 @@ for cast + generation.
 > determined from this row's own criteria text alone — flagged here as
 > itself unresolved, for a human to check, rather than guessed at.
 
+> **Group C step 3, 2026-09-07 — STILL OWED, new deterministic finding.**
+> Two independent, live, real-API attempts (throwaway `mns_KwZCcqh6JG`, the
+> primary checkout's already-running server, a genuine per-request `model`
+> override so the concurrent session's own work was never touched) both died
+> in Phase 0 on Chapter 1 with `GeminiContentBlockedError
+> (reason=PROHIBITED_CONTENT)` — byte-identical failure signature both times
+> (`stage: 1-ch1`, `userTurnLength: 12451`), ≈1.9 s and ≈23 s to failure. This
+> falsifies this row's working premise that `gemma-4-31b-it` is safe for this
+> book because it is "RECITATION-filter-immune" — Google's separate
+> `PROHIBITED_CONTENT` classifier fires on this exact Chapter 1 text on
+> `gemma-4-31b-it` too, deterministically (code's own design treats this error
+> class as whole-book-fatal; a third attempt would reproduce it). Zero of nine
+> chapters completed either attempt, so none of the three acceptance criteria
+> ("completes end to end," "script-review pass completes," "a per-minute 429
+> observed being retried") could be exercised — the only rate-limiter event
+> seen was the app's own proactive TPM throttle, not a live 429 from Google.
+> **Do not re-run this row as-is expecting a different result** — the block is
+> reproducibly tied to this book's Chapter 1 text, not to quota or timing. If
+> retried, the two live options are (a) exclude/reshape Chapter 1's opening
+> section before sending it to Gemini, or (b) accept the criterion can only be
+> measured from Chapter 2 onward on this book — both are decisions for a human,
+> not resolved here. Full evidence:
+> `docs/testing/onbox-wave11-group-c-results/step-3-c1-cloud.md`.
+
 ### C2 · Dialogue-convention invariant end to end ([#2253](https://github.com/dudarenok-maker/Castwright/issues/2253))
 
 **Partially discharged 2026-08-13** — see the run summary above. Two of this
@@ -4002,16 +4042,28 @@ structure hashes unchanged (parser untouched, confirmed by construction and by
 diff). Unit and regression coverage for the invariant, the bucket split and
 every `EngineReport` consumer ships in the same PR.
 
-**What is still owed:** this PR ships engine behaviour proven only by replay
-over one book's *cached* analysis. What replay cannot prove is that a real
-end-to-end analysis run produces the same buckets, and that `escalated`/
-`escalationAccepted` behave with the new bucket split. Re-run Ночной дозор
-analysis and confirm: `[analysis:structure]` log lines show `unresolved=`
-populated and `flagged=` at conflict scale (order 10²/chapter, not 10³); ch5's
-dash-opening sentences are no longer rewritten to `narrator`; `state.json`'s
-`analysisProvenance.report` carries a populated `unresolved`. Full criteria:
-`docs/testing/night-watch-reanalysis-onbox-acceptance.md` §2A.5, and plan 247's
-re-specified target 1.
+**Narrowed further, Group C step 2, 2026-09-05.** A real 9-chapter end-to-end
+re-analysis (throwaway `mns_a_x7EBUule`, local Ollama, GPU-pinned instance)
+confirmed every log-visible criterion this row asks for: `[analysis:structure]`
+lines show `unresolved=` populated on every chapter (179–1166, all non-zero),
+`flagged=` sits at conflict scale (0–69/chapter, order 10², not the 10³
+collapse this row exists to catch) on all nine chapters, `escalated`/
+`escalationAccepted` both fire with the new bucket split, and ch5's
+dash-opening sentences are no longer rewritten to `narrator` (final pass 51/473
+= 10.8%, against the historical 87.4% collapse — which also did not reproduce
+book-wide this run, mean ≈27.5% across chapters). **What is still owed** is the
+one criterion this run could not reach: `state.json`'s `analysisProvenance.
+report` carrying a populated `unresolved`. The run's own drift guard refused to
+persist `cast.json`/`state.json` at all (1805/12171 ≈ 15% of sentences demoted
+to `narrator` during an orphan-id cleanup pass, above the guard's 15%
+threshold) — a separate mechanism from the structural invariant itself, and not
+evidence the invariant failed. A re-run that either clears the drift guard, or
+a deliberate look at why that many orphan-id sentences needed demoting, is the
+one thing standing between this row and DISCHARGED. Full criteria:
+`docs/testing/night-watch-reanalysis-onbox-acceptance.md` §2A.5, plan 247's
+re-specified target 1, and
+`docs/testing/onbox-wave11-group-c-results/step-2-c2c3c4-run.md` for this
+run's full per-chapter figures and log evidence.
 
 **Residual risk not covered by this row:** the invariant activates for
 Russian, Spanish and French (`lang/es.ts`, `lang/fr.ts` both carry a non-null
@@ -4092,35 +4144,20 @@ this row is not, and can be taken on any local re-analysis that reaches ch8.
 > log-line criteria are unchanged and were not exercised — no re-analysis
 > ran. `docs/testing/onbox-wave3-results/step-6-group-c.md`.
 
----
-
-### C4 · The dialogue-collapse guard fires on a real collapse and stays quiet on a healthy book ([#2325](https://github.com/dudarenok-maker/Castwright/issues/2325), [#2342](https://github.com/dudarenok-maker/Castwright/issues/2342))
-
-**Why this cannot be closed by the unit tests.** The guard's whole calibration rests on **one** Cyrillic book, nine chapters, two runs — the 2026-08-06 pass (per-chapter narrated speech halves 32.4 18.0 3.8 39.3 3.2 2.0 27.6 33.8 20.8, **max 39.3%**) and the 2026-08-12/13 collapse (93.1 93.7 94.8 97.5 86.5 72.2 84.3 74.6 91.8, **min 72.2%**). The 60% threshold sits in a 33-point gap between two runs of the *same book*. Every automated test feeds the guard a fixture built to breach or not breach it; none can say whether a *different* real Russian, French or Spanish book lands in that gap. Replaying the metric over all 82 cached analyses on this box found **exactly one** with an evaluable speech population (4,240 speech halves, 19.9% narrated); the only other two Cyrillic books hold **19** and **15** speech halves, both under the 20 floor. No offline work can widen this — a second dash-language book has to be imported.
-
-**Observe, on a real local re-analysis:**
-
-- a **healthy** dash-convention book completes with no `attribution-collapse` chapter failure, and the per-chapter narrated-speech share logged for each chapter sits below 60%. Record the actual percentages — the distribution is worth far more than a pass/fail, because it is what says whether 60% has real headroom or got lucky;
-- the guard's **retry** fires on a section that breaches, and the kept take is the *less* collapsed one (#2342 made the scoring see the collapse dimension at all — confirm the better take survived, not merely that a retry happened);
-- a chapter that still breaches reports **`attribution-collapse`** with the cast-focused copy, **not** `attribution-incomplete`'s "did not cover every sentence / a retry usually fills the gaps" — that copy was factually wrong for this failure class until #2342, and this is the only place the corrected wiring is exercised end to end;
-- the **marker-loss** control does not false-positive: the source's dash-opening count and the attributed speech-half count are logged for at least one chapter, and the second is well above half the first. Both real runs measured ~246→213 and ~241→209, so near-parity is expected and a ratio approaching 0.5 is what to escalate.
-
-**Hardware prerequisite:** no GPU needed — local Ollama analyzer only, as with the rest of Group C. Best taken in the same session as C2/C3 rather than as its own long run.
-
-**Where the criteria live:** the max-39.3%/min-72.2% per-chapter narrated-speech-half figures this row cites are stated directly above, in this row (**Why this cannot be closed by the unit tests**) — no source file duplicates them at that granularity, so this row is their canonical home, not a pointer away from it. [`server/src/analyzer/stage2-coverage.ts`](../../server/src/analyzer/stage2-coverage.ts) carries two DIFFERENT calibration figures of its own, not this row's numbers: the module header's 95.7%/67.9% (lines ~160-161) is the same book's WHOLE-BOOK, ALL-SENTENCE narrator share, not the per-chapter SPEECH-HALF share the 60% threshold actually gates — reading 67.9% as "under the 60% threshold" would be wrong, since the good run's per-chapter figure this row measured is 3.2-39.3%, comfortably clear; and the `markersLost` comment's 246→213/241→209 (lines ~389-390) is an unrelated dialogue-marker-recovery calibration, not a narrated-share number at all. There is no dedicated plan doc for #2325/#2342, and plan 247 (dialogue-structure attribution) mentions neither the issue nor this calibration, so it was never the right pointer. Related but distinct: the #1984 attribution-collapse *visibility* strand measures and surfaces collapse; this guard *acts* on it during analysis. They share a name and nothing else — do not discharge one against the other.
-
-**Not discharged by:** a green `npm run test:server`. The guard's tests are fixture-driven by construction; that is the point of this row.
-
-> **Wave-3 step 6, 2026-08-20 — STILL OWED-blocked.** "Best taken in the
-> same session as C2/C3" — same live-confirmed #2288-open block. Both
-> halves of this row's criterion (fires on a real collapse; stays quiet on
-> a healthy book) remain unexercised, recorded as two separate still-owed
-> observations per this row's own requirement that a guard is only proven
-> by both. Re-resolution note, not acted on: even once #2288 clears, the
-> healthy-book half may need a second Cyrillic/dash-convention book
-> imported, since replaying the metric over this box's 82 cached analyses
-> found only one with an evaluable speech population.
-> `docs/testing/onbox-wave3-results/step-6-group-c.md`.
+> **Group C step 2, 2026-09-05 — STILL OWED, no change.** The 9-chapter
+> end-to-end re-run that batched C2/C3/C4 together did not reproduce this
+> row's named reproducer (Ночной дозор ch8, `repeat-loop` at offset 19); the
+> only `repeat-loop` observed this run was a different chapter/offset (ch1,
+> offset 13), caught and handled on its first occurrence. Ch8 itself hit a
+> different failure family entirely (`Dialogue collapse`/`Low coverage`
+> across attempts 2–3, resolved by progressive re-splitting) and finished
+> whole — 1,437 sentences across 11 sections, no truncation or drop. This is
+> a new data point (ch8 completing whole under a different failure path) but
+> not evidence for or against this row's specific `coverageRetries`-vs-
+> repeat-loop mechanism, which simply was not exercised — the trigger
+> condition is non-deterministic and did not fire this time. Nothing in the
+> row's criteria changes. Full evidence:
+> `docs/testing/onbox-wave11-group-c-results/step-2-c2c3c4-run.md`.
 
 ---
 
