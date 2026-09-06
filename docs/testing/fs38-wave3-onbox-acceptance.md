@@ -1094,7 +1094,17 @@ sample cache is scoped per library voice (`cacheScope = "qwen-<uuid>"`).
   Kokoro/Qwen stock voice.
 - A cache file named `qwen-<uuid>-<modelKey>-<hash>.mp3` exists.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Measured, not by-ear (per #2923's
+explicit method). Cast sample fetched twice via `POST
+/api/voice-library/.../sample {modelKey:"coqui-xtts-v2"}`: 1st `cached:false`,
+2nd `cached:true` — cache correctly scoped to the `xtts-<uuid>` storage key
+(Coqui naming, not `qwen-<uuid>`, since this rerun used the cloned Coqui voice
+per #2923/E-04's own scope). Identity via sidecar `/embed` cosine,
+duration-matched at 11.7s: sample vs. its own source clip **0.364**; vs.
+mismatched-speaker floor (F9-speaker2-20s.wav, same duration) **0.026**;
+separate un-matched-duration sanity check (F1 vs F9 at 20s) **0.0037**, also
+near-zero, confirming the floor. Clear separation between same-voice and
+floor. See #2923 for full command log.
 
 ---
 
@@ -1123,7 +1133,18 @@ chapter under test.
 - No `Cloned + cached Qwen voice` line in the sidecar log for this run (the
   voice was Healthy — the resolver did no derive).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Measured via cosine, not by-ear (per
+#2923). Genuine full-chapter generation (not splice/re-record) — English book
+chapter 2 ("Chapter One — The Knock"), `chapter_complete` event,
+`audioQa.status:"ok"`, duration 206.7s, `audioEngines:{"coqui":5}`. 5 narrator
+lines each cropped to an identical 2.4s window, embedded via sidecar
+`/embed`, compared pairwise and against source clip / floor
+(duration-matched): pairwise same-chapter same-voice cosines **0.576–0.704**
+(mean ≈0.64); vs. source clip (2.4s window) **0.185–0.239** (lower — short
+window vs. full clip, expected per "never compare across durations"); vs.
+floor (mismatched speaker) **-0.064 to 0.020**. Strong internal consistency,
+clearly above floor. No `cloned-voice-broken`, no drift. See #2923 for full
+command log.
 
 ---
 
@@ -1141,7 +1162,22 @@ change the rendered identity.
 - Both chapters complete; no re-derive fired between them.
 - `voice.json`'s `engines.qwen.baseModel` is unchanged from B-01.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Measured via cosine, not by-ear (per
+#2923). Three genuine full-chapter generations on the same cloned Coqui
+voice, none splices: EN ch2 "The Knock" (206.7s), EN ch3 "The Pour" (770.9s,
+163 segments — completed after retries needed due to real cross-worktree GPU
+contention on this shared dev box, see #2923 for detail), RU ch2 "Глава
+первая — Стук" (263.6s). 3–5 narrator lines per chapter cropped to matched
+2.4s windows, embedded, compared cross-chapter and against floor. Same
+book/language (EN ch2 vs EN ch3): cross-chapter cosines **0.524–0.665**,
+comparable to within-chapter pairwise (0.525–0.672); floor **-0.080 to
+-0.018**. Different book/language (EN ch2 vs RU ch2, same cloned voice): RU
+internal pairwise **0.570–0.714** (mean ≈0.65, comparable to EN internal
+consistency); cross-chapter/cross-language cosines **0.294–0.459** (positive,
+well above floor, lower than same-language as expected since content/language
+differ); floor **-0.121 to -0.044**. Identity holds across independent
+full-chapter renders with floors reported throughout. See #2923 for full
+command log.
 
 ---
 
@@ -2879,7 +2915,20 @@ XTTS has on long input without it).
 - Renders without crashing or truncating audibly mid-sentence.
 - No fallback to a stock catalogue voice.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Re-run confirming PR #2039 (plain
+`spacy` dependency) fixed the prior FAIL (missing spacy left
+`enable_text_splitting=True` hardcoded but spacy absent from the sidecar
+venv, so XTTS 500'd past `char_limits[lang]`). Direct sidecar `/synthesize`
+calls, engine=coqui, voice=cloned Coqui voice, language=ru (limit 182 chars):
+control line 46 chars (below limit) → **200 OK**, 146944 bytes PCM (~3.06s);
+long line 199 chars (above limit) → **200 OK**, 552448 bytes PCM (~11.5s) —
+previously 500 pre-#2039. Above-limit line now returns 200 as expected.
+Bonus JA check (86 chars, above the 71-char ja limit): also 200 OK — the
+sidecar's `except ImportError` fallback (`enable_text_splitting=False`)
+swallows the SudachiPy gap rather than surfacing an HTTP failure in this
+build; informational only, not scored as a fail (Japanese/SudachiPy is the
+fs-59 CJK workstream's gap, out of scope here per #2923). See #2923 for full
+command log.
 
 ---
 
@@ -3140,9 +3189,9 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | B-05 | Fidelity-unavailable is advisory, not fatal | **B** | no way to fail `/embed` independently of the clone path — the sheet's own caveat |
 | B-06 | Clone-fidelity advisory warning | **N/A — retired, automated** | Originally found **B — not reachable as written**: See **#1945**. The cosine scores clone-vs-source *faithfulness*, so degrading the source degrades the clone equally: clean 0.891, band-limited **0.881** (not lower), two speakers 0.773. Nothing realistic nears `CLONE_FIDELITY_MIN = 0.3`; **the advisory-warning path has never fired on hardware**. Resolved 2026-07-30: threshold kept as a catastrophe-only backstop (fires on a wrong-speaker clone — 0.158 datapoint); manual step replaced by `server/src/routes/voice-library.clone-fidelity.test.ts`. See DEF-C below |
 | B-07 | Assign to a character | **P** | 200 `{updated:1, written:["qwen","coqui"]}`; qwen slot `{name:qwen-$U, libraryUuid:$U, provenance:cloned}`; **`variants` map dropped** (had a `whisper` variant); `voiceUuid` unchanged; **coqui slot also written** `{name:xtts-$U,…}` per Task 24; all 13 characters diffed — only the target changed |
-| B-08 | Cast sample plays in the cloned voice | | |
-| B-09 | Chapter renders, consistent across lines | | |
-| B-10 | Consistent across chapters | | |
+| B-08 | Cast sample plays in the cloned voice | **P** (#2923) | Measured, not by-ear. Cache: `POST /api/voice-library/.../sample {modelKey:"coqui-xtts-v2"}` 1st `cached:false`, 2nd `cached:true`, scoped to `xtts-<uuid>` (Coqui naming, since this run used the cloned Coqui voice per E-04's scope). Identity via sidecar `/embed`, duration-matched 11.7s: sample vs. own source clip **0.364**; vs. mismatched-speaker floor **0.026**; separate duration-mismatched sanity check **0.0037**. Clear separation, floor confirmed |
+| B-09 | Chapter renders, consistent across lines | **P** (#2923) | Measured via cosine. Genuine full-chapter generation (not splice) — EN ch2 "The Knock", `chapter_complete`, `audioQa.status:"ok"`, 206.7s, `audioEngines:{"coqui":5}`. 5 narrator lines cropped to matched 2.4s windows, embedded, compared pairwise/vs source/vs floor: pairwise **0.576–0.704**; vs source clip **0.185–0.239** (shorter window, expected); floor **-0.064 to 0.020** |
+| B-10 | Consistent across chapters | **P** (#2923) | Measured via cosine. Three genuine full-chapter generations, no splices: EN ch2 (206.7s), EN ch3 "The Pour" (770.9s, 163 segments, completed after retries from real cross-worktree GPU contention), RU ch2 (263.6s). Same book/language cross-chapter cosines **0.524–0.665** (comparable to within-chapter); floor **-0.080 to -0.018**. Different book/language (EN vs RU, same cloned voice): cross cosines **0.294–0.459** (positive, above floor, lower than same-language as expected); floor **-0.121 to -0.044** |
 | B-11 | Un-derived clone assign → 409 | | |
 | B-12 | Capacity-admission-**ON** branch of `/qwen/clone-voice` | | |
 | B-13 | Sidecar failure status preserved, nothing persisted | | |
@@ -3191,7 +3240,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 > **Run 2 (superseded, kept for history):** Russian Coalfall ch.2, `oduvan` reassigned to clone `563501c7-…` and its `ttsEngine` forced to `coqui` (run 1's trap: the character's own engine overrides the requested `modelKey`). Splice `rerecord/coqui-xtts-v2` → `splice_complete`, 80 segments, 244.42 s. **`voices\xtts\xtts-$U.pt` (135,509 B) + `.json` (172 B) created — the first XTTS clone artifacts ever produced on this box.** `resolvedVoiceName` = `xtts-$U`, `voiceEngine: coqui`. 21 oduvan spans (55.0 s) → `/transcribe` auto-detect: **`ru`**, `avg_logprob` **−0.368**. Sidecar logged `Coqui ready — 58 speakers in manifest` on `cuda:1` in a process that had already served `/embed` (#1962 holding). **Required a workaround first — see DEF-D.** **⚠️ The identity half is RETRACTED** — this used a splice re-record, and **13 of the 21 targeted segments diverge** between `segments.json` and the analysis cache ([#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)), so roughly half the audio rendered in other characters' voices. That is what the unexplained ECAPA reading meant: **0.604** against the Russian narrator and **0.279** against the clone's own audition — a mixture, not a match, which run 2 recorded as "ambiguous" instead of investigating. What survives: the Coqui derive genuinely ran, the artifacts are real, and the language is right. Still owed: identity, the no-re-derive half, and the by-ear check
 | **E-02** ⭐ | Audition, then revoke — Play refuses afterwards | **P** (run 2) | Sample before revoke → 200 `{"url":"/audio/voices/qwen-$U-…-yqzvr6.mp3","cached":true}`. Revoke → 200, `revokedAt` set, `personName`/`relationship`/`permittedUse`/`attestedAt`/`attestedBy` intact, `master` block absent, **no `artifactPurgeIncomplete`**. Sample after revoke → **403** `This cloned voice has no valid consent and cannot be played.` (exact). Direct GET of the previously-cached audition URL → **404** — the cached clip of the revoked person is gone, not merely unlinked |
 | E-03 | Revoke lands during an in-flight Coqui derive | **P** | Run 2026-08-31. `revokedAt` survived, chapter failed naming "Pell Hollis", no orphaned `voices\xtts\` artifact — all three core guarantees held on first attempt. Minor non-defect wording deviation: reason read `(derive-failed)`, not `(revoked)` |
-| E-04 | A long sentence on a cloned Coqui voice | **F** | **Reproduced deliberately, not inferred.** Same cloned voice, same engine, same `language: ru` — only length differs: a **46-char** line → **200**, 178,176 B PCM (3.71 s); a **245-char** line → **500** `{"detail":"Internal error."}`. `main.py:2427` hardcodes `enable_text_splitting=True`; XTTS reaches `get_spacy_lang` only past `char_limits[lang]`; **spacy is not installed and not declared in any `requirements/*.txt`**. Thresholds: **ja 71, ru 182**, es 239, en 250, de 253, fr 273 — tightest exactly where cloned Coqui voices matter. Chapter 2 still rendered because **zero** of its lines reach 182 chars. Filed [#2017](https://github.com/dudarenok-maker/Castwright/issues/2017). **This is the crash class `test_xtts_clone_sanity` was written for** — it never ran: the golden tier is opt-in and SKIP-exits-0 without weights. **Update:** the fix landed in [PR #2039](https://github.com/dudarenok-maker/Castwright/pull/2039) — `requirements/base.txt` now declares plain `spacy`, and `_infer_from_latents` catches the `ImportError` and retries with `enable_text_splitting=False`, logged loudly. Verified only against a unit-test fake reproducing the upstream `ImportError` shape; this row's `F` stands until the exact reproduction above (46-char control → 200; 245-char Russian line → 200 + PCM) is re-run on a box with real Coqui weights |
+| E-04 | A long sentence on a cloned Coqui voice | **P** (re-run, #2923) | **Original F reproduced the bug deliberately**: 46-char control → 200, 245-char RU line → 500, isolating the missing-`spacy` gap fixed by [PR #2039](https://github.com/dudarenok-maker/Castwright/pull/2039). **Re-run on real Coqui weights (#2923, 2026-09-06)**, same cloned voice/engine, `language: ru` (limit 182): control line 46 chars → **200 OK**, 146944 B PCM (~3.06 s); long line **199 chars** (above limit) → **200 OK**, 552448 B PCM (~11.5 s) — the exact case that 500'd pre-#2039 now succeeds. Bonus JA check (86 chars, above the 71-char ja limit) also returned 200 — the sidecar's `except ImportError` fallback (`enable_text_splitting=False`) swallows the SudachiPy gap rather than surfacing an HTTP failure in this build; informational only, not scored (Japanese/SudachiPy is the separate fs-59 CJK workstream's gap). **F retired — fix confirmed on hardware.** |
 | E-05 | Audition matches render (KL-o caveat) | **P** | Card Play with `modelKey: coqui-xtts-v2` → 200 `{"url":"/audio/voices/xtts-$U-coqui-xtts-v2-47pmuw.mp3","cached":false}` — KL-o's fix holds, the card asks for Coqui. Audition vs the rendered chapter spans **0.5515**, against floors of **0.105** (rendered narrator) and **0.051** (the old designed oduvan). Same artifact, same identity — no drift between preview and delivery |
 | **E-06** ⭐ | A designed voice on a Coqui book — judged against the stock voice it replaces (D-B) | | |
 | **E-07** ⭐ | A designed voice's forced derive failure still renders the chapter (D-F) | **P** | Run 7: corrupted the retained calibration clip so the Coqui derive genuinely fails; chapter completed on `coqui-xtts-v2` (fail-soft to the stock catalogue voice), no crash/silence, no new xtts artifact, coqui slot unchanged |
