@@ -102,6 +102,26 @@ in flight — is confirmed on real hardware. The render's own eventual
 completion time was not measured cleanly because of this box's real
 multi-lane GPU contention.
 
+## A24 bullet 4 — attempted, blocked on fixture setup (not a code finding)
+
+Attempted the same pattern as bullet 1 (design `ivan-petrovich`, concurrent
+render for chapter 1) intending to fire `POST .../generation/pause` mid-wait
+and check the render's terminal event is a plain `AbortError`, not
+`NoCapacityError`/`vram-spill`. The render came back immediately with
+`chapter_complete` via `resumeFromCompletedChapterIds` — this fixture's only
+chapter had already been fully synthesized (via `coqui-xtts-v2`, not even
+`qwen`) by this same session's own earlier bullet-1 run, so `force:true` hit
+the resume-from-completed path rather than actually re-entering the
+generation loop and waiting on Qwen at all. No design-contention wait ever
+started for the render side, so there was nothing to pause mid-wait, and
+issuing `/pause` at that point would only prove pause works on an idle
+book — not the thing this bullet needs. Aborted before spending a real
+`/pause` call on that non-signal. This needs a genuinely fresh, never-before-
+rendered chapter/character target (or a book reset) to reach the actual
+wait state; noted for the next run rather than reported as a result.
+Design itself (`ivan-petrovich`) completed cleanly and was left in a normal
+resting state (not aborted) — cleanup below reflects that.
+
 ## Remaining scope — not attempted this session
 
 - **A24 bullets 2-4**: forcing a genuinely wedged design (bullet 2), the
@@ -110,7 +130,11 @@ multi-lane GPU contention.
   land on GPU0 in step 1's own findings, so this needs the same
   investigation step 1 already flagged as owed), and the
   `POST /api/sidecar/load` 90 s abort-budget conversion to `NoCapacityError`
-  vs. a plain synthesis-path `AbortError` (bullet 4) — none were driven.
+  vs. a plain synthesis-path `AbortError` — none were driven. Bullet 4 (Pause
+  mid-design-wait → `AbortError`) was attempted this session and blocked on
+  fixture setup, not code — see its own section above; the fixture's single
+  chapter needs to be reset to unsynthesized (or a new chapter added) before
+  the wait state this bullet needs can even be reached.
 - **A105 (5 bullets)**: base17-vs-design co-residency, the mid-load
   `/unload` 200 vs 500 check, the Kokoro/VoiceDesign mutual-exclusion
   arbiter in both directions, the two-overlapping-designs case, and driving
@@ -138,9 +162,23 @@ reconnaissance.
 
 - This worktree's sidecar (port 9170) and dev server (port 8250) were left
   running (same as step 1 left them — the next run needs them anyway).
-  `qwen`/`coqui` were unloaded once mid-session to free VRAM for the design
-  test; both reload on demand.
-- The `Onbox Test` fixture book now has `anna` genuinely designed
-  (`qwen-uIRjRzpfDUZqLX_0eVctR`) in this worktree's own throwaway workspace
-  copy — expected and fine, it is a disposable fixture, not real book data.
+  `qwen`/`coqui` were unloaded once mid-session (twice, across the two runs
+  that have now touched this row) to free VRAM for design tests; both reload
+  on demand.
+- The `Onbox Test` fixture book now has both `anna`
+  (`qwen-uIRjRzpfDUZqLX_0eVctR`) and `ivan-petrovich`
+  (`qwen-F-lKfWgmxmPoLNK7nfUkk`) genuinely designed, in this worktree's own
+  throwaway workspace copy — expected and fine, it is a disposable fixture,
+  not real book data. Chapter 1 is now fully synthesized end-to-end (via
+  `coqui-xtts-v2` from an earlier pass in this same session) — this is
+  exactly what blocks bullet 4 above; the next run needs a fresh chapter or
+  a book/chapter reset before attempting bullet 4 again, or should switch to
+  a different, never-synthesized fixture entirely.
 - No other lane's process was touched.
+
+**Still not finished after two runs.** A24 bullets 2-4, A105 (5 bullets),
+and A35 (4 bullets) remain undriven — same reasoning as above: forcing each
+race and waiting out A35's two real 120 s idle TTLs needs sustained,
+carefully sequenced real-hardware time this run's own budget did not stretch
+to either. Parking again (Agent Working, still assigned) rather than
+reporting AGENT DONE against unfinished scope.
