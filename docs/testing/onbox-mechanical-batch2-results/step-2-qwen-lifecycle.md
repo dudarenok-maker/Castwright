@@ -1,5 +1,5 @@
 # Step 2 — A24 design-contention wait + A105 base17 eviction guard + A35
-# three-model stranded VRAM — PARTIAL, in progress (3rd run adds A105 bullet 2)
+# three-model stranded VRAM — PARTIAL, in progress (4th run adds A105 bullet 1)
 
 Run 2026-09-06, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
@@ -182,6 +182,60 @@ to) — the next run should check whether `_ensure_base17_loaded` writes an
 identifiable log line, or add a temporary one, rather than relying on
 timing to separate the two cases.
 
+## A105 bullet 1 — base17-in-flight vs. concurrent design_voice() (4th run, 2026-09-07)
+
+**Real result: CONFIRMED — no OOM; the design co-resided with (and, on the
+second attempt, safely evicted) base17 on the same card, and completed with a
+real `designed` event.**
+
+Fired against this worktree's own server/sidecar (fixture book
+`onbox-test__standalones__untitled`, undesigned character `unknown-male`, the
+`рыбак` fold bucket — chosen specifically because it had never been designed,
+unlike `ivan-petrovich`/`anna` which earlier bullets already consumed):
+
+1. `POST :9170/load {"engine":"qwen","model":"1.7b"}` backgrounded to start
+   the base17 load.
+2. ~1 s later (`qwen_loading: true` confirmed the load was genuinely
+   in-flight, not yet resident), fired
+   `POST .../cast/unknown-male/design-voice/stream` (`persona` supplied
+   directly, `sampleVoiceId: char-onbox-test__standalones__untitled__unknown-male`,
+   `modelKey: qwen3-tts-0.6b`).
+
+**First attempt** (this run's own methodology error, recorded so the next run
+doesn't repeat it): the design SSE call was curled with `-m 60`; the design
+took longer than that, curl was killed at 60 s, and
+`GET .../cast/design-single/status` afterward showed `{"active":false}` with
+no `voiceId` ever written to `cast.json` — the client disconnect appears to
+have aborted the server-side job (or the job failed independently; not
+distinguished). **Not reported as a finding** — a self-inflicted client
+timeout, not evidence about the code under test.
+
+**Second attempt**, corrected (curl `-m 300`, launched detached, polled via
+`design-single/status` instead of relying on the SSE body): base17 loaded to
+`qwen_base17_loaded: true` on `cuda:0` almost immediately (this run's box
+apparently had the weights hot from the first attempt); the design job then
+reported `phase: "freeing-vram"` via the status endpoint — i.e. it had to
+evict base17 to fit — followed eventually by `qwen_base17_loaded: false` and
+the design proceeding to completion:
+`{"type":"designed","characterId":"unknown-male","voiceId":"qwen-eB3SAJ1iv6rDrCh0ueLVZ",
+"url":"/audio/voices/char-onbox-test__standalones__untitled__unknown-male-qwen3-tts-0.6b-jcwm7x.mp3"}`.
+No OOM at any point in either attempt. Post-completion `/health`:
+`qwen_design_resident: true`, `qwen_device_key: "cuda:0"`,
+`qwen_base17_loaded: false`; GPU0 `free_mb` dropped from the idle 7411 to
+3456 (design resident), GPU1 unaffected (13700, essentially idle-baseline).
+
+**Bullet 1 verdict:** the design did not OOM against an in-flight/resident
+base17 on the same card — it correctly triggered the eviction path
+(`freeing-vram`) and proceeded once base17 was cleared. This run did not
+capture the sidecar's own stdout log (same limitation as bullet 2's note
+above — no file-based log access from this run), so the *guard's internal
+branch* (checking `_base17_in_flight.busy` vs. `_base17 is not None`) was not
+directly observed; only the externally-visible behavior (no OOM, correct
+eviction, successful design) was, which is what the row actually asks for.
+Cleaned up afterward: `POST :9170/unload {"engine":"qwen"}` returned to a
+fully idle sidecar (`qwen_loaded`/`qwen_base17_loaded`/`qwen_design_resident`
+all `false`) before this run stopped.
+
 ## Remaining scope — not attempted this session
 
 - **A24 bullets 2-4**: forcing a genuinely wedged design (bullet 2), the
@@ -195,14 +249,14 @@ timing to separate the two cases.
   fixture setup, not code — see its own section above; the fixture's single
   chapter needs to be reset to unsynthesized (or a new chapter added) before
   the wait state this bullet needs can even be reached.
-- **A105 bullets 1, 3, 4, 5**: base17-vs-design co-residency (bullet 1), the
-  Kokoro/VoiceDesign mutual-exclusion arbiter in both directions (bullet 3),
-  the two-overlapping-designs case (bullet 4), and driving
-  `Base17ContentionTimeoutError` deliberately (bullet 5) — none were driven.
-  Bullet 2 (mid-load `/unload` 200 vs 500) was driven this session — see its
-  own section above — with one open sub-question (log-line vs. race-timing
-  distinction) flagged for whoever picks up bullet 1/3/4/5 next, since they
-  all touch the same `_ensure_base17_loaded`/arbiter code path.
+- **A105 bullets 3, 4, 5**: the Kokoro/VoiceDesign mutual-exclusion arbiter in
+  both directions (bullet 3), the two-overlapping-designs case (bullet 4), and
+  driving `Base17ContentionTimeoutError` deliberately (bullet 5) — none were
+  driven. Bullets 1 and 2 are now both driven to a real result — see their own
+  sections above — with one open sub-question (log-line vs. race-timing
+  distinction on bullet 2, and the internal guard-branch not directly observed
+  on bullet 1) flagged for whoever picks up bullet 3/4/5 next, since they all
+  touch the same `_ensure_base17_loaded`/arbiter code path.
 - **A35 (4 bullets)**: the three-model (Qwen Base + base17 + Whisper)
   residency scenario, its two real 120 s idle-TTL waits
   (`ASR_IDLE_TTL`, `QWEN_BASE17_IDLE_TTL`), and the `/debug/memory`
@@ -212,16 +266,18 @@ timing to separate the two cases.
 timed real race (or, for A35, two back-to-back 120 s real waits) against a
 sidecar this box is already sharing with other live lanes — the same class
 of multi-hour, contention-sensitive real-hardware work the ledger's #2993
-entry hit for the same reason. Continuing past A105 bullet 2 inside this
+entry hit for the same reason. Continuing past A105 bullet 1 inside this
 run's remaining budget would mean either rushing the timing (an unreliable
 pass/fail read, indistinguishable from a false pass) or reporting results
 never actually observed. Neither is acceptable, so the claim is being left
 parked (Agent Working, still assigned, no AGENT DONE/BLOCKED/FAILED) rather
 than closed. Setup above (fixture book already in place, unload sequence
-already known to work, exact endpoints already traced, A105 bullet 2's
-`/load`+`/unload` race pattern now demonstrated directly against the raw
-sidecar) should let the next run start directly on A24 bullet 2 or A105
-bullet 1 instead of repeating this reconnaissance.
+already known to work, exact endpoints already traced, A105 bullets 1 and 2's
+`/load`+design/`/unload` race patterns now demonstrated directly against the
+raw sidecar, and `design-single/status` confirmed as a more reliable poll
+target than an SSE body a client-side timeout can sever) should let the next
+run start directly on A24 bullet 2 or A105 bullet 3 instead of repeating this
+reconnaissance.
 
 ## Cleanup / state at time of writing
 
@@ -230,23 +286,25 @@ bullet 1 instead of repeating this reconnaissance.
   `qwen`/`coqui` were unloaded once mid-session (twice, across the two runs
   that have now touched this row) to free VRAM for design tests; both reload
   on demand.
-- The `Onbox Test` fixture book now has both `anna`
-  (`qwen-uIRjRzpfDUZqLX_0eVctR`) and `ivan-petrovich`
-  (`qwen-F-lKfWgmxmPoLNK7nfUkk`) genuinely designed, in this worktree's own
-  throwaway workspace copy — expected and fine, it is a disposable fixture,
-  not real book data. Chapter 1 is now fully synthesized end-to-end (via
-  `coqui-xtts-v2` from an earlier pass in this same session) — this is
-  exactly what blocks bullet 4 above; the next run needs a fresh chapter or
-  a book/chapter reset before attempting bullet 4 again, or should switch to
-  a different, never-synthesized fixture entirely.
+- The `Onbox Test` fixture book now has `anna` (`qwen-uIRjRzpfDUZqLX_0eVctR`),
+  `ivan-petrovich` (`qwen-F-lKfWgmxmPoLNK7nfUkk`), and `unknown-male`
+  (`qwen-eB3SAJ1iv6rDrCh0ueLVZ`, from this run's A105 bullet 1) genuinely
+  designed, in this worktree's own throwaway workspace copy — expected and
+  fine, it is a disposable fixture, not real book data. Chapter 1 is now
+  fully synthesized end-to-end (via `coqui-xtts-v2` from an earlier pass in
+  this same session) — this is exactly what blocks A24 bullet 4 above; the
+  next run needs a fresh chapter or a book/chapter reset before attempting
+  that bullet again, or should switch to a different, never-synthesized
+  fixture entirely.
 - No other lane's process was touched.
-- This run's own base17 load/unload cycles left this worktree's sidecar back
-  at idle (`qwen_base17_loaded: false`, `qwen_loaded: false`) — no lingering
-  residency from the A105 bullet 2 race above.
+- This run's own base17/design load/unload cycles left this worktree's
+  sidecar back at idle (`qwen_loaded`, `qwen_base17_loaded`,
+  `qwen_design_resident` all `false`) — no lingering residency from either
+  the A105 bullet 1 or bullet 2 races above.
 
-**Still not finished after three runs.** A24 bullets 2-4, A105 bullets 1 and
-3-5, and A35 (4 bullets) remain undriven — same reasoning as above: forcing
-each race and waiting out A35's two real 120 s idle TTLs needs sustained,
-carefully sequenced real-hardware time this run's own budget did not stretch
-to either. Parking again (Agent Working, still assigned) rather than
-reporting AGENT DONE against unfinished scope.
+**Still not finished after four runs.** A24 bullets 2-4, A105 bullets 3-5, and
+A35 (4 bullets) remain undriven — same reasoning as above: forcing each race
+and waiting out A35's two real 120 s idle TTLs needs sustained, carefully
+sequenced real-hardware time this run's own budget did not stretch to either.
+Parking again (Agent Working, still assigned) rather than reporting AGENT
+DONE against unfinished scope.
