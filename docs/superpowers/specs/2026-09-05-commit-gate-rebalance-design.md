@@ -227,10 +227,24 @@ Per-step-total is also the only shape that composes additively with a pipeline c
 records `durationMs` per step. Derive the budget as `max(FLOOR, K × lastGreenDurationMs)`: no
 magic numbers, adapts to the box, and degrades to `FLOOR` when cold.
 
-**One measurement is owed before these are final.** `durationMs` is recorded around the whole
-retry loop (`verify-cache.mjs:1478-1481`), so 19.45 min is a **step total** and the per-attempt
-figure is unknown by up to 3×. Run one `test:server --no-cache` on a reaped box and record
-per-attempt timings.
+**One measurement was owed before these are final — resolved 2026-09-06 by instrumentation
+rather than sampling ([#3018](https://github.com/dudarenok-maker/Castwright/issues/3018)).**
+`durationMs` is recorded around the whole retry loop, so 19.45 min is a **step total** and the
+per-attempt figure was unknown by up to 3×. Only `RETRIABLE_POOL_STEPS` (`test:server`,
+`test:server-slow`) can be inflated this way; every other step is always exactly one attempt.
+
+The original plan here — "run one `test:server --no-cache` on a reaped box and record per-attempt
+timings" — was **not** taken, deliberately. It buys a single sample for ~19 minutes of exclusive
+box time, and this box is rarely idle enough to give that honestly; an earlier attempt to sample it
+became a real 19-minute battery on a box that was mid-cleanup. #3018 instead records the attempt
+count in the cache entry, so **every** future run reports its own decomposition for free, and a
+stale figure can never again be mistaken for a single-attempt cost.
+
+**This is a hard prerequisite for the self-calibrating budget above, not a tidy-up.** That design
+derives the budget as `max(FLOOR, K × lastGreenDurationMs)` — reading `durationMs`
+programmatically. Fed a 3-attempt total, it would set a budget up to **3× too generous**, which is
+the precise failure mode Part 2 exists to prevent: a run that outlives its budget without tripping
+it. Part 2 must consume the per-attempt figure, not the step total.
 
 **Implementation is an async `spawn` conversion of step execution — the largest piece of work
 here, and its real risk is source-text pins, not caller compatibility.**
@@ -439,6 +453,19 @@ the governor entirely.
 - **Open Engine queue concurrency.** Noted as a gap: with the governor deferred, this was the
   only other lever on battery count, and both are now out. If Part 3's log shows deliberate
   starts dominate, this becomes the live option alongside the governor.
+
+## Status of the two deferred measurements
+
+| # | Question | State |
+|---|---|---|
+| 1 | Is the wedge a concurrency phenomenon at all? | **Still open.** The "two concurrent batteries are enough" claim came from immediate-parent root detection later proved wrong. Its urgency has dropped: since Part 1 **no git hook spawns a pool**, so the hook-driven wedge is structurally impossible and this now governs only Parts 2-6 (manual `verify` runs and OE lanes). Deliberately reproducing it costs ~40 min of a shared box and recreates the failure it studies — not done. |
+| 2 | Is `test:server`'s 19.45 min one attempt or three? | **Answered 2026-09-06: the artifact could not say**, because the attempt count was never recorded. Fixed by #3018 rather than sampled. See Part 2 above. |
+
+**Part 1 propagation is complete.** `.husky/*` is tracked, so each worktree kept the old ~35-min
+hooks until `main` merged into it. As of 2026-09-06 the sweep is finished: **19/19 worktrees on
+instant hooks, 0 on the old battery.** Verify this with the hook file contents, not with
+`git branch --contains` — one straggler's branch lacked the merge commit while its content had
+reached `main` by another route.
 
 ## Open questions
 

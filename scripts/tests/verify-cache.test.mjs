@@ -38,6 +38,7 @@ import {
   siblingContentionFor,
   SIBLING_CONTENTION_THRESHOLD,
   isVitestPoolCrash,
+  runStepProcess,
   branchDiffFiles,
   stagedDiffFiles,
   sidecarFingerprint,
@@ -1320,6 +1321,110 @@ test('runStepProcess keys the retriable-pool-crash lookup on retryKey, not the s
   );
 });
 
+// --- Attempt-count propagation (#3018) -----------------------------------
+//
+// Unlike the CHANGED_ONLY_NPM_SCRIPT/runStepProcess wiring test above (which
+// pins the retryKey-vs-npmScript distinction by source regex to avoid
+// spawning real vitest), these tests need to observe runStepProcess's actual
+// return value across real retries — that can't be proven by reading source.
+// So they spawn a real npm process, but only ever against a throwaway
+// package.json whose "script" is a one-line node invocation of a local
+// fixture file — milliseconds, not a vitest battery.
+
+function writeFlakyFixture(dir, npmScriptName, { failFirst }) {
+  const marker = join(dir, 'attempts.txt');
+  writeFileSync(
+    join(dir, 'flaky.mjs'),
+    `import { existsSync, appendFileSync } from 'node:fs';
+const marker = ${JSON.stringify(marker)};
+const already = existsSync(marker);
+appendFileSync(marker, 'x');
+// A short busy-wait so a real, measurable amount of time elapses on EVERY
+// attempt — proves a summed duration actually accumulates across retries
+// rather than only reflecting the last attempt.
+const until = Date.now() + 60;
+while (Date.now() < until) { /* spin */ }
+if (${JSON.stringify(failFirst)} && !already) {
+  process.stderr.write('Worker exited unexpectedly\\n');
+  process.exit(1);
+}
+process.exit(0);
+`,
+    'utf8',
+  );
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'flaky-fixture', private: true, scripts: { [npmScriptName]: 'node flaky.mjs' } }),
+    'utf8',
+  );
+  return marker;
+}
+
+test('runStepProcess: a step passing on the first attempt records 1 attempt', () => {
+  const dir = mkTmp();
+  writeFlakyFixture(dir, 'always-pass', { failFirst: false });
+  const result = runStepProcess('always-pass', { cwd: dir, env: process.env, retryKey: 'test:server' });
+  assert.equal(result.code, 0);
+  assert.equal(result.attempts, 1);
+});
+
+test('runStepProcess: a fork-pool crash followed by a pass records the true attempt count, summed across attempts', () => {
+  const dir = mkTmp();
+  writeFlakyFixture(dir, 'flaky', { failFirst: true });
+  const t0 = Date.now();
+  const result = runStepProcess('flaky', { cwd: dir, env: process.env, retryKey: 'test:server' });
+  const dt = Date.now() - t0;
+  assert.equal(result.code, 0);
+  assert.equal(result.attempts, 2, 'first attempt crashes, second passes — 2 total attempts');
+  // Each attempt spins for >= 60ms; two attempts must sum to noticeably more
+  // than a single one, proving the elapsed time isn't just the last attempt.
+  assert.ok(dt >= 110, `expected the two attempts' durations to sum (>=110ms), got ${dt}ms`);
+});
+
+test('runStepProcess: a non-retriable step always records 1 attempt, even given a crash-shaped failure', () => {
+  const dir = mkTmp();
+  writeFlakyFixture(dir, 'flaky-nonretriable', { failFirst: true });
+  // retryKey NOT in RETRIABLE_POOL_STEPS — must never retry, regardless of
+  // stderr shape, and must report exactly 1 attempt.
+  const result = runStepProcess('flaky-nonretriable', {
+    cwd: dir,
+    env: process.env,
+    retryKey: 'some-other-step',
+  });
+  assert.equal(result.code, 1);
+  assert.equal(result.attempts, 1);
+});
+
+test('decide: a legacy cache entry with durationMs but no attempts field is still a valid cache hit', () => {
+  const hash = composeInputHash(fixedArgs());
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: {
+        inputHash: hash,
+        lastGreenAt: '2026-05-18T00:00:00.000Z',
+        durationMs: 4242,
+        // no `attempts` field — pre-existing entry written before #3018
+      },
+    },
+  };
+  assert.equal(decide({ stepName: 'lint', currentHash: hash, cache, noCache: false }), 'skip');
+});
+
+test('loadCache does not crash or reset the cache when an entry lacks the attempts field', () => {
+  const dir = mkTmp();
+  const path = join(dir, '.verify-cache.json');
+  const legacy = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { inputHash: 'a'.repeat(64), lastGreenAt: '2026-05-18T00:00:00.000Z', durationMs: 999 },
+    },
+  };
+  writeFileSync(path, JSON.stringify(legacy), 'utf8');
+  const result = loadCache(path);
+  assert.deepEqual(result, legacy);
+});
+
 function runPipelineLoopBody() {
   const match = src.match(
     /if \(action === 'skip'\) \{[\s\S]*?const changedOnlyScript =[\s\S]*?\n {2}\}\n {2}return 0;/,
@@ -1737,4 +1842,48 @@ test('hasVitestStep returns FALSE for an empty array', () => {
   // false. The default-to-all-steps expansion happens upstream, before this is
   // ever called with the resolved list, so the two never disagree in practice.
   assert.equal(hasVitestStep([]), false, 'empty selection contains no vitest step');
+});
+
+// --- Attempt-count wiring verification (#3018) ---
+//
+// Issue #3018 added an `attempts` field to runStepProcess's return value and
+// wired it into the cache write. These tests verify the wiring by examining the
+// per-step loop body in verify-cache.mjs using the same regex-based technique
+// as CHANGED_ONLY_NPM_SCRIPT and detectGpuContention above — running the real
+// pipeline would spawn vitest batteries, so correctness is pinned by reading
+// the source code at the seam where the field is written to the cache entry
+// and where the [pass] console log conditionally includes the attempt count.
+
+test('runPipeline writes the attempts field to the cache entry on pass — #3018 acceptance criterion 1', () => {
+  const body = runPipelineLoopBody();
+  // Verify the cache write block includes `attempts` as a field in the object
+  // literal. Deleting this line removes the entire purpose of #3018 — that the
+  // cache persists the attempt count alongside durationMs, so a later run can
+  // know whether a step needed retries.
+  assert.match(
+    body,
+    /cache\.steps\[step\.name\]\s*=\s*\{[^}]*attempts,?[^}]*\}/,
+    'cache.steps[step.name] write must include the attempts field in its object literal — ' +
+      'without it, the attempt count is computed and then thrown away, defeating the ' +
+      'acceptance criterion of persisting it for later analysis',
+  );
+});
+
+test('runPipeline appends the attempt count to [pass] output conditionally, not unconditionally — #3018 acceptance criterion 2', () => {
+  const body = runPipelineLoopBody();
+  // Verify the conditional that controls whether the attempts note is printed.
+  // The note must NOT appear when attempts === 1 (single attempt, no retry).
+  assert.match(
+    body,
+    /const attemptsNote = attempts > 1 \? `.*, \${attempts} attempts` : '';/,
+    'the attempts note must be conditional: printed only when attempts > 1 — ' +
+      'a single successful run has no retry story to tell, so the note stays absent',
+  );
+  // Verify the note is actually used in the console output.
+  assert.match(
+    body,
+    /\[pass\].*\$\{attemptsNote\}/,
+    '[pass] console line must interpolate attemptsNote — the conditional note ' +
+      'controls whether retry context appears in the output',
+  );
 });
