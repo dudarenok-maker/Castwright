@@ -1,0 +1,122 @@
+[
+  {
+    "characterId": "одуван",
+    "sentenceIds": [
+      5
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.872981587590684,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "audition",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "одуван",
+    "sentenceIds": [
+      8
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8789431242106196,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "audition",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "одуван",
+    "sentenceIds": [
+      47
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8336137121048838,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "audition",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "одуван",
+    "sentenceIds": [
+      50
+    ],
+    "verdict": "voice-mismatch",
+    "cosine": 0.7642512491405666,
+    "severity": "severe",
+    "fixable": true,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "audition",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "одуван",
+    "sentenceIds": [
+      54
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8603046585331035,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "audition",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "одуван",
+    "sentenceIds": [
+      55
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8367982453514293,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "audition",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "одуван",
+    "sentenceIds": [
+      71
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.9009038388510527,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "audition",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "одуван",
+    "sentenceIds": [
+      76
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8553911284459341,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "audition",
+    "windowed": false,
+    "chapterId": 2
+  }
+]

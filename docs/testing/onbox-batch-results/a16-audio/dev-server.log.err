@@ -1,0 +1,52 @@
+2026-09-07 07:02:48.097 [tts:catalog-audit] Could not reach http://127.0.0.1:9160/speakers within 120s — skipping audit. Start the sidecar and run `curl http://127.0.0.1:9160/api/sidecar/catalog-audit` (or restart the server) to retry.
+2026-09-07 07:11:00.370 [generation] Рассказчик: designed Qwen voice "qwen-O4V2lNiEzNp86cKwQ1oUi" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.371 [generation] Рен: designed Qwen voice "qwen-FmurrCWbS2TY6m4rYvXN1" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.372 [generation] Мэйрин: designed Qwen voice "qwen-TP3sfCclL5WIPEhaZ9-Jd" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.372 [generation] Коалфолл: designed Qwen voice "qwen-RJznhtTqGRaeobU0bm5XN" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.373 [generation] Пелл Холлис: designed Qwen voice "qwen-3W6SS1Q4vvK1hWrzOhi_l" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.373 [generation] Вдова Каспер: designed Qwen voice "qwen-4qD9rkQOTtwjfUvpnL8Rs" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.373 [generation] Бранн Уир: designed Qwen voice "qwen-NUdgiC63RTpX27R3hkHC2" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.374 [generation] Беррин Уир: designed Qwen voice "qwen-a-hYrcMYR-d2OaLXALxF8" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.374 [generation] Отец Лессом: designed Qwen voice "qwen-14KZfNt2RXojvFwljXNpD" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.375 [generation] Иво: designed Qwen voice "qwen-_f-OXeE0Rx2YTIewNSzLQ" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.375 [generation] Села: designed Qwen voice "qwen-DsQqmj3eEs0tzL-vp6UF9" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.375 [generation] Харт: designed Qwen voice "qwen-psOzUmbzKNK_26gBG2HzA" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:11:00.376 [generation] Незнакомый Парень: designed Qwen voice "qwen-DKE5Mh07zLzz-FyveObr6" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.423 [generation] Рассказчик: designed Qwen voice "qwen-O4V2lNiEzNp86cKwQ1oUi" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.425 [generation] Мэйрин: designed Qwen voice "qwen-TP3sfCclL5WIPEhaZ9-Jd" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.425 [generation] Коалфолл: designed Qwen voice "qwen-RJznhtTqGRaeobU0bm5XN" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.426 [generation] Пелл Холлис: designed Qwen voice "qwen-3W6SS1Q4vvK1hWrzOhi_l" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.426 [generation] Вдова Каспер: designed Qwen voice "qwen-4qD9rkQOTtwjfUvpnL8Rs" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.426 [generation] Бранн Уир: designed Qwen voice "qwen-NUdgiC63RTpX27R3hkHC2" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.427 [generation] Беррин Уир: designed Qwen voice "qwen-a-hYrcMYR-d2OaLXALxF8" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.427 [generation] Отец Лессом: designed Qwen voice "qwen-14KZfNt2RXojvFwljXNpD" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.427 [generation] Иво: designed Qwen voice "qwen-_f-OXeE0Rx2YTIewNSzLQ" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.427 [generation] Села: designed Qwen voice "qwen-DsQqmj3eEs0tzL-vp6UF9" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.428 [generation] Харт: designed Qwen voice "qwen-psOzUmbzKNK_26gBG2HzA" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:23:22.428 [generation] Незнакомый Парень: designed Qwen voice "qwen-DKE5Mh07zLzz-FyveObr6" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:30:25.572 [generation] chapter 2 (02-глава-первая-стук) flagged SUSPECT by audio QA: 1 sentence(s) still flagged after re-recording (e.g. Suspiciously long — 3.7s rendered vs ~1.4s expected (possible runaway synthesis).).
+2026-09-07 07:31:00.947 [sidecar] child exited (code=1, signal=null) at 2026-09-07 07:31:00.947
+2026-09-07 07:32:02.583 [generation] Рассказчик: designed Qwen voice "qwen-O4V2lNiEzNp86cKwQ1oUi" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.584 [generation] Мэйрин: designed Qwen voice "qwen-TP3sfCclL5WIPEhaZ9-Jd" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.585 [generation] Коалфолл: designed Qwen voice "qwen-RJznhtTqGRaeobU0bm5XN" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.585 [generation] Пелл Холлис: designed Qwen voice "qwen-3W6SS1Q4vvK1hWrzOhi_l" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.585 [generation] Вдова Каспер: designed Qwen voice "qwen-4qD9rkQOTtwjfUvpnL8Rs" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.585 [generation] Бранн Уир: designed Qwen voice "qwen-NUdgiC63RTpX27R3hkHC2" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.585 [generation] Беррин Уир: designed Qwen voice "qwen-a-hYrcMYR-d2OaLXALxF8" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.586 [generation] Отец Лессом: designed Qwen voice "qwen-14KZfNt2RXojvFwljXNpD" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.586 [generation] Иво: designed Qwen voice "qwen-_f-OXeE0Rx2YTIewNSzLQ" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.586 [generation] Села: designed Qwen voice "qwen-DsQqmj3eEs0tzL-vp6UF9" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.586 [generation] Харт: designed Qwen voice "qwen-psOzUmbzKNK_26gBG2HzA" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:32:02.587 [generation] Незнакомый Парень: designed Qwen voice "qwen-DKE5Mh07zLzz-FyveObr6" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.003 [generation] Рассказчик: designed Qwen voice "qwen-O4V2lNiEzNp86cKwQ1oUi" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.004 [generation] Мэйрин: designed Qwen voice "qwen-TP3sfCclL5WIPEhaZ9-Jd" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.005 [generation] Коалфолл: designed Qwen voice "qwen-RJznhtTqGRaeobU0bm5XN" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.005 [generation] Пелл Холлис: designed Qwen voice "qwen-3W6SS1Q4vvK1hWrzOhi_l" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.005 [generation] Вдова Каспер: designed Qwen voice "qwen-4qD9rkQOTtwjfUvpnL8Rs" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.006 [generation] Бранн Уир: designed Qwen voice "qwen-NUdgiC63RTpX27R3hkHC2" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.006 [generation] Беррин Уир: designed Qwen voice "qwen-a-hYrcMYR-d2OaLXALxF8" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.006 [generation] Отец Лессом: designed Qwen voice "qwen-14KZfNt2RXojvFwljXNpD" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.006 [generation] Иво: designed Qwen voice "qwen-_f-OXeE0Rx2YTIewNSzLQ" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.006 [generation] Села: designed Qwen voice "qwen-DsQqmj3eEs0tzL-vp6UF9" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.007 [generation] Харт: designed Qwen voice "qwen-psOzUmbzKNK_26gBG2HzA" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
+2026-09-07 07:44:26.007 [generation] Незнакомый Парень: designed Qwen voice "qwen-DKE5Mh07zLzz-FyveObr6" is not Russian (manifest: missing) — treating as undesigned, re-design required for this ru book.
