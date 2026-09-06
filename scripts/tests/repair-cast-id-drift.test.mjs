@@ -2777,12 +2777,12 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
     assert.equal(orphans.size, 0);
   });
 
-  test("CRITICAL (#2107, widened by owner decision): an id resolving via 'normalised-id' is now an orphan too — the-torment/lightning-dave real-workspace counter-example (formerly register row A29, discharged and renumbered since)", () => {
+  test("CRITICAL (#2107, widened by owner decision): an id resolving via 'normalised-id' is now an orphan too — register row A29's the-torment/lightning-dave real-workspace counter-example", () => {
     // A narrower first version of this fix kept 'normalised-id' out of
     // orphans, reasoning it can't depend on the mutable supersededBy table
     // so it can't post-date the render. Independent review found that
     // proves only that no RENAME happened, not that the rendered bytes are
-    // correct — the real-workspace case above records a real case where a
+    // correct — register row A29 records a real case where a
     // 'normalised-id' match was rendered BEFORE Wave 1's resolver existed
     // at all, substituting the narrator regardless of tier. The owner
     // decided: over-reporting is the safe failure direction for a one-shot

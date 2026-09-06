@@ -166,9 +166,8 @@ check fails on a real dependency gap.
 > Unit tests pin the wiring, but **whether CUDA is genuinely used cannot be
 > proven off-box**: get_available_providers() reports CUDA whether or not any
 > session uses it, which is exactly what hid this. Criteria 1 and 2 still need
-> a real load here — row A28 is discharged (2026-08-31); row A29 is discharged
-> (2026-09-05) — read the provider off a live Kokoro, not off the
-> available-providers list.
+> a real load here — row A28 is discharged (2026-08-31); row A29 stays owed —
+> read the provider off a live Kokoro, not off the available-providers list.
 >
 > **A CPU session here is not automatically this criterion failing (#2631
 > review N6).** This box's VRAM ledger (`admit()`, `main.py`) is a genuine
@@ -263,7 +262,9 @@ GPU-provider check would have measured the other lane's venv, not this
 one — worthless evidence. A structural box-contention limitation, distinct
 from the already-filed #2534 CUDA13/cuDNN9 gap.
 **Run by:** claude (wave-4 step 5c, Castwright#2561). **Date:** 2026-08-21.
-**Disposition:** Register row A29 (renumbered from A39 this wave) stayed STILL OWED at the time — partially run; row A29 was later discharged in full (2026-09-05). Full evidence: `docs/testing/onbox-wave4-results/step-5c-a40.md` (this run) and `docs/testing/onbox-a29-results/step-1-retry.md` (the discharging retry).
+**Disposition:** Register row A29 (renumbered from A39 this wave) stays
+STILL OWED — partially run. Full evidence:
+`docs/testing/onbox-wave4-results/step-5c-a40.md`.
 
 > **2026-08-23 (Castwright#2621) — STILL OWED, blocked by box-wide sidecar
 > port contention again.** Started this worktree's own app; the server found
