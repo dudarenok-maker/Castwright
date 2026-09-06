@@ -42,7 +42,12 @@ import { parseBranchName } from './lib/branch-name.mjs';
 import { scrubGitEnv } from './git-env.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { parseWorktreePorcelain } from './wt-list.mjs';
-import { extractSlotFromEnvLocal, readSlotClaims, SLOT_CLAIM_FILES } from './lib/worktree-slot.mjs';
+import {
+  extractSlotFromEnvLocal,
+  isPrimaryCheckout,
+  readSlotClaims,
+  SLOT_CLAIM_FILES,
+} from './lib/worktree-slot.mjs';
 
 const BASE_PORTS = {
   VITE_PORT: 5173,
@@ -131,6 +136,16 @@ export function listWorktreePaths() {
 // EnterWorktree or Agent isolation: "worktree", neither of which writes one.
 // Such trees cannot be detected at all; that limit is unchanged here.
 //
+// Neither does the PRIMARY CHECKOUT, which is excluded from `silent` outright.
+// Every real clone's primary checkout has a hand-written, marker-less
+// `server/.env` — that is where GEMINI_API_KEY lives — so counting it made
+// `silent` >= 1 on every genuine invocation, and a warning with a 100% base
+// rate carries no signal at all. It is also the one tree the warning's own
+// text cannot be true of: it is slot 0 and allocation starts at 1, so its
+// slot can never be re-issued. See isPrimaryCheckout for how it is told apart
+// (a .git directory rather than a `gitdir:` file) — deliberately not "the
+// first entry in the list", which is the positional premise #3052 was.
+//
 // `worktreePaths` defaults to the live worktree list; pass an explicit array
 // to point the scan at a fixture directory.
 export function collectSlotClaims(worktreePaths = listWorktreePaths()) {
@@ -142,7 +157,7 @@ export function collectSlotClaims(worktreePaths = listWorktreePaths()) {
     scanned++;
     const { slots, present } = readSlotClaims(treePath);
     for (const slot of slots) claimed.add(slot);
-    if (present > 0 && slots.length === 0) silent++;
+    if (present > 0 && slots.length === 0 && !isPrimaryCheckout(treePath)) silent++;
   }
 
   return { slots: Array.from(claimed).sort((a, b) => a - b), scanned, silent };
@@ -369,7 +384,7 @@ export async function main(argv) {
   );
   if (claims.silent > 0) {
     process.stderr.write(
-      `[wt-new] WARNING: ${claims.silent} worktree(s) have a generated ${SLOT_CLAIM_FILES.join(' / ')} ` +
+      `[wt-new] WARNING: ${claims.silent} linked worktree(s) have a ${SLOT_CLAIM_FILES.join(' / ')} ` +
         `but no readable slot marker — their slots are NOT protected and may be re-issued.\n`,
     );
   }

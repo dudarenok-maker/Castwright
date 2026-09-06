@@ -9,7 +9,7 @@
 // list` as its "slot", which is exactly the count-based premise wt-new.mjs
 // stopped using — the diagnostic denied the collision it exists to reveal.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Every generated file that carries the slot marker, relative to a worktree
@@ -59,6 +59,57 @@ export function extractSlotFromEnvLocal(envContent) {
   return null;
 }
 
+// The primary checkout is a KNOWN, EXPECTED non-claimant, and callers have to
+// tell it apart from a linked worktree that lost its marker.
+//
+// It never carries a wt-new-generated env file: wt-new.mjs only ever writes
+// into the worktree it creates, so the primary checkout's `server/.env` is the
+// hand-written one every real clone has (it is where GEMINI_API_KEY lives) and
+// carries no slot marker. It is also structurally safe — it is slot 0, and
+// allocateNextSlot starts at 1, so its slot can never be re-issued. Counting
+// it as a lost claim made the "no readable marker" warning fire on 100% of
+// real runs, and assert that the one guaranteed-safe tree was at risk.
+//
+// Detected from the tree itself, not from its position in `git worktree list`:
+// a linked worktree's `.git` is a FILE containing `gitdir: …`, the primary
+// checkout's is a DIRECTORY. That is a fact about the tree rather than an
+// inference from enumeration order — the same class of premise #3052 was.
+export function isPrimaryCheckout(treePath) {
+  try {
+    return statSync(join(treePath, '.git')).isDirectory();
+  } catch {
+    // No .git at all (a fixture directory, a removed tree): not the primary.
+    return false;
+  }
+}
+
+// Every SLOT_CLAIM_FILES entry that exists in a worktree, in SLOT_CLAIM_FILES
+// order, as { relative, path, content }. `content` is null when the file
+// exists but could not be read (permissions, a half-written file) — the entry
+// is still returned, so a caller counting "generated files present" is not
+// fooled by an unreadable one.
+//
+// Shared so every consumer reads the SAME set of files: readSlotClaims below
+// and wt-list.mjs's port columns both go through here. wt-list used to read
+// only `.env.local` for its ports, so a tree whose (deletable) `.env.local`
+// was gone reported `PORT=(default)` while its server stayed bound to the
+// slot's port — the slot column's own bug, one column over.
+export function readClaimFiles(treePath) {
+  const files = [];
+  for (const relative of SLOT_CLAIM_FILES) {
+    const filePath = join(treePath, ...relative.split('/'));
+    if (!existsSync(filePath)) continue;
+    let content = null;
+    try {
+      content = readFileSync(filePath, 'utf8');
+    } catch {
+      content = null;
+    }
+    files.push({ relative, path: filePath, content });
+  }
+  return files;
+}
+
 // Slots claimed by one worktree, read from every file in SLOT_CLAIM_FILES.
 // `present` counts how many of those files exist, so a caller can tell
 // "this tree claims nothing because it was never configured" apart from
@@ -66,21 +117,11 @@ export function extractSlotFromEnvLocal(envContent) {
 // second is a silent detection failure and gets surfaced, not swallowed.
 export function readSlotClaims(treePath) {
   const slots = new Set();
-  let present = 0;
-  for (const relative of SLOT_CLAIM_FILES) {
-    const filePath = join(treePath, ...relative.split('/'));
-    if (!existsSync(filePath)) continue;
-    present++;
-    let content;
-    try {
-      content = readFileSync(filePath, 'utf8');
-    } catch {
-      // Unreadable (permissions, a half-written file) — counted as present
-      // above, so it still shows up in the "yielded no slot" tally.
-      continue;
-    }
-    const slot = extractSlotFromEnvLocal(content);
+  const files = readClaimFiles(treePath);
+  for (const file of files) {
+    if (file.content === null) continue;
+    const slot = extractSlotFromEnvLocal(file.content);
     if (slot !== null) slots.add(slot);
   }
-  return { slots: Array.from(slots).sort((a, b) => a - b), present };
+  return { slots: Array.from(slots).sort((a, b) => a - b), present: files.length };
 }
