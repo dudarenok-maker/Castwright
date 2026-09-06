@@ -36,17 +36,21 @@ export interface CharacterCentroid {
   /** Mean cosine of the anchor-eligible set against this centroid.
    *  Used as the accept-check threshold in the auto-fix route (Task 13). */
   cleanMean: number;
-  /** Band boundary at the severe edge (E — severe-edge boundary). Either a percentile value
-   *  (when `bandMethod` is 'percentile'), or a sigma-based threshold (when `bandMethod` is
-   *  'synthetic-sigma' and the pool is tight), or a percentile value from the dispersion
-   *  fallback (when `bandMethod` is 'synthetic-sigma' but pool dispersion triggered the
-   *  percentile fallback). Check the `bandMethod` field to determine which computation was used. */
+  /** Band boundary at the severe edge (E — severe-edge boundary).
+   *  - When `bandMethod` is 'percentile': a percentile-of-pool value (used on real-anchor
+   *    in-book paths, or on synthetic-only audition pools that fall back due to high dispersion).
+   *  - When `bandMethod` is 'synthetic-sigma': a sigma-based threshold computed from
+   *    mean ± severeSigma × std (used on synthetic-only audition pools with tight clustering).
+   *  Only 'audition' rows carry `bandMethod`. The field's presence/value distinguishes
+   *  post-fix rows (trusted) from pre-fix rows (missing field = rebuild). */
   pSevere: number;
   /** Band boundary at the inconclusive-band upper boundary (U — inconclusive-band upper boundary).
-   *  Either a percentile value (when `bandMethod` is 'percentile'), or a sigma-based threshold
-   *  (when `bandMethod` is 'synthetic-sigma' and the pool is tight), or a percentile value from
-   *  the dispersion fallback (when `bandMethod` is 'synthetic-sigma' but pool dispersion triggered
-   *  the percentile fallback). Check the `bandMethod` field to determine which computation was used. */
+   *  - When `bandMethod` is 'percentile': a percentile-of-pool value (used on real-anchor
+   *    in-book paths, or on synthetic-only audition pools that fall back due to high dispersion).
+   *  - When `bandMethod` is 'synthetic-sigma': a sigma-based threshold computed from
+   *    mean ± bandSigma × std (used on synthetic-only audition pools with tight clustering).
+   *  Only 'audition' rows carry `bandMethod`. The field's presence/value distinguishes
+   *  post-fix rows (trusted) from pre-fix rows (missing field = rebuild). */
   pBand: number;
   /** How this centroid was built:
    *  - 'in-book': from the character's own clean anchor segments (in-book mode)
@@ -60,9 +64,13 @@ export interface CharacterCentroid {
    *  rebuilt rather than trusted. */
   auditionVoice?: AuditionVoiceRef;
   /** A36 fix — detection of pre-fix persisted audition rows. Records which band-computation
-   *  method was used ('percentile' = pre-fix, 'synthetic-sigma' = post-fix with sigma band
-   *  for synthetic-only pools). Only present on 'audition' rows built after this fix;
-   *  pre-fix rows carry none and are rebuilt to apply the new sigma-band logic. */
+   *  method was used on post-fix audition centroid rows:
+   *  - 'percentile': percentile-of-pool method (used on real-anchor paths, or on synthetic-only
+   *    pools that triggered the dispersion fallback due to high std dev > 0.05).
+   *  - 'synthetic-sigma': sigma-based method (mean ± sigma × std; used only on tight synthetic-only
+   *    pools with low std dev ≤ 0.05).
+   *  Pre-fix rows lack this field entirely — they are detected and rebuilt to apply the current
+   *  band-computation logic. Only present on 'audition' referenceKind rows. */
   bandMethod?: 'percentile' | 'synthetic-sigma';
 }
 

@@ -191,10 +191,9 @@ function persistedAsRef(row: CharacterCentroid): CharacterReference {
 /** #1969 / A36 — whether a persisted audition centroid's recorded voice identity still matches the
  *  character's CURRENT render identity, AND it was computed with the current band-derivation method.
  *  A mismatch — or no recorded identity at all (a legacy row written before #1969, or a character
- *  whose current voice info is absent) — or a pre-fix band method (missing bandMethod field or
- *  'percentile' value, pre-sigma-band rows) — means the reference may describe a speaker the
- *  character no longer is, or it was computed with outdated band logic, so it must not be trusted
- *  as-is: the caller discards and rebuilds it. */
+ *  whose current voice info is absent) — or a missing bandMethod field (pre-fix row) — means the
+ *  reference may describe a speaker the character no longer is, or it was computed with outdated
+ *  band logic, so it must not be trusted as-is: the caller discards and rebuilds it. */
 function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacter): boolean {
   const r = row.auditionVoice;
   if (row.referenceKind !== 'audition' || r == null) return false;
@@ -297,7 +296,6 @@ async function resolveCharacterReference(
   // register row A36). For tight synthetic-only pools, use the separately-
   // calibrated sigma band; for loose/degenerate pools, fall back to the
   // percentile-of-pool computation the real-anchor path uses (safe, proven).
-  // the real (real-anchor) in-book path above never reaches this branch.
   let pSevere: number;
   let pBand: number;
   let bandMethod: 'percentile' | 'synthetic-sigma';
