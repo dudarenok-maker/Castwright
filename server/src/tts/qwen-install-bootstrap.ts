@@ -232,45 +232,49 @@ export class QwenInstallBootstrap {
        kill()) — wrap it so the finally block still restarts. */
     this.transition(job, 'installing', { step: 'Stopping the sidecar…' });
     let stopError: Error | null = null;
+    let restartError: Error | null = null;
+
     try {
       await this.stopSidecarFn();
     } catch (err) {
       stopError = err instanceof Error ? err : new Error(String(err));
-      throw stopError; // re-throw immediately; finally still runs.
     }
-    try {
-      this.update(job, { step: 'Starting installer…' });
-      await this.spawnInstaller(job);
 
-      /* Pip installed successfully. The pip call pulled a fresh, plain CPU
-         `onnxruntime` (install-qwen3.mjs never invokes install-ort.mjs, and
-         base.txt has no pin). On a GPU box this silently clobbers the GPU
-         runtime. Re-swap it back to the GPU build. ensureOrtMarker is pure fs
-         (no throws — see its definition) and idempotent. */
-      this.update(job, { step: 'Verifying GPU runtime…' });
-      ensureOrtMarker(
-        process.env.SIDECAR_VENV_DIR ?? '',
-        (m: string) => console.log(`[qwen-install] ${m}`),
-      );
-    } finally {
-      /* Restart the sidecar unconditionally (success or failure) so a failed
-         install never leaves TTS down on top of the install error.
-         BUT: a throwing startSidecarFn must not replace the original install
-         error (stopError or spawnInstaller's error). Catch, log, and re-throw
-         only the original error. */
-      this.update(job, { step: 'Restarting the sidecar…' });
+    if (!stopError) {
       try {
-        await this.startSidecarFn();
-      } catch (restartErr) {
-        const msg = restartErr instanceof Error ? restartErr.message : String(restartErr);
-        console.error(`[qwen-install] sidecar restart failed: ${msg}`);
-        /* If there was already an error (from stop or spawn), that takes
-           precedence. If restart threw but stop/spawn didn't, throw the
-           restart error. If nothing threw yet, this is the error. */
-        if (stopError) throw stopError;
-        throw restartErr;
+        this.update(job, { step: 'Starting installer…' });
+        await this.spawnInstaller(job);
+
+        /* Pip installed successfully. The pip call pulled a fresh, plain CPU
+           `onnxruntime` (install-qwen3.mjs never invokes install-ort.mjs, and
+           base.txt has no pin). On a GPU box this silently clobbers the GPU
+           runtime. Re-swap it back to the GPU build. ensureOrtMarker is pure fs
+           (no throws — see its definition) and idempotent. */
+        this.update(job, { step: 'Verifying GPU runtime…' });
+        ensureOrtMarker(
+          process.env.SIDECAR_VENV_DIR ?? '',
+          (m: string) => console.log(`[qwen-install] ${m}`),
+        );
+      } catch (err) {
+        stopError = err instanceof Error ? err : new Error(String(err));
       }
     }
+
+    // Always restart the sidecar, even if stop or install failed, so TTS isn't
+    // left down. But capture any restart error separately so it doesn't mask
+    // the original error.
+    this.update(job, { step: 'Restarting the sidecar…' });
+    try {
+      await this.startSidecarFn();
+    } catch (err) {
+      restartError = err instanceof Error ? err : new Error(String(err));
+      const msg = (err instanceof Error ? err.message : String(err));
+      console.error(`[qwen-install] sidecar restart failed: ${msg}`);
+    }
+
+    // Report the original error if present, otherwise the restart error.
+    if (stopError) throw stopError;
+    if (restartError) throw restartError;
 
     /* Re-probe: the script exited 0, confirm the package + weights actually
        landed. A 0-exit with weights still missing is surfaced as an error so
