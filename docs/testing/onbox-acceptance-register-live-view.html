@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">62</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">64</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->2<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->4<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->3<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->10<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->12<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1158,7 +1158,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">10 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">12 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1279,6 +1279,33 @@
         </ul>
         <p class="src">Windows box with Pinokio installed, a pre-existing install with CRLF-mangled <code>requirements/*.txt</code> (or ability to create one by checking out an old release prior to <code>.gitattributes</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2596">#2596</a>, PR #2799 · automated acceptance test in <code>resolve-release.test.js</code>; real-world confirmation that a stale-CRLF install updates without spurious reinstall and that a fresh install normalizes correctly · 10–15 minutes, grouping with <a href="#ge1">E1</a></p>
         <p><b>One-update lag:</b> Updates FROM pre-#2799 releases run the old <code>resolve-release.js</code>, so CRLF normalization only takes effect from the NEXT update onward (see <a href="#ge1">E1</a> and <code>pinokio-scripts/update.js</code> lines 19–28).</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E103</span><span class="iname"><code>scripts/wt-gc.mjs --prune</code> &#8212; real junction-first teardown</span><span class="risk">ops-75 Part 4</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Acceptance #5 of #3051: &#8220;the destructive path cannot be proven in-PR.&#8221; Every unit and Pester test in this PR runs against throwaway fixtures (a scratch dir with a real <code>New-Item -ItemType Junction</code>, never a real worktree) &#8212; see <code>scripts/tests/wt-gc-junctions.Tests.ps1</code> and <code>scripts/tests/wt-gc.test.mjs</code>. What those tests cannot exercise is <code>--prune</code> against a REAL worktree carrying real junctions into the primary checkout&#39;s <code>node_modules</code>/<code>.venv</code> &#8212; exactly the shape that produced the 28-orphan, 8.27 GB incident this tool exists to automate away.</p>
+        <ul>
+          <li><code>npm run wt:gc</code> (no <code>--prune</code>) correctly reports each worktree&#39;s merged/ahead/dirty/unpushed/PR-state columns and marks the primary checkout, any dirty tree, and any tree with unpushed or unverifiable-push commits as <b>not</b> prunable &#8212; confirm against <code>git status</code>/<code>git log</code> by hand for a few rows.</li>
+          <li>Pick one worktree that IS marked prunable and genuinely is safe to delete (already merged, pushed, clean). Run <code>npm run wt:gc -- --prune</code>.</li>
+          <li>Confirm the junctions inside it (<code>node_modules</code>, <code>server/node_modules</code>, <code>server/tts-sidecar/.venv</code>, <code>server/tts-sidecar/voices/</code> if present) are gone (<code>Test-Path</code> false) while the PRIMARY checkout&#39;s own real <code>node_modules</code>/<code>.venv</code>/<code>voices/</code> are <b>untouched and intact</b> &#8212; this is the one failure mode that matters: a <code>$false</code>&#8594;dropped <code>Directory.Delete</code> or a <code>.LinkTarget</code>-based gate reading empty and silently skipping the delete, letting the follow-on <code>git worktree remove</code> recurse into the primary checkout&#39;s real trees.</li>
+          <li>Confirm <code>git worktree list</code> no longer lists the pruned path, and the directory is gone from disk.</li>
+          <li>Confirm the primary checkout and every OTHER live worktree are unaffected (<code>git status --porcelain</code> on each, before/after).</li>
+        </ul>
+        <p class="src">A Windows box with <code>pwsh</code> or <code>powershell</code> on PATH, at least one genuinely prunable worktree with real junctions set up per CLAUDE.md&#39;s worktree-setup recipe &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3051">#3051</a>, ops-75 Part 4 &#183; this issue&#39;s acceptance list and the design doc&#39;s Part 4 &#183; 10&#8211;15 minutes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E104</span><span class="iname">ops-71 stale-battery reaper &#8212; <code>Win32_Process</code> classification against real processes</span><span class="risk">any Windows dev box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>scripts/reap-stale-batteries.mjs</code>&#39;s <code>classify()</code> is unit-tested against a synthetic 11-battery fixture (<code>scripts/tests/reap-stale-batteries.test.mjs</code>), and every guard in it is mutation-verified (deletion &#8594; a named test reddens &#8594; restored). What no test in the repo can prove is the thing this row exists for: that <code>collectProcessSnapshot()</code>&#39;s single <code>Get-CimInstance Win32_Process</code> query, run against REAL processes on a real box, actually reports the shapes <code>classify()</code> assumes &#8212; <code>ParentProcessId</code> correctly reflecting a live parent vs. a dead/reused one, <code>CreationDate</code> parsing to the right relative ordering for the PID-reuse guard, and <code>UserModeTime</code>/<code>KernelModeTime</code> actually growing at the CPU-s/min rates the thresholds are calibrated against (2/min dead, 30&#8211;100/min healthy for a vitest subtree).</p>
+        <ul>
+          <li>Run <code>npm run doctor</code> (report-only) on a box with a few real batteries running (e.g. a <code>vitest</code>/<code>npm run test:server</code> battery, a real <code>git commit</code>, and the TTS sidecar&#39;s <code>python.exe</code> if it&#39;s up) and confirm every root&#39;s command line and verdict look right by eye &#8212; no live battery misclassified as <code>reap</code>, no <code>python.exe</code>/<code>git.exe</code> subtree flagged.</li>
+          <li>Run it again ~10+ minutes later and confirm a subtree that has genuinely gone idle since the first run now shows <code>stalled-rate</code>.</li>
+          <li>Start a battery, then kill its owning terminal/agent process out from under it (simulating the 2026-09-05 incident) and confirm the orphaned subtree shows <code>orphaned-unreachable</code> even while still burning CPU, and that <code>npm run doctor -- --kill</code> reaps it.</li>
+          <li>Confirm <code>git push</code> (which now runs the pre-push census automatically) still completes in about the same time as before this change, and that <code>logs/reaper-census.jsonl</code> accumulates one entry per push with every root&#39;s command line present &#8212; the exact thing the 2026-09-05 census omitted.</li>
+        </ul>
+        <p class="src">A Windows dev box, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3047">#3047</a>, Part 3 of <a href="../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md">the commit-gate rebalance design</a> &#183; the four observations above; issue #3047&#39;s acceptance list &#183; ~20 minutes across a few pushes</p>
       </div>
     </details>
 

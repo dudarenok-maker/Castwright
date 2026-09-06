@@ -25,9 +25,28 @@
 # a root package.json / package-lock.json / .github/actions/** change trips
 # computeShared in verify-cache.mjs, which puts every step in scope whatever
 # its own globs say, so that push pays the full cost on a cold cache.
+#
+# ops-71 (#3047, Part 3 of the same design, "A reaper that actually runs"):
+# every push also runs the stale-battery census — ONE Win32_Process query,
+# ~300ms, no pool — which appends a log entry (every root's command line
+# included, the dataset the deferred concurrency-governor question needs)
+# and kills only PROVABLY orphaned trees (a dead parent, per classify()'s
+# reachability test). It never blocks the push: reap-stale-batteries.mjs's
+# own CLI catches everything and always exits 0 (see runCli's try/catch and
+# its "always returns 0, even when the census throws" test).
+#
+# Deliberately placed BEFORE the is-docs-only-push branch, so it runs on
+# EVERY push, docs-only included: the census costs ~300ms and spawns no
+# pool, so a docs-only push isn't cheapened by skipping it, and a docs-only
+# push is exactly as likely as any other to be the one that happens to run
+# after an earlier battery orphaned a subtree — the orphan doesn't know or
+# care what kind of diff is being pushed next. Skipping the census on
+# docs-only pushes would just mean orphans from an all-docs stretch of work
+# never get swept until a code push finally happens along.
 PUSH_REFS=$(cat)
 printf '%s\n' "$PUSH_REFS" | node scripts/guard-protected-push.mjs "$@" || exit 1
 printf '%s\n' "$PUSH_REFS" | node scripts/guard-commit-subjects.mjs "$@" || exit 1
+node scripts/reap-stale-batteries.mjs --pre-push
 if printf '%s\n' "$PUSH_REFS" | node scripts/is-docs-only-push.mjs "$@"; then
   exit 0
 fi

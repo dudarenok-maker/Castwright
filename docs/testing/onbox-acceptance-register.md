@@ -520,15 +520,32 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 4 |
 | **D** | Multi-language TTS render + ASR | 3 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 12 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**64 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
+
+> **Last change: 2026-09-06, adding E104** (#3047, ops-71 Part 3, claude): the
+> stale-battery reaper's `classify()` and its census/kill-scoping/never-blocks-push
+> orchestration are unit- and mutation-tested in-PR, but `Win32_Process`
+> classification against real, running processes on a real box cannot be. Row
+> renumbered E103 → **E104** to avoid colliding with #3051 (ops-75 Part 4), which
+> independently allocated E103 off the same `next-id` marker and landed first —
+> both PRs read `next-id: E103` before either merged; the register's IDs allocate
+> once, globally, so the second one to land moves. 63 → 64 owed, Group E 11 → 12.
+> `next-id` bumped E104 → E105 in the same change.
+
+> **Last change: 2026-09-06, adding E103** (#3051, ops-75 Part 4, claude):
+> `scripts/wt-gc.mjs --prune`'s junction-first teardown against real worktree
+> junctions cannot be proven in-PR — every automated test (the node:test suite
+> and the new `wt-gc-junctions.Tests.ps1` Pester tests) runs against throwaway
+> scratch fixtures, never a real worktree. 62 → 63 owed, Group E 10 → 11.
+> `next-id` bumped E103 → E104 in the same change.
 
 > **Last change: 2026-09-06, discharging E12** (#2682, PR #2799 chain via #2930,
 > claude): the E12 rework (#3012) added `FootprintTable.snapshot()` +
@@ -4273,7 +4290,7 @@ to real output, not about VRAM or a specific card.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E103 -->
+<!-- next-id: E105 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5/E6/E8 for front-end acceptance), or platform-independent infrastructure (E1/E7/E9/E11/E12). E1/E7/E11 group on the Pinokio box; E6 needs two live checkouts.
 
@@ -4765,6 +4782,74 @@ normalizes correctly. Issue #2596 and PR #2799 body.
 **One-update lag:** Updates FROM pre-#2799 releases run the old `resolve-release.js`, 
 so CRLF normalization only takes effect from the NEXT update onward (see E1 and 
 `pinokio-scripts/update.js` lines 19–28).
+
+### E103 · `scripts/wt-gc.mjs --prune` — real junction-first teardown ([#3051](https://github.com/dudarenok-maker/Castwright/issues/3051), ops-75 Part 4)
+
+Acceptance #5 of #3051: "the destructive path cannot be proven in-PR." Every unit and
+Pester test in this PR runs against throwaway fixtures (a scratch dir with a real
+`New-Item -ItemType Junction`, never a real worktree) — see
+`scripts/tests/wt-gc-junctions.Tests.ps1` and `scripts/tests/wt-gc.test.mjs`. What
+those tests cannot exercise is `--prune` against a REAL worktree carrying real
+junctions into the primary checkout's `node_modules`/`.venv` — exactly the shape
+that produced the 28-orphan, 8.27 GB incident this tool exists to automate away.
+
+**What to observe, concretely**, on a Windows box with several stale worktrees
+(junctioned per CLAUDE.md's "Worktree setup"):
+
+- `npm run wt:gc` (no `--prune`) correctly reports each worktree's merged/ahead/dirty/
+  unpushed/PR-state columns and marks the primary checkout, any dirty tree, and any
+  tree with unpushed or unverifiable-push commits as **not** prunable — confirm
+  against `git status`/`git log` by hand for a few rows.
+- Pick one worktree that IS marked prunable and genuinely is safe to delete (already
+  merged, pushed, clean). Run `npm run wt:gc -- --prune`.
+- Confirm the junctions inside it (`node_modules`, `server/node_modules`,
+  `server/tts-sidecar/.venv`, `server/tts-sidecar/voices/` if present) are gone
+  (`Test-Path` false) while the PRIMARY checkout's own real `node_modules`/`.venv`/
+  `voices/` are **untouched and intact** — this is the one failure mode that matters:
+  a `$false`→dropped `Directory.Delete` or a `.LinkTarget`-based gate reading empty
+  and silently skipping the delete, letting the follow-on `git worktree remove`
+  recurse into the primary checkout's real trees.
+- Confirm `git worktree list` no longer lists the pruned path, and the directory is
+  gone from disk.
+- Confirm the primary checkout and every OTHER live worktree are unaffected
+  (`git status --porcelain` on each, before/after).
+
+*Needs:* a Windows box with `pwsh` or `powershell` on PATH, at least one genuinely
+prunable worktree with real junctions set up per CLAUDE.md's worktree-setup recipe.
+*Cost:* 10–15 minutes. *Criteria:* this issue's acceptance list (#3051) and the
+design doc's Part 4 (`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`).
+
+### E104 · ops-71 stale-battery reaper — `Win32_Process` classification against real processes ([#3047](https://github.com/dudarenok-maker/Castwright/issues/3047), Part 3 of [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)) · **any Windows dev box; no GPU needed**
+
+`scripts/reap-stale-batteries.mjs`'s `classify()` is unit-tested against a synthetic
+11-battery fixture (`scripts/tests/reap-stale-batteries.test.mjs`), and every guard
+in it is mutation-verified (deletion → a named test reddens → restored). What no
+test in the repo can prove is the thing this row exists for: that
+`collectProcessSnapshot()`'s single `Get-CimInstance Win32_Process` query, run
+against REAL processes on a real box, actually reports the shapes `classify()`
+assumes — `ParentProcessId` correctly reflecting a live parent vs. a dead/reused
+one, `CreationDate` parsing to the right relative ordering for the PID-reuse guard,
+and `UserModeTime`/`KernelModeTime` actually growing at the CPU-s/min rates the
+thresholds are calibrated against (2/min dead, 30–100/min healthy for a vitest
+subtree).
+
+**What to observe, concretely:** on a Windows dev box with a few real batteries
+running (e.g. a `vitest`/`npm run test:server` battery, a real `git commit`, and
+the TTS sidecar's `python.exe` if it's up), run `npm run doctor` (report-only) and
+confirm: (1) every root's command line and verdict look right by eye — no live
+battery misclassified as `reap`, no `python.exe`/`git.exe` subtree flagged; (2) run
+it again ~10+ minutes later and confirm a subtree that has genuinely gone idle
+since the first run now shows `stalled-rate`; (3) start a battery, then kill its
+owning terminal/agent process out from under it (simulating the 2026-09-05
+incident) and confirm the ORPHANED subtree shows `orphaned-unreachable` even while
+still burning CPU, and that `npm run doctor -- --kill` reaps it. Separately confirm
+`git push` (which now runs the pre-push census automatically) still completes in
+about the same time as before this change — the design's own budget is ~300ms for
+the query — and that `logs/reaper-census.jsonl` accumulates one entry per push with
+every root's command line present (the exact thing the 2026-09-05 census omitted).
+
+*Needs:* a Windows dev box, no GPU. *Cost:* ~20 minutes across a few pushes.
+*Criteria:* the four observations above; issue #3047's acceptance list.
 
 ## Group G — GitHub Actions itself
 
