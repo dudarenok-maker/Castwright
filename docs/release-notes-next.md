@@ -147,6 +147,21 @@ A character's `id` is free text the analyzer mints, and it is the join key acros
   edge and both halves are fatal, so a half-failure leaves the visible half — the chip renders and
   Undo works. A new reconciliation heals books already stranded by the old order at the next
   analysis, and `notLinkedTo` became server-owned on the cast PUT so a stale client cannot undo
+
+---
+
+## 🔧 Infrastructure & fixes
+
+### Qwen3-TTS in-app install no longer silently swaps the GPU runtime for CPU, or blocks the queue while installing
+
+**The in-app Qwen3-TTS installation** (Account → Models → Install) now:
+
+- **actually restores the GPU onnxruntime** after `pip install qwen-tts` pulls in a fresh CPU build as a transitive dependency — previously `ensureOrtMarker` (a marker-only, no-pip function) was mistakenly called instead of running the real ORT swap steps from `install-ort.mjs`. Now calls `planOrtSwap()`, runs the actual pip steps (`uninstall`, `install --force-reinstall`, plus GPU runtime packages), and writes the marker.
+- **properly disables the queue dispatcher** during the install by setting `supervisor.isRecycling` before stopping the sidecar, so in-flight renders don't drain into a stopped sidecar and fail silently (#3039).
+- **correctly distinguishes adopted sidecars from "not yet started"** — a missing `current()` handle is benign (the sidecar hasn't been asked to spawn, or is between respawns), not a hard error. The old check threw on autoStart-off boxes; now only refuses on a genuinely adopted (already-running, externally-managed) sidecar.
+- **respects both hold-down states** on restart — code-43 trips AND plain exhaustion, not only code-43. The install path now calls `exhaustedEvent()` alongside `tripEvent()`, matching the `/restart` route's own logic.
+- **reports a successful install even when restart fails** — if pip succeeds (detected via re-probe), the install is recorded as installed with a logged warning, not masked as failed by a restart problem the user can't recover from in-app.
+- **adds paired test coverage** to `sidecar-supervisor.test.ts` verifying that `stop()` followed by `start()` leaves the supervisor ready to respawn, even after a code-43 trip (#3043).
   the repair. (PR #2202)
 - **The #2166 reconciliation above now heals every rejected pair independently, instead of one
   relocated edge silently blocking the rest of that book's healing** (#2200). Its add pass used to

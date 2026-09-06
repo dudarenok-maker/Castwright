@@ -66,6 +66,7 @@ describe('QwenInstallBootstrap', () => {
         spawned++;
         return makeFakeChild(0, { stdout: '[install-qwen3] Pre-fetching models\n' }) as never;
       },
+      ortSwapFn: async () => 'skip',
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'installed');
@@ -82,6 +83,7 @@ describe('QwenInstallBootstrap', () => {
         spawned++;
         return makeFakeChild(0) as never;
       },
+      ortSwapFn: async () => 'skip',
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'installed');
@@ -93,6 +95,7 @@ describe('QwenInstallBootstrap', () => {
       repoRoot: '/repo',
       detectFn: () => 'not-installed',
       spawnFn: () => makeFakeChild(1, { stderr: 'ERROR: pip failed to resolve qwen-tts\n' }) as never,
+      ortSwapFn: async () => 'skip',
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
@@ -106,6 +109,7 @@ describe('QwenInstallBootstrap', () => {
       repoRoot: '/repo',
       detectFn,
       spawnFn: () => makeFakeChild(0) as never,
+      ortSwapFn: async () => 'skip',
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
@@ -120,6 +124,7 @@ describe('QwenInstallBootstrap', () => {
       repoRoot: '/repo',
       detectFn: () => state,
       spawnFn: () => makeFakeChild(0) as never,
+      ortSwapFn: async () => 'skip',
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
@@ -148,6 +153,7 @@ describe('QwenInstallBootstrap', () => {
         startSidecarFn: async () => {
           calls.push('start');
         },
+        ortSwapFn: async () => 'skip',
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'installed');
@@ -169,6 +175,7 @@ describe('QwenInstallBootstrap', () => {
         startSidecarFn: async () => {
           calls.push('start');
         },
+        ortSwapFn: async () => 'skip',
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'error');
@@ -187,6 +194,7 @@ describe('QwenInstallBootstrap', () => {
         startSidecarFn: async () => {
           calls.push('start');
         },
+        ortSwapFn: async () => 'skip',
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'installed');
@@ -212,6 +220,7 @@ describe('QwenInstallBootstrap', () => {
         repoRoot: '/repo',
         detectFn,
         spawnFn: () => makeFakeChild(0) as never,
+        ortSwapFn: async () => 'skip',
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'installed');
@@ -228,13 +237,18 @@ describe('QwenInstallBootstrap', () => {
         stopSidecarFn: async () => {
           throw new Error('Cannot stop an externally-managed sidecar');
         },
+        ortSwapFn: async () => 'skip',
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'error');
       expect(b.getJob(job.id)?.error).toMatch(/externally-managed sidecar/);
     });
 
-    it('errors clearly when startSidecarFn throws (e.g. code-43 hold-down)', async () => {
+    it('reports install as successful even when startSidecarFn throws (e.g. code-43 hold-down)', async () => {
+      /* #3039 Finding 3: a successful install with a restart problem should
+         report as installed (with the restart error logged separately), not as
+         failed. The operator needs to know the Qwen install itself succeeded,
+         even if the sidecar can't be restarted due to a hold-down state. */
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const calls: string[] = [];
       const b = new QwenInstallBootstrap({
@@ -251,13 +265,15 @@ describe('QwenInstallBootstrap', () => {
           calls.push('start');
           throw new Error('code-43 hold-down: device assignment too small');
         },
+        ortSwapFn: async () => 'skip',
       });
       const job = b.start();
-      await until(() => b.getJob(job.id)?.status === 'error');
-      /* Verify stop and spawn happened (we tried to proceed) but the error
-         from start is the job error (not masked by something else). */
+      await until(() => b.getJob(job.id)?.status === 'installed');
+      /* Verify stop and spawn happened (we tried to proceed). The install
+         succeeded (detect() returned 'ready'), so the job is installed despite
+         the restart error. The restart problem is logged as a warning. */
       expect(calls).toEqual(['stop', 'spawn', 'start']);
-      expect(b.getJob(job.id)?.error).toMatch(/code-43/);
+      expect(b.getJob(job.id)?.status).toBe('installed');
     });
   });
 
@@ -289,6 +305,7 @@ describe('QwenInstallBootstrap', () => {
       repoRoot: '/repo',
       detectFn: () => 'not-installed',
       spawnFn: () => makeFakeChild(1, { stderr: stderrFixture }) as never,
+      ortSwapFn: async () => 'skip',
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
