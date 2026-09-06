@@ -3050,6 +3050,35 @@ filed against, and it has not been separately re-confirmed since the fix landed
 > `docs/testing/onbox-a29-results/step-1-retry.md` (port-isolation half
 > only; criterion 2 explicitly not validated, see that doc's own correction).
 
+> **2026-09-06 (chain #2913 → #3020, Castwright#3020) — STILL OWED, criterion 2
+> genuinely exercised for the first time across six attempts, and it fails.**
+> In a fresh isolated venv (`LOCAL_TTS_PORT=9200`) confirmed Qwen3-TTS
+> genuinely absent (live `packageFault: "missing"` probe, re-confirmed after a
+> racing background bootstrap job installed it mid-pass and was deliberately
+> uninstalled), then clicked **Install Qwen3-TTS** for real via Playwright: a
+> genuine `POST /api/qwen/install` job (202, not the installed short-circuit)
+> ran for real and failed after ~3.1s. **`WinError 5` / `Access is denied`
+> genuinely reproduced** on `onnxruntime\capi\onnxruntime_providers_shared.dll`
+> — this is #2192's exact scenario, now actually fired instead of skipped.
+> Root cause isolated by a controlled A/B: the in-app install flow
+> (`server/src/tts/qwen-install-bootstrap.ts` → `install-qwen3.mjs`) never
+> stops the sidecar before running `pip`, and `qwen-tts` pulls a fresh
+> `onnxruntime` wheel as a transitive dependency regardless of what the venv
+> already has; the identical `pip` command succeeds once the sidecar process
+> is stopped first. This is a real, reproducible gap distinct from — and not
+> fixed by — #2192/#2534's sidecar-startup ORT-provider-selection work; it is
+> the installer's own pip-vs-live-process DLL conflict. **Kokoro-afterward
+> check read honestly** from the live `/health` response
+> (`devices.kokoro`, not `get_available_providers()`): `"cpu"` throughout,
+> traced to a pre-existing, unrelated gap (`qwen-tts`'s pip resolution pulls
+> plain `onnxruntime` rather than `onnxruntime-gpu`, the same #2534-class
+> CPU-fallback pattern) — not something this pass's install attempt caused.
+> Venv restored and reverified `qwen_install_state: "ready"`; no shared/
+> box-wide resource touched. **Not discharged — a genuine defect, not a false
+> alarm.** Rework filed separately rather than retried silently — tracking
+> parent Castwright#3038, rework #3039, gated verify #3040. Evidence:
+> `docs/testing/onbox-a29-results/step-2-genuine-install.md`.
+
 ### A30 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
 
 **Not in the design doc's §On-box acceptance table.** Filed anyway: Task 8 wired
