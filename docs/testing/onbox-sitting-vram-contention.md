@@ -2,6 +2,8 @@
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
 > register rows **A5, A13, A17, A19, A24, A25** — the rows that
+
+> **A5 was discharged on 2026-09-06 and removed from the register** — bullets 1–4 PASS (via a real product fix to `generation.ts`'s per-chapter fallback gate, which hard-failed every non-English book regardless of Coqui eligibility), bullet 5 N/A / superseded. The ID is kept here as a historical citation under the register's "annotate, don't renumber" rule.
 > only mean something when the single 8 GB card is genuinely full — and nothing
 > else. (Three rows this sitting pack originally covered — A19/A16/A31 in
 > their pre-2026-08-26 numbering — are discharged and removed from the
@@ -157,6 +159,8 @@ up.
    - Result:
 
 ### A5 · fs-60 XTTS per-language engine eligibility (plan 249) — step 6
+
+> **A5 was discharged on 2026-09-06 and removed from the register** — bullets 1–4 PASS (via a real product fix to `generation.ts`'s per-chapter fallback gate, which hard-failed every non-English book regardless of Coqui eligibility), bullet 5 N/A / superseded. The ID is kept here as a historical citation under the register's "annotate, don't renumber" rule.
 
 > **Criteria source:** [`../features/249-fs60-xtts-language-eligibility.md`](../features/249-fs60-xtts-language-eligibility.md)
 > `:53-66` (five-step walkthrough). Re-resolved: plan frontmatter `status: active`;
