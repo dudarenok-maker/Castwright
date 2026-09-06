@@ -25,7 +25,45 @@ import { join } from 'node:path';
 import {
   detectQwenInstallStateOnDisk,
 } from './qwen-install-detect.js';
+import { getActiveSupervisor } from './sidecar-supervisor.js';
 import type { QwenInstallState } from '../workspace/user-settings.js';
+
+/* #3039 — stop the supervised sidecar before running pip, restart it after.
+   `install-qwen3.mjs` runs `pip install qwen-tts`, which pulls a fresh
+   `onnxruntime` wheel as a transitive dependency; the live sidecar has that
+   package's DLL memory-mapped (`onnxruntime_providers_shared.dll` on
+   Windows), so pip's DLL replace fails with WinError 5 / Access is denied
+   whenever the sidecar is still running. Stopping supervision first (not
+   just killing the child — `supervisor.stop()` also suppresses the
+   auto-respawn that would otherwise re-load the same DLL mid-install) frees
+   the lock for the identical `pip` command that already works once the
+   sidecar is down (confirmed by the manual A/B in
+   docs/testing/onbox-a29-results/step-2-genuine-install.md). Restarting is
+   unconditional (success or failure) via `finally`, so a failed install
+   never leaves TTS down on top of the install error.
+   `getActiveSupervisor()` returns null when autoStart is off or the server
+   hasn't finished booting — nothing to stop, so both hooks default to a
+   no-op in that case rather than failing the install. */
+async function defaultStopSidecar(): Promise<void> {
+  await getActiveSupervisor()?.stop();
+}
+async function defaultStartSidecar(): Promise<void> {
+  await getActiveSupervisor()?.start();
+}
+
+/* #3039 — pull the actionable line(s) out of the installer's stderr tail.
+   pip prints its own routine "[notice] A new release of pip is available…"
+   line AFTER a real failure (including a WinError 5 traceback), so a naive
+   "last N lines" slice can surface only that notice and hide the actual
+   error the job.error field exists to report. Drop pip's own notice lines
+   first, then take the tail of what's left. */
+function extractInstallErrorDetail(stderrTail: string): string {
+  const lines = stderrTail
+    .trim()
+    .split('\n')
+    .filter((line) => !/^\[notice\]/i.test(line.trim()));
+  return lines.slice(-5).join(' ').trim();
+}
 
 export type QwenInstallJobStatus = 'detecting' | 'installing' | 'installed' | 'error';
 
@@ -57,6 +95,10 @@ export interface QwenInstallOptions {
       install (Base + VoiceDesign) is the default — bespoke voices need the
       VoiceDesign model, so we do NOT pass --skip-design. */
   installArgs?: readonly string[];
+  /** Stubbable sidecar stop/start hooks (offline tests). Default to the real
+      supervisor via getActiveSupervisor() — see the #3039 comment above. */
+  stopSidecarFn?: () => Promise<void>;
+  startSidecarFn?: () => Promise<void>;
 }
 
 export class QwenInstallBootstrap {
@@ -68,12 +110,16 @@ export class QwenInstallBootstrap {
   private readonly spawnFn: QwenSpawnFn;
   private readonly detectFn: () => QwenInstallState | Promise<QwenInstallState>;
   private readonly installArgs: readonly string[];
+  private readonly stopSidecarFn: () => Promise<void>;
+  private readonly startSidecarFn: () => Promise<void>;
 
   constructor(opts: QwenInstallOptions) {
     this.repoRoot = opts.repoRoot;
     this.spawnFn = opts.spawnFn ?? (realSpawn as unknown as QwenSpawnFn);
     this.detectFn = opts.detectFn ?? (() => detectQwenInstallStateOnDisk(this.repoRoot));
     this.installArgs = opts.installArgs ?? [];
+    this.stopSidecarFn = opts.stopSidecarFn ?? defaultStopSidecar;
+    this.startSidecarFn = opts.startSidecarFn ?? defaultStartSidecar;
   }
 
   /** Probe install-state without kicking off a job. Used by GET /detect. */
@@ -126,8 +172,18 @@ export class QwenInstallBootstrap {
       return;
     }
 
-    this.transition(job, 'installing', { step: 'Starting installer…' });
-    await this.spawnInstaller(job);
+    /* #3039 — stop the supervised sidecar before pip runs (see the comment on
+       defaultStopSidecar above) and restart it unconditionally afterward, so
+       a failed install never leaves TTS down on top of the install error. */
+    this.transition(job, 'installing', { step: 'Stopping the sidecar…' });
+    await this.stopSidecarFn();
+    try {
+      this.update(job, { step: 'Starting installer…' });
+      await this.spawnInstaller(job);
+    } finally {
+      this.update(job, { step: 'Restarting the sidecar…' });
+      await this.startSidecarFn();
+    }
 
     /* Re-probe: the script exited 0, confirm the package + weights actually
        landed. A 0-exit with weights still missing is surfaced as an error so
@@ -181,9 +237,13 @@ export class QwenInstallBootstrap {
         }
       };
       const onStderr = (b: Buffer): void => {
-        /* Keep only the tail — a pip/HF failure dump can be huge; the last few
-           lines carry the actionable error. */
-        stderrTail = (stderrTail + b.toString('utf8')).slice(-2000);
+        /* Keep only the tail — a pip/HF failure dump can be huge; the last
+           few lines carry the actionable error. #3039: widened from 2000 to
+           4000 chars so a real error isn't pushed entirely out of the window
+           by pip's own routine notice line(s) printed after it — see
+           extractInstallErrorDetail, which then filters those notice lines
+           back out. */
+        stderrTail = (stderrTail + b.toString('utf8')).slice(-4000);
       };
       proc.stdout?.on('data', onStdout);
       proc.stderr?.on('data', onStderr);
@@ -192,10 +252,10 @@ export class QwenInstallBootstrap {
         if (code === 0) {
           resolve();
         } else {
+          const detail = extractInstallErrorDetail(stderrTail);
           reject(
             new Error(
-              `install-qwen3.mjs exited with code ${code}.` +
-                (stderrTail.trim() ? ` ${stderrTail.trim().split('\n').slice(-3).join(' ')}` : ''),
+              `install-qwen3.mjs exited with code ${code}.${detail ? ` ${detail}` : ''}`,
             ),
           );
         }

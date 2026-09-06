@@ -127,4 +127,105 @@ describe('QwenInstallBootstrap', () => {
     const uchecked = await b.recheck(job.id);
     expect(uchecked?.status).toBe('installed');
   });
+
+  /* #3039 — the sidecar must be stopped before pip runs (it holds the
+     onnxruntime DLL pip needs to replace) and restarted afterward, on both
+     the success and the failed-install path. */
+  describe('sidecar stop/restart around the install (#3039)', () => {
+    it('stops the sidecar before spawning and restarts it after a successful install', async () => {
+      const calls: string[] = [];
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new QwenInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn,
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(0) as never;
+        },
+        stopSidecarFn: async () => {
+          calls.push('stop');
+        },
+        startSidecarFn: async () => {
+          calls.push('start');
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'installed');
+      expect(calls).toEqual(['stop', 'spawn', 'start']);
+    });
+
+    it('still restarts the sidecar when the installer exits non-zero', async () => {
+      const calls: string[] = [];
+      const b = new QwenInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(1, { stderr: 'ERROR: pip failed\n' }) as never;
+        },
+        stopSidecarFn: async () => {
+          calls.push('stop');
+        },
+        startSidecarFn: async () => {
+          calls.push('start');
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(calls).toEqual(['stop', 'spawn', 'start']);
+    });
+
+    it('does not spawn the installer if already installed, and never touches the sidecar', async () => {
+      const calls: string[] = [];
+      const b = new QwenInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn: () => 'ready',
+        spawnFn: () => makeFakeChild(0) as never,
+        stopSidecarFn: async () => {
+          calls.push('stop');
+        },
+        startSidecarFn: async () => {
+          calls.push('start');
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'installed');
+      expect(calls).toEqual([]);
+    });
+
+    it('defaults to a no-op when no sidecar hooks are injected (no active supervisor)', async () => {
+      /* Regression guard for the production default path: getActiveSupervisor()
+         returns null outside a running server (no registerActiveSupervisor call
+         in this test process), so the default stop/start hooks must not throw. */
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new QwenInstallBootstrap({
+        repoRoot: '/repo',
+        detectFn,
+        spawnFn: () => makeFakeChild(0) as never,
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'installed');
+    });
+  });
+
+  /* #3039 — a pip failure dump often ends with pip's own routine "new release
+     available" notice printed AFTER the real error; the job's error field
+     must still surface the actual failure, not just that trailing notice. */
+  it('surfaces the real error even when pip prints its update notice after it', async () => {
+    const b = new QwenInstallBootstrap({
+      repoRoot: '/repo',
+      detectFn: () => 'not-installed',
+      spawnFn: () =>
+        makeFakeChild(1, {
+          stderr:
+            'OSError: [WinError 5] Access is denied: ' +
+            "'onnxruntime\\\\capi\\\\onnxruntime_providers_shared.dll'\n" +
+            '[notice] A new release of pip is available: 24.0 -> 24.1\n' +
+            "[notice] To update, run: python.exe -m pip install --upgrade pip\n",
+        }) as never,
+    });
+    const job = b.start();
+    await until(() => b.getJob(job.id)?.status === 'error');
+    expect(b.getJob(job.id)?.error).toMatch(/WinError 5/);
+  });
 });
