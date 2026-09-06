@@ -897,6 +897,67 @@ describe('sidecar supervisor (srv-15)', () => {
       expect(sup.tripEvent()).toEqual({ card: { uuid: 'GPU-1', idx: 1 }, residentEngines: ['coqui'] });
     });
 
+    it('onTrip fires exactly once, synchronously, with the trip payload (Task 16/16.5, #2974)', async () => {
+      let now = 0;
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      const spawn = makeSpawn(handles);
+      vi.spyOn(breadcrumbModule, 'readRestartBreadcrumb').mockReturnValue({
+        card: { uuid: 'GPU-1', idx: 1 }, reason: 'reserved VRAM', residentEngines: ['qwen'],
+      });
+      const onTrip = vi.fn();
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: spawn.fn,
+        delayFn: async () => {},
+        nowFn: () => now,
+        warn: vi.fn(),
+        log: vi.fn(),
+        onTrip,
+      });
+      await sup.start();
+      for (let i = 0; i < 3; i++) {
+        now += 35_000;
+        spawn.exit(43);
+        await Promise.resolve();
+      }
+      expect(onTrip).toHaveBeenCalledTimes(1);
+      expect(onTrip).toHaveBeenCalledWith({ card: { uuid: 'GPU-1', idx: 1 }, residentEngines: ['qwen'] });
+
+      // A 4th exit after the trip must not fire onTrip again — restart43Trip
+      // is already set, so onChildExit's early-return branch (not the
+      // trip-setting branch this hook lives in) handles it.
+      now += 35_000;
+      spawn.exit(43);
+      await Promise.resolve();
+      expect(onTrip).toHaveBeenCalledTimes(1);
+    });
+
+    it('a thrown onTrip callback is caught and does not stop the supervisor holding TTS down', async () => {
+      let now = 0;
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      const spawn = makeSpawn(handles);
+      const warn = vi.fn();
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: spawn.fn,
+        delayFn: async () => {},
+        nowFn: () => now,
+        warn,
+        log: vi.fn(),
+        onTrip: () => {
+          throw new Error('boom');
+        },
+      });
+      await sup.start();
+      for (let i = 0; i < 3; i++) {
+        now += 35_000;
+        spawn.exit(43);
+        await Promise.resolve();
+      }
+      expect(sup.tripEvent()).not.toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('onTrip callback threw'), expect.any(Error));
+    });
+
     it('does not trip on 3 non-43 exits', async () => {
       let now = 0;
       const handles: ReturnType<typeof makeHandle>[] = [];

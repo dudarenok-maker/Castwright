@@ -25,7 +25,7 @@
    warm independently. Plan 30 explicitly preserves that path. */
 
 import { useEffect, useRef, useState } from 'react';
-import { api, type SidecarHealth, type GpuQueueState } from './api';
+import { api, type SidecarHealth, type GpuQueueState, type GpuTripStatus } from './api';
 import type { ModelControlState } from '../components/ModelControlPill';
 
 export interface EngineLifecycle {
@@ -95,6 +95,14 @@ export interface TtsLifecycle {
       (older builds / partial deploys) — UI degrades to no prefix in that
       case. */
   gpuQueueDepth?: number;
+  /** Task 16/16.5 (#1230 item 2, #2974) — "Auto-reverted: GPU pin for ... was
+      reset to auto." (a card-specific code-43 streak was reverted and TTS
+      brought back) or "...not tied to a specific GPU card... manual
+      investigation needed." (a non-card-specific streak — nothing was
+      reverted, TTS is still held down). `null` when nothing has tripped
+      since the server booted, or the server predates GET /api/gpu/trip-status.
+      Surface-local dismiss via `dismissNotices()`, same as the other two. */
+  tripNotice: string | null;
 }
 
 type EngineId = 'coqui' | 'kokoro' | 'qwen' | 'qwen1_7b';
@@ -113,6 +121,14 @@ export function useTtsLifecycle(): TtsLifecycle {
   const [pendingQwen17b, setPendingQwen17b] = useState<ModelControlState | null>(null);
   const [evictionNotice, setEvictionNotice] = useState<string | null>(null);
   const [loadErrorNotice, setLoadErrorNotice] = useState<string | null>(null);
+  /* Task 16/16.5 — last-seen trip-status toast, or null once dismissed or
+     never tripped. Tracks the toast STRING, not the raw GpuTripStatus, so a
+     dismiss doesn't need to remember which trip it dismissed — the poll
+     below only re-sets it when the toast text actually changes (see the
+     lastTripToast ref), so a dismissed notice doesn't reappear on the very
+     next 30s tick for the same still-current trip. */
+  const [tripNotice, setTripNotice] = useState<string | null>(null);
+  const lastTripToast = useRef<string | null>(null);
   /* In-flight op counter — guards the /health poll's unconditional pending-
      clear below against a Load/Stop that is still awaiting its response.
      Since #1894 a Stop can await a 90 s budget (the sidecar waits out an
@@ -172,6 +188,25 @@ export function useTtsLifecycle(): TtsLifecycle {
         .catch(() => {
           if (cancelled) return;
           setGpuQueue(null);
+        });
+
+      /* Task 16/16.5 — same permissive-error posture as the queue probe above:
+         an older server or a transient failure just means no trip toast, not
+         a user-visible error. Only pushes a NEW toast into state (via the
+         lastTripToast ref) — a dismissed notice must not resurrect itself on
+         the very next tick for the same still-current trip. */
+      api
+        .getGpuTripStatus()
+        .then((t: GpuTripStatus) => {
+          if (cancelled) return;
+          const toast = t?.toast ?? null;
+          if (toast !== lastTripToast.current) {
+            lastTripToast.current = toast;
+            setTripNotice(toast);
+          }
+        })
+        .catch(() => {
+          /* leave whatever notice/dismiss state is already showing */
         });
     };
     probe();
@@ -315,6 +350,7 @@ export function useTtsLifecycle(): TtsLifecycle {
   const dismissNotices = () => {
     setEvictionNotice(null);
     setLoadErrorNotice(null);
+    setTripNotice(null);
   };
 
   return {
@@ -352,5 +388,6 @@ export function useTtsLifecycle(): TtsLifecycle {
     loadErrorNotice,
     dismissNotices,
     gpuQueueDepth: gpuQueue?.queueDepth,
+    tripNotice,
   };
 }

@@ -44,6 +44,7 @@ const INERT_TTS_LIFECYCLE: TtsLifecycle = {
   qwen1_7bInstalled: false,
   evictionNotice: null,
   loadErrorNotice: null,
+  tripNotice: null,
   dismissNotices: () => {},
 };
 import { ConfirmDialog } from '../modals/confirm-dialog';

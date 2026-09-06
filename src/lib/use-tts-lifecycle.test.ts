@@ -19,6 +19,7 @@ const { mocks } = vi.hoisted(() => ({
   mocks: {
     getSidecarHealth: vi.fn(),
     getGpuQueueState: vi.fn(),
+    getGpuTripStatus: vi.fn(),
     getOllamaHealth: vi.fn(),
     unloadAnalyzer: vi.fn(),
     loadSidecar: vi.fn(),
@@ -45,6 +46,9 @@ beforeEach(() => {
      Default to an empty queue so the "GPU busy · N waiting ·" pill prefix
      stays hidden in tests that don't exercise contention. */
   mocks.getGpuQueueState.mockResolvedValue({ queueDepth: 0, devices: [] });
+  /* Task 16/16.5 trip-status probe — same 30 s tick. Default to "nothing has
+     tripped" so tests that don't exercise it never see a stray tripNotice. */
+  mocks.getGpuTripStatus.mockResolvedValue(null);
   mocks.getOllamaHealth.mockResolvedValue({
     status: 'reachable',
     modelResident: true,
@@ -556,6 +560,35 @@ describe('useTtsLifecycle', () => {
        its initial mount before we assert on the queue field. */
     await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
     expect(result.current.gpuQueueDepth).toBeUndefined();
+  });
+
+  it('Task 16/16.5: surfaces the reverted trip toast from /api/gpu/trip-status on the same tick', async () => {
+    mocks.getGpuTripStatus.mockResolvedValueOnce({
+      status: 'reverted',
+      card: 1,
+      engines: ['qwen'],
+      toast: 'Auto-reverted: GPU pin for qwen looked structurally too small and was reset to auto.',
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() =>
+      expect(result.current.tripNotice).toBe(
+        'Auto-reverted: GPU pin for qwen looked structurally too small and was reset to auto.',
+      ),
+    );
+  });
+
+  it('Task 16/16.5: surfaces the unrevertable trip toast, and dismissNotices clears it', async () => {
+    mocks.getGpuTripStatus.mockResolvedValue({
+      status: 'unrevertable',
+      toast: 'Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed.',
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.tripNotice).not.toBeNull());
+
+    act(() => {
+      result.current.dismissNotices();
+    });
+    expect(result.current.tripNotice).toBeNull();
   });
 
   it('reports qwen1_7bInstalled=true when /health (reachable) affirms the 1.7B weights are present', async () => {

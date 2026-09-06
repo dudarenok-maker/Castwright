@@ -61,6 +61,37 @@ describe('TtsNoticeBanner', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/failed to load/i);
   });
 
+  describe('trip notice (Task 16/16.5, #2974)', () => {
+    it('renders the trip notice as an alert, distinct from loadErrorNotice, and dismisses on click', () => {
+      const onDismiss = vi.fn();
+      render(
+        <TtsNoticeBanner
+          evictionNotice={null}
+          loadErrorNotice={null}
+          tripNotice="Auto-reverted: GPU pin for qwen looked structurally too small and was reset to auto."
+          onDismiss={onDismiss}
+        />,
+      );
+      const alert = screen.getByRole('alert');
+      expect(alert).toHaveTextContent('Auto-reverted');
+      fireEvent.click(screen.getByRole('button', { name: /dismiss gpu auto-revert notice/i }));
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders alongside a load error notice without clobbering it', () => {
+      render(
+        <TtsNoticeBanner
+          evictionNotice={null}
+          loadErrorNotice="Voice engine failed to load. Check the voice engine logs."
+          tripNotice="Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed."
+          onDismiss={vi.fn()}
+        />,
+      );
+      expect(screen.getByText(/not tied to a specific gpu card/i)).toBeInTheDocument();
+      expect(screen.getByText(/failed to load/i)).toBeInTheDocument();
+    });
+  });
+
   describe('resident-model Stop row (Task 10 / #1839)', () => {
     it("leads with the action: the Stop button's VISIBLE text names the engine, and doubles as its accessible name", () => {
       /* This control duplicates the Status popover's own Stop pill for the
