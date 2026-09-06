@@ -12,15 +12,46 @@
 //   node scripts/wt-gc.mjs --prune    # actually remove prunable worktrees
 //
 // Report columns per non-primary worktree: path, branch, merged-into-main,
-// commits-ahead-of-main, dirty, unpushed, PR state (when `gh` is available
-// and authenticated — degrades to "unknown" otherwise, never an error).
+// commits-ahead-of-main, dirty, PR state (when `gh` is available and
+// authenticated), and the prunable?/refusal cell. Unpushed state is not its
+// own column — it surfaces inside the refusal text (`N unpushed commit(s)` /
+// `no upstream configured`), which is where a reader needs it.
 //
-// Refuses to prune three shapes, always, regardless of --prune:
-//   1. the primary checkout — never touched;
-//   2. a tree with uncommitted changes (`git status --porcelain` non-empty);
-//   3. a tree with unpushed commits — including a branch with NO upstream at
-//      all, which is treated as "can't verify it's pushed" and refused, not
-//      silently assumed safe.
+// Refuses to prune six shapes, always, regardless of --prune. Every one of
+// them fails CLOSED: an unanswerable question is a refusal, never a pass.
+//   1. the primary checkout — never touched. If git cannot answer
+//      `rev-parse --git-common-dir`/`--git-dir`, the tree is TREATED AS the
+//      primary checkout rather than assumed to be a linked worktree;
+//   2. the worktree this process is itself running from. `git worktree
+//      remove --force` run from inside its own tree deletes every file and
+//      deregisters the worktree, then fails the final rmdir with exit 255 —
+//      leaving exactly the orphaned, no-longer-registered directory this
+//      tool exists to remove, and reporting it as a failed prune;
+//   3. a tree with uncommitted changes (`git status --porcelain` non-empty);
+//   4. a tree whose branch is NOT merged into `main`. Teardown destroys
+//      per-worktree state that does not travel with the branch — `server/.env`
+//      (`PORT`/`WORKSPACE_DIR`/`LOCAL_TTS_PORT`), `.env.local`, the
+//      `node_modules` junctions, `server/tts-sidecar/.venv` and `voices/`
+//      (CLAUDE.md "Branching workflow" → "Git-ignored artifacts ... are
+//      destroyed by worktree teardown"). "The commits are pushed so nothing
+//      is lost" is false: the commits survive, the environment does not.
+//      This is #3051's own acceptance #1, which names merged as a refusal
+//      case; the design doc's Part 4 sentence listed only three and is
+//      amended by this file (see the PR body for the reconciliation);
+//   5. a tree whose branch has unpushed commits — including a branch with NO
+//      upstream at all, which is treated as "can't verify it's pushed" and
+//      refused, not silently assumed safe;
+//   6. a tree whose branch carries an OPEN PR — an in-flight lane — or whose
+//      PR state could not be determined at all (`gh` missing, unauthenticated
+//      or offline). "gh answered: no PR exists" and "gh could not be asked"
+//      are DIFFERENT answers here and are reported and treated differently:
+//      the first is safe, the second is a refusal.
+//
+// `mergedIntoMain` is computed against the LOCAL `main`
+// (`git merge-base --is-ancestor <head> main`), so a stale local `main`
+// reports a genuinely-merged tree as unmerged. That errs toward refusing,
+// which is the safe direction; `git fetch && git merge --ff-only main` first
+// if a row you expect to be prunable reads `merged false`.
 //
 // Teardown order for a worktree that clears all three refusals — load-bearing,
 // not incidental (CLAUDE.md "Worktree teardown", #3051's own regression
@@ -42,8 +73,10 @@
 //
 // Offline tolerance: every `gh` call goes through scripts/gh.mjs's
 // ghSpawn() (the repo's mandatory chokepoint, #2184) and degrades to
-// "unknown" PR state on any failure — `gh` missing, unauthenticated, or a
-// network error never aborts the report or the prune.
+// "unknown (gh unavailable)" PR state on any failure — `gh` missing,
+// unauthenticated, or a network error never aborts the REPORT. It does
+// refuse the PRUNE for that row (refusal 6 above): offline tolerance means
+// the tool keeps working, not that it deletes trees it could not check.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -77,8 +110,9 @@ function usage(extra) {
     'Report mode (default): lists worktrees with commits-ahead-of-main,',
     'merged status, and PR state (when `gh` is available). No mutation.',
     '',
-    '--prune: actually remove worktrees that clear all three refusals',
-    '(primary checkout, uncommitted changes, unpushed commits) — junctions',
+    '--prune: actually remove worktrees that clear every refusal (primary',
+    "checkout, this process's own worktree, uncommitted changes, not merged",
+    'into main, unpushed commits, an open or undeterminable PR) — junctions',
     'first, then the worktree itself. See CLAUDE.md "Worktree teardown".',
   ];
   if (extra) lines.unshift(`Error: ${extra}`, '');
@@ -104,21 +138,28 @@ export function makeDefaultRunners() {
         error: result.error,
       };
     },
-    // Availability + lookup collapsed into one call: a caller that can't
-    // reach `gh` (missing binary, no auth, no network) gets `null` back,
-    // never a thrown error — offline tolerance is the contract, not an
-    // opt-in.
+    // Availability + lookup, kept DISTINGUISHABLE. `gh pr list --head <b>`
+    // prints `[]` and exits 0 when there is genuinely no PR, which is
+    // character-for-character what an uninstalled/unauthenticated/offline
+    // `gh` used to render as here — the same `unknown` token for "definitely
+    // no PR" and "couldn't ask". They are opposite answers for a destructive
+    // default, so this returns a two-field verdict instead of one nullable
+    // row: `{ available, pr }`. `available:false` means gh could not be
+    // asked (never a thrown error — offline tolerance is the contract);
+    // `available:true, pr:null` means gh answered and there is no PR.
     ghPrState(branch) {
       const result = ghSpawn(
         ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,state,url', '--limit', '1'],
         { stdio: ['ignore', 'pipe', 'pipe'] },
       );
-      if (result.error || result.status !== 0) return null;
+      if (result.error || result.status !== 0) return { available: false, pr: null };
       try {
         const rows = JSON.parse(result.stdout || '[]');
-        return rows[0] ?? null;
+        return { available: true, pr: rows[0] ?? null };
       } catch {
-        return null;
+        // Unparseable output means gh answered something this code does not
+        // understand — that is "couldn't ask", not "no PR".
+        return { available: false, pr: null };
       }
     },
     // Junction-first teardown primitive — see this file's header. Returns
@@ -199,24 +240,81 @@ export function isPrimaryWorktree(gitCommonDir, gitDir) {
 }
 
 /**
- * The three mandatory refusal reasons, and nothing else — see this file's
- * header. `unpushed: true` covers BOTH "has commits ahead of its upstream"
- * AND "has no upstream configured at all" (hasUpstream: false) — an
- * unverifiable push state is refused, not assumed safe. Returns an array;
- * empty means the worktree clears every refusal and is eligible for
- * --prune.
+ * Is `worktreePath` the tree this very process is running from (or an
+ * ancestor of it)? Comparing both the script's own repo root AND the
+ * process cwd catches the two ways it happens: `npm run wt:gc` from inside
+ * a worktree (that worktree's own copy of the script), and
+ * `node <primary>/scripts/wt-gc.mjs` invoked while cwd sits in a worktree.
+ * Normalisation is separator- and case-insensitive because this is a
+ * Windows-only tool and `C:\wt\a` / `c:/wt/a` are the same directory.
+ * Pure — takes the candidate self-paths rather than reading process state.
+ */
+export function isSelfWorktree(worktreePath, selfPaths) {
+  const norm = (p) => resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const wt = norm(worktreePath);
+  return selfPaths.some((candidate) => {
+    const c = norm(candidate);
+    return c === wt || c.startsWith(`${wt}/`);
+  });
+}
+
+/**
+ * The mandatory refusal reasons, and nothing else — see this file's header
+ * for what each one protects and why. All six fail CLOSED: every `!`-shaped
+ * test here reads "could not be confirmed safe", not "was confirmed
+ * unsafe". `unpushed` covers BOTH "has commits ahead of its upstream" AND
+ * "has no upstream configured at all" (hasUpstream: false).
+ *
+ * `prQueried: false` is the ONE case that suppresses the PR refusals, and
+ * run() sets it only for a row that ALREADY carries another refusal — it is
+ * a "don't pay for a `gh` round-trip we can't act on" optimisation, never a
+ * path to prunable. A row with no other refusal always queries gh.
+ *
+ * Returns an array; empty means the worktree clears every refusal and is
+ * eligible for --prune.
  */
 export function refusalReasons(facts) {
   const reasons = [];
   if (facts.isPrimary) reasons.push('primary checkout — never pruned');
+  if (facts.isSelf) reasons.push('the worktree this process is running from — never pruned');
   if (facts.dirty) reasons.push('uncommitted changes');
+  if (!facts.mergedIntoMain) reasons.push('not merged into main');
   if (!facts.hasUpstream) reasons.push('no upstream configured — cannot verify it is pushed');
   else if (facts.unpushedCount > 0) reasons.push(`${facts.unpushedCount} unpushed commit(s)`);
+  if (facts.prQueried !== false) {
+    if (!facts.prAvailable) reasons.push('PR state could not be determined — cannot verify no PR is open');
+    else if (facts.prOpen) reasons.push(`open PR #${facts.prNumber}`);
+  }
   return reasons;
 }
 
-/** Assemble one report row from raw facts + optional PR info. Pure. */
+/**
+ * Normalise the `ghPrState` verdict into the three states the report and
+ * the refusals both need to tell apart: not asked, asked-and-failed, and
+ * asked-and-answered (with or without a PR). A missing/`null` verdict is
+ * treated as asked-and-failed — the fail-closed reading.
+ */
+function normalizePrInfo(prInfo) {
+  if (prInfo && prInfo.queried === false) {
+    return { queried: false, available: false, open: false, number: null, label: 'not queried' };
+  }
+  if (!prInfo || prInfo.available !== true) {
+    return { queried: true, available: false, open: false, number: null, label: 'unknown (gh unavailable)' };
+  }
+  const pr = prInfo.pr ?? null;
+  if (!pr) return { queried: true, available: true, open: false, number: null, label: 'none' };
+  return {
+    queried: true,
+    available: true,
+    open: pr.state === 'OPEN',
+    number: pr.number,
+    label: `#${pr.number} ${pr.state}`,
+  };
+}
+
+/** Assemble one report row from raw facts + the PR verdict. Pure. */
 export function classifyWorktree(tree, facts, prInfo) {
+  const pr = normalizePrInfo(prInfo);
   return {
     path: tree.path,
     branch: tree.branch ?? '(detached)',
@@ -224,15 +322,56 @@ export function classifyWorktree(tree, facts, prInfo) {
     aheadOfMain: facts.aheadCount,
     dirty: facts.dirty,
     hasUpstream: facts.hasUpstream,
-    unpushedCount: facts.unpushedCount,
-    prState: prInfo ? `#${prInfo.number} ${prInfo.state}` : 'unknown',
-    refusals: refusalReasons(facts),
+    // null, never a number, when the count could not be read — the row must
+    // not claim a count it does not have. `unpushedVerified` is the field to
+    // read; `unpushedCount` is only meaningful when it is true.
+    unpushedCount: facts.unpushedCount ?? null,
+    unpushedVerified: facts.unpushedVerified === true,
+    prState: pr.label,
+    refusals: refusalReasons({
+      ...facts,
+      prQueried: pr.queried,
+      prAvailable: pr.available,
+      prOpen: pr.open,
+      prNumber: pr.number,
+    }),
   };
+}
+
+// ---- The PowerShell -> JS junction-report contract --------------------------
+
+/**
+ * The exact property names `Remove-JunctionsRecursive`
+ * (scripts/lib/wt-gc-junctions.psm1) puts on every result object, and the
+ * ONLY names run() reads. This constant is the JS half of a two-sided pin:
+ * scripts/tests/wt-gc.test.mjs asserts the .psm1 source emits each of these,
+ * and scripts/tests/wt-gc-junctions.Tests.ps1 asserts this list matches the
+ * PowerShell side's own output.
+ *
+ * Why it is pinned at all: rename `TargetStillExists` on either side and
+ * `j.TargetStillExists === false` below becomes permanently false, so the
+ * catastrophic case — the junction unlinked AND its real target destroyed —
+ * would read as success and `git worktree remove --force` would proceed.
+ * validateJunctionEntry() makes that shape fail closed at runtime too.
+ */
+export const JUNCTION_RESULT_KEYS = ['Path', 'Target', 'Removed', 'TargetStillExists', 'Error'];
+
+/**
+ * null when the entry carries every key run() depends on; otherwise a
+ * human-readable description of what is wrong. An entry that does not match
+ * the contract is a FAILURE, never something to interpret leniently.
+ */
+export function validateJunctionEntry(entry) {
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    return `expected an object, got ${Array.isArray(entry) ? 'an array' : typeof entry}`;
+  }
+  const missing = JUNCTION_RESULT_KEYS.filter((k) => !Object.hasOwn(entry, k));
+  return missing.length === 0 ? null : `missing key(s): ${missing.join(', ')}`;
 }
 
 // ---- Fact-gathering (git calls, isolated so the classification above stays pure) --
 
-function gatherFacts(git, tree, isPrimary) {
+function gatherFacts(git, tree, isPrimary, isSelf) {
   const head = tree.head;
   const branch = tree.branch;
 
@@ -247,6 +386,7 @@ function gatherFacts(git, tree, isPrimary) {
 
   let hasUpstream = false;
   let unpushedCount = 0;
+  let unpushedVerified = false;
   if (branch && branch !== '(detached)') {
     const upstreamResult = git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${branch}@{upstream}`], {
       cwd: tree.path,
@@ -256,11 +396,15 @@ function gatherFacts(git, tree, isPrimary) {
       const upstream = upstreamResult.stdout.trim();
       const unpushedResult = git(['rev-list', '--count', `${upstream}..${branch}`], { cwd: tree.path });
       unpushedCount = unpushedResult.status === 0 ? parseInt(unpushedResult.stdout.trim(), 10) || 0 : null;
-      if (unpushedCount === null) hasUpstream = false; // couldn't verify — fail closed via refusalReasons
+      // Couldn't verify — fail closed via refusalReasons, and leave the count
+      // NULL rather than a number the row would otherwise be claiming to know.
+      if (unpushedCount === null) hasUpstream = false;
+      else unpushedVerified = true;
     }
   }
+  if (!hasUpstream) unpushedCount = null;
 
-  return { isPrimary, dirty, mergedIntoMain, aheadCount, hasUpstream, unpushedCount };
+  return { isPrimary, isSelf, dirty, mergedIntoMain, aheadCount, hasUpstream, unpushedCount, unpushedVerified };
 }
 
 // ---- Report + prune formatting ---------------------------------------------
@@ -288,9 +432,13 @@ function formatReportTable(rows) {
  * @param {Object} opts
  * @param {boolean} opts.prune
  * @param {Object} opts.runners
+ * @param {string[]} [opts.selfPaths] paths identifying the worktree this
+ *   process is running from — defaults to the script's own repo root plus
+ *   the process cwd. Injectable so the self-exclusion refusal is testable
+ *   without relocating the test runner.
  * @returns {number} exit code
  */
-export function run({ prune, runners }) {
+export function run({ prune, runners, selfPaths = [repoRoot, process.cwd()] }) {
   const { git, ghPrState, removeJunctions, removeWorktree, pathExists, log, err } = runners;
 
   const porcelainResult = git(['worktree', 'list', '--porcelain']);
@@ -311,10 +459,31 @@ export function run({ prune, runners }) {
   for (const tree of trees) {
     const gitDirResult = git(['rev-parse', '--path-format=absolute', '--git-dir'], { cwd: tree.path });
     const gitDir = gitDirResult.status === 0 ? gitDirResult.stdout.trim() : null;
-    const isPrimary = commonDir !== null && gitDir !== null && isPrimaryWorktree(commonDir, gitDir);
+    // FAIL CLOSED, like `dirty` and `unpushedCount` beside it: if git could
+    // not answer either rev-parse, treat the tree AS the primary checkout.
+    // git's own `fatal: is a main working tree` only backstops the LAST
+    // step — by then removeJunctions() has already swept the primary
+    // checkout's real node_modules/.venv, which is the catastrophic half.
+    const isPrimary = commonDir === null || gitDir === null || isPrimaryWorktree(commonDir, gitDir);
+    const isSelf = isSelfWorktree(tree.path, selfPaths);
 
-    const facts = gatherFacts(git, tree, isPrimary);
-    const prInfo = tree.branch && tree.branch !== '(detached)' ? ghPrState(tree.branch) : null;
+    const facts = gatherFacts(git, tree, isPrimary, isSelf);
+
+    // Only spend a `gh` round-trip on a row the answer could change. A row
+    // that already carries a refusal cannot become prunable, so querying it
+    // buys nothing and costs one serial network call per worktree (17 of
+    // them on this box). `prQueried: false` suppresses ONLY the PR refusals,
+    // and only for rows that are already refused on other grounds.
+    const otherRefusals = refusalReasons({ ...facts, prQueried: false });
+    let prInfo;
+    if (otherRefusals.length > 0) {
+      prInfo = { queried: false, available: false, pr: null };
+    } else if (tree.branch && tree.branch !== '(detached)') {
+      prInfo = ghPrState(tree.branch);
+    } else {
+      // No branch to ask about — undeterminable, and refused as such.
+      prInfo = { queried: true, available: false, pr: null };
+    }
     rows.push(classifyWorktree(tree, facts, prInfo));
   }
 
@@ -346,6 +515,16 @@ export function run({ prune, runners }) {
     }
     let junctionFailure = false;
     for (const j of junctionReport) {
+      // The report's SHAPE is checked before its content: a renamed or
+      // missing key would otherwise make the checks below read as "fine"
+      // (`undefined.Removed` is falsy, but `undefined === false` is not, so
+      // a renamed TargetStillExists silently passes the catastrophic case).
+      const shapeProblem = validateJunctionEntry(j);
+      if (shapeProblem !== null) {
+        err(`  junction report entry does not match the expected contract (${shapeProblem}): ${JSON.stringify(j)}\n`);
+        junctionFailure = true;
+        continue;
+      }
       if (!j.Removed || j.TargetStillExists === false) {
         err(`  junction NOT cleanly removed: ${JSON.stringify(j)}\n`);
         junctionFailure = true;

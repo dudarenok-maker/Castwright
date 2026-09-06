@@ -4787,11 +4787,19 @@ that produced the 28-orphan, 8.27 GB incident this tool exists to automate away.
 (junctioned per CLAUDE.md's "Worktree setup"):
 
 - `npm run wt:gc` (no `--prune`) correctly reports each worktree's merged/ahead/dirty/
-  unpushed/PR-state columns and marks the primary checkout, any dirty tree, and any
-  tree with unpushed or unverifiable-push commits as **not** prunable — confirm
-  against `git status`/`git log` by hand for a few rows.
+  PR-state columns and marks as **not** prunable: the primary checkout, the worktree
+  you ran the command from, any dirty tree, any tree **not merged into `main`**, any
+  tree with unpushed or unverifiable-push commits, and any tree whose branch carries
+  an **open PR** or whose PR state could not be determined — confirm against
+  `git status`/`git log`/`gh pr list` by hand for a few rows. On a box mid-round this
+  should leave very few prunable rows; a row you know is an in-flight lane reading
+  `prunable? yes` is a failure of this criterion, not a curiosity.
+- Confirm `gh` answering "no PR" renders `none` and `gh` being unreachable renders
+  `unknown (gh unavailable)` — two different cells, not one shared token. Kill `gh`'s
+  auth (or rename the binary out of PATH) for one run to see the second.
 - Pick one worktree that IS marked prunable and genuinely is safe to delete (already
-  merged, pushed, clean). Run `npm run wt:gc -- --prune`.
+  merged into `main`, pushed, clean, PR merged/closed, and NOT the tree you are
+  standing in). Run `npm run wt:gc -- --prune` **from a different checkout**.
 - Confirm the junctions inside it (`node_modules`, `server/node_modules`,
   `server/tts-sidecar/.venv`, `server/tts-sidecar/voices/` if present) are gone
   (`Test-Path` false) while the PRIMARY checkout's own real `node_modules`/`.venv`/
@@ -4803,9 +4811,16 @@ that produced the 28-orphan, 8.27 GB incident this tool exists to automate away.
   gone from disk.
 - Confirm the primary checkout and every OTHER live worktree are unaffected
   (`git status --porcelain` on each, before/after).
+- **The fail-closed scan, which no fixture can prove:** the junction walk now throws
+  on any enumeration error rather than answering "no junctions found". On a real tree
+  with a deep junction path (the `server/tts-sidecar/.venv` shape under a long
+  worktree name), run once under `pwsh` and once under `powershell` (5.1) and confirm
+  both either find the junction or FAIL LOUDLY — never a silent `removed 0
+  junction(s)` followed by a successful `git worktree remove`.
 
-*Needs:* a Windows box with `pwsh` or `powershell` on PATH, at least one genuinely
-prunable worktree with real junctions set up per CLAUDE.md's worktree-setup recipe.
+*Needs:* a Windows box with `pwsh` **and** Windows PowerShell 5.1 on PATH, at least one
+genuinely prunable worktree with real junctions set up per CLAUDE.md's worktree-setup
+recipe, and a second checkout to run the prune from.
 *Cost:* 10–15 minutes. *Criteria:* this issue's acceptance list (#3051) and the
 design doc's Part 4 (`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`).
 

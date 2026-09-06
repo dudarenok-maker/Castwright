@@ -6,7 +6,9 @@
 # `.LinkTarget`, source-pinned below); recursion never descends INTO a found
 # junction; removal unlinks the junction but leaves its target's own content
 # untouched; removal is verified by Test-Path, not by "the call didn't
-# throw".
+# throw"; an enumeration error FAILS CLOSED (throws) rather than answering
+# "no junctions found"; and the result objects' property names match
+# wt-gc.mjs's JUNCTION_RESULT_KEYS.
 
 BeforeAll {
     $modulePath = Join-Path $PSScriptRoot "..\lib\wt-gc-junctions.psm1"
@@ -256,5 +258,131 @@ Describe 'ReparsePoint gate is source-pinned (#3051 acceptance 4)' {
         # `.LinkTarget` truthiness check reddens this exact test — see the
         # PR description / fix report for the named mutation run.
         $script:moduleCode | Should -Not -Match '\.LinkTarget'
+    }
+}
+
+# --- The scan FAILS CLOSED (PR #3055 review, significant #3) -----------------
+# An empty result that means "the scan failed" is indistinguishable from one
+# that means "there are no junctions here" — and wt-gc.mjs acts on the second
+# by running `git worktree remove --force`, which then follows the junction
+# the scan never saw into the primary checkout's real node_modules/.venv.
+# Measured shape: a junction at a 394-character path is found by pwsh, while
+# Windows PowerShell 5.1 raised PathTooLongException inside Get-ChildItem and
+# — under the old `-ErrorAction SilentlyContinue` — returned `{"items": []}`,
+# exit 0, no warning. ACL-denied directories swallow the same way on both
+# engines. The mocks below reproduce that class deterministically rather than
+# depending on a 5.1 box or a hand-built long path.
+Describe 'Get-JunctionsRecursive fails closed on an enumeration error' {
+    BeforeEach {
+        $script:tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "wtgc-failclosed-$([Guid]::NewGuid())"
+        New-Item -ItemType Directory -Path $script:tempDir | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $script:tempDir "sub") | Out-Null
+    }
+    AfterEach {
+        if (Test-Path $script:tempDir) {
+            Remove-Item $script:tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'THROWS when a directory cannot be enumerated, instead of reporting zero junctions' {
+        Mock -ModuleName 'wt-gc-junctions' Get-ChildItem { throw 'Access to the path is denied.' }
+
+        { Get-JunctionsRecursive -Root $script:tempDir } |
+            Should -Throw -ExpectedMessage '*INCOMPLETE*'
+    }
+
+    It 'THROWS when a directory cannot be inspected (the Get-Item half of the same swallow)' {
+        Mock -ModuleName 'wt-gc-junctions' Get-Item { throw 'The specified path, file name, or both are too long.' }
+
+        { Get-JunctionsRecursive -Root $script:tempDir } |
+            Should -Throw -ExpectedMessage '*INCOMPLETE*'
+    }
+
+    It 'propagates the failure out of Remove-JunctionsRecursive — the caller must never see a clean empty report' {
+        Mock -ModuleName 'wt-gc-junctions' Get-ChildItem { throw 'Access to the path is denied.' }
+
+        { Remove-JunctionsRecursive -Root $script:tempDir } |
+            Should -Throw -ExpectedMessage '*INCOMPLETE*'
+    }
+
+    It 'still returns normally (no throw) when enumeration succeeds — proves the guard is not always-on' {
+        $found = Get-JunctionsRecursive -Root $script:tempDir
+
+        ($found -is [array]) | Should -BeTrue
+        $found.Count | Should -Be 0
+    }
+}
+
+# --- The .psm1 -> wt-gc.mjs property contract (PR #3055 review, significant #5) ---
+# Rename `TargetStillExists` on either side and wt-gc.mjs's
+# `j.TargetStillExists === false` becomes permanently false, so the
+# catastrophic case — junction unlinked AND its real target destroyed — reads
+# as success and `git worktree remove --force` proceeds. This is the
+# PowerShell half of the pin; scripts/tests/wt-gc.test.mjs holds the JS half
+# (it asserts this module's source emits each of those names).
+Describe 'Junction-report property names match wt-gc.mjs JUNCTION_RESULT_KEYS' {
+    BeforeEach {
+        $script:tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "wtgc-contract-$([Guid]::NewGuid())"
+        New-Item -ItemType Directory -Path $script:tempDir | Out-Null
+    }
+    AfterEach {
+        if (Test-Path $script:tempDir) {
+            Remove-Item $script:tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'emits exactly the property set wt-gc.mjs declares' {
+        $jsPath = Join-Path $PSScriptRoot "..\wt-gc.mjs"
+        $js = Get-Content $jsPath -Raw
+        $match = [regex]::Match($js, "JUNCTION_RESULT_KEYS\s*=\s*\[([^\]]*)\]")
+        $match.Success | Should -BeTrue -Because 'wt-gc.mjs must export the key list this pin reads'
+        $expected = @(
+            $match.Groups[1].Value -split ',' |
+                ForEach-Object { $_.Trim().Trim("'").Trim('"').Trim() } |
+                Where-Object { $_ }
+        )
+        $expected.Count | Should -Be 5
+
+        $target = Join-Path $script:tempDir "real-node-modules"
+        New-Item -ItemType Directory -Path $target | Out-Null
+        $link = Join-Path $script:tempDir "node_modules"
+        New-TestJunction -LinkPath $link -TargetPath $target
+
+        $report = Remove-JunctionsRecursive -Root $script:tempDir
+
+        $report.Count | Should -Be 1
+        $actual = @($report[0].PSObject.Properties.Name)
+        (($actual | Sort-Object) -join ',') | Should -Be (($expected | Sort-Object) -join ',')
+    }
+}
+
+# --- The .ps1 CLI surface (PR #3055 review, minor: dead -Action Find) --------
+Describe 'wt-gc-junctions.ps1 CLI surface' {
+    BeforeEach {
+        $script:tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "wtgc-cli-$([Guid]::NewGuid())"
+        New-Item -ItemType Directory -Path $script:tempDir | Out-Null
+        $script:ps1 = Join-Path $PSScriptRoot "..\lib\wt-gc-junctions.ps1"
+    }
+    AfterEach {
+        if (Test-Path $script:tempDir) {
+            Remove-Item $script:tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'REJECTS -Action Find — the branch was unreachable and returned strings, not report objects' {
+        # wt-gc.mjs only ever passes 'Remove'. Had anything routed Find through
+        # its report loop, `!j.Removed` would have been truthy for every string
+        # and every junction would have read as a failure.
+        { & $script:ps1 -Root $script:tempDir -Action Find } | Should -Throw
+    }
+
+    It 'accepts -Action Remove and emits the {items:[...]} envelope wt-gc.mjs parses' {
+        # An empty scratch root: nothing to remove, so this exercises the
+        # envelope shape (never a bare array) without mutating anything.
+        $json = & $script:ps1 -Root $script:tempDir -Action Remove
+        $parsed = ($json | Out-String) | ConvertFrom-Json
+
+        $parsed.PSObject.Properties.Name | Should -Contain 'items'
+        @($parsed.items).Count | Should -Be 0
     }
 }

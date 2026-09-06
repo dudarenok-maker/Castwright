@@ -318,6 +318,20 @@ acts. Junctions dropped **first** via `[System.IO.Directory]::Delete($p, $false)
 Refuses to prune the primary checkout, any tree with uncommitted changes, and any tree with
 unpushed commits. Independent of Parts 1–3 and cuttable.
 
+**Amended during implementation (PR #3055 review) — the refusal list above was too short and
+is superseded by the one in `scripts/wt-gc.mjs`'s header.** This sentence named three refusals;
+issue #3051's own acceptance #1 names *"merged / ahead / dirty / unpushed refusal cases"*, i.e.
+merged as a refusal case too, and the implementation initially followed this sentence. Report
+mode on the real box then showed six rows reading `prunable? yes` of which five were unmerged,
+four carried an open PR, and one was the reviewing PR's own worktree — because
+`refusalReasons()` never read the `merged` or `PR` columns it printed. Teardown destroys
+per-worktree state that does not travel with the branch (`server/.env`, `.env.local`, the
+`node_modules` junctions, `server/tts-sidecar/.venv`, `voices/` — CLAUDE.md "Branching
+workflow"), so a GC default that deletes an in-flight lane is not a defensible resting state.
+The shipped refusal set is six: primary checkout · the worktree the process is running from ·
+uncommitted changes · **not merged into `main`** · unpushed (or unverifiable-push) commits ·
+**an open PR, or a PR state that could not be determined at all**. Every one fails closed.
+
 ### Part 5 — A Windows leg in PR-time CI
 
 **What it runs:** a `windows-latest` job executing `test` and `test:server`, with its scope

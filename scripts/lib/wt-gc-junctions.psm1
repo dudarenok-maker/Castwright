@@ -43,6 +43,22 @@ function Test-IsReparsePoint {
 # junction pointing at a live checkout) enumerate a real, unrelated tree.
 # Returns an array (always — even for 0 or 1 matches, via the unary `,`
 # comma operator, which PowerShell would otherwise unwrap to a bare string).
+#
+# FAILS CLOSED: every enumeration error THROWS rather than being swallowed.
+# This used to be `-ErrorAction SilentlyContinue` on the Get-ChildItem and a
+# bare `catch { return }` on the Get-Item, which dropped whole subtrees
+# without a signal — and an empty result that means "the scan FAILED" is
+# indistinguishable from one that means "there are no junctions here". The
+# caller (scripts/wt-gc.mjs) acts on that emptiness by running
+# `git worktree remove --force`, which then follows the junction the scan
+# never saw into the primary checkout's real node_modules/.venv. Measured
+# shape: a junction at a 394-character path is found by `pwsh`, while
+# Windows PowerShell 5.1 raises PathTooLongException inside Get-ChildItem
+# and — with SilentlyContinue — answered `{"items": []}`, exit 0, no
+# warning. wt-gc.mjs's pickPowerShell() falls back to `powershell`, and this
+# module declares `#requires -Version 5.1`, so that engine is supported, not
+# hypothetical. An ACL-denied directory swallows identically on both
+# engines. A partial scan is never reported as a complete one.
 function Get-JunctionsRecursive {
     [CmdletBinding()]
     param(
@@ -60,14 +76,21 @@ function Get-JunctionsRecursive {
         try {
             $item = Get-Item -LiteralPath $Dir -Force -ErrorAction Stop
         } catch {
-            return
+            throw "wt-gc: junction scan could not inspect '$Dir' — the scan is INCOMPLETE and must not be treated as 'no junctions found': $($_.Exception.Message)"
         }
         if (Test-IsReparsePoint -Item $item) {
             $found.Add($Dir)
             return
         }
-        Get-ChildItem -LiteralPath $Dir -Directory -Force -ErrorAction SilentlyContinue |
-            ForEach-Object { Test-JunctionsWalk -Dir $_.FullName }
+        $children = @()
+        try {
+            $children = @(Get-ChildItem -LiteralPath $Dir -Directory -Force -ErrorAction Stop)
+        } catch {
+            throw "wt-gc: junction scan could not enumerate '$Dir' — the scan is INCOMPLETE and must not be treated as 'no junctions found': $($_.Exception.Message)"
+        }
+        foreach ($child in $children) {
+            Test-JunctionsWalk -Dir $child.FullName
+        }
     }
 
     Test-JunctionsWalk -Dir $Root
@@ -82,6 +105,20 @@ function Get-JunctionsRecursive {
 # trusting a non-throwing call as proof — `cmd /c rmdir` from a bash shell is
 # on record silently no-op'ing and returning 0, so this module never assumes
 # success from the absence of an exception alone.
+#
+# A failed SCAN propagates out of here as a throw (see Get-JunctionsRecursive)
+# rather than being reported as "0 junctions removed" — the caller must not be
+# able to mistake an incomplete scan for a clean tree.
+#
+# Every result object carries exactly these five properties, and
+# scripts/wt-gc.mjs reads them by name (JUNCTION_RESULT_KEYS there):
+#   Path, Target, Removed, TargetStillExists, Error
+# Renaming one silently changes the JS side's reading — `TargetStillExists`
+# especially, whose absence makes the "junction unlinked AND its real target
+# destroyed" case read as success. The names are pinned from both sides:
+# scripts/tests/wt-gc-junctions.Tests.ps1 asserts this module's output against
+# wt-gc.mjs's list, and scripts/tests/wt-gc.test.mjs asserts that list against
+# this file's source.
 function Remove-JunctionsRecursive {
     [CmdletBinding()]
     param(

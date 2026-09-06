@@ -4,19 +4,46 @@
 // git/gh/PowerShell via the injectable `runners` object, the same shape
 // wt-merge.mjs's tests use — no real git/gh/PowerShell process is spawned
 // by these tests. The junction-first teardown ORDER (junctions before
-// `git worktree remove`) and the three refusal cases are the load-bearing
+// `git worktree remove`) and the six refusal cases are the load-bearing
 // assertions; each is proved against input that would otherwise make the
 // guard fire.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   parseArgs,
   isPrimaryWorktree,
+  isSelfWorktree,
   refusalReasons,
   classifyWorktree,
+  validateJunctionEntry,
+  JUNCTION_RESULT_KEYS,
   run,
 } from '../wt-gc.mjs';
+
+const scriptsDir = dirname(dirname(fileURLToPath(import.meta.url)));
+
+// Every refusal is a separate `if`, so a single-refusal test must hand in a
+// fact set that clears all the OTHERS — otherwise it passes for the wrong
+// reason. This is that all-clear baseline: a non-primary, non-self, clean,
+// merged, fully-pushed worktree whose branch gh confirmed carries no PR.
+function clearFacts(overrides = {}) {
+  return {
+    isPrimary: false,
+    isSelf: false,
+    dirty: false,
+    mergedIntoMain: true,
+    hasUpstream: true,
+    unpushedCount: 0,
+    prAvailable: true,
+    prOpen: false,
+    prNumber: null,
+    ...overrides,
+  };
+}
 
 // ---- parseArgs ---------------------------------------------------------
 
@@ -52,90 +79,281 @@ test('isPrimaryWorktree: false when git-dir is a worktrees/<name> subdir (a link
   );
 });
 
-// ---- refusalReasons — the three mandatory refusals, one at a time ----------
+// ---- isSelfWorktree --------------------------------------------------------
+
+test('isSelfWorktree: true when a self-path IS the worktree', () => {
+  assert.equal(isSelfWorktree('C:/wt/a', ['C:/wt/a']), true);
+});
+
+test('isSelfWorktree: true when a self-path sits INSIDE the worktree (cwd deeper in the tree)', () => {
+  assert.equal(isSelfWorktree('C:/wt/a', ['C:/wt/a/scripts/lib']), true);
+});
+
+test('isSelfWorktree: separator- and case-insensitive (Windows paths for the same directory)', () => {
+  assert.equal(isSelfWorktree('C:/wt/a', ['c:\\WT\\A\\']), true);
+});
+
+test('isSelfWorktree: false for a sibling worktree with a shared prefix (no substring false-positive)', () => {
+  // "C:/wt/a" must not match "C:/wt/abc" — the guard compares path segments,
+  // not raw string prefixes.
+  assert.equal(isSelfWorktree('C:/wt/a', ['C:/wt/abc']), false);
+});
+
+test('isSelfWorktree: false for an unrelated worktree', () => {
+  assert.equal(isSelfWorktree('C:/wt/a', ['C:/repo', 'C:/wt/b']), false);
+});
+
+// ---- refusalReasons — every refusal, one at a time -------------------------
 
 test('refusalReasons: refuses the primary checkout', () => {
-  const reasons = refusalReasons({ isPrimary: true, dirty: false, hasUpstream: true, unpushedCount: 0 });
+  const reasons = refusalReasons(clearFacts({ isPrimary: true }));
   assert.ok(reasons.some((r) => r.includes('primary checkout')));
 });
 
 test('refusalReasons: does NOT flag primary-checkout reason when isPrimary is false (proves the flag is read, not always-on)', () => {
-  const reasons = refusalReasons({ isPrimary: false, dirty: false, hasUpstream: true, unpushedCount: 0 });
+  const reasons = refusalReasons(clearFacts());
   assert.ok(!reasons.some((r) => r.includes('primary checkout')));
 });
 
+test("refusalReasons: refuses the worktree this process is running from", () => {
+  const reasons = refusalReasons(clearFacts({ isSelf: true }));
+  assert.ok(reasons.some((r) => r.includes('this process is running from')));
+});
+
+test('refusalReasons: does NOT flag self reason when isSelf is false (proves the flag is read, not always-on)', () => {
+  const reasons = refusalReasons(clearFacts());
+  assert.ok(!reasons.some((r) => r.includes('this process is running from')));
+});
+
 test('refusalReasons: refuses a dirty tree (uncommitted changes)', () => {
-  const reasons = refusalReasons({ isPrimary: false, dirty: true, hasUpstream: true, unpushedCount: 0 });
+  const reasons = refusalReasons(clearFacts({ dirty: true }));
   assert.ok(reasons.some((r) => r.includes('uncommitted')));
 });
 
 test('refusalReasons: does NOT flag dirty reason when dirty is false (proves the flag is read, not always-on)', () => {
-  const reasons = refusalReasons({ isPrimary: false, dirty: false, hasUpstream: true, unpushedCount: 0 });
+  const reasons = refusalReasons(clearFacts());
   assert.ok(!reasons.some((r) => r.includes('uncommitted')));
 });
 
+test('refusalReasons: refuses a branch NOT merged into main (#3051 acceptance 1)', () => {
+  // The blocking finding on PR #3055: an unmerged tree is an in-flight lane,
+  // and teardown destroys its per-worktree env/junctions/.venv, which do not
+  // travel with the branch.
+  const reasons = refusalReasons(clearFacts({ mergedIntoMain: false }));
+  assert.ok(reasons.some((r) => r.includes('not merged into main')));
+});
+
+test('refusalReasons: does NOT flag merged reason for a merged branch (proves the flag is read, not always-on)', () => {
+  const reasons = refusalReasons(clearFacts({ mergedIntoMain: true }));
+  assert.ok(!reasons.some((r) => r.includes('not merged into main')));
+});
+
 test('refusalReasons: refuses a branch with unpushed commits', () => {
-  const reasons = refusalReasons({ isPrimary: false, dirty: false, hasUpstream: true, unpushedCount: 3 });
+  const reasons = refusalReasons(clearFacts({ unpushedCount: 3 }));
   assert.ok(reasons.some((r) => r.includes('unpushed')));
 });
 
 test('refusalReasons: refuses a branch with NO upstream at all — unverifiable, not assumed safe', () => {
-  const reasons = refusalReasons({ isPrimary: false, dirty: false, hasUpstream: false, unpushedCount: 0 });
+  const reasons = refusalReasons(clearFacts({ hasUpstream: false }));
   assert.ok(reasons.some((r) => r.includes('no upstream')));
 });
 
 test('refusalReasons: does NOT flag unpushed when hasUpstream and unpushedCount is 0 (proves the flag is read, not always-on)', () => {
-  const reasons = refusalReasons({ isPrimary: false, dirty: false, hasUpstream: true, unpushedCount: 0 });
+  const reasons = refusalReasons(clearFacts());
   assert.ok(!reasons.some((r) => r.includes('unpushed')));
   assert.ok(!reasons.some((r) => r.includes('no upstream')));
 });
 
-test('refusalReasons: a clean, merged-or-not, pushed, non-primary worktree has NO refusals (prunable)', () => {
-  const reasons = refusalReasons({ isPrimary: false, dirty: false, hasUpstream: true, unpushedCount: 0 });
-  assert.deepEqual(reasons, []);
+test('refusalReasons: refuses a branch carrying an OPEN PR (an in-flight lane)', () => {
+  const reasons = refusalReasons(clearFacts({ prOpen: true, prNumber: 3055 }));
+  assert.ok(reasons.some((r) => r.includes('open PR #3055')));
 });
 
-test('refusalReasons: all three refusals can co-occur', () => {
-  const reasons = refusalReasons({ isPrimary: true, dirty: true, hasUpstream: false, unpushedCount: 0 });
-  assert.equal(reasons.length, 3);
+test('refusalReasons: does NOT flag a PR reason for a MERGED/CLOSED PR (prOpen false, gh answered)', () => {
+  const reasons = refusalReasons(clearFacts({ prOpen: false }));
+  assert.ok(!reasons.some((r) => r.includes('PR')));
 });
 
-// ---- classifyWorktree — merged / ahead classification ----------------------
+test('refusalReasons: refuses when PR state could NOT be determined (gh unavailable — fail closed)', () => {
+  const reasons = refusalReasons(clearFacts({ prAvailable: false }));
+  assert.ok(reasons.some((r) => r.includes('could not be determined')));
+});
+
+test('refusalReasons: prQueried:false suppresses ONLY the PR reasons, and cannot make a row prunable on its own', () => {
+  // run() sets prQueried:false only for rows that already carry another
+  // refusal. Prove both halves: the PR reasons vanish, and the row is still
+  // refused on the ground that made it skip the gh call.
+  const suppressed = refusalReasons(clearFacts({ dirty: true, prAvailable: false, prQueried: false }));
+  assert.ok(!suppressed.some((r) => r.includes('could not be determined')));
+  assert.ok(suppressed.some((r) => r.includes('uncommitted')));
+  assert.ok(suppressed.length > 0);
+});
+
+test('refusalReasons: a clean, merged, pushed, PR-free, non-primary, non-self worktree has NO refusals (prunable)', () => {
+  assert.deepEqual(refusalReasons(clearFacts()), []);
+});
+
+test('refusalReasons: all six refusals can co-occur', () => {
+  const reasons = refusalReasons({
+    isPrimary: true,
+    isSelf: true,
+    dirty: true,
+    mergedIntoMain: false,
+    hasUpstream: false,
+    unpushedCount: 0,
+    prAvailable: false,
+  });
+  assert.equal(reasons.length, 6);
+});
+
+// ---- classifyWorktree — merged / ahead / PR-state classification ------------
 
 test('classifyWorktree: reports mergedIntoMain true for a merged branch', () => {
   const row = classifyWorktree(
     { path: 'C:\\wt\\a', branch: 'feat/a' },
-    { isPrimary: false, dirty: false, mergedIntoMain: true, aheadCount: 0, hasUpstream: true, unpushedCount: 0 },
-    null,
+    { ...clearFacts(), mergedIntoMain: true, aheadCount: 0, unpushedVerified: true },
+    { available: true, pr: null },
   );
   assert.equal(row.mergedIntoMain, true);
   assert.equal(row.aheadOfMain, 0);
+  assert.deepEqual(row.refusals, []);
 });
 
-test('classifyWorktree: reports mergedIntoMain false and a nonzero ahead count for an unmerged branch', () => {
+test('classifyWorktree: an unmerged branch is reported AND refused — the report column feeds the decision', () => {
   const row = classifyWorktree(
     { path: 'C:\\wt\\b', branch: 'feat/b' },
-    { isPrimary: false, dirty: false, mergedIntoMain: false, aheadCount: 5, hasUpstream: true, unpushedCount: 0 },
-    null,
+    { ...clearFacts(), mergedIntoMain: false, aheadCount: 5, unpushedVerified: true },
+    { available: true, pr: null },
   );
   assert.equal(row.mergedIntoMain, false);
   assert.equal(row.aheadOfMain, 5);
+  assert.ok(row.refusals.some((r) => r.includes('not merged into main')));
 });
 
-test('classifyWorktree: PR state reported when prInfo is present, "unknown" when null (offline tolerance)', () => {
-  const withPr = classifyWorktree(
+test('classifyWorktree: an OPEN PR is reported AND refused — the PR column feeds the decision', () => {
+  const row = classifyWorktree(
     { path: 'C:\\wt\\c', branch: 'feat/c' },
-    { isPrimary: false, dirty: false, mergedIntoMain: false, aheadCount: 1, hasUpstream: true, unpushedCount: 0 },
-    { number: 42, state: 'OPEN' },
+    { ...clearFacts(), aheadCount: 1, unpushedVerified: true },
+    { available: true, pr: { number: 42, state: 'OPEN' } },
   );
-  assert.equal(withPr.prState, '#42 OPEN');
+  assert.equal(row.prState, '#42 OPEN');
+  assert.ok(row.refusals.some((r) => r.includes('open PR #42')));
+});
 
-  const withoutPr = classifyWorktree(
+test('classifyWorktree: a MERGED PR is reported and does NOT refuse (proves the OPEN check reads state, not presence)', () => {
+  const row = classifyWorktree(
     { path: 'C:\\wt\\c', branch: 'feat/c' },
-    { isPrimary: false, dirty: false, mergedIntoMain: false, aheadCount: 1, hasUpstream: true, unpushedCount: 0 },
+    { ...clearFacts(), aheadCount: 0, unpushedVerified: true },
+    { available: true, pr: { number: 41, state: 'MERGED' } },
+  );
+  assert.equal(row.prState, '#41 MERGED');
+  assert.deepEqual(row.refusals, []);
+});
+
+test('classifyWorktree: "gh answered: no PR" and "gh could not be asked" are DIFFERENT states, rendered differently', () => {
+  const answered = classifyWorktree(
+    { path: 'C:\\wt\\c', branch: 'feat/c' },
+    { ...clearFacts(), aheadCount: 0, unpushedVerified: true },
+    { available: true, pr: null },
+  );
+  const unavailable = classifyWorktree(
+    { path: 'C:\\wt\\c', branch: 'feat/c' },
+    { ...clearFacts(), aheadCount: 0, unpushedVerified: true },
+    { available: false, pr: null },
+  );
+
+  assert.equal(answered.prState, 'none');
+  assert.equal(unavailable.prState, 'unknown (gh unavailable)');
+  assert.notEqual(answered.prState, unavailable.prState);
+  // ...and only the undeterminable one is refused.
+  assert.deepEqual(answered.refusals, []);
+  assert.ok(unavailable.refusals.some((r) => r.includes('could not be determined')));
+});
+
+test('classifyWorktree: a null PR verdict is read as "could not be asked", never as "no PR"', () => {
+  const row = classifyWorktree(
+    { path: 'C:\\wt\\c', branch: 'feat/c' },
+    { ...clearFacts(), aheadCount: 0, unpushedVerified: true },
     null,
   );
-  assert.equal(withoutPr.prState, 'unknown');
+  assert.equal(row.prState, 'unknown (gh unavailable)');
+  assert.ok(row.refusals.some((r) => r.includes('could not be determined')));
+});
+
+test('classifyWorktree: an unverifiable unpushed count is reported as null, not as a number the row does not have', () => {
+  const row = classifyWorktree(
+    { path: 'C:\\wt\\d', branch: 'feat/d' },
+    { ...clearFacts(), hasUpstream: false, unpushedCount: null, unpushedVerified: false, aheadCount: 1 },
+    { available: true, pr: null },
+  );
+  assert.equal(row.unpushedCount, null);
+  assert.equal(row.unpushedVerified, false);
+  assert.ok(row.refusals.some((r) => r.includes('no upstream')));
+});
+
+test('classifyWorktree: a verified count of 0 is marked verified (proves the flag is read, not always-false)', () => {
+  const row = classifyWorktree(
+    { path: 'C:\\wt\\e', branch: 'feat/e' },
+    { ...clearFacts(), unpushedCount: 0, unpushedVerified: true, aheadCount: 0 },
+    { available: true, pr: null },
+  );
+  assert.equal(row.unpushedCount, 0);
+  assert.equal(row.unpushedVerified, true);
+});
+
+// ---- The PowerShell -> JS junction-report contract --------------------------
+
+test('validateJunctionEntry: accepts an entry carrying every contract key', () => {
+  assert.equal(
+    validateJunctionEntry({ Path: 'p', Target: 't', Removed: true, TargetStillExists: true, Error: null }),
+    null,
+  );
+});
+
+test('validateJunctionEntry: rejects an entry missing TargetStillExists — the rename that would silently pass the catastrophic case', () => {
+  const problem = validateJunctionEntry({ Path: 'p', Target: 't', Removed: true, Error: null });
+  assert.ok(problem !== null);
+  assert.match(problem, /TargetStillExists/);
+});
+
+test('validateJunctionEntry: rejects a non-object (a bare string, the shape the deleted -Action Find branch emitted)', () => {
+  assert.ok(validateJunctionEntry('C:/wt/node_modules') !== null);
+  assert.ok(validateJunctionEntry(null) !== null);
+});
+
+test('the .psm1 emits every key JUNCTION_RESULT_KEYS names — the PowerShell half of the two-sided seam pin', () => {
+  // Renaming a property on the PowerShell side without touching wt-gc.mjs
+  // is the failure this pins: `j.TargetStillExists === false` would become
+  // permanently false and the "junction unlinked AND its target destroyed"
+  // case would read as success.
+  const psm1 = readFileSync(join(scriptsDir, 'lib', 'wt-gc-junctions.psm1'), 'utf8');
+  const code = psm1
+    .split(/\r?\n/)
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n');
+  for (const key of JUNCTION_RESULT_KEYS) {
+    assert.match(code, new RegExp(`^\\s*${key}\\s*=`, 'm'), `.psm1 must emit a '${key}' property`);
+  }
+});
+
+test('the .ps1 wraps its result in the {items:[...]} envelope wt-gc.mjs destructures', () => {
+  const ps1 = readFileSync(join(scriptsDir, 'lib', 'wt-gc-junctions.ps1'), 'utf8');
+  const code = ps1
+    .split(/\r?\n/)
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n');
+  assert.match(code, /@\{\s*items\s*=\s*@\(\$items\)\s*\}/);
+  assert.match(code, /ConvertTo-Json/);
+});
+
+test('the .ps1 no longer offers the unreachable, shape-mismatched -Action Find', () => {
+  const ps1 = readFileSync(join(scriptsDir, 'lib', 'wt-gc-junctions.ps1'), 'utf8');
+  const code = ps1
+    .split(/\r?\n/)
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n');
+  assert.match(code, /ValidateSet\('Remove'\)/);
+  assert.ok(!/ValidateSet\([^)]*'Find'/.test(code), "'Find' must not be an accepted -Action value");
 });
 
 // ---- run() — full flow against a stubbed runners object --------------------
@@ -209,15 +427,27 @@ function baseByCwd() {
   };
 }
 
+// A complete junction-report entry, matching what Remove-JunctionsRecursive
+// actually emits — every key in JUNCTION_RESULT_KEYS. Written through the
+// exported constant so a rename on either side breaks these stubs loudly
+// instead of leaving them silently describing a shape that no longer exists.
+function junctionEntry(overrides = {}) {
+  const entry = {};
+  for (const key of JUNCTION_RESULT_KEYS) entry[key] = null;
+  return { ...entry, Path: 'C:/wt-clean/node_modules', Removed: true, TargetStillExists: true, ...overrides };
+}
+
 function makeRunners(overrides = {}) {
   const stubGit = makeStubGit({ ...baseCanned(), ...(overrides.canned ?? {}) }, overrides.byCwd ?? baseByCwd());
   const logs = [];
   const errs = [];
   const pathExistsCalls = [];
+  const ghCalls = [];
+  const ghPrState = overrides.ghPrState ?? (() => ({ available: true, pr: null }));
   return {
     runners: {
       git: stubGit.fn,
-      ghPrState: overrides.ghPrState ?? (() => null),
+      ghPrState: (branch) => { ghCalls.push(branch); return ghPrState(branch); },
       removeJunctions: overrides.removeJunctions ?? (() => []),
       removeWorktree: overrides.removeWorktree ?? (() => ({ status: 0, stdout: '', stderr: '' })),
       pathExists: overrides.pathExists ?? ((p) => { pathExistsCalls.push(p); return false; }),
@@ -227,9 +457,14 @@ function makeRunners(overrides = {}) {
     logs,
     errs,
     pathExistsCalls,
+    ghCalls,
     gitCalls: stubGit.calls,
   };
 }
+
+// The stub tree paths are nowhere near this test process's real cwd, so the
+// self-exclusion refusal is inert unless a test opts into it explicitly.
+const NO_SELF = ['C:/somewhere-else'];
 
 test('run(): report mode never calls removeJunctions or removeWorktree (no mutation by default)', () => {
   let junctionCalls = 0;
@@ -239,7 +474,7 @@ test('run(): report mode never calls removeJunctions or removeWorktree (no mutat
     removeWorktree: () => { removeCalls += 1; return { status: 0, stdout: '', stderr: '' }; },
   });
 
-  const code = run({ prune: false, runners });
+  const code = run({ prune: false, runners, selfPaths: NO_SELF });
 
   assert.equal(code, 0);
   assert.equal(junctionCalls, 0);
@@ -248,7 +483,7 @@ test('run(): report mode never calls removeJunctions or removeWorktree (no mutat
 
 test('run(): report includes the primary checkout marked not-prunable', () => {
   const { runners, logs } = makeRunners();
-  run({ prune: false, runners });
+  run({ prune: false, runners, selfPaths: NO_SELF });
   const out = logs.join('');
   assert.match(out, /C:\/repo/);
   assert.match(out, /primary checkout/);
@@ -263,7 +498,7 @@ test('run(): --prune skips a worktree with a refusal reason and does not touch i
     removeJunctions: () => { junctionCalls += 1; return []; },
   });
 
-  const code = run({ prune: true, runners });
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.equal(code, 0);
   assert.equal(junctionCalls, 0, 'a refused worktree must never reach junction removal');
@@ -273,11 +508,11 @@ test('run(): --prune skips a worktree with a refusal reason and does not touch i
 test('run(): --prune removes junctions BEFORE calling git worktree remove — the load-bearing order', () => {
   const order = [];
   const { runners } = makeRunners({
-    removeJunctions: (root) => { order.push(`junctions:${root}`); return [{ Path: 'x', Removed: true, TargetStillExists: true }]; },
+    removeJunctions: (root) => { order.push(`junctions:${root}`); return [junctionEntry()]; },
     removeWorktree: (path) => { order.push(`remove:${path}`); return { status: 0, stdout: '', stderr: '' }; },
   });
 
-  const code = run({ prune: true, runners });
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.equal(code, 0);
   assert.deepEqual(order, ['junctions:C:/wt-clean', 'remove:C:/wt-clean']);
@@ -286,11 +521,11 @@ test('run(): --prune removes junctions BEFORE calling git worktree remove — th
 test('run(): a junction that fails to clean removal (Removed:false) aborts BEFORE git worktree remove is called', () => {
   let removeWorktreeCalled = false;
   const { runners, errs } = makeRunners({
-    removeJunctions: () => [{ Path: 'C:/wt-clean/node_modules', Removed: false, TargetStillExists: true, Error: null }],
+    removeJunctions: () => [junctionEntry({ Removed: false })],
     removeWorktree: () => { removeWorktreeCalled = true; return { status: 0, stdout: '', stderr: '' }; },
   });
 
-  const code = run({ prune: true, runners });
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.equal(code, 1);
   assert.equal(removeWorktreeCalled, false, 'must not proceed to worktree removal when a junction survived');
@@ -303,48 +538,226 @@ test('run(): a junction whose TARGET vanished (TargetStillExists:false) is flagg
   // from Directory.Delete and it recursed). Must never read as success.
   let removeWorktreeCalled = false;
   const { runners, errs } = makeRunners({
-    removeJunctions: () => [{ Path: 'C:/wt-clean/node_modules', Removed: true, TargetStillExists: false, Error: null }],
+    removeJunctions: () => [junctionEntry({ TargetStillExists: false })],
     removeWorktree: () => { removeWorktreeCalled = true; return { status: 0, stdout: '', stderr: '' }; },
   });
 
-  const code = run({ prune: true, runners });
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.equal(code, 1);
   assert.equal(removeWorktreeCalled, false);
   assert.match(errs.join(''), /NOT cleanly removed/);
 });
 
+test('run(): a junction entry missing a contract key aborts instead of being read leniently (the rename hazard)', () => {
+  // Drop TargetStillExists, exactly as a PowerShell-side rename would: the
+  // `=== false` check below it can never fire, so without the shape check
+  // this row would sail through to `git worktree remove --force`.
+  let removeWorktreeCalled = false;
+  const { runners, errs } = makeRunners({
+    removeJunctions: () => [{ Path: 'C:/wt-clean/node_modules', Target: 'C:/repo/node_modules', Removed: true, Error: null }],
+    removeWorktree: () => { removeWorktreeCalled = true; return { status: 0, stdout: '', stderr: '' }; },
+  });
+
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
+
+  assert.equal(code, 1);
+  assert.equal(removeWorktreeCalled, false);
+  assert.match(errs.join(''), /does not match the expected contract/);
+});
+
+test('run(): a THROWING junction scan aborts the prune for that tree — an errored scan is never read as "no junctions"', () => {
+  // The .psm1 now throws on any enumeration error rather than swallowing it
+  // with -ErrorAction SilentlyContinue; the .ps1 turns that into a non-zero
+  // exit and runJunctionScript() re-raises. This is the JS end of that
+  // chain: the recursive `git worktree remove --force` must not run.
+  let removeWorktreeCalled = false;
+  const { runners, errs } = makeRunners({
+    removeJunctions: () => { throw new Error('wt-gc: junction scan could not enumerate ... INCOMPLETE'); },
+    removeWorktree: () => { removeWorktreeCalled = true; return { status: 0, stdout: '', stderr: '' }; },
+  });
+
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
+
+  assert.equal(code, 1);
+  assert.equal(removeWorktreeCalled, false, 'an incomplete junction scan must never reach the recursive remove');
+  assert.match(errs.join(''), /junction removal failed/);
+  assert.match(errs.join(''), /INCOMPLETE/);
+});
+
 test('run(): verifies worktree removal with pathExists, not the exit code alone', () => {
   const { runners, errs } = makeRunners({
+    removeJunctions: () => [junctionEntry()],
     removeWorktree: () => ({ status: 0, stdout: 'ok', stderr: '' }), // reports success...
     pathExists: () => true, // ...but the directory is still there
   });
 
-  const code = run({ prune: true, runners });
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.equal(code, 1);
   assert.match(errs.join(''), /still exists after removal/);
 });
 
-test('run(): a fully clean/merged/pushed worktree is pruned successfully end to end', () => {
+test('run(): a fully clean/merged/pushed/PR-free worktree is pruned successfully end to end', () => {
   const { runners, logs } = makeRunners({
-    removeJunctions: () => [{ Path: 'C:/wt-clean/node_modules', Removed: true, TargetStillExists: true, Error: null }],
+    removeJunctions: () => [junctionEntry()],
   });
 
-  const code = run({ prune: true, runners });
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.equal(code, 0);
   assert.match(logs.join(''), /removed 1 junction\(s\)/);
   assert.match(logs.join(''), /removed\.\n/);
 });
 
-// ---- Offline tolerance: gh absent/failing degrades to "unknown", never throws --
+// ---- The blocking refusals, proved through run() ---------------------------
 
-test('run(): gh unavailable (ghPrState returns null) reports PR state as "unknown", not an error, and completes normally', () => {
-  const { runners, logs } = makeRunners({ ghPrState: () => null });
+test('run(): --prune REFUSES an unmerged worktree and never touches it', () => {
+  let removeWorktreeCalled = false;
+  const { runners, logs } = makeRunners({
+    // `merge-base --is-ancestor` exits 1 => not an ancestor of main.
+    canned: {
+      'merge-base --is-ancestor': { status: 1 },
+      'rev-list --count main..': { stdout: '4\n' },
+    },
+    removeJunctions: () => [junctionEntry()],
+    removeWorktree: () => { removeWorktreeCalled = true; return { status: 0, stdout: '', stderr: '' }; },
+  });
 
-  const code = run({ prune: false, runners });
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.equal(code, 0);
-  assert.match(logs.join(''), /unknown/);
+  assert.equal(removeWorktreeCalled, false);
+  assert.match(logs.join(''), /SKIP C:\/wt-clean — .*not merged into main/);
+});
+
+test('run(): --prune REFUSES a worktree whose branch carries an OPEN PR', () => {
+  let removeWorktreeCalled = false;
+  const { runners, logs } = makeRunners({
+    ghPrState: () => ({ available: true, pr: { number: 3055, state: 'OPEN' } }),
+    removeJunctions: () => [junctionEntry()],
+    removeWorktree: () => { removeWorktreeCalled = true; return { status: 0, stdout: '', stderr: '' }; },
+  });
+
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
+
+  assert.equal(code, 0);
+  assert.equal(removeWorktreeCalled, false);
+  assert.match(logs.join(''), /SKIP C:\/wt-clean — open PR #3055/);
+});
+
+test("run(): --prune REFUSES the worktree the process is running from", () => {
+  // git worktree remove --force from inside its own tree deletes every file
+  // and deregisters the worktree, THEN fails the final rmdir with exit 255 —
+  // leaving an orphaned directory git no longer lists, which wt-gc itself can
+  // never see again. The refusal has to come before the call.
+  let removeWorktreeCalled = false;
+  const { runners, logs } = makeRunners({
+    removeJunctions: () => [junctionEntry()],
+    removeWorktree: () => { removeWorktreeCalled = true; return { status: 0, stdout: '', stderr: '' }; },
+  });
+
+  const code = run({ prune: true, runners, selfPaths: ['C:/wt-clean/scripts'] });
+
+  assert.equal(code, 0);
+  assert.equal(removeWorktreeCalled, false);
+  assert.match(logs.join(''), /SKIP C:\/wt-clean — .*this process is running from/);
+});
+
+test('run(): --prune REFUSES every tree when git cannot resolve --git-common-dir (fail closed, not fail open)', () => {
+  // The one that points the destructive path at the primary checkout: an
+  // unresolvable common-dir used to make isPrimary false for EVERY row,
+  // including C:/repo itself, and removeJunctions() would then sweep the
+  // primary checkout's real node_modules before git refused the last step.
+  const swept = [];
+  const { runners, logs } = makeRunners({
+    canned: { 'rev-parse --path-format=absolute --git-common-dir': { status: 128, stderr: 'unknown option\n' } },
+    removeJunctions: (root) => { swept.push(root); return [junctionEntry()]; },
+  });
+
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
+
+  assert.equal(code, 0);
+  assert.deepEqual(swept, [], 'no tree may reach junction removal when the primary check is unanswerable');
+  assert.match(logs.join(''), /SKIP C:\/repo — primary checkout/);
+  assert.match(logs.join(''), /SKIP C:\/wt-clean — primary checkout/);
+});
+
+test('run(): --prune REFUSES every tree when git cannot resolve a worktree --git-dir (fail closed)', () => {
+  const swept = [];
+  const { runners, logs } = makeRunners({
+    byCwd: {
+      'C:/repo': { 'rev-parse --path-format=absolute --git-dir': { status: 128, stderr: 'dubious ownership\n' } },
+      'C:/wt-clean': { 'rev-parse --path-format=absolute --git-dir': { status: 128, stderr: 'dubious ownership\n' } },
+    },
+    removeJunctions: (root) => { swept.push(root); return [junctionEntry()]; },
+  });
+
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
+
+  assert.equal(code, 0);
+  assert.deepEqual(swept, []);
+  assert.match(logs.join(''), /SKIP C:\/wt-clean — primary checkout/);
+});
+
+// ---- Offline tolerance: gh absent degrades the REPORT, refuses the PRUNE ---
+
+test('run(): gh unavailable reports "unknown (gh unavailable)", completes normally, and REFUSES the prune', () => {
+  let removeWorktreeCalled = false;
+  const { runners, logs } = makeRunners({
+    ghPrState: () => ({ available: false, pr: null }),
+    removeJunctions: () => [junctionEntry()],
+    removeWorktree: () => { removeWorktreeCalled = true; return { status: 0, stdout: '', stderr: '' }; },
+  });
+
+  const reportCode = run({ prune: false, runners, selfPaths: NO_SELF });
+  assert.equal(reportCode, 0, 'an unreachable gh must never abort the report');
+  assert.match(logs.join(''), /unknown \(gh unavailable\)/);
+
+  const pruneCode = run({ prune: true, runners, selfPaths: NO_SELF });
+  assert.equal(pruneCode, 0);
+  assert.equal(removeWorktreeCalled, false, 'a tree whose PR state could not be checked must not be pruned');
+  assert.match(logs.join(''), /could not be determined/);
+});
+
+test('run(): gh answering "no PR" reads as none and stays prunable — the two states are not collapsed', () => {
+  const { runners, logs } = makeRunners({
+    ghPrState: () => ({ available: true, pr: null }),
+    removeJunctions: () => [junctionEntry()],
+  });
+
+  const code = run({ prune: true, runners, selfPaths: NO_SELF });
+
+  assert.equal(code, 0);
+  assert.match(logs.join(''), /removed\.\n/);
+});
+
+// ---- gh is only asked when the answer could change the outcome -------------
+
+test('run(): gh is NOT queried for a row that already carries another refusal', () => {
+  const { runners, ghCalls } = makeRunners({
+    canned: { 'status --porcelain': { stdout: ' M x.txt\n' } },
+  });
+
+  run({ prune: false, runners, selfPaths: NO_SELF });
+
+  assert.deepEqual(ghCalls, [], 'a row that cannot become prunable must not cost a gh round-trip');
+});
+
+test('run(): gh IS queried for a row with no other refusal — the skip can never make a row prunable', () => {
+  const { runners, ghCalls } = makeRunners();
+
+  run({ prune: false, runners, selfPaths: NO_SELF });
+
+  assert.deepEqual(ghCalls, ['feat/clean-merged']);
+});
+
+test('run(): a row skipped for gh renders "not queried", distinct from both "none" and "unknown"', () => {
+  const { runners, logs } = makeRunners({
+    canned: { 'status --porcelain': { stdout: ' M x.txt\n' } },
+  });
+
+  run({ prune: false, runners, selfPaths: NO_SELF });
+
+  assert.match(logs.join(''), /not queried/);
 });
