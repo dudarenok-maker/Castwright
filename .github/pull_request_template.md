@@ -24,6 +24,13 @@ Checklist of what was run / what reviewers should look at. Examples:
 - [ ] cloud `verify.yml` (required status check) — green
 - [ ] Manual walkthrough in mock mode: <steps>
 - [ ] Reviewer: spot-check <file>:<line> against the regression plan
+
+If this PR touches server/tts-sidecar/**, the sidecar acceptance gate needs
+one of these two lines somewhere in this body (see CONTRIBUTING.md "Sidecar
+acceptance fast-path" for the full format):
+
+  Sidecar acceptance: `npm run test:sidecar` -- <YYYY-MM-DD> -- passed
+  Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row <ID>
 -->
 
 - [ ] `npm run verify` — green

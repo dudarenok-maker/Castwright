@@ -551,13 +551,77 @@ jobs:
         if: fromJSON(needs.detect.outputs.scopes).step_build || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run build
 
+  # Windows leg (ops-73 / #3049, commit-gate rebalance design Part 5).
+  # Detection latency, not new coverage: cross-os.yml already runs the full
+  # `verify:quick` battery on windows-latest twice weekly, and release.yml
+  # gates every tag on Windows. This moves Windows detection from <=3.5 days
+  # to per-PR. It does NOT close the tmpdir/handle race the old pre-push
+  # hooks were built around — that race is a concurrency artifact between
+  # co-running batteries, and this runner is single-tenant, so it structurally
+  # cannot reproduce here.
+  #
+  # Scope conditions sit on STEPS, never the job — a job-level `if:` would
+  # leave this job (and therefore the aggregator's `needs:` entry for it)
+  # PERMANENTLY SKIPPED on every docs-only PR, and the aggregator fails on
+  # `'skipped'` below, which would block merge forever. No other leg in this
+  # file uses a job-level `if:`; this one doesn't either.
+  #
+  # `cancel-in-progress: true` (workflow-wide, top of file) makes a slow
+  # Windows leg a new source of `cancelled`, which the aggregator also treats
+  # as failure — timeout-minutes is sized with that in mind.
+  #
+  # Every step pins `shell: bash` explicitly: this file sets no workflow- or
+  # job-level `defaults: run: shell:`, so a bare `run:` on windows-latest
+  # would default to pwsh, not bash.
+  windows-tests:
+    name: Windows (test + test:server)
+    needs: detect
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
+
+      # ffmpeg is needed by the server MP3 encoder (server/src/tts/mp3.ts
+      # shells out to it). See .github/actions/install-ffmpeg-windows for why
+      # this installs via choco with a winget fallback and a bounded retry.
+      # supports: test:server
+      - name: Install ffmpeg (Windows)
+        if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).shared
+        uses: ./.github/actions/install-ffmpeg-windows
+
+      # leg: test (Windows)
+      - name: Frontend tests
+        if: fromJSON(needs.detect.outputs.scopes).step_test || fromJSON(needs.detect.outputs.scopes).shared
+        shell: bash
+        run: npm test
+
+      # leg: test:server (Windows)
+      - name: Server tests
+        if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).shared
+        shell: bash
+        run: npm run test:server
+
   # Thin aggregator — see the top-of-file comment. Keeps the "npm run verify"
   # status-check name (required on main's branch-protection ruleset) stable
   # while the real work runs concurrently in the named jobs above.
   verify:
     name: npm run verify
     needs:
-      [detect, lint-and-checks, frontend-tests, server-tests, sidecar-tests, e2e, e2e-visual, build]
+      [
+        detect,
+        lint-and-checks,
+        frontend-tests,
+        server-tests,
+        sidecar-tests,
+        e2e,
+        e2e-visual,
+        build,
+        windows-tests,
+      ]
     runs-on: ubuntu-latest
     if: always()
     steps:

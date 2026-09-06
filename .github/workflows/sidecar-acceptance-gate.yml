@@ -1,0 +1,71 @@
+name: Sidecar acceptance gate
+
+# ops-74 (#3050) — commit-gate rebalance design Part 6. Mirrors
+# .github/workflows/pr-issue-link.yml's shape: a small, always-triggered
+# validator gated on a specific, checkable PR-body format -- but this one
+# only requires that format when the PR's diff touches
+# server/tts-sidecar/**, the ONE directory whose 38
+# `pytest.importorskip("torch")` tests (14 files) run exclusively via a
+# local `npm run test:sidecar` on real hardware and have no automated CI
+# equivalent (see docs/superpowers/specs/2026-09-05-commit-gate-rebalance-
+# design.md, Part 6, and CONTRIBUTING.md "Sidecar acceptance fast-path").
+#
+# Trigger path is server/tts-sidecar/** ONLY -- deliberately narrower than an
+# earlier draft that also listed server/src/tts/**, server/src/analyzer/**,
+# server/src/gpu/** (177 TypeScript test files Ubuntu CI already covers via
+# verify.yml). Do not add those back.
+
+on:
+  pull_request:
+    # Same four types as pr-issue-link.yml, for the same reason: `edited`
+    # stays because the primary way a PR satisfies this gate after opening
+    # is editing the body to add the "Sidecar acceptance:" line, not pushing
+    # a new commit -- without `edited` that fix wouldn't clear the check
+    # until the next `synchronize` push.
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Verify sidecar acceptance is recorded
+    runs-on: ubuntu-latest
+    # Tiny validator; cap explicitly so a hung run can't bill the 360-min
+    # default (same rationale as pr-title-lint.yml / pr-issue-link.yml).
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history so the scope diff below can reach the PR's merge
+          # base. A shallow clone wouldn't have it reachable.
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: List changed files
+        # Same merge-base pattern as verify.yml's `detect` job: diff against
+        # the merge base, not BASE itself, so a PR branch cut from a stale
+        # main doesn't pick up every file main moved past the fork point.
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          MERGE_BASE="$(git merge-base "$BASE" "$HEAD" 2>/dev/null || echo "$BASE")"
+          git diff --name-only "$MERGE_BASE" "$HEAD" > "$RUNNER_TEMP/pr-files.txt"
+          echo "Changed files in this PR:"
+          cat "$RUNNER_TEMP/pr-files.txt"
+
+      - name: Write PR body to a temp file
+        # Same file-passing pattern as pr-issue-link.yml's PR_BODY handling
+        # — the body can't be interpreted as a shell expression this way.
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.txt"
+
+      - name: Validate sidecar acceptance
+        run: node scripts/validate-sidecar-acceptance.mjs "$RUNNER_TEMP/pr-files.txt" "$RUNNER_TEMP/pr-body.txt"
