@@ -530,7 +530,12 @@ setup rather than repeatedly loading and evicting models.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-06 (claude), 62 → 61 — Group A 39 → 38.** Row **A36**
+> **Last change: 2026-09-06 (claude), 61 → 60 — Group A 38 → 37.** Row **A5**
+> (fs-60 XTTS per-language engine eligibility, plan 249) discharged on the box:
+> bullets 1–4 PASS via a real `generation.ts` fallback-gate fix, bullet 5 N/A /
+> superseded. Body row removed; the four external citations to it are annotated
+> in place under "annotate, don't renumber". Previous change: 2026-09-06
+> (claude), 62 → 61 — Group A 39 → 38. Row **A36**
 > (voice reassignment — a rebuilt audition centroid actually scores real audio,
 > #1969/#2700) fully discharged and dropped — **A36 is retired, not reused**
 > (allocate-once, same precedent as A28). The 2026-08-29 on-box run had left
@@ -1897,7 +1902,7 @@ operation on real hardware, and whether the 30 s TTL is tuned for real chapter g
 > gaps. Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
 
-**Run this with A5** — same card, same mixed-cast book, and a mixed Qwen+Coqui
+**Run this with A5** (A5 was discharged 2026-09-06 and removed from the register — co-schedule against its run sheet section rather than a live row) — same card, same mixed-cast book, and a mixed Qwen+Coqui
 render already stages the co-residency this row's first bullet needs.
 
 *Needs:* the 8 GB card only, pinned via `CUDA_VISIBLE_DEVICES=0`, and a mixed-cast
@@ -2040,7 +2045,8 @@ when a real multi-GB `gc.collect()`/`empty_cache()` and a real contended
 Run sheet: [`sidecar-evict-latency-onbox-acceptance.md`](sidecar-evict-latency-onbox-acceptance.md).
 
 - **Run pinned to ONE card** — `CUDA_VISIBLE_DEVICES=0` (runnable alongside
-  A5/A13 in the same session). `SEG_CAPACITY_ADMISSION=1` (the default) and
+  A5/A13 in the same session; A5 is discharged and removed from the register as of
+  2026-09-06, so only A13 is a live row here). `SEG_CAPACITY_ADMISSION=1` (the default) and
   Qwen as the generation engine (also the default).
 - Run a cast-review **voice design** so Qwen VoiceDesign is warm-resident
   (`QWEN_DESIGN_IDLE_TTL` keeps it ~120 s), then start a Qwen **chapter render** —
