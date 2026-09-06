@@ -308,4 +308,33 @@ describe('scoreBook — A36 synthetic-only-pool severity band (register row A36)
     expect(freshRender!.verdict).not.toBe('voice-mismatch');
     expect(freshRender!.severity).not.toBe('severe');
   });
+
+  it('dispersion fallback correction: the corrected fallback (percentile 6/10) flags cosine 0.50 as severe with the review pool', async () => {
+    // Regression test for the corrected dispersion fallback. The reviewer found
+    // that the OLD fallback (percentile 1/5) was wrong-direction: it was LESS
+    // protective than both the raw sigma AND the main percentiles. The fix
+    // changes the fallback to use the same percentiles as the real-anchor path,
+    // which is proven-safe (no regression).
+    // Pool: [0.4369, 0.9607, 0.9734, 0.9836, 0.9914, 0.9967]
+    // This pool is dispersed (std ≈ 0.262 > 0.05), so it triggers the fallback.
+    // With the corrected fallback (percentile 6), pSevere ≈ 0.5940.
+    // Cosine 0.50 < 0.5940 → severe (correct).
+    auditionSpy.mockResolvedValue({
+      centroid: CENTROID,
+      embeddings: [0.4369, 0.9607, 0.9734, 0.9836, 0.9914, 0.9967].map(vecAtCosine),
+      kind: 'audition' as const,
+      syntheticOnly: true,
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'spk-a36-dispersed-corrected-'));
+    await writeThuridBook(dir, 0.50);
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    const freshRender = verdicts!.find((v) => v.sentenceIds[0] === 99);
+    expect(freshRender).toBeDefined();
+    // With the corrected fallback, cosine 0.50 must be severe
+    expect(freshRender!.verdict).toBe('voice-mismatch');
+    expect(freshRender!.severity).toBe('severe');
+  });
 });

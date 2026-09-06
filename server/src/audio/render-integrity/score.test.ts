@@ -77,15 +77,37 @@ describe('syntheticOnlySpread', () => {
 
   it('reproduces the calibrated severe/band edges for the pinned pool', () => {
     // mean=0.9629, population std≈0.017318 → severe = mean-3σ, band = mean-1.5σ
-    const { pSevere, pBand } = syntheticOnlySpread(poolCosines);
+    const { pSevere, pBand, usedSigmaBand } = syntheticOnlySpread(poolCosines);
     expect(pSevere).toBeCloseTo(0.9629 - 3 * 0.017318, 4);
     expect(pBand).toBeCloseTo(0.9629 - 1.5 * 0.017318, 4);
+    expect(usedSigmaBand).toBe(true); // tight pool uses sigma band
   });
 
   it('the plain percentile-of-pool cutoff (old behaviour) DOES flag the same pool\'s edge at/above 0.928 — this is the bug this band replaces', () => {
     const sorted = [...poolCosines].sort((a, b) => a - b);
     const oldPSevere = percentile(sorted, CUTOFFS.severeEdgePctl);
     expect(oldPSevere).toBeGreaterThan(0.928); // old cutoff over-flags the real render
+  });
+
+  it('degenerate pool dispersion fallback: corrected to use the same percentiles as the real-anchor path', () => {
+    // Regression test for the corrected dispersion fallback. Pool with one outlier
+    // at 0.4369 and the rest clustered at 0.9607-0.9967. This pool is dispersed
+    // (std > 0.05) so it falls back to percentile-based band.
+    const degeneratePool = [0.4369, 0.9607, 0.9734, 0.9836, 0.9914, 0.9967];
+    const { pSevere, pBand, usedSigmaBand } = syntheticOnlySpread(degeneratePool);
+
+    // This pool should trigger dispersion detection (std > 0.05)
+    expect(usedSigmaBand).toBe(false); // dispersed pool uses percentile fallback
+
+    // The fallback should use CUTOFFS percentiles (6, 10), not tighter ones
+    const sorted = [...degeneratePool].sort((a, b) => a - b);
+    const expectedPSevere = percentile(sorted, CUTOFFS.severeEdgePctl);
+    const expectedPBand = percentile(sorted, CUTOFFS.bandUpperPctl);
+    expect(pSevere).toBeCloseTo(expectedPSevere, 5);
+    expect(pBand).toBeCloseTo(expectedPBand, 5);
+
+    // Verify: cosine 0.50 should be severe (the reviewer's test case)
+    expect(0.50).toBeLessThan(pSevere);
   });
 });
 

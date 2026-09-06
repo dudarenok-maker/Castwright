@@ -94,17 +94,17 @@ export const SYNTHETIC_ONLY_CUTOFFS = {
  * (observed 0.9629±0.02); on a looser/degenerate pool (e.g., one bad render
  * in a six-render audition), the std dev can grow large enough to produce an
  * unbounded pSevere that makes the severe tier unreachable. This function
- * now detects pool dispersion (std dev relative to mean) and, when high
- * dispersion is detected, falls back to a tighter percentile-based band
- * (using lower percentiles than the real-anchor path) to ensure the severe
- * tier remains reachable even with degenerate outliers. At tight pools the
- * sigma-based computation is used (as originally calibrated); at loose
- * pools the percentile-based fallback with tighter percentiles activates.
+ * detects pool dispersion and, when detected, falls back to the percentile-of-pool
+ * computation the real-anchor path already uses, which is proven safe (no
+ * regression vs the pre-fix baseline). The sigma-band calibration is retained
+ * for tight pools where the tight-cluster assumption holds.
  *
  * @param cosines Cosine-to-centroid values for the pool (any order; not
  *   required to be pre-sorted, unlike `percentile`).
+ * @returns Spread thresholds plus a flag indicating whether the sigma band (tight pool)
+ *   or percentile fallback (loose pool) was used.
  */
-export function syntheticOnlySpread(cosines: number[]): { pSevere: number; pBand: number } {
+export function syntheticOnlySpread(cosines: number[]): { pSevere: number; pBand: number; usedSigmaBand: boolean } {
   const mean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
   const variance = cosines.reduce((s, c) => s + (c - mean) ** 2, 0) / cosines.length;
   const std = Math.sqrt(variance);
@@ -115,19 +115,21 @@ export function syntheticOnlySpread(cosines: number[]): { pSevere: number; pBand
   const sigmaPBand = mean - SYNTHETIC_ONLY_CUTOFFS.bandSigma * std;
 
   // Dispersion detection: the calibration assumes a tight pool (std < ~0.05).
-  // When std is much larger, the pool contains degenerate outliers and the
-  // sigma-based band can collapse. Fall back to tighter percentiles (1st/5th
-  // instead of 6th/10th) to ensure the severe tier stays reachable.
-  const poolRange = sorted[sorted.length - 1] - sorted[0];
-  const isDispersed = std > Math.max(0.05, poolRange * 0.1); // > 5% mean or > 10% of range
+  // When std is much larger (absolute threshold alone), the pool contains
+  // degenerate outliers and the sigma-based band can collapse to unbounded
+  // or negative values. Fall back to the same percentile-of-pool computation
+  // the real-anchor path uses, which is proven safe.
+  const isDispersed = std > 0.05;
 
   if (isDispersed) {
-    // Percentile-of-pool fallback with tighter percentiles for degenerate pools.
-    // Using 1st/5th instead of 6th/10th ensures the severe tier can still flag
-    // genuine mismatches even with outlier renders in the pool.
+    // Percentile-of-pool fallback: use the SAME percentiles as the real-anchor
+    // path (CUTOFFS.severeEdgePctl/bandUpperPctl). This ensures a dispersed
+    // synthetic-only pool behaves identically to the pre-fix baseline (safe,
+    // no regression), while tight pools retain the sigma-band calibration.
     return {
-      pSevere: percentile(sorted, 1), // much tighter than CUTOFFS.severeEdgePctl (6)
-      pBand: percentile(sorted, 5),   // tighter than CUTOFFS.bandUpperPctl (10)
+      pSevere: percentile(sorted, CUTOFFS.severeEdgePctl),
+      pBand: percentile(sorted, CUTOFFS.bandUpperPctl),
+      usedSigmaBand: false,
     };
   }
 
@@ -135,6 +137,7 @@ export function syntheticOnlySpread(cosines: number[]): { pSevere: number; pBand
   return {
     pSevere: sigmaPSevere,
     pBand: sigmaPBand,
+    usedSigmaBand: true,
   };
 }
 

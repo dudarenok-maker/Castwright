@@ -294,15 +294,29 @@ async function resolveCharacterReference(
   // AuditionCentroidResult.syntheticOnly) clusters far tighter than real
   // render-to-render variance, so the normal percentile cutoffs over-flag a
   // correctly-cast voice on fresh text as 'voice-mismatch'/'severe' (srv-36
-  // register row A36). Use the separately-calibrated sigma band instead —
+  // register row A36). For tight synthetic-only pools, use the separately-
+  // calibrated sigma band; for loose/degenerate pools, fall back to the
+  // percentile-of-pool computation the real-anchor path uses (safe, proven).
   // the real (real-anchor) in-book path above never reaches this branch.
-  const { pSevere, pBand } = audition.syntheticOnly
-    ? syntheticOnlySpread(cosines)
-    : { pSevere: percentile(cosines, CUTOFFS.severeEdgePctl), pBand: percentile(cosines, CUTOFFS.bandUpperPctl) };
+  let pSevere: number;
+  let pBand: number;
+  let bandMethod: 'percentile' | 'synthetic-sigma';
+
+  if (audition.syntheticOnly) {
+    const spread = syntheticOnlySpread(cosines);
+    pSevere = spread.pSevere;
+    pBand = spread.pBand;
+    bandMethod = spread.usedSigmaBand ? 'synthetic-sigma' : 'percentile';
+  } else {
+    pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
+    pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
+    bandMethod = 'percentile';
+  }
+
   // A36 fix: tag the band method used (synthetic-sigma for post-fix synthetic-only
-  // pools, percentile for the original logic). Pre-fix rows lack this field entirely,
-  // allowing us to detect and rebuild them with the current band-computation logic.
-  const bandMethod = audition.syntheticOnly ? ('synthetic-sigma' as const) : ('percentile' as const);
+  // pools that matched the tight-pool condition, percentile for the fallback or
+  // non-synthetic cases). Pre-fix rows lack this field entirely, allowing us to
+  // detect and rebuild them with the current band-computation logic.
   return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', bandMethod, auditionVoice: { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned } } };
 }
 
