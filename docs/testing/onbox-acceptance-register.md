@@ -1663,6 +1663,18 @@ chapter with the full gate stack on and confirm **RTF lands near ~1.2**, down fr
 *Never claimed done even at merge:* PR #1072's own body says "On-box RTF acceptance
 (~1.2 target) to be confirmed on the next clean multi-chapter render."
 
+> **2026-09-06 — on-box run, PARTIAL.** Regenerated a QA-flagging chapter (CH 3,
+> "The Knock", 51 lines, 5 speakers) with the full gate stack on
+> (`qa.asr.enabled` turned on live, `qa.asr.maxRerecords=2`, `qa.seg.maxRerecords=2`
+> default). The re-record loop genuinely engaged (batched re-record rounds at
+> RTF 0.87/0.88/1.24 — matching the ~1.2 target and confirming the plan's own
+> batching fix works; two unbatched single-line stragglers at RTF 16.38/21.23,
+> as the plan's own writeup predicts for that residual case). The app's own
+> reported per-chapter RTF was **4.13**, not ~1.2, because CPU-bound ASR-QA
+> (`qa.asr.device=cpu`, the shipped default) added ~7 minutes of serial
+> transcription on top of the synthesis phase — a cost outside plan 228's own
+> scope. Evidence: `docs/testing/onbox-mechanical-batch1-results/step-3-a8-a9-a10.md`.
+
 ### A9 · Per-character re-record / splice (plan 176)
 
 "Manual (owed — live GPU + sidecar)" (`:50,55,59`). Still `status: active` as of a
@@ -1673,12 +1685,51 @@ chapters: verify louder, duration unchanged, `.previous.*` written, A/B works,
 chapter stays ≈ −16 LUFS. Then **re-record one chapter's lines** and verify timing
 integrity — no seam, no doubled title. *Merged* 2026-06-03, PR #500.
 
+> **2026-09-06 — on-box run, PARTIAL.** Loudness (+3 dB, Master Oduvan, CH 3):
+> `.previous.mp3`/`.previous.segments.json` written; his own lines measured
+> (concatenated segments, `ffmpeg loudnorm`) at **-16.03 → -14.40 LUFS**, a real
+> +1.63 dB increase (short of the nominal +3 dB, most likely limited by the
+> whole-chapter loudnorm remaster holding true-peak near its -1.5 dBTP ceiling);
+> duration unchanged (195.640s → 195.650s); chapter-wide loudness confirmed
+> pinned to exactly **-16 LUFS** via the app's own `lufs.json`. Re-record (same
+> character, same chapter, all 19 lines): timing integrity confirmed clean —
+> every segment boundary in the new `segments.json` is contiguous with the
+> next (one intentional 1.5s post-title pause aside), no seam, no doubled
+> content, downstream lines correctly re-flowed after the chapter's total
+> duration shifted 195.65s → 200.79s. **A/B toggle — FAIL**: the Fix-audio
+> dialog's own copy promises review "in the revisions panel," but the Status
+> pill's Revisions list read "No pending revisions" and `revisions.json` stayed
+> empty after both actions — the drift-detection-based Revisions panel this
+> copy points at is a different mechanism that never got populated by either
+> action. Evidence: `docs/testing/onbox-mechanical-batch1-results/step-3-a8-a9-a10.md`.
+
 ### A10 · Structured failure taxonomy (plan 173, fs-19)
 
 "Live multi-failure acceptance owed" (`:9,45`). Force **≥2 distinct real failure
 modes** — stop the sidecar mid-run (`sidecar-unreachable`), oversubscribe VRAM
 (`vram-spill`) — and confirm the friendly message plus remediation line on both
 the row and the toast. *Shipped* 2026-06-03 (`affa489`, closes #469).
+
+> **2026-09-06 — on-box run, PARTIAL (1 of 2 modes).** Repeatedly killed the
+> sidecar mid-chapter (`POST /api/sidecar/restart` × 6 while CH 4 — 159 lines —
+> was actively synthesising) to outrun the in-loop recovery budget. A single
+> kill rides out cleanly (chapter row: "Recovering — restarting voice engine…",
+> resumes normally — the same graceful behaviour step 2's A6 confirmed
+> elsewhere). After the 2nd in-loop recovery was also exhausted, the run failed
+> loud and correctly: server log shows `RECYCLE STORM: sidecar recycled 2× on
+> one chapter` / `forced recycle: chapter 4 hit a recycle storm (2 in-loop
+> recoveries exhausted)`; the chapter row showed "Synthesis failed" with the
+> friendly message + a "What to do:" remediation line + a
+> `#/help?code=recycle-storm` link, and the identical message persisted in the
+> Activity log. This is the `recycle-storm` `FailureCode`, not literally
+> `sidecar-unreachable` — the more specific class this codebase actually gives
+> to repeated mid-chapter unreachability — confirmed as a real, distinct,
+> correctly-classified failure. `vram-spill` was deliberately not attempted:
+> forcing a real CUDA OOM means defeating `capacity-retry.ts`'s own safety
+> queueing on a GPU this session doesn't have exclusive claim to, on a box
+> other lanes may be using. Net: 1 of the row's 2 named modes forced and fully
+> evidenced; the bar is not met. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/step-3-a8-a9-a10.md`.
 
 ### A11 · A/B "current vs proposed" voice audition (plan 161)
 
