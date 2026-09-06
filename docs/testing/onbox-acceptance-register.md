@@ -1604,32 +1604,30 @@ on item 1 — it consumes the `tripEvent()` item 1 exercises.
 
 ### A4 · Audition engine + tier fidelity ([#1849](https://github.com/dudarenok-maker/Castwright/pull/1849))
 
-Verified by tests and CI; never listened to.
+Verified by tests and CI; never listened to except where noted below.
 
-- A character overridden to **Kokoro** in a **Coqui** book previews in Kokoro.
-- A preview on a book set to **1.7B** renders at 1.7B, not 0.6B.
-- Design a voice in **My voices**, then Play — first play is instant, no second
-  synthesis (the design/play cache pairing that was made real; the two sides
-  previously hashed different filenames).
 - Force a capacity failure with **Coqui resident** — the error names Coqui and
   where its Stop button is, not just "free VRAM".
 
-*Needs:* Kokoro, Coqui and both Qwen tiers, plus enough VRAM pressure for a real
-capacity refusal. *Cost:* short.
+*Needs:* Coqui resident plus enough VRAM pressure for a real capacity refusal.
+*Cost:* short.
 
-### A5 · fs-60 XTTS per-language engine eligibility (plan 249)
-
-Plan header: "**Live-GPU acceptance owed** (mock-mode e2e only)… This plan's
-status stays `active`, not `stable`, until that walkthrough runs" (`:9,51`).
-
-Five steps (`:53-66`): an undesigned character on a Russian book shows the
-Coqui-fallback banner (not a hard block) · the engine picker offers Coqui · the
-voice-readiness gate offers "Proceed anyway" · a **real render** shows a
-"Fallback (Coqui)" pill · the same on a still-unsupported language (Chinese)
-keeps the old hard block.
-
-*Needs:* real sidecar, 8 GB-class GPU, a Russian book with an undesigned
-character, and enough VRAM pressure to exercise Qwen/Coqui evict-and-reload.
+> **2026-09-06 — on-box run, bullets 1–3 discharged.** Exercised via the
+> per-character "Voice engine for this character" override rather than a
+> whole Coqui-default book (same override plumbing; the book's own default
+> engine is orthogonal to whether the override dispatches correctly). A
+> **Kokoro** override in a Coqui-default book synthesised tagged
+> `engine=kokoro`, not a silent Coqui fall-through (server log). A preview on
+> the book's default **1.7B** tier rendered a file whose own model-key
+> segment reads `qwen3-tts-1.7b`, not `0.6b` — the tier actually used, not a
+> UI label. Designing then playing a new My Voices entry reused the exact
+> same audio filename on both the design step and the saved-voice Preview —
+> no second `/synthesize` call. **Bullet 4 (capacity failure with Coqui
+> resident) not attempted** — this box's free VRAM (7.4–15.9 GB across both
+> cards, shared with other live lanes) never got low enough to force a
+> genuine refusal without risking an OOM on a card another lane might be
+> using; still owed. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/step-1-a4-a14.md`.
 
 ### A6 · Bulk voice-design recycle resilience (plan 200)
 
@@ -1644,21 +1642,67 @@ respawn rather than stalling.
 *Note:* the flow gets exercised informally (bugs #1156, #1532, #1557, #1570 were
 all found through real use) — but never this specific forced-recycle walkthrough.
 
+> **2026-09-06 — on-box run, PARTIAL.** The row's own forced-recycle ask is a
+> clean **PASS**, confirmed twice: `POST /api/sidecar/restart` issued mid-run
+> against a live "Design full cast" job (12-character cast) rode out cleanly
+> both times the job happened to be mid-character when interference landed —
+> the job's status held `"active": true, "state": "running"` throughout the
+> ~45 s the sidecar was down, the in-app pill never left "Designing…"/
+> "Cancel design · N/12", and the in-flight character finished and cached
+> once the sidecar answered again, with no manual intervention. "Design full
+> cast … completes end to end" is a **FAIL** on this book, for an unrelated
+> reason: the job halts (`castDesignActions.halt`, no error toast) after
+> exactly 2 of 12 characters, reproduced twice — once with unrelated
+> interference in flight, once as a clean, isolated control with nothing else
+> touching the sidecar. A same-day follow-up (step 3) found a plausible but
+> unconfirmed explanation: this worktree's `server/.env` has no
+> `GEMINI_API_KEY`, and switching `analyzer.personaGeneration.engine` to
+> `local` let the same 10 remaining characters design successfully in one run
+> on the same book. Not proven byte-for-byte against the original halt's
+> environment. Filed as
+> [#3027](https://github.com/dudarenok-maker/Castwright/issues/3027). Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/step-2-a6-a7.md`.
+
 ### A7 · Design full cast — bulk Qwen voice design (plan 195)
 
 Shipped 2026-06-07 (`7f0d5f4b`, PR #637); PR #638 filled the Ship-notes SHA but
 left the acceptance bullet open (`:78-82`).
 
-Pill survives navigation and a reload mid-run (resumes) · terminal summary counts
-are right · series propagation reaches a sibling book · VRAM headroom holds across
-a long run — **the exact combination that caused the plan-108 OOM** · a 2nd-tab
-single design serialises correctly against a bulk run.
+- Terminal summary counts (designed/failed/skipped) are correct.
+- Series propagation reaches a sibling book.
+- A 2nd-tab single design serialises correctly against a bulk run.
+
+*Needs:* a bulk "Design full cast" run that reaches a genuine terminal state
+(not the A6 halt above) on a multi-book series with a shared, undesigned
+character. *Blocked on the same halt as A6* — [#3027](https://github.com/dudarenok-maker/Castwright/issues/3027).
+
+> **2026-09-06 — on-box run, PARTIAL (2 of 5 bullets discharged).** Pill
+> survives navigation and a reload mid-run: **PASS** — hard-reloaded
+> (`location.reload()`, a genuine full page load) mid-Master-Oduvan and the
+> client re-subscribed to the live server-side job with no blank/error state.
+> VRAM headroom across the run: **PASS as far as it went** — `committed_mb`
+> 8.4–18.8 GB against a 47.58 GB ceiling, no monotonic growth, `vram_reserved_mb`
+> never exceeding ~5.8 GB with both VoiceDesign and Base resident, matching
+> the row's own known-good shape — but only 2 characters' worth of data
+> (short of the full 12-character run plan-108's OOM needed). Terminal
+> summary counts, series propagation, and the 2nd-tab serialization bullet
+> were **not reached** — the halt above (A6) capped both runs at 2/12, before
+> the queue ever reached the 3rd character (bullet 2) or the series-shared
+> characters at positions 4 and 12 (bullet 3). The 2nd-tab harness (bullet 5)
+> is real and left in place: a genuinely concurrent single "Design & preview"
+> request against a sibling book's character, sent while the bulk job owned
+> the GPU, showed the expected GPU-fairness serialization (`inflight_synth`
+> never exceeded 1) but itself never resolved — no error, no toast, spinning
+> indefinitely — a second instance of the same silent-failure class as A6's
+> halt. Filed as [#3027](https://github.com/dudarenok-maker/Castwright/issues/3027).
+> Evidence: `docs/testing/onbox-mechanical-batch1-results/step-2-a6-a7.md`.
 
 ### A8 · Batch the QA re-record loops (plan 228)
 
-"Acceptance (manual, on-box) — **OWED**" (`:95-100`). Regenerate a QA-flagging Qwen
-chapter with the full gate stack on and confirm **RTF lands near ~1.2**, down from
-~1.9.
+Regenerate a QA-flagging Qwen chapter with `qa.asr.device=cuda` and confirm the
+app's own per-chapter RTF lands near ~1.2, down from ~1.9 — isolating whether
+CPU-bound ASR-QA (not part of plan 228's own fix) is the whole gap between the
+measured 4.13 (below) and the ~1.2 target.
 
 *Never claimed done even at merge:* PR #1072's own body says "On-box RTF acceptance
 (~1.2 target) to be confirmed on the next clean multi-chapter render."
@@ -1677,13 +1721,10 @@ chapter with the full gate stack on and confirm **RTF lands near ~1.2**, down fr
 
 ### A9 · Per-character re-record / splice (plan 176)
 
-"Manual (owed — live GPU + sidecar)" (`:50,55,59`). Still `status: active` as of a
-2026-07-24 correction commit that says "Still owed: live-GPU re-record acceptance."
-
-Rendered book → a character's profile → Fix audio → **+3 dB gain** across all
-chapters: verify louder, duration unchanged, `.previous.*` written, A/B works,
-chapter stays ≈ −16 LUFS. Then **re-record one chapter's lines** and verify timing
-integrity — no seam, no doubled title. *Merged* 2026-06-03, PR #500.
+Rendered book → a character's profile → Fix audio → **+3 dB gain** — confirm the
+promised A/B audition actually populates the Revisions panel (currently wired to
+a different, drift-detection-only mechanism; see below). *Merged* 2026-06-03,
+PR #500.
 
 > **2026-09-06 — on-box run, PARTIAL.** Loudness (+3 dB, Master Oduvan, CH 3):
 > `.previous.mp3`/`.previous.segments.json` written; his own lines measured
@@ -1730,6 +1771,22 @@ the row and the toast. *Shipped* 2026-06-03 (`affa489`, closes #469).
 > other lanes may be using. Net: 1 of the row's 2 named modes forced and fully
 > evidenced; the bar is not met. Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-3-a8-a9-a10.md`.
+>
+> **2026-09-06 — a second mode, forced organically, not deliberately (step 4).**
+> A17's forced contended-eviction race pushed this 8 GB card into a genuine
+> `errorCode: "vram-spill"` failure (*"The GPU ran out of video memory (VRAM)
+> mid-render — too many models were resident at once."*) when Qwen 1.7B and
+> Coqui XTTS ended up resident together. The sidecar itself recovered cleanly
+> afterward (not poisoned, no crash loop once idle). This is a second real,
+> distinct failure mode with a genuine `errorCode` and message — but unlike
+> `recycle-storm` above, this session did not independently re-confirm
+> `vram-spill`'s own chapter-row / Activity-log / remediation-link surfacing
+> the same way it did for the first mode, so the row's full bar (friendly
+> message *and* remediation confirmed on both surfaces, for **two** modes) is
+> still not fully closed — the remaining gap narrowed to that one surfacing
+> check. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`
+> (row A17).
 
 ### A11 · A/B "current vs proposed" voice audition (plan 161)
 
@@ -1818,6 +1875,28 @@ operation on real hardware, and whether the 30 s TTL is tuned for real chapter g
 > itself triggered, but not fully ruled out either since the two events landed this close
 > together. Bullets 2–3 (idle-Coqui admission timing, evict→reload cadence) are still owed.
 
+> **2026-09-06 — on-box run, bullet 2 FAIL (confounded), bullet 3 still not
+> independently exercised (step 4).** Loaded Coqui idle-resident, then started
+> a Qwen-only re-render sized to force exactly the "wouldn't otherwise fit"
+> scenario. The sidecar logged an admission attempt with no blockers, then the
+> child process crashed and the render hit a RECYCLE STORM (2 in-loop
+> recoveries exhausted) — the same taxonomy A10 forces deliberately. The
+> specific log line the row asks for, `Coqui model unloaded.`, did **not**
+> appear in either `tts.log` or `tts.err.log` for this attempt. **Confounded**:
+> this attempt ran after this box's shared `cuda:0` baseline had already
+> risen from 1344 MiB (session start) to ~4500 MiB (four sibling-lane
+> contexts, up from three) — comfortably under Qwen 1.7B's 6144 MB need even
+> with Coqui's ~1–2 GB reclaimed, so this may be a genuine idle-reclaim
+> regression or simply insufficient total headroom regardless of the lever;
+> cannot disambiguate from available logs. Bullet 3 (evict→reload cadence
+> across chapter boundaries): the mixed Qwen+Coqui render this session
+> produced for A5 confirms the two engines can co-render within one request,
+> but that book has only 1 chapter, so there is no chapter boundary to
+> observe a repeating cadence across — needs a genuinely multi-chapter
+> mixed-cast book. Both still owed, same framing wave 6 used for the same
+> gaps. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
+
 **Run this with A5** — same card, same mixed-cast book, and a mixed Qwen+Coqui
 render already stages the co-residency this row's first bullet needs.
 
@@ -1841,6 +1920,19 @@ than a single committed clip.
 
 *Needs:* a working TTS engine + a real book. *Criteria:* plan 274 §6 row 1.
 *Cost:* short (rides along with any other real-book render session).
+
+> **2026-09-06 — on-box run, BLOCKED, not attempted-and-failed.** Could not
+> reach a completed chapter to compare badges on: "Generate this chapter"
+> marked the chapter "In progress"/"Stalled" at 0/N lines with zero `[tts]`
+> activity and the sidecar's own `/health` never showing `inflight_synth`,
+> reproduced across a full clean server restart. A follow-up session (step 3)
+> found a plausible, reproducible alternate cause for the identical symptom —
+> stale, never-answered `awaiting_confirm` queue entries blocking the FIFO
+> queue — filed as
+> [#3026](https://github.com/dudarenok-maker/Castwright/issues/3026); this
+> row is blocked on that queue behaviour, not on anything specific to plan
+> 274's own hoist. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/step-1-a4-a14.md`.
 
 ### A15 · Measurement-failure path renders as untrusted, not as a fabricated reading (plan [274](../features/archive/274-loudness-measurement-provenance.md))
 
@@ -1988,6 +2080,35 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 > actually warm via bullet 2 before the second admission fires) and a clean
 > low-overhead re-measurement of the `/health` gap.
 
+> **2026-09-06 — on-box run, MIXED, low-overhead re-measurement is worse, not
+> better (step 4).** Re-ran with the low-overhead instrument wave 6 asked for
+> (`health_poller.py`, a persistent `HTTPSConnection` reused across all 692
+> requests, not a fresh `curl` subprocess per iteration) and warmed Qwen
+> VoiceDesign for real first — but by the time the second admission actually
+> fired, `qwenDesignResident` had already reverted to `false` (its idle
+> window elapsed), so the exact #1919 race (VoiceDesign warm **and** a Base
+> forward in flight **and** a concurrent second admission, all three at once)
+> was still not hit byte-for-byte; what this run hit instead is arguably the
+> harder case — a live Qwen 1.7B Base forward actively synthesising, evicted
+> against by a concurrent Coqui admission. **Bullet 4 (admission succeeds):
+> PASS** — `{"status":"ready"}`, the evict genuinely freed capacity. **`/health`
+> never fully hung: 0 errors across 692 polls.** But the metric that actually
+> reflects blocking — **max single-request latency, 2092.92 ms** — is *worse*
+> than wave 6's own already-over-target 987 ms, and far above the ~500 ms
+> target, even with the lower-overhead instrument wave 6 suspected would show
+> a cleaner number. The render **itself then failed** with a genuine
+> `errorCode: "vram-spill"` — both Qwen 1.7B and Coqui XTTS resident together
+> genuinely exceeded this 8 GB card's ceiling (cross-referenced as A10's
+> second failure mode, forced organically here rather than deliberately).
+> Net: the eviction mechanism is not a silent no-op, but actually forcing this
+> race on this box neither clears the ~500 ms budget nor stays inside the
+> card's VRAM ceiling — real, useful, still-negative evidence about current
+> headroom on an 8 GB card with two heavy engines. **Still owed:** a run where
+> the second admission fires while `qwenDesignResident` is still `true`, on a
+> box (or a smaller model pairing) with enough headroom that the race doesn't
+> also OOM the card. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
+
 ### A18 · Cloned-voice derive on Coqui no longer needs torchcodec ([#1967](https://github.com/dudarenok-maker/Castwright/issues/1967)) · **single 8 GB card + a real static-FFmpeg box; item 4 needs a Pinokio install**
 
 **The hot patch was reverted on 2026-07-31 and the dev box is now a genuine static-FFmpeg box again** — `ffmpeg 8.1.1-full_build-www.gyan.dev` on PATH, and the 25 copied FFmpeg DLLs removed from `site-packages/torchcodec/`. Note the revert is *not* "delete every non-hash-suffixed `*.dll`" as first written: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's **own** extensions, have no hash-suffixed twin, and must stay. The copied set is exactly those non-hash-suffixed files that *do* have a hash-suffixed twin. With #1967 merged the hot patch is no longer needed to unblock A1's Section E.
@@ -2097,6 +2218,24 @@ which already stages a mixed-engine render on this same card.
 > failed/aborted render, an ASR-QA re-record cycle) this round didn't hit. **Still owed:**
 > reproduce a genuinely stranded pool first (try forcing a chapter failure or recycle
 > mid-render, not just an ordinary completion), then run bullets 2–3 against it.
+
+> **2026-09-06 — a third negative result, this time after a genuine crash, not
+> a clean completion (step 4).** Immediately after A17's forced `vram-spill`
+> crash, `/health` showed `vram_reserved_mb: 3852.47` — strikingly close to
+> #1976's own ~3.9 GB shape, and initially looked like the reproduction wave 6
+> asked for. **It was not**: explicitly unloading both engines
+> (`POST /api/sidecar/unload` for coqui, then qwen) dropped `vram_reserved_mb`
+> cleanly to **132.12 MB** with `resident: []` — the 3.85 GB was legitimate
+> in-use reservation for two co-resident heavy engines, not a pool that
+> survives an explicit unload. So even a genuine mid-render OOM crash on this
+> box reclaims cleanly once asked to — a third data point (after wave 6's 0 MB
+> and 243.3 MB clean-completion measurements) all pointing the same direction:
+> this box's ordinary, and now also crash, paths do not organically strand
+> VRAM the way #1976's original report did. Bullets 2–3 still not exercised —
+> still need a genuinely stranded pool to test against; a `/recycle` mid-render
+> specifically (not an ordinary completion or an unforced crash, both tried
+> now, both clean) is the next thing to try. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
 
 ---
 
