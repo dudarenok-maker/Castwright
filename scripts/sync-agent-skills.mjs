@@ -151,9 +151,10 @@ function assertNoBom(buf, path) {
  *  syncAgentSkills (git-sourced): both must run the exact same checks so
  *  neither path can diverge from the other. `sourceLabel` names the
  *  CANONICAL SOURCE in error messages (a disk path for syncOneFile, a
- *  `main:<path>` git ref for syncAgentSkills) — deliberately not `destPath`,
- *  since the defect being reported is always in the source, never the
- *  (not-yet-written) mirror. */
+ *  resolved `<sha>:<path>` git ref for syncAgentSkills — never the literal
+ *  ref name `main`, since that's exactly the ambiguity resolveMainSha exists
+ *  to remove) — deliberately not `destPath`, since the defect being reported
+ *  is always in the source, never the (not-yet-written) mirror. */
 function writeMirroredFile(rawBuffer, destPath, rel, sourceLabel) {
   assertNoBom(rawBuffer, sourceLabel);
   const canonicalContent = rawBuffer.toString('utf8');
@@ -236,6 +237,15 @@ export function resolveMainSha(repoRoot = REPO_ROOT) {
  *  exists to catch. `git show` reads a worktree's shared `.git`, so this
  *  resolves correctly regardless of which branch this checkout has out. */
 export function readCommittedOnMain(rel, mainSha, repoRoot = REPO_ROOT) {
+  // A missing/falsy mainSha (e.g. a caller built before resolveMainSha
+  // existed, or one that forgot to call it) would otherwise build
+  // `git show undefined:<path>` — git fails that exactly like a real missing
+  // path, which the catch below folds into `null`, i.e. exactly the "not on
+  // main yet" outcome for EVERY file that #3001 exists to prevent. Fail
+  // loud here instead of silently reproducing that bug one call deeper.
+  if (!mainSha) {
+    throw new Error(`sync-agent-skills: readCommittedOnMain('${rel}') called with no resolved main SHA — call resolveMainSha first`);
+  }
   const gitPath = `.claude/skills/${rel}`;
   try {
     return execFileSync('git', ['show', `${mainSha}:${gitPath}`], {

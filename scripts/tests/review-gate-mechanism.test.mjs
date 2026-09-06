@@ -669,6 +669,69 @@ test('resolveMainSha resolves a local main branch, falls back to origin/main on 
   }
 });
 
+test('readCommittedOnMain (and syncAgentSkills end to end) reads main, never whatever branch happens to be checked out on disk', () => {
+  // #3001 round 3: closes a residual pinning gap the earlier fixtures left.
+  // Both of them happened to have HEAD pointing at the exact same commit as
+  // resolved 'main' (a fresh clone right after checkout, or a repo with no
+  // 'main' at all) — so mutating the production git-show argument from the
+  // resolved `${mainSha}:` back to the literal `HEAD:` (reintroducing
+  // #3001's actual bug: reading whatever is checked out, not main) left
+  // every existing test green. This fixture puts HEAD on a DIFFERENT commit
+  // than 'main': a feature branch with its own committed-but-unmerged edit
+  // to a mirrored skill file — exactly the #3001 shape (PR #2999's unmerged
+  // SKILL.md edit sat on a branch whose HEAD was never 'main').
+  const gitOpts = (cwd) => ({ cwd, env: scrubGitEnvForThrowawayRepo(), windowsHide: true, encoding: 'utf8' });
+  const tmp = mkdtempSync(join(tmpdir(), 'read-committed-on-main-'));
+  try {
+    const repo = join(tmp, 'repo');
+    mkdirSync(repo);
+    execFileSync('git', ['init', '-b', 'main'], gitOpts(repo));
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], gitOpts(repo));
+    execFileSync('git', ['config', 'user.name', 'Test'], gitOpts(repo));
+    mkdirSync(join(repo, '.claude', 'skills', 'fake-skill'), { recursive: true });
+    writeFileSync(join(repo, '.claude', 'skills', 'fake-skill', 'SKILL.md'), '---\nname: fake-skill\n---\non main\n');
+    execFileSync('git', ['add', '.'], gitOpts(repo));
+    execFileSync('git', ['commit', '-m', 'main commit'], gitOpts(repo));
+    const mainSha = execFileSync('git', ['rev-parse', 'main'], gitOpts(repo)).trim();
+
+    // Branch off, edit the mirrored file, commit — 'main' never sees this.
+    execFileSync('git', ['checkout', '-b', 'feature'], gitOpts(repo));
+    writeFileSync(
+      join(repo, '.claude', 'skills', 'fake-skill', 'SKILL.md'),
+      '---\nname: fake-skill\n---\nunmerged feature edit\n',
+    );
+    execFileSync('git', ['add', '.'], gitOpts(repo));
+    execFileSync('git', ['commit', '-m', 'unmerged feature edit'], gitOpts(repo));
+
+    // HEAD is now on 'feature', with content 'main' has never had. 'main'
+    // itself is untouched — resolving it must not be affected by HEAD at all.
+    assert.equal(resolveMainSha(repo), mainSha, "resolveMainSha must resolve the 'main' ref, not HEAD");
+
+    const raw = readCommittedOnMain('fake-skill/SKILL.md', mainSha, repo);
+    assert.ok(raw !== null, 'the file exists on main and must be found');
+    assert.match(raw.toString('utf8'), /on main/);
+    assert.doesNotMatch(
+      raw.toString('utf8'),
+      /unmerged feature edit/,
+      "readCommittedOnMain read the checked-out branch's disk/HEAD content instead of main's",
+    );
+
+    // And through the real production entry point, end to end.
+    const tmpMirror = join(tmp, 'mirror');
+    const result = syncAgentSkills(['fake-skill/SKILL.md'], tmpMirror, repo);
+    assert.deepEqual(result.skipped, []);
+    const written = readFileSync(join(tmpMirror, 'fake-skill', 'SKILL.md'), 'utf8');
+    assert.match(written, /on main/);
+    assert.doesNotMatch(
+      written,
+      /unmerged feature edit/,
+      "syncAgentSkills wrote the unmerged feature-branch content instead of main's",
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('the agent-store mirror matches what main has committed, when it exists', () => {
   // FAILS OPEN BY CONSTRUCTION, and that is not an oversight. The target is
   // in $HOME: absent on a fresh clone and in CI. Making this a hard failure

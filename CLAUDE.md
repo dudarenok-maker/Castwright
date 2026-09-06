@@ -480,11 +480,16 @@ Design rationale:
   diverge), so it only **skips**, loudly, on a machine with no store at all —
   once the store exists (e.g. any box where Cline has installed its global
   skills), the guard **fails** rather than skips if the mirror doesn't match
-  `main`, even if `skills:sync` has never been run on that machine. If this
-  guard fires, run `npm run skills:sync` after confirming this machine's
-  local `main` is up to date with `origin/main` — a stale local `main` is the
-  one way this can still go wrong, since the sync reads whatever `main` this
-  machine's git has, not `origin/main` directly.
+  `main`, even if `skills:sync` has never been run on that machine. The sync
+  resolves `main` once per run — a local `main` branch if one exists, else
+  falling back to `origin/main` (the shape a CI checkout of a pull request
+  leaves, with no local `main` branch at all) — and throws loudly if neither
+  resolves, rather than silently syncing nothing. If this guard fires, run
+  `npm run skills:sync` after confirming whichever of those two this
+  machine's git actually has is up to date; a stale local `main` (with a
+  fresher `origin/main` sitting unused) is the one way this can still go
+  wrong, since a local `main` branch is always preferred over `origin/main`
+  when both exist.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
   is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not
