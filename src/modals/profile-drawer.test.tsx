@@ -2318,6 +2318,41 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
     );
   });
 
+  /* #1998 — sibling of the #1953 case above: a CLONED voice's source clip
+     was recorded in a language different from the book's. The server flags
+     this as the SAME non-fatal `warning` field (identity loss, not
+     intelligibility loss, is the framing difference), and the drawer must
+     surface it through the SAME affordance — no separate cloned-only warning
+     UI. */
+  it('#1998 surfaces the server\'s cloned-voice language-mismatch warning after a successful assign', async () => {
+    assignLibraryVoice.mockResolvedValue({
+      updated: 1,
+      written: ['qwen'],
+      warning:
+        '"Ada"\'s voice was cloned in Russian but this book is English — the audio will be unintelligible. Re-clone the voice in English to fix it.',
+    });
+    const clonedEntry: VoiceLibraryEntry = {
+      voiceUuid: 'lib-clone-lang',
+      name: 'Ada (cloned)',
+      provenance: 'cloned',
+      tags: [],
+      pinned: false,
+      engines: { qwen: { status: 'ready' } },
+      createdAt: '2026-07-01T09:00:00.000Z',
+      updatedAt: '2026-07-01T09:00:00.000Z',
+    };
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: [clonedEntry] },
+    );
+
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-lib-clone-lang'));
+
+    expect(await screen.findByTestId('profile-drawer-my-voices-error')).toHaveTextContent(
+      'cloned in Russian but this book is English',
+    );
+  });
+
   /* GATE 1, owner-decided [DELTA-I5] — the explicit "Remove voice" control.
      Nothing else in the app can take a library voice back off a character:
      `PUT /api/voices/:id/override` refuses a clear when a cloned slot is
