@@ -1,0 +1,2703 @@
+{
+  "bookId": "castwright__standalones__der-auftrag-von-coalfall",
+  "chapterId": 2,
+  "chapterTitle": "Kapitel Eins — Das Klopfen",
+  "durationSec": 416.176,
+  "sampleRate": 24000,
+  "modelKey": "qwen3-tts-0.6b",
+  "synthesizedAt": "2026-09-06T22:28:16.881Z",
+  "castHistorySeq": 0,
+  "segments": [
+    {
+      "groupIndex": -1,
+      "characterId": "narrator",
+      "sentenceIds": [],
+      "startSec": 1.5,
+      "endSec": 6.044666666666667,
+      "kind": "title",
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara"
+    },
+    {
+      "groupIndex": 0,
+      "characterId": "narrator",
+      "sentenceIds": [
+        1
+      ],
+      "textHash": "3t9wdf",
+      "startSec": 7.544666666666667,
+      "endSec": 16.686666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12520793107009948,
+        "longestSilenceSec": 0.5680833333333334,
+        "durationSec": 9.142,
+        "expectedSec": 11.214285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Die Schmiede hatte die Farbe eines gedämpften Sonnenuntergangs angenommen und Ren kratzte die letzten Schlackenreste ab, als das Klopfen an der Tür begann.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 1,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        2
+      ],
+      "textHash": "wu9s28",
+      "startSec": 16.686666666666667,
+      "endSec": 18.308666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10508812118335174,
+        "longestSilenceSec": 0.6160833333333333,
+        "durationSec": 1.622,
+        "expectedSec": 0.6428571428571429
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "lasse es el.",
+        "reasons": [
+          "Not scored — sentence under the 12-char ASR floor."
+        ]
+      }
+    },
+    {
+      "groupIndex": 2,
+      "characterId": "narrator",
+      "sentenceIds": [
+        3
+      ],
+      "textHash": "c4e7pb",
+      "startSec": 18.308666666666667,
+      "endSec": 22.202666666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11408020055745138,
+        "longestSilenceSec": 0.5779583333333334,
+        "durationSec": 6.443333333333333,
+        "expectedSec": 2.7142857142857144
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "sagte Meister Odovan, ohne aufzusehen.",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 3,
+      "characterId": "narrator",
+      "sentenceIds": [
+        4
+      ],
+      "textHash": "3qdl08",
+      "startSec": 22.202666666666666,
+      "endSec": 28.006,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11957122137432624,
+        "longestSilenceSec": 0.5707083333333334,
+        "durationSec": 5.803333333333334,
+        "expectedSec": 4.857142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.1,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "70 Winter hatten seine Stimme zu Kies und Geduld abgeschleffenen.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 4,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        5
+      ],
+      "textHash": "olmjdu",
+      "startSec": 28.006,
+      "endSec": 33.340666666666664,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12894539576400554,
+        "longestSilenceSec": 0.5925,
+        "durationSec": 5.334666666666666,
+        "expectedSec": 3
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.14285714285714285,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Wer immer es ist, der mag weiter klopfen. Nische!",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 5,
+      "characterId": "wren",
+      "sentenceIds": [
+        6
+      ],
+      "textHash": "70tfxf",
+      "startSec": 33.340666666666664,
+      "endSec": 41.44866666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Alison Dietlinde",
+      "baseVoiceName": "Alison Dietlinde",
+      "qa": {
+        "status": "suspect",
+        "reasons": [
+          "Suspiciously long — 8.1s rendered vs ~1.9s expected (possible runaway synthesis)."
+        ],
+        "rms": 0.1222609296768808,
+        "longestSilenceSec": 0.5884166666666667,
+        "durationSec": 8.108,
+        "expectedSec": 1.9285714285714286
+      },
+      "suspect": true,
+      "qaRetries": 2,
+      "asr": {
+        "verdict": "drift",
+        "wer": 1.6,
+        "sub": 0,
+        "del": 0,
+        "ins": 8,
+        "longestDeletionRun": 0,
+        "transcript": "Es könnte ein Kunde sein. Now, on this to day, Nando geco. Nidhi.",
+        "reasons": [
+          "Content drift — word-error-rate 1.60 exceeds 0.4 (0 sub, 0 del, 8 ins vs 5 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 6,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        7
+      ],
+      "textHash": "uj8y1x",
+      "startSec": 41.44866666666667,
+      "endSec": 48.77733333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13310592160935728,
+        "longestSilenceSec": 0.59225,
+        "durationSec": 7.328666666666667,
+        "expectedSec": 4.714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.18181818181818182,
+        "sub": 2,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Um diese Stunde ist es entweder ein betonkener oder eine Schulzpunkte.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 7,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        8
+      ],
+      "textHash": "eaw1f",
+      "startSec": 48.77733333333333,
+      "endSec": 56.096,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1382512005770497,
+        "longestSilenceSec": 0.6290416666666667,
+        "durationSec": 7.318666666666667,
+        "expectedSec": 5.142857142857143
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2727272727272727,
+        "sub": 0,
+        "del": 0,
+        "ins": 3,
+        "longestDeletionRun": 0,
+        "transcript": "Keiner von beiden zahlt besser dafür, dass man ihn schnell hereinlässt. Nein. Ja, ne...",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 8,
+      "characterId": "narrator",
+      "sentenceIds": [
+        9
+      ],
+      "textHash": "xlsbc1",
+      "startSec": 56.096,
+      "endSec": 59.20066666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1164985091633783,
+        "longestSilenceSec": 0.5537916666666667,
+        "durationSec": 3.1046666666666667,
+        "expectedSec": 1.8571428571428572
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Die Tür ging trotzdem auf.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 9,
+      "characterId": "narrator",
+      "sentenceIds": [
+        10
+      ],
+      "textHash": "aotzbh",
+      "startSec": 59.20066666666666,
+      "endSec": 66.20933333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11229794414849799,
+        "longestSilenceSec": 0.599625,
+        "durationSec": 7.008666666666667,
+        "expectedSec": 4.928571428571429
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.23076923076923078,
+        "sub": 2,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Merendee fügt ihn, steckte den Kopf herein, und die Kälte kam mit ihr. Oh!",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 10,
+      "characterId": "maerin",
+      "sentenceIds": [
+        11
+      ],
+      "textHash": "6y4o72",
+      "startSec": 66.20933333333333,
+      "endSec": 67.69266666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11547682778560149,
+        "longestSilenceSec": 0.5912083333333333,
+        "durationSec": 1.4833333333333334,
+        "expectedSec": 0.5714285714285714
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "und du Wann.",
+        "reasons": [
+          "Not scored — sentence under the 12-char ASR floor."
+        ]
+      }
+    },
+    {
+      "groupIndex": 11,
+      "characterId": "maerin",
+      "sentenceIds": [
+        12
+      ],
+      "textHash": "l8roml",
+      "startSec": 67.69266666666667,
+      "endSec": 73.11266666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11686399419026264,
+        "longestSilenceSec": 0.639625,
+        "durationSec": 5.42,
+        "expectedSec": 3
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.42857142857142855,
+        "sub": 1,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "verriegle die Läden und löscht die Kohlen. Seinnen es?",
+        "reasons": [
+          "Content drift — word-error-rate 0.43 exceeds 0.4 (1 sub, 0 del, 2 ins vs 7 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 12,
+      "characterId": "narrator",
+      "sentenceIds": [
+        13
+      ],
+      "textHash": "flib7e",
+      "startSec": 73.11266666666667,
+      "endSec": 78.308,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11903627141454069,
+        "longestSilenceSec": 0.5939583333333334,
+        "durationSec": 5.195333333333333,
+        "expectedSec": 5
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ihre Worte waren knapp, wie sie es immer waren, wenn sie gelaufen war.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 13,
+      "characterId": "maerin",
+      "sentenceIds": [
+        14
+      ],
+      "textHash": "vne75b",
+      "startSec": 78.308,
+      "endSec": 82.57533333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12354732166796117,
+        "longestSilenceSec": 0.5775,
+        "durationSec": 4.267333333333333,
+        "expectedSec": 3.2142857142857144
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Auf der Straße nach Kohlfoll ist ein Drache.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 14,
+      "characterId": "maerin",
+      "sentenceIds": [
+        15
+      ],
+      "textHash": "bygks5",
+      "startSec": 82.57533333333333,
+      "endSec": 86.288,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1059000762816028,
+        "longestSilenceSec": 0.5764583333333333,
+        "durationSec": 3.712666666666667,
+        "expectedSec": 1.5714285714285714
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Groß wie eine Scheune.",
+        "reasons": [
+          "Transcript untrustworthy — no-speech prob 0.69 above 0.6; not scoring."
+        ]
+      }
+    },
+    {
+      "groupIndex": 15,
+      "characterId": "maerin",
+      "sentenceIds": [
+        16
+      ],
+      "textHash": "g1jn9h",
+      "startSec": 86.288,
+      "endSec": 95.04666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "suspect",
+        "reasons": [
+          "Suspiciously long — 8.8s rendered vs ~1.9s expected (possible runaway synthesis)."
+        ],
+        "rms": 0.11984434949149873,
+        "longestSilenceSec": 0.639,
+        "durationSec": 8.758666666666667,
+        "expectedSec": 1.9285714285714286
+      },
+      "suspect": true,
+      "qaRetries": 2,
+      "asr": {
+        "verdict": "drift",
+        "wer": 1.6,
+        "sub": 0,
+        "del": 0,
+        "ins": 8,
+        "longestDeletionRun": 0,
+        "transcript": "Er kommt den Weg herunter. In Nachen. Es sei Nei, Derno und Senei.",
+        "reasons": [
+          "Content drift — word-error-rate 1.60 exceeds 0.4 (0 sub, 0 del, 8 ins vs 5 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 16,
+      "characterId": "narrator",
+      "sentenceIds": [
+        17
+      ],
+      "textHash": "66xa63",
+      "startSec": 95.04666666666667,
+      "endSec": 98.75933333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12362734411667639,
+        "longestSilenceSec": 0.5738333333333333,
+        "durationSec": 3.574,
+        "expectedSec": 1.7857142857142858
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.75,
+        "sub": 2,
+        "del": 1,
+        "ins": 0,
+        "longestDeletionRun": 1,
+        "transcript": "Raserneinskatzer hielt inner.",
+        "reasons": [
+          "Content drift — word-error-rate 0.75 exceeds 0.4 (2 sub, 1 del, 0 ins vs 4 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 17,
+      "characterId": "wren",
+      "sentenceIds": [
+        18
+      ],
+      "textHash": "h9g4it",
+      "startSec": 98.75933333333333,
+      "endSec": 100.28533333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Alison Dietlinde",
+      "baseVoiceName": "Alison Dietlinde",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10552311234596568,
+        "longestSilenceSec": 0.5768333333333333,
+        "durationSec": 1.526,
+        "expectedSec": 0.9285714285714286
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ein echter...",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 18,
+      "characterId": "maerin",
+      "sentenceIds": [
+        19
+      ],
+      "textHash": "jprl60",
+      "startSec": 100.28533333333333,
+      "endSec": 106.07866666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "suspect",
+        "reasons": [
+          "Suspiciously long — 7.8s rendered vs ~1.9s expected (possible runaway synthesis)."
+        ],
+        "rms": 0.11508903438963392,
+        "longestSilenceSec": 0.6149166666666667,
+        "durationSec": 7.788,
+        "expectedSec": 1.9285714285714286
+      },
+      "suspect": true,
+      "qaRetries": 2,
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.75,
+        "sub": 1,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Nein, Kind, ein gemaltter, naher, wen?",
+        "reasons": [
+          "Content drift — word-error-rate 0.75 exceeds 0.4 (1 sub, 0 del, 2 ins vs 4 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 19,
+      "characterId": "narrator",
+      "sentenceIds": [
+        20
+      ],
+      "textHash": "kqfo22",
+      "startSec": 106.07866666666666,
+      "endSec": 109.65266666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12625400512427012,
+        "longestSilenceSec": 0.57175,
+        "durationSec": 3.574,
+        "expectedSec": 1.5714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Maren lächelte nicht. Nala?",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 20,
+      "characterId": "maerin",
+      "sentenceIds": [
+        21
+      ],
+      "textHash": "itxyw",
+      "startSec": 109.65266666666666,
+      "endSec": 111.49866666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10973900944842768,
+        "longestSilenceSec": 0.619375,
+        "durationSec": 1.846,
+        "expectedSec": 0.8571428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ein Echter",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 21,
+      "characterId": "maerin",
+      "sentenceIds": [
+        22
+      ],
+      "textHash": "yftw7g",
+      "startSec": 111.49866666666667,
+      "endSec": 119.85133333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13008470284892892,
+        "longestSilenceSec": 0.5162916666666667,
+        "durationSec": 8.352666666666666,
+        "expectedSec": 6.357142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "und er kommt geradewegs auf das einzige erleuchtete Fenster im Tal zu. Und das ist Eures!",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 22,
+      "characterId": "maerin",
+      "sentenceIds": [
+        23
+      ],
+      "textHash": "6po2fw",
+      "startSec": 119.85133333333333,
+      "endSec": 124.386,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "suspect",
+        "reasons": [
+          "Suspiciously long — 4.5s rendered vs ~1.2s expected (possible runaway synthesis)."
+        ],
+        "rms": 0.10495092273937652,
+        "longestSilenceSec": 0.5799166666666666,
+        "durationSec": 4.534666666666666,
+        "expectedSec": 1.2142857142857142
+      },
+      "suspect": true,
+      "qaRetries": 2,
+      "asr": {
+        "verdict": "drift",
+        "wer": 1.3333333333333333,
+        "sub": 1,
+        "del": 0,
+        "ins": 3,
+        "longestDeletionRun": 0,
+        "transcript": "löscht das Feuer. Ja, endern online.",
+        "reasons": [
+          "Content drift — word-error-rate 1.33 exceeds 0.4 (1 sub, 0 del, 3 ins vs 3 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 23,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        24
+      ],
+      "textHash": "evsoqt",
+      "startSec": 124.386,
+      "endSec": 126.52,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13905982247647433,
+        "longestSilenceSec": 0.5787083333333334,
+        "durationSec": 2.134,
+        "expectedSec": 1.9285714285714286
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "wenn ich das Feuer lösche.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 24,
+      "characterId": "narrator",
+      "sentenceIds": [
+        25
+      ],
+      "textHash": "lqa6qa",
+      "startSec": 126.52,
+      "endSec": 128.462,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.08263256990012746,
+        "longestSilenceSec": 0.5727916666666667,
+        "durationSec": 1.942,
+        "expectedSec": 0.9285714285714286
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "sagte Odovan",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 25,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        26
+      ],
+      "textHash": "o4fps8",
+      "startSec": 128.462,
+      "endSec": 132.452,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13975765720589897,
+        "longestSilenceSec": 0.618125,
+        "durationSec": 3.99,
+        "expectedSec": 4
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Verliere ich die Schweißnaht, die ich seit Mittag hege.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 26,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        27
+      ],
+      "textHash": "wl5m75",
+      "startSec": 132.452,
+      "endSec": 142.512,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13404868236217407,
+        "longestSilenceSec": 0.6317916666666666,
+        "durationSec": 10.06,
+        "expectedSec": 9.071428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.08333333333333333,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Ein Drache kann die Länge einer Schweißnaht warten. Oder er kann es nicht. Und so oder so empfange ich ihn lieber in der Wärme. Media. Ja.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 27,
+      "characterId": "narrator",
+      "sentenceIds": [
+        28
+      ],
+      "textHash": "dz46ft",
+      "startSec": 142.512,
+      "endSec": 144.50733333333332,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11174831768465185,
+        "longestSilenceSec": 0.6004166666666667,
+        "durationSec": 2.966,
+        "expectedSec": 1.7142857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "er legte seine Zander ab.",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 28,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        29
+      ],
+      "textHash": "7bsu6b",
+      "startSec": 144.50733333333332,
+      "endSec": 145.71333333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.09237321968757543,
+        "longestSilenceSec": 0.566625,
+        "durationSec": 1.206,
+        "expectedSec": 0.5
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Spatz.",
+        "reasons": [
+          "Not scored — sentence under the 12-char ASR floor."
+        ]
+      }
+    },
+    {
+      "groupIndex": 29,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        30
+      ],
+      "textHash": "vy8e2l",
+      "startSec": 145.71333333333334,
+      "endSec": 156.75466666666668,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "suspect",
+        "reasons": [
+          "Suspiciously long — 11.0s rendered vs ~1.7s expected (possible runaway synthesis)."
+        ],
+        "rms": 0.1224402447781293,
+        "longestSilenceSec": 0.7022916666666666,
+        "durationSec": 11.041333333333334,
+        "expectedSec": 1.7142857142857142
+      },
+      "suspect": true,
+      "qaRetries": 2,
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 2.6,
+        "sub": 1,
+        "del": 0,
+        "ins": 12,
+        "longestDeletionRun": 0,
+        "transcript": "macht das große Tor auf Oktodalandien, erharnet dem Diede, wie den Tanrosh La Shaterov. Nun? Nn. Haum.",
+        "reasons": [
+          "Transcript untrustworthy — avg logprob -1.14 below -1; not scoring."
+        ]
+      }
+    },
+    {
+      "groupIndex": 30,
+      "characterId": "narrator",
+      "sentenceIds": [
+        31
+      ],
+      "textHash": "3stjcz",
+      "startSec": 156.75466666666668,
+      "endSec": 166.078,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11208952980037186,
+        "longestSilenceSec": 0.5955833333333334,
+        "durationSec": 9.323333333333334,
+        "expectedSec": 7.857142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.08695652173913043,
+        "sub": 2,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Wenn, spaz nur für ihn, und nur, wenn er vergass, streng zu sein, ging zum großen Tor, und stieß es weit auf.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 31,
+      "characterId": "narrator",
+      "sentenceIds": [
+        32
+      ],
+      "textHash": "ramce6",
+      "startSec": 166.078,
+      "endSec": 172.20133333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1295005196503142,
+        "longestSilenceSec": 0.59075,
+        "durationSec": 6.123333333333333,
+        "expectedSec": 5.214285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.09090909090909091,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Der Drache füllte die Dunkelheit dahinter. Wie Wasser, einen Becher füll.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 32,
+      "characterId": "narrator",
+      "sentenceIds": [
+        33
+      ],
+      "textHash": "4ridrc",
+      "startSec": 172.20133333333334,
+      "endSec": 181.20466666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1273225812363044,
+        "longestSilenceSec": 0.5858333333333333,
+        "durationSec": 9.003333333333334,
+        "expectedSec": 8.071428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.05,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ein Auge, golden und langsam, kam auf Höhe der Schwelle und hielt dort inne die kleine Wärme des Ortes abwägen.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 33,
+      "characterId": "narrator",
+      "sentenceIds": [
+        34
+      ],
+      "textHash": "fifdla",
+      "startSec": 181.20466666666667,
+      "endSec": 187.14666666666668,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13385237646610376,
+        "longestSilenceSec": 0.592375,
+        "durationSec": 5.942,
+        "expectedSec": 4.571428571428571
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.09090909090909091,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Von irgendwo den Weg hinab brach eine Stimme aus der Dunkelheit. Annar!",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 34,
+      "characterId": "unknown-male",
+      "sentenceIds": [
+        35
+      ],
+      "textHash": "r2rd8d",
+      "startSec": 187.14666666666668,
+      "endSec": 192.10733333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Viktor Menelaos",
+      "baseVoiceName": "Viktor Menelaos",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11374090513191151,
+        "longestSilenceSec": 0.598125,
+        "durationSec": 4.960666666666667,
+        "expectedSec": 3.9285714285714284
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 2,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Fliet, ihr Naren, er wird euch alle verschlingen.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 35,
+      "characterId": "narrator",
+      "sentenceIds": [
+        36
+      ],
+      "textHash": "4qxkm0",
+      "startSec": 192.10733333333334,
+      "endSec": 194.93466666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.07946220955230406,
+        "longestSilenceSec": 1.4825416666666666,
+        "durationSec": 2.8273333333333333,
+        "expectedSec": 0.9285714285714286
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0.5,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Niemand Flur.",
+        "reasons": [
+          "Short reference (2 words) with a single substitution; WER 0.50 is weak evidence — not scoring."
+        ]
+      }
+    },
+    {
+      "groupIndex": 36,
+      "characterId": "unknown-male",
+      "sentenceIds": [
+        37
+      ],
+      "textHash": "svbfzk",
+      "startSec": 194.93466666666666,
+      "endSec": 197.99666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Viktor Menelaos",
+      "baseVoiceName": "Viktor Menelaos",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13083801606673442,
+        "longestSilenceSec": 0.5924166666666667,
+        "durationSec": 3.062,
+        "expectedSec": 2.2142857142857144
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ich bin von weit her gekommen.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 37,
+      "characterId": "narrator",
+      "sentenceIds": [
+        38
+      ],
+      "textHash": "pdzitz",
+      "startSec": 197.99666666666667,
+      "endSec": 199.75733333333332,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.08265845892505481,
+        "longestSilenceSec": 0.5757916666666667,
+        "durationSec": 1.7606666666666666,
+        "expectedSec": 1.2142857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "sagte der Drache.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 38,
+      "characterId": "narrator",
+      "sentenceIds": [
+        39
+      ],
+      "textHash": "fqsgng",
+      "startSec": 199.75733333333332,
+      "endSec": 202.862,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10844611764948027,
+        "longestSilenceSec": 0.6112916666666667,
+        "durationSec": 3.1046666666666667,
+        "expectedSec": 2
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "seine Stimme war nicht laut.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 39,
+      "characterId": "narrator",
+      "sentenceIds": [
+        40
+      ],
+      "textHash": "mbyjmy",
+      "startSec": 202.862,
+      "endSec": 212.18533333333335,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1224295035823138,
+        "longestSilenceSec": 0.5853333333333334,
+        "durationSec": 9.323333333333334,
+        "expectedSec": 10
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Es war der Klang, den ein Berg machen würde, wenn ein Berg müde wäre. Und jedes Wort traf einen Augenblick später ein, als man es erwartete.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 40,
+      "characterId": "unknown-male",
+      "sentenceIds": [
+        41
+      ],
+      "textHash": "c4yljh",
+      "startSec": 212.18533333333335,
+      "endSec": 216.17533333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Viktor Menelaos",
+      "baseVoiceName": "Viktor Menelaos",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10753283560213737,
+        "longestSilenceSec": 0.5771666666666667,
+        "durationSec": 3.99,
+        "expectedSec": 2.357142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Die Dörfer nennen mich Kohlfahrer Pontoing.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 41,
+      "characterId": "unknown-male",
+      "sentenceIds": [
+        42
+      ],
+      "textHash": "l9fvhz",
+      "startSec": 216.17533333333333,
+      "endSec": 221.744,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Viktor Menelaos",
+      "baseVoiceName": "Viktor Menelaos",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11497033671382044,
+        "longestSilenceSec": 0.5644583333333333,
+        "durationSec": 5.568666666666667,
+        "expectedSec": 2.857142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Das ist nicht mein Name, aber er genügt und sti.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 42,
+      "characterId": "unknown-male",
+      "sentenceIds": [
+        43
+      ],
+      "textHash": "g6ea8",
+      "startSec": 221.744,
+      "endSec": 231.20666666666668,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Viktor Menelaos",
+      "baseVoiceName": "Viktor Menelaos",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12196018754375659,
+        "longestSilenceSec": 0.609875,
+        "durationSec": 9.462666666666667,
+        "expectedSec": 4.357142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 0,
+        "del": 0,
+        "ins": 3,
+        "longestDeletionRun": 0,
+        "transcript": "Man sagt mir, der beste Schmied im Tal, halte diese Schmiede. Liedere Jahr, Renein.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 43,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        44
+      ],
+      "textHash": "1u5g9m",
+      "startSec": 231.20666666666668,
+      "endSec": 232.87133333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10089595251785884,
+        "longestSilenceSec": 0.6030833333333333,
+        "durationSec": 1.6646666666666667,
+        "expectedSec": 1.5714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Man sagt euch falsch.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 44,
+      "characterId": "narrator",
+      "sentenceIds": [
+        45
+      ],
+      "textHash": "lqa6qc",
+      "startSec": 232.87133333333333,
+      "endSec": 234.49333333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.06026479225561792,
+        "longestSilenceSec": 0.5956666666666667,
+        "durationSec": 1.622,
+        "expectedSec": 0.9285714285714286
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "sagte Odovan.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 45,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        46
+      ],
+      "textHash": "dtozpt",
+      "startSec": 234.49333333333334,
+      "endSec": 239.08066666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12860406499337051,
+        "longestSilenceSec": 0.5938333333333333,
+        "durationSec": 4.5873333333333335,
+        "expectedSec": 4
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Der beste Schmied im Tal ist vor neun Jahren gestorben.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 46,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        47
+      ],
+      "textHash": "jcssiu",
+      "startSec": 239.08066666666667,
+      "endSec": 244.44733333333335,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13218789238579007,
+        "longestSilenceSec": 0.5892083333333333,
+        "durationSec": 5.366666666666666,
+        "expectedSec": 3.2142857142857144
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2857142857142857,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Ihr müsst euch mit dem Zweitbesten begnügen. Na, los.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 47,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        48
+      ],
+      "textHash": "86t2kv",
+      "startSec": 244.44733333333335,
+      "endSec": 248.24533333333332,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11557129511631906,
+        "longestSilenceSec": 0.589875,
+        "durationSec": 3.798,
+        "expectedSec": 2.642857142857143
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Bescheidenheit oder Verkaufstaktik?",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 48,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        49
+      ],
+      "textHash": "2esogw",
+      "startSec": 248.24533333333332,
+      "endSec": 252.31066666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12480562783616944,
+        "longestSilenceSec": 0.5900416666666667,
+        "durationSec": 4.684,
+        "expectedSec": 1.9285714285714286
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "In meinem Alter dasselbe. Nießen.",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 49,
+      "characterId": "narrator",
+      "sentenceIds": [
+        50
+      ],
+      "textHash": "ngam7e",
+      "startSec": 252.31066666666666,
+      "endSec": 261.218,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12116512000961875,
+        "longestSilenceSec": 0.55175,
+        "durationSec": 8.907333333333334,
+        "expectedSec": 6.857142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "das goldene Auge wanderte zu brenn und sie spürte es, wie man die Sonne durch ein Fenster spürt.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 50,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        51
+      ],
+      "textHash": "dswryj",
+      "startSec": 261.218,
+      "endSec": 263.1173333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12741942889954358,
+        "longestSilenceSec": 0.5821666666666667,
+        "durationSec": 1.8993333333333333,
+        "expectedSec": 1.2142857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "und die kleine?",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 51,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        52
+      ],
+      "textHash": "cxma6p",
+      "startSec": 263.1173333333333,
+      "endSec": 264.366,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13043330736508155,
+        "longestSilenceSec": 0.5587916666666667,
+        "durationSec": 1.2486666666666666,
+        "expectedSec": 1.0714285714285714
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0.5,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Mein Lernen.",
+        "reasons": [
+          "Short reference (2 words) with a single substitution; WER 0.50 is weak evidence — not scoring."
+        ]
+      }
+    },
+    {
+      "groupIndex": 52,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        53
+      ],
+      "textHash": "ys5vpr",
+      "startSec": 264.366,
+      "endSec": 267.70533333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13167161178253348,
+        "longestSilenceSec": 0.5938333333333333,
+        "durationSec": 3.3393333333333333,
+        "expectedSec": 4
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2,
+        "sub": 1,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Sie ist 13 und glaubt ich höre sie nicht zu Äuften.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 53,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        54
+      ],
+      "textHash": "gro45r",
+      "startSec": 267.70533333333333,
+      "endSec": 276.56,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.130957805083614,
+        "longestSilenceSec": 0.6617916666666667,
+        "durationSec": 8.854666666666667,
+        "expectedSec": 7.5
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.15,
+        "sub": 0,
+        "del": 0,
+        "ins": 3,
+        "longestDeletionRun": 0,
+        "transcript": "Sie wird besser sein als ich, ehe sie 20 ist und das ist der einzige Grund, warum ich sie behalte. Häh? Nee. Nein?",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 54,
+      "characterId": "wren",
+      "sentenceIds": [
+        55
+      ],
+      "textHash": "a29ktj",
+      "startSec": 276.56,
+      "endSec": 279.526,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Alison Dietlinde",
+      "baseVoiceName": "Alison Dietlinde",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10353300351247914,
+        "longestSilenceSec": 0.5824166666666667,
+        "durationSec": 2.966,
+        "expectedSec": 1.1428571428571428
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ich säufze nie.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 55,
+      "characterId": "narrator",
+      "sentenceIds": [
+        56
+      ],
+      "textHash": "2akmnz",
+      "startSec": 279.526,
+      "endSec": 281.0946666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.08701762036103693,
+        "longestSilenceSec": 0.6275416666666667,
+        "durationSec": 1.5686666666666667,
+        "expectedSec": 0.7857142857142857
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Zack der Ren.",
+        "reasons": [
+          "Not scored — sentence under the 12-char ASR floor."
+        ]
+      }
+    },
+    {
+      "groupIndex": 56,
+      "characterId": "narrator",
+      "sentenceIds": [
+        57
+      ],
+      "textHash": "5saenp",
+      "startSec": 281.0946666666667,
+      "endSec": 286.0126666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.09741139419057436,
+        "longestSilenceSec": 0.5751666666666667,
+        "durationSec": 2.966,
+        "expectedSec": 0.8571428571428571
+      },
+      "qaRetries": 2,
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 1.5,
+        "sub": 1,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "die säufste Nahnen, es.",
+        "reasons": [
+          "Transcript untrustworthy — avg logprob -1.01 below -1; not scoring."
+        ]
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 57,
+      "characterId": "narrator",
+      "sentenceIds": [
+        58
+      ],
+      "textHash": "x8cjfk",
+      "startSec": 286.0126666666667,
+      "endSec": 294.3226666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11543134022408597,
+        "longestSilenceSec": 0.575375,
+        "durationSec": 8.31,
+        "expectedSec": 8.071428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.05,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Der Drache senkte sich, bis sein Atem die Kohlen bewegte und sie glüten auf, ohne darum gebeten worden zu sein.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 58,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        59
+      ],
+      "textHash": "quf3t4",
+      "startSec": 294.3226666666667,
+      "endSec": 297.15,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1069820828891125,
+        "longestSilenceSec": 0.5667916666666667,
+        "durationSec": 2.8273333333333333,
+        "expectedSec": 1.6428571428571428
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ich will kein Schwert.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 59,
+      "characterId": "narrator",
+      "sentenceIds": [
+        60
+      ],
+      "textHash": "ap5rb6",
+      "startSec": 297.15,
+      "endSec": 300.116,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1204289231346018,
+        "longestSilenceSec": 0.5705833333333333,
+        "durationSec": 2.966,
+        "expectedSec": 0.6428571428571429
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Zaktia, aia.",
+        "reasons": [
+          "Not scored — sentence under the 12-char ASR floor."
+        ]
+      }
+    },
+    {
+      "groupIndex": 60,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        61
+      ],
+      "textHash": "4gzs4b",
+      "startSec": 300.116,
+      "endSec": 306.6553333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12216181001159743,
+        "longestSilenceSec": 0.5584583333333333,
+        "durationSec": 6.539333333333333,
+        "expectedSec": 4.5
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Alle wollen mich tot und ein Schwert würde sie nur ermutigen.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 61,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        62
+      ],
+      "textHash": "k5zld7",
+      "startSec": 306.6553333333333,
+      "endSec": 317.6533333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "suspect",
+        "reasons": [
+          "Suspiciously long — 11.0s rendered vs ~1.5s expected (possible runaway synthesis)."
+        ],
+        "rms": 0.1281205706747059,
+        "longestSilenceSec": 0.5370416666666666,
+        "durationSec": 10.998,
+        "expectedSec": 1.5
+      },
+      "suspect": true,
+      "qaRetries": 2,
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 2.5,
+        "sub": 0,
+        "del": 0,
+        "ins": 10,
+        "longestDeletionRun": 0,
+        "transcript": "Ich will eine Glocke, oh, Dingdossigedokisame, Indo hundraundraundrade tatsi, Indos boun is shuul, tja.",
+        "reasons": [
+          "Transcript untrustworthy — avg logprob -1.10 below -1; not scoring."
+        ]
+      }
+    },
+    {
+      "groupIndex": 62,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        63
+      ],
+      "textHash": "d9yrhd",
+      "startSec": 317.6533333333333,
+      "endSec": 321.686,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11860337670643241,
+        "longestSilenceSec": 0.6872083333333333,
+        "durationSec": 4.032666666666667,
+        "expectedSec": 2.9285714285714284
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "klein genug, um an einer Klaue zu hängen.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 63,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        64
+      ],
+      "textHash": "ovi831",
+      "startSec": 321.686,
+      "endSec": 329.01466666666664,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11733676649790661,
+        "longestSilenceSec": 0.5940416666666667,
+        "durationSec": 7.328666666666667,
+        "expectedSec": 6.285714285714286
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ich bin der Letzte meiner Art und wenn ich gehe, wird niemand da sein, der es vermerkt.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 64,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        65
+      ],
+      "textHash": "l4zavl",
+      "startSec": 329.01466666666664,
+      "endSec": 343.07466666666664,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12309462949872896,
+        "longestSilenceSec": 0.5849166666666666,
+        "durationSec": 13.132,
+        "expectedSec": 8
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3157894736842105,
+        "sub": 0,
+        "del": 0,
+        "ins": 6,
+        "longestDeletionRun": 0,
+        "transcript": "Ich möchte es selbst vermerken. Im Voraus, solange es noch jemanden gibt, der einen wahren Ton zugießen weiß. Hosene di Reilne, nois cardi calte.",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 65,
+      "characterId": "narrator",
+      "sentenceIds": [
+        66
+      ],
+      "textHash": "o7v9a3",
+      "startSec": 343.07466666666664,
+      "endSec": 347.80066666666664,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12269637243679053,
+        "longestSilenceSec": 0.522125,
+        "durationSec": 4.726,
+        "expectedSec": 3.2857142857142856
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Eine Weile war das Feuer, das einzige Geräusch.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 66,
+      "characterId": "narrator",
+      "sentenceIds": [
+        67
+      ],
+      "textHash": "hm0y9i",
+      "startSec": 347.80066666666664,
+      "endSec": 352.996,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12018290822278102,
+        "longestSilenceSec": 0.5656666666666667,
+        "durationSec": 5.195333333333333,
+        "expectedSec": 2.857142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2857142857142857,
+        "sub": 1,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Dann nahm Odovan seine Zanne wieder auf. Au!",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 67,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        68
+      ],
+      "textHash": "6fl723",
+      "startSec": 352.996,
+      "endSec": 354.426,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10362269076845022,
+        "longestSilenceSec": 0.56775,
+        "durationSec": 1.43,
+        "expectedSec": 0.9285714285714286
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Eine Glocke.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 68,
+      "characterId": "narrator",
+      "sentenceIds": [
+        69
+      ],
+      "textHash": "ap5rb8",
+      "startSec": 354.426,
+      "endSec": 355.77066666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.06685213681461039,
+        "longestSilenceSec": 0.5807083333333334,
+        "durationSec": 1.3446666666666667,
+        "expectedSec": 0.6428571428571429
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "sagte er.",
+        "reasons": [
+          "Not scored — sentence under the 12-char ASR floor."
+        ]
+      }
+    },
+    {
+      "groupIndex": 69,
+      "characterId": "narrator",
+      "sentenceIds": [
+        70
+      ],
+      "textHash": "vbw6b4",
+      "startSec": 355.77066666666667,
+      "endSec": 362.03266666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11761258410996511,
+        "longestSilenceSec": 0.58325,
+        "durationSec": 4.683333333333334,
+        "expectedSec": 3
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "All... als bestellten Drachen sie jeden Dienstag. Kau.",
+        "reasons": []
+      },
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 70,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        71
+      ],
+      "textHash": "p2po47",
+      "startSec": 362.03266666666667,
+      "endSec": 364.9986666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11915180165557936,
+        "longestSilenceSec": 0.5725,
+        "durationSec": 2.966,
+        "expectedSec": 1.7857142857142858
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Bronze also kein Eisen.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 71,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        72
+      ],
+      "textHash": "uyev2o",
+      "startSec": 364.9986666666667,
+      "endSec": 375.06933333333336,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.14188040054388043,
+        "longestSilenceSec": 0.6039583333333334,
+        "durationSec": 10.070666666666666,
+        "expectedSec": 7.071428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.1111111111111111,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Spatz das gute Zinn den Tiegel und hör auf, auf den Formsand zu weinen, das verdirbt den Guss. Mehr'nend, können.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 72,
+      "characterId": "wren",
+      "sentenceIds": [
+        73
+      ],
+      "textHash": "usoii3",
+      "startSec": 375.06933333333336,
+      "endSec": 377.88666666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Alison Dietlinde",
+      "baseVoiceName": "Alison Dietlinde",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.0907914982340606,
+        "longestSilenceSec": 0.5869166666666666,
+        "durationSec": 2.8173333333333335,
+        "expectedSec": 1.2857142857142858
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Ich weine nicht. Naja.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 73,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        74
+      ],
+      "textHash": "7prupy",
+      "startSec": 377.88666666666666,
+      "endSec": 380.66133333333335,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12109638078285394,
+        "longestSilenceSec": 0.5924583333333333,
+        "durationSec": 2.7746666666666666,
+        "expectedSec": 1.2857142857142858
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "drift",
+        "wer": 1,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Natürlich nicht. Nasser der.",
+        "reasons": [
+          "Content drift — word-error-rate 1.00 exceeds 0.4 (0 sub, 0 del, 2 ins vs 2 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 74,
+      "characterId": "narrator",
+      "sentenceIds": [
+        75
+      ],
+      "textHash": "11bucm",
+      "startSec": 380.66133333333335,
+      "endSec": 387.1046666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10994147706787316,
+        "longestSilenceSec": 0.5244166666666666,
+        "durationSec": 6.443333333333333,
+        "expectedSec": 5.928571428571429
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2,
+        "sub": 2,
+        "del": 1,
+        "ins": 0,
+        "longestDeletionRun": 1,
+        "transcript": "Er knifft die Augen zusammen und betrachtete den Drachen. Maß ihn wir alles Maß.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 75,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        76
+      ],
+      "textHash": "y5rh4g",
+      "startSec": 387.1046666666667,
+      "endSec": 390.764,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12185526141012952,
+        "longestSilenceSec": 0.561375,
+        "durationSec": 3.6593333333333335,
+        "expectedSec": 1.8571428571428572
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Es dauert bis zum Morgen.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 76,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        77
+      ],
+      "textHash": "j7xfdd",
+      "startSec": 390.764,
+      "endSec": 396.28,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1421090106741234,
+        "longestSilenceSec": 0.6325,
+        "durationSec": 5.516,
+        "expectedSec": 5.142857142857143
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.1,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Ihr werdet dem Feuer Gesellschaft leisten müssen, während wir arbeiten. Dieser",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 77,
+      "characterId": "narrator",
+      "sentenceIds": [
+        78
+      ],
+      "textHash": "23cpi1",
+      "startSec": 396.28,
+      "endSec": 409.60333333333335,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12323872871320134,
+        "longestSilenceSec": 0.5874583333333333,
+        "durationSec": 13.323333333333334,
+        "expectedSec": 15.857142857142858
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.02631578947368421,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Der Drache ließ sich in der Türöffnung nieder, ein Auge ging die Wärme halb geschlossen und sagte mit der Stimme eines müden Berges, den man seit sehr langer Zeit nicht gebeten hatte, an einem freundlichen Ort zu warten.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 78,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        79
+      ],
+      "textHash": "8i5fuu",
+      "startSec": 409.60333333333335,
+      "endSec": 412.388,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11409758649619456,
+        "longestSilenceSec": 0.559,
+        "durationSec": 2.784666666666667,
+        "expectedSec": 1.8571428571428572
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ich habe nichts als Zeit.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 79,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        80
+      ],
+      "textHash": "hif2s",
+      "startSec": 412.388,
+      "endSec": 416.176,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "suspect",
+        "reasons": [
+          "Suspiciously long — 7.1s rendered vs ~0.7s expected (possible runaway synthesis)."
+        ],
+        "rms": 0.11522016994846238,
+        "longestSilenceSec": 0.7920833333333334,
+        "durationSec": 7.094666666666667,
+        "expectedSec": 0.7142857142857143
+      },
+      "suspect": true,
+      "qaRetries": 2,
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "fangt an, tunt. Litesani.",
+        "reasons": [
+          "Not scored — sentence under the 12-char ASR floor."
+        ]
+      },
+      "asrRetries": 1
+    }
+  ],
+  "characterSnapshots": {
+    "narrator": {
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 40
+      },
+      "gender": "neutral",
+      "ageRange": "adult",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Asya Anara",
+      "renderedFallbackEngine": "coqui",
+      "attributes": [
+        "formal",
+        "measured",
+        "observational",
+        "rhythmic"
+      ]
+    },
+    "oduvan": {
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 85,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Damien Black",
+      "renderedFallbackEngine": "coqui"
+    },
+    "wren": {
+      "tone": {
+        "warmth": 50,
+        "pace": 60,
+        "authority": 40,
+        "emotion": 55
+      },
+      "gender": "female",
+      "ageRange": "teen",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Alison Dietlinde",
+      "renderedFallbackEngine": "coqui"
+    },
+    "maerin": {
+      "tone": {
+        "warmth": 60,
+        "pace": 50,
+        "authority": 50,
+        "emotion": 70
+      },
+      "gender": "female",
+      "ageRange": "adult",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Sofia Hellen",
+      "renderedFallbackEngine": "coqui"
+    },
+    "coalfall": {
+      "tone": {
+        "warmth": 65,
+        "pace": 30,
+        "authority": 90,
+        "emotion": 40
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Wulf Carlevaro",
+      "renderedFallbackEngine": "coqui"
+    },
+    "unknown-male": {
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 50,
+        "emotion": 50
+      },
+      "gender": "male",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Viktor Menelaos",
+      "renderedFallbackEngine": "coqui"
+    }
+  },
+  "qa": {
+    "status": "suspect",
+    "reasons": [
+      "7 sentence(s) still flagged after re-recording (e.g. Suspiciously long — 8.1s rendered vs ~1.9s expected (possible runaway synthesis).)."
+    ],
+    "measuredLufs": -16,
+    "truePeakDb": -0.9,
+    "durationSec": 416.176,
+    "expectedSec": 271.14285714285717,
+    "checkedAt": "2026-09-06T22:28:16.880Z"
+  }
+}

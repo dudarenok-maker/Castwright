@@ -1,0 +1,1975 @@
+{
+  "bookId": "castwright__standalones__el-encargo-de-coalfall",
+  "chapterId": 2,
+  "chapterTitle": "Capítulo Uno — La Llamada",
+  "durationSec": 303.02866666666665,
+  "sampleRate": 24000,
+  "modelKey": "qwen3-tts-0.6b",
+  "synthesizedAt": "2026-09-06T22:37:28.797Z",
+  "castHistorySeq": 0,
+  "segments": [
+    {
+      "groupIndex": -1,
+      "characterId": "narrator",
+      "sentenceIds": [],
+      "startSec": 1.5,
+      "endSec": 4.05,
+      "kind": "title",
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara"
+    },
+    {
+      "groupIndex": 0,
+      "characterId": "narrator",
+      "sentenceIds": [
+        1
+      ],
+      "textHash": "2ahntv",
+      "startSec": 5.55,
+      "endSec": 15.62,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13169101007988315,
+        "longestSilenceSec": 0.58325,
+        "durationSec": 10.07,
+        "expectedSec": 10.5
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "La fragua había tomado el color de un ocaso apagado, y Bren estaba raspando los últimos restos de escoria cuando empezaron los golpes en la puerta.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 1,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        2
+      ],
+      "textHash": "uuf51y",
+      "startSec": 15.62,
+      "endSec": 17.188666666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11700151154221043,
+        "longestSilenceSec": 0.5716666666666667,
+        "durationSec": 1.5686666666666667,
+        "expectedSec": 0.6428571428571429
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "el halloio",
+        "reasons": [
+          "Not scored — sentence under the 12-char ASR floor."
+        ]
+      }
+    },
+    {
+      "groupIndex": 2,
+      "characterId": "narrator",
+      "sentenceIds": [
+        3
+      ],
+      "textHash": "oocv6h",
+      "startSec": 17.188666666666666,
+      "endSec": 20.762666666666668,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12318416787875522,
+        "longestSilenceSec": 0.5750416666666667,
+        "durationSec": 3.574,
+        "expectedSec": 3.2857142857142856
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "dijo el maestro o Dubán, sin levantar la vista.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 3,
+      "characterId": "narrator",
+      "sentenceIds": [
+        4
+      ],
+      "textHash": "mkwa21",
+      "startSec": 20.762666666666668,
+      "endSec": 26.139333333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12919535725749628,
+        "longestSilenceSec": 0.5970416666666667,
+        "durationSec": 5.376666666666667,
+        "expectedSec": 5.571428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.08333333333333333,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "70 inviernos le habían gastado la voz hasta dejarla en graba y paciencia.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 4,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        5
+      ],
+      "textHash": "asnq2f",
+      "startSec": 26.139333333333333,
+      "endSec": 30.214666666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13242489601842664,
+        "longestSilenceSec": 0.5662083333333333,
+        "durationSec": 4.075333333333333,
+        "expectedSec": 2.9285714285714284
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.16666666666666666,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Equiaquia, que sea, que siga llamando.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 5,
+      "characterId": "wren",
+      "sentenceIds": [
+        6
+      ],
+      "textHash": "p9z0fh",
+      "startSec": 30.214666666666666,
+      "endSec": 33.042,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Alison Dietlinde",
+      "baseVoiceName": "Alison Dietlinde",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11210065808645289,
+        "longestSilenceSec": 0.5835833333333333,
+        "durationSec": 3.062,
+        "expectedSec": 1.7142857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Podría ser un cliente.",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 6,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        7
+      ],
+      "textHash": "3a03ub",
+      "startSec": 33.042,
+      "endSec": 40.97866666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.137709807932517,
+        "longestSilenceSec": 0.5679583333333333,
+        "durationSec": 7.9366666666666665,
+        "expectedSec": 7.642857142857143
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.05555555555555555,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "¿Hico a estas horas eso un borracho o una deuda? Ninguno de los dos paga mejor porque lo dejes entrar rápido.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 7,
+      "characterId": "narrator",
+      "sentenceIds": [
+        8
+      ],
+      "textHash": "kuprae",
+      "startSec": 40.97866666666667,
+      "endSec": 43.94466666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11745094036365171,
+        "longestSilenceSec": 0.5737083333333334,
+        "durationSec": 2.966,
+        "expectedSec": 2.5
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "La puerta se abrió de todas formas.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 8,
+      "characterId": "narrator",
+      "sentenceIds": [
+        9
+      ],
+      "textHash": "b096g7",
+      "startSec": 43.94466666666667,
+      "endSec": 49.972,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12610232446590128,
+        "longestSilenceSec": 0.5700416666666667,
+        "durationSec": 6.027333333333333,
+        "expectedSec": 4.714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Maerín, la recaudadora, asomó la cabeza y el frío entró con ella.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 9,
+      "characterId": "maerin",
+      "sentenceIds": [
+        10
+      ],
+      "textHash": "oepj7l",
+      "startSec": 49.972,
+      "endSec": 54.794,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12492176400850888,
+        "longestSilenceSec": 0.5472083333333333,
+        "durationSec": 4.822,
+        "expectedSec": 3.5
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2857142857142857,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Ego Duvan. Cierra los postigos y apaga las brasas. Ego.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 10,
+      "characterId": "narrator",
+      "sentenceIds": [
+        11
+      ],
+      "textHash": "ijbqjl",
+      "startSec": 54.794,
+      "endSec": 59.754666666666665,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13370685742342547,
+        "longestSilenceSec": 0.6039583333333334,
+        "durationSec": 4.960666666666667,
+        "expectedSec": 5.357142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Sus palabras eran secas, del modo que siempre lo eran cuando había corrido.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 11,
+      "characterId": "maerin",
+      "sentenceIds": [
+        12
+      ],
+      "textHash": "yl01k",
+      "startSec": 59.754666666666665,
+      "endSec": 65.69666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13727664115327776,
+        "longestSilenceSec": 0.580125,
+        "durationSec": 5.942,
+        "expectedSec": 6.071428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.0625,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Hay un dragón en el camino de Qualfal, grande como un granero, baja por el carril, yo.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 12,
+      "characterId": "narrator",
+      "sentenceIds": [
+        13
+      ],
+      "textHash": "4ipaus",
+      "startSec": 65.69666666666667,
+      "endSec": 68.15066666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11567484032465722,
+        "longestSilenceSec": 0.5937916666666667,
+        "durationSec": 2.454,
+        "expectedSec": 2.142857142857143
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "El raspador de brense detuvo.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 13,
+      "characterId": "wren",
+      "sentenceIds": [
+        14
+      ],
+      "textHash": "wmgzcq",
+      "startSec": 68.15066666666667,
+      "endSec": 70.32733333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Alison Dietlinde",
+      "baseVoiceName": "Alison Dietlinde",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11447844776946073,
+        "longestSilenceSec": 0.58975,
+        "durationSec": 2.4113333333333333,
+        "expectedSec": 1.2142857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "¿Uno de verdad? ¿Yú?",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 14,
+      "characterId": "maerin",
+      "sentenceIds": [
+        15
+      ],
+      "textHash": "dv7ph1",
+      "startSec": 70.32733333333333,
+      "endSec": 74.31733333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11988034574850553,
+        "longestSilenceSec": 0.5446666666666666,
+        "durationSec": 3.99,
+        "expectedSec": 1.7142857142857142
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.5,
+        "sub": 1,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Ecano, hija. Uno pintado. Eo.",
+        "reasons": [
+          "Content drift — word-error-rate 0.50 exceeds 0.4 (1 sub, 0 del, 1 ins vs 4 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 15,
+      "characterId": "narrator",
+      "sentenceIds": [
+        16
+      ],
+      "textHash": "jq1vzq",
+      "startSec": 74.31733333333334,
+      "endSec": 76.814,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1131517472644794,
+        "longestSilenceSec": 0.6075416666666666,
+        "durationSec": 2.4966666666666666,
+        "expectedSec": 1.2142857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Marine no sonrió.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 16,
+      "characterId": "maerin",
+      "sentenceIds": [
+        17
+      ],
+      "textHash": "7d7jvg",
+      "startSec": 76.814,
+      "endSec": 88.65466666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13673878281910473,
+        "longestSilenceSec": 0.597125,
+        "durationSec": 11.840666666666667,
+        "expectedSec": 7.857142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.1111111111111111,
+        "sub": 1,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Y cade verdad, y viniendo directo hacia la única ventana iluminada del valle, que es la vuestra, apaga el fuego.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 17,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        18
+      ],
+      "textHash": "ikoipq",
+      "startSec": 88.65466666666667,
+      "endSec": 91.34333333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12377954908681948,
+        "longestSilenceSec": 0.58325,
+        "durationSec": 3.5206666666666666,
+        "expectedSec": 1.4285714285714286
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.5,
+        "sub": 1,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "¡Ey, casi apago el fuego!",
+        "reasons": [
+          "Content drift — word-error-rate 0.50 exceeds 0.4 (1 sub, 0 del, 1 ins vs 4 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 18,
+      "characterId": "narrator",
+      "sentenceIds": [
+        19
+      ],
+      "textHash": "tvrbfg",
+      "startSec": 91.34333333333333,
+      "endSec": 93.05066666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.09277639798970934,
+        "longestSilenceSec": 0.61625,
+        "durationSec": 1.7073333333333334,
+        "expectedSec": 0.8571428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "dijo Dubán.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 19,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        20
+      ],
+      "textHash": "mqigbi",
+      "startSec": 93.05066666666667,
+      "endSec": 103.21666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.15470920489884832,
+        "longestSilenceSec": 0.599375,
+        "durationSec": 10.166,
+        "expectedSec": 12.214285714285714
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.037037037037037035,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "He pierdo la soldadura que llevo cuidando desde el mediodía. Un dragón puede esperar lo que tarda una soldadura o no puede, y de cualquier modo prefiero recibirlo en calor.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 20,
+      "characterId": "narrator",
+      "sentenceIds": [
+        21
+      ],
+      "textHash": "58g9vz",
+      "startSec": 103.21666666666667,
+      "endSec": 105.532,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.09165794231459785,
+        "longestSilenceSec": 0.5709583333333333,
+        "durationSec": 2.3153333333333332,
+        "expectedSec": 1.2142857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Dejó las tenazas.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 21,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        22
+      ],
+      "textHash": "1ozgdv",
+      "startSec": 105.532,
+      "endSec": 109.842,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.09860362653308576,
+        "longestSilenceSec": 0.5949583333333334,
+        "durationSec": 4.31,
+        "expectedSec": 2.357142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "¡Euróri! ¡Abre el portón grande!",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 22,
+      "characterId": "narrator",
+      "sentenceIds": [
+        23
+      ],
+      "textHash": "eogahh",
+      "startSec": 109.842,
+      "endSec": 118.056,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.14035458200446713,
+        "longestSilenceSec": 0.5660833333333334,
+        "durationSec": 8.214,
+        "expectedSec": 8.642857142857142
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.13043478260869565,
+        "sub": 3,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ren gorrió un solo para él y solo cuando se le olvidaba hacer severo, fue hasta el gran portón y lo abrió de par en par.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 23,
+      "characterId": "narrator",
+      "sentenceIds": [
+        24
+      ],
+      "textHash": "7nvfjp",
+      "startSec": 118.056,
+      "endSec": 123.11266666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13199602764870808,
+        "longestSilenceSec": 0.61325,
+        "durationSec": 5.056666666666667,
+        "expectedSec": 5.071428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.07142857142857142,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "El dragón lleno la oscuridad del otro lado, como el agua llena una copa.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 24,
+      "characterId": "narrator",
+      "sentenceIds": [
+        25
+      ],
+      "textHash": "45i7bh",
+      "startSec": 123.11266666666667,
+      "endSec": 132.02,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12381726295654001,
+        "longestSilenceSec": 0.5830416666666667,
+        "durationSec": 8.907333333333334,
+        "expectedSec": 7.714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.05555555555555555,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Un ojo, dorado y lento, quedó a la altura del umbral y se detuvo allí, sopezando el pequeño calor del lugar.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 25,
+      "characterId": "narrator",
+      "sentenceIds": [
+        26
+      ],
+      "textHash": "iyi8ts",
+      "startSec": 132.02,
+      "endSec": 136.522,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1314934590391171,
+        "longestSilenceSec": 0.6014166666666667,
+        "durationSec": 4.502,
+        "expectedSec": 4.5
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Desde algún punto del carril, una voz irrumpió en la oscuridad.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 26,
+      "characterId": "pell-hollis",
+      "sentenceIds": [
+        27
+      ],
+      "textHash": "3ekxs2",
+      "startSec": 136.522,
+      "endSec": 142.54933333333332,
+      "renderedFallbackEngine": "coqui",
+      "renderedFallbackCharacterId": "narrator",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12611785614692272,
+        "longestSilenceSec": 0.5600833333333334,
+        "durationSec": 6.027333333333333,
+        "expectedSec": 3.357142857142857
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.5,
+        "sub": 1,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "¡Opa! ¡Corred! ¡Incensatos! Os va a devorar a todos. ¡Cool!",
+        "reasons": [
+          "Content drift — word-error-rate 0.50 exceeds 0.4 (1 sub, 0 del, 2 ins vs 6 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 27,
+      "characterId": "narrator",
+      "sentenceIds": [
+        28
+      ],
+      "textHash": "ezonom",
+      "startSec": 142.54933333333332,
+      "endSec": 143.93666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.08550466365434609,
+        "longestSilenceSec": 0.5833333333333334,
+        "durationSec": 1.3873333333333333,
+        "expectedSec": 0.9285714285714286
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Nadie corrió.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 28,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        29
+      ],
+      "textHash": "8nbsh2",
+      "startSec": 143.93666666666667,
+      "endSec": 146.94533333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Henriette Usha",
+      "baseVoiceName": "Henriette Usha",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12399388114433632,
+        "longestSilenceSec": 0.5580833333333334,
+        "durationSec": 3.0086666666666666,
+        "expectedSec": 2
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.4,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Eko he venido desde muy lejos ella.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 29,
+      "characterId": "narrator",
+      "sentenceIds": [
+        30
+      ],
+      "textHash": "ayfqbb",
+      "startSec": 146.94533333333334,
+      "endSec": 148.61,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.09138883175664878,
+        "longestSilenceSec": 0.581375,
+        "durationSec": 1.6646666666666667,
+        "expectedSec": 1.0714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "dijo el dragón.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 30,
+      "characterId": "narrator",
+      "sentenceIds": [
+        31
+      ],
+      "textHash": "vzc8qu",
+      "startSec": 148.61,
+      "endSec": 151.24533333333332,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1209542310416867,
+        "longestSilenceSec": 0.5875833333333333,
+        "durationSec": 2.6353333333333335,
+        "expectedSec": 1.5
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Su voz no era fuerte.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 31,
+      "characterId": "narrator",
+      "sentenceIds": [
+        32
+      ],
+      "textHash": "4rju9t",
+      "startSec": 151.24533333333332,
+      "endSec": 160.89933333333335,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1447447737662645,
+        "longestSilenceSec": 0.5726666666666667,
+        "durationSec": 9.654,
+        "expectedSec": 9.857142857142858
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Era el sonido que haría una montaña, si una montaña estuviera cansada, y cada palabra llegaba un instante, después de cuando se la esperaba.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 32,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        33
+      ],
+      "textHash": "qae3gv",
+      "startSec": 160.89933333333335,
+      "endSec": 171.43866666666668,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Henriette Usha",
+      "baseVoiceName": "Henriette Usha",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.14595105804187103,
+        "longestSilenceSec": 0.621125,
+        "durationSec": 10.539333333333333,
+        "expectedSec": 9.071428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.08695652173913043,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Y a los pueblos me llaman Coalfal. Ese no es mi nombre, pero servirá. Me dicen que el mejor herrero del valle tiene esta fragua. Eh.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 33,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        34
+      ],
+      "textHash": "6tge5h",
+      "startSec": 171.43866666666668,
+      "endSec": 173.51933333333332,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13891187067769425,
+        "longestSilenceSec": 0.5982916666666667,
+        "durationSec": 2.0806666666666667,
+        "expectedSec": 1.0714285714285714
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.6666666666666666,
+        "sub": 2,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Édale, dicen mayor.",
+        "reasons": [
+          "Content drift — word-error-rate 0.67 exceeds 0.4 (2 sub, 0 del, 0 ins vs 3 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 34,
+      "characterId": "narrator",
+      "sentenceIds": [
+        35
+      ],
+      "textHash": "tvrbfe",
+      "startSec": 173.51933333333332,
+      "endSec": 175.184,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.09052322594227183,
+        "longestSilenceSec": 0.6295416666666667,
+        "durationSec": 1.6646666666666667,
+        "expectedSec": 0.8571428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Dijo a Duvan.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 35,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        36
+      ],
+      "textHash": "6euap1",
+      "startSec": 175.184,
+      "endSec": 181.81933333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.14587443559088362,
+        "longestSilenceSec": 0.5841666666666666,
+        "durationSec": 6.6353333333333335,
+        "expectedSec": 6.428571428571429
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.06666666666666667,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Ewell, el mejor herrero del valle, murió hace 9 años. Tendrá que conformarse con el segundo.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 36,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        37
+      ],
+      "textHash": "9x89xi",
+      "startSec": 181.81933333333333,
+      "endSec": 186.73733333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Henriette Usha",
+      "baseVoiceName": "Henriette Usha",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10656526722713473,
+        "longestSilenceSec": 0.5998333333333333,
+        "durationSec": 4.918,
+        "expectedSec": 2.2857142857142856
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "modestia o táctica de ventayú.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 37,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        38
+      ],
+      "textHash": "z255u",
+      "startSec": 186.73733333333334,
+      "endSec": 190.53533333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12201287882102776,
+        "longestSilenceSec": 0.615625,
+        "durationSec": 3.798,
+        "expectedSec": 1.7857142857142858
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Egoa, niedad, es lo mismo.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 38,
+      "characterId": "narrator",
+      "sentenceIds": [
+        39
+      ],
+      "textHash": "dw9uge",
+      "startSec": 190.53533333333334,
+      "endSec": 197.352,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1271932040912635,
+        "longestSilenceSec": 0.58725,
+        "durationSec": 6.816666666666666,
+        "expectedSec": 7.142857142857143
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "El ojo dorado se desplazó hacia Ren y ella lo sintió como se siente el sol a través de un cristal.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 39,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        40
+      ],
+      "textHash": "cb6qip",
+      "startSec": 197.352,
+      "endSec": 199.486,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Henriette Usha",
+      "baseVoiceName": "Henriette Usha",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12254333541958684,
+        "longestSilenceSec": 0.5829166666666666,
+        "durationSec": 2.731333333333333,
+        "expectedSec": 1.1428571428571428
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.5,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Ea y la Pequeña.",
+        "reasons": [
+          "Content drift — word-error-rate 0.50 exceeds 0.4 (0 sub, 0 del, 1 ins vs 2 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 40,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        41
+      ],
+      "textHash": "461ljt",
+      "startSec": 199.486,
+      "endSec": 209.37466666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13807793043611846,
+        "longestSilenceSec": 0.59275,
+        "durationSec": 9.888666666666667,
+        "expectedSec": 10.642857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.034482758620689655,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Etami aprendiza, tiene 13 años y cree que no le oigo suspirar. Será mejor que yo antes de los 20 que es la única razón por la que la conservo.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 41,
+      "characterId": "wren",
+      "sentenceIds": [
+        42
+      ],
+      "textHash": "vwbek7",
+      "startSec": 209.37466666666666,
+      "endSec": 211.82866666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Alison Dietlinde",
+      "baseVoiceName": "Alison Dietlinde",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12024515169758121,
+        "longestSilenceSec": 0.6004583333333333,
+        "durationSec": 2.454,
+        "expectedSec": 1.3571428571428572
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Egoayo nunca suspiro.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 42,
+      "characterId": "narrator",
+      "sentenceIds": [
+        43
+      ],
+      "textHash": "rlihex",
+      "startSec": 211.82866666666666,
+      "endSec": 214.69866666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.09067633939821952,
+        "longestSilenceSec": 0.727875,
+        "durationSec": 2.87,
+        "expectedSec": 1.5714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "dijo Ren suspirando.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 43,
+      "characterId": "narrator",
+      "sentenceIds": [
+        44
+      ],
+      "textHash": "8kbag8",
+      "startSec": 214.69866666666667,
+      "endSec": 221.654,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13549962441269475,
+        "longestSilenceSec": 0.5674583333333333,
+        "durationSec": 6.955333333333333,
+        "expectedSec": 8
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.047619047619047616,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "El dragón se fue bajando hasta que su aliento agitó las brasas, y éstas se avivaron sin que nadie se lo pidiera.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 44,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        45
+      ],
+      "textHash": "r5n73v",
+      "startSec": 221.654,
+      "endSec": 224.34266666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Henriette Usha",
+      "baseVoiceName": "Henriette Usha",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12308916643921229,
+        "longestSilenceSec": 0.5695833333333333,
+        "durationSec": 2.6886666666666668,
+        "expectedSec": 1.6428571428571428
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Tocano, quiero una espada U.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 45,
+      "characterId": "narrator",
+      "sentenceIds": [
+        46
+      ],
+      "textHash": "48sm9l",
+      "startSec": 224.34266666666667,
+      "endSec": 225.39933333333335,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.05270900037104795,
+        "longestSilenceSec": 0.58275,
+        "durationSec": 1.0566666666666666,
+        "expectedSec": 0.35714285714285715
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "dijo.",
+        "reasons": [
+          "Not scored — sentence under the 12-char ASR floor."
+        ]
+      }
+    },
+    {
+      "groupIndex": 46,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        47
+      ],
+      "textHash": "bwpo2t",
+      "startSec": 225.39933333333335,
+      "endSec": 247.08533333333332,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Henriette Usha",
+      "baseVoiceName": "Henriette Usha",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13893604599840806,
+        "longestSilenceSec": 1.3360833333333333,
+        "durationSec": 21.686,
+        "expectedSec": 23
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.05555555555555555,
+        "sub": 1,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Eco todo el mundo quiere que esté muerto y una espada solo los animaría. Quiero una campana pequeña para colgar de una garra. Soy el último de los míos y cuando yo me vaya no habrá nadie que lo recuerde. Me gustaría recordarlo yo mismo por adelantado mientras todavía quede alguien que sepa fundir una nota verdadera, joven.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 47,
+      "characterId": "narrator",
+      "sentenceIds": [
+        48
+      ],
+      "textHash": "qxtxhh",
+      "startSec": 247.08533333333332,
+      "endSec": 250.798,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12084464443351163,
+        "longestSilenceSec": 0.6039583333333334,
+        "durationSec": 3.712666666666667,
+        "expectedSec": 3.5
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Durante un rato el único sonido fue el del fuego.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 48,
+      "characterId": "narrator",
+      "sentenceIds": [
+        49
+      ],
+      "textHash": "vgjguv",
+      "startSec": 250.798,
+      "endSec": 254.22266666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11127216480207892,
+        "longestSilenceSec": 0.5719583333333333,
+        "durationSec": 3.4246666666666665,
+        "expectedSec": 3.0714285714285716
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Entonces, Oduvan volvió a coger las tenazas.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 49,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        50
+      ],
+      "textHash": "vb5rnw",
+      "startSec": 254.22266666666667,
+      "endSec": 255.88733333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12370550469944867,
+        "longestSilenceSec": 0.5685,
+        "durationSec": 1.6646666666666667,
+        "expectedSec": 1
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 1,
+        "sub": 2,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Euna campanado.",
+        "reasons": [
+          "Content drift — word-error-rate 1.00 exceeds 0.4 (2 sub, 0 del, 0 ins vs 2 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 50,
+      "characterId": "narrator",
+      "sentenceIds": [
+        51
+      ],
+      "textHash": "kdbnht",
+      "startSec": 255.88733333333334,
+      "endSec": 259.6,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11332221436335203,
+        "longestSilenceSec": 0.5552916666666666,
+        "durationSec": 3.712666666666667,
+        "expectedSec": 4.071428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Dijo, como si los dragones se las encargaran cada martes.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 51,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        52
+      ],
+      "textHash": "prknh6",
+      "startSec": 259.6,
+      "endSec": 272.646,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12604984938004224,
+        "longestSilenceSec": 0.5799166666666666,
+        "durationSec": 13.046,
+        "expectedSec": 9.428571428571429
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.18181818181818182,
+        "sub": 1,
+        "del": 0,
+        "ins": 3,
+        "longestDeletionRun": 0,
+        "transcript": "Eobron se pues no hierro, gorrión, el estaño bueno, el crisol, y deja de llorar sobre la arena de moldeo que arruinará la colada, Yu-ei.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 52,
+      "characterId": "wren",
+      "sentenceIds": [
+        53
+      ],
+      "textHash": "ekpo11",
+      "startSec": 272.646,
+      "endSec": 274.78,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Alison Dietlinde",
+      "baseVoiceName": "Alison Dietlinde",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.113277547234194,
+        "longestSilenceSec": 0.594875,
+        "durationSec": 3.382,
+        "expectedSec": 1.4285714285714286
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Eocan no estoy llorando.",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 53,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        54
+      ],
+      "textHash": "lccb76",
+      "startSec": 274.78,
+      "endSec": 276.626,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11179264453717881,
+        "longestSilenceSec": 0.5819166666666666,
+        "durationSec": 1.846,
+        "expectedSec": 1.0714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Y que claro que no.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 54,
+      "characterId": "narrator",
+      "sentenceIds": [
+        55
+      ],
+      "textHash": "634zhk",
+      "startSec": 276.626,
+      "endSec": 281.26666666666665,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12263174783974247,
+        "longestSilenceSec": 0.5740833333333333,
+        "durationSec": 4.640666666666666,
+        "expectedSec": 4.428571428571429
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.1,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Frunció el seño mirando al dragón, midiéndolo como medía todo.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 55,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        56
+      ],
+      "textHash": "w52g9b",
+      "startSec": 281.26666666666665,
+      "endSec": 286.782,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Damien Black",
+      "baseVoiceName": "Damien Black",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.15291153191225723,
+        "longestSilenceSec": 0.5940416666666667,
+        "durationSec": 5.515333333333333,
+        "expectedSec": 6
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "y llevará hasta la mañana. Tendrá que hacerle compañía al fuego mientras trabajamos.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 56,
+      "characterId": "narrator",
+      "sentenceIds": [
+        57
+      ],
+      "textHash": "g7hlll",
+      "startSec": 286.782,
+      "endSec": 299.55066666666664,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1353796249103592,
+        "longestSilenceSec": 0.5780416666666667,
+        "durationSec": 12.768666666666666,
+        "expectedSec": 13.571428571428571
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.027777777777777776,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "El dragón se acomodó en el umbral, un ojo entornado frente al calor, y dijo, con la voz de una montaña cansada a la que no le habían pedido, en mucho tiempo, que esperar en un sitio amable.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 57,
+      "characterId": "coalfall",
+      "sentenceIds": [
+        58
+      ],
+      "textHash": "ylvtmd",
+      "startSec": 299.55066666666664,
+      "endSec": 303.02866666666665,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Henriette Usha",
+      "baseVoiceName": "Henriette Usha",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12146649145946048,
+        "longestSilenceSec": 0.5782916666666666,
+        "durationSec": 3.478,
+        "expectedSec": 2.857142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.14285714285714285,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Ella no tengo nada más que tiempo. ¡Empezad!",
+        "reasons": []
+      }
+    }
+  ],
+  "characterSnapshots": {
+    "narrator": {
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 40
+      },
+      "gender": "neutral",
+      "ageRange": "adult",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-1.7b",
+      "resolvedVoiceName": "Asya Anara",
+      "renderedFallbackEngine": "coqui",
+      "attributes": [
+        "formal",
+        "measured",
+        "observational",
+        "rhythmic"
+      ]
+    },
+    "wren": {
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 30,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "teen",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-1.7b",
+      "resolvedVoiceName": "Alison Dietlinde",
+      "renderedFallbackEngine": "coqui",
+      "attributes": [
+        "direct",
+        "earnest",
+        "observant",
+        "reserved",
+        "young"
+      ]
+    },
+    "oduvan": {
+      "tone": {
+        "warmth": 40,
+        "pace": 40,
+        "authority": 90,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-1.7b",
+      "resolvedVoiceName": "Damien Black",
+      "renderedFallbackEngine": "coqui",
+      "attributes": [
+        "authoritative",
+        "composed",
+        "experienced",
+        "gruff",
+        "pragmatic",
+        "professional"
+      ]
+    },
+    "maerin": {
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 70,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "adult",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-1.7b",
+      "resolvedVoiceName": "Sofia Hellen",
+      "renderedFallbackEngine": "coqui",
+      "attributes": [
+        "authoritative",
+        "clipped",
+        "firm",
+        "protective",
+        "steady",
+        "urgent"
+      ]
+    },
+    "coalfall": {
+      "tone": {
+        "warmth": 60,
+        "pace": 30,
+        "authority": 80,
+        "emotion": 50
+      },
+      "gender": "neutral",
+      "ageRange": "elderly",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-1.7b",
+      "resolvedVoiceName": "Henriette Usha",
+      "renderedFallbackEngine": "coqui",
+      "attributes": [
+        "ancient",
+        "deliberate",
+        "melancholy",
+        "profound"
+      ]
+    }
+  },
+  "qa": {
+    "status": "ok",
+    "reasons": [],
+    "measuredLufs": -16,
+    "truePeakDb": -0.9,
+    "durationSec": 303.02866666666665,
+    "expectedSec": 258.07142857142856,
+    "checkedAt": "2026-09-06T22:37:28.796Z"
+  }
+}
