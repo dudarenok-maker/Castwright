@@ -18,6 +18,18 @@ import {
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from './model-paths.js';
 import { setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
+import { fetchSidecarDevices } from '../gpu/fetch-sidecar-devices.js';
+
+/* #3061 review C1 — the lazy Coqui derive now WARMS the last-known GPU device
+   list itself (`ensureGpuDeviceListWarm`) instead of hoping a settings screen
+   already did. That warm is a real sidecar round-trip, so stub it at the one
+   module that performs it: the default here is "sidecar unreachable" (null),
+   which is what every test in this file that isn't specifically about the
+   hint should see, and the hint tests opt into a device list per case. */
+vi.mock('../gpu/fetch-sidecar-devices.js', () => ({
+  fetchSidecarDevices: vi.fn(async () => null),
+}));
+const fetchSidecarDevicesMock = vi.mocked(fetchSidecarDevices);
 
 describe('UnresolvableClonedVoiceError', () => {
   it('fromList carries the structured broken voices and a readable message', () => {
@@ -2074,6 +2086,123 @@ describe('resolveDesignedVoicesForChapter', () => {
     describe('#3058 — lazy Coqui derive device hint', () => {
       afterEach(() => {
         setLastKnownGpuDevices([]); // restore the no-GPU-list-yet default
+        fetchSidecarDevicesMock.mockReset();
+        fetchSidecarDevicesMock.mockResolvedValue(null);
+      });
+
+      function coquiDeriveDeps() {
+        const entry = designedEntry();
+        return makeDesignedDeps({
+          readEntry: vi.fn(async (uuid: string) => (uuid === 'lib-designed' ? entry : null)),
+          ptExists: vi.fn(async () => false),
+          readDesignedMasterPcm: vi.fn(async () => ({
+            pcm: Buffer.alloc(1000),
+            sampleRate: 24000,
+            refText: '',
+            manifest: {},
+          })),
+          deriveEngineArtifact: vi.fn(async () => ({
+            previewPcm: Buffer.alloc(0),
+            sampleRate: 24000,
+            coquiVersion: 'v2.0.5',
+            modelId: 'tts_models/multilingual/multi-dataset/xtts_v2',
+          })),
+        });
+      }
+
+      /* #3061 review C1 — THE regression test for "the feature ships as a
+         silent no-op". The last-known GPU list's only other writers are
+         GET /api/gpu/devices, GET /api/config and PUT /api/config, all
+         three reachable only from the Advanced Settings mount effect. This
+         is the ordinary flow: server started, book opened, chapter
+         generated, that screen never visited — so the cache is EMPTY when
+         the lazy derive runs, and the derive itself has to warm it. Without
+         the warm this returns `undefined` and the whole of #3058 is
+         pre-PR behaviour with no log line saying so. */
+      it('warms the GPU device list itself when nothing else has, so the hint is still sent on a plain generation', async () => {
+        setLastKnownGpuDevices([]); // Advanced Settings never opened
+        fetchSidecarDevicesMock.mockResolvedValue({
+          devices: [
+            { uuid: 'GPU-0', idx: 0, name: 'a', total_mb: 24000, free_mb: 20000 },
+            { uuid: 'GPU-1', idx: 1, name: 'b', total_mb: 16000, free_mb: 15000 },
+          ],
+          cpu: false,
+        });
+        const deps = coquiDeriveDeps();
+
+        await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          deps,
+        );
+
+        expect(fetchSidecarDevicesMock).toHaveBeenCalled();
+        const [, , input] = deps.deriveEngineArtifact.mock.calls[0];
+        expect(input.deviceHint).toBe('cuda:1');
+      });
+
+      /* The companion direction: a warm that fails (sidecar down — the
+         `fetchSidecarDevices` null path) must leave the cache empty and the
+         hint unset, never throw and never fail the self-heal. */
+      it('sends no hint and does not throw when the warm cannot reach the sidecar', async () => {
+        setLastKnownGpuDevices([]);
+        fetchSidecarDevicesMock.mockResolvedValue(null);
+        const deps = coquiDeriveDeps();
+
+        await resolveDesignedVoicesForChapter(
+          [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-designed', engine: 'coqui' }],
+          deps,
+        );
+
+        expect(deps.deriveEngineArtifact).toHaveBeenCalledTimes(1);
+        const [, , input] = deps.deriveEngineArtifact.mock.calls[0];
+        expect(input.deviceHint).toBeUndefined();
+      });
+
+      /* #3061 review N2 — the control the block comment above promised and
+         nobody had written. `resolveClonedVoicesForChapter`'s coqui derive
+         is a DIFFERENT self-heal (a cloned voice, not a designed one) and
+         must keep sending no hint. Asserted with an index-1 card present in
+         the cache, so it fails if that arm ever starts calling the hint
+         helper — the earlier tests all pass with the helper hardwired to
+         'cuda:1' because this arm never reaches it at all. */
+      it('resolveClonedVoicesForChapter never sends deviceHint, even with an index-1 card known', async () => {
+        setLastKnownGpuDevices([
+          { uuid: 'GPU-0', idx: 0 },
+          { uuid: 'GPU-1', idx: 1 },
+        ]);
+        const entry = baseEntry({
+          master: MASTER,
+          engines: { xtts: { status: 'stale', coquiVersion: 'v2.0.3' } },
+        });
+        const deps = makeDeps({
+          readEntry: vi.fn(async () => entry),
+          ptExists: vi.fn(async () => true),
+          currentArtifactVersion: () => '',
+          deriveEngineArtifact: vi.fn(async () => ({
+            previewPcm: Buffer.alloc(0),
+            sampleRate: 24000,
+            coquiVersion: 'v2.0.5',
+            modelId: 'tts_models/multilingual/multi-dataset/xtts_v2',
+          })),
+        });
+
+        await resolveClonedVoicesForChapter(
+          [
+            {
+              characterName: 'Marlow',
+              characterId: 'marlow',
+              libraryUuid: 'u1',
+              engine: 'coqui',
+              wrongEngine: false,
+              engineUnavailable: false,
+            },
+          ],
+          deps,
+        );
+
+        expect(deps.deriveEngineArtifact).toHaveBeenCalledTimes(1);
+        const [, , input] = deps.deriveEngineArtifact.mock.calls[0];
+        expect(input.deviceHint).toBeUndefined();
       });
 
       it('passes deviceHint "cuda:1" when the last-known GPU list reports an index-1 card', async () => {

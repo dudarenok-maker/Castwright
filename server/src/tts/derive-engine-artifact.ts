@@ -46,14 +46,33 @@ export interface DeriveArtifactInput {
       coherent, not contradictory — manifest language = the reference clip's,
       request language = the book's. */
   language?: string;
-  /** #3058 — a per-REQUEST device override for this one derive call, sent as
+  /** #3058 — a device PREFERENCE carried on this one derive call, sent as
       `X-Device-Hint`. Distinct from the engine's process-lifetime
-      `COQUI_DEVICE`/`QWEN_DEVICE` pin: this lets a single derive land on a
-      specific GPU (e.g. the lazy Coqui self-heal derive, which must avoid
-      contending with a co-resident Qwen for the same card) without touching
-      the engine's own device for its whole lifetime. Omitted for every
-      caller except `clone-voice-resolver.ts`'s lazy Coqui derive — leave
-      unset here to get today's behaviour unchanged. */
+      `COQUI_DEVICE` pin: it is not persisted config, it never touches the
+      engine's pristine `_requested_device`, and it can never overrule an
+      operator's env pin (`main.py`'s `_resolve_admission` skips a
+      `preferred` device whenever residency or `pinned` is set).
+
+      #3061 review C5 — what it is NOT is per-request in EFFECT, and an
+      earlier version of this comment said it was. The header influences
+      exactly one thing: WHICH CARD A COLD LOAD LANDS ON. An XTTS model
+      cannot migrate cards without a reload, so the card this hint picks is
+      then the card Coqui runs on for the REST OF ITS RESIDENCY — every
+      later `/synthesize` and every later derive included, hinted or not —
+      until a `POST /unload` restores `_requested_device`
+      (`main.py`'s `CoquiEngine._publish_loaded_locked` writes `_device`,
+      `unload` restores it). Sending it against an ALREADY-RESIDENT engine
+      is a no-op instead: `_ensure_loaded` returns early on a live `_tts`,
+      and the admission layer constrains to the resident card. Pinned by
+      `tests/test_xtts_clone_voice.py::test_a_hinted_cold_load_pins_coqui_for_the_rest_of_its_residency`.
+
+      ENGINE SCOPE (#3061 review C7): this field is set on the request
+      irrespective of engine, but only the sidecar's `/xtts/clone-voice`
+      route reads `X-Device-Hint`. `/qwen/clone-voice` ignores it entirely,
+      so setting it on a qwen derive is a silent no-op — it does NOT move
+      Qwen, and `QWEN_DEVICE` remains the only way to place it. Omitted for
+      every caller except `clone-voice-resolver.ts`'s lazy Coqui derive —
+      leave unset here to get today's behaviour unchanged. */
   deviceHint?: string;
 }
 

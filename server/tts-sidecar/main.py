@@ -3952,11 +3952,41 @@ def _audio_duration_ms(audio: Any, sample_rate: int) -> float:
     return (n / sample_rate * 1000.0) if sample_rate > 0 else 0.0
 
 
+def _device_index(idx: str) -> Optional[int]:
+    """`int(idx)` for a plain ASCII decimal device index, else None.
+
+    #3061 review C4 — `idx.isdigit()` alone was NOT a safe guard for the
+    `int(idx)` that followed it, in three separate ways, and all three are
+    reachable from an `X-Device-Hint` header (Starlette decodes headers as
+    latin-1, so a raw socket can send them even where an HTTP client would
+    refuse):
+
+    - `'²'` (U+00B2, in latin-1) is `isdigit()` but `int()` REJECTS it →
+      an uncaught `ValueError` out of a function whose callers all assume a
+      total parse.
+    - `'1' * 5000` is plain ASCII and `isdigit()`, but exceeds CPython's
+      int↔str conversion limit (4300) → `ValueError` again, from an input
+      any HTTP client can send.
+    - `'٣'` (Arabic-Indic) and `'１'` (fullwidth) are `isdigit()` AND
+      `int()` accepts them, so `cuda:٣` was SILENTLY equivalent to `cuda:3`
+      — a device pin via a spelling no operator could have typed into the
+      registry, and one no `==` against a `f"cuda:{n}"` candidate key would
+      ever surface.
+
+    Requiring ASCII closes all three of the accept-cases and the `²` raise;
+    the length bound closes the digit-limit raise. Fixed HERE rather than at
+    the header parser so every device-value entry point (registry knobs,
+    env pins, the hint) gets it — the same-grammar-everywhere rule
+    `_parse_device`'s own docstring states."""
+    return int(idx) if idx.isascii() and idx.isdigit() and len(idx) <= 9 else None
+
+
 def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
     """Split a device knob value into (family, index). The single place that
     understands the cuda:N / rocm:N grammar — every engine routes through it so
     an indexed pin can't silently degrade. Malformed index ('cuda:x') keeps
-    family, drops index.
+    family, drops index. "Malformed" is `_device_index`'s definition — plain
+    ASCII decimal only — not bare `str.isdigit()`; see there.
 
     `rocm:N` is handled explicitly, not just `cuda:N`-then-normalised (#2678
     review N1): admission hands engines an ALREADY-indexed device string, and
@@ -3974,10 +4004,10 @@ def _parse_device(value: Optional[str]) -> tuple[str, Optional[int]]:
         return (p, None)
     if p.startswith("cuda"):
         _, _, idx = p.partition(":")
-        return ("cuda", int(idx) if idx.isdigit() else None)
+        return ("cuda", _device_index(idx))
     if p.startswith("rocm"):
         _, _, idx = p.partition(":")
-        return ("rocm", int(idx) if idx.isdigit() else None)
+        return ("rocm", _device_index(idx))
     return (p, None)
 
 
@@ -4078,35 +4108,80 @@ def _engine_env_pin(engine_id: str) -> Optional[str]:
     return None
 
 
+# An X-Device-Hint value is a device KEY ("cuda:1", "cuda-uuid:<36-char
+# uuid>"), never free text. Anything materially longer than the uuid form is
+# not a device key, and admitting it only widens the parser's exposure to
+# adversarial input (#3061 review C4 reached a 500 with a 5000-character
+# value). Rejected before the parse runs, so nothing downstream ever sees it.
+_DEVICE_HINT_MAX_LEN = 64
+
+
 def _parse_device_hint(raw: Optional[str]) -> Optional[str]:
     """Validate/normalise an X-Device-Hint header value into a concrete
-    `admit()`/`reservation()` `pinned` device key, or None when the header
-    is absent/blank/unparsable.
+    PREFERRED device key, or None when the header is absent/blank/unparsable.
+
+    The returned key is ADVISORY (#3061 review C3): it is threaded into
+    `reservation(preferred=...)`, which tries that device FIRST and then
+    falls back to unconstrained best-fit, NOT into `pinned`, which restricts
+    `_gpu_candidates` to one device with no fallback at all. A hard pin here
+    would be strictly worse than sending no hint: on a box where the hinted
+    card is the busy one, the derive cannot fit, `_evict_until` targets the
+    ROOMIEST card instead (`_worst_device_key`) so eviction can never satisfy
+    the constraint, `withCapacityRetry` burns ~60 s, and the resolver
+    soft-fails the voice — the character then renders in a stock catalogue
+    voice. A preference degrades to today's placement instead. If a hard pin
+    is ever wanted it must be a separate, explicit, fail-fast opt-in.
 
     Deliberately reuses the SAME grammar `_engine_env_pin` applies to
     `COQUI_DEVICE`/`QWEN_DEVICE` (`_resolve_uuid_to_index` for the
     `cuda-uuid:UUID` form, then `_parse_device` for `cuda:N`/`rocm:N`) rather
     than inventing a second parser that could silently drift from the
-    registry's own validation. An unparsable value is handled exactly like
-    an invalid registry device value: it never raises and never crashes the
-    process — it just fails to produce a concrete pin, so the caller falls
-    back to whatever it would have used had no hint been supplied at all."""
+    registry's own validation. Consequences worth stating rather than
+    leaving to be rediscovered:
+
+    - Only GPU keys are expressible. `cpu` and `mps` parse fine but are not
+      admission-ledger candidate keys (`PlacementController._gpu_candidates`
+      considers GPUs only), so they are rejected with the same warning as
+      any other unusable value (#3061 review N3). "Send this one derive to
+      the CPU" is not something this header can express; it would need its
+      own mechanism.
+    - An unparsable value is handled exactly like an invalid registry device
+      value: logged and ignored, so the caller falls back to whatever it
+      would have used had no hint been supplied at all.
+
+    NEVER RAISES — and that is now enforced rather than asserted. The
+    docstring made this claim before #3061 review C4 found two header values
+    that broke it (`cuda:²`, and `cuda:` + 5000 digits, the latter a plain
+    HTTP 500). `_device_index` fixes the underlying grammar for every entry
+    point; the length bound and the blanket `except Exception` here are the
+    belt to that braces, because this parse sits ABOVE its caller's own
+    `try:` and anything escaping it answers 500."""
     raw = (raw or "").strip()
     if not raw:
         return None
-    resolved = _resolve_uuid_to_index(raw)
-    if raw.startswith("cuda-uuid:") and resolved is None:
+    if len(raw) > _DEVICE_HINT_MAX_LEN:
         log.warning(
-            "X-Device-Hint=%s did not match any visible GPU (uuid_unresolved) — ignoring hint.",
-            raw,
+            "X-Device-Hint of %d chars exceeds the %d-char device-key bound — ignoring hint.",
+            len(raw), _DEVICE_HINT_MAX_LEN,
         )
         return None
-    fam, idx = _parse_device(resolved)
-    if fam in ("cuda", "rocm") and idx is not None:
-        return _report_rocm_device_key(f"{fam}:{idx}")
-    if fam not in ("auto",):
-        log.warning("X-Device-Hint=%s is not a valid device key — ignoring hint.", raw)
-    return None
+    try:
+        resolved = _resolve_uuid_to_index(raw)
+        if raw.startswith("cuda-uuid:") and resolved is None:
+            log.warning(
+                "X-Device-Hint=%s did not match any visible GPU (uuid_unresolved) — ignoring hint.",
+                raw,
+            )
+            return None
+        fam, idx = _parse_device(resolved)
+        if fam in ("cuda", "rocm") and idx is not None:
+            return _report_rocm_device_key(f"{fam}:{idx}")
+        if fam not in ("auto",):
+            log.warning("X-Device-Hint=%s is not a valid device key — ignoring hint.", raw)
+        return None
+    except Exception:
+        log.warning("X-Device-Hint could not be parsed — ignoring hint.", exc_info=True)
+        return None
 
 
 # --- Cross-vendor capacity probe (task 1, vram-aware-placement) ---
@@ -5039,6 +5114,7 @@ class PlacementController:
         cpu_capable: bool,
         heavy: bool,
         pinned: Optional[str],
+        preferred: Optional[str] = None,
     ) -> tuple[dict, Optional[tuple], bool, Optional[int], bool]:
         """The probe -> try_hold -> evict -> resolve body of `reservation()`
         (plan 273, T4) — extracted so `reservation()` can run it under
@@ -5075,7 +5151,25 @@ class PlacementController:
         devices = self.probe()
         candidates = self._gpu_candidates(devices, constraint)
 
-        held = self.ledger.try_hold(candidates, peak, reserve_cap, engine)
+        # #3061 review C3 — `preferred` is an ADVISORY placement preference
+        # (today: the X-Device-Hint header on /xtts/clone-voice). One extra
+        # try_hold restricted to that device, and if it doesn't fit we fall
+        # straight through to the ordinary unconstrained path below —
+        # candidates, evict ladder, reclaim, noCapacity key, every one of
+        # them untouched by the preference. That is the whole difference
+        # from `pinned`, which restricts `_gpu_candidates` for the entire
+        # admission and turns "the hinted card is busy" into a 503.
+        # Residency and an operator's env pin both outrank it: if
+        # `constraint` is set the engine either cannot migrate or the
+        # operator has said where it goes, and a per-request hint must not
+        # overrule either.
+        held: Optional[tuple] = None
+        if preferred is not None and constraint is None:
+            held = self.ledger.try_hold(
+                [c for c in candidates if c[0] == preferred], peak, reserve_cap, engine
+            )
+        if held is None:
+            held = self.ledger.try_hold(candidates, peak, reserve_cap, engine)
         if held is None and not (cpu_capable and not heavy):
             worst = self._worst_device_key(devices)
             if worst is not None:
@@ -5150,6 +5244,7 @@ class PlacementController:
         cpu_capable: bool = False,
         heavy: bool = False,
         pinned: Optional[str] = None,
+        preferred: Optional[str] = None,
     ):
         """Atomically admits AND holds the peak reservation for the op, yields
         the Admission, and on exit (success OR exception) releases the hold and
@@ -5158,7 +5253,12 @@ class PlacementController:
         forward. Unlike `admit()`, this path performs the hold (via the ledger's
         atomic `try_hold`), so two concurrent reservations can't double-book.
         `pinned` mirrors `admit()`'s operator-pin constraint (residency still
-        takes precedence).
+        takes precedence). `preferred` is the weaker, ADVISORY sibling
+        (#3061 review C3): try that device first, then fall back to ordinary
+        unconstrained placement — it can never by itself produce a
+        `noCapacity`. Residency and `pinned` both outrank it. See
+        `_resolve_admission` for the mechanics and `_parse_device_hint` for
+        why the X-Device-Hint header takes this parameter and not `pinned`.
 
         Async since plan 273 (T4): the admission-RESOLUTION phase
         (`_resolve_admission` — probe/try_hold/evict) runs under
@@ -5178,7 +5278,7 @@ class PlacementController:
         `PlacementController` under exactly one `asyncio.run()`."""
         async with self._admit_lock:
             admission, held, resident, mem_before_mb, foreign_before = await self._resolve_admission(
-                engine, model, cfg, cpu_capable, heavy, pinned
+                engine, model, cfg, cpu_capable, heavy, pinned, preferred
             )
         try:
             yield admission
@@ -11859,15 +11959,38 @@ async def xtts_clone_voice(req: Request) -> Response:
 
     ref_audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
 
-    # X-Device-Hint (optional) — a per-REQUEST device override for this one
+    # X-Device-Hint (optional) — a device PREFERENCE carried on this one
     # /xtts/clone-voice call, distinct from COQUI_DEVICE's process-lifetime
     # pin. Used by the lazy Coqui derive (derive-engine-artifact.ts via
     # clone-voice-resolver.ts) to land THIS derive on a specific GPU (e.g.
     # cuda:1) while Qwen stays resident elsewhere, without ever touching the
-    # engine's own env pin. Absent header -> byte-for-byte the prior
-    # behaviour (falls through to `_engine_env_pin("coqui")`); an invalid
-    # header value is treated the same as an invalid registry device value
-    # (see `_parse_device_hint`) — logged and ignored, never fatal.
+    # engine's own env pin.
+    #
+    # LIFETIME (#3061 review C5 — this used to read "per-REQUEST", which was
+    # false in effect): the header decides WHICH CARD A COLD LOAD LANDS ON,
+    # and nothing more. XTTS cannot migrate cards without a reload, so once
+    # a hinted cold load publishes, `_publish_loaded_locked` writes
+    # `self._device = device` and Coqui stays on that card for the REST OF
+    # ITS RESIDENCY — every later /synthesize and every later unhinted
+    # derive included — until `unload()` restores `_requested_device`. The
+    # hint is per-request only in the sense that it is never persisted and
+    # never overwrites `_requested_device`. Against an ALREADY-RESIDENT
+    # engine it is a no-op in the other direction: `_ensure_loaded` returns
+    # early on a live `_tts`, and `_resolve_admission` skips `preferred`
+    # whenever `constraint` (residency, else the env pin) is set, so a hint
+    # can neither move a loaded model nor mis-book its VRAM.
+    #
+    # It goes to `reservation(preferred=...)`, NOT
+    # `pinned` (#3061 review C3): the hinted card is tried first and
+    # ordinary unconstrained placement is the fallback, so a busy or absent
+    # hinted card degrades to today's behaviour instead of a 60-second
+    # capacity-retry stall ending in a stock-catalogue-voice substitution.
+    # The operator's own `COQUI_DEVICE` pin still wins outright — a
+    # per-request preference must not overrule a `risk: 'high'` registry
+    # knob the operator set deliberately. Absent header -> byte-for-byte the
+    # prior behaviour; an invalid header value is treated the same as an
+    # invalid registry device value (see `_parse_device_hint`) — logged and
+    # ignored, never fatal.
     device_hint = _parse_device_hint(req.headers.get("X-Device-Hint"))
 
     global _inflight_synth
@@ -11878,7 +12001,8 @@ async def xtts_clone_voice(req: Request) -> Response:
             async with _placement.reservation(
                 "coqui", None, {},
                 cpu_capable=cap["cpu_capable"], heavy=cap["heavy"],
-                pinned=device_hint if device_hint is not None else _engine_env_pin("coqui"),
+                pinned=_engine_env_pin("coqui"),
+                preferred=device_hint,
             ) as adm:
                 if "noCapacity" in adm:
                     return _no_capacity(adm)

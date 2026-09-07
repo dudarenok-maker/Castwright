@@ -9,6 +9,7 @@ import type { VoiceLibraryEntry, VoiceLibraryEngineStatus } from '../workspace/v
 import type { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
 import { getLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
+import { ensureGpuDeviceListWarm } from '../gpu/ensure-gpu-device-list-warm.js';
 // Review C-1 — type-only: this module's whole design is injected deps for
 // testability, so the REAL purgeCloneArtifacts is wired in by the caller
 // (synthesise-chapter.ts's buildDefaultCloneResolverDeps), never imported
@@ -876,16 +877,44 @@ export interface ResolveDesignedVoiceDeps {
  *  `resolveClonedVoicesForChapter`'s fail-loud contract is the whole point
  *  of this being a different function. */
 /** #3058 — the lazy Coqui derive below (the designed-voice self-heal, run
-    mid-chapter while Qwen may already be resident and generating) must never
-    contend with Qwen for the same GPU, or it can trip a vram-spill failure.
-    `cuda:1` is the fixed target — this repo currently has no per-box
-    discovery of WHICH card Qwen is actually on, only whether a second card
-    exists at all — so this only fires the hint when the last-known GPU list
-    (`getLastKnownGpuDevices()`, kept warm by `GET /api/gpu/devices`) actually
-    reports an index-1 card. Absent/stale/single-GPU boxes get `undefined`
-    (today's behaviour, unchanged) rather than a hint pointing at a card that
-    doesn't exist. */
-function lazyCoquiDeriveDeviceHint(): string | undefined {
+    mid-chapter while Qwen may already be resident and generating) should
+    avoid contending with Qwen for the same GPU, or it can trip a vram-spill
+    failure. `cuda:1` is the fixed target — this repo currently has no
+    per-box discovery of WHICH card Qwen is actually on, only whether a
+    second card exists at all — so this only fires the hint when the
+    last-known GPU list reports an index-1 card.
+
+    The hint is ADVISORY on the wire: the sidecar threads `X-Device-Hint`
+    into `reservation(preferred=...)`, which tries that card first and then
+    falls back to ordinary unconstrained placement (see `_parse_device_hint`
+    in `main.py`). That is what makes a WRONG hint cheap, which matters
+    because this one can be wrong in two ways it cannot detect:
+
+    - #3061 review N1 — a stale-POPULATED cache. The earlier version of this
+      comment claimed absent/stale lists "never hint at a card that doesn't
+      exist"; only a stale-EMPTY list degrades that way. Nothing resets the
+      cache when the sidecar respawns with fewer visible cards (an
+      accelerator-profile change, `CUDA_VISIBLE_DEVICES`), so a list that
+      still remembers an idx-1 card keeps emitting `cuda:1` after that card
+      is gone.
+    - `cuda:1` may simply be the busier card on this box, or the operator's
+      own `tts.qwen.device` pin.
+
+    Under the advisory contract both cases cost one failed fit-check and
+    land on the same device unconstrained placement would have chosen
+    anyway. Under a hard pin they cost a ~60 s capacity-retry stall and a
+    silent stock-catalogue-voice substitution — which is why the sidecar
+    must keep treating this as a preference.
+
+    #3061 review C1 — `ensureGpuDeviceListWarm()` is not optional here. The
+    cache's only other writers are `GET /api/gpu/devices`, `PUT /api/config`
+    and `GET /api/config`, all three reachable only from the Advanced
+    Settings mount effect (`src/views/advanced.tsx`). On a server where
+    nobody has opened that screen — the ordinary "start the app, generate a
+    chapter" flow — the list is `[]`, and without this warm the whole
+    feature is a silent no-op. */
+async function lazyCoquiDeriveDeviceHint(): Promise<string | undefined> {
+  await ensureGpuDeviceListWarm();
   return getLastKnownGpuDevices().some((d) => d.idx === 1) ? 'cuda:1' : undefined;
 }
 
@@ -1017,7 +1046,7 @@ export async function resolveDesignedVoicesForChapter(
             sampleRate: master.sampleRate,
             refText: master.refText,
             auditionText: REPAIR_AUDITION_TEXT,
-            deviceHint: lazyCoquiDeriveDeviceHint(),
+            deviceHint: await lazyCoquiDeriveDeviceHint(),
           },
           { signal: deps.signal },
         );

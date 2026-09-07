@@ -27,7 +27,7 @@ import {
 import { PROMPT_IDS, readPrompt, writeForkedPrompt, resetPrompt } from '../config/prompts.js';
 import { toUuidForm, needsUuidTranslation } from './gpu-uuid.js';
 import { fetchSidecarDevices, type SidecarDevicesResponse } from '../gpu/fetch-sidecar-devices.js';
-import { getLastKnownGpuDevices, setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
+import { ensureGpuDeviceListWarm } from '../gpu/ensure-gpu-device-list-warm.js';
 
 export const configRouter = Router();
 
@@ -51,12 +51,12 @@ let serverEnvPathOverride: string | null = null;
    — reproduced and confirmed by the mandatory PR code-review. Warm the
    cache here too (a no-op once anything else has already warmed it) so
    resolveAll() never reconciles against a cache that's empty only because
-   nothing has asked the sidecar yet. */
-async function ensureGpuDeviceListWarm(): Promise<void> {
-  if (getLastKnownGpuDevices().length > 0) return;
-  const result = await fetchSidecarDevices();
-  if (result) setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx })));
-}
+   nothing has asked the sidecar yet.
+
+   The helper itself now lives in `gpu/ensure-gpu-device-list-warm.ts` —
+   #3061 review C1: while it was private to this route it was reachable only
+   from the Advanced Settings screen, so every other consumer of the cache
+   read an empty list on a server nobody had opened that screen on. */
 
 configRouter.get('/', async (_req, res) => {
   await ensureGpuDeviceListWarm();

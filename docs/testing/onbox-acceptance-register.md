@@ -547,7 +547,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -557,11 +557,25 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**49 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**50 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-08 (step 9, #2954), 52 → 49.** Folded the six
+> **Last change: 2026-09-09 (claude), 49 → 50 — Group A 34 → 35.** New row
+> **A106** added for #3058's `X-Device-Hint` derive placement (PR #3061). Minted
+> from Group A's `next-id` floor; marker bumped `A106` → `A107` in the same
+> change. The row deliberately does NOT reuse #3058's own acceptance sentence:
+> that read "issue a hinted derive request", which exercises the sidecar half
+> only and passes green on a build where the Node side emits no header at all —
+> the exact state PR #3061's review found. A106's first criterion starts from a
+> real chapter render on a server nobody opened Advanced Settings on, and fails
+> if the header never arrives. This lands on top of every register change the
+> parent branch had already merged (the 2-card-boot + Pinokio batch chain,
+> #2950, and the A34 repair-and-retest chain, #2903) — verified by row-ID-set
+> diff against the true `git merge-base`, not this branch's own stale base.
+> `npm run check:onbox-register` green.
+
+> **Prior change: 2026-09-08 (step 9, #2954), 52 → 49.** Folded the six
 > register rows discharged by the 2-card-boot + Pinokio batch chain (#2950),
 > individually, per their own criteria:
 > - **A2** DISCHARGED and dropped — step 9's cross-card device-steer walkthrough
@@ -1230,7 +1244,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A106 -->
+<!-- next-id: A107 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -4295,6 +4309,76 @@ Qwen VoiceDesign 1.7B model, real sidecar, Kokoro resident for the third and fou
 *Criteria:* the five bullets above — no separate run sheet.
 *Cost:* moderate — concurrent-load/eviction scenarios + VRAM observation, plus one
 forced-contention run for the lock-leak criterion.
+
+### A106 · X-Device-Hint reaches the sidecar from a real chapter render, and a wrong hint still lands the derive ([#3058](https://github.com/dudarenok-maker/Castwright/issues/3058), PR [#3061](https://github.com/dudarenok-maker/Castwright/pull/3061)) · **2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti), Qwen resident on GPU0, a designed Coqui voice whose `.pt` is missing**
+
+#3058 makes the lazy Coqui derive (the designed-voice self-heal, run mid-chapter
+while Qwen may already be generating) ask the sidecar to place THAT derive on
+`cuda:1`, via an `X-Device-Hint` header on `/xtts/clone-voice`. The sidecar
+treats it as an **advisory preference** (`reservation(preferred=...)`), not a
+pin: the hinted card is tried first and ordinary unconstrained placement is the
+fallback.
+
+**Read the first criterion before anything else.** #3058's own acceptance text
+read *"issue a hinted derive request and confirm via `nvidia-smi` that Coqui
+loads on GPU1"* — and a hand-issued `curl` with the header set exercises only
+the **sidecar** half. It passes green on a build where the Node side never
+emits the header at all, which is exactly the state PR #3061's review found the
+branch in (the device list the hint keys off was warmed only by the Advanced
+Settings screen). An acceptance that cannot fail on its own feature is not an
+acceptance. The run below therefore starts from the app, not from `curl`.
+
+- **The header is emitted by a real generation-path derive, on a server nobody
+  opened Advanced Settings on.** Start the stack (`npm start`), open a book
+  **and go straight to generating a chapter** — do NOT visit Account → Advanced
+  Settings first, at any point before the render. The chapter must contain a
+  character on a *designed* Coqui voice whose `.pt` artifact is absent (delete
+  it from the voice library directory beforehand) so the lazy derive actually
+  fires. Confirm in the sidecar log that the `/xtts/clone-voice` request
+  **carried `X-Device-Hint: cuda:1`** — the placement log line names the hinted
+  device, and a hint that never arrived logs nothing. **A run in which the
+  header is absent is a FAILURE even if the derive succeeds**, because the
+  derive succeeding is what it did before this feature existed.
+- **Coqui lands on GPU1 while Qwen stays on GPU0.** With Qwen resident and
+  generating on GPU0 and GPU1 free, sample `nvidia-smi` across the derive.
+  Confirm the XTTS weights appear on GPU1, Qwen's GPU0 footprint is unchanged,
+  and the render does not stall.
+- **A hint at a card that cannot take it still lands the derive — no stall, no
+  substituted voice.** This is the criterion that separates the shipped
+  advisory behaviour from the hard pin that was reviewed out. Fill GPU1 (a
+  second resident model, or boot with the eGPU carrying the load) so the derive
+  cannot fit there, then trigger the same lazy derive. Confirm: the derive
+  **succeeds on GPU0** within its normal time; the log shows the preference not
+  taken rather than a `noCapacity` refusal; there is **no ~60 s
+  `withCapacityRetry` stall**; and — the user-visible half — the character
+  renders in **its own designed voice, not a stock catalogue voice**. A
+  catalogue-voice substitution here is the failure the advisory contract
+  exists to prevent, and it is silent in the UI, so listen to (or inspect the
+  cast assignment of) the rendered chapter rather than trusting a green
+  render.
+- **An operator's own `COQUI_DEVICE` pin still wins.** Set `tts.coqui.device`
+  to `cuda:0` (Advanced Settings, or `COQUI_DEVICE=cuda:0` in `server/.env`),
+  restart, and run the same chapter. Confirm the derive lands on **GPU0**
+  despite the hint naming `cuda:1` — a per-request preference must not
+  overrule a `risk: 'high'` knob the operator set deliberately.
+- **A stale device list does not break anything.** Warm the list (open Advanced
+  Settings once on the 2-card boot), then restart the sidecar with only one card
+  visible (`CUDA_VISIBLE_DEVICES=0`) WITHOUT restarting the Node server, and
+  render again. The cached list still remembers an idx-1 card, so the hint is
+  still emitted and names a device that no longer exists. Confirm the derive
+  still succeeds on the remaining card. (Nothing resets the cache on sidecar
+  respawn — this is a known, accepted consequence of the advisory contract, and
+  the criterion pins that it stays harmless.)
+
+*Needs:* the 2-card boot for the first four criteria (the third also needs GPU1
+occupied); real Qwen + Coqui/XTTS weights; a real book with a designed Coqui
+character; a live sidecar. Not reproducible on the single-card boot — with no
+idx-1 card the feature deliberately emits no hint at all.
+*Criteria:* the five bullets above, expanded with the exact commands and
+sampling points in
+[`docs/testing/device-hint-placement-onbox-acceptance.md`](device-hint-placement-onbox-acceptance.md).
+*Cost:* moderate — one eGPU sitting; the third criterion needs GPU1 deliberately
+filled, the fifth needs a sidecar restart mid-session.
 
 ## Group B — local Ollama analyzer only
 

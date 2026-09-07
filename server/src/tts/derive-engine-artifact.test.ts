@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /* Task 15 — withCapacityRetry is mocked wholesale (mirrors embed-client.test.ts
    / transcribe-client.test.ts): the retry/evict/exhaustion policy itself is
@@ -198,10 +201,22 @@ describe('deriveEngineArtifact — X-Language (#1951)', () => {
   });
 });
 
-/* #3058 — a per-request device override for /xtts/clone-voice, sent as
-   X-Device-Hint. Only clone-voice-resolver.ts's lazy Coqui derive supplies
-   `deviceHint`; every other caller leaves it undefined, so the header must
-   be sent only when explicitly provided and never invented as a default. */
+/* #3058 — a device preference for /xtts/clone-voice, sent as X-Device-Hint.
+   Only clone-voice-resolver.ts's lazy Coqui derive supplies `deviceHint`;
+   every other caller leaves it undefined, so the header must be sent only
+   when explicitly provided and never invented as a default.
+
+   #3061 review C7 — the send side of this helper is engine-blind (the
+   header is written before the engine branch), but the WIRE CONTRACT is
+   not: only the sidecar's `/xtts/clone-voice` route reads the header.
+   `/qwen/clone-voice` ignores it, so a `deviceHint` set on a qwen derive
+   travels and is discarded. An earlier version of this block asserted the
+   opposite under the name "the header is engine-agnostic on the wire",
+   which would have been cited as evidence the qwen path works. The two
+   tests below now say which half is true, and the third pins the sidecar's
+   read sites so the claim cannot rot: add a read to `/qwen/clone-voice` and
+   the guard reddens, forcing this comment and those names to be revisited
+   rather than leaving a green test telling a false story. */
 describe('deriveEngineArtifact — X-Device-Hint (#3058)', () => {
   function headersOf(spy: ReturnType<typeof vi.spyOn>) {
     const [, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
@@ -221,7 +236,7 @@ describe('deriveEngineArtifact — X-Device-Hint (#3058)', () => {
     expect(headersOf(spy)['X-Device-Hint']).toBe('cuda:1');
   });
 
-  it('sends X-Device-Hint on a qwen derive too (the header is engine-agnostic on the wire)', async () => {
+  it('puts X-Device-Hint on the wire for a qwen derive too, where the sidecar then ignores it (NOT engine-agnostic — see the qwen route guard below)', async () => {
     const spy = vi
       .spyOn(global, 'fetch')
       .mockResolvedValue(okResponse(Buffer.from([1]), { 'X-Sample-Rate': '24000' }));
@@ -231,7 +246,34 @@ describe('deriveEngineArtifact — X-Device-Hint (#3058)', () => {
       { masterPcm: Buffer.from([9]), sampleRate: 24000, refText: 't', deviceHint: 'cuda:0' },
       { sidecarUrl: 'http://sidecar:9000' },
     );
+    /* The send side is engine-blind, so the header IS emitted here. That is
+       a fact about this helper, not a capability: `/qwen/clone-voice` never
+       reads it, so this call places Qwen exactly where it would have gone
+       with no header at all. QWEN_DEVICE remains the only way to move Qwen. */
     expect(headersOf(spy)['X-Device-Hint']).toBe('cuda:0');
+    expect(spy.mock.calls[0][0]).toBe('http://sidecar:9000/qwen/clone-voice');
+  });
+
+  it('is read by exactly one sidecar route, /xtts/clone-voice — the guard behind the claim above', () => {
+    const mainPy = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tts-sidecar', 'main.py'),
+      'utf8',
+    );
+    /* Header READS only — `req.headers.get("X-Device-Hint")`. Mentions in
+       comments and log strings are deliberately not counted; this asserts
+       where the value is consumed, not where it is discussed. */
+    const readSites = [...mainPy.matchAll(/headers\.get\(\s*["']X-Device-Hint["']\s*\)/g)];
+    expect(readSites).toHaveLength(1);
+
+    /* And that one read is inside `xtts_clone_voice`, not some other route:
+       bound the function by its own `def` and the next top-level `def`. */
+    const fnStart = mainPy.indexOf('\nasync def xtts_clone_voice');
+    expect(fnStart).toBeGreaterThan(-1);
+    const nextDef = mainPy.slice(fnStart + 1).search(/\n(?:async )?def /);
+    const fnEnd = nextDef === -1 ? mainPy.length : fnStart + 1 + nextDef;
+    const readAt = readSites[0].index as number;
+    expect(readAt).toBeGreaterThan(fnStart);
+    expect(readAt).toBeLessThan(fnEnd);
   });
 
   it('omits X-Device-Hint entirely when deviceHint is not supplied — today\'s behaviour, unchanged', async () => {
