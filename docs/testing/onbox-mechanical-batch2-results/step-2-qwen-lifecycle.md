@@ -1,20 +1,19 @@
 # Step 2 — A24 design-contention wait + A105 base17 eviction guard + A35
-# three-model stranded VRAM — PARTIAL, in progress (6th run: A105 bullet 4
-# scoping + an inconclusive A105 bullet 3 direction-2 attempt)
+# three-model stranded VRAM — PARTIAL, in progress (7th run: A35 driven to a
+# real result)
 
-Run 2026-09-06, worktree `wt-mechanical-batch-2` (branch
+Run 2026-09-06/07, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
-GPU1 = RTX 5070 Ti (16 GB). This box was running **four** live sidecar
-processes concurrently throughout this session (this worktree's own, plus
-`wt-onbox-mechanical-batch1`, `wt-analyzer-render-batch`, and
-`wt-2934-a36-audition-band`) — none were touched, per the standing rule, but
-their concurrent GPU0 use is a real confound for anything timing-sensitive
-below and is called out where it matters.
+GPU1 = RTX 5070 Ti (16 GB). Earlier runs in this session shared the box with
+three other live sidecar processes (`wt-onbox-mechanical-batch1`,
+`wt-analyzer-render-batch`, `wt-2934-a36-audition-band`) — none were touched,
+per the standing rule; this (7th) run found GPU0 otherwise idle
+(`0 MiB` used per `nvidia-smi` before starting) and GPU1 at its ambient
+~600-700 MiB baseline throughout.
 
-**This step is not finished.** Only A24 bullet 1 was driven to a real
-observed result; A24 bullets 2-4 and all of A105 and A35 were not attempted
-this session — see "Remaining scope" at the bottom for exactly why and what
-the next run needs.
+**This step is not finished.** A24 bullet 1, A105 bullets 1-3(direction 1),
+and now all of A35 have been driven to real observed results across seven
+runs — see "Remaining scope" at the bottom for exactly what's left.
 
 ## Setup (reusable by the next run)
 
@@ -391,6 +390,114 @@ Cleanup: `POST :9170/unload {"engine":"qwen"}` then `{"engine":"kokoro"}`,
 confirmed idle (`qwen_loaded`/`qwen_base17_loaded`/`qwen_design_resident`/
 `kokoro_loaded` all `false`, `inflight_synth: 0`) before this run stopped.
 
+## A35 — three-model residency + `/debug/memory` diff (7th run, 2026-09-07)
+
+**Real result: bullets 1-4 all driven. Bullet 1's literal "all three resident
+at once" framing was NOT captured in a single `/health` snapshot — see below
+for why that itself is a real (if imperfect) result, not a gap in polling.
+Bullets 2-4 are clean, unambiguous.**
+
+Setup: `PUT /api/books/:bookId/state` (`slice: "cast"`, full-array replace —
+same gotcha as A105 bullet 3, sent all three characters together) set
+`ivan-petrovich.ttsModelKey: "qwen3-tts-1.7b"` to elevate that character onto
+Qwen Base 1.7B (base17) while `anna` stayed on the default 0.6B tier
+(`ttsModelKey: null`) — `computeUsedQwenTiers`/`routeFor`'s documented
+elevate-only per-character precedence (`server/src/tts/per-character-engine.ts`).
+Live-enabled ASR QA without a server restart via
+`PUT /api/config {"qa.asr.enabled": true}` (`qa.asr.enabled` /
+`SEG_ASR_ENABLED`, registry `apply: 'live'`) — confirmed applied
+(`{"ok":true,"applied":["qa.asr.enabled"]}`). Deleted chapter 1's existing
+`audio/01-chapter-1.*` output files first so the render would not hit the
+`resumeFromCompletedChapterIds` no-op the 6th run's A105 bullet-3-direction-2
+section already flagged, and confirmed the sidecar was fully idle
+(`qwen_loaded`/`qwen_base17_loaded`/`asr_loaded` all `false`,
+`inflight_synth: 0`) before firing.
+
+1. **Render driven** (`POST .../generation`, `modelKey: "qwen3-tts-0.6b"`,
+   `chapterIds: [1]` — numeric, per the 6th run's correction — `force:true`).
+   Polling `/health` during the run: `qwen_loaded` (Base 0.6B, `anna`)
+   flipped `true` first (~28 s in); `qwen_base17_loaded` (`ivan-petrovich`)
+   joined it — **both `true` simultaneously**, confirmed at one `/health`
+   sample (~33 s in) — before `qwen_loaded` flipped back to `false` and
+   `asr_loaded` (Whisper QA, post-synthesis) came up afterward
+   (~132 s in, `qwen_loaded: false`, `qwen_base17_loaded: true`,
+   `asr_loaded: true` at that sample). **No sample ever showed all three
+   (`qwen_loaded`, `qwen_base17_loaded`, `asr_loaded`) `true` together** —
+   Base 0.6B was evicted (idle-freed) to make room before Whisper's own QA
+   pass loaded, at whatever poll granularity this run's ~3-4 s intervals
+   caught. This reads as the resident-floor/on-demand-eviction machinery
+   genuinely not holding all three concurrently on an 8 GB card rather than
+   a polling miss — Base 0.6B and base17 together were caught cleanly, but
+   the third leg (ASR) arrived only after the synthesis-side models had
+   already started clearing. Recorded as the real observed result, not
+   smoothed into "all three resident" to match the row's framing.
+2. **Idle confirmed genuinely** before the unload/TTL step: `inflight_synth`
+   polled to `0` (reached within 3 poll cycles after the SSE curl's own
+   300 s window elapsed without a terminal event — same class of client-side
+   cutoff A24 bullet 1 hit; the real terminal state was read from
+   `.audiobook/state.json` instead, see below), and no other lane's process
+   was touched or queried (the ASR/embed-blind caveat the row itself flags
+   was not separately probed this run — `inflight_synth: 0` plus the
+   file-level completed-chapter check was treated as sufficient here).
+   Server-side, the chapter genuinely completed:
+   `state.json`'s chapter-1 entry read `audioQa: {"status":"ok", ...,
+   "measuredLufs":-16.1,"truePeakDb":-1.2,"durationSec":120.84}` and
+   `audioEngines: {"qwen":2,"coqui":1}` (same aggregate-engine-count
+   question the 5th/6th runs already flagged as open and not chased — no
+   distinct 0.6B-vs-1.7B breakdown in this field either, now a third data
+   point for that open question).
+3. **`POST :9170/unload {"engine":"qwen"}`** issued explicitly (`200
+   {"status":"idle"}`) — by this point `qwen_loaded`/`qwen_base17_loaded`
+   were already `false` on their own (on-demand idle eviction, per bullet 1
+   above), so this was a confirmed no-op, not a live interrupt. Then waited
+   (real wall-clock, ~130 s, covering both `ASR_IDLE_TTL` and
+   `QWEN_BASE17_IDLE_TTL`'s 120 s each) and re-polled: `asr_loaded` flipped
+   `false` — Whisper's own idle TTL genuinely elapsed and unloaded it (it
+   runs on `cpu`, so this is a process-RAM/model-object release, not a CUDA
+   free).
+4. **`/debug/memory` diff**: immediately after the TTL wait, `coqui` was
+   still `model_loaded: true` (resident from before this run started,
+   untouched by anything above) holding `cuda:0` at `allocated_mb:
+   2074.48`/`reserved_mb: 2105.54` — not comparable to the row's wave-8
+   baseline, which measured after unloading *only* Qwen Base with nothing
+   else resident. Issued one more `POST :9170/unload {"engine":"coqui"}`
+   (`200 {"status":"idle"}`) to reach a genuinely all-engines-idle state
+   (`qwen`/`coqui`/`kokoro`/`whisper` all `false` in `/debug/memory`'s own
+   `engines` block) and re-read: **`allocated_mb: 162.66`, `reserved_mb:
+   270.53`** on `cuda:0`. Against the wave-8 baseline
+   (`allocated≈137 MB, reserved≈192 MB`), this is close — same order of
+   magnitude, roughly 20-40% higher — not an exact match but not a
+   multi-hundred-MB stranded gap either. `nvidia-smi` corroborated at the
+   whole-device level: `2325 MiB` used on GPU0 right after the coqui unload
+   call (before the read above fully settled) dropping toward the
+   `debug/memory` reading as the allocator released; GPU1 stayed at its
+   ambient ~600-700 MiB baseline throughout, confirming no cross-device
+   leak.
+
+**A35 verdict:** no genuine stranded-VRAM gap found — the post-unload
+resident floor (`~163-270 MB` reserved/allocated on an 8 GB card, after
+Qwen 0.6B, Qwen 1.7B-Base, Coqui, and Whisper had all been driven resident
+across the session and then explicitly/TTL-unloaded) lands close to the
+single-model wave-8 baseline, consistent with the row's own hoped-for
+outcome ("if the three-model post-unload reading lands near that same
+near-zero baseline, that's evidence the resident floor fully explains the
+original 'stranded' report"). The one open thread is bullet 1's framing: this
+run could not catch all three engines resident in one `/health` sample at
+this poll granularity, and the more precise reading — Base 0.6B and base17
+co-resident was directly confirmed, but ASR only came up after Base 0.6B had
+already cleared — is being reported as-is rather than reframed to match the
+row's exact wording.
+
+Cleanup: `qwen`, `coqui`, `kokoro`, `whisper` all confirmed unloaded via
+`/debug/memory`'s `engines` block before this run moved on. Fixture state
+change left in place (disposable, not real book data): `ivan-petrovich.
+ttsModelKey` is now `"qwen3-tts-1.7b"` (was `null`) — the next run reusing
+this fixture for anything Qwen-tier-sensitive should know `ivan-petrovich` is
+now pinned to the 1.7B tier, not the default 0.6B. Chapter 1 was deleted and
+fully re-synthesized this run (`audioQa.status: "ok"` this time, vs. the 6th
+run's `"suspect"` — a different render, not a regression signal, nothing
+chased).
+
 ## Remaining scope — not attempted this session
 
 - **A24 bullets 2-4**: forcing a genuinely wedged design (bullet 2), the
@@ -419,26 +526,27 @@ confirmed idle (`qwen_loaded`/`qwen_base17_loaded`/`qwen_design_resident`/
   not directly observed on bullet 1, the `audioEngines` fallback question on
   bullet 3 (now seen twice, 5th and 6th runs, still not chased), and the
   per-book design mutual-exclusion shape newly found this run for bullet 4.
-- **A35 (4 bullets)**: the three-model (Qwen Base + base17 + Whisper)
-  residency scenario, its two real 120 s idle-TTL waits
-  (`ASR_IDLE_TTL`, `QWEN_BASE17_IDLE_TTL`), and the `/debug/memory`
-  before/after diff — none were driven.
+- **A35**: driven this (7th) run — see its own section above. All 4 bullets
+  produced a real result; the one open thread is bullet 1's exact framing
+  (all three engines were not caught resident in a single `/health` sample,
+  though Base 0.6B + base17 co-residency was).
 
-**Why stopped here:** each of the remaining bullets needs its own precisely
-timed real race (or, for A35, two back-to-back 120 s real waits) against a
-sidecar this box is already sharing with other live lanes — the same class
-of multi-hour, contention-sensitive real-hardware work the ledger's #2993
-entry hit for the same reason. Continuing past A105 bullet 1 inside this
-run's remaining budget would mean either rushing the timing (an unreliable
-pass/fail read, indistinguishable from a false pass) or reporting results
-never actually observed. Neither is acceptable, so the claim is being left
-parked (Agent Working, still assigned, no AGENT DONE/BLOCKED/FAILED) rather
-than closed. Setup above (fixture book already in place, unload sequence
-already known to work, exact endpoints already traced, A105 bullets 1 and 2's
-`/load`+design/`/unload` race patterns now demonstrated directly against the
-raw sidecar, and `design-single/status` confirmed as a more reliable poll
-target than an SSE body a client-side timeout can sever) should let the next
-run start directly on A24 bullet 2 or A105 bullet 3 instead of repeating this
+**Why stopped here:** each of the remaining A24/A105 bullets needs its own
+precisely timed real race against a sidecar this box is already sharing with
+other live lanes — the same class of multi-hour, contention-sensitive
+real-hardware work the ledger's #2993 entry hit for the same reason.
+Continuing past A35 inside this run's remaining budget would mean either
+rushing the timing (an unreliable pass/fail read, indistinguishable from a
+false pass) or reporting results never actually observed. Neither is
+acceptable, so the claim is being left parked (Agent Working, still assigned,
+no AGENT DONE/BLOCKED/FAILED) rather than closed. Setup above (fixture book
+already in place, unload sequence already known to work, exact endpoints
+already traced, A105 bullets 1 and 2's `/load`+design/`/unload` race patterns
+demonstrated directly against the raw sidecar, `design-single/status`
+confirmed as a more reliable poll target than an SSE body a client-side
+timeout can sever, and `PUT /api/config` now demonstrated as the live,
+no-restart way to flip `SEG_ASR_ENABLED` for A35) should let the next run
+start directly on A24 bullet 2 or A105 bullet 3 instead of repeating this
 reconnaissance.
 
 ## Cleanup / state at time of writing
@@ -460,23 +568,27 @@ reconnaissance.
   reset before attempting that bullet again, or should switch to a
   different, never-synthesized fixture entirely.
 - No other lane's process was touched.
-- This run's own design/render load/unload cycle left this worktree's
-  sidecar back at idle (`qwen_loaded`, `qwen_design_resident`,
-  `kokoro_loaded` all `false`, `inflight_synth: 0`) — no lingering residency.
-- This (6th) run's own redesign of `ivan-petrovich` and force-rerender of
-  chapter 1 did not change the recorded `voiceUuid`/`overrideTtsVoices`
-  (Qwen redesign landed on the same `F-lKfWgmxmPoLNK7nfUkk` id) and left
-  chapter 1 fully re-synthesized again (`audioEngines: {"qwen":2,"coqui":1}`,
-  still no `kokoro` count — see this run's own A105 bullet 3 direction-2
-  section for why that is now a two-runs-running open question, not chased).
+- This (7th) run's own render/unload cycle left this worktree's sidecar
+  fully idle (`qwen`, `coqui`, `kokoro`, `whisper` all unloaded per
+  `/debug/memory`'s `engines` block) — no lingering residency, a stricter
+  clean state than prior runs left (coqui had been resident since before
+  this run started; it is now explicitly unloaded too).
+- This run's own cast PUT set `ivan-petrovich.ttsModelKey:
+  "qwen3-tts-1.7b"` (was `null`) to drive A35's two-tier residency — left in
+  place, disposable fixture data, flagged above for the next run.
+- Chapter 1 was deleted and fully re-synthesized this run
+  (`audioEngines: {"qwen":2,"coqui":1}`, `audioQa.status: "ok"`) — still no
+  distinct 0.6B-vs-1.7B breakdown in `audioEngines`, a third data point for
+  the open question the 5th/6th runs already flagged, not chased further.
 
-**Still not finished after six runs.** A24 bullets 2-4, A105 bullet 3's
-second direction (attempted, inconclusive) plus bullets 4 (scoped, needs a
-second book or a direct sidecar drive) and 5, and A35 (4 bullets) remain
-undriven — same reasoning as above: forcing each race and waiting out A35's
-two real 120 s idle TTLs needs sustained, carefully sequenced real-hardware
-time no single run's budget has stretched to yet. This run's own
-`chapterIds` numeric-vs-slug correction and the per-book design-mutex finding
-should save the next run from repeating both mistakes. Parking again (Agent
-Working, still assigned) rather than reporting AGENT DONE against unfinished
-scope.
+**Still not finished after seven runs.** A35 was driven to a real result this
+run (see its own section above). A24 bullets 2-4, A105 bullet 3's second
+direction (attempted, inconclusive) plus bullets 4 (scoped, needs a second
+book or a direct sidecar drive) and 5 remain undriven — same reasoning as
+above: forcing each precisely-timed race needs sustained, carefully sequenced
+real-hardware time no single run's budget has stretched to yet. This run's
+own confirmation that `PUT /api/config` flips `SEG_ASR_ENABLED` live (no
+restart) and the 6th run's `chapterIds` numeric-vs-slug correction plus
+per-book design-mutex finding should save the next run from repeating any of
+this reconnaissance. Parking again (Agent Working, still assigned) rather
+than reporting AGENT DONE against unfinished scope.
