@@ -2290,9 +2290,9 @@ generation view **open and visible** when the failure lands.
   when the underlying reason is `wrong-engine`. Repeat once against C-13's
   wrong-engine setup to confirm.
 
-**Result:** ☒ P (live toast + help link + same-chapter dedupe) ☐ F
-☒ B (cross-chapter dedupe + wrong-engine reason-neutral repeat still owed)
-☐ N/A  **Notes:** Retried
+**Result:** ☒ P (live toast + help link) ☐ F
+☒ B (same-chapter dedupe re-run + cross-chapter dedupe + wrong-engine
+reason-neutral repeat still owed) ☐ N/A  **Notes:** Retried
 2026-09-06, real dev stack (`npm start` + `LAN_HTTPS=1`, real server, not
 mock). **Live toast now confirmed** (the piece blocked on 2026-09-04):
 revoked the Narrator's cloned voice on "The Coalfall Commission" (a
@@ -2306,13 +2306,22 @@ voice(s); reassign the character(s).` The failed chapter row's **"More
 help"** link had `href="#/help?code=cloned-voice-broken"` exactly; clicking
 it navigated to that URL and rendered the Help view titled verbatim
 **`Cloned voice can't render as itself`** under Voices, with the same
-remediation copy. **Per-chapter dedupe (same chapter) confirmed**:
-re-triggering Chapter 1's failure a second time in the same session did
-**not** add a second stacked toast — the toast list still showed exactly
-one `"Chapter 1 failed — ..."` entry (consistent with
-`generation-stream-runner.ts`'s `dedupeKey:
-\`${errorCode}:${bookId}:${chapterId}\`` bumping the existing toast's
-`createdAt` rather than appending a duplicate). **Not cleanly re-confirmed
+remediation copy. **Per-chapter dedupe (same chapter) — claimed confirmed
+here, then withdrawn.** Re-triggering Chapter 1's failure a second time in
+the same session did not add a second stacked toast, which was read at the
+time as dedupe holding. A round-2 pr-review-gate pass on PR #3073
+(2026-09-07) found the measuring script
+(`e2e/manual/fs38-c15-toast-dedupe.mjs`) could not actually detect a broken
+dedupe: same-chapter failures produce identical toast text, so the script's
+toast-presence check could be satisfied by attempt 1's own still-visible
+toast without attempt 2 having done anything at all — a coincidental
+"count stayed at 1" that would read as PASS whether or not dedupe existed.
+The script has since been rewritten (captures the specific toast DOM
+element before the retry and verifies via `element.isConnected` that the
+same element persisted, on a real ~2.3s wait for the retry's own failure to
+land, rather than trusting text-match timing) but has **not yet been
+re-run against a real dev stack** — so same-chapter dedupe reverts to
+**owed**, not confirmed, pending that re-run. **Not cleanly re-confirmed
 live this session: a genuinely different chapter of the same book getting
 its own separate toast.** Set up a second, independent Broken voice
 (assigned + revoked a spare cloned voice on "Pell Hollis", who appears only
@@ -2340,11 +2349,12 @@ reason-neutral design, but the wrong-engine variant itself needs a repeat
 run. Previously-found sidecar-URL defect (`getResolvedSidecarUrl()` using
 `localhost` instead of `127.0.0.1`) remains fixed and unrelated to any of
 this. **Net: promoted from fully Blocked to partially confirmed** — live
-toast + help link + help page + same-chapter dedupe are solid; cross-chapter
-dedupe and the wrong-engine reason-neutral repeat are still owed, blocked
-by this box's shared-queue contention rather than a known product defect.
-Scripts: `e2e/manual/fs38-c15-toast-dedupe.mjs` (kept — the clean, working
-flow for triggering + reading toasts/help-link/dedupe on the same chapter).
+toast + help link + help page are solid; same-chapter dedupe (re-run owed
+against the corrected script), cross-chapter dedupe, and the wrong-engine
+reason-neutral repeat are all still owed. Scripts:
+`e2e/manual/fs38-c15-toast-dedupe.mjs` (kept, now with a genuinely
+fail-capable dedupe check — see PR #3073 — but not yet exercised against a
+real dev stack).
 
 ---
 
@@ -3399,7 +3409,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-12 | Atomic `.pt`: kill mid-write leaves no truncated `.pt` | **P** (weaker variant) | Run 5, 5 attempts — never caught a truncated `.pt`; every kill landed cleanly before or after the write. Consistent with atomicity but doesn't prove concurrent interruption directly |
 | C-13 | `wrong-engine` diagnosed distinctly at render time | **P** (wrong-engine half) · **B** (engine-unavailable contrast) | Run 5. Wrong-engine half confirmed exactly. Engine-unavailable contrast not reproducible on this box — a generation request lazily relaunches the sidecar regardless of `autoStartSidecar` |
 | C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | **P** | Run 5. All 4 assign-time wrong-engine guard scenarios confirmed |
-| C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | **P** (live toast, help link, help page, same-chapter dedupe) · **B** (cross-chapter dedupe + wrong-engine reason-neutral repeat) | 2026-09-06: live toast fired 2.3s after trigger, exact message; `More help` href `#/help?code=cloned-voice-broken`; Help view titled `Cloned voice can't render as itself`; re-triggering the SAME chapter did not stack a second toast (dedupe held). A different-chapter toast could not be cleanly re-confirmed live this session — blocked by a saturated shared queue (10+ pending entries from concurrent worktree activity) and a stuck `in_progress` entry that resisted cancellation even paused; not a toast/dedupe code defect. `dedupeKey` embeds `chapterId` (source-confirmed) |
+| C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | **P** (live toast, help link, help page) · **B** (same-chapter dedupe re-run + cross-chapter dedupe + wrong-engine reason-neutral repeat) | 2026-09-06: live toast fired 2.3s after trigger, exact message; `More help` href `#/help?code=cloned-voice-broken`; Help view titled `Cloned voice can't render as itself`. Re-triggering the SAME chapter did not stack a second toast, initially read as dedupe holding — **withdrawn**: a round-2 pr-review-gate pass on PR #3073 (2026-09-07) found the measuring script could not distinguish dedupe working from dedupe being entirely absent (identical toast text across attempts let attempt 1's own stale toast satisfy the check). Script rewritten to verify DOM-element persistence instead; not yet re-run live, so same-chapter dedupe is owed again. A different-chapter toast could not be cleanly re-confirmed live this session — blocked by a saturated shared queue (10+ pending entries from concurrent worktree activity) and a stuck `in_progress` entry that resisted cancellation even paused; not a toast/dedupe code defect. `dedupeKey` embeds `chapterId` (source-confirmed) |
 | C-16 | Broken / Repairable card chip | **P** | All 5 states confirmed on `#/voices`: Healthy=no chip, Broken(revoked/no-master/failed)=danger `Needs attention`, Repairable(stale)=warning `Will re-derive`; per-engine pill correctly shows `Qwen ⚠`/`Qwen ⟳` on the two engine-status states |
 | C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | **P** | Run 7: full chapter generation (not splice) on a throwaway primary-checkout book. `.pt` deleted → chapter completed, `.pt` reappeared, `instruct`/`designModel` byte-identical, `baseModel` refreshed. Re-design confirmed working (needed a Kokoro unload first — real, correctly-diagnosed VRAM contention, not a defect). Historical run-2 `F` was already withdrawn as a #1972 splice-attribution artifact — see the detailed section |
 | C-18 | §2.3 stale `.pt` deliberately left alone | **P** | Run 7: bumped `baseModel`+`status` to bogus/stale, `.pt` present. Chapter completed, `.pt` hash/mtime unchanged, zero new derives — designed-voice presence-only check confirmed, unlike a cloned voice's C-07 |

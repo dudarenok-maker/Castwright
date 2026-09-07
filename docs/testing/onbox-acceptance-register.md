@@ -1130,8 +1130,8 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **56 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04, 2026-09-06) · 10 still owed · 3 run-2 results retracted**
-<!-- stat:a1-still-owed 10 -->
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **56 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04, 2026-09-06) · 11 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 11 -->
 <!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
@@ -1178,8 +1178,9 @@ naming the character — Run 4, see below). **Wave 12 (2026-09-06) additionally
 discharged:** A-07/A-08/A-09 (real-browser recorder/mic-denial/consent-gate,
 #2920), B-02 (record-path clone, #2920), B-08/B-09/B-10 (cast-sample and
 chapter/cross-chapter identity via sidecar cosine, #2923), E-04 (long-Coqui-
-sentence fix re-confirmed on real weights, #2923), and C-15's live-toast half
-(help link + same-chapter dedupe, #2920) — see "Still owed" below for what
+sentence fix re-confirmed on real weights, #2923), and C-15's live toast +
+help link half (#2920 — the same-chapter dedupe half briefly counted here
+too but withdrawn; see "Still owed" below) — see "Still owed" below for what
 remains of each partially-discharged row. This list is not kept exhaustively
 in sync with every Section C/D/E discharge recorded further below; treat the
 row's own totals table and "Still owed" bullets as authoritative for current
@@ -1431,7 +1432,7 @@ finding and fixing 5 genuinely-broken assertions across `qwen-voice.test.ts`
 `localhost:9000` individually rather than blind-replacing, since most were
 self-contained mocks/fixtures unaffected by the real derivation.
 
-**Still owed (9), and why — updated wave 12 (2026-09-06/07):**
+**Still owed (11), and why — updated wave 12 (2026-09-06/07):**
 - **Browser/mic — DISCHARGED wave 12.** A-07 (recorder webm/opus), A-08
   (mic-denial fallback), A-09 (consent gates Continue) and B-02 (record-path
   clone) all ran for real against a real Chromium + real dev stack
@@ -1444,6 +1445,13 @@ self-contained mocks/fixtures unaffected by the real derivation.
   (#2919, 2026-09-06 — `LISTEN-fs38-wave12.md`); B-03's kit is complete and
   awaiting the owner's verdict, E-06's kit is incomplete (its Coqui-derive half
   still blocked on GPU capacity — see below).
+- **C-13 (1) — engine-unavailable contrast still owed.** The wrong-engine half
+  is confirmed exactly (Run 5); the engine-unavailable contrast has not been
+  reproducible on this box (a generation request lazily relaunches the sidecar
+  regardless of `autoStartSidecar`, so the "engine genuinely unavailable"
+  precondition can't be held still long enough to observe). Previously not
+  counted in this row's own tally — a round-2 pr-review-gate pass on PR #3073
+  caught the omission.
 - **Section E — 8 of 9 discharged as of wave 12; only E-06 (by-ear + GPU
   capacity) remains.** E-04's reproduction re-run landed this wave: retried on
   real Coqui weights (#2923, 2026-09-06) and the case that 500'd pre-#2039 now
@@ -1528,8 +1536,13 @@ self-contained mocks/fixtures unaffected by the real derivation.
   whose `segments.json` and the current analysis disagreed (exactly the shape
   both fixture books in that run hit); #1972 has since closed that refusal.
   </details>
-- **Section C — 13 rows discharged in full: C-01 ⭐,
-  C-04, C-06, C-07, C-08, C-09, C-12, C-14, C-16, C-17 ⭐, C-18, C-20, C-21.**
+- **Section C — 18 rows discharged in full: C-01 ⭐, C-02, C-03,
+  C-04, C-06, C-07, C-08, C-09, C-10 ⭐, C-11, C-12, C-14, C-16, C-17 ⭐, C-18,
+  C-19, C-20, C-21** (C-02/C-03/C-10/C-11/C-19 previously omitted from this
+  tally despite a clean `P` in the run sheet's §7.1 results table — caught by
+  a round-2 pr-review-gate pass on PR #3073; C-05 is deliberately excluded,
+  a genuine **F** already filed as [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023),
+  not a discharge).
   **C-13** is partial — wrong-engine half only, engine-unavailable contrast
   not reproducible on this box — see Run 5 note. **C-15's live browser-toast
   half is partially confirmed** (2026-09-06, real dev stack): the toast fires
@@ -1595,10 +1608,12 @@ does not affect functionality.
 attester — `attestedBy` is overwritten with `personName`, which inverts
 `guardian-of-minor`).
 
-Starred, highest-risk — **C-10, C-01, C-08, C-17, C-12, C-15, E-01, E-02, and
-E-07 are all now discharged** (C-10 2026-07-29; C-01/C-08/C-17/C-12 Run 5/7;
-C-15's live half wave 12 (2026-09-06); E-01 Run 3 — Run 2's E-01 result was
-retracted, #1972; E-02 Run 2; E-07 Run 7).
+Starred, highest-risk — **C-10, C-01, C-08, C-17, C-12, E-01, E-02, and
+E-07 are all now discharged in full; C-15 is partially discharged** (live
+toast + help link only — see "Still owed" below for the rest) (C-10
+2026-07-29; C-01/C-08/C-17/C-12 Run 5/7; C-15's live-toast + help-link half
+wave 12 (2026-09-06); E-01 Run 3 — Run 2's E-01 result was retracted,
+#1972; E-02 Run 2; E-07 Run 7).
 **E-06 is the one still owed**: the one place D-B's
 synthetic-clip-vs-catalogue quality question can actually be judged, by ear —
 its kit is now staged (wave 12) but the Coqui-derive half of the pair still
