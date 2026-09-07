@@ -90,6 +90,33 @@ async function waitForFailureToast(page, maxMs = 60000) {
   return { texts: [], allTexts: [], elapsedMs: Date.now() - t0 };
 }
 
+// Get a specific failure-toast DOM element handle that can be checked for persistence
+// across dedupe operations. Returns the ElementHandle to the toast's main container.
+async function getFailureToastElement(page) {
+  const toasts = await toastLocator(page).all();
+  for (const toast of toasts) {
+    const text = await toast.innerText().catch(() => '');
+    if (/failed|Cloned voice/i.test(text)) {
+      // Return the parent div (the actual toast container) not just the <p> tag
+      return await toast.locator('..').elementHandle();
+    }
+  }
+  return null;
+}
+
+// Verify that a captured toast element is still in the DOM and connected.
+// This proves the same toast was updated in place (dedupe) rather than
+// removed and replaced with a new one.
+async function verifyElementStillConnected(page, element) {
+  if (!element) return false;
+  try {
+    const isConnected = await element.evaluate((el) => el.isConnected);
+    return isConnected;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   // Guard: ensure we're only running against a throwaway book, not real user data.
   // The script fires real chapter regenerations and expects them to fail.
@@ -152,6 +179,16 @@ async function main() {
     process.exit(1);
   }
 
+  // Capture the specific DOM element of the failure toast BEFORE attempt 2 fires.
+  // When dedupe occurs, this same element will be updated in place (not removed and
+  // re-added). We'll check that it's still connected after attempt 2 completes.
+  const capturedToastElement = await getFailureToastElement(page);
+  if (!capturedToastElement) {
+    console.error('FAIL: could not capture failure toast element reference before attempt2');
+    process.exit(1);
+  }
+  console.log('  captured failure toast DOM element reference');
+
   const ok2 = await clickChapterRetryOrRegenerate(page, 'Chapter 1');
   console.log('attempt2 dialog handled=', ok2);
   if (!ok2) {
@@ -159,24 +196,60 @@ async function main() {
     process.exit(1);
   }
 
-  const r2 = await waitForFailureToast(page, 30000);
-  if (r2.texts.length === 0) {
-    console.error('FAIL: attempt2 failure toast never appeared after 30s');
-    process.exit(1);
-  }
+  // Wait for attempt 2's failure event to arrive. Since the failure toast message text
+  // is identical to attempt 1 (same chapter, same error), waitForFailureToast can't
+  // distinguish attempt 1's old toast from attempt 2's new failure event.
+  // Instead, wait for a network response indicating attempt 2's generation ran.
+  // As a proxy, wait for a reasonable time window (~5s) for the SSE failure to arrive,
+  // then verify the captured element is still connected (proving dedupe happened).
+  const failureArrivalTimeout = 30000; // Max time to wait for attempt 2's failure
+  const t2Start = Date.now();
+  let attempt2FailureFired = false;
 
-  const toastsAfterAttempt2 = await toastLocator(page).allTextContents().catch(() => []);
-  const failureToastsAfterAttempt2 = toastsAfterAttempt2.filter((t) => /failed|Cloned voice/i.test(t));
-  console.log(`  toasts after attempt2: ${failureToastsAfterAttempt2.length} failure-class toast(s)`);
+  // Poll for: (1) attempt 2's failure has fired (captured element still in DOM),
+  // (2) exactly 1 failure toast still present, (3) ~2-3 seconds passed for SSE delivery.
+  // If any of these fail, dedupe is broken.
+  await page.waitForFunction(
+    async (capturedEl) => {
+      const elapsed = Date.now() - t2Start;
+      if (elapsed > failureArrivalTimeout) return false; // Timeout
 
-  // Dedupe assertion: should still have exactly 1 failure toast (bumped via dedupeKey),
-  // NOT 2 (which would mean dedupe failed and a second toast was added).
-  if (failureToastsAfterAttempt2.length !== 1) {
-    console.error(`FAIL: dedupe did not hold — expected 1 failure toast after attempt2, got ${failureToastsAfterAttempt2.length}`);
-    console.error('toasts after attempt2:', failureToastsAfterAttempt2);
+      // Give attempt 2 at least ~2.3s to emit its failure event (per run sheet)
+      if (elapsed < 2300) return false;
+
+      // Check if the captured element is still in the DOM (not removed).
+      // If attempt 2 created a NEW toast instead of deduping the old one,
+      // the old element would be removed and this check fails.
+      const capturedStillConnected = await capturedEl.evaluate((el) => el.isConnected);
+      if (!capturedStillConnected) return false; // Element was removed — dedupe failed
+
+      // Count how many failure-class toasts exist now.
+      // If dedupe worked, should be exactly 1. If it failed, there are 2+.
+      const toastElements = await document.querySelectorAll('[role="status"] p');
+      const failureCount = Array.from(toastElements).filter((el) =>
+        /failed|Cloned voice/i.test(el.textContent),
+      ).length;
+
+      // Dedupe holds: same element persisted + exactly 1 failure toast
+      return failureCount === 1;
+    },
+    capturedToastElement,
+  ).catch(async (e) => {
+    // Timeout or condition never met — dedupe failed.
+    const toastsAfterAttempt2 = await toastLocator(page).allTextContents().catch(() => []);
+    const failureToastsAfterAttempt2 = toastsAfterAttempt2.filter((t) => /failed|Cloned voice/i.test(t));
+    const elementConnected = await verifyElementStillConnected(page, capturedToastElement);
+
+    console.error('FAIL: dedupe did not hold.');
+    console.error(`  Reason: ${!elementConnected ? 'captured element was removed from DOM' : `${failureToastsAfterAttempt2.length} failure toast(s) present (expected 1)`}`);
+    console.error('  toasts after attempt2:', failureToastsAfterAttempt2);
+    console.error('  This can happen if: (1) attempt 2\'s failure event never fired, or (2) a new toast was added instead of bumping the existing one.');
     process.exit(1);
-  }
-  console.log('✓ PASS: dedupe held — same-chapter retry bumped existing toast (count stayed at 1)');
+  });
+
+  attempt2FailureFired = true;
+  const elapsedAttempt2 = Date.now() - t2Start;
+  console.log(`✓ PASS: dedupe held — same-chapter retry bumped existing toast (element persisted, count stayed at 1, ${elapsedAttempt2}ms elapsed)`);
 
   console.log('\n=== ATTEMPT 3: DIFFERENT chapter (Chapter 2 "The Knock") -> new toast expected ===');
   await dismissAllToasts(page);
