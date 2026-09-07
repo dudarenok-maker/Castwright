@@ -192,3 +192,30 @@ test('CLI: missing --runs defaults to 3 (no error)', () => {
     'should not complain about missing --runs (defaults to 3)',
   );
 });
+
+test('CLI: outside-repo diagnostic does not print undefined', () => {
+  const { exitCode, stderr } = runFlakeRepro([
+    '--file',
+    'C:\\Windows\\System32\\drivers\\etc\\hosts.test.ts',
+    '--runs',
+    '1',
+  ]);
+  assert.strictEqual(exitCode, 2);
+  assert.strictEqual(stderr.includes('outside the repository'), true);
+  assert.strictEqual(stderr.includes('undefined'), false, 'should not print undefined in diagnostic');
+  assert.strictEqual(stderr.includes('C:\\Windows'), true, 'should print the resolved path');
+});
+
+test('CLI: invoked from subdirectory (server/) still runs with correct config', () => {
+  // Change to server directory, then run flake-repro with an absolute path to a test file
+  const serverDir = resolve(repoRoot, 'server');
+  const result = spawnSync(process.execPath, [scriptPath, '--file', 'server/src/routes/book-state.test.ts', '--runs', '1'], {
+    encoding: 'utf8',
+    stdio: 'pipe',
+    cwd: serverDir,
+  });
+  // Should succeed even when invoked from a subdirectory
+  assert.strictEqual(result.status, 0, `expected exit 0, got ${result.status}`);
+  assert.strictEqual(result.stdout.includes('SUMMARY'), true, 'should print SUMMARY');
+  assert.strictEqual(result.stdout.includes('RUN'), true, 'should run vitest');
+});

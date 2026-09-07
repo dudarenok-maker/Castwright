@@ -71,7 +71,8 @@ export function resolveTarget(file, repoRoot) {
       normalized = relativeToRepo;
     } else {
       // Return as-is; the caller will refuse it as outside the repo
-      return { cwd: null, rel: abs.replace(/\\/g, '/'), isSlow: false, isOutsideRepo: true };
+      const absPath = abs.replace(/\\/g, '/');
+      return { cwd: null, rel: absPath, fullPath: absPath, isSlow: false, isOutsideRepo: true };
     }
   }
 
@@ -187,12 +188,25 @@ function main() {
     ? ['vitest', 'run', '--config', 'vitest.config.slow.ts', rel]
     : ['vitest', 'run', rel];
 
+  // Use absolute cwd so spawn resolves correctly from any working directory
+  const absoluteCwd = resolve(repoRoot, cwd);
+
   const results = [];
   for (let i = 0; i < runs; i++) {
     const t0 = process.hrtime.bigint();
-    const r = spawnSync('npx', cmd, { cwd, stdio: 'inherit', shell: process.platform === 'win32', windowsHide: true,
+    const r = spawnSync('npx', cmd, { cwd: absoluteCwd, stdio: 'inherit', shell: process.platform === 'win32', windowsHide: true,
       env: { ...process.env, RUN_QUARANTINE: '1' } }); // RUN_QUARANTINE=1 so quarantined cases run
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+
+    // If the spawn itself failed (r.error set or r.status is null), do not report it as a measurement
+    if (r.error || r.status === null) {
+      stopCpuLoad(); stopIoLoad();
+      console.error('flake-repro: spawn failed to start');
+      if (r.error) console.error(`  error: ${r.error.message}`);
+      process.exitCode = 1;
+      return;
+    }
+
     results.push({ run: i + 1, ms: Math.round(ms), code: r.status });
     console.log(`run ${i + 1}: ${Math.round(ms)}ms exit=${r.status}`);
   }
