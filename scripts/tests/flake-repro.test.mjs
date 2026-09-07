@@ -12,79 +12,183 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveTarget } from '../flake-repro.mjs';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(here, '..', '..');
+const scriptPath = resolve(here, '..', 'flake-repro.mjs');
+
+// === Unit tests: resolveTarget pure function ===
 
 // Test a slow-lane server file in all three Windows/POSIX path forms
 test('resolveTarget: slow-lane server file with forward slashes', () => {
-  const result = resolveTarget('server/src/routes/book-state.test.ts');
+  const result = resolveTarget('server/src/routes/book-state.test.ts', repoRoot);
   assert.deepStrictEqual(result, {
     cwd: 'server',
     rel: 'src/routes/book-state.test.ts',
+    fullPath: 'server/src/routes/book-state.test.ts',
     isSlow: true,
+    isOutsideRepo: false,
   });
 });
 
 test('resolveTarget: slow-lane server file with backslashes (regression)', () => {
-  const result = resolveTarget('server\\src\\routes\\book-state.test.ts');
+  const result = resolveTarget('server\\src\\routes\\book-state.test.ts', repoRoot);
   assert.deepStrictEqual(result, {
     cwd: 'server',
     rel: 'src/routes/book-state.test.ts',
+    fullPath: 'server/src/routes/book-state.test.ts',
     isSlow: true,
+    isOutsideRepo: false,
   });
 });
 
 test('resolveTarget: slow-lane server file with ./ prefix and backslashes (regression)', () => {
-  const result = resolveTarget('.\\server\\src\\routes\\book-state.test.ts');
+  const result = resolveTarget('.\\server\\src\\routes\\book-state.test.ts', repoRoot);
   assert.deepStrictEqual(result, {
     cwd: 'server',
     rel: 'src/routes/book-state.test.ts',
+    fullPath: 'server/src/routes/book-state.test.ts',
     isSlow: true,
+    isOutsideRepo: false,
   });
 });
 
-// Test a non-slow server file in all three forms
+// Test a non-slow server file in all three forms (use a real file)
 test('resolveTarget: non-slow server file with forward slashes', () => {
-  const result = resolveTarget('server/src/routes/voices.route.test.ts');
+  const result = resolveTarget('server/src/routes/voices.test.ts', repoRoot);
   assert.deepStrictEqual(result, {
     cwd: 'server',
-    rel: 'src/routes/voices.route.test.ts',
+    rel: 'src/routes/voices.test.ts',
+    fullPath: 'server/src/routes/voices.test.ts',
     isSlow: false,
+    isOutsideRepo: false,
   });
 });
 
 test('resolveTarget: non-slow server file with backslashes (regression)', () => {
-  const result = resolveTarget('server\\src\\routes\\voices.route.test.ts');
+  const result = resolveTarget('server\\src\\routes\\voices.test.ts', repoRoot);
   assert.deepStrictEqual(result, {
     cwd: 'server',
-    rel: 'src/routes/voices.route.test.ts',
+    rel: 'src/routes/voices.test.ts',
+    fullPath: 'server/src/routes/voices.test.ts',
     isSlow: false,
+    isOutsideRepo: false,
   });
 });
 
 test('resolveTarget: non-slow server file with ./ prefix and backslashes (regression)', () => {
-  const result = resolveTarget('.\\server\\src\\routes\\voices.route.test.ts');
+  const result = resolveTarget('.\\server\\src\\routes\\voices.test.ts', repoRoot);
   assert.deepStrictEqual(result, {
     cwd: 'server',
-    rel: 'src/routes/voices.route.test.ts',
+    rel: 'src/routes/voices.test.ts',
+    fullPath: 'server/src/routes/voices.test.ts',
     isSlow: false,
+    isOutsideRepo: false,
   });
 });
 
 // Test a frontend file
 test('resolveTarget: frontend file with forward slashes', () => {
-  const result = resolveTarget('src/views/listen.test.tsx');
+  const result = resolveTarget('src/views/listen.test.tsx', repoRoot);
   assert.deepStrictEqual(result, {
     cwd: '.',
     rel: 'src/views/listen.test.tsx',
+    fullPath: 'src/views/listen.test.tsx',
     isSlow: false,
+    isOutsideRepo: false,
   });
 });
 
 test('resolveTarget: frontend file with backslashes (regression)', () => {
-  const result = resolveTarget('src\\views\\listen.test.tsx');
+  const result = resolveTarget('src\\views\\listen.test.tsx', repoRoot);
   assert.deepStrictEqual(result, {
     cwd: '.',
     rel: 'src/views/listen.test.tsx',
+    fullPath: 'src/views/listen.test.tsx',
     isSlow: false,
+    isOutsideRepo: false,
   });
+});
+
+// === CLI-level tests: spawn subprocess and check behavior ===
+
+function runFlakeRepro(args) {
+  const result = spawnSync(process.execPath, [scriptPath, ...args], {
+    encoding: 'utf8',
+    stdio: 'pipe',
+  });
+  return {
+    exitCode: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+test('CLI: nonexistent file is refused with exit 2 and no SUMMARY', () => {
+  const { exitCode, stdout, stderr } = runFlakeRepro(['--file', 'nonexistent.test.ts', '--runs', '1']);
+  assert.strictEqual(exitCode, 2, `expected exit 2, got ${exitCode}`);
+  assert.strictEqual(stdout.includes('SUMMARY'), false, 'stdout should not contain SUMMARY');
+  assert.strictEqual(stderr.includes('no such test file'), true, 'stderr should mention the error');
+});
+
+test('CLI: absolute path outside repo is refused with exit 2 and no SUMMARY', () => {
+  const { exitCode, stdout, stderr } = runFlakeRepro([
+    '--file',
+    'C:\\fake\\outside\\repo\\test.test.ts',
+    '--runs',
+    '1',
+  ]);
+  assert.strictEqual(exitCode, 2, `expected exit 2, got ${exitCode}`);
+  assert.strictEqual(stdout.includes('SUMMARY'), false, 'stdout should not contain SUMMARY');
+  assert.strictEqual(stderr.includes('outside the repository'), true, 'stderr should mention the error');
+});
+
+test('CLI: directory is refused with exit 2 and no SUMMARY', () => {
+  const { exitCode, stdout, stderr } = runFlakeRepro(['--file', 'server/src/routes', '--runs', '1']);
+  assert.strictEqual(exitCode, 2, `expected exit 2, got ${exitCode}`);
+  assert.strictEqual(stdout.includes('SUMMARY'), false, 'stdout should not contain SUMMARY');
+  assert.strictEqual(stderr.includes('not a regular file'), true, 'stderr should mention it is a directory');
+});
+
+test('CLI: non-test file is refused with exit 2 and no SUMMARY', () => {
+  const { exitCode, stdout, stderr } = runFlakeRepro(['--file', 'server/src/routes/voices.ts', '--runs', '1']);
+  assert.strictEqual(exitCode, 2, `expected exit 2, got ${exitCode}`);
+  assert.strictEqual(stdout.includes('SUMMARY'), false, 'stdout should not contain SUMMARY');
+  assert.strictEqual(stderr.includes('not a test file'), true, 'stderr should mention the pattern');
+});
+
+test('CLI: missing --file is refused with exit 2 and no SUMMARY', () => {
+  const { exitCode, stdout, stderr } = runFlakeRepro(['--runs', '1']);
+  assert.strictEqual(exitCode, 2, `expected exit 2, got ${exitCode}`);
+  assert.strictEqual(stdout.includes('SUMMARY'), false, 'stdout should not contain SUMMARY');
+  assert.strictEqual(stderr.includes('--file <relpath> required'), true, 'stderr should mention missing --file');
+});
+
+test('CLI: --runs 0 is refused with exit 2 and no SUMMARY', () => {
+  const { exitCode, stdout, stderr } = runFlakeRepro(['--file', 'src/views/listen.test.tsx', '--runs', '0']);
+  assert.strictEqual(exitCode, 2, `expected exit 2, got ${exitCode}`);
+  assert.strictEqual(stdout.includes('SUMMARY'), false, 'stdout should not contain SUMMARY');
+  assert.strictEqual(stderr.includes('positive integer'), true, 'stderr should mention the validation');
+});
+
+test('CLI: --runs non-numeric is refused with exit 2 and no SUMMARY', () => {
+  const { exitCode, stdout, stderr } = runFlakeRepro(['--file', 'src/views/listen.test.tsx', '--runs', 'banana']);
+  assert.strictEqual(exitCode, 2, `expected exit 2, got ${exitCode}`);
+  assert.strictEqual(stdout.includes('SUMMARY'), false, 'stdout should not contain SUMMARY');
+  assert.strictEqual(stderr.includes('positive integer'), true, 'stderr should mention the validation');
+});
+
+test('CLI: missing --runs defaults to 3 (no error)', () => {
+  const { stderr } = runFlakeRepro(['--file', 'src/views/listen.test.tsx']);
+  // Will fail to find a test file when running with --runs missing and defaulting to 3,
+  // but should not complain about --runs itself
+  assert.strictEqual(
+    stderr.includes('positive integer'),
+    false,
+    'should not complain about missing --runs (defaults to 3)',
+  );
 });

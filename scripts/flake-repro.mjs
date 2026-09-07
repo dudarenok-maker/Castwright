@@ -1,9 +1,17 @@
 // scripts/flake-repro.mjs — measure a test file's runtime under induced load.
-// Usage: node scripts/flake-repro.mjs --file server/src/routes/analysis-pipelining.test.ts --runs 3 --cpu-load --io-load
+// Usage: node scripts/flake-repro.mjs --file <test-file> --runs <N> [--cpu-load] [--io-load]
+//
+// --file accepts a relative or absolute path to a test file (not a vitest filter).
+//   Relative paths are resolved against the repo root. Absolute paths are accepted
+//   only if they resolve to a file within the repo; paths outside the repo are refused.
+//   Test files must exist and match the test-file glob patterns from the vitest configs.
+//   Partial path filters (e.g., 'src/routes/voices') are no longer accepted as of #3081.
+//
 import { spawn, spawnSync } from 'node:child_process';
-import { rmSync, mkdtempSync, existsSync } from 'node:fs';
+import { rmSync, mkdtempSync, existsSync, statSync } from 'node:fs';
 import { tmpdir, cpus } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, relative, isAbsolute } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // Decide config: slow files run via the slow config. This list is the exact
@@ -28,7 +36,7 @@ const SLOW = [
   'src/routes/analysis.interim-prune-prohibition.e2e.test.ts',
 ];
 
-// Pure function: resolve a --file argument into { cwd, rel, isSlow }.
+// Pure function: resolve a --file argument into { cwd, rel, isSlow, fullPath }.
 // PowerShell tab-completion produces backslash paths on Windows (the ordinary
 // way paths are typed on this repo's primary platform), but three separate
 // consumers below — cwd routing, server/ prefix strip, and SLOW exact-match —
@@ -37,19 +45,41 @@ const SLOW = [
 // wrong config and still reports a timing, making the silent failure hard to
 // spot (issue #3081). The three consumers are:
 //   - `cwd` choice: checks startsWith('server/')
-//   - `rel` production: strips a leading `server/`
+//   - `rel` production: strips a leading `server/` (for vitest)
 //   - `isSlow` lookup: EXACT match against SLOW's POSIX paths
-export function resolveTarget(file) {
+//
+// Absolute paths (drive-letter, UNC, or POSIX) are relativised against repoRoot.
+// Paths that resolve outside the repo are returned as-is for validation by the
+// caller (which will refuse them with an appropriate diagnostic).
+//
+// `fullPath` is the relative or relativised path (before server/ stripping),
+// suitable for file-existence checks. `rel` is after stripping, for vitest filters.
+export function resolveTarget(file, repoRoot) {
+  // Normalize separators (Windows backslash, UNC) and strip leading ./
   let normalized = file.replace(/\\/g, '/');
   if (normalized.startsWith('./')) {
     normalized = normalized.slice(2);
+  }
+
+  // If absolute, relativise against repo root (or leave as absolute if outside repo)
+  if (isAbsolute(file)) {
+    const abs = resolve(file); // Resolve to absolute form
+    const repoAbs = resolve(repoRoot);
+    const relativeToRepo = relative(repoAbs, abs).replace(/\\/g, '/');
+    // If relative() returned a path with ../, it's outside the repo
+    if (!relativeToRepo.startsWith('..')) {
+      normalized = relativeToRepo;
+    } else {
+      // Return as-is; the caller will refuse it as outside the repo
+      return { cwd: null, rel: abs.replace(/\\/g, '/'), isSlow: false, isOutsideRepo: true };
+    }
   }
 
   const cwd = normalized.startsWith('server/') ? 'server' : '.';
   const rel = normalized.replace(/^server\//, '');
   const isSlow = SLOW.includes(rel);
 
-  return { cwd, rel, isSlow };
+  return { cwd, rel, isSlow, fullPath: normalized, isOutsideRepo: false };
 }
 
 let cpuBurners = [];
@@ -81,12 +111,32 @@ function main() {
   const get = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
   const has = (k) => args.includes(k);
   const file = get('--file');
-  const runs = Number(get('--runs', '3'));
+  const runsArg = get('--runs', '3');
+  const runs = Number(runsArg);
+
   if (!file) { console.error('--file <relpath> required'); process.exitCode = 2; return; }
+  if (!Number.isInteger(runs) || runs <= 0) {
+    console.error(`flake-repro: --runs must be a positive integer, got '${runsArg}'`);
+    process.exitCode = 2;
+    return;
+  }
 
-  const { cwd, rel, isSlow } = resolveTarget(file);
+  // Resolve the repo root from this script's location
+  const scriptDir = fileURLToPath(new URL('.', import.meta.url));
+  const repoRoot = resolve(scriptDir, '..');
 
-  const filePath = resolve(cwd, rel);
+  const { cwd, rel, isSlow, fullPath, isOutsideRepo } = resolveTarget(file, repoRoot);
+
+  if (isOutsideRepo) {
+    console.error('flake-repro: path resolves outside the repository');
+    console.error(`  --file      ${file}`);
+    console.error(`  resolved to ${fullPath}`);
+    console.error(`  repo root   ${repoRoot}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  const filePath = resolve(repoRoot, fullPath);
   if (!existsSync(filePath)) {
     console.error('flake-repro: no such test file');
     console.error(`  --file      ${file}`);
@@ -94,6 +144,41 @@ function main() {
     process.exitCode = 2;
     return;
   }
+
+  // Require a real file (not a directory) that matches test-file pattern
+  let stats;
+  try {
+    stats = statSync(filePath);
+  } catch {
+    console.error('flake-repro: cannot stat file');
+    console.error(`  --file      ${file}`);
+    console.error(`  resolved to ${filePath}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  if (!stats.isFile()) {
+    console.error('flake-repro: not a regular file');
+    console.error(`  --file      ${file}`);
+    console.error(`  resolved to ${filePath}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  // Check that the filename matches a test-file pattern
+  // Pattern: (test|spec).[cm]?[tj]sx?
+  if (!/\.(test|spec)\.[cm]?[tj]sx?$/.test(filePath)) {
+    console.error('flake-repro: not a test file (must match .(test|spec).[cm]?[tj]sx?)');
+    console.error(`  --file      ${file}`);
+    console.error(`  resolved to ${filePath}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  // Note: process.exitCode = 2 before starting the load-inducer children is safe
+  // because the children's event loop keeps the process alive. A return after
+  // startCpuLoad() would hang (the main process exits but children keep running).
+  // Keep this early-exit block and comment together.
 
   if (has('--cpu-load')) startCpuLoad();
   if (has('--io-load')) startIoLoad();

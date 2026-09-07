@@ -67,8 +67,10 @@ async function loadSlowConfig(): Promise<SlowConfigModule> {
    now safely importable — its CLI half sits behind isDirectlyInvoked(), so it
    no longer reads `process.argv` or exits at module-eval time, which was the
    original reason this could not import it (#3081). The parse stays because a
-   drift guard wants the literal AS COMMITTED: it holds even if the module
-   later stops exporting the list, or exports a transformed copy of it. */
+   drift guard wants the literal AS COMMITTED (what is in git), not what a
+   dynamic import would resolve to after module interpretation. This distinction
+   survives a future refactoring of what the module exports or how it computes
+   the list; the committed text never changes. */
 function loadFlakeReproSlowList(): string[] {
   const srcPath = resolve(SERVER_ROOT, '..', 'scripts', 'flake-repro.mjs');
   const src = readFileSync(srcPath, 'utf8');
