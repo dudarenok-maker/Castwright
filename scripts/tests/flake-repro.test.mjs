@@ -147,8 +147,13 @@ test('CLI: absolute path outside repo is refused with exit 2 and no SUMMARY', ()
   assert.strictEqual(stderr.includes('outside the repository'), true, 'stderr should mention the error');
 });
 
+// Deliberately a SMALL directory. If the isFile() guard ever regresses, this
+// test still fails -- but it fails by spawning vitest against whatever the
+// argument names first. Pointed at server/src/routes (137 test files) that
+// took minutes and looked like a hang; scripts/lib matches no vitest include
+// glob, so the regression surfaces in milliseconds instead.
 test('CLI: directory is refused with exit 2 and no SUMMARY', () => {
-  const { exitCode, stdout, stderr } = runFlakeRepro(['--file', 'server/src/routes', '--runs', '1']);
+  const { exitCode, stdout, stderr } = runFlakeRepro(['--file', 'scripts/lib', '--runs', '1']);
   assert.strictEqual(exitCode, 2, `expected exit 2, got ${exitCode}`);
   assert.strictEqual(stdout.includes('SUMMARY'), false, 'stdout should not contain SUMMARY');
   assert.strictEqual(stderr.includes('not a regular file'), true, 'stderr should mention it is a directory');
