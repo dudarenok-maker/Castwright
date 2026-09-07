@@ -347,7 +347,8 @@ describe('#1981 Task 11 — "Start fresh" cannot be resurrected by a racing cast
         /* The deadline timer is captured, unref'd and cleared (PR #3009 review
            pass 2, finding 3). Left dangling it holds a live handle for the full
            SYNC_WAIT_TIMEOUT_MS past the normal path — the exact hazard
-           workspace/file-lock.ts:239-247 names and defends against, in a repo
+           workspace/file-lock.ts's own unref-the-pending-timer note names and
+           defends against, in a repo
            that already fights "Worker exited unexpectedly" teardown noise. */
         let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
         try {
@@ -391,7 +392,8 @@ describe('#1981 Task 11 — "Start fresh" cannot be resurrected by a racing cast
         // even attempt this lock until add-alias releases it, so there is no
         // earlier test-visible edge to poll or await. Stated as availability,
         // not non-existence (PR #3009 review pass 2) — a lock-queue-ENTRY
-        // edge (workspace/file-lock.ts:232, synchronous, fires while add-alias
+        // edge (workspace/file-lock.ts's `chains.set(key, mine)` queue-entry
+        // point, synchronous, fires while add-alias
         // still holds) would not deadlock; it is simply not exposed to a test
         // today. Do not re-run this experiment: it was tried once already and
         // deadlocked for the reason above, which does not change with #3022's
