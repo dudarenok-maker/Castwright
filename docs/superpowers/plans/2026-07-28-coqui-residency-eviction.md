@@ -38,7 +38,7 @@
 | `docs/wiki/Advanced-Settings.md` | Knob's user-facing row (§9) | 4 |
 | `server/src/gpu/describe-vram-blockers.ts` + `.test.ts` | Drop the now-redundant Coqui blocker entry | 5 |
 | `server/tts-sidecar/tests/test_asr_spk_idle_evict.py` | **New.** ASR + ECAPA unload/forward race | 6 |
-| `docs/features/249-fs60-xtts-language-eligibility.md` | Cross-reference the new reclaim | 7 |
+| `docs/features/archive/249-fs60-xtts-language-eligibility.md` | Cross-reference the new reclaim | 7 |
 | `docs/testing/onbox-acceptance-register.md` | New row grouped with A19 | 7 |
 | `docs/release-notes-next.md`, `RELEASE_NOTES.md` | Shipping notes | 7 |
 
@@ -1272,7 +1272,7 @@ git commit -m "fix(sidecar): guard ASR and ECAPA unloads against an in-flight fo
 ### Task 7: Documentation, on-box acceptance, release notes
 
 **Files:**
-- Modify: `docs/features/249-fs60-xtts-language-eligibility.md`
+- Modify: `docs/features/archive/249-fs60-xtts-language-eligibility.md`
 - Modify: `docs/testing/onbox-acceptance-register.md`
 - Modify: `docs/release-notes-next.md`, `RELEASE_NOTES.md`
 
@@ -1391,6 +1391,8 @@ PR body must contain `Closes #1894`, a `## Summary` and a `## Test plan` section
 - Task 6 fixes the *same class* of bug in `WhisperEngine` and `SpeakerEngine`, which were already being auto-evicted — so that race was live in production, not introduced by this branch. Reviewers should read Task 6's diff as a bug fix on its own merits, independent of the Coqui feature.
 
 **No `docs/features/` regression plan is created for this work**, and that is deliberate rather than an omission of Before-shipping checklist step 1: the design of record is the spec, the invariants it touches live in plan 249 (updated in Step 1), and the acceptance debt is register row A5. Say so in the PR body so the gate reads as answered, not skipped.
+
+> **A5 was discharged on 2026-09-06 and removed from the register** — bullets 1–4 PASS (via a real product fix to `generation.ts`'s per-chapter fallback gate, which hard-failed every non-English book regardless of Coqui eligibility), bullet 5 N/A / superseded. The ID is kept here as a historical citation under the register's "annotate, don't renumber" rule.
 
 - [ ] **Step 7: Run the mandatory independent code review**
 

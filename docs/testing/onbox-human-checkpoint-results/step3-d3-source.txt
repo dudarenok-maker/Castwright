@@ -1,0 +1,42 @@
+# Source citation
+#
+# Book:    聊齋志異 (Liaozhai Zhiyi / "Strange Tales from a Chinese Studio")
+# Author:  蒲松齡 Pu Songling (Qing dynasty, public domain)
+# Edition: Project Gutenberg ebook #51828
+# URL:     https://www.gutenberg.org/ebooks/51828
+# Fetched: 2026-09-06, via `curl -sL https://www.gutenberg.org/ebooks/51828.txt.utf-8`
+#          Full raw fetch (1.4 MB, ~2,348 paragraphs) saved alongside this file
+#          as pg51828-raw.txt for traceability; this file is the qualifying
+#          excerpt only.
+#
+# This is the story of 彭好士 (Peng Haoshi) and 桓侯 (張桓侯, the deified
+# spirit of Zhang Fei) trading horses — the paragraph below is real, unedited
+# corpus text, byte-for-byte as fetched, chosen because a fully mechanical,
+# unmodified run of this repo's real parseChapterStructure/scanQuoteRuns
+# (server/src/analyzer/dialogue-structure/parser.ts) on it, with zero
+# modification to the parser, confirms it exhibits the exact
+# primary-pair-straddle shape D3 targets: a quote-run that continues
+# without its own opening delimiter, carries its own speech-verb tag
+# ("又告衆曰："), and recovers an embedded, freshly-opened「」turn
+# ("遠客歸家，可少助以資斧。") as its OWN span rather than merging it into
+# the surrounding narration/tag text. See step3-d3-probe.mts and
+# step3-d3.md for the parser's actual (unmodified) output on this exact
+# text and full methodology.
+#
+# Independent verification note: this repo's own design doc
+# (docs/superpowers/specs/2026-08-13-primary-pair-straddle-design.md:464)
+# cites a DIFFERENT real zh passage from the same corpus scan
+# ("眾鬼嘩然並出，曰：「爾恃符咒拘遣我，今符咒已失，不畏爾矣。」聚而攢擊。")
+# as its own illustrative example. Two targeted web searches for that exact
+# substring (via WebSearch) did not resolve its source Gutenberg ID quickly;
+# per the task's own instruction not to burn excessive time on that, this
+# excerpt — an independently-found REAL occurrence of the identical shape,
+# confirmed programmatically rather than by inspection, in a different but
+# also-real Gutenberg zh book by the same author/genre — was used instead.
+
+彭至下馬，相向拱敬。俄，主人出，氣象剛猛，巾服都異人世。拱手向客，曰：「今日客莫遠於彭君。」因揖彭，請先行。彭謙謝，不肯遽先。主人捉臂行之。彭覺捉處如被械梏，痛欲折，不敢復爭，遂行。下此者，猶相推讓，主人或推之，或挽之，客皆呻吟傾跌，似不能堪，一依主命而行。登堂，則陳設炫麗，兩客一筵。彭暗問接坐者：「主人何人？」答云：「此張桓侯也。」彭愕然，不敢復咳。合座寂然。酒既行，桓侯曰：「歲歲叨擾親賓，聊設薄酌，盡此區區之意。值遠客辱臨，亦屬幸遇。僕竊妄有干求，如少存愛戀，即亦不強。」彭起問：「何物？」曰：「尊乘已有仙骨，非塵世所能驅策。欲市馬相易，如何？」彭曰：「敬以奉獻，不敢易也。」桓侯曰：「當報以良馬，且將賜以萬金。」彭離席伏謝。桓侯命人曳起之。俄傾，酒饌紛綸。日落，命燭。衆起辭，彭亦告別。桓侯曰：「君遠來焉歸？」彭顧同席者曰：「已求此公作居停主人矣。」桓侯乃遍以巨觴酌客。謂彭曰：「所懷香草，鮮者可以成仙，枯者可以點金；草七莖，得金一萬。」即命僮出方授彭。彭又拜謝。桓侯曰：「明日造市，請於馬羣中任意擇其良者，不必與之論價，吾自給之。又告衆曰：「遠客歸家，可少助以資斧。」衆唯唯。觴盡，謝別而出。途中始詰姓字，同座者為劉子翬。同行二三里，越嶺，即睹村舍。衆客陪彭並至劉所，始述其異。
+
+# Secondary reference sentence (same book, story of 長清僧, real text, used
+# only as a same-character "other line" audio reference for the embedding
+# proxy — not part of the qualifying paragraph above):
+新瘳，未應遠涉。

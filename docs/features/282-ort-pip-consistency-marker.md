@@ -319,7 +319,8 @@ therefore a shell + log walkthrough, not a browser one:
 6. **Install Qwen3 or Whisper from the app UI (or re-run bootstrap/upgrade).** Expect
    no `WinError 5`, and `pip check` to stay green afterward. For the in-app **Qwen3**
    install specifically, this no longer depends on the marker being present: since
-   #3039 (register row A29's real finding) `server/src/tts/qwen-install-bootstrap.ts`
+   #3039 (register row A29 is discharged, 2026-09-07, retired, not reused — its real
+   finding is now fixed) `server/src/tts/qwen-install-bootstrap.ts`
    runs the installer inside the supervisor's `withSidecarHeld` hold — the sidecar is
    down for the duration, so pip can replace the DLL in any venv state — and then
    `server/src/tts/ort-restore.ts` re-runs this file's swap (same delete-first /
