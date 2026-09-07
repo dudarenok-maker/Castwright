@@ -645,7 +645,8 @@ figure below is a genuine measurement of the shipped code, not the prototype.
   five reverted; full detail in the PR body and the implementation report.
 - On-box acceptance: row **D3** added to
   [`docs/testing/onbox-acceptance-register.md`](../../testing/onbox-acceptance-register.md)
-  (generate a `zh`/`ja` chapter with a continuation paragraph; confirm the
+  (discharged 2026-09-06, human-checkpoint batch, retired, not reused —
+  generate a `zh`/`ja` chapter with a continuation paragraph; confirm the
   recovered inner turn voices as its own turn in its own cast voice). The
   live view was mirrored by the coordinating thread in `520bc81f`, which owns
   the pre-publish comparator run: comparator green against the live page
