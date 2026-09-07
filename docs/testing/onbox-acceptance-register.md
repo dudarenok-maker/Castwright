@@ -1766,9 +1766,13 @@ opportunistic.
 
 ### A16 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
 
-> **PARTIALLY evidenced 2026-07-31 — NOT discharged.** Corrected after
+> **EVIDENCED 2026-09-06 (wave 12) via full chapter generation — still owed,
+> one new defect.** Corrected after
 > [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) was
-> understood; the original entry claimed a full discharge and was wrong.
+> understood; the original 2026-07-31 entry claimed a full discharge from a
+> splice re-record and was wrong (see the RETRACTED note above — that result
+> measured narrator audio, not the clone). This entry replaces it with a
+> **full chapter-level generation**, which the splice defect never touched.
 >
 > **What still stands — the fix works, proven at the synthesis boundary.** Three
 > direct `POST /synthesize` calls on the same cloned voice, raw PCM transcribed
@@ -1782,25 +1786,41 @@ opportunistic.
 >
 > Row 3 reproduces the shipped bug live — German in, English phonetics out,
 > transcript garbage. Row 2 is the fix, with the cloned identity intact at 0.809
-> against a ~0.03 different-speaker floor. This is real evidence and does not
-> depend on the splice path.
+> against a ~0.03 different-speaker floor.
 >
-> **What is withdrawn.** The row's actual criterion is *"render a non-English
-> **chapter** with a cloned voice and transcribe the output"*. That chapter
-> render used a splice re-record, so most of what was measured was **narrator**
-> audio, not the clone — the rendered lines scored **0.949** against the
-> chapter's own narrator. The `de` / −0.233 figure is therefore a measurement of
-> the wrong audio: it shows the chapter rendered in German, not that *a cloned
-> voice* did. `resolvedVoiceName` said otherwise, and that is the field #1972
-> falsifies.
+> **The chapter-level criterion, run for real this time (#2937, 2026-09-06).**
+> A full chapter generation (not a splice) with a cloned voice cast onto a
+> Russian book: `chapter_complete` reported `audioEngines:
+> {"coqui":4,"qwen":1}`, and `characterSnapshots.<id>.resolvedVoiceName`
+> stayed the clone's storage key throughout — the never-substitute guarantee
+> held under a real render, not just a synthesis-boundary call.
 >
-> **To finish this row:** re-run the chapter-level criterion once #1972 has
-> landed, on a book whose `segments.json` and analysis agree — or via a full
-> chapter generation, which is unaffected by the defect. The remaining
-> sub-checks (designed self-heal → restart → identical; the QA
-> `voice-mismatch` check, blocked on
-> [#1969](https://github.com/dudarenok-maker/Castwright/issues/1969)) are
-> unchanged.
+> - **Language:** whole-chapter ASR auto-detected `ru`. The clean,
+>   clone-only segments scored `avg_logprob` **−0.596** and **−0.331**,
+>   passing the ≈−0.5 bar.
+> - **Identity:** cosine **0.679–0.681** against the clone's own source clip,
+>   with a different-speaker floor of **0.0037** — clean separation from any
+>   other voice in the book. The figure sits below the language-matched band
+>   seen in the synthesis-boundary table above (0.809–0.865); that gap is
+>   attributed to **[#1998](https://github.com/dudarenok-maker/Castwright/issues/1998)**
+>   (cross-language identity degradation: the source clip is English against
+>   a Russian book), not to a defect in this row's own criterion.
+> - **Self-heal → restart → identical:** both runs agreed on the JSON output
+>   and the identity cosine. **No audible A/B was available** for this run, so
+>   this is a measured-not-heard result, not a confirmed-by-ear one.
+> - **QA `voice-mismatch` check:** ran cleanly (no longer blocked on
+>   [#1969](https://github.com/dudarenok-maker/Castwright/issues/1969) for
+>   this render) and **found a real, reproducible defect**: sentence 19
+>   decoded in English instead of Russian on both runs (cosine 0.704 → 0.656).
+>   This is a new finding, not folded into this row's own pass/fail — it is
+>   recorded here as evidence and is a candidate for its own issue, not filed
+>   as one by this entry.
+>
+> **Still owed, not a clean pass.** The chapter-level criterion has real
+> evidence now, on a full generation the splice defect never reached — but the
+> below-band identity figure (attributed to #1998) and the measured-not-heard
+> self-heal caveat mean this row stays open rather than closing silently on a
+> partial result.
 
 Before this fix a cloned Qwen voice rendered **every** book, in every language, as
 English — `QwenEngine.synthesize` took the caller's language and ignored it, and a
