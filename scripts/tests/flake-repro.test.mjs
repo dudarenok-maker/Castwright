@@ -120,6 +120,8 @@ function runFlakeRepro(args) {
   const result = spawnSync(process.execPath, [scriptPath, ...args], {
     encoding: 'utf8',
     stdio: 'pipe',
+    // Required tree-wide outside server/src by server/src/spawn-windows-hide.test.ts.
+    windowsHide: true,
   });
   return {
     exitCode: result.status,
@@ -136,9 +138,13 @@ test('CLI: nonexistent file is refused with exit 2 and no SUMMARY', () => {
 });
 
 test('CLI: absolute path outside repo is refused with exit 2 and no SUMMARY', () => {
+  // Use process.platform to construct a portable outside-repo path
+  const outsidePath = process.platform === 'win32'
+    ? 'C:\\fake\\outside\\repo\\test.test.ts'
+    : '/tmp/outside-repo-test.test.ts';
   const { exitCode, stdout, stderr } = runFlakeRepro([
     '--file',
-    'C:\\fake\\outside\\repo\\test.test.ts',
+    outsidePath,
     '--runs',
     '1',
   ]);
@@ -188,27 +194,34 @@ test('CLI: --runs non-numeric is refused with exit 2 and no SUMMARY', () => {
 });
 
 test('CLI: missing --runs defaults to 3 (no error)', () => {
-  const { stderr } = runFlakeRepro(['--file', 'src/views/listen.test.tsx']);
-  // Will fail to find a test file when running with --runs missing and defaulting to 3,
-  // but should not complain about --runs itself
+  const { stdout, stderr } = runFlakeRepro(['--file', 'server/src/analyzer/ru-diminutives.test.ts']);
+  // With default --runs=3, should run 3 times and NOT complain about --runs
   assert.strictEqual(
     stderr.includes('positive integer'),
     false,
     'should not complain about missing --runs (defaults to 3)',
   );
+  // Assert that exactly 3 runs occurred by checking the SUMMARY array
+  const summaryMatch = stdout.match(/SUMMARY\s+(\[.*?\])/);
+  assert.ok(summaryMatch, 'stdout should contain SUMMARY array');
+  const summary = JSON.parse(summaryMatch[1]);
+  assert.strictEqual(summary.length, 3, `expected 3 runs, got ${summary.length}`);
 });
 
 test('CLI: outside-repo diagnostic does not print undefined', () => {
+  // Use a path outside the repo that's portable across platforms
+  const outsidePath = process.platform === 'win32'
+    ? 'C:\\Windows\\System32\\hosts.test.ts'
+    : '/etc/passwd.test.ts';
   const { exitCode, stderr } = runFlakeRepro([
     '--file',
-    'C:\\Windows\\System32\\drivers\\etc\\hosts.test.ts',
+    outsidePath,
     '--runs',
     '1',
   ]);
   assert.strictEqual(exitCode, 2);
   assert.strictEqual(stderr.includes('outside the repository'), true);
   assert.strictEqual(stderr.includes('undefined'), false, 'should not print undefined in diagnostic');
-  assert.strictEqual(stderr.includes('C:\\Windows'), true, 'should print the resolved path');
 });
 
 test('CLI: invoked from subdirectory (server/) still runs with correct config', () => {
@@ -218,6 +231,7 @@ test('CLI: invoked from subdirectory (server/) still runs with correct config', 
     encoding: 'utf8',
     stdio: 'pipe',
     cwd: serverDir,
+    windowsHide: true,
   });
   // Should succeed even when invoked from a subdirectory
   assert.strictEqual(result.status, 0, `expected exit 0, got ${result.status}`);

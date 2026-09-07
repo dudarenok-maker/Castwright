@@ -55,7 +55,7 @@ const SLOW = [
 // `fullPath` is the relative or relativised path (before server/ stripping),
 // suitable for file-existence checks. `rel` is after stripping, for vitest filters.
 export function resolveTarget(file, repoRoot) {
-  // Normalize separators (Windows backslash, UNC) and strip leading ./
+  // Normalize separators (Windows backslash, UNC), strip leading ./, and resolve .. segments
   let normalized = file.replace(/\\/g, '/');
   if (normalized.startsWith('./')) {
     normalized = normalized.slice(2);
@@ -65,6 +65,16 @@ export function resolveTarget(file, repoRoot) {
   if (isAbsolute(file)) {
     const abs = resolve(file); // Resolve to absolute form
     const repoAbs = resolve(repoRoot);
+
+    // Check if on the same drive (Windows) — path.relative() can't cross drives
+    const absDrive = abs.split('/')[0]; // e.g., 'C:' or '//host/share'
+    const repoDrive = repoAbs.split('/')[0];
+    if (absDrive !== repoDrive) {
+      // Different drives (or UNC roots) — outside the repo
+      const absPath = abs.replace(/\\/g, '/');
+      return { cwd: null, rel: absPath, fullPath: absPath, isSlow: false, isOutsideRepo: true };
+    }
+
     const relativeToRepo = relative(repoAbs, abs).replace(/\\/g, '/');
     // If relative() returned a path with ../, it's outside the repo
     if (!relativeToRepo.startsWith('..')) {
@@ -146,7 +156,7 @@ function main() {
     return;
   }
 
-  // Require a real file (not a directory) that matches test-file pattern
+  // Require a real file (not a directory)
   let stats;
   try {
     stats = statSync(filePath);
@@ -166,10 +176,23 @@ function main() {
     return;
   }
 
-  // Check that the filename matches a test-file pattern
-  // Pattern: (test|spec).[cm]?[tj]sx?
-  if (!/\.(test|spec)\.[cm]?[tj]sx?$/.test(filePath)) {
-    console.error('flake-repro: not a test file (must match .(test|spec).[cm]?[tj]sx?)');
+  // Ask vitest authoritatively whether it will select this file.
+  // Run `npx vitest list` with the same cwd and config that the measured runs will use.
+  // If vitest outputs nothing, the file won't be tested under the chosen config.
+  const absoluteCwd = resolve(repoRoot, cwd);
+  const listCmd = isSlow
+    ? ['vitest', 'list', '--config', 'vitest.config.slow.ts', rel]
+    : ['vitest', 'list', rel];
+  const listResult = spawnSync('npx', listCmd, {
+    cwd: absoluteCwd,
+    encoding: 'utf8',
+    stdio: ['inherit', 'pipe', 'pipe'],
+    shell: process.platform === 'win32',
+    windowsHide: true,
+  });
+
+  if (listResult.stdout.trim() === '') {
+    console.error('flake-repro: not a test file (vitest does not select it under the chosen config)');
     console.error(`  --file      ${file}`);
     console.error(`  resolved to ${filePath}`);
     process.exitCode = 2;
@@ -188,9 +211,6 @@ function main() {
     ? ['vitest', 'run', '--config', 'vitest.config.slow.ts', rel]
     : ['vitest', 'run', rel];
 
-  // Use absolute cwd so spawn resolves correctly from any working directory
-  const absoluteCwd = resolve(repoRoot, cwd);
-
   const results = [];
   for (let i = 0; i < runs; i++) {
     const t0 = process.hrtime.bigint();
@@ -198,12 +218,15 @@ function main() {
       env: { ...process.env, RUN_QUARANTINE: '1' } }); // RUN_QUARANTINE=1 so quarantined cases run
     const ms = Number(process.hrtime.bigint() - t0) / 1e6;
 
-    // If the spawn itself failed (r.error set or r.status is null), do not report it as a measurement
-    if (r.error || r.status === null) {
+    // If the spawn itself failed (r.error set), stop and report what we have so far
+    if (r.error) {
       stopCpuLoad(); stopIoLoad();
       console.error('flake-repro: spawn failed to start');
-      if (r.error) console.error(`  error: ${r.error.message}`);
-      process.exitCode = 1;
+      console.error(`  error: ${r.error.message}`);
+      if (results.length > 0) {
+        console.log('SUMMARY', JSON.stringify(results));
+      }
+      process.exitCode = 2;
       return;
     }
 
