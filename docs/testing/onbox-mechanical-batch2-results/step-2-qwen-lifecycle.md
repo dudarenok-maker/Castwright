@@ -1,5 +1,6 @@
 # Step 2 — A24 design-contention wait + A105 base17 eviction guard + A35
-# three-model stranded VRAM — PARTIAL, in progress (4th run adds A105 bullet 1)
+# three-model stranded VRAM — PARTIAL, in progress (5th run adds A105 bullet 3,
+# direction 1)
 
 Run 2026-09-06, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
@@ -236,6 +237,83 @@ Cleaned up afterward: `POST :9170/unload {"engine":"qwen"}` returned to a
 fully idle sidecar (`qwen_loaded`/`qwen_base17_loaded`/`qwen_design_resident`
 all `false`) before this run stopped.
 
+## A105 bullet 3 — Kokoro pauses for VoiceDesign, direction 1 only (5th run, 2026-09-07)
+
+**Fixture-setup blocker (owed by three prior runs) resolved this run:** the
+fixture book had no Kokoro-voiced character, so there was nothing to render
+on Kokoro to test the arbiter against. Found the app's own endpoint for
+this — `PUT /api/books/:bookId/state` with `{"slice":"cast","patch":{"characters":[...]}}`
+(`server/src/routes/book-state.ts:740`, `case 'cast'`) — the same funnel the
+UI's cast editor itself uses (goes through `preserveDesignedVoices` +
+`denormaliseCastReusedVoices` + the cast lock, not a raw file write).
+
+**Self-inflicted near-miss, recorded so the next run doesn't repeat it:**
+this slice is a **full replace of `characters`, not a merge** — the first
+call sent only `unknown-male`'s object and it silently dropped
+`ivan-petrovich` and `anna` from `cast.json` (204 response, no error). This
+is disposable fixture data (not real book data, per the standing rule) so no
+harm done, but the pattern generalises: **always PUT the complete array**
+when using this slice, never a single-character delta. Recovered by
+resending all three characters together (the two originals verbatim from
+the on-disk state, `unknown-male` with `ttsEngine: "kokoro"`,
+`voiceUuid: "af_bella"`, `overrideTtsVoices.kokoro.name: "af_bella"`).
+Confirmed via re-read: all three characters present, `unknown-male` now
+correctly on Kokoro.
+
+Sequence (fixture book `onbox-test__standalones__untitled`, sidecar
+confirmed idle first — `qwen_loaded`/`qwen_design_resident`/`kokoro_loaded`
+all `false`, `inflight_synth: 0`):
+1. `POST .../cast/ivan-petrovich/design-voice/stream` (persona supplied
+   directly, `modelKey: qwen3-tts-0.6b`) — backgrounded, `-m 300`.
+2. ~3 s later, `qwen_design_resident: true` confirmed (design genuinely
+   in flight, `design-single/status` phase `loading-model`).
+3. Fired `POST .../generation` for chapter 1, `modelKey: "kokoro-v1"` (the
+   real model-key id — first attempt used the bare string `"kokoro"` and
+   was rejected with `modelKey must be a supported TTS model id`; corrected
+   from `server/src/tts/model-keys.ts`), `force:true`.
+
+Observed:
+- While the design held the arbiter (`qwen_design_resident: true`,
+  `design-single/status` phase progressing `loading-model` →
+  `designing` → `rendering`), the render's own progress **stalled at
+  ~1-23%** for the entire window and `kokoro_loaded` stayed `false` — the
+  render did not proceed while VoiceDesign was mid-forward. No
+  `chapter_failed` fired during this wait.
+- The design completed (`design-single/status` → `{"active":false}`), and
+  `/health` immediately after showed `qwen_design_resident: false`,
+  `kokoro_loaded: true` — the arbiter released.
+- The render then advanced from ~23% straight through to completion within
+  the next ~35 s (`progress` events climbing to 1.0), finishing with a real
+  `chapter_complete` event — `audioModelKey: "kokoro-v1"`,
+  `audioQa.status: "suspect"` (2 sentences flagged for runaway-synthesis
+  duration, an audio-QA finding unrelated to the arbiter question), no
+  error at any point.
+- **Open observation, not chased further this run:** the completed chapter's
+  `audioEngines` breakdown read `{"qwen":2,"coqui":1}` — no `kokoro` count
+  at all, despite `kokoro_loaded` having flipped `true` mid-render and the
+  request's `modelKey` being `kokoro-v1`. Either `modelKey` on this route is
+  a request-level default that each character's own `ttsEngine` can still
+  override (so `ivan-petrovich`/`anna` rendered via their designed `qwen`
+  voices as normal, and `unknown-male`'s single line fell back to `coqui`
+  for a reason not investigated), or there's a real fallback-engine
+  question worth a closer look. Not reported as a finding either way —
+  flagging it for whoever picks up bullet 3's second direction next, since
+  they'll be staring at the same `audioEngines` field.
+
+**Bullet 3 verdict (direction 1 only — CONFIRMED):** Kokoro paused while a
+same-card VoiceDesign forward was in flight (through the full forward, not
+just the load — matching the row's "not just the load" requirement) and
+resumed once the design left. **Direction 2 (Kokoro must NOT pause for the
+separate base17-eviction wait) was not attempted this run** — that needs a
+fresh race against `_ensure_base17_loaded`'s eviction path specifically,
+with no VoiceDesign involved, and this run's remaining budget went to
+getting direction 1 measured cleanly instead of splitting across both.
+
+Cleanup: `POST :9170/unload {"engine":"qwen"}` then `{"engine":"kokoro"}`,
+confirmed via `/health` back to fully idle (`qwen_loaded`,
+`qwen_design_resident`, `kokoro_loaded` all `false`, `inflight_synth: 0`)
+before this run stopped.
+
 ## Remaining scope — not attempted this session
 
 - **A24 bullets 2-4**: forcing a genuinely wedged design (bullet 2), the
@@ -249,14 +327,15 @@ all `false`) before this run stopped.
   fixture setup, not code — see its own section above; the fixture's single
   chapter needs to be reset to unsynthesized (or a new chapter added) before
   the wait state this bullet needs can even be reached.
-- **A105 bullets 3, 4, 5**: the Kokoro/VoiceDesign mutual-exclusion arbiter in
-  both directions (bullet 3), the two-overlapping-designs case (bullet 4), and
-  driving `Base17ContentionTimeoutError` deliberately (bullet 5) — none were
-  driven. Bullets 1 and 2 are now both driven to a real result — see their own
-  sections above — with one open sub-question (log-line vs. race-timing
-  distinction on bullet 2, and the internal guard-branch not directly observed
-  on bullet 1) flagged for whoever picks up bullet 3/4/5 next, since they all
-  touch the same `_ensure_base17_loaded`/arbiter code path.
+- **A105 bullets 3 (direction 2), 4, 5**: bullet 3's second direction (Kokoro
+  must NOT pause for the base17-eviction-only wait), the two-overlapping-
+  designs case (bullet 4), and driving `Base17ContentionTimeoutError`
+  deliberately (bullet 5) — none were driven. Bullets 1, 2, and 3
+  (direction 1) are now driven to a real result — see their own sections
+  above — with open sub-questions flagged for whoever picks up the rest:
+  log-line vs. race-timing distinction on bullet 2, the internal guard-branch
+  not directly observed on bullet 1, and the `audioEngines` fallback question
+  on bullet 3.
 - **A35 (4 bullets)**: the three-model (Qwen Base + base17 + Whisper)
   residency scenario, its two real 120 s idle-TTL waits
   (`ASR_IDLE_TTL`, `QWEN_BASE17_IDLE_TTL`), and the `/debug/memory`
@@ -287,24 +366,27 @@ reconnaissance.
   that have now touched this row) to free VRAM for design tests; both reload
   on demand.
 - The `Onbox Test` fixture book now has `anna` (`qwen-uIRjRzpfDUZqLX_0eVctR`),
-  `ivan-petrovich` (`qwen-F-lKfWgmxmPoLNK7nfUkk`), and `unknown-male`
-  (`qwen-eB3SAJ1iv6rDrCh0ueLVZ`, from this run's A105 bullet 1) genuinely
-  designed, in this worktree's own throwaway workspace copy — expected and
-  fine, it is a disposable fixture, not real book data. Chapter 1 is now
-  fully synthesized end-to-end (via `coqui-xtts-v2` from an earlier pass in
-  this same session) — this is exactly what blocks A24 bullet 4 above; the
-  next run needs a fresh chapter or a book/chapter reset before attempting
-  that bullet again, or should switch to a different, never-synthesized
-  fixture entirely.
+  `ivan-petrovich` (`qwen-F-lKfWgmxmPoLNK7nfUkk`) on Qwen, and `unknown-male`
+  moved to **Kokoro** (`af_bella`, this run's own change — was
+  `qwen-eB3SAJ1iv6rDrCh0ueLVZ` from the 4th run's A105 bullet 1) in this
+  worktree's own throwaway workspace copy — expected and fine, it is a
+  disposable fixture, not real book data. Chapter 1 is now fully synthesized
+  end-to-end (this run's own A105 bullet 3 render, `audioModelKey:
+  "kokoro-v1"`, `audioQa.status: "suspect"`) — this is exactly what blocks
+  A24 bullet 4 above; the next run needs a fresh chapter or a book/chapter
+  reset before attempting that bullet again, or should switch to a
+  different, never-synthesized fixture entirely.
 - No other lane's process was touched.
-- This run's own base17/design load/unload cycles left this worktree's
-  sidecar back at idle (`qwen_loaded`, `qwen_base17_loaded`,
-  `qwen_design_resident` all `false`) — no lingering residency from either
-  the A105 bullet 1 or bullet 2 races above.
+- This run's own design/render load/unload cycle left this worktree's
+  sidecar back at idle (`qwen_loaded`, `qwen_design_resident`,
+  `kokoro_loaded` all `false`, `inflight_synth: 0`) — no lingering residency.
 
-**Still not finished after four runs.** A24 bullets 2-4, A105 bullets 3-5, and
-A35 (4 bullets) remain undriven — same reasoning as above: forcing each race
-and waiting out A35's two real 120 s idle TTLs needs sustained, carefully
-sequenced real-hardware time this run's own budget did not stretch to either.
-Parking again (Agent Working, still assigned) rather than reporting AGENT
-DONE against unfinished scope.
+**Still not finished after five runs.** A24 bullets 2-4, A105 bullet 3's
+second direction plus bullets 4-5, and A35 (4 bullets) remain undriven — same
+reasoning as above: forcing each race and waiting out A35's two real 120 s
+idle TTLs needs sustained, carefully sequenced real-hardware time no single
+run's budget has stretched to yet. The fixture now has a Kokoro-voiced
+character in place, which was the actual blocker stalling bullet 3 across
+runs 2-4 — the next run can go straight at bullet 3's second direction or
+A105 bullet 4 without repeating this setup. Parking again (Agent Working,
+still assigned) rather than reporting AGENT DONE against unfinished scope.
