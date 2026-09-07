@@ -223,7 +223,7 @@ async function main() {
       // Check if the captured element is still in the DOM (not removed).
       // If attempt 2 created a NEW toast instead of deduping the old one,
       // the old element would be removed and this check fails.
-      const capturedStillConnected = await capturedEl.evaluate((el) => el.isConnected);
+      const capturedStillConnected = capturedEl.isConnected;
       if (!capturedStillConnected) return false; // Element was removed — dedupe failed
 
       // Count how many failure-class toasts exist now.
