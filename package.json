@@ -120,7 +120,7 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-redux": "^9.2.0",
-    "react-router": "^8.3.0",
+    "react-router": "^8.3.1",
     "redux-persist": "^6.0.0"
   },
   "devDependencies": {
@@ -128,14 +128,14 @@
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^7.0.1",
-    "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.6",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/jest-axe": "^3.5.9",
-    "@types/node": "^26.3.0",
+    "@types/node": "^26.4.1",
     "@types/picomatch": "^4.0.3",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.5",
-    "@vitejs/plugin-react": "^6.1.0",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
     "archiver": "^8",
     "concurrently": "^10.0.5",
     "cross-env": "^10.1.0",
@@ -152,7 +152,7 @@
     "jsdom": "^29",
     "openapi-typescript": "^7.0.0",
     "picomatch": "^4.0.7",
-    "postcss": "^8.5.26",
+    "postcss": "^8.5.28",
     "prettier": "^3.9.6",
     "sharp": "^0.35.4",
     "std-env": "^4.2.0",
@@ -161,7 +161,7 @@
     "typescript-eslint": "^8",
     "vite": "^8.2.2",
     "vite-plugin-mkcert": "^2.0.0",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   },
   "overrides": {
     "js-yaml": "^4.2.0",
