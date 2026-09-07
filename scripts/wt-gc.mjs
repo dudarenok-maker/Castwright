@@ -111,6 +111,9 @@
 // unauthenticated, or a network error never aborts the REPORT. It does
 // refuse the PRUNE for that row (refusal 6 above): offline tolerance means
 // the tool keeps working, not that it deletes trees it could not check.
+// A `gh` that HANGS rather than fails is covered by the same contract via a
+// per-call `timeout` (GH_TIMEOUT_MS) — spawnSync's timeout surfaces as
+// `error`, which is already the "could not be asked" branch (#3055 pass 3).
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -187,13 +190,23 @@ export function makeDefaultRunners() {
     // `available:true, pr:null` means gh answered and there is no PR.
     ghPrState(branch) {
       const result = ghSpawn(
-        ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,state,url', '--limit', '1'],
-        { stdio: ['ignore', 'pipe', 'pipe'] },
+        // --limit 10, not 1: `--limit 1` answers "is the MOST RECENT PR open",
+        // not "is there an open PR". A head branch with an older PR to `main`
+        // still open and a newer one to another base already merged rendered
+        // `#N MERGED` and cleared refusal 6 — a destructive default deciding
+        // off the wrong row (#3055 pass 3). selectPrRow() picks the open one.
+        ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,state,url', '--limit', '10'],
+        // A `gh` that HANGS — blackholed DNS, a captive portal, a stalled TLS
+        // connect — would otherwise wedge the read-only report indefinitely,
+        // and this file's offline-tolerance contract covers `gh` FAILING, not
+        // `gh` hanging. On timeout spawnSync sets `error`, which the next line
+        // already reads as available:false — the fail-closed answer.
+        { stdio: ['ignore', 'pipe', 'pipe'], timeout: GH_TIMEOUT_MS },
       );
       if (result.error || result.status !== 0) return { available: false, pr: null };
       try {
         const rows = JSON.parse(result.stdout || '[]');
-        return { available: true, pr: rows[0] ?? null };
+        return { available: true, pr: selectPrRow(rows) };
       } catch {
         // Unparseable output means gh answered something this code does not
         // understand — that is "couldn't ask", not "no PR".
@@ -337,6 +350,25 @@ export function refusalReasons(facts) {
  * asked-and-answered (with or without a PR). A missing/`null` verdict is
  * treated as asked-and-failed — the fail-closed reading.
  */
+/** Per-`gh`-call wall-clock budget. Generous — 28.1 s was measured for 18
+ *  SERIAL calls on a healthy box — because the only thing this exists to
+ *  bound is a `gh` that hangs rather than one that is merely slow. */
+export const GH_TIMEOUT_MS = 30_000;
+
+/**
+ * Which of a branch's PRs the refusal set must decide off. Pure.
+ *
+ * An OPEN PR wins over every other state, whatever the ordering `gh` returns:
+ * refusal 6 exists to stop the tool deleting a tree whose work is still under
+ * review, and one open PR anywhere on the branch is that condition. Falls back
+ * to the first row (gh's own newest-first ordering) so a branch with only
+ * closed/merged PRs still renders the state a reader expects.
+ */
+export function selectPrRow(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  return rows.find((r) => r && r.state === 'OPEN') ?? rows[0] ?? null;
+}
+
 function normalizePrInfo(prInfo) {
   if (prInfo && prInfo.queried === false) {
     return { queried: false, available: false, open: false, number: null, label: 'not queried' };

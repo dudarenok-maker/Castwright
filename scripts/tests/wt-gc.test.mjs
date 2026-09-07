@@ -21,6 +21,8 @@ import {
   classifyWorktree,
   validateJunctionEntry,
   JUNCTION_RESULT_KEYS,
+  selectPrRow,
+  GH_TIMEOUT_MS,
   run,
 } from '../wt-gc.mjs';
 
@@ -843,4 +845,70 @@ test('run(): a row skipped for gh under --prune renders "not queried", distinct 
   run({ prune: true, runners, selfPaths: NO_SELF });
 
   assert.match(logs.join(''), /not queried/);
+});
+
+// --- selectPrRow: an OPEN PR anywhere on the branch wins (#3055 pass 3) -----
+//
+// The query used to ask for `--limit 1` and read `rows[0]`, which answers "is
+// the MOST RECENT PR open", not "is there an open PR". A head branch with an
+// older PR to `main` still open and a newer one to another base already merged
+// therefore rendered `#N MERGED` and cleared refusal 6 -- a destructive default
+// deciding off the wrong row.
+
+test('selectPrRow: an OPEN PR wins over a newer merged one on the same branch', () => {
+  const rows = [
+    { number: 3060, state: 'MERGED' }, // gh returns newest first
+    { number: 3055, state: 'OPEN' },
+  ];
+  assert.deepEqual(selectPrRow(rows), { number: 3055, state: 'OPEN' });
+});
+
+test('selectPrRow: with no OPEN row it keeps gh ordering (the first row)', () => {
+  const rows = [
+    { number: 3060, state: 'MERGED' },
+    { number: 3055, state: 'CLOSED' },
+  ];
+  assert.deepEqual(selectPrRow(rows), { number: 3060, state: 'MERGED' });
+});
+
+test('selectPrRow: no rows is no PR, and a non-array is not a crash', () => {
+  assert.equal(selectPrRow([]), null);
+  assert.equal(selectPrRow(null), null);
+  assert.equal(selectPrRow(undefined), null);
+});
+
+test('the gh PR query asks for more than one row, or selectPrRow can never see the open one', () => {
+  // Source-level, because ghPrState is the impure adapter every other test
+  // stubs out: selectPrRow choosing correctly is worthless if the query only
+  // ever hands it one row. `--limit 1` here would make the tests above pass
+  // while the tool still decided off the wrong PR.
+  const src = readFileSync(join(scriptsDir, 'wt-gc.mjs'), 'utf8');
+  const m = src.match(/'--limit',\s*'(\d+)'/);
+  assert.ok(m, 'expected the gh pr list call to pass an explicit --limit');
+  assert.ok(Number(m[1]) > 1, `gh pr list --limit must exceed 1, found ${m[1]}`);
+  // ...and the rows must go through selectPrRow, not be indexed directly.
+  const call = src.slice(src.indexOf('ghPrState(branch)'), src.indexOf('removeJunctions('));
+  assert.match(call, /pr: selectPrRow\(rows\)/, 'ghPrState must select through selectPrRow');
+  assert.doesNotMatch(call, /pr: rows\[0\]/, 'ghPrState must not index the row list directly');
+});
+
+// --- ghSpawn timeout: a gh that HANGS must not wedge the read-only report ---
+
+test('the gh PR query carries a wall-clock timeout (a hung gh is not a failed gh)', () => {
+  assert.ok(Number.isFinite(GH_TIMEOUT_MS) && GH_TIMEOUT_MS > 0, 'GH_TIMEOUT_MS must be a positive number');
+  const src = readFileSync(join(scriptsDir, 'wt-gc.mjs'), 'utf8');
+  const call = src.slice(src.indexOf('ghPrState(branch)'), src.indexOf('removeJunctions('));
+  assert.match(call, /timeout:\s*GH_TIMEOUT_MS/, 'the gh pr list spawn must pass timeout: GH_TIMEOUT_MS');
+});
+
+test('a timed-out gh reads as "could not be asked", not as "no PR"', () => {
+  // spawnSync surfaces a timeout as `error` (ETIMEDOUT), so this pins that the
+  // fail-closed branch really covers it: the row must refuse, not clear.
+  const row = classifyWorktree(
+    { path: 'C:/t/wt-x', branch: 'feat/x' },
+    { mergedIntoMain: true, aheadCount: 0, dirty: false, hasUpstream: true, unpushedCount: 0, unpushedVerified: true },
+    { available: false, pr: null },
+  );
+  assert.equal(row.prState, 'unknown (gh unavailable)');
+  assert.ok(row.refusals.length > 0, 'an unaskable gh must still refuse the prune');
 });

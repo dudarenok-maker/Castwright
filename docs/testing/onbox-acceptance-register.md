@@ -4818,16 +4818,29 @@ that already are. Do not accept this row against an orphan-directory cleanup.
 - **The fail-closed scan, which no fixture can prove:** the junction walk now throws
   on any enumeration error rather than answering "no junctions found". On a real tree
   with a deep junction path (the `server/tts-sidecar/.venv` shape under a long
-  worktree name), run once under `pwsh` and once under `powershell` (5.1) and confirm
-  both either find the junction or FAIL LOUDLY — never a silent `removed 0
+  worktree name), run the scan under `pwsh` **and** under `powershell` (5.1) and
+  confirm both either find the junction or FAIL LOUDLY — never a silent `removed 0
   junction(s)` followed by a successful `git worktree remove`. **Distinguish the two
   ways 5.1 can fail loudly**, because this criterion could not tell them apart and was
   briefly disarmed by that: a `ParserError` / `Import-Module` failure means the MODULE
   did not load and the fail-closed scan was never executed, which is NOT a pass for
-  this bullet. First confirm `powershell.exe -NoProfile -Command "Import-Module
-  scripts\lib\wt-gc-junctions.psm1 -Force"` loads clean, THEN exercise the scan.
-  (`pickPowerShell()` always prefers `pwsh` and has no engine flag, so "run it under
-  5.1" means invoking the `.ps1` through `powershell.exe` by hand.)
+  this bullet. So, per engine, from the repo root:
+
+      <engine> -NoProfile -Command "Import-Module .\scripts\lib\wt-gc-junctions.psm1 -Force; 'LOADED OK'; Get-JunctionsRecursive -Root '<tree>' | ConvertTo-Json -Compress"
+
+  where `<engine>` is `pwsh` then `powershell.exe`. **The leading `.\` is required** —
+  `Import-Module` treats a bare relative path as a MODULE NAME and searches
+  `$env:PSModulePath`, so the same command WITHOUT the `.\` fails with
+  `Modules_ModuleNotFound` on both engines, which is character-for-character the disqualifying
+  signature above and would produce a guaranteed false FAIL. `LOADED OK` must print
+  before any scan output; then the scan must list the junction or throw.
+  **`Get-JunctionsRecursive` (read-only) rather than the `.ps1` wrapper, deliberately:**
+  `wt-gc-junctions.ps1`'s `[ValidateSet('Remove')]` leaves `Remove` as its only action,
+  so running the wrapper under `pwsh` would unlink the junction the 5.1 run needs and
+  the second engine would legitimately find nothing — which this same bullet defines as
+  a failure. (`pickPowerShell()` always prefers `pwsh` and has no engine flag, which is
+  why the 5.1 half has to be driven by hand at all.) Exercise the destructive
+  `-Action Remove` path once, afterwards, as part of the prune bullets above.
 - **A locked worktree is refused, and refused BEFORE the junction sweep.** `git
   worktree lock <tree> --reason 'in flight'`, then `npm run wt:gc` — the row must read
   ``no (locked by `git worktree lock`: in flight)``. Then `--prune` and confirm the

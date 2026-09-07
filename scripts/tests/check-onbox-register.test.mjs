@@ -3776,3 +3776,79 @@ test('#2837: CLI -- extraction error in baseline live-view produces [baseline] b
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- Executable-as-written: `Import-Module` needs a leading `.\` (#3055 pass 3) ---
+//
+// E103's criterion told the operator to run `Import-Module
+// scripts\lib\wt-gc-junctions.psm1 -Force` and treat an `Import-Module` failure
+// as a disqualifying FAIL. Run verbatim that command ALWAYS fails
+// (`Modules_ModuleNotFound`): PowerShell reads a bare relative path as a module
+// NAME and searches $env:PSModulePath. So the criterion guaranteed the exact
+// false FAIL it had just been rewritten to teach the operator to recognise.
+// Class guard over every acceptance surface, not just that one row.
+
+const IMPORT_MODULE_RE = /Import-Module\s+(?:-Name\s+)?(&quot;|&#39;|["']?)([^"'\s;|&<]+)/g;
+
+/** A path is safe if it is absolute, variable-rooted, or explicitly relative. */
+function importPathIsExecutable(spec) {
+  if (!/[\\/]/.test(spec)) return true; // a bare module NAME, resolved via PSModulePath
+  return /^(\.{1,2}[\\/]|[A-Za-z]:[\\/]|[\\/]|\$)/.test(spec);
+}
+
+test('every Import-Module command quoted in docs/testing is executable as written (#3055)', () => {
+  const surfaces = [
+    join(HERE, '..', '..', 'docs', 'testing', 'onbox-acceptance-register.md'),
+    REAL_LIVE_VIEW_PATH,
+  ];
+  const bad = [];
+  for (const file of surfaces) {
+    const text = readFileSync(file, 'utf8');
+    for (const m of text.matchAll(IMPORT_MODULE_RE)) {
+      if (!importPathIsExecutable(m[2])) bad.push(`${file}: Import-Module ${m[2]}`);
+    }
+  }
+  assert.deepEqual(
+    bad,
+    [],
+    'A relative Import-Module path needs a leading `.\\` -- without it PowerShell searches\n' +
+      '$env:PSModulePath and fails with Modules_ModuleNotFound on both engines.\n' +
+      bad.join('\n'),
+  );
+
+  // The matcher and the predicate must both be able to fire, or the assertion
+  // above is vacuous.
+  const probe = [...'Import-Module scripts\\lib\\x.psm1 -Force'.matchAll(IMPORT_MODULE_RE)];
+  assert.equal(probe.length, 1);
+  assert.equal(importPathIsExecutable(probe[0][2]), false);
+  assert.equal(importPathIsExecutable('.\\scripts\\lib\\x.psm1'), true);
+  assert.equal(importPathIsExecutable('./scripts/lib/x.psm1'), true);
+  assert.equal(importPathIsExecutable('Pester'), true);
+});
+
+test('E103 drives the two-engine scan read-only, so the second engine still has a junction to find (#3055)', () => {
+  // wt-gc-junctions.ps1's [ValidateSet('Remove')] leaves Remove as its only
+  // action, so a criterion that says "run the .ps1 under each engine" unlinks
+  // the fixture between the two runs and the second run legitimately finds
+  // nothing -- which the same bullet defines as a failure.
+  const md = readFileSync(
+    join(HERE, '..', '..', 'docs', 'testing', 'onbox-acceptance-register.md'),
+    'utf8',
+  );
+  const html = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
+
+  // The action set is what makes this necessary -- pin the premise, so this
+  // fails loudly (rather than silently becoming pointless) if a read-only
+  // action is ever restored to the wrapper.
+  const ps1 = readFileSync(
+    join(HERE, '..', 'lib', 'wt-gc-junctions.ps1'),
+    'utf8',
+  );
+  assert.match(ps1, /ValidateSet\(\s*'Remove'\s*\)/, 'wt-gc-junctions.ps1 still offers only -Action Remove');
+
+  for (const [name, text] of [['register', md], ['live view', html]]) {
+    assert.ok(
+      text.includes('Get-JunctionsRecursive'),
+      `${name}'s E103 must name the read-only Get-JunctionsRecursive for the two-engine run`,
+    );
+  }
+});

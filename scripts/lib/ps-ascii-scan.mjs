@@ -4,9 +4,19 @@
 // Why this exists: a `.ps1`/`.psm1` saved as UTF-8 with NO BOM is decoded by
 // Windows PowerShell 5.1 as the ANSI code page (CP1252 on this box), not as
 // UTF-8. An em dash (U+2014, bytes `E2 80 94`) therefore reads back as three
-// CP1252 characters and the THIRD of them is `"` — which terminates an
-// enclosing double-quoted string literal mid-line and turns the rest of the
-// line into a parse error. Measured on 5.1.26100.9223:
+// CP1252 characters and the THIRD of them, byte `0x94`, is U+201D — the RIGHT
+// DOUBLE QUOTATION MARK. That is NOT ASCII `"` (0x22); it terminates the
+// enclosing literal because the PowerShell lexer accepts the smart-quote
+// characters as string delimiters in their own right. Stating it that way is
+// what makes the rest of the class visible, and the class is much wider than
+// the em dash (all measured on 5.1.26100.9223, BOM-less UTF-8):
+//
+//   U+2014 EM DASH      -> E2 80 94 -> ... U+201D -> closes a DOUBLE-quoted string
+//   U+2013 EN DASH      -> E2 80 93 -> ... U+201C -> closes a DOUBLE-quoted string
+//   U+2011 NB HYPHEN    -> E2 80 91 -> ... U+2018 -> closes a SINGLE-quoted string
+//
+// so the blanket "no non-ASCII outside a comment" rule is the right rule, and
+// it is right for reasons broader than its own worked example. Measured:
 //
 //   throw "... could not inspect '$Dir' <em dash> the scan is INCOMPLETE ..."
 //   -> ParserError: Unexpected token 'the' in expression or statement
@@ -29,6 +39,12 @@
 // of line" shortcut is exactly wrong here: `#` inside a string literal is not
 // a comment, so that shortcut would strip — and therefore MISS — a non-ASCII
 // character sitting in a string that happens to contain a `#`.
+//
+// A UTF-8 BOM is the one thing that makes non-ASCII safe here: 5.1 honours a
+// leading `EF BB BF` and decodes the whole file as UTF-8, so none of the above
+// happens. A BOM-carrying file is therefore reported CLEAN outright (see
+// `scanPowerShellNonAscii`) rather than being flagged for the BOM itself.
+// scripts/start-app.ps1 is the repo's one such file.
 
 /**
  * Every non-ASCII character in `text` that is NOT inside a comment.
@@ -43,9 +59,20 @@
  */
 export function scanPowerShellNonAscii(text) {
   const findings = [];
+  // A leading UTF-8 BOM makes 5.1 decode the file as UTF-8, which is exactly
+  // the mis-decode this scanner exists to prevent. Such a file is clean by
+  // construction, so report nothing rather than flagging the BOM itself as a
+  // U+FEFF-in-code finding (which is what a naive scan does, and what kept
+  // scripts/start-app.ps1 out of the guarded set until #3055 pass 3).
+  if (text.charCodeAt(0) === 0xfeff) return findings;
+
   const lines = text.split(/\r?\n/);
   // 'code' | 'single' | 'double' | 'hereSingle' | 'hereDouble' | 'block'
   let state = 'code';
+  // Set once a line ends inside an unterminated single-/double-quoted string.
+  // See the `state` reset at the bottom of the loop for why that suppresses
+  // comment handling for the remainder of the file.
+  let sawUnterminatedString = false;
 
   for (let li = 0; li < lines.length; li += 1) {
     const line = lines[li];
@@ -107,8 +134,8 @@ export function scanPowerShellNonAscii(text) {
       }
 
       // state === 'code'
-      if (ch === '<' && line[i + 1] === '#') { state = 'block'; i += 2; continue; }
-      if (ch === '#') { lineComment = true; break; }
+      if (ch === '<' && line[i + 1] === '#' && !sawUnterminatedString) { state = 'block'; i += 2; continue; }
+      if (ch === '#' && !sawUnterminatedString) { lineComment = true; break; }
       if (ch === '@' && (line[i + 1] === "'" || line[i + 1] === '"')) {
         // `@'` / `@"` opens a here-string only when nothing but whitespace
         // follows on the line; otherwise it is a splat/array-ish `@` next to
@@ -128,11 +155,27 @@ export function scanPowerShellNonAscii(text) {
       i += 1;
     }
 
-    // A single- or double-quoted string does not span lines in PowerShell in
-    // any shape this repo writes; reset so one unbalanced quote cannot make
-    // the whole rest of the file read as a string (and so silently stop
-    // reporting). Here-strings and block comments DO span lines.
-    if (state === 'single' || state === 'double') state = 'code';
+    // PowerShell single- and double-quoted string literals CAN span lines, so
+    // an unterminated quote at EOL is ambiguous: either a multi-line literal,
+    // or one stray quote in otherwise ordinary code. Carrying the string state
+    // forward would let a single stray quote make the whole rest of the file
+    // read as a string and silently stop reporting; NOT carrying anything
+    // forward (what this did before #3055 pass 3) let a `#` opening the
+    // continuation line of a multi-line literal be read as a comment, so the
+    // rest of that line -- string body, non-ASCII and all -- was skipped and
+    // the scanner returned clean on source 5.1 rejects outright.
+    //
+    // Resolution: reset the lexer state (so no runaway), but latch
+    // `sawUnterminatedString`, which stops `#` and `<#` from opening comments
+    // for the remainder of the file. That over-reports rather than misses,
+    // which is the correct direction for a guard. It is also free today: no
+    // tracked .ps1/.psm1 in the repo ends any line inside an unterminated
+    // quote, so the latch never fires on real source (pinned by a test).
+    // Here-strings and block comments DO span lines and are handled above.
+    if (state === 'single' || state === 'double') {
+      state = 'code';
+      sawUnterminatedString = true;
+    }
     void lineComment;
   }
 
