@@ -39,6 +39,7 @@ import {
   cosineToCentroid,
   percentile,
   scoreSegment,
+  syntheticOnlySpread,
   CUTOFFS,
 } from './score.js';
 import { auditionCentroid, type AuditionCharacter, type AuditionCentroidOpts } from './audition-centroid.js';
@@ -159,6 +160,10 @@ interface CharacterReference {
    *  current chapter audio). Carried on the persisted row so a match-checked
    *  reuse rewrites the same identity back instead of silently dropping it. */
   auditionVoice?: AuditionVoiceRef;
+  /** A36 fix — band-computation method used ('synthetic-sigma' = post-fix,
+   *  or 'percentile' = original/pre-fix). Carried on persisted 'audition' rows
+   *  so pre-fix rows can be detected and rebuilt with the new logic. */
+  bandMethod?: 'percentile' | 'synthetic-sigma';
 }
 
 /** Discriminates the three things that can happen when a character's
@@ -180,17 +185,24 @@ type ReferenceOutcome =
 const TOO_SHORT_REF: CharacterReference = { centroid: [], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' };
 
 function persistedAsRef(row: CharacterCentroid): CharacterReference {
-  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice };
+  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice, bandMethod: row.bandMethod };
 }
 
-/** #1969 — whether a persisted audition centroid's recorded voice identity still matches the
- *  character's CURRENT render identity. A mismatch — or no recorded identity at all (a legacy
- *  row written before #1969, or a character whose current voice info is absent) — means the
- *  reference may describe a speaker the character no longer is, so it must not be trusted as-is:
- *  the caller discards and rebuilds it. */
+/** #1969 / A36 — whether a persisted audition centroid's recorded voice identity still matches the
+ *  character's CURRENT render identity, AND it was computed with the current band-derivation method.
+ *  A mismatch — or no recorded identity at all (a legacy row written before #1969, or a character
+ *  whose current voice info is absent) — or a missing bandMethod field (pre-fix row) — means the
+ *  reference may describe a speaker the character no longer is, or it was computed with outdated
+ *  band logic, so it must not be trusted as-is: the caller discards and rebuilds it. */
 function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacter): boolean {
   const r = row.auditionVoice;
   if (row.referenceKind !== 'audition' || r == null) return false;
+  // A36 fix: a persisted audition row without bandMethod field is a pre-fix row
+  // (written before this fix). Such rows must be rebuilt to apply the current
+  // band-computation logic, especially for synthetic-only pools which changed from
+  // percentile-derived to sigma-derived bands. Once rebuilt, rows carry bandMethod
+  // and can be reused on subsequent passes.
+  if (row.bandMethod === undefined) return false;
   // language is compared STRICTLY: a recorded language — or the absence of one —
   // must equal the current voice's language. A legacy row that recorded no language
   // while the book now has one is a mismatch -> rebuild once, then it records the
@@ -277,9 +289,33 @@ async function resolveCharacterReference(
     .map((v) => cosineToCentroid(Array.from(v), centroidArr))
     .sort((a, b) => a - b);
   const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
-  const pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
-  const pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
-  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', auditionVoice: { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned } } };
+  // A36 (discharged 2026-09-05) — a small, synthetic-only pool (no real anchors blended in; see
+  // AuditionCentroidResult.syntheticOnly) clusters far tighter than real
+  // render-to-render variance, so the normal percentile cutoffs over-flag a
+  // correctly-cast voice on fresh text as 'voice-mismatch'/'severe' (srv-36
+  // register row A36). For tight synthetic-only pools, use the separately-
+  // calibrated sigma band; for loose/degenerate pools, fall back to the
+  // percentile-of-pool computation the real-anchor path uses (safe, proven).
+  let pSevere: number;
+  let pBand: number;
+  let bandMethod: 'percentile' | 'synthetic-sigma';
+
+  if (audition.syntheticOnly) {
+    const spread = syntheticOnlySpread(cosines);
+    pSevere = spread.pSevere;
+    pBand = spread.pBand;
+    bandMethod = spread.usedSigmaBand ? 'synthetic-sigma' : 'percentile';
+  } else {
+    pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
+    pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
+    bandMethod = 'percentile';
+  }
+
+  // A36 fix: tag the band method used (synthetic-sigma for post-fix synthetic-only
+  // pools that matched the tight-pool condition, percentile for the fallback or
+  // non-synthetic cases). Pre-fix rows lack this field entirely, allowing us to
+  // detect and rebuild them with the current band-computation logic.
+  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', bandMethod, auditionVoice: { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned } } };
 }
 
 // ── Per-chapter segment lookup ─────────────────────────────────────────────

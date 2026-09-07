@@ -39,11 +39,15 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { readNormalized } from '../lib/read-normalized.mjs';
+import { readNormalized, normalizeEol } from '../lib/read-normalized.mjs';
+import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 import {
   FILES as MIRRORED_FILES,
   buildMirrorContent,
   syncOneFile,
+  syncAgentSkills,
+  readCommittedOnMain,
+  resolveMainSha,
   assertFilesNonEmpty,
 } from '../sync-agent-skills.mjs';
 
@@ -559,23 +563,218 @@ test('MIRRORED_FILES (sync-agent-skills.mjs FILES) is non-empty and names the ex
   ]);
 });
 
-test('the agent-store mirror matches its canonical source, when it exists', () => {
+test('sync-agent-skills.mjs refuses to report success with an empty file list', () => {
+  // Closes the same wiring gap `assertFilesNonEmpty`'s own comment already
+  // asserts but nothing previously verified end-to-end: this calls the
+  // public `syncAgentSkills()` entry point itself (not just the standalone
+  // guard function), proving the empty-list check actually sits in front of
+  // the write loop rather than merely existing as an unused export.
+  assert.throws(() => syncAgentSkills([]), /FILES is empty/);
+});
+
+test('syncAgentSkills writes a real, git-sourced mirror for a file on main and skips one that is not, without ever touching the real ~/.agents/skills', () => {
+  // #3001: this is the wiring test for the actual fix, not just its pieces.
+  // Passing an injected `mirrorRoot` here is what makes it safe to exercise
+  // the *real* write path in a unit test: a version of this test that used
+  // the default $HOME mirror would mutate real machine state on every local
+  // test run — exactly the shared-mutable-state hazard this PR closes.
+  const tmpMirror = mkdtempSync(join(tmpdir(), 'skills-sync-wiring-'));
+  try {
+    const result = syncAgentSkills(['pr-review-gate/SKILL.md', 'does/not/exist/on/main.md'], tmpMirror);
+    assert.deepEqual(result.skipped, ['does/not/exist/on/main.md']);
+    assert.deepEqual(result.written, [join(tmpMirror, 'pr-review-gate', 'SKILL.md')]);
+    const written = readFileSync(join(tmpMirror, 'pr-review-gate', 'SKILL.md'), 'utf8');
+    const mainSha = resolveMainSha();
+    assert.equal(
+      normalizeEol(written),
+      buildMirrorContent(
+        normalizeEol(readCommittedOnMain('pr-review-gate/SKILL.md', mainSha).toString('utf8')),
+        'pr-review-gate/SKILL.md',
+      ),
+    );
+    assert.ok(!existsSync(join(tmpMirror, 'does')), "a FILES entry not on 'main' must not create any output");
+  } finally {
+    rmSync(tmpMirror, { recursive: true, force: true });
+  }
+});
+
+test('resolveMainSha resolves a local main branch, falls back to origin/main on the CI PR-checkout shape, and throws loudly when neither resolves', () => {
+  // #3008 round 2: NOT hypothetical — this is exactly what made CI's own
+  // "Hooks tests" leg fail red on this PR's first head. `actions/checkout`
+  // on a `pull_request` event leaves a DETACHED HEAD with no local `main`
+  // branch — only `refs/remotes/origin/main`, once `fetch-depth: 0`
+  // populates it. A bare `git show main:<path>` fails to resolve `main`
+  // there for EVERY path, and — before this fix — that failure was
+  // indistinguishable from "this one path isn't on main yet" (a legitimate
+  // per-file skip, see #3001): syncAgentSkills silently skipped every single
+  // file and reported `Wrote 0, skipped N`, exit 0, having verified nothing.
+  const gitOpts = (cwd) => ({ cwd, env: scrubGitEnvForThrowawayRepo(), windowsHide: true, encoding: 'utf8' });
+  const tmp = mkdtempSync(join(tmpdir(), 'resolve-main-sha-'));
+  try {
+    // Case 1: an ordinary checkout with a local `main` branch.
+    const origin = join(tmp, 'origin');
+    mkdirSync(origin);
+    execFileSync('git', ['init', '-b', 'main'], { ...gitOpts(origin), windowsHide: true });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { ...gitOpts(origin), windowsHide: true });
+    execFileSync('git', ['config', 'user.name', 'Test'], { ...gitOpts(origin), windowsHide: true });
+    writeFileSync(join(origin, 'file.txt'), 'hello\n');
+    execFileSync('git', ['add', 'file.txt'], { ...gitOpts(origin), windowsHide: true });
+    execFileSync('git', ['commit', '-m', 'initial'], { ...gitOpts(origin), windowsHide: true });
+    const originMainSha = execFileSync('git', ['rev-parse', 'main'], { ...gitOpts(origin), windowsHide: true }).trim();
+    assert.equal(resolveMainSha(origin), originMainSha, 'a local main branch resolves directly');
+
+    // Case 2: the actual CI PR-checkout shape. `git clone` creates a local
+    // `main` branch by default (checked out) — deleting it after detaching
+    // reproduces "no local main branch, only origin/main" exactly.
+    const ciCheckout = join(tmp, 'ci-checkout');
+    execFileSync('git', ['clone', origin, ciCheckout], { env: scrubGitEnvForThrowawayRepo(), windowsHide: true });
+    execFileSync('git', ['checkout', '--detach', 'origin/main'], { ...gitOpts(ciCheckout), windowsHide: true });
+    execFileSync('git', ['branch', '-D', 'main'], { ...gitOpts(ciCheckout), windowsHide: true });
+    assert.throws(
+      () => execFileSync('git', ['rev-parse', '--verify', 'main'], { ...gitOpts(ciCheckout), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }),
+      'sanity check failed: the local main branch should be gone in this fixture',
+    );
+    assert.equal(
+      resolveMainSha(ciCheckout),
+      originMainSha,
+      'must fall back to origin/main when no local main branch exists',
+    );
+
+    // Case 3: neither `main` nor `origin/main` resolves at all.
+    const noMain = join(tmp, 'no-main');
+    mkdirSync(noMain);
+    execFileSync('git', ['init', '-b', 'trunk'], { ...gitOpts(noMain), windowsHide: true });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { ...gitOpts(noMain), windowsHide: true });
+    execFileSync('git', ['config', 'user.name', 'Test'], { ...gitOpts(noMain), windowsHide: true });
+    writeFileSync(join(noMain, 'file.txt'), 'hello\n');
+    execFileSync('git', ['add', 'file.txt'], { ...gitOpts(noMain), windowsHide: true });
+    execFileSync('git', ['commit', '-m', 'initial'], { ...gitOpts(noMain), windowsHide: true });
+    assert.throws(
+      () => resolveMainSha(noMain),
+      /could not resolve 'main'/,
+      'resolveMainSha must fail loudly, not silently treat "main does not resolve at all" as "no files are on main yet"',
+    );
+
+    // And the actual production entry point must propagate that failure
+    // rather than absorb it into a false "nothing to sync" success — this is
+    // the exact regression CI caught: syncAgentSkills must NOT report
+    // { written: [], skipped: [...] } when `main` itself can't be resolved.
+    assert.throws(
+      () => syncAgentSkills(['pr-review-gate/SKILL.md'], join(tmp, 'unused-mirror'), noMain),
+      /could not resolve 'main'/,
+      'syncAgentSkills must fail loudly, not silently skip every file, when main cannot be resolved',
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('readCommittedOnMain (and syncAgentSkills end to end) reads main, never whatever branch happens to be checked out on disk', () => {
+  // #3001 round 3: closes a residual pinning gap the earlier fixtures left.
+  // Both of them happened to have HEAD pointing at the exact same commit as
+  // resolved 'main' (a fresh clone right after checkout, or a repo with no
+  // 'main' at all) — so mutating the production git-show argument from the
+  // resolved `${mainSha}:` back to the literal `HEAD:` (reintroducing
+  // #3001's actual bug: reading whatever is checked out, not main) left
+  // every existing test green. This fixture puts HEAD on a DIFFERENT commit
+  // than 'main': a feature branch with its own committed-but-unmerged edit
+  // to a mirrored skill file — exactly the #3001 shape (PR #2999's unmerged
+  // SKILL.md edit sat on a branch whose HEAD was never 'main').
+  const gitOpts = (cwd) => ({ cwd, env: scrubGitEnvForThrowawayRepo(), windowsHide: true, encoding: 'utf8' });
+  const tmp = mkdtempSync(join(tmpdir(), 'read-committed-on-main-'));
+  try {
+    const repo = join(tmp, 'repo');
+    mkdirSync(repo);
+    execFileSync('git', ['init', '-b', 'main'], { ...gitOpts(repo), windowsHide: true });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { ...gitOpts(repo), windowsHide: true });
+    execFileSync('git', ['config', 'user.name', 'Test'], { ...gitOpts(repo), windowsHide: true });
+    mkdirSync(join(repo, '.claude', 'skills', 'fake-skill'), { recursive: true });
+    writeFileSync(join(repo, '.claude', 'skills', 'fake-skill', 'SKILL.md'), '---\nname: fake-skill\n---\non main\n');
+    execFileSync('git', ['add', '.'], { ...gitOpts(repo), windowsHide: true });
+    execFileSync('git', ['commit', '-m', 'main commit'], { ...gitOpts(repo), windowsHide: true });
+    const mainSha = execFileSync('git', ['rev-parse', 'main'], { ...gitOpts(repo), windowsHide: true }).trim();
+
+    // Branch off, edit the mirrored file, commit — 'main' never sees this.
+    execFileSync('git', ['checkout', '-b', 'feature'], { ...gitOpts(repo), windowsHide: true });
+    writeFileSync(
+      join(repo, '.claude', 'skills', 'fake-skill', 'SKILL.md'),
+      '---\nname: fake-skill\n---\nunmerged feature edit\n',
+    );
+    execFileSync('git', ['add', '.'], { ...gitOpts(repo), windowsHide: true });
+    execFileSync('git', ['commit', '-m', 'unmerged feature edit'], { ...gitOpts(repo), windowsHide: true });
+
+    // HEAD is now on 'feature', with content 'main' has never had. 'main'
+    // itself is untouched — resolving it must not be affected by HEAD at all.
+    assert.equal(resolveMainSha(repo), mainSha, "resolveMainSha must resolve the 'main' ref, not HEAD");
+
+    const raw = readCommittedOnMain('fake-skill/SKILL.md', mainSha, repo);
+    assert.ok(raw !== null, 'the file exists on main and must be found');
+    assert.match(raw.toString('utf8'), /on main/);
+    assert.doesNotMatch(
+      raw.toString('utf8'),
+      /unmerged feature edit/,
+      "readCommittedOnMain read the checked-out branch's disk/HEAD content instead of main's",
+    );
+
+    // And through the real production entry point, end to end.
+    const tmpMirror = join(tmp, 'mirror');
+    const result = syncAgentSkills(['fake-skill/SKILL.md'], tmpMirror, repo);
+    assert.deepEqual(result.skipped, []);
+    const written = readFileSync(join(tmpMirror, 'fake-skill', 'SKILL.md'), 'utf8');
+    assert.match(written, /on main/);
+    assert.doesNotMatch(
+      written,
+      /unmerged feature edit/,
+      "syncAgentSkills wrote the unmerged feature-branch content instead of main's",
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('the agent-store mirror matches what main has committed, when it exists', () => {
   // FAILS OPEN BY CONSTRUCTION, and that is not an oversight. The target is
   // in $HOME: absent on a fresh clone and in CI. Making this a hard failure
   // would turn every never-synced machine red. The trade is deliberate — but
   // it means a GREEN run here proves nothing about a machine that has not
   // synced, so never report this as "the mirror is in sync".
+  //
+  // Compares against what `main` has COMMITTED (readCommittedOnMain, the
+  // exact same function production syncing uses — imported, not
+  // reimplemented, so the two can never diverge the way they did in #3001)
+  // rather than against the current worktree's disk copy of
+  // `.claude/skills/**`. A branch with a legitimate, not-yet-synced in-flight
+  // edit to a mirrored skill no longer trips this — that false positive is
+  // exactly what blocked PR #2998 while PR #2999 held an unmerged edit
+  // elsewhere on the same machine.
+  //
+  // A `rel` not yet present on `main` (e.g. this very branch just adding a
+  // 5th mirrored file — done for real on 2026-08-14 when model-routing/
+  // joined) is skipped rather than asserted-missing: the mirror provably
+  // cannot hold content `main` doesn't have yet, so failing on it would
+  // deadlock the branch that adds it with no legal remedy (#3001).
   if (!existsSync(AGENT_SKILL_STORE)) {
     console.log(`[skip] no agent-store mirror at ${AGENT_SKILL_STORE} — run npm run skills:sync`);
     return;
   }
+  const mainSha = resolveMainSha();
   for (const rel of MIRRORED_FILES) {
+    const raw = readCommittedOnMain(rel, mainSha);
+    if (raw === null) {
+      console.log(`[skip] ${rel} is not at ${mainSha.slice(0, 8)} ('main') yet — the mirror can't hold it until that change merges`);
+      continue;
+    }
     const mirrored = join(AGENT_SKILL_STORE, rel);
-    assert.ok(existsSync(mirrored), `mirror is missing ${rel} — run npm run skills:sync`);
+    assert.ok(existsSync(mirrored), `mirror is missing ${rel}, which IS on main — run npm run skills:sync`);
     assert.equal(
       readNormalized(mirrored),
-      buildMirrorContent(readNormalized(join(REPO_ROOT, '.claude', 'skills', rel)), rel),
-      `${rel} has drifted from its canonical copy — run npm run skills:sync`,
+      buildMirrorContent(normalizeEol(raw.toString('utf8')), rel),
+      `${rel} in the shared ~/.agents/skills mirror does not match main's committed copy. ` +
+        "This does NOT necessarily mean YOUR branch is wrong — the mirror is shared machine " +
+        'state, and another worktree on this box may have synced from a stale local `main` ' +
+        '(see #3001). Run `npm run skills:sync` (it always reads from `main`\'s committed git ' +
+        "blob regardless of which branch runs it, so it's safe to run from anywhere) after " +
+        "confirming this machine's local `main` is up to date with origin.",
     );
   }
 });

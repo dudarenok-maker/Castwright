@@ -166,7 +166,8 @@ check fails on a real dependency gap.
 > Unit tests pin the wiring, but **whether CUDA is genuinely used cannot be
 > proven off-box**: get_available_providers() reports CUDA whether or not any
 > session uses it, which is exactly what hid this. Criteria 1 and 2 still need
-> a real load here — row A28 is discharged (2026-08-31); row A29 stays owed —
+> a real load here — row A28 is discharged (2026-08-31); row A29 is discharged
+> (2026-09-07, retired, not reused) —
 > read the provider off a live Kokoro, not off the available-providers list.
 >
 > **A CPU session here is not automatically this criterion failing (#2631
@@ -262,8 +263,9 @@ GPU-provider check would have measured the other lane's venv, not this
 one — worthless evidence. A structural box-contention limitation, distinct
 from the already-filed #2534 CUDA13/cuDNN9 gap.
 **Run by:** claude (wave-4 step 5c, Castwright#2561). **Date:** 2026-08-21.
-**Disposition:** Register row A29 (renumbered from A39 this wave) stays
-STILL OWED — partially run. Full evidence:
+**Disposition:** Register row **A29 is discharged** (2026-09-07, retired, not
+reused; renumbered from A39 this wave) — at this point in the chain it stayed
+STILL OWED, partially run. Full evidence:
 `docs/testing/onbox-wave4-results/step-5c-a40.md`.
 
 > **2026-08-23 (Castwright#2621) — STILL OWED, blocked by box-wide sidecar
@@ -282,6 +284,24 @@ STILL OWED — partially run. Full evidence:
 > `LOCAL_TTS_PORT`'s per-worktree value. Evidence:
 > `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
 > (Castwright#2621).
+
+> **2026-09-06 (chain #2913 retry, Castwright#2916/#2914/#3015) — one datum
+> retired, Qwen3 install click-through still not run.** #2632's per-worktree
+> `LOCAL_TTS_PORT` fix genuinely closes the box-wide port-contention class
+> that made wave-4 step 5c's and wave-5's Kokoro-provider checks
+> UNREACHABLE above: this worktree's sidecar bound its own assigned `:9080`,
+> a real in-app Kokoro install + load ran against it, and `GET /health`'s
+> `devices.kokoro` (read from the live ONNX session's own providers, not
+> `get_available_providers()`) reported `"cuda"` — proof the isolated venv's
+> GPU runtime works end to end once a worktree can actually reach its own
+> sidecar. That retires the port-contention *reason* stated in §4.3 above,
+> but does not discharge this row: Qwen3-TTS was already installed from this
+> worktree's own bootstrap, so the Install action never rendered and no
+> fresh `pip install` ran — criterion 2 (a real Install click, watched for
+> `WinError 5`) remains genuinely untested. Full evidence:
+> `docs/testing/onbox-a29-results/step-1-retry.md`. Redo filed separately,
+> chain Castwright#2913 → #3020 → #3019. Run by: claude
+> (Castwright#2916/#2914).
 
 ---
 

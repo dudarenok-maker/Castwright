@@ -106,7 +106,7 @@ Three defects let it run unchecked:
 - **The GPU probe never fired.** `GPU_BUSY_THRESHOLD = 40` (`verify-cache.mjs:1028`); measured
   utilisation was **0%**. It also cannot be deleted cheaply: `scripts/run-golden-audio.mjs:68`
   imports `maxNvidiaSmiUtil` and `GPU_BUSY_THRESHOLD`, and
-  `scripts/tests/verify-cache.test.mjs:1183-1224` pins `detectGpuContention`'s **source text**.
+  `scripts/tests/verify-cache.test.mjs`'s `detectGpuContention routes through gpuContentionFor, not parseNvidiaSmiUtil directly` test pins `detectGpuContention`'s **source text**.
 - **A second probe exists** — `detectSiblingContention` (`verify-cache.mjs:1131-1145`);
   `SKIP_CONTENTION_CHECK` gates both at `:1340` and `:1350`.
 - **Neither probe explains the failure.** Both set `LOW_CONCURRENCY` on their own process env,
@@ -227,22 +227,38 @@ Per-step-total is also the only shape that composes additively with a pipeline c
 records `durationMs` per step. Derive the budget as `max(FLOOR, K × lastGreenDurationMs)`: no
 magic numbers, adapts to the box, and degrades to `FLOOR` when cold.
 
-**One measurement is owed before these are final.** `durationMs` is recorded around the whole
-retry loop (`verify-cache.mjs:1478-1481`), so 19.45 min is a **step total** and the per-attempt
-figure is unknown by up to 3×. Run one `test:server --no-cache` on a reaped box and record
-per-attempt timings.
+**One measurement was owed before these are final — resolved 2026-09-06 by instrumentation
+rather than sampling ([#3018](https://github.com/dudarenok-maker/Castwright/issues/3018)).**
+`durationMs` is recorded around the whole retry loop, so 19.45 min is a **step total** and the
+per-attempt figure was unknown by up to 3×. Only `RETRIABLE_POOL_STEPS` (`test:server`,
+`test:server-slow`) can be inflated this way; every other step is always exactly one attempt.
+
+The original plan here — "run one `test:server --no-cache` on a reaped box and record per-attempt
+timings" — was **not** taken, deliberately. It buys a single sample for ~19 minutes of exclusive
+box time, and this box is rarely idle enough to give that honestly; an earlier attempt to sample it
+became a real 19-minute battery on a box that was mid-cleanup. #3018 instead records the attempt
+count in the cache entry, so **every** future run records how many attempts its figure covers, and a
+stale figure can never again be mistaken for a single-attempt cost.
+
+**What this buys Part 2 — qualifying the baseline, not changing the budget shape.** The budget shape stays exactly as `:215` settles it: **per-step total, not per-attempt.** A step total is therefore the *correct* unit for `max(FLOOR, K × lastGreenDurationMs)`, and nothing here revises that.
+
+The problem the conflation caused is narrower: that formula calibrates off whichever run happened to be last-green, and an entry inflated by two crashed attempts is **not a representative baseline** for a typical run — the budget silently anchors to an outlier, and nothing recorded let a consumer notice. With the attempt count present, a consumer can qualify the baseline: prefer an entry with `attempts === 1`, and treat `attempts > 1` as uncalibratable, falling back to `FLOOR`.
+
+**Do not derive a per-attempt figure by dividing.** Attempts are not equal length — a crashed attempt aborts early — so `durationMs / attempts` is meaningless. Worked example: crash at 60 s, crash at 60 s, pass at 1100 s gives `{ durationMs: 1220000, attempts: 3 }`; dividing yields 407 s against a true single-pass cost of 1100 s, a budget **~2.7× too tight** that false-positives on every clean run — precisely the failure `:223` cites as the reason 20 min was rejected.
+
+**This does not retroactively qualify the 19.45 min figure in the table above.** Entries written before this change carry no attempt count, so that number remains a step total of unknown composition until the next full local run rewrites it.
 
 **Implementation is an async `spawn` conversion of step execution — the largest piece of work
 here, and its real risk is source-text pins, not caller compatibility.**
 
-- `scripts/tests/verify-cache.test.mjs:1288` extracts `runStepProcess`'s body by regex and
-  `:1298-1302` asserts it contains the literal **`spawnSync('npm', ['run', npmScript]`**. This
+- `verify-cache.test.mjs`'s `#3018: runStepProcess` test extracts `runStepProcess`'s body by regex
+  and asserts it contains the literal **`spawnSync('npm', ['run', npmScript]`**. This
   fails the moment `spawnSync` becomes `spawn`.
-- `:1305-1311` extracts `runPipeline`'s loop body with a regex anchored on a trailing `return
-  0;` at **exactly two-space indent**; `:1332-1341` and `:1391-1399` depend on that match and
-  throw if it fails to locate.
-- **`server/src/spawn-windows-hide.test.ts`** scans `scripts/**` and its `SPAWN_NAMES` (`:134`)
-  covers `spawn` as well as `spawnSync`; the rule (`:459-478`) requires the literal
+- The same file's `#3018: runPipeline persists` and `#3018: [fail] line` tests extract `runPipeline`'s
+  loop body with a regex anchored on a trailing `return 0;` at **exactly two-space indent**; these
+  tests depend on that match and throw if it fails to locate.
+- **`server/src/spawn-windows-hide.test.ts`**'s `SPAWN_NAMES` scanner
+  covers `spawn` as well as `spawnSync`; the rule in that file's spawn-call guard requires the literal
   `windowsHide: true` **inside the call's own balanced-paren argument text**, so hoisting
   options into a variable fails it. This guard will also scan the new reaper, `wt-gc.mjs`, and
   `pre-commit-lint.mjs`.
@@ -354,13 +370,13 @@ register](../../testing/onbox-acceptance-register.md) row.
 | Staged-file selection | extension filter, empty-set short-circuit, missing-eslint **passes**, timeout passes |
 | Step budgets | per-step-total fires; pipeline cap fires independently; **timeout is not retried as a pool crash**; tail-keeping accumulator still matches `isVitestPoolCrash`; both stdio shapes + `shell`/`windowsHide` preserved |
 | **The invariant** | `hook-no-pool.test.mjs` — an **allowlist** of permitted hook invocations |
-| Hook-scope exclusivity | pin that a `.husky/**` diff selects `test:hooks` and nothing else. `verify-cache.test.mjs:647-651` asserts only the positive; true today, **unpinned**. Also fix the stale comment at `:636-646` claiming `.husky/**` matches no step. |
+| Hook-scope exclusivity | `verify-cache.test.mjs`'s `stepTouchedByDiff: a .husky diff matches test:hooks and NOTHING ELSE` test pins that a `.husky/**` diff selects `test:hooks` and nothing else. The prior stale claim (`.husky/**` matches no step) was acknowledged and corrected in the comments above this test. |
 
 Every test asserts against input that would otherwise make the guard fire.
 
-**Source-text pins are part of the work, not a surprise:** `verify-cache.test.mjs:1288-1311` and
-`server/src/spawn-windows-hide.test.ts` must be updated in the same commit as the async
-conversion.
+**Source-text pins are part of the work, not a surprise:** `verify-cache.test.mjs`'s `runStepProcess` and
+`runPipeline` acceptance tests, plus `server/src/spawn-windows-hide.test.ts`'s spawn-call guard,
+must be updated in the same commit as the async conversion.
 
 **On-box acceptance rows are owed** (CLAUDE.md step 3 — a merge gate): the reaper's
 `Win32_Process` classification against real processes, and the budget's kill-the-whole-tree
@@ -431,7 +447,7 @@ the governor entirely.
 
 - **The concurrency governor** — deferred with a measurement plan, above.
 - **Deleting the GPU throttle** — the probe never fired; removal breaks
-  `run-golden-audio.mjs:68` and `verify-cache.test.mjs:1183-1224`. The real defect there (both
+  `run-golden-audio.mjs:68` and `verify-cache.test.mjs`'s `detectGpuContention routes through gpuContentionFor, not parseNvidiaSmiUtil directly` test. The real defect there (both
   probes decide once at entry, never re-evaluate) is a separate issue.
 - `verify-cache.mjs`'s input-hash/STEPS table. **Not local-only:** `ci-scope.mjs:13` imports
   from it and `verify.yml:127` runs it, so CI's per-leg scoping derives from this file. A future
@@ -439,6 +455,20 @@ the governor entirely.
 - **Open Engine queue concurrency.** Noted as a gap: with the governor deferred, this was the
   only other lever on battery count, and both are now out. If Part 3's log shows deliberate
   starts dominate, this becomes the live option alongside the governor.
+
+## Status of the two deferred measurements
+
+| # | Question | State |
+|---|---|---|
+| 1 | Is the wedge a concurrency phenomenon at all? | **Still open.** The "two concurrent batteries are enough" claim came from immediate-parent root detection later proved wrong. Its urgency has dropped: since Part 1 **no git hook spawns a pool**, so the hook-driven wedge is structurally impossible and this now governs only Parts 2-6 (manual `verify` runs and OE lanes). Deliberately reproducing it costs ~40 min of a shared box and recreates the failure it studies — not done. |
+| 2a | Can the artifact tell us the composition? | **Answered 2026-09-06: no**, because the attempt count was never recorded. Fixed by #3018. See Part 2 above. |
+| 2b | What is `test:server`'s 19.45 min broken down by attempts? | **Still open.** Pre-#3018 cache entries carry no attempt count, so the composition of the 19.45 min figure remains unknown. Tracked by **[#3025](https://github.com/dudarenok-maker/Castwright/issues/3025)** — once the artifact records attempts going forward, a future run can re-baseline this figure and qualify it. |
+
+**Part 1 propagation is complete.** `.husky/*` is tracked, so each worktree kept the old ~35-min
+hooks until `main` merged into it. As of 2026-09-06 the sweep is finished: **19/19 worktrees on
+instant hooks, 0 on the old battery.** Verify this with the hook file contents, not with
+`git branch --contains` — one straggler's branch lacked the merge commit while its content had
+reached `main` by another route.
 
 ## Open questions
 

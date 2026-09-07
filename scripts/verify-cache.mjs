@@ -1307,13 +1307,14 @@ const CHANGED_ONLY_NPM_SCRIPT = {
   'test:server': 'test:server:changed',
 };
 
-/** Run one pipeline step (`npm run <npmScript>`) and return its exit code. Retriable
-    pool steps stream stdout LIVE but CAPTURE stderr so a fork-pool crash can be
-    detected and the step retried; every other step inherits both streams unchanged.
-    `retryKey` is the step's cache/identity name, used to look up
-    RETRIABLE_POOL_STEPS/isVitestPoolCrash — it can differ from `npmScript` when
+/** Run one pipeline step (`npm run <npmScript>`) and return `{ code, attempts }` —
+    `attempts` is how many times the underlying process actually ran (always 1 for a
+    non-retriable step). Retriable pool steps stream stdout LIVE but CAPTURE stderr so
+    a fork-pool crash can be detected and the step retried; every other step inherits
+    both streams unchanged. `retryKey` is the step's cache/identity name, used to look
+    up RETRIABLE_POOL_STEPS/isVitestPoolCrash — it can differ from `npmScript` when
     CHANGED_ONLY_NPM_SCRIPT substitutes a different underlying script. */
-function runStepProcess(npmScript, { cwd, env, retryKey = npmScript }) {
+export function runStepProcess(npmScript, { cwd, env, retryKey = npmScript }) {
   const runOnce = (capture) => {
     const r = spawnSync('npm', ['run', npmScript], {
       cwd,
@@ -1328,13 +1329,13 @@ function runStepProcess(npmScript, { cwd, env, retryKey = npmScript }) {
     if (stderr) process.stderr.write(stderr); // captured stderr isn't echoed live — surface it
     return { code: r.status ?? 1, stderr };
   };
-  if (!RETRIABLE_POOL_STEPS.has(retryKey)) return runOnce(false).code;
+  if (!RETRIABLE_POOL_STEPS.has(retryKey)) return { code: runOnce(false).code, attempts: 1 };
   let lastRes = null;
   for (let attempt = 1; attempt <= MAX_POOL_ATTEMPTS; attempt += 1) {
     const res = runOnce(true);
     lastRes = res;
     if (res.code === 0 || !isVitestPoolCrash(res.stderr)) {
-      return res.code; // success or a genuine red test (not a crash)
+      return { code: res.code, attempts: attempt }; // success or a genuine red test (not a crash)
     }
     if (attempt < MAX_POOL_ATTEMPTS) {
       console.log(
@@ -1343,7 +1344,7 @@ function runStepProcess(npmScript, { cwd, env, retryKey = npmScript }) {
     }
   }
   // Exhausted all MAX_POOL_ATTEMPTS attempts on crashes — return the last exit code
-  return lastRes.code;
+  return { code: lastRes.code, attempts: MAX_POOL_ATTEMPTS };
 }
 
 export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env } = {}) {
@@ -1509,14 +1510,15 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
       console.log(`[run] ${step.name}`);
     }
     const t0 = Date.now();
-    const code = runStepProcess(changedOnlyScript ?? step.name, {
+    const { code, attempts } = runStepProcess(changedOnlyScript ?? step.name, {
       cwd,
       env,
       retryKey: step.name,
     });
     const dt = Date.now() - t0;
+    const attemptsNote = attempts > 1 ? `, ${attempts} attempts` : '';
     if (code === 0) {
-      console.log(`[pass] ${step.name} (took ${formatSecs(dt)})`);
+      console.log(`[pass] ${step.name} (took ${formatSecs(dt)}${attemptsNote})`);
       // A --changed-only pass covers a NARROWER set of tests than currentHash's
       // declared inputs claim to have verified — caching it under the full
       // step's hash would let a later --scope-branch/CI run (no diff since,
@@ -1528,11 +1530,12 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
           inputHash: currentHash,
           lastGreenAt: new Date().toISOString(),
           durationMs: dt,
+          attempts,
         };
         saveCache(cachePath, cache);
       }
     } else {
-      console.log(`[fail] ${step.name} (exit ${code}, took ${formatSecs(dt)})`);
+      console.log(`[fail] ${step.name} (exit ${code}, took ${formatSecs(dt)}${attemptsNote})`);
       return code;
     }
   }

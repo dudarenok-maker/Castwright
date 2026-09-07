@@ -40,7 +40,7 @@
  *   A. The same broken-qwen cast, routed to Coqui instead of Qwen -> NO gate
  *      (the check is engine-aware, not a blanket "this voice is broken").
  *   B. A healthy cloned voice with BOTH cast slots present (clip + transcript
- *      intact) on a Coqui-routed character -> NO gate (rule 7 silence),
+ *      intact) on a Coqui-routed character -> NO gate (rule 8 silence),
  *      reached through the real, un-intercepted mock fixture. */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -126,6 +126,51 @@ async function setClonedCastSlot(page: Page, ttsEngine?: 'qwen' | 'coqui'): Prom
       ),
     )
     .toBe(CLONE_LIBRARY_UUID);
+}
+
+/* `unresolvable-uuid` (#2054) needs no mock-backend fixture at all — it is a
+   property of the CHARACTER's own cast slot (a missing/empty libraryUuid),
+   never looked up against the voice-library entry, so it is reachable here
+   exactly like `setClonedCastSlot` above, just with the uuid blanked out. */
+async function setClonedCastSlotWithUnresolvableUuid(page: Page, ttsEngine?: 'qwen' | 'coqui'): Promise<void> {
+  await page.evaluate(
+    ({ characterId, ttsEngine }) => {
+      const store = (
+        window as unknown as { __store__: { getState(): unknown; dispatch(a: unknown): void } }
+      ).__store__;
+      const state = store.getState() as { cast: { characters: Array<Record<string, unknown>> } };
+      const next = state.cast.characters.map((c) => {
+        if (c.id !== characterId) return c;
+        const updated: Record<string, unknown> = {
+          ...c,
+          overrideTtsVoices: {
+            qwen: { name: 'broken-uuid-voice', libraryUuid: '', provenance: 'cloned' },
+          },
+        };
+        if (ttsEngine) updated.ttsEngine = ttsEngine;
+        else delete updated.ttsEngine;
+        return updated;
+      });
+      store.dispatch({ type: 'cast/setCharacters', payload: next });
+    },
+    { characterId: TEST_CHARACTER_ID, ttsEngine },
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ characterId }) => {
+          const store = (window as unknown as { __store__: { getState(): unknown } }).__store__;
+          const chars = (
+            store.getState() as {
+              cast: { characters: Array<{ id: string; overrideTtsVoices?: { qwen?: { name?: string } } }> };
+            }
+          ).cast.characters;
+          return chars.find((c) => c.id === characterId)?.overrideTtsVoices?.qwen?.name;
+        },
+        { characterId: TEST_CHARACTER_ID },
+      ),
+    )
+    .toBe('broken-uuid-voice');
 }
 
 async function setSessionModelKey(page: Page, modelKey: string): Promise<void> {
@@ -238,6 +283,24 @@ test.describe('Plan 276 — cast-time clone-readiness gate', () => {
     });
   });
 
+  test('unresolvable-uuid: names character/engine/reason, offers "Assign a different voice"', async ({
+    page,
+  }) => {
+    await goToManuscript(page);
+    await setClonedCastSlotWithUnresolvableUuid(page, 'qwen');
+
+    await clickApproveCast(page);
+
+    const gate = page.getByTestId('clone-readiness-gate');
+    await expect(gate).toBeVisible({ timeout: 5_000 });
+    const row = page.getByTestId(`clone-readiness-row-${TEST_CHARACTER_ID}`);
+    await expect(row).toBeVisible();
+    await expect(row.getByText(TEST_CHARACTER_NAME, { exact: true })).toBeVisible();
+    await expect(row.getByText('Qwen', { exact: true })).toBeVisible();
+    await expect(row.getByText(/doesn.t specify which voice to use/i)).toBeVisible();
+    await expect(row.getByRole('button', { name: 'Assign a different voice' })).toBeVisible();
+  });
+
   test('Control B: a healthy cloned voice with both cast slots stays silent on its Coqui-routed character', async ({
     page,
   }) => {
@@ -246,7 +309,7 @@ test.describe('Plan 276 — cast-time clone-readiness gate', () => {
     await setSessionModelKey(page, 'coqui-xtts-v2');
     /* No interceptor here — `lib-cloned-demo` reaches the client exactly as
        the real (un-intercepted) mock fixture defines it: qwen AND xtts both
-       `ready`, transcript `'demo'`. Rule 7 silence. */
+       `ready`, transcript `'demo'`. Rule 8 silence. */
 
     await clickApproveCast(page);
     await confirmTierPromptIfPresent(page);

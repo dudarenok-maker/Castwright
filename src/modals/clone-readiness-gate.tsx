@@ -22,6 +22,9 @@
                                             when castOnEngine is non-null —
                                             Decision 5's per-candidate scan)
      missing-entry   -> Assign a different voice (opens the cast profile drawer)
+     unresolvable-uuid -> Assign a different voice (reuses missing-entry's CTA —
+                                            the repo owner's call: re-assigning
+                                            is the only repair that works here)
      revoked,
      missing-master  -> explanatory copy only, no CTA (no in-app repair exists)
 
@@ -76,6 +79,8 @@ function reasonCopy(verdict: CloneCharacterVerdict): string {
       return `${characterName} is routed to ${engineName}, which doesn't have this cloned voice.`;
     case 'missing-entry':
       return `${characterName}'s assigned voice is no longer in your voice library.`;
+    case 'unresolvable-uuid':
+      return `${characterName}'s cloned voice slot doesn't specify which voice to use, so it can never resolve.`;
   }
 }
 
@@ -125,7 +130,7 @@ function CloneVerdictRow({
   const onRetryDerive = async () => {
     /* `isCloneEngine` narrows `verdict.engine` (`TtsEngine`) to `CloneEngine`
        for the retry route's param type. Always true at runtime here — rule
-       4 (`derive-failed`) is only reached after rule 3 confirms the engine
+       5 (`derive-failed`) is only reached after rule 4 confirms the engine
        IS clone-capable (clone-readiness.ts) — but TypeScript can't see that
        from the verdict's shape, so the guard makes it explicit rather than
        casting. */
@@ -206,7 +211,7 @@ function CloneVerdictRow({
         </button>
       )}
 
-      {verdict.reason === 'missing-entry' && (
+      {(verdict.reason === 'missing-entry' || verdict.reason === 'unresolvable-uuid') && (
         <button
           onClick={onAssignDifferentVoice}
           className="mt-2 inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-magenta/10 text-magenta hover:bg-magenta/20 min-h-[44px] fine-pointer:min-h-0"

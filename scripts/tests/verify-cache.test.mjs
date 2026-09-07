@@ -1,9 +1,10 @@
-// Unit tests for the verify-cache runner's pure logic (hash composition + cache
-// decision + load/save). No `npm run` spawning — runPipeline itself is exercised
-// by the manual walkthrough in docs/features/archive/50-verify-cache.md. Run via
+// Unit tests for the verify-cache runner. Includes hash composition, cache
+// decision, load/save logic, and acceptance-driven behavioural tests that spawn
+// real `npm run` against throwaway fixture repos — test:server/lint/etc run
+// instantly (a one-line node invocation, not vitest batteries). Entry point:
 // `npm run test:hooks` (node --test, no extra deps).
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync,
@@ -13,6 +14,7 @@ import {
   readdirSync,
   readFileSync,
   copyFileSync,
+  rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -38,6 +40,8 @@ import {
   siblingContentionFor,
   SIBLING_CONTENTION_THRESHOLD,
   isVitestPoolCrash,
+  runStepProcess,
+  runPipeline,
   branchDiffFiles,
   stagedDiffFiles,
   sidecarFingerprint,
@@ -56,6 +60,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_PATH = join(HERE, '..', 'verify-cache.mjs');
 const src = readFileSync(SRC_PATH, 'utf8');
 
+// Track temporary directories created by mkTmp() so we can clean them up after all tests.
+const createdDirs = [];
+
 test('isVitestPoolCrash: true for fork-pool worker crashes, false for red tests', () => {
   // Transient fork-pool process crashes — warrant ONE auto-retry.
   assert.equal(isVitestPoolCrash('Error: [vitest-pool]: Worker forks emitted error.'), true);
@@ -70,8 +77,24 @@ test('isVitestPoolCrash: true for fork-pool worker crashes, false for red tests'
 });
 
 function mkTmp() {
-  return mkdtempSync(join(tmpdir(), 'verify-cache-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'verify-cache-test-'));
+  createdDirs.push(dir);
+  return dir;
 }
+
+// Clean up temporary directories after all tests complete. Best-effort: ignore
+// any failures to remove individual directories (e.g., locked files on Windows).
+// Only remove directories this run created — never glob %TEMP% to avoid deleting
+// another concurrent run's fixtures.
+after(() => {
+  for (const dir of createdDirs) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Ignore failures (locked files, permissions, etc.)
+    }
+  }
+});
 
 function fixedArgs(overrides = {}) {
   return {
@@ -1320,6 +1343,138 @@ test('runStepProcess keys the retriable-pool-crash lookup on retryKey, not the s
   );
 });
 
+// --- Attempt-count propagation (#3018) -----------------------------------
+//
+// Unlike the CHANGED_ONLY_NPM_SCRIPT/runStepProcess wiring test above (which
+// pins the retryKey-vs-npmScript distinction by source regex to avoid
+// spawning real vitest), these tests need to observe runStepProcess's actual
+// return value across real retries — that can't be proven by reading source.
+// So they spawn a real npm process, but only ever against a throwaway
+// package.json whose "script" is a one-line node invocation of a local
+// fixture file — milliseconds, not a vitest battery.
+
+function writeFlakyFixture(dir, npmScriptName, { failFirst = false, alwaysFail = false } = {}) {
+  // Determine fixture filename and marker name based on failure mode.
+  let fixtureFile;
+  let markerName;
+  if (alwaysFail) {
+    fixtureFile = 'allfail.mjs';
+    markerName = 'attempts-allfail.txt';
+  } else if (failFirst) {
+    fixtureFile = 'flaky.mjs';
+    markerName = 'attempts-flaky.txt';
+  } else {
+    fixtureFile = 'pass.mjs';
+    markerName = 'attempts-pass.txt';
+  }
+  const marker = join(dir, markerName);
+
+  // Generate fixture code based on failure mode.
+  let fixtureCode;
+  if (alwaysFail) {
+    fixtureCode = `import { appendFileSync } from 'node:fs';
+const marker = ${JSON.stringify(marker)};
+appendFileSync(marker, 'x');
+process.stderr.write('Worker exited unexpectedly\\n');
+process.exit(1);
+`;
+  } else if (failFirst) {
+    fixtureCode = `import { existsSync, appendFileSync } from 'node:fs';
+const marker = ${JSON.stringify(marker)};
+const already = existsSync(marker);
+appendFileSync(marker, 'x');
+if (!already) {
+  process.stderr.write('Worker exited unexpectedly\\n');
+  process.exit(1);
+}
+process.exit(0);
+`;
+  } else {
+    // Always pass
+    fixtureCode = `import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(marker)}, 'x');
+process.exit(0);
+`;
+  }
+
+  writeFileSync(join(dir, fixtureFile), fixtureCode, 'utf8');
+
+  // Update or create package.json, merging the new script with existing ones.
+  const packageJsonPath = join(dir, 'package.json');
+  let packageJson;
+  if (existsSync(packageJsonPath)) {
+    packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  } else {
+    packageJson = { name: 'flaky-fixture', private: true, scripts: {} };
+  }
+  packageJson.scripts[npmScriptName] = `node ${fixtureFile}`;
+  writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8');
+
+  return marker;
+}
+
+test('runStepProcess: a step passing on the first attempt records 1 attempt', () => {
+  const dir = mkTmp();
+  writeFlakyFixture(dir, 'always-pass', { failFirst: false });
+  const result = runStepProcess('always-pass', { cwd: dir, env: process.env, retryKey: 'test:server' });
+  assert.equal(result.code, 0);
+  assert.equal(result.attempts, 1);
+});
+
+test('runStepProcess: a fork-pool crash followed by a pass records the true attempt count, summed across attempts', () => {
+  const dir = mkTmp();
+  const marker = writeFlakyFixture(dir, 'flaky', { failFirst: true });
+  const result = runStepProcess('flaky', { cwd: dir, env: process.env, retryKey: 'test:server' });
+  assert.equal(result.code, 0);
+  assert.equal(result.attempts, 2, 'first attempt crashes, second passes — 2 total attempts');
+  // The fixture appends to marker on each launch, so 2 attempts → 2 bytes.
+  assert.equal(readFileSync(marker, 'utf8').length, 2, 'marker file must record 2 real process launches');
+});
+
+test('runStepProcess: a non-retriable step always records 1 attempt, even given a crash-shaped failure', () => {
+  const dir = mkTmp();
+  writeFlakyFixture(dir, 'flaky-nonretriable', { failFirst: true });
+  // retryKey NOT in RETRIABLE_POOL_STEPS — must never retry, regardless of
+  // stderr shape, and must report exactly 1 attempt.
+  const result = runStepProcess('flaky-nonretriable', {
+    cwd: dir,
+    env: process.env,
+    retryKey: 'some-other-step',
+  });
+  assert.equal(result.code, 1);
+  assert.equal(result.attempts, 1);
+});
+
+test('decide: a legacy cache entry with durationMs but no attempts field is still a valid cache hit', () => {
+  const hash = composeInputHash(fixedArgs());
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: {
+        inputHash: hash,
+        lastGreenAt: '2026-05-18T00:00:00.000Z',
+        durationMs: 4242,
+        // no `attempts` field — pre-existing entry written before #3018
+      },
+    },
+  };
+  assert.equal(decide({ stepName: 'lint', currentHash: hash, cache, noCache: false }), 'skip');
+});
+
+test('loadCache does not crash or reset the cache when an entry lacks the attempts field', () => {
+  const dir = mkTmp();
+  const path = join(dir, '.verify-cache.json');
+  const legacy = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { inputHash: 'a'.repeat(64), lastGreenAt: '2026-05-18T00:00:00.000Z', durationMs: 999 },
+    },
+  };
+  writeFileSync(path, JSON.stringify(legacy), 'utf8');
+  const result = loadCache(path);
+  assert.deepEqual(result, legacy);
+});
+
 function runPipelineLoopBody() {
   const match = src.match(
     /if \(action === 'skip'\) \{[\s\S]*?const changedOnlyScript =[\s\S]*?\n {2}\}\n {2}return 0;/,
@@ -1737,4 +1892,112 @@ test('hasVitestStep returns FALSE for an empty array', () => {
   // false. The default-to-all-steps expansion happens upstream, before this is
   // ever called with the resolved list, so the two never disagree in practice.
   assert.equal(hasVitestStep([]), false, 'empty selection contains no vitest step');
+});
+
+// --- Attempt-count wiring verification (#3018) ---
+//
+// Issue #3018 added an `attempts` field to runStepProcess's return value and
+// wired it into the cache write. This test verifies the wiring through
+// runPipeline's actual execution against a throwaway git repo: a fixture
+// package.json maps scripts to one-line node invocations (not vitest, so fast —
+// 1–2 seconds total). Both acceptance criteria are observable end-to-end: the
+// cache entry persists attempts, and the [pass] console line conditionally
+// reports the count.
+
+test('#3018: runPipeline persists attempts to cache and reports count only on retry', () => {
+  const dir = makeGitFixture();
+
+  // Fixture 1: crashes on first run (fork-pool crash shape), passes on retry.
+  const marker1 = writeFlakyFixture(dir, 'test:server', { failFirst: true });
+
+  // Fixture 2: always passes on first attempt.
+  const marker2 = writeFlakyFixture(dir, 'test', { failFirst: false });
+
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  // Capture console output.
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+
+  try {
+    // Criterion 1: retry case → cache.steps[step].attempts = 2
+    // Criterion 2: [pass] line includes "2 attempts" (only when attempts > 1)
+    logs.length = 0;
+    const result1 = runPipeline({
+      argv: ['--steps', 'test:server'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+    });
+    assert.equal(result1, 0);
+
+    const cache1 = loadCache(join(dir, '.verify-cache.json'));
+    assert.equal(cache1.steps['test:server'].attempts, 2);
+    assert.equal(readFileSync(marker1, 'utf8').length, 2, 'marker shows 2 launches');
+
+    const passLine1 = logs.find((l) => l.includes('[pass]') && l.includes('test:server'));
+    assert.ok(passLine1);
+    assert.match(passLine1, /2 attempts/);
+
+    // Criterion 1: first-try case → cache.steps[step].attempts = 1
+    // Criterion 2: [pass] line does NOT include attempt count (only when attempts > 1)
+    logs.length = 0;
+    const result2 = runPipeline({
+      argv: ['--steps', 'test'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+    });
+    assert.equal(result2, 0);
+
+    const cache2 = loadCache(join(dir, '.verify-cache.json'));
+    assert.equal(cache2.steps.test.attempts, 1);
+    assert.equal(readFileSync(marker2, 'utf8').length, 1, 'marker shows 1 launch');
+
+    const passLine2 = logs.find((l) => l.includes('[pass]') && l.includes('test'));
+    assert.ok(passLine2);
+    assert.doesNotMatch(passLine2, /attempts/);
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+test('#3018: [fail] line reports attempt count when step crashes all retries', () => {
+  const dir = makeGitFixture();
+
+  // Fixture: crashes on all 3 attempts (fork-pool crash shape).
+  const marker = writeFlakyFixture(dir, 'test:server', { alwaysFail: true });
+
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  // Capture console output.
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+
+  try {
+    // Run the pipeline; it will crash all 3 attempts and return non-zero
+    logs.length = 0;
+    const result = runPipeline({
+      argv: ['--steps', 'test:server'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+    });
+    assert.ok(result !== 0, 'pipeline should return non-zero for a failing step');
+
+    // Verify that all 3 attempts were launched (marker file has 3 x's)
+    assert.equal(
+      readFileSync(marker, 'utf8').length,
+      3,
+      'marker shows all 3 attempts were launched',
+    );
+
+    // Criterion: [fail] line must include "3 attempts" to document how many attempts failed
+    const failLine = logs.find((l) => l.includes('[fail]') && l.includes('test:server'));
+    assert.ok(failLine, 'should have a [fail] line for test:server');
+    assert.match(failLine, /3 attempts/, '[fail] line should include attempt count');
+  } finally {
+    console.log = originalLog;
+  }
 });
