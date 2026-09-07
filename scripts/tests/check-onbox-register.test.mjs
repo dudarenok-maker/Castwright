@@ -3787,7 +3787,15 @@ test('#2837: CLI -- extraction error in baseline live-view produces [baseline] b
 // false FAIL it had just been rewritten to teach the operator to recognise.
 // Class guard over every acceptance surface, not just that one row.
 
-const IMPORT_MODULE_RE = /Import-Module\s+(?:-Name\s+)?(&quot;|&#39;|["']?)([^"'\s;|&<]+)/g;
+// The quote characters are \uXXXX escapes, not literals (" = double,
+// ' = single). server/src/spawn-windows-hide.test.ts scans this file as an
+// external file, and its #2747 guard rejects any regex literal whose bare
+// quotes desync its quote tracker. Written literally, the first double quote
+// opens a string, the second closes it, and the single quote that follows opens
+// one that never closes -- which would blank the rest of this file and hide any
+// real spawn call below it. Escaping keeps the match semantics identical.
+const IMPORT_MODULE_RE =
+  /Import-Module\s+(?:-Name\s+)?(&quot;|&#39;|[\u0022\u0027]?)([^\u0022\u0027\s;|&<]+)/g;
 
 /** A path is safe if it is absolute, variable-rooted, or explicitly relative. */
 function importPathIsExecutable(spec) {

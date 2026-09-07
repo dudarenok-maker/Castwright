@@ -10,10 +10,33 @@
 # "no junctions found"; and the result objects' property names match
 # wt-gc.mjs's JUNCTION_RESULT_KEYS.
 
+# NTFS junctions are a Windows filesystem feature; `New-Item -ItemType
+# Junction` does not exist on the Linux CI runner, so every test that builds a
+# junction fixture would create nothing and then assert on an empty scan. The
+# 11 It blocks that need a real junction carry -Skip:$SkipWithoutJunctions;
+# the rest of this file (ordinary-directory detection, empty-root scans, the
+# source-pinned ReparsePoint gate, the enumeration-failure guard and the CLI
+# surface) is platform-independent and still runs everywhere.
+#
+# $env:OS is 'Windows_NT' only on Windows, in both Windows PowerShell 5.1 and
+# pwsh -- unlike $IsWindows, which 5.1 does not define. Same predicate as
+# prevent-sleep.Tests.ps1 and oe-detached-commit.Tests.ps1. Evaluated during
+# discovery, which is when Pester binds -Skip.
+#
+# A skip that fires on Windows too would silently delete this suite's whole
+# reason to exist, so the 'Windows-only junction guard' Describe at the foot of
+# this file pins that it does not -- see the comment there.
+$SkipWithoutJunctions = ($env:OS -ne 'Windows_NT')
+
 BeforeAll {
     $modulePath = Join-Path $PSScriptRoot "..\lib\wt-gc-junctions.psm1"
     Import-Module $modulePath -Force
     $script:modulePath = $modulePath
+
+    # Bumped by New-TestJunction on every fixture it builds, and asserted at
+    # the foot of this file. This is the counter that makes an always-on skip
+    # loud instead of silent.
+    $script:JunctionsCreated = 0
 
     # A real junction requires elevation-free `New-Item -ItemType Junction`
     # (unlike symlinks, junctions need no admin rights on Windows). Defined
@@ -27,6 +50,7 @@ BeforeAll {
             [Parameter(Mandatory)] [string] $TargetPath
         )
         New-Item -ItemType Junction -Path $LinkPath -Target $TargetPath -ErrorAction Stop | Out-Null
+        $script:JunctionsCreated = [int]$script:JunctionsCreated + 1
     }
 }
 
@@ -55,7 +79,7 @@ Describe 'Test-IsReparsePoint' {
         Test-IsReparsePoint -Item $item | Should -BeFalse
     }
 
-    It 'returns $true for a real junction' {
+    It 'returns $true for a real junction' -Skip:$SkipWithoutJunctions {
         $target = Join-Path $script:tempDir "target"
         $link = Join-Path $script:tempDir "link"
         New-Item -ItemType Directory -Path $target | Out-Null
@@ -95,7 +119,7 @@ Describe 'Get-JunctionsRecursive' {
         $found.Count | Should -Be 0
     }
 
-    It 'finds a junction at the root level' {
+    It 'finds a junction at the root level' -Skip:$SkipWithoutJunctions {
         $target = Join-Path $script:tempDir "real-node-modules"
         $link = Join-Path $script:tempDir "node_modules"
         New-Item -ItemType Directory -Path $target | Out-Null
@@ -107,7 +131,7 @@ Describe 'Get-JunctionsRecursive' {
         $found[0] | Should -Be $link
     }
 
-    It 'finds a junction three levels deep (the server/tts-sidecar/.venv shape, #3051)' {
+    It 'finds a junction three levels deep (the server/tts-sidecar/.venv shape, #3051)' -Skip:$SkipWithoutJunctions {
         $nested = Join-Path $script:tempDir "server\tts-sidecar"
         New-Item -ItemType Directory -Path $nested -Force | Out-Null
         $target = Join-Path $script:tempDir "real-venv"
@@ -123,7 +147,7 @@ Describe 'Get-JunctionsRecursive' {
         $found[0] | Should -Be $link
     }
 
-    It 'does NOT descend into a found junction (its contents live at the target, not under $Root)' {
+    It 'does NOT descend into a found junction (its contents live at the target, not under $Root)' -Skip:$SkipWithoutJunctions {
         $target = Join-Path $script:tempDir "real-target"
         $insideTarget = Join-Path $target "should-not-be-enumerated"
         New-Item -ItemType Directory -Path $insideTarget -Force | Out-Null
@@ -136,7 +160,7 @@ Describe 'Get-JunctionsRecursive' {
         $found | Should -Not -Contain (Join-Path $link "should-not-be-enumerated")
     }
 
-    It 'finds multiple sibling junctions at different depths' {
+    It 'finds multiple sibling junctions at different depths' -Skip:$SkipWithoutJunctions {
         $t1 = Join-Path $script:tempDir "t1"; New-Item -ItemType Directory -Path $t1 | Out-Null
         $t2 = Join-Path $script:tempDir "t2"; New-Item -ItemType Directory -Path $t2 | Out-Null
         $nested = Join-Path $script:tempDir "nested"; New-Item -ItemType Directory -Path $nested | Out-Null
@@ -164,7 +188,7 @@ Describe 'Remove-JunctionsRecursive' {
         }
     }
 
-    It 'unlinks the junction and leaves the TARGET directory and its content untouched (the load-bearing guarantee)' {
+    It 'unlinks the junction and leaves the TARGET directory and its content untouched (the load-bearing guarantee)' -Skip:$SkipWithoutJunctions {
         $target = Join-Path $script:tempDir "real-node-modules"
         New-Item -ItemType Directory -Path $target | Out-Null
         $marker = Join-Path $target "package.json"
@@ -187,7 +211,7 @@ Describe 'Remove-JunctionsRecursive' {
         (Get-Content $marker -Raw) | Should -Match 'real'
     }
 
-    It 'reports TargetStillExists = $true after removal (the link is gone, the real tree is not)' {
+    It 'reports TargetStillExists = $true after removal (the link is gone, the real tree is not)' -Skip:$SkipWithoutJunctions {
         $target = Join-Path $script:tempDir "real-venv"
         New-Item -ItemType Directory -Path $target | Out-Null
         $link = Join-Path $script:tempDir ".venv"
@@ -198,7 +222,7 @@ Describe 'Remove-JunctionsRecursive' {
         $report[0].TargetStillExists | Should -BeTrue
     }
 
-    It 'removes multiple junctions at different depths, each independently verified' {
+    It 'removes multiple junctions at different depths, each independently verified' -Skip:$SkipWithoutJunctions {
         $t1 = Join-Path $script:tempDir "t1"; New-Item -ItemType Directory -Path $t1 | Out-Null
         $nested = Join-Path $script:tempDir "server\tts-sidecar"; New-Item -ItemType Directory -Path $nested -Force | Out-Null
         $t2 = Join-Path $script:tempDir "t2"; New-Item -ItemType Directory -Path $t2 | Out-Null
@@ -253,7 +277,7 @@ Describe 'Remove-JunctionsRecursive re-scans after the delete pass' {
         Remove-Variable -Name WtGcLateLink -Scope Global -ErrorAction SilentlyContinue
     }
 
-    It 'reports a junction that appeared AFTER the delete pass as un-removed, and does NOT sweep it' {
+    It 'reports a junction that appeared AFTER the delete pass as un-removed, and does NOT sweep it' -Skip:$SkipWithoutJunctions {
         $target = Join-Path $script:tempDir "real-node-modules"
         New-Item -ItemType Directory -Path $target | Out-Null
         $marker = Join-Path $target "package.json"
@@ -286,7 +310,7 @@ Describe 'Remove-JunctionsRecursive re-scans after the delete pass' {
         Test-Path -LiteralPath $marker | Should -BeTrue
     }
 
-    It 'adds NO extra entry when the tree really is clean after the sweep (proves the re-scan is not always-reporting)' {
+    It 'adds NO extra entry when the tree really is clean after the sweep (proves the re-scan is not always-reporting)' -Skip:$SkipWithoutJunctions {
         $target = Join-Path $script:tempDir "real-node-modules"
         New-Item -ItemType Directory -Path $target | Out-Null
         $link = Join-Path $script:tempDir "node_modules"
@@ -404,7 +428,7 @@ Describe 'Junction-report property names match wt-gc.mjs JUNCTION_RESULT_KEYS' {
         }
     }
 
-    It 'emits exactly the property set wt-gc.mjs declares' {
+    It 'emits exactly the property set wt-gc.mjs declares' -Skip:$SkipWithoutJunctions {
         $jsPath = Join-Path $PSScriptRoot "..\wt-gc.mjs"
         $js = Get-Content $jsPath -Raw
         $match = [regex]::Match($js, "JUNCTION_RESULT_KEYS\s*=\s*\[([^\]]*)\]")
@@ -457,5 +481,43 @@ Describe 'wt-gc-junctions.ps1 CLI surface' {
 
         $parsed.PSObject.Properties.Name | Should -Contain 'items'
         @($parsed.items).Count | Should -Be 0
+    }
+}
+
+# --- The platform guard is itself pinned (#3055) ----------------------------
+#
+# A -Skip that fires on every platform is the same as deleting the suite, and
+# it fails silently: the file still reports green, just with nothing in it.
+# These two tests close that hole, and they are deliberately NOT guarded by
+# $SkipWithoutJunctions -- a pin that the broken predicate can switch off pins
+# nothing. Both re-read $env:OS directly rather than trusting the predicate,
+# so the guard and its check do not share a single point of failure.
+Describe 'Windows-only junction guard' {
+    It 'the $env:OS predicate agrees with an independent platform oracle' {
+        # $env:OS drives the skip, but it is an ordinary environment variable:
+        # unset or clobbered on a Windows box it would silently skip all 11
+        # junction tests. OSVersion.Platform cannot be set from the
+        # environment, so it is a genuinely independent second source -- and
+        # it is defined in both Windows PowerShell 5.1 and pwsh, unlike
+        # $IsWindows. Discovery-time variables are not reliably visible during
+        # the run phase in Pester 5, so re-derive rather than read
+        # $SkipWithoutJunctions here.
+        ($env:OS -eq 'Windows_NT') |
+            Should -Be ([System.Environment]::OSVersion.Platform -eq 'Win32NT')
+    }
+
+    It 'really executed the junction-backed tests here (not a blanket no-op)' {
+        # 11 It blocks carry -Skip:$SkipWithoutJunctions and every one builds
+        # its fixture through New-TestJunction, so on Windows the counter must
+        # reach 11. If a refactor ever makes the predicate always-true, this
+        # reads 0 on Windows and FAILS -- which is the whole point.
+        if ($env:OS -eq 'Windows_NT') {
+            [int]$script:JunctionsCreated |
+                Should -BeGreaterOrEqual 11 -Because 'every junction test must run on Windows'
+        }
+        else {
+            [int]$script:JunctionsCreated |
+                Should -Be 0 -Because 'no junction fixture can be built off Windows'
+        }
     }
 }

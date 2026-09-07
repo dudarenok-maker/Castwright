@@ -53,6 +53,7 @@ function powerShellSources() {
   const out = execFileSync('git', ['-C', repoRoot, 'ls-files', '*.ps1', '*.psm1'], {
     encoding: 'utf8',
     env: scrubGitEnv(),
+    windowsHide: true,
   });
   return out.split('\n').map((l) => l.trim()).filter(Boolean).sort();
 }
