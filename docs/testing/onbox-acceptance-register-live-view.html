@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">65</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">62</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">39 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">38 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -730,16 +730,6 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A37</span><span class="iname">Russian dash-attributed dialogue — doubled-comma collapse pause by ear</span><span class="risk">Coqui/XTTS resident, Russian text; no clone needed</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>PR #2688 fixed <code>softenDashes</code> (<code>server/src/tts/text-normalize.ts</code>) producing a doubled comma in dash-attributed Russian (also French/Spanish) dialogue, e.g. <code>"— Привет, — сказал Антон."</code> previously carried a <code>,,</code> in the TTS wire text. The collapse to a single comma is pinned only as a wire-text transform (<code>text-normalize.test.ts</code>); never confirmed whether removing the doubled comma changes the audible pause/prosody on real synthesized speech — same open shape as <a href="#ga">A31</a>'s leading-dash-to-ellipsis case.</p>
-        <ul>
-          <li><b>Doubled-comma collapse pause, by ear.</b> Render a dash-attributed line (e.g. <code>"— Привет, — сказал Антон."</code>) and confirm collapsing the doubled comma to one doesn't shorten or eliminate an audible pause the doubled comma was incidentally providing, and doesn't introduce a new artifact.</li>
-        </ul>
-        <p class="src">A Coqui-capable sidecar with XTTS resident, a Russian line (no clone needed — the stock catalogue voice <code>Damien Black</code> reproduces this shape) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2059">#2059</a> · criteria: the bullet above — #2059 itself has only this one dialogue shape and no separate run sheet (unlike A31's) · short — one or two renders of a Russian test sentence</p>
-      </div>
-    </details>
-    <details class="item">
       <summary><span class="num">A102</span><span class="iname">CUDA self-test on real ORT session detects Kokoro CPU fallback</span><span class="risk">single 8 GB card, live Kokoro sidecar with real ORT session</span><span class="chev">›</span></summary>
       <div class="body">
         <p>PR #2719's <code>_cuda_selftest_or_warn</code> method (<code>server/tts-sidecar/main.py</code>) inspects the real ORT <code>InferenceSession</code> returned by Kokoro's first load and checks whether CUDA was requested but the session landed on CPU instead. The verification result (<code>cuda_verified</code>, <code>cuda_verification_detail</code>) rides the existing <code>_ensure_loaded</code> load at the <code>from_session</code> code path and is surfaced through <code>/health</code> → <code>/api/info</code> → the device-panel amber warning in the UI. Unit tests mock <code>InferenceSession</code> and cannot prove the mechanism against a genuine CUDA→CPU degradation on real hardware.</p>
@@ -792,7 +782,7 @@
   <!-- B -->
   <section class="group" id="gb">
     <header>
-      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">2 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">1 row</span></h3>
       <p class="setup">
         A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a
         <strong>CPU-only sub-case</strong> — the analogous B2-step-7 CPU-only case retired to
@@ -813,19 +803,6 @@
         <div class="flag"><b>Correction, 2026-08-21.</b> Both stated wave-3 blockers were wrong: no <code>GEMINI_API_KEY</code> was a worktree-isolation artifact (worktrees deliberately carry no secrets — the key exists in the primary checkout); the "no ready-made fixture" claim is false and backwards — <em lang="ru">Ночной дозор</em> carries a paragraph of exactly the needed size and is <b>the book the original issue came from</b>. Real remaining blocker: step 5 (<code>LiveChapterTicker</code> at K=4) is browser-shaped, added to <code>onbox-sitting-device-browser.md</code>. Also: this row's criteria predate recent paragraph-separation/turn-attribution fixes (PR #2518, merged 2026-08-20) and must be re-derived against current <code>main</code> before running.</div>
 
         <p class="src"><code>plan 216:124-142</code></p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">B2</span><span class="iname">An unset book hits the analysis language gate, the prompt resolves it, analysis selects the right conventions table</span><span class="risk">no TTS/GPU rendering</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p><a href="https://github.com/dudarenok-maker/Castwright/issues/2246">#2246</a>: <code>resolveBookLanguageForManuscript</code> (<code>routes/analysis.ts:3160-3167</code>, the design's site 1) is the 25,063-line path the design gives its own three-point treatment — the gate lives in the POST handler before the analysis job detaches (a returnable <code>409</code>), the <code>located === null</code> (pre-confirm, no book on disk) branch still resolves <code>'en'</code>, and the in-loop path emits an SSE <code>error</code> with <code>code: 'language_unset'</code> via <code>classifyAnalysisFailure</code>. Unit tests cover the gate against a mocked analyzer and a mocked <code>conventionsFor</code>. What they cannot prove is the full loop on a real book: that the <code>409</code>/prompt actually surfaces and unblocks a real book, and that the analyzer then picks the SET language's own conventions table — a non-<code>'en'</code> book's dash-opened dialogue recognised as dialogue rather than falling to the narrator.</p>
-        <ul>
-          <li>Produce a book with <code>language: null</code> on disk (import with detection surrendered and "Decide later", or a bundle/restore/sample path left unset).</li>
-          <li>Start analysis through the normal UI/API path; confirm it's refused with the <code>language_unset</code> shape (<code>409</code> pre-detach), not silently analysed as English.</li>
-          <li>Resolve the language through the prompt (library "unset" badge → Book settings row, or confirm-screen re-entry), then re-start analysis against a live local analyzer.</li>
-          <li>Confirm the analyzer's conventions table matches the language just set — for a non-<code>'en'</code> language with a <code>dialogueOpen</code> marker (e.g. Russian), dash-opened dialogue lines attribute to the speaking character, not the narrator (the same distinction #2325's dialogue-collapse guard measures).</li>
-        </ul>
-        <p class="src">A real local Ollama (or Gemini) analyzer; no TTS/GPU rendering required · <a href="https://github.com/dudarenok-maker/Castwright/issues/2246">#2246</a> · criteria in <code>language-recurrence-onbox-acceptance.md</code> §Analysis language gate · short — one import left unset, one refused attempt, one prompt resolution, one real analysis run</p>
       </div>
     </details>
   </section>
@@ -1126,17 +1103,9 @@
   <!-- D -->
   <section class="group" id="gd">
     <header>
-      <h3 class="gtitle"><span class="gtag">D</span> Multi-language render + ASR <span class="gcount">3 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">D</span> Multi-language render + ASR <span class="gcount">2 rows</span></h3>
       <p class="setup">Whisper resident plus real non-English renders. Largely unattended — render the batch, inspect the distribution afterwards.</p>
     </header>
-    <details class="item">
-      <summary><span class="num">D1</span><span class="iname">Non-English ASR content-QA calibration</span><span class="risk">Thresholds unset</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>Render real audio in es/ru (then fr/de), run the ASR content-QA gate, inspect the WER distribution per language, and set <code>qa.asr.maxWer.{es,fr,de,ru}</code> from observed data — they currently all inherit the English-tuned <code>0.4</code> default.</p>
-        <p>Two named residual risks: gendered-number mismatch (es/fr/ru “one”, ru “two”), and Russian oblique-case declension. Also whether Whisper's German output matches the single-fused-token assumption for compound numbers.</p>
-        <p class="src"><b>Prerequisite satisfied</b> — the fs-61 demo books are voice-designed per PR #1568 (2026-07-13): a language-matched Qwen cast per sample, 0 <code>.pt</code> collisions across 101 files · <a href="https://github.com/dudarenok-maker/Castwright/issues/1527">#1527</a>, <a href="https://github.com/dudarenok-maker/Castwright/issues/1084">#1084</a></p>
-      </div>
-    </details>
     <details class="item">
       <summary><span class="num">D2</span><span class="iname">fs-61 zh/ja placeholder voices</span><span class="risk low">Pipeline exists</span><span class="chev">›</span></summary>
       <div class="body">
