@@ -28,7 +28,7 @@ export function parseWorktreePorcelain(text) {
   for (const line of text.split(/\r?\n/)) {
     if (line.startsWith('worktree ')) {
       if (current) trees.push(current);
-      current = { path: line.slice('worktree '.length), branch: null, head: null };
+      current = { path: line.slice('worktree '.length), branch: null, head: null, locked: false, lockReason: null };
     } else if (line.startsWith('branch ')) {
       // `branch refs/heads/<name>` — strip the prefix.
       current.branch = line.slice('branch '.length).replace(/^refs\/heads\//, '');
@@ -36,6 +36,16 @@ export function parseWorktreePorcelain(text) {
       current.head = line.slice('HEAD '.length);
     } else if (line === 'detached' && current) {
       current.branch = '(detached)';
+    } else if ((line === 'locked' || line.startsWith('locked ')) && current) {
+      // `git worktree lock` marks a tree as "do not remove". The porcelain
+      // emits a bare `locked`, or `locked <reason>` when one was given. This
+      // is the only such signal git itself provides, and scripts/wt-gc.mjs
+      // turns it into a prune refusal (#3055 pass 2) — without it a locked
+      // tree read `prunable? yes`, had its junctions stripped, and only THEN
+      // hit `fatal: cannot remove a locked working tree`, surviving as a
+      // registered worktree with no node_modules/.venv/voices.
+      current.locked = true;
+      current.lockReason = line === 'locked' ? '' : line.slice('locked '.length);
     }
   }
   if (current) trees.push(current);

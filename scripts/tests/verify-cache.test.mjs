@@ -576,6 +576,33 @@ test('stepTouchedByDiff: a .env.mock diff matches test:hooks via extraFiles (dev
   assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
 });
 
+// #3055 pass 3, finding 1 -- scripts/tests/ps-ascii-scan.test.mjs enumerates
+// every tracked .ps1/.psm1 with `git ls-files` and readFileSync's each at
+// RUNTIME. No module-graph edge, and the set reaches outside scripts/**. With
+// the previous globs a PowerShell-only diff -- exactly the diff that can
+// reintroduce the 5.1-unparseable module the guard was written for -- scored
+// step_test_hooks=false, so verify.yml skipped the leg and local verify-cache
+// printed [cached]. The guard ran on PR #3055 itself only because that PR also
+// touched root package.json (computeShared). Same #1847 trap as fixtures/**.
+test('stepTouchedByDiff: a .psm1-only diff matches test:hooks (ps-ascii-scan.test.mjs scans PowerShell source at runtime)', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['scripts/lib/wt-gc-junctions.psm1']), true);
+});
+
+test('stepTouchedByDiff: a .ps1 diff OUTSIDE scripts/ matches test:hooks (the guard set is repo-wide)', () => {
+  // server/tts-sidecar/start.ps1 is inside the guarded set but outside every
+  // scripts/**-scoped glob, so a scripts/**/*.{ps1,psm1} spelling would fail
+  // this while passing the case above.
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['server/tts-sidecar/start.ps1']), true);
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['scripts/start-app.ps1']), true);
+});
+
+test('stepTouchedByDiff: the PowerShell glob does not drag unrelated diffs into test:hooks', () => {
+  // The negative half: without it the two assertions above would pass for a
+  // glob that matched everything.
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['src/App.tsx']), false);
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], ['server/tts-sidecar/main.py']), false);
+});
+
 // #2532 review, finding C1 — gitignore-secrets.test.mjs drives
 // `git check-ignore` against .gitignore's OWN patterns at RUNTIME, no
 // module-graph edge, so the automated transitive-closure completeness guard

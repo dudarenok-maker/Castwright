@@ -551,17 +551,27 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 2 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 7 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**54 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**55 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-06, human-checkpoint batch step 8 (#2985), 58 → 54.**
+> **Last change: 2026-09-06, adding E103** (#3051, ops-75 Part 4, claude):
+> `scripts/wt-gc.mjs --prune`'s junction-first teardown against real worktree
+> junctions cannot be proven in-PR — every automated test (the node:test suite
+> and the new `wt-gc-junctions.Tests.ps1` Pester tests) runs against throwaway
+> scratch fixtures, never a real worktree. 54 → 55 owed, Group E 7 → 8.
+> `next-id` bumped E103 → E104 in the same change. This lands on top of the
+> independent human-checkpoint step-8 discharge below (54 owed at that point;
+> the two changes never saw each other — that batch removed D3/E4/E6/E8, this
+> one adds E103).
+
+> **Prior change: 2026-09-06, human-checkpoint batch step 8 (#2985), 58 → 54.**
 > Folded steps 1-7's on-box evidence into the 11 rows this batch covers.
 > **Four rows fully DISCHARGED and removed** (their full original criterion
 > was met with real, unambiguous evidence — citing the evidence file rather
@@ -4467,7 +4477,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E103 -->
+<!-- next-id: E104 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5/E6/E8 for front-end acceptance), or platform-independent infrastructure (E1/E7/E9/E11/E12). E1/E7/E11 group on the Pinokio box; E6 needs two live checkouts.
 
@@ -4865,6 +4875,88 @@ normalizes correctly. Issue #2596 and PR #2799 body.
 **One-update lag:** Updates FROM pre-#2799 releases run the old `resolve-release.js`, 
 so CRLF normalization only takes effect from the NEXT update onward (see E1 and 
 `pinokio-scripts/update.js` lines 19–28).
+
+### E103 · `scripts/wt-gc.mjs --prune` — real junction-first teardown ([#3051](https://github.com/dudarenok-maker/Castwright/issues/3051), ops-75 Part 4)
+
+Acceptance #5 of #3051: "the destructive path cannot be proven in-PR." Every unit and
+Pester test in this PR runs against throwaway fixtures (a scratch dir with a real
+`New-Item -ItemType Junction`, never a real worktree) — see
+`scripts/tests/wt-gc-junctions.Tests.ps1` and `scripts/tests/wt-gc.test.mjs`. What
+those tests cannot exercise is `--prune` against a REAL worktree carrying real
+junctions into the primary checkout's `node_modules`/`.venv` — the shape behind the
+2026-09-06 sweep, in which 12 of 14 registered worktrees' junctions pointed at the
+primary checkout's real trees. **Scope:** `wt-gc` reads `git worktree list`, so the
+28 already-ORPHANED directories (8.27 GB) that same sweep counted are invisible to it
+— it exists to stop registered worktrees from becoming those, not to reclaim ones
+that already are. Do not accept this row against an orphan-directory cleanup.
+
+**What to observe, concretely**, on a Windows box with several stale worktrees
+(junctioned per CLAUDE.md's "Worktree setup"):
+
+- `npm run wt:gc` (no `--prune`) correctly reports each worktree's merged/ahead/dirty/
+  PR-state columns and marks as **not** prunable: the primary checkout, the worktree
+  you ran the command from, any dirty tree, any tree **not merged into `main`**, any
+  tree with unpushed or unverifiable-push commits, and any tree whose branch carries
+  an **open PR** or whose PR state could not be determined — confirm against
+  `git status`/`git log`/`gh pr list` by hand for a few rows. On a box mid-round this
+  should leave very few prunable rows; a row you know is an in-flight lane reading
+  `prunable? yes` is a failure of this criterion, not a curiosity.
+- Confirm `gh` answering "no PR" renders `none` and `gh` being unreachable renders
+  `unknown (gh unavailable)` — two different cells, not one shared token. Kill `gh`'s
+  auth (or rename the binary out of PATH) for one run to see the second.
+- Pick one worktree that IS marked prunable and genuinely is safe to delete (already
+  merged into `main`, pushed, clean, PR merged/closed, and NOT the tree you are
+  standing in). Run `npm run wt:gc -- --prune` **from a different checkout**.
+- Confirm the junctions inside it (`node_modules`, `server/node_modules`,
+  `server/tts-sidecar/.venv`, `server/tts-sidecar/voices/` if present) are gone
+  (`Test-Path` false) while the PRIMARY checkout's own real `node_modules`/`.venv`/
+  `voices/` are **untouched and intact** — this is the one failure mode that matters:
+  a `$false`→dropped `Directory.Delete` or a `.LinkTarget`-based gate reading empty
+  and silently skipping the delete, letting the follow-on `git worktree remove`
+  recurse into the primary checkout's real trees.
+- Confirm `git worktree list` no longer lists the pruned path, and the directory is
+  gone from disk.
+- Confirm the primary checkout and every OTHER live worktree are unaffected
+  (`git status --porcelain` on each, before/after).
+- **The fail-closed scan, which no fixture can prove:** the junction walk now throws
+  on any enumeration error rather than answering "no junctions found". On a real tree
+  with a deep junction path (the `server/tts-sidecar/.venv` shape under a long
+  worktree name), run the scan under `pwsh` **and** under `powershell` (5.1) and
+  confirm both either find the junction or FAIL LOUDLY — never a silent `removed 0
+  junction(s)` followed by a successful `git worktree remove`. **Distinguish the two
+  ways 5.1 can fail loudly**, because this criterion could not tell them apart and was
+  briefly disarmed by that: a `ParserError` / `Import-Module` failure means the MODULE
+  did not load and the fail-closed scan was never executed, which is NOT a pass for
+  this bullet. So, per engine, from the repo root:
+
+      <engine> -NoProfile -Command "Import-Module .\scripts\lib\wt-gc-junctions.psm1 -Force; 'LOADED OK'; Get-JunctionsRecursive -Root '<tree>' | ConvertTo-Json -Compress"
+
+  where `<engine>` is `pwsh` then `powershell.exe`. **The leading `.\` is required** —
+  `Import-Module` treats a bare relative path as a MODULE NAME and searches
+  `$env:PSModulePath`, so the same command WITHOUT the `.\` fails with
+  `Modules_ModuleNotFound` on both engines, which is character-for-character the disqualifying
+  signature above and would produce a guaranteed false FAIL. `LOADED OK` must print
+  before any scan output; then the scan must list the junction or throw.
+  **`Get-JunctionsRecursive` (read-only) rather than the `.ps1` wrapper, deliberately:**
+  `wt-gc-junctions.ps1`'s `[ValidateSet('Remove')]` leaves `Remove` as its only action,
+  so running the wrapper under `pwsh` would unlink the junction the 5.1 run needs and
+  the second engine would legitimately find nothing — which this same bullet defines as
+  a failure. (`pickPowerShell()` always prefers `pwsh` and has no engine flag, which is
+  why the 5.1 half has to be driven by hand at all.) Exercise the destructive
+  `-Action Remove` path once, afterwards, as part of the prune bullets above.
+- **A locked worktree is refused, and refused BEFORE the junction sweep.** `git
+  worktree lock <tree> --reason 'in flight'`, then `npm run wt:gc` — the row must read
+  ``no (locked by `git worktree lock`: in flight)``. Then `--prune` and confirm the
+  tree's junctions are still present: `git worktree remove --force` refuses a locked
+  tree on its own, but only after the sweep has already run, so "it survived" is not
+  the criterion — "it survived WITH its `node_modules`/`.venv`/`voices/`" is.
+  `git worktree unlock` afterwards.
+
+*Needs:* a Windows box with `pwsh` **and** Windows PowerShell 5.1 on PATH, at least one
+genuinely prunable worktree with real junctions set up per CLAUDE.md's worktree-setup
+recipe, and a second checkout to run the prune from.
+*Cost:* 10–15 minutes. *Criteria:* this issue's acceptance list (#3051) and the
+design doc's Part 4 (`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`).
 
 ## Group G — GitHub Actions itself
 

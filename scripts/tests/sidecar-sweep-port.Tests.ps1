@@ -244,7 +244,7 @@ Describe 'Get-SidecarSweepPort' {
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
     }
 
-    It '#2754 — uses a stale note (dead PID) when it is the only one (orphan detection)' {
+    It '#2754 -- uses a stale note (dead PID) when it is the only one (orphan detection)' {
         # Concrete scenario: a server crashed hard (taskkill /T /F), leaving its sidecar
         # running and orphaned. The note has a dead PID, but its EXISTENCE is the signal
         # for the sweep to know "reap this port". If the resolver filters by PID liveness
@@ -263,7 +263,7 @@ Describe 'Get-SidecarSweepPort' {
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9010
     }
 
-    It '#2754 — falls back to server\.env when multiple notes exist' {
+    It '#2754 -- falls back to server\.env when multiple notes exist' {
         $notePathA = Join-Path $script:tempDir "tts.owner.9010.json"
         $notePathB = Join-Path $script:tempDir "tts.owner.9011.json"
 
@@ -277,7 +277,7 @@ Describe 'Get-SidecarSweepPort' {
         Get-SidecarSweepPort -RunDir $script:tempDir -ServerEnvPath $script:envPath | Should -Be 9030
     }
 
-    It '#2754 — handles ambiguity defensively (multiple notes)' {
+    It '#2754 -- handles ambiguity defensively (multiple notes)' {
         # Edge case: two notes present — the resolver cannot distinguish which one
         # represents the actual sidecar, so it treats this as ambiguous and falls back.
 
