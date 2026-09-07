@@ -1,7 +1,8 @@
 # Step 2 — A24 design-contention wait + A105 base17 eviction guard + A35
 # three-model stranded VRAM — PARTIAL, in progress (9th run: A105 bullet 5
 # now fully closed, both the contention-timeout and the card_lock-leak
-# halves confirmed on real hardware)
+# halves confirmed on real hardware; 10th run: diagnosed WHY the whole-chapter
+# render can't isolate the Kokoro arbiter for bullet 3/4, still not fixed)
 
 Run 2026-09-06/07/08, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
@@ -930,3 +931,143 @@ instruct, still reproduces — not an instruct-wording issue) should save the
 next run from repeating this reconnaissance. Parking again (Agent Working,
 still assigned) rather than reporting AGENT DONE against unfinished scope —
 A24 bullets 2-4 and A105 bullets 3(direction 2)/4 remain real, undriven work.
+
+## 10th run (2026-09-08) — device-sharing confirmed, `language:"ru"` bug pinned
+## down precisely, genuine design-vs-design overlap achieved, root cause of
+## bullet 3/4's methodology problem identified (not fixed)
+
+Found this worktree's sidecar (port 9170, PID 21308, adopted from an earlier
+run) and dev server (port 8250) both already running at the start — the 9th
+run's own note that "the next run needs them anyway" held. Confirmed idle
+first (`qwen_loaded`/`qwen_design_resident`/`kokoro_loaded` all `false`,
+`inflight_synth: 0`, both GPUs at their own idle baselines: GPU0 `0 MiB`,
+GPU1 `197 MiB`).
+
+**New fact: this box's device config genuinely shares a card, so the
+Kokoro/VoiceDesign arbiter is live, not silently bypassed.** Read
+`server/tts-sidecar/main.py`'s `_VdKokoroArbiter` docstring and
+`_compute_vd_kokoro_shares_device()`: the arbiter only fires when
+`QWEN_DEVICE` and `KOKORO_DEVICE` resolve to the same card. Checked this
+worktree's `server/.env` — neither variable is set, so both fall back to
+unindexed `'cuda'`, which `shares_device()` resolves to `cuda:0` for both →
+`shares_device = True`. This had never been explicitly checked in nine prior
+runs; it rules out one plausible explanation for why bullet 3's second
+direction and bullet 4 have stayed inconclusive (a multi-GPU box silently
+routing Kokoro and Qwen to different cards, making the arbiter a no-op) —
+that is NOT what's happening here.
+
+**`language:"ru"` raw `/qwen/design-voice` bug, pinned down precisely (the
+9th run had only flagged it in passing).** Fired
+`POST :9170/qwen/design-voice` with `{"voiceId":"qwen-a105b4-A","instruct":
+"...","language":"ru"}` — `HTTP 500 {"detail":"Internal error."}` in 19.37s.
+A second call with a different fresh `voiceId`, same shape, same `language:
+"ru"` — `HTTP 500` again, 9.51s. Both calls were otherwise identical to the
+calls that succeeded seconds later with the `language` field simply omitted
+(see below) — isolates the bug to that one field, deterministically, not an
+intermittent fault. Not fixed (out of scope for this register row); flagging
+precisely so nobody burns another attempt rediscovering that this field is
+the trigger.
+
+**Genuine two-overlapping-designs state achieved — new data for A105 bullet
+4, distinct from the 9th run's near-instant-503 attempt.** Fired
+`POST :9170/qwen/design-voice` for fresh `voiceId: qwen-a105b4-C` (no
+`language` field, plain neutral instruct) — confirmed genuinely in flight 3s
+later (`qwen_design_resident: true`, `inflight_synth: 1`, no error). ~18s
+later fired a second, `qwen-a105b4-D` — confirmed BOTH in flight together 2s
+after that (`inflight_synth: 2`, no 503, no `base17_in_flight` — unlike the
+9th run's design-vs-design race, which always saw the second call 503
+almost immediately because that race deliberately also hit base17
+contention). This confirms plain 0.6B `design_voice`-vs-`design_voice`
+overlap does NOT trigger base17 contention on its own — only scenarios that
+also load/evict base17 do (as bullet 5 exercised). Design-C completed
+`HTTP 200` in 127.66s, design-D completed `HTTP 200` in 143.86s (started 18s
+after C) — by wall clock, C ran ~09:31:09–09:33:16 and D ran
+~09:31:27–09:33:51, a genuine ~109s window where BOTH held the arbiter
+concurrently, confirmed via polling (`qwen_design_resident: true`,
+`inflight_synth: 2` mid-window; `inflight_synth: 1` after C alone finished;
+`qwen_design_resident: false` only after D also finished). Both designs
+succeeded cleanly, no errors, no leak — a real "two overlapping designs, both
+succeed" data point the 9th run's attempt never reached because its second
+design always got rejected before any real overlap existed.
+
+**But the concurrent chapter-render race against this overlap does NOT
+isolate Kokoro's own pause behaviour — this run independently confirms
+(with a causal explanation) the exact confound the 6th run only suspected.**
+Fired `POST /api/books/onbox-test__standalones__untitled/generation`
+(`modelKey: "kokoro-v1"`, `chapterIds: [1]`, `force: true`) immediately after
+confirming both designs were concurrently resident. The render's own
+progress stalled at line 4 (`anna`, a **Qwen** character) for the entire
+~109s overlap window and only resumed once `qwen_design_resident` returned
+to `false` — but this chapter's cast order is `narrator → anna →
+ivan-petrovich → unknown-male` (Kokoro), so the render's early lines are ALL
+Qwen-engine characters that queue behind the two designs via
+`QwenEngine._synth_lock` — an entirely different, ordinary serialisation
+mechanism from the `_VdKokoroArbiter` this bullet is actually about. By the
+time the render's SSE stream finally reached `unknown-male`'s line (the only
+Kokoro character in the fixture), both designs had been done for several
+minutes. **The render never tested the Kokoro arbiter at all this run** —
+it only re-demonstrated that Qwen synth ops queue behind Qwen designs, which
+nobody doubted. This is exactly why the 6th run called its own attempt
+"inconclusive" ("the render target doesn't isolate Kokoro from Qwen
+contention on this fixture") — this run shows precisely why: the fixture's
+only Kokoro character is cast LAST, so a whole-chapter render can never let
+a Kokoro line reach the sidecar while a design is still active, regardless
+of how the arbiter itself behaves. Chapter 1 still completed successfully in
+the end (`SUSPECT` QA again, same 2 sentences flagged for runaway-synthesis
+duration — a fourth occurrence of that pre-existing incidental finding, not
+new), so no error was introduced; only the test's own methodology failed to
+isolate what it was trying to observe.
+
+**What would actually resolve bullet 3 direction 2 / bullet 4, for whoever
+picks this up next:** do NOT drive the app-level whole-chapter `/generation`
+route again for this — it cannot isolate the arbiter on this fixture's cast
+order (moving `unknown-male` earlier in the manuscript might work but wasn't
+tried). Instead, drive the sidecar's own Kokoro synth endpoint directly
+(mirroring how bullet 5 used raw `/qwen/design-voice` and
+`/qwen/mint-variant` to sidestep the app's per-book mutual exclusion) —
+fire a raw Kokoro `/synthesize` call (check `main.py` for its exact route
+and body shape; not looked up this run) while a raw `/qwen/design-voice`
+call is confirmed resident, with no other character's line queued ahead of
+it to confound timing. That isolates the arbiter cleanly for both bullet 3
+direction 2 (no design active, only a base17-eviction wait — confirm Kokoro
+proceeds unblocked) and bullet 4 (two overlapping raw designs, as
+reproduced above — confirm the raw Kokoro call stays blocked until BOTH
+release, using the exact concurrent-overlap technique this run already
+proved works: two designs 15-20s apart, poll `/health` for
+`qwen_design_resident`/`inflight_synth` to confirm real overlap before firing
+the Kokoro call).
+
+**Incidental, not chased:** the adopted sidecar (PID 21308, running since
+before this run started) hit the supervisor's leak-saturation threshold
+(`committed 20045MB ≥ 20000MB`) mid-render during this run's own first
+(aborted, `language:"ru"`-blocked) render attempt, and was auto-respawned to
+a fresh child (PID 34676) by `[sidecar] supervisor` — a normal recovery
+mechanism, not a bug, but it stretched that render to several minutes
+end-to-end and re-flagged chapter 1 `SUSPECT`. Documented so the next run
+recognises a stalled-looking SSE stream as a possible mid-flight respawn
+rather than a hang, before spending time diagnosing it as one.
+
+Cleanup: final `/health` confirmed idle (`qwen_loaded`/`qwen_design_resident`
+`false`, `kokoro_loaded: true` — left resident same as prior runs left
+similar residual state, `inflight_synth: 0`, `model_loaded: false`). GPU0
+`3337 MiB` (Kokoro resident + this worktree's own dev-server processes),
+GPU1 `359 MiB` (idle baseline) — checked via `nvidia-smi`, no other lane's
+process present or touched this run (confirmed via `Get-CimInstance
+Win32_Process`, only this worktree's own uvicorn PID and one unrelated
+lane's uvicorn PID seen, neither touched beyond health-checking this
+worktree's own). Working tree clean (`git status --porcelain` empty) — no
+source edits made this run, this file is the only change. Dev server and
+sidecar left running, same as the 9th run's own practice ("the next run
+needs them anyway"). No cast/fixture data touched — `qwen-a105b4-{A,C,D}`
+are throwaway, never-cast voiceIds (matching the 9th run's own
+`qwen-a105b5-*` convention), none touch the `Onbox Test` book's cast.
+Chapter 1 was re-synthesized once more via this run's own (successful)
+render — same disposable fixture, no new state beyond what prior runs
+already established as expected churn.
+
+**Still not finished after ten runs.** A24 bullets 2-4, A105 bullet 3's
+second direction, and A105 bullet 4 remain undriven — this run narrowed the
+path (raw sidecar Kokoro synth, not the app route) and removed one
+red herring (device-sharing) but did not close any of them. Parking again
+(Agent Working, still assigned) rather than reporting AGENT DONE against
+unfinished scope.
