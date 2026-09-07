@@ -94,7 +94,10 @@ import {
 import {
   deleteAnalysisState,
   writeAnalysisState,
+  readAnalysisLastOutcome,
+  writeAnalysisLastOutcome,
   type AnalysisStateFile,
+  type AnalysisLastOutcome,
 } from '../store/analysis-state.js';
 import type {
   CharacterOutput,
@@ -2684,6 +2687,14 @@ export function isAnalysisJobRunning(manuscriptId: string): boolean {
   return !!subset && !subset.controller.signal.aborted;
 }
 
+/** Test helper: register a job into the in-flight map. Used by
+    analysis.rejoin-miss.test.ts's buildJob to ensure the staleness guard
+    in endJob has a valid map entry to check. */
+export function __testRegisterJobForTest(job: AnalysisJob): void {
+  const targetMap = jobMapFor(job.kind);
+  targetMap.set(job.manuscriptId, job);
+}
+
 /** fs-1 — true when ANY analyzer job (main or subset) is in flight. The upgrade
     gate refuses to restart the server out from under an active analysis. Returns
     the busy manuscript ids so the 409 can name them. */
@@ -2976,7 +2987,59 @@ export function replayCatchUp(job: AnalysisJob, send: (ev: unknown) => void): vo
   for (const warning of job.replay.warnings.values()) send(warning);
 }
 
-function endJob(job: AnalysisJob, finalEv?: unknown): void {
+/** #3004 — true when the dispatch has NOT found a live job to join and the
+    caller did not explicitly request a fresh restart, i.e. exactly the case
+    the rejoin-miss check applies to. Split out as its own pure predicate so
+    the "no live entry found" condition (spec points 1/2) and the "explicit
+    restart" exclusion (point 4) can be asserted directly, without needing to
+    drive a whole job through the dispatch route to prove the boundary. */
+export function shouldCheckForRejoinMiss(
+  existing: Pick<AnalysisJob, 'controller'> | undefined,
+  requestedFresh: boolean,
+): boolean {
+  if (requestedFresh) return false;
+  return !existing || existing.controller.signal.aborted;
+}
+
+/** #3004 — the SSE event a rejoin emits when NO live job was found for the
+    manuscript (see the dispatch block below), so the caller can tell "I
+    joined the still-running job" apart from "no job was found, so a
+    brand-new one silently started." Carries the job's LAST recorded terminal
+    outcome when one is on disk (from `readAnalysisLastOutcome`); a truly
+    novel manuscript that was never analysed has no outcome to attach, so
+    `priorOutcome` is omitted rather than fabricated. Exported for unit
+    testing — the dispatch route only builds and sends this, it doesn't
+    branch on its shape. */
+export function buildRejoinMissEvent(priorOutcome: AnalysisLastOutcome | null): {
+  kind: 'rejoin-miss';
+  reason: string;
+  priorOutcome?: { kind: 'result' | 'error'; code?: string; message?: string; endedAt: number };
+} {
+  const reason = priorOutcome
+    ? priorOutcome.kind === 'error'
+      ? `previous job ended with error (${priorOutcome.code ?? 'unknown'})`
+      : 'previous job completed — starting fresh'
+    : 'no tracked job found for this manuscript — starting fresh';
+  return {
+    kind: 'rejoin-miss',
+    reason,
+    ...(priorOutcome
+      ? {
+          priorOutcome: {
+            kind: priorOutcome.kind,
+            code: priorOutcome.code,
+            message: priorOutcome.message,
+            endedAt: priorOutcome.endedAt,
+          },
+        }
+      : {}),
+  };
+}
+
+/* Exported for unit testing (the #3004 last-outcome persistence contract) —
+   production call sites still reach this only via the analyzer loop's own
+   terminal transitions. */
+export function endJob(job: AnalysisJob, finalEv?: unknown): void {
   if (finalEv) broadcastToJob(job, finalEv);
   /* Cold-boot snapshot transition. Fire-and-forget; we still tear
      down subscribers + deregister synchronously below so the route
@@ -2991,6 +3054,52 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
      mid-flight aborts so the pill can render the Resume affordance. */
   const kind = (finalEv as { kind?: string } | undefined)?.kind;
   const code = (finalEv as { code?: string } | undefined)?.code;
+  /* #3004 — record the LAST terminal outcome so a later rejoin that finds no
+     live job can report why. Only for `kind: 'main'`: the rejoin-miss check
+     this feeds lives on the main dispatch path only, and a per-book file
+     shared with subset jobs would let a subset's own ending overwrite the
+     main run's outcome. Only `result`/`error` are recorded — a `finalEv`-less
+     teardown (subscriber-driven cleanup with nothing to report) leaves the
+     prior outcome, if any, exactly as it was.
+     #2165/#2196 — resolve via `liveBookDir(job)` (the CURRENT directory, not
+     the pinned `job.bookDir` copy) and route through the identity-gated
+     delete-only guard, same as the main-success cleanup right below: a
+     book renamed away mid-run must never have this write mkdir the dead
+     pre-rename folder back into existence. */
+  let outcomeWritePromise: Promise<void> | null = null;
+  if (job.kind === 'main' && (kind === 'result' || kind === 'error')) {
+    const dirForOutcome = liveBookDir(job);
+    if (dirForOutcome) {
+      const message = (finalEv as { message?: string } | undefined)?.message;
+      /* Staleness guard: a displaced job's late-arriving endJob must not
+         overwrite a NEWER job's outcome with its own stale one. Same idiom
+         as the map deregistration 75 lines below. */
+      const targetMap = jobMapFor(job.kind);
+      if (targetMap.get(job.manuscriptId) === job) {
+        outcomeWritePromise = (async () => {
+          const verified = await tryResolveVerifiedBookDir({
+            manuscriptId: job.manuscriptId,
+            candidateBookDir: dirForOutcome,
+            /* Full identity-bearing path (default true): the write creates
+               a file, so we must verify the path still belongs to the correct
+               manuscript. The delete-only fast path below is for cleanup only
+               and permits resurrection of a stale path; creating a new file
+               must not. See #2196 for the rename-induced contamination case. */
+            identityBearing: true,
+          });
+          if (!verified) return;
+          await writeAnalysisLastOutcome(verified, {
+            manuscriptId: job.manuscriptId,
+            kind,
+            code,
+            message,
+          });
+        })().catch((err) => {
+          console.warn('[analysis-last-outcome] write failed', err);
+        });
+      }
+    }
+  }
   if (job.bookDir) {
     if (!finalEv || kind === 'result') {
       /* Terminal success OR a clean teardown with no final event.
@@ -3035,15 +3144,31 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
       void persistTerminalSnapshot(job, 'halted', finalEv as { code: string; message?: string });
     }
   }
-  for (const sub of job.subscribers) {
-    clearInterval(sub.keepAlive);
-    try {
-      sub.res.end();
-    } catch {
-      /* socket already gone */
-    }
-  }
+  /* #3004 — if an outcome write is in flight, don't end the response
+     until it's complete. This ensures a rejoining client sees the
+     persisted outcome file when it reconnects and re-reads.
+
+     CRITICAL: capture the subscriber list BEFORE clearing it, since the
+     async .then() callback cannot run until the current synchronous block
+     finishes. If we clear() first, the callback finds an empty set and
+     res.end() is never called, hanging the response forever. */
+  const subs = Array.from(job.subscribers);
   job.subscribers.clear();
+  const endResponsesCallback = () => {
+    for (const sub of subs) {
+      clearInterval(sub.keepAlive);
+      try {
+        sub.res.end();
+      } catch {
+        /* socket already gone */
+      }
+    }
+  };
+  if (outcomeWritePromise) {
+    void outcomeWritePromise.then(endResponsesCallback);
+  } else {
+    endResponsesCallback();
+  }
   const targetMap = jobMapFor(job.kind);
   if (targetMap.get(job.manuscriptId) === job) {
     targetMap.delete(job.manuscriptId);
@@ -3202,6 +3327,19 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     );
   }
 
+  /* Read the prior outcome FILE OUTSIDE the critical section (before the
+     existing-job check). The .await below would otherwise insert a gap into
+     what must be an atomic "check existing, then set new job" window (#3004
+     race case: two rejoin POSTs in the same tick both see existing===undefined,
+     both suspend on the read, both create and register a job; the second wins
+     and the first orphans, leaking markAnalysisBusy). Reading here (outside
+     the map operations) keeps them atomic. */
+  const priorOutcome =
+    (shouldCheckForRejoinMiss(inFlightAnalysisByManuscript.get(manuscriptId), requestedFresh) &&
+    record.bookDir)
+      ? await readAnalysisLastOutcome(record.bookDir)
+      : null;
+
   /* ── Dispatch: subscribe-vs-start.
      If a non-aborted job is already running for this manuscript AND we
      are not explicitly displacing it (fresh: true), join the existing
@@ -3231,6 +3369,33 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
        will hit the AnalysisAbortedError catch and call endJob, which
        deregisters only when it's still the current entry. We
        overwrite the map below. */
+  }
+
+  /* #3004 — reaching here means NO live job was found for this manuscript:
+     either `existing` was never set, or it was set but already aborted
+     (stale entry not yet cleaned up). That is exactly the ambiguous case a
+     rejoining caller can't tell apart from "no job was found, so a
+     brand-new one silently started" — signal it with one SSE event before
+     the fresh job below starts. Skipped when `requestedFresh` is true: that
+     is a caller-requested restart, not a rejoin, and it already knows it's
+     starting fresh (point 4 of the fix).
+
+     The event is emitted REGARDLESS of whether a persisted outcome file
+     exists. A truly novel manuscript (never analysed here) has no file and
+     no outcome to attach; a job that crashed or was interrupted before
+     endJob's async write completed also has no file, but the job still died
+     and the caller needs to know it. Both cases require the event. The
+     priorOutcome is attached when available, omitted when the file is absent
+     or unparseable (via buildRejoinMissEvent(null)). */
+  /* Validate the persisted outcome's manuscript id against the current
+     request, in case a book rename mid-job left a stale outcome from a
+     different book in the path. */
+  if (shouldCheckForRejoinMiss(existing, requestedFresh)) {
+    if (priorOutcome && priorOutcome.manuscriptId === manuscriptId) {
+      send(buildRejoinMissEvent(priorOutcome));
+    } else {
+      send(buildRejoinMissEvent(null));
+    }
   }
 
   const job: AnalysisJob = {

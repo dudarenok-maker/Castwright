@@ -32,6 +32,7 @@ import { formatTimestamp } from '../logger.js';
 import { allKnobs } from '../config/registry.js';
 import { resolveKnob, resolveKnobForSidecarEnv, isEnvValueRejected } from '../config/resolver.js';
 import { resolveSidecarPort } from './sidecar-owner.js';
+import { resolveSidecarVenvDir } from '../diagnostics/venv.js';
 import { readStamp } from '../../tts-sidecar/scripts/venv-migration.mjs';
 // @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
 import { resolveProfile, ortProviders } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
@@ -472,6 +473,22 @@ function killTree(pid: number, spawnFn: typeof spawn, ownGroup = false): Promise
   });
 }
 
+/** The accelerator profile the sidecar RUNS with for the venv at `venvDir`:
+    the venv stamp's profile (what the venv was built for), overridable by
+    ACCELERATOR, defaulting to cpu when neither exists (a no-GPU / un-stamped
+    box). No hardware probe — that belongs to the install/upgrade path
+    (`resolveInstallProfile`), not to "what is this venv already". Shared by
+    buildSidecarEnv (below) and the in-app Qwen installer's post-install ORT
+    restore (tts/qwen-install-bootstrap.ts), so the runtime the installer
+    puts back is exactly the one the respawned sidecar will be told to use. */
+export function resolveVenvRuntimeProfile(venvDir: string): string {
+  return resolveProfile({
+    envOverride: process.env.ACCELERATOR ?? null,
+    wizardChoice: readStamp(venvDir)?.profile ?? null, // stamp = the installed profile
+    detected: 'cpu',
+  });
+}
+
 /** Options for {@link buildSidecarEnv}. Mirrors the subset of
     {@link SpawnSidecarOpts} that the env construction actually needs,
     separated so callers and tests can invoke it without an `autoStart`
@@ -585,13 +602,12 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
      un-stamped box). We inject the profile + the Kokoro ORT provider list (JSON)
      so main.py never re-derives them; an absent venv stamp + no override yields
      cpu + ['CPUExecutionProvider'] (today's auto-detect-safe behaviour). */
-  const venvDir =
-    process.env.SIDECAR_VENV_DIR ?? join(repoRoot, 'server', 'tts-sidecar', '.venv');
-  const profile = resolveProfile({
-    envOverride: process.env.ACCELERATOR ?? null,
-    wizardChoice: readStamp(venvDir)?.profile ?? null, // stamp = the installed profile
-    detected: 'cpu',
-  });
+  /* Through the shared resolver, not a second inlined `SIDECAR_VENV_DIR ??` —
+     the profile below is DERIVED from this path, so a drift here would silently
+     drift the profile the sidecar runs with away from the one the installer
+     restored against (#3043 M5). */
+  const venvDir = resolveSidecarVenvDir(repoRoot);
+  const profile = resolveVenvRuntimeProfile(venvDir);
   env.CASTWRIGHT_ACCELERATOR_PROFILE = profile;
   env.KOKORO_ORT_PROVIDERS = JSON.stringify(ortProviders(profile, process.platform));
 
@@ -621,11 +637,6 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     lastOwnedPid = null,
     platform = process.platform,
   } = opts;
-
-  if (!autoStart) {
-    log('[sidecar] auto-start disabled (user pref or DISABLE_AUTOSTART_SIDECAR=1)');
-    return null;
-  }
 
   if (await probeFn(host, port)) {
     /* Something already holds :port. Before honouring it (the old behaviour),
@@ -665,6 +676,45 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
       log(
         `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), skipping spawn (current sidecar honoured)`,
       );
+      onAdoptExisting?.({ host, port });
+      return null;
+    }
+    /* autoStart off means "this server does not own the sidecar on this port".
+       Probing is still worth doing — a healthy external sidecar is exactly what
+       the operator turned autoStart off to run, and onAdoptExisting arms the
+       watchdog that makes an install hold REFUSE rather than pip into a live
+       venv (#3043 pass 1). But every OWNERSHIP ACTION below is off-limits here:
+       killTree would reap a process we did not start, and onSpawnRefused would
+       drive a retry/backoff loop toward a spawn that `if (!autoStart)` will
+       never perform, holding isRecycling true and the queue with it. So this
+       returns either way — adopt a healthy one, leave anything else strictly
+       alone (#3043 B1).
+       An UNFIT (or unrecognised) process on the port still gets onAdoptExisting
+       — not because we'd ever treat it as our sidecar, but because whatever it
+       is, it is a live process sitting on this venv's port, and withSidecarHeld
+       must refuse an install against it exactly as it would a healthy adopted
+       one (#3043 B2/Door-1: the earlier version only armed the watchdog for the
+       fit case, leaving withSidecarHeld free to pip-install straight into a
+       venv still held open by an unfit-but-live sidecar). */
+    if (!autoStart) {
+      if (freshProtocol && unfitReason === null) {
+        log(
+          `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), adopting it ` +
+            '(auto-start disabled — this server does not own the sidecar).',
+        );
+      } else {
+        warn(
+          `[sidecar] something is listening on :${port} that we would not adopt ` +
+            `(${
+              !health.looksLikeSidecar
+                ? 'it does not look like our sidecar'
+                : !freshProtocol
+                  ? `protocol ${health.protocolVersion === null ? 'missing' : `v${health.protocolVersion}`} < v${EXPECTED_PROTOCOL_VERSION}`
+                  : (unfitReason ?? 'unfit')
+            }), but auto-start is disabled — ` +
+            'NOT touching it. TTS may be unavailable until it is restarted manually.',
+        );
+      }
       onAdoptExisting?.({ host, port });
       return null;
     }
@@ -727,6 +777,11 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     }
     log(`[sidecar] replaced stale sidecar (killed pid=${stalePid}); spawning current build.`);
     /* fall through to the normal spawn below */
+  }
+
+  if (!autoStart) {
+    log('[sidecar] auto-start disabled (user pref or DISABLE_AUTOSTART_SIDECAR=1)');
+    return null;
   }
 
   const isWindows = platform === 'win32';

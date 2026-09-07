@@ -125,6 +125,7 @@ describe('GET /api/queue', () => {
         tripEvent: () => null,
         exhaustedEvent: () => false,
         resetAndRespawn: async () => {},
+        withSidecarHeld: (fn) => fn(),
       });
 
       const res = await request(app).get('/api/queue');
@@ -142,6 +143,7 @@ describe('GET /api/queue', () => {
         tripEvent: () => null,
         exhaustedEvent: () => false,
         resetAndRespawn: async () => {},
+        withSidecarHeld: (fn) => fn(),
       });
 
       const res = await request(app).get('/api/queue');

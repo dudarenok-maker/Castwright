@@ -1,6 +1,8 @@
 # A29 step 1 — Qwen3 install click-through retry (isolated venv + port)
 
-Register row **A29** ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192),
+Register row **A29 is discharged** (2026-09-07, retired, not reused — see
+`docs/testing/onbox-a29-results/step-3-post-fix-verify.md`). Historical record below,
+from before the fix. Register row **A29** ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192),
 plan 282), retried per parent [#2913](https://github.com/dudarenok-maker/Castwright/issues/2913)
 now that the sidecar port hardcode ([#2632](https://github.com/dudarenok-maker/Castwright/issues/2632))
 is fixed on `main`. Run entirely in worktree

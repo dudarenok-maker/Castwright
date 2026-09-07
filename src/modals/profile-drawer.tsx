@@ -489,11 +489,13 @@ export function ProfileDrawer({
             `It’s assigned on Qwen only, so this character still uses a catalogue voice on Coqui.`,
         );
       } else if (warning) {
-        /* #1953 — the assign still succeeded; the server's `warning` is a
-           non-fatal advisory (a designed voice's baked language doesn't
-           match this book's), not a failure. Reuse the same inline slot
-           the coqui-decline notice above uses — this file's existing
-           convention for a non-fatal advisory at the point of assignment. */
+        /* The assign succeeded; the server's `warning` is a non-fatal
+           advisory carried by the assign response (e.g., #1953 designed-voice
+           language mismatch, #1998 cloned-voice language mismatch, or #1933
+           cloned-voice engine-readiness advisory, where #1933 takes priority
+           over #1998 when both apply). Reuse the same inline slot the
+           coqui-decline notice above uses — this file's existing convention
+           for a non-fatal advisory at the point of assignment. */
         setLibraryActionError(warning);
       }
     } catch (e) {
