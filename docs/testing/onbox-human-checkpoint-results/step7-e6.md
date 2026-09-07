@@ -1,9 +1,11 @@
 # Step 7 — E6 observation 6, the venv-bootstrap failure path: CONFIRMED
 
 Issue: Castwright#2987 ("Human-checkpoint batch step 7 - E6 observation 6
-(venv-bootstrap failure path)"). Row E6
-(`docs/testing/onbox-acceptance-register.md:4283`), on-box acceptance
-register campaign (#2435), step 7 of #2978. Observations 1-5 were already
+(venv-bootstrap failure path)"). Row E6 (discharged by this same step,
+2026-09-06, human-checkpoint batch — retired, not reused; the line citation
+`docs/testing/onbox-acceptance-register.md:4283` predates that discharge),
+on-box acceptance register campaign (#2435), step 7 of #2978. Observations
+1-5 were already
 discharged in earlier waves; wave 4 explicitly declined observation 6
 because inducing a real failure on the shared venv was too risky
 (`docs/testing/onbox-acceptance-register.md:4343-4357`).

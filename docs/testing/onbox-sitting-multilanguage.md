@@ -1,7 +1,8 @@
 # On-box sitting pack — multi-language render + ASR content-QA (D1, D2, A27, E4)
 
 > **Sitting pack** for wave 2 of `#2435`, step 7 of the `#2453` chain. Covers
-> register rows **D1, D2, A27, E4** — non-English ASR content-QA calibration,
+> register rows **D1, D2, A27, E4** (E4 discharged 2026-09-06, human-checkpoint
+> batch, retired, not reused) — non-English ASR content-QA calibration,
 > zh/ja placeholder voice design, sidecar auto-scaled RAM/VRAM recycle
 > thresholds, and the engine-recommendation CPU caveat. Follows the shared
 > format fixed by [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the
@@ -178,7 +179,7 @@ two renders racing to write the same `render-integrity` state.
     confirmed in Preconditions.
     - Result:
 
-### E4 · fe-51 engine-recommendation CPU caveat (plan [259](../features/259-fe51-engine-recommendation.md))
+### E4 · fe-51 engine-recommendation CPU caveat — discharged 2026-09-06 (plan [259](../features/259-fe51-engine-recommendation.md))
 
 > **Criteria source:** `docs/features/259-fe51-engine-recommendation.md:183-191`.
 > Re-resolved 2026-08-20: `server/src/tts/engine-recommendation.ts:34` still

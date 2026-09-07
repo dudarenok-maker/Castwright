@@ -163,11 +163,12 @@ by an `it.each(['detecting', 'bootstrapping'])` regression test.
 This is the single best illustration of why the issue was worth doing: the
 drift was invisible, tested, and shipping.
 
-**On-box acceptance owed** — [register row E6](../testing/onbox-acceptance-register.md).
-The regression test pins the card, but it mocks `fetch`; no automated test has
-ever driven this component from a real bootstrap job, which is exactly how the
-bug survived. Proving the fix needs a box with no venv and the patience for a
-~2 GB, multi-minute install — the duration is the point.
+**On-box acceptance** — register row E6 (discharged 2026-09-06, human-checkpoint
+batch, retired, not reused). The regression test pins the card, but it mocks
+`fetch`; a real bootstrap-failure run (env-scoped isolation, never touching the
+shared, junctioned venv) induced a genuine "Setup failed" card with the
+server's real error text plus a working "Try again" (fresh job id) — see
+`docs/testing/onbox-human-checkpoint-results/step7-e6.md`.
 
 ## Known limitations
 

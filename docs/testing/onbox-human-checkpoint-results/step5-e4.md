@@ -1,7 +1,8 @@
 # Step 5 — E4, the wizard CPU caveat: CONFIRMED
 
 Issue: Castwright#2990 ("Human-checkpoint batch step 5 - E4 CPU-forced Qwen
-render"). Row E4 (`docs/testing/onbox-acceptance-register.md:4241`), on-box
+render"). Row E4 (discharged and removed, 2026-09-06, human-checkpoint batch —
+retired, not reused; this evidence file predates that discharge), on-box
 acceptance register campaign (#2435), step 5 of #2978.
 
 ## Setup

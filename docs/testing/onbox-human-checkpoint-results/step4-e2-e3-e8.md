@@ -105,7 +105,7 @@ below.
    403 branch because it fails the earlier, broader check first — same practical
    effect the row asks for: a bare LAN IP cannot pair or manage devices).
 
-## E8 · Revoke is loopback-only (issue #2269, PR #2280/#2294, plan 225)
+## E8 · Revoke is loopback-only — discharged 2026-09-06 (issue #2269, PR #2280/#2294, plan 225)
 
 Paired 3 devices total for the ≥3-device check
 (`oe-2991-test-device-{1,2,3}`, later also `oe-2991-forwarder-test` and
