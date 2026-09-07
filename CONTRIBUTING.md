@@ -590,6 +590,46 @@ docs-only push has no runtime surface for it to exercise, so paying even
 that scope computation is wasted time/CPU for zero signal. See
 [CLAUDE.md "Commit gate"](CLAUDE.md#commit-gate).
 
+### Sidecar acceptance fast-path
+
+A PR whose diff touches `server/tts-sidecar/**` is a required check
+([`.github/workflows/sidecar-acceptance-gate.yml`](.github/workflows/sidecar-acceptance-gate.yml),
+ops-74 / #3050) unless the PR body records that `npm run test:sidecar` was
+run locally, or links a row in the [on-box acceptance
+register](docs/testing/onbox-acceptance-register.md). This exists because 38
+`pytest.importorskip("torch")` tests (14 files, all under
+`server/tts-sidecar/`) run **only** on real hardware via a local
+`npm run test:sidecar` — never in CI (`verify.yml`'s sidecar leg deliberately
+installs the lean, torch-free dependency set, so those tests report as
+skipped there). A PR that doesn't touch `server/tts-sidecar/**` is unaffected
+and needs nothing in its body.
+
+Write one of these two lines plainly (not inside backticks or a code block)
+in the PR body:
+
+```
+Sidecar acceptance: `npm run test:sidecar` -- 2026-09-06 -- passed
+Sidecar acceptance: see docs/testing/onbox-acceptance-register.md row <ID>
+```
+
+The first form is checked field-by-field — a literal
+`` `npm run test:sidecar` `` (flags after it are fine), an ISO date, and an
+outcome of `passed` or `failed`; only `passed` satisfies the gate. Free
+prose ("ran the sidecar tests, all good") does not. The second form points
+at a specific register row rather than re-running locally — useful when
+acceptance is already tracked there. `<ID>` must name a row that **actually
+exists** in the register: the gate parses the register (with
+`check-register-citations.mjs`'s own row parser) and rejects an id it does
+not find, so "blocked until Q3" or "will file in v2" is not a citation. And
+"plainly" is enforced, not merely asked for — a line inside a backtick or
+tilde fence, inside an HTML comment, indented by four spaces or a tab, or
+inside an inline code span opened on an earlier line, does not satisfy the
+gate. See
+[`scripts/validate-sidecar-acceptance.mjs`](scripts/validate-sidecar-acceptance.mjs)
+for the exact patterns and
+[docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md](docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)
+("Part 6") for the rationale.
+
 ## When you ship a change
 
 The full checklist lives in [CLAUDE.md → "Before-shipping checklist"](CLAUDE.md#before-shipping-checklist).
