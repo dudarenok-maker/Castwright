@@ -10,7 +10,8 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { rmSync, mkdtempSync, existsSync, statSync } from 'node:fs';
 import { tmpdir, cpus } from 'node:os';
-import { join, resolve, relative, isAbsolute } from 'node:path';
+import { join, resolve, relative, isAbsolute, posix as pathPosix } from 'node:path';
+const posixNormalize = pathPosix.normalize;
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
@@ -56,7 +57,13 @@ const SLOW = [
 // suitable for file-existence checks. `rel` is after stripping, for vitest filters.
 export function resolveTarget(file, repoRoot) {
   // Normalize separators (Windows backslash, UNC), strip leading ./, and resolve .. segments
-  let normalized = file.replace(/\\/g, '/');
+  /* posixNormalize collapses interior '.' and '..' segments, not just
+     separators. Without it 'server/./src/routes/book-state.test.ts' keeps
+     its './', fails the SLOW exact-match, and routes a slow-lane file to
+     the config that excludes it -- #3081's own mis-routing in a different
+     spelling (#3082 pass 3, R4). A leading './' is stripped after, since
+     normalize preserves that one. */
+  let normalized = posixNormalize(file.replace(/\\/g, '/'));
   if (normalized.startsWith('./')) {
     normalized = normalized.slice(2);
   }
@@ -66,18 +73,19 @@ export function resolveTarget(file, repoRoot) {
     const abs = resolve(file); // Resolve to absolute form
     const repoAbs = resolve(repoRoot);
 
-    // Check if on the same drive (Windows) — path.relative() can't cross drives
-    const absDrive = abs.split('/')[0]; // e.g., 'C:' or '//host/share'
-    const repoDrive = repoAbs.split('/')[0];
-    if (absDrive !== repoDrive) {
-      // Different drives (or UNC roots) — outside the repo
-      const absPath = abs.replace(/\\/g, '/');
-      return { cwd: null, rel: absPath, fullPath: absPath, isSlow: false, isOutsideRepo: true };
-    }
-
+    /* Cross-root (a different Windows drive, or a UNC share) and
+       outside-the-tree are ONE test, not two: path.relative() cannot express
+       a route between two roots, so it hands back the target ABSOLUTE
+       instead. isAbsolute(relativeToRepo) IS therefore the cross-drive check.
+       A hand-rolled drive comparison was tried and shipped broken (#3082
+       review pass 3, R1): it split a path.resolve() result on '/', which on
+       Windows is backslash-separated, so both sides were the whole path and
+       EVERY in-repo absolute path was refused as 'outside the repository' --
+       while the same message printed a resolved path plainly inside the
+       printed root. Nothing could see it: test:hooks runs on ubuntu only,
+       where that comparison was '' === ''. */
     const relativeToRepo = relative(repoAbs, abs).replace(/\\/g, '/');
-    // If relative() returned a path with ../, it's outside the repo
-    if (!relativeToRepo.startsWith('..')) {
+    if (!relativeToRepo.startsWith('..') && !isAbsolute(relativeToRepo)) {
       normalized = relativeToRepo;
     } else {
       // Return as-is; the caller will refuse it as outside the repo
@@ -189,7 +197,31 @@ function main() {
     stdio: ['inherit', 'pipe', 'pipe'],
     shell: process.platform === 'win32',
     windowsHide: true,
+    /* Must match the measured run's env EXACTLY or the oracle answers a
+       different question than the one asked. `vitest list` omits skipped
+       tests, so without RUN_QUARANTINE a file whose every case is
+       quarantined lists NOTHING -- byte-identical to the refusal signal,
+       and no status check can tell those apart (#3082 pass 3, R2). */
+    env: { ...process.env, RUN_QUARANTINE: '1' },
   });
+
+  /* Empty stdout means 'selected nothing' ONLY if the oracle actually ran.
+     A failed spawn, a missing config, or a config that throws all produce
+     empty stdout too -- and on POSIX (shell:false) a failed spawn leaves
+     stdout undefined, which crashed on .trim() (#3082 pass 3, R3). Those
+     are a broken oracle, not a verdict, and must not be reported as
+     'not a test file'. */
+  if (listResult.error || listResult.status !== 0 || typeof listResult.stdout !== 'string') {
+    console.error('flake-repro: could not ask vitest which files it selects');
+    console.error(`  command     npx ${listCmd.join(' ')}`);
+    console.error(`  in          ${absoluteCwd}`);
+    if (listResult.error) console.error(`  spawn error ${listResult.error.message}`);
+    else console.error(`  exit        ${listResult.status}`);
+    const stderrHead = String(listResult.stderr || '').trim().slice(0, 200);
+    if (stderrHead) console.error(`  stderr      ${stderrHead}`);
+    process.exitCode = 2;
+    return;
+  }
 
   if (listResult.stdout.trim() === '') {
     console.error('flake-repro: not a test file (vitest does not select it under the chosen config)');
