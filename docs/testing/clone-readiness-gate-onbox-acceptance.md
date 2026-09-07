@@ -104,7 +104,7 @@ and its behaviour was verified below.
 
 Expected: the gate clears for that character; re-opening shows no warning.
 
-Result: **PASS.** `PATCH /api/voice-library/01e278d6.../assign` transcript set
+Result: **PASS.** `PATCH /api/voice-library/01e278d6...` transcript set
 to the real Whisper text for the `F8-lowfi-20s.wav` clip
 ("ocean and then the rover boys in the jungle..."). Response confirmed
 `master.transcript` populated, `transcriptSource:'user'`. Re-derive was then
@@ -166,10 +166,11 @@ then rendered chapter 1 on Qwen for real. It failed for real:
 "...\"Aria\" (derive-failed). Re-run the clone for Qwen and check the sidecar
 log..."`. `GET /api/voice-library` confirmed `engines.qwen.status:"failed"` —
 a genuine on-disk stamp written by `clone-voice-resolver.ts`, not fabricated.
-Pressed **Retry derive** for real: `POST
+Exercised **Retry derive**'s underlying call for real: `POST
 /api/voice-library/01e278d6.../engines/qwen/retry` → `engines:{}` (stamp
-deleted, per that route's documented behaviour). Then ran the actual exported
-`cloneReadiness` predicate (`server/src/tts/clone-readiness.ts`, via `npx tsx`)
+deleted, per that route's documented behaviour) — a direct API call, not a UI
+button press, since no UI interaction tool was available to this agent. Then
+ran the actual exported `cloneReadiness` predicate (`server/src/tts/clone-readiness.ts`, via `npx tsx`)
 against the real current state (`slotStatus: undefined`, `hasMaster: true`,
 `transcript: ''`, `engine: 'qwen'`, `characterHasSlot: true`) — **not**
 hand-simulated JSON: `cloneReadiness(...) === 'no-transcript'`. Confirmed the
