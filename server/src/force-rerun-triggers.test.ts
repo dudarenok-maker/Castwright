@@ -151,6 +151,12 @@ const MAIN_COVERED = [
     file: 'the Coqui residency policy doc',
     base: REPO_ROOT,
   },
+  /* #3059 — engine-language-coverage.guard.test.ts's third assertion reads
+     generation.ts at RUNTIME (readFileSync + a TypeScript parse) to scan for
+     the resolveEligibleEngines(...) call site; the same #1847 runtime-read
+     trap as the entries above, since the guard scans the file's source text
+     rather than importing it. */
+  { rel: 'src/routes/generation.ts', file: 'the generation route (resolveEligibleEngines call site)', base: SERVER_ROOT },
 ];
 
 const SLOW_COVERED = [

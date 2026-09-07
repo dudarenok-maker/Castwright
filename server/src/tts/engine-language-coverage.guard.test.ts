@@ -45,6 +45,16 @@
        it fails if that argument changes to anything else, independent of
        what `ALL_TTS_ENGINES` contains.
 
+       IT #3 READS `generation.ts` AT RUNTIME, NOT VIA IMPORT — the same
+       #1847 trap `server/vitest.config.ts`'s `forceRerunTriggers` header
+       documents repeatedly. That file has a `generation.ts` entry
+       (mirrored in `force-rerun-triggers.test.ts`'s `MAIN_COVERED` list)
+       specifically so `vitest run --changed`'s scoped CI leg still selects
+       THIS file when only `generation.ts` changes. If the scan target ever
+       moves to a different file, move that trigger with it — otherwise this
+       guard goes back to being silent on the CI leg that runs on every PR,
+       exactly the failure mode this guard exists to close.
+
    Together, it #2 (or #1) covers the table, and it #3 covers the call site
    — that is (2) and (3) in full. (1) has NO coverage in this file, by
    design: it isn't guarded, it is only named as a limit below.
