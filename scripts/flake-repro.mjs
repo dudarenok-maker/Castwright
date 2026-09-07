@@ -1,16 +1,10 @@
 // scripts/flake-repro.mjs — measure a test file's runtime under induced load.
 // Usage: node scripts/flake-repro.mjs --file server/src/routes/analysis-pipelining.test.ts --runs 3 --cpu-load --io-load
 import { spawn, spawnSync } from 'node:child_process';
-import { rmSync, mkdtempSync } from 'node:fs';
+import { rmSync, mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir, cpus } from 'node:os';
-import { join } from 'node:path';
-
-const args = process.argv.slice(2);
-const get = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
-const has = (k) => args.includes(k);
-const file = get('--file');
-const runs = Number(get('--runs', '3'));
-if (!file) { console.error('--file <relpath> required'); process.exit(2); }
+import { join, resolve } from 'node:path';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // Decide config: slow files run via the slow config. This list is the exact
 // set of paths in server/vitest.config.slow.ts's SLOW_FILES, mirrored here
@@ -33,9 +27,30 @@ const SLOW = [
   'src/routes/venv-bootstrap.route.test.ts',
   'src/routes/analysis.interim-prune-prohibition.e2e.test.ts',
 ];
-const cwd = file.startsWith('server/') ? 'server' : '.';
-const rel = file.replace(/^server\//, '');
-const isSlow = SLOW.includes(rel);
+
+// Pure function: resolve a --file argument into { cwd, rel, isSlow }.
+// PowerShell tab-completion produces backslash paths on Windows (the ordinary
+// way paths are typed on this repo's primary platform), but three separate
+// consumers below — cwd routing, server/ prefix strip, and SLOW exact-match —
+// all expect POSIX separators. Normalizing here once fixes all three; a
+// mismatch in any one leaves the others silently broken. The run goes to the
+// wrong config and still reports a timing, making the silent failure hard to
+// spot (issue #3081). The three consumers are:
+//   - `cwd` choice: checks startsWith('server/')
+//   - `rel` production: strips a leading `server/`
+//   - `isSlow` lookup: EXACT match against SLOW's POSIX paths
+export function resolveTarget(file) {
+  let normalized = file.replace(/\\/g, '/');
+  if (normalized.startsWith('./')) {
+    normalized = normalized.slice(2);
+  }
+
+  const cwd = normalized.startsWith('server/') ? 'server' : '.';
+  const rel = normalized.replace(/^server\//, '');
+  const isSlow = SLOW.includes(rel);
+
+  return { cwd, rel, isSlow };
+}
 
 let cpuBurners = [];
 function startCpuLoad() {
@@ -61,21 +76,45 @@ function startIoLoad() {
 }
 function stopIoLoad() { if (ioBurner) ioBurner.kill('SIGKILL'); if (ioDir) rmSync(ioDir, { recursive: true, force: true }); }
 
-if (has('--cpu-load')) startCpuLoad();
-if (has('--io-load')) startIoLoad();
+function main() {
+  const args = process.argv.slice(2);
+  const get = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
+  const has = (k) => args.includes(k);
+  const file = get('--file');
+  const runs = Number(get('--runs', '3'));
+  if (!file) { console.error('--file <relpath> required'); process.exitCode = 2; return; }
 
-const cmd = isSlow
-  ? ['vitest', 'run', '--config', 'vitest.config.slow.ts', rel]
-  : ['vitest', 'run', rel];
+  const { cwd, rel, isSlow } = resolveTarget(file);
 
-const results = [];
-for (let i = 0; i < runs; i++) {
-  const t0 = process.hrtime.bigint();
-  const r = spawnSync('npx', cmd, { cwd, stdio: 'inherit', shell: process.platform === 'win32', windowsHide: true,
-    env: { ...process.env, RUN_QUARANTINE: '1' } }); // RUN_QUARANTINE=1 so quarantined cases run
-  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-  results.push({ run: i + 1, ms: Math.round(ms), code: r.status });
-  console.log(`run ${i + 1}: ${Math.round(ms)}ms exit=${r.status}`);
+  const filePath = resolve(cwd, rel);
+  if (!existsSync(filePath)) {
+    console.error('flake-repro: no such test file');
+    console.error(`  --file      ${file}`);
+    console.error(`  resolved to ${filePath}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  if (has('--cpu-load')) startCpuLoad();
+  if (has('--io-load')) startIoLoad();
+
+  const cmd = isSlow
+    ? ['vitest', 'run', '--config', 'vitest.config.slow.ts', rel]
+    : ['vitest', 'run', rel];
+
+  const results = [];
+  for (let i = 0; i < runs; i++) {
+    const t0 = process.hrtime.bigint();
+    const r = spawnSync('npx', cmd, { cwd, stdio: 'inherit', shell: process.platform === 'win32', windowsHide: true,
+      env: { ...process.env, RUN_QUARANTINE: '1' } }); // RUN_QUARANTINE=1 so quarantined cases run
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    results.push({ run: i + 1, ms: Math.round(ms), code: r.status });
+    console.log(`run ${i + 1}: ${Math.round(ms)}ms exit=${r.status}`);
+  }
+  stopCpuLoad(); stopIoLoad();
+  console.log('SUMMARY', JSON.stringify(results));
 }
-stopCpuLoad(); stopIoLoad();
-console.log('SUMMARY', JSON.stringify(results));
+
+if (isDirectlyInvoked(import.meta.url)) {
+  main();
+}
