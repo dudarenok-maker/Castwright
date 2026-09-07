@@ -645,6 +645,34 @@ test('findClaimedSlots unions two disagreeing claim files rather than picking on
   assert.deepEqual(findClaimedSlots(paths), [4, 5]);
 });
 
+test('wt-list port columns read server/.env when both claim files carry different values (server/.env wins)', (t) => {
+  // SLOT_CLAIM_FILES order is ['.env.local', 'server/.env'], so the merge
+  // processes .env.local first and server/.env second, giving server/.env
+  // precedence on any key both carry. This matters because the server and
+  // sidecar actually read server/.env, not .env.local — a collision must not
+  // hand them different ports than wt-list reports.
+  const root = mkdtempSync(join(tmpdir(), 'wt-merge-test-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'server'), { recursive: true });
+  // .env.local claims slot 3
+  writeFileSync(
+    join(root, '.env.local'),
+    renderEnvLocal({ slot: 3, branch: 'feat/server-merge-test', ports: computePorts(3) }),
+    'utf8',
+  );
+  // server/.env claims slot 7 (different value)
+  writeFileSync(
+    join(root, 'server', '.env'),
+    renderServerEnv({ slot: 7, branch: 'feat/server-merge-test', ports: computePorts(7) }),
+    'utf8',
+  );
+  // Port merge should prefer server/.env's values
+  const [row] = buildRows([{ path: root, branch: 'feat/server-merge-test' }]);
+  const ports7 = computePorts(7);
+  assert.equal(row[4], String(ports7.PORT), 'PORT must come from server/.env, not .env.local');
+  assert.equal(row[5], String(ports7.LOCAL_TTS_PORT), 'LOCAL_TTS_PORT must come from server/.env, not .env.local');
+});
+
 test('readSlotClaims reports a tree with no generated env file as claiming nothing', (t) => {
   const [treePath] = makeClaimFixture(t, [{}]);
   assert.deepEqual(readSlotClaims(treePath), { slots: [], present: 0 });
@@ -860,19 +888,23 @@ test('wt-new main() stamps the allocated slot into the worktree it creates (#305
 // never issue) was at risk. Both of these tests read stderr, which nothing
 // did before; that is why it shipped.
 
-test('wt-new main() does not warn about the primary checkout’s hand-written server/.env (#3052)', async (t) => {
+test("wt-new main() does not warn about the primary checkout’s hand-written server/.env (#3052)", async (t) => {
   const { repo } = makeRealWorktreeRepo(t, [1, 2]);
+  // Verify the fixture’s primary checkout is correctly set up with a marker-less
+  // server/.env. This line is load-bearing: if it is ever deleted, the two tests
+  // below must still redden (deletion alone leaves both 85/0 green).
+  assert.equal(readSlotClaims(repo).present, 1, "fixture must give the primary a marker-less server/.env");
   const { result: code, stderr } = await captureStderr(() =>
-    inRepo(repo, () => wtNewMain(['feat/server-fresh', '--no-install'])),
+    inRepo(repo, () => wtNewMain(["feat/server-fresh", "--no-install"])),
   );
   assert.equal(code, 0, stderr);
   assert.doesNotMatch(
     stderr,
     /WARNING/,
-    'the primary checkout is a known non-claimant; warning about it fires on every real run',
+    "the primary checkout is a known non-claimant; warning about it fires on every real run",
   );
   await inRepo(repo, () => {
-    assert.equal(collectSlotClaims().silent, 0, 'the primary checkout must not count as a lost claim');
+    assert.equal(collectSlotClaims().silent, 0, "the primary checkout must not count as a lost claim");
   });
 });
 

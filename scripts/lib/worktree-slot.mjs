@@ -105,7 +105,7 @@ export function readClaimFiles(treePath) {
     } catch {
       content = null;
     }
-    files.push({ relative, path: filePath, content });
+    files.push({ content });
   }
   return files;
 }
