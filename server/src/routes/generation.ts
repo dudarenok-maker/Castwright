@@ -1430,82 +1430,24 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       const speakers = cast.characters.filter((c) => speakingIds.has(c.id));
       const fallbackSet = computeQwenKokoroFallbackSet(speakers, engine);
       if (fallbackSet.length > 0) {
-        /* #1263, narrowed by fs-60 (#1005) — a STILL-UNSUPPORTED non-English
-           book (not even Coqui-eligible) never parks here: `forbidKokoroFallback`
-           is unconditional and there is no fallback engine, so "confirm" (render
-           anyway) could never actually succeed — parking would just offer a
-           button that deterministically re-fails. Fail the chapter immediately
-           instead, naming every undesigned character up front (mirroring the
-           park's own list) rather than letting synthesiseChapter's
-           MissingDesignedVoiceError surface only the first one it happens to hit
-           and forcing an iterative design-retry-design-retry loop.
-
-           A Coqui-eligible non-English book is different: synthesiseChapter DOES
-           have a real fallback for it (forbidKokoroFallback + coquiEligible ⇒
-           Task 6's applyQwenFallback substitutes Coqui per character), so it
-           must fall through to the same park-and-confirm path English/Kokoro
-           books use below — otherwise "Proceed anyway" in the voice-readiness
-           gate promises a Coqui fallback this gate never lets the render reach.
-           Before this fix EVERY non-English book hard-failed here regardless of
-           `coquiEligible`, silently defeating fs-60's whole acceptance criterion
-           on the one path (queue-driven "Generate this chapter") real users take. */
-        if (nonEnglishBook && !coquiEligible) {
-          const names = fallbackSet.map((c) => c.name ?? c.id).join(', ');
-          const plural = fallbackSet.length > 1;
-          /* Only remind about the narrator separately when it ISN'T already
-             undesigned itself (and thus already named in `names`) — the
-             narrator speaks in nearly every chapter, so it's the common
-             member of fallbackSet, and "design them (and the narrator)" reads
-             redundant when the narrator IS "them". */
-          const narratorAlreadyListed = fallbackSet.some((c) => c.id === 'narrator');
-          const narratorNote = narratorAlreadyListed ? '' : ' (and the narrator)';
-          const errorReason =
-            `No designed Qwen voice for ${names} — design ${plural ? 'them' : 'it'}${narratorNote} ` +
-            `in the cast view before generating. English Kokoro voices cannot read ${bookLanguage} text.`;
-          job.runInProgress.delete(chapter.id);
-          job.currentChapterId = null;
-          broadcast(job, {
-            type: 'chapter_failed',
-            chapterId: chapter.id,
-            errorReason,
-            errorCode: 'voice-not-designed',
-            remediation: FAILURE_REMEDIATIONS['voice-not-designed'].remediation,
-          });
-          /* Durably record the failure in state.json so the chapter survives a
-             reload / queue-clear as "Failed · reason" instead of re-hydrating
-             as the misleading "Queued" (no audio on disk → absent from
-             completedSlugs). Mirrors the outer catch's persist below. Wrapped
-             in try/catch so a persistence hiccup never masks the real failure
-             the user needs to see. */
-          try {
-            const statePath = stateJsonPath(bookDir);
-            const prev = await readJson<BookStateJson>(statePath);
-            if (prev) {
-              const next: BookStateJson = {
-                ...prev,
-                chapters: prev.chapters.map((c) =>
-                  c.id === chapter.id
-                    ? {
-                        ...c,
-                        generationState: 'failed',
-                        generationError: errorReason,
-                        generationErrorCode: 'voice-not-designed',
-                        generationRemediation: FAILURE_REMEDIATIONS['voice-not-designed'].remediation,
-                      }
-                    : c,
-                ),
-                updatedAt: new Date().toISOString(),
-              };
-              await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
-            }
-          } catch (persistErr) {
-            console.warn(
-              '[generation] failed to persist voice-not-designed state (continuing):',
-              (persistErr as Error).message,
-            );
-          }
-          return;
-        }
+        /* #1263, narrowed by fs-60 (#1005) — a non-English book always has a
+           real fallback here: synthesiseChapter's forbidKokoroFallback +
+           coquiEligible ⇒ Task 6's applyQwenFallback substitutes Coqui per
+           character, and every book language this app will let a user pick
+           is validated (registry `supported:true`), which the
+           engine-language-coverage guard (#3059,
+           server/src/tts/engine-language-coverage.guard.test.ts) keeps
+           coupled to Coqui coverage. So every non-English book falls through
+           to the same park-and-confirm path English/Kokoro books use below —
+           otherwise "Proceed anyway" in the voice-readiness gate would
+           promise a Coqui fallback this gate never let the render reach.
+           Before fs-60, EVERY non-English book hard-failed here regardless of
+           `coquiEligible`, silently defeating fs-60's whole acceptance
+           criterion on the one path (queue-driven "Generate this chapter")
+           real users take. A surviving `nonEnglishBook && !coquiEligible`
+           hard-fail arm was removed by #3059 as provably unreachable — see
+           that issue for the removal rationale and the guard that keeps it
+           true. */
         /* Flip in_progress → awaiting_confirm FIRST (serialised, so the srv-12
            res-close orphan-reset + srv-16 done-flip see a non-in_progress entry
            and no-op), then broadcast + return without rendering. */
