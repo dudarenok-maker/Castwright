@@ -13,6 +13,7 @@
 import { afterEach, describe, it, expect } from 'vitest';
 import {
   classifyTranscript,
+  isLanguageCalibrated,
   looksLikeCalibrationBleed,
   normalizeForWer,
   resolveAsrThresholds,
@@ -717,6 +718,58 @@ describe('resolveAsrThresholds per-language maxWer (#1084 scaffold)', () => {
     process.env.SEG_ASR_MAX_WER_FR = '0.35';
     expect(resolveAsrThresholds(undefined, 'fr').maxWer).toBeCloseTo(0.35);
     expect(resolveAsrThresholds(undefined, 'de').maxWer).toBe(0.45);
+  });
+
+  // Rework of #3068 (pr-review-gate finding 2, PR #3076): before this fix,
+  // perLanguageMaxWer() returned a calibrated language's own registry default
+  // unconditionally once state.source === 'default', so an operator's
+  // explicit SEG_ASR_MAX_WER never reached es/ru/fr/de once they had their
+  // own calibrated knob — only the four per-language env vars could move
+  // them. Red before the fix (all four assert 0.45, the calibrated default,
+  // ignoring the global override), green after.
+  it('an explicit global override still reaches a calibrated language, the same way it reaches an uncalibrated one', () => {
+    process.env.SEG_ASR_MAX_WER = '0.25';
+    try {
+      expect(resolveAsrThresholds(undefined, 'es').maxWer).toBeCloseTo(0.25);
+      expect(resolveAsrThresholds(undefined, 'ru').maxWer).toBeCloseTo(0.25);
+      expect(resolveAsrThresholds(undefined, 'fr').maxWer).toBeCloseTo(0.25);
+      expect(resolveAsrThresholds(undefined, 'de').maxWer).toBeCloseTo(0.25);
+      expect(resolveAsrThresholds(undefined, 'zh').maxWer).toBeCloseTo(0.25);
+    } finally {
+      delete process.env.SEG_ASR_MAX_WER;
+    }
+  });
+
+  // An explicit PER-LANGUAGE override still outranks the global override —
+  // the most specific setting wins, unchanged by the fix above.
+  it('a per-language override still outranks an explicit global override', () => {
+    process.env.SEG_ASR_MAX_WER = '0.25';
+    process.env.SEG_ASR_MAX_WER_ES = '0.55';
+    try {
+      expect(resolveAsrThresholds(undefined, 'es').maxWer).toBeCloseTo(0.55);
+      expect(resolveAsrThresholds(undefined, 'ru').maxWer).toBeCloseTo(0.25);
+    } finally {
+      delete process.env.SEG_ASR_MAX_WER;
+    }
+  });
+});
+
+describe('isLanguageCalibrated (dead-branch coverage, #3068 review finding 3)', () => {
+  // perLanguageMaxWer() infers "this language was calibrated" from
+  // knob.default !== globalKnob.default. Every language actually calibrated
+  // today (es/ru/fr/de, all 0.45 vs the global 0.4) only ever exercises the
+  // `true` case through the real registry — there is no knob whose default
+  // equals the global default to reach `false` through resolveAsrThresholds.
+  // These test the extracted comparison directly with synthetic values so
+  // the `false` branch — "not calibrated, cascade to the global" — has real
+  // coverage instead of being asserted by nothing (as `#zh` in the describe
+  // above actually exits earlier, at the `!knob` guard, per D2).
+  it('a language whose calibrated default differs from the global default is calibrated', () => {
+    expect(isLanguageCalibrated(0.45, 0.4)).toBe(true);
+  });
+
+  it('a language whose calibrated default equals the global default is NOT calibrated', () => {
+    expect(isLanguageCalibrated(0.4, 0.4)).toBe(false);
   });
 });
 

@@ -301,8 +301,12 @@ export const KNOBS: ConfigKnob[] = [
   // Whisper trailing-filler-token insertion artifact (not the two risks this
   // row set out to check — gendered-number mismatch and Russian oblique-case
   // declension — which this run's dialogue didn't happen to exercise), so each
-  // default was raised only modestly (0.45, each language's own p75-p80 band)
-  // and deliberately kept BELOW 0.5: segment-asr-qa.test.ts pins real
+  // default was raised to a uniform 0.45, bounded above by the 0.5
+  // substitution floor below — not each language's own p75-p80 band: es
+  // (0.20/0.29) and de (0.27/0.33) both sit well under it, so 0.45 is
+  // justified by fr (0.40/0.40) and ru (0.33/0.50) alone, and es/de's own
+  // distributions did not call for any raise. Deliberately kept BELOW 0.5:
+  // segment-asr-qa.test.ts pins real
   // substitution-heavy content drift (half a short sentence's words wrong) at
   // WER 0.5-0.6, and raising past that would blunt genuine-drift detection to
   // chase this run's noise. All four stay comfortably below the independent
