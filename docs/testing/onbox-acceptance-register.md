@@ -327,12 +327,43 @@ comparison, see the edge list above). The merge step that closes this, run
      (`origin/main`'s copy) to tell a genuine defect apart from an ordinary
      in-progress publish:
      - **Your local copy matches the baseline, but the published page doesn't**
-       — this edit is already merged to `origin/main`, yet the live page never
-       caught up. This is the classic A41 signature: PR #2578 review rounds
-       13-18 caught it only by manually byte-diffing the two files, because
-       nothing mechanical compared row content before this check existed. A
-       reported failure of this shape is a genuine defect — do not publish
-       until it's investigated and reconciled.
+       — **two opposite situations produce this one signature, and the check
+       cannot tell them apart.** Establish which one you are in before you
+       touch anything; do not publish under either until you have.
+       - **The live page is BEHIND** — an edit already merged to `origin/main`
+         never reached it. This is the classic A41 signature: PR #2578 review
+         rounds 13-18 caught it only by manually byte-diffing the two files,
+         because nothing mechanical compared row content before this check
+         existed. A genuine defect — investigate and reconcile before
+         publishing.
+       - **The live page is AHEAD** — another lane published from its own
+         branch, which step 4 says to do *before* merging, so the live page
+         legitimately carries rows `origin/main` has not seen yet. Nothing is
+         wrong and there is nothing to reconcile: that lane is simply in front
+         of you. **Republishing your older copy here is the destructive move**
+         — it deletes that lane's rows from the artifact, which is the #1931
+         incident one level up, and it is precisely what this signature will
+         talk you into if you read it as the BEHIND case. Leave the page
+         alone, let that PR merge, pull `main`, and only then start again from
+         step 1.
+
+       **The publish token separates them in one line, and it is the first
+       thing to check** — not the row bodies. Compare `data-published-as` on
+       the saved live page against the tracked file's:
+
+       - **published HIGHER than tracked** → someone is AHEAD of you. Name them
+         with `git log --all -S'<the live page's data-publish-id>' --
+         docs/testing/onbox-acceptance-register-live-view.html`, which
+         resolves to the exact commit that produced the live page, and
+         `gh pr list --head <its branch>` to that lane's PR.
+       - **published EQUAL or LOWER** → the BEHIND case above.
+
+       Observed 2026-09-07: live at 11 against a tracked 9 located PR #3073 in
+       one command, before any row-by-row comparison. The row-content report
+       named A1/A16/A21 — true, but it reads identically in both directions,
+       which is the whole reason to check the counter first. Note this works
+       even though nothing yet *enforces* the token (#2599): reading it by eye
+       costs nothing and does not wait on that check landing.
      - **The published page matches the baseline, but your local copy doesn't**
        — you have a local edit not yet merged to `origin/main`, and the
        published page is simply unchanged (still at baseline) because nothing
