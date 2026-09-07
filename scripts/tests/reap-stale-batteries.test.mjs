@@ -34,14 +34,34 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify, runCli, runCensus } from '../reap-stale-batteries.mjs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  classify,
+  runCli,
+  runCensus,
+  rowsToProcesses,
+  computeOsDescendants,
+  readPriorSamples,
+} from '../reap-stale-batteries.mjs';
 
 const MIN = 60_000;
 const NOW = 2_000_000_000_000;
 const THRESHOLDS = { deadRateCpuSecPerMin: 2, minSampleAgeMs: 10 * MIN };
 
+// A "battery" is only ever a reap candidate once its command line carries a
+// real test-runner marker (BATTERY_COMMAND_RE, Finding 2 of PR #3063's
+// review) — every node.exe member here stands in for a real `vitest` worker,
+// so it needs that marker for the existing B1-B11 scenarios to still
+// represent genuine batteries rather than accidentally falling through to
+// 'alive' regardless of orphan/stall status.
 function proc(pid, ppid, name, cpuSeconds, startedAt) {
-  return { pid, ppid, name, commandLine: `${name} --battery=${pid}`, cpuSeconds, startedAt };
+  const isBatteryProcess = /^node(?:\.exe)?$/i.test(name);
+  const commandLine = isBatteryProcess
+    ? `${name} node_modules/vitest/dist/vitest.mjs run --battery=${pid}`
+    : `${name} --battery=${pid}`;
+  return { pid, ppid, name, commandLine, cpuSeconds, startedAt };
 }
 
 function verdictFor(verdicts, rootPid) {
@@ -117,6 +137,38 @@ const processes = [
   proc(11000, 999, 'WindowsTerminal.exe', 0, NOW - 2 * MIN),
   proc(11001, 11000, 'cmd.exe', 50, NOW - 60 * MIN),
   proc(11002, 11001, 'node.exe', 900, NOW - 59 * MIN),
+
+  // B12 — steam.exe: orphaned parent AND near-zero rate BY THE NUMBERS, but
+  // no battery marker anywhere in its command line. Finding 2's positive
+  // case: must classify alive/[] purely because it was never battery-shaped,
+  // even though both the orphan and stall tests would otherwise fire.
+  proc(12001, 12000, 'steam.exe', 5, NOW - 90 * MIN),
+
+  // B13 — "ollama app.exe" (the literal Win32_Process Name the review
+  // captured live): same shape as B12, a second independent proof.
+  proc(13001, 13000, 'ollama app.exe', 5, NOW - 90 * MIN),
+
+  // B14 — Finding 3's structural bug: an orphaned, battery-shaped root R
+  // (14001, cmd.exe) whose real OS descendant chain runs THROUGH a
+  // non-supervisor-shaped intermediate (14002, conhost.exe) down to a live
+  // python.exe (14003). classify()'s upward climb from 14003 stops at
+  // conhost.exe (not supervisor-shaped), so 14003 resolves to ITS OWN
+  // subtree (protected:python, alive) — a DIFFERENT subtree than R's. But
+  // `taskkill /PID 14001 /T /F` reaches straight through conhost.exe into
+  // 14003 regardless: classify()'s subtree grouping is not what /T kills.
+  { ...proc(14001, 14000, 'cmd.exe', 5, NOW - 40 * MIN), commandLine: 'cmd.exe /c npx vitest run --battery=14001' },
+  proc(14002, 14001, 'conhost.exe', 1, NOW - 40 * MIN),
+  proc(14003, 14002, 'python.exe', 2, NOW - 40 * MIN),
+
+  // B15 — the generic form of the same structural bug, WITHOUT relying on a
+  // protected name: R2 (15001, cmd.exe, battery-shaped, orphaned) reaches
+  // 15003 (WindowsTerminal.exe) through the same non-supervisor intermediate
+  // (15002, conhost.exe). 15003 is not python/git-named — it is caught only
+  // by classify()'s subtree grouping saying it belongs to a DIFFERENT,
+  // 'alive' subtree (it carries no battery marker of its own either).
+  { ...proc(15001, 15000, 'cmd.exe', 5, NOW - 40 * MIN), commandLine: 'cmd.exe /c npx vitest run --battery=15001' },
+  proc(15002, 15001, 'conhost.exe', 1, NOW - 40 * MIN),
+  proc(15003, 15002, 'WindowsTerminal.exe', 1, NOW - 40 * MIN),
 ];
 
 const priorSamples = {
@@ -127,6 +179,10 @@ const priorSamples = {
   4001: { cpuSeconds: 500, sampledAt: NOW - 15 * MIN, startedAt: NOW - 50 * MIN },
   9001: { cpuSeconds: 500, sampledAt: NOW - 15 * MIN, startedAt: NOW - 30 * MIN },
   10001: { cpuSeconds: 4.9, sampledAt: NOW - 3 * MIN, startedAt: NOW - 8 * MIN },
+  // B12/B13 — near-zero rate BY THE NUMBERS (delta 0.1 over 15 trusted
+  // minutes), proving these would stall-reap if they were battery-shaped.
+  12001: { cpuSeconds: 4.9, sampledAt: NOW - 15 * MIN, startedAt: NOW - 90 * MIN },
+  13001: { cpuSeconds: 4.9, sampledAt: NOW - 15 * MIN, startedAt: NOW - 90 * MIN },
 };
 
 const protectedPids = [7001];
@@ -227,6 +283,60 @@ test('B11: a reused PID cannot be the real parent — still classified as orphan
 });
 
 // ---------------------------------------------------------------------------
+// B12-B13 — Finding 2: "battery" gates candidacy, independent of the orphan
+// and rate tests
+// ---------------------------------------------------------------------------
+
+test('B12: an orphaned, near-zero-rate steam.exe is never reaped — it never carried a battery marker', () => {
+  const v = verdictFor(classifyCensus(), 12001);
+  assert.equal(v.verdict, 'alive');
+  assert.deepEqual(v.reasons, []);
+});
+
+test('B13: an orphaned, near-zero-rate "ollama app.exe" is never reaped either — a second independent proof', () => {
+  const v = verdictFor(classifyCensus(), 13001);
+  assert.equal(v.verdict, 'alive');
+  assert.deepEqual(v.reasons, []);
+});
+
+// ---------------------------------------------------------------------------
+// computeOsDescendants() — Finding 3: taskkill /T's real reach vs.
+// classify()'s supervisor-bounded subtree
+// ---------------------------------------------------------------------------
+
+test('computeOsDescendants: follows forward ppid links unboundedly, with no name/supervisor filtering', () => {
+  const descendants = computeOsDescendants(14001, processes);
+  assert.ok(descendants.has(14001), 'includes the root itself');
+  assert.ok(descendants.has(14002), 'reaches the non-supervisor-shaped conhost.exe');
+  assert.ok(descendants.has(14003), 'reaches straight through into python.exe');
+});
+
+test('computeOsDescendants: does not cross into an unrelated subtree it was never asked about', () => {
+  const descendants = computeOsDescendants(14001, processes);
+  assert.ok(!descendants.has(15001), 'B15\'s root is not a descendant of B14\'s root');
+});
+
+test("B14: classify() alone marks R 'reap', but R's real /T reach contains a live python.exe classify() protects in a DIFFERENT subtree", () => {
+  const verdicts = classifyCensus();
+  const r = verdictFor(verdicts, 14001);
+  assert.equal(r.verdict, 'reap', "classify() alone has no way to see the collision — it's still 'reap' here");
+  const x = verdictFor(verdicts, 14003);
+  assert.equal(x.verdict, 'alive');
+  assert.deepEqual(x.reasons, ['protected:python']);
+  assert.notEqual(r.rootPid, x.rootPid, 'classify() buckets R and X into DIFFERENT subtrees');
+});
+
+test('B15: the generic form — R2 reap-eligible alone, but its real descendant closure reaches a separately-alive subtree with no protected name at all', () => {
+  const verdicts = classifyCensus();
+  const r2 = verdictFor(verdicts, 15001);
+  assert.equal(r2.verdict, 'reap');
+  const y = verdictFor(verdicts, 15003);
+  assert.equal(y.verdict, 'alive');
+  assert.deepEqual(y.reasons, [], 'alive purely because it never carried a battery marker, not because of a name');
+  assert.notEqual(r2.rootPid, y.rootPid);
+});
+
+// ---------------------------------------------------------------------------
 // Additional targeted assertions (acceptance criteria 1-2)
 // ---------------------------------------------------------------------------
 
@@ -293,7 +403,62 @@ test('runCensus: pre-push kill scope (killReasons=[orphaned-unreachable]) kills 
   assert.ok(killed.includes(4001));
   assert.ok(killed.includes(11001));
   assert.ok(!killed.includes(2001), 'stalled-but-live-parented battery must survive the pre-push scope');
+  // B14/B15's roots ARE orphaned-unreachable reap candidates by classify()
+  // alone, but their real /T reach hits a protected/alive process filed
+  // under a different subtree — the runCensus-level safety check must
+  // refuse them, not kill them.
+  assert.ok(!killed.includes(14001), "B14's root must be refused, not killed");
+  assert.ok(!killed.includes(15001), "B15's root must be refused, not killed");
   assert.deepEqual(killedPids.slice().sort((a, b) => a - b), killed.slice().sort((a, b) => a - b));
+});
+
+test('runCensus: findKillRefusalReason refuses B14\'s root — real /T reach hits a live python.exe classify() protects elsewhere', () => {
+  const { killed, refused } = runCensus({
+    collectSnapshot: () => processes,
+    readPrior: () => priorSamples,
+    appendLog: () => {},
+    kill: true,
+    killReasons: ['orphaned-unreachable'],
+    thresholds: THRESHOLDS,
+    now: NOW,
+    killFn: () => true,
+  });
+  assert.ok(!killed.includes(14001));
+  const entry = refused.find((r) => r.rootPid === 14001);
+  assert.ok(entry, 'expected 14001 in refused');
+  assert.match(entry.reason, /python/i);
+});
+
+test('runCensus: findKillRefusalReason refuses B15\'s root — real /T reach hits a separately-alive subtree, no protected name involved', () => {
+  const { killed, refused } = runCensus({
+    collectSnapshot: () => processes,
+    readPrior: () => priorSamples,
+    appendLog: () => {},
+    kill: true,
+    killReasons: ['orphaned-unreachable'],
+    thresholds: THRESHOLDS,
+    now: NOW,
+    killFn: () => true,
+  });
+  assert.ok(!killed.includes(15001));
+  const entry = refused.find((r) => r.rootPid === 15001);
+  assert.ok(entry, 'expected 15001 in refused');
+  assert.match(entry.reason, /15003/);
+});
+
+test('runCensus: a genuinely safe orphan (no collateral in its real /T reach) is still killed, not refused', () => {
+  const { killed, refused } = runCensus({
+    collectSnapshot: () => processes,
+    readPrior: () => priorSamples,
+    appendLog: () => {},
+    kill: true,
+    killReasons: ['orphaned-unreachable'],
+    thresholds: THRESHOLDS,
+    now: NOW,
+    killFn: () => true,
+  });
+  assert.ok(killed.includes(3001));
+  assert.ok(!refused.some((r) => r.rootPid === 3001));
 });
 
 test('runCensus: report-only mode (kill=false) never calls killFn', () => {
@@ -357,4 +522,143 @@ test('runCli: report-only mode (no flags) never sets kill=true', () => {
     },
   });
   assert.equal(seenKill, false);
+});
+
+test('runCli: report mode surfaces a refused root distinctly from alive/reap [KILLED]', () => {
+  const lines = [];
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk) => {
+    lines.push(String(chunk));
+    return true;
+  };
+  try {
+    runCli([], {
+      runCensusFn: () => ({
+        verdicts: [
+          {
+            rootPid: 14001,
+            name: 'cmd.exe',
+            commandLine: 'cmd.exe /c npx vitest run',
+            cpuRatePerMin: null,
+            verdict: 'reap',
+            reasons: ['orphaned-unreachable'],
+          },
+        ],
+        killed: [],
+        refused: [{ rootPid: 14001, reason: 'real OS descendant pid=14003 is python.exe' }],
+      }),
+    });
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  const output = lines.join('');
+  assert.match(output, /\[REFUSED: real OS descendant pid=14003 is python\.exe\]/);
+  assert.doesNotMatch(output, /\[KILLED\]/);
+});
+
+// ---------------------------------------------------------------------------
+// rowsToProcesses() — the collection layer's unit-testable seam (Finding 1's
+// review: zero coverage previously existed for this layer, which is exactly
+// where the date-parsing bug lived undetected).
+// ---------------------------------------------------------------------------
+
+test('rowsToProcesses: maps a realistic row (numeric CreationEpochMs) into the process shape classify() expects', () => {
+  const rows = [
+    {
+      ProcessId: 12345,
+      ParentProcessId: 999,
+      Name: 'node.exe',
+      CommandLine: 'node vitest run',
+      CreationEpochMs: 1788727332170,
+      CpuSeconds: 42.5,
+    },
+  ];
+  const out = rowsToProcesses(rows);
+  assert.deepEqual(out, [
+    { pid: 12345, ppid: 999, name: 'node.exe', commandLine: 'node vitest run', cpuSeconds: 42.5, startedAt: 1788727332170 },
+  ]);
+});
+
+test('rowsToProcesses: filters out a row with a malformed/missing CreationEpochMs', () => {
+  const rows = [
+    { ProcessId: 1, ParentProcessId: 0, Name: 'a.exe', CommandLine: null, CreationEpochMs: null, CpuSeconds: 0 },
+    { ProcessId: 2, ParentProcessId: 0, Name: 'b.exe', CommandLine: null, CreationEpochMs: '/Date(1788727332170)/', CpuSeconds: 0 },
+    { ProcessId: 3, ParentProcessId: 0, Name: 'c.exe', CpuSeconds: 0 }, // missing entirely
+    { ProcessId: 4, ParentProcessId: 0, Name: 'ok.exe', CreationEpochMs: 1788727332170, CpuSeconds: 1 },
+  ];
+  const out = rowsToProcesses(rows);
+  assert.deepEqual(out.map((p) => p.pid), [4]);
+});
+
+test('rowsToProcesses: filters out a row missing ProcessId/ParentProcessId', () => {
+  const rows = [
+    { ParentProcessId: 0, Name: 'a.exe', CreationEpochMs: 1, CpuSeconds: 0 },
+    { ProcessId: 1, Name: 'b.exe', CreationEpochMs: 1, CpuSeconds: 0 },
+  ];
+  assert.deepEqual(rowsToProcesses(rows), []);
+});
+
+// ---------------------------------------------------------------------------
+// readPriorSamples() — stale-sample preference under rapid pushes, and
+// tail-bounded reading
+// ---------------------------------------------------------------------------
+
+function withTempLog(fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'reap-stale-batteries-test-'));
+  const logPath = join(dir, 'census.jsonl');
+  try {
+    return fn(logPath);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('readPriorSamples: prefers the most recent sample that is ALREADY old enough, not simply the newest', () => {
+  withTempLog((logPath) => {
+    const rootPid = 99001;
+    const t1 = NOW - 6 * MIN;
+    const t2 = NOW - 3 * MIN;
+    const t3 = NOW; // "now" is close to this one
+    const lines = [t1, t2, t3]
+      .map((ts, i) => JSON.stringify({ ts, roots: [{ rootPid, cpuSecondsNow: 10 + i, startedAt: 500 }] }))
+      .join('\n');
+    writeFileSync(logPath, `${lines}\n`, 'utf8');
+
+    // minSampleAgeMs=5min: elapsed(t3)=0 and elapsed(t2)=3min both too
+    // recent; elapsed(t1)=6min qualifies. Must pick t1, not t3.
+    const samples = readPriorSamples(logPath, { now: t3 + 100, minSampleAgeMs: 5 * MIN });
+    assert.equal(samples[rootPid].sampledAt, t1, 'expected the OLDEST-but-still-valid sample, not the newest');
+    assert.equal(samples[rootPid].cpuSeconds, 10);
+  });
+});
+
+test('readPriorSamples: falls back to the newest sample when none is old enough yet', () => {
+  withTempLog((logPath) => {
+    const rootPid = 99002;
+    const ts = NOW - MIN; // 1 minute old
+    writeFileSync(logPath, `${JSON.stringify({ ts, roots: [{ rootPid, cpuSecondsNow: 5, startedAt: 500 }] })}\n`, 'utf8');
+    const samples = readPriorSamples(logPath, { now: NOW, minSampleAgeMs: 10 * MIN });
+    assert.equal(samples[rootPid].sampledAt, ts, 'still returns the only sample available, letting classify() reject it');
+  });
+});
+
+test('readPriorSamples: missing log file returns {}', () => {
+  withTempLog((logPath) => {
+    assert.deepEqual(readPriorSamples(logPath), {});
+  });
+});
+
+test('readPriorSamples: a tiny tail window still returns the most recent entries without throwing', () => {
+  withTempLog((logPath) => {
+    const entries = [];
+    for (let i = 0; i < 20; i += 1) {
+      entries.push(JSON.stringify({ ts: NOW - (20 - i) * MIN, roots: [{ rootPid: 90000 + i, cpuSecondsNow: i, startedAt: 1 }] }));
+    }
+    writeFileSync(logPath, `${entries.join('\n')}\n`, 'utf8');
+    // A window far smaller than the whole file — only the tail few entries
+    // can possibly be read back.
+    const samples = readPriorSamples(logPath, { now: NOW, minSampleAgeMs: 0, tailBytes: 200 });
+    assert.ok(Object.keys(samples).length > 0, 'expected at least the trailing entries to parse');
+    assert.ok(!('90000' in samples), 'the earliest entry must be outside a 200-byte tail window');
+  });
 });
