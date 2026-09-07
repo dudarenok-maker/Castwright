@@ -942,6 +942,42 @@ already-corrupted book. A hand-edit of the real `cast.json` to force the
 guarded precondition was considered and correctly declined by a permission
 gate; it was not worked around.
 
+### 10.2b Repair pass for books already damaged (#2903 chain) — evidence
+
+The 2026-08-27 run above establishes what the code-level fix can and cannot
+do: `stripEstablishedAsciiRewrites` stops a *new* wrong-direction retirement,
+and has no path to repair a book whose established id was already non-ASCII
+before PR #2640 shipped. Parent issue
+[#2903](https://github.com/dudarenok-maker/Castwright/issues/2903) is the
+repair-and-retest chain for that pre-existing damage. Its on-box evidence is
+recorded here, and this is the only place the register (via row A34, which
+cites this run sheet) points at it:
+
+- [`onbox-a34-results/step-1-scope.md`](onbox-a34-results/step-1-scope.md) —
+  step 1, the real-workspace scope scan: 23 books scanned, **1** hit
+  (*Заказ Коалфолла*'s `oduvan` -> `одуван`), plus the 4 books that matched
+  the id shape for a legitimate, different reason and must not be touched.
+  Also the `cast.json.bak.*` cross-check that establishes `oduvan` and
+  `одуван` are the same character by name.
+- [`onbox-a34-results/step-2-implement.md`](onbox-a34-results/step-2-implement.md)
+  — step 2, the repair script itself
+  (`scripts/repair-a34-wrong-direction-ids.mjs`): detection gate, the
+  two-file repair, and why it reuses the server's own `retireCharacterId`
+  and the sibling script's `collectBooks`/`probePortRangeRefused` rather
+  than re-implementing any of them.
+- [`onbox-a34-results/step-3-dry-run.md`](onbox-a34-results/step-3-dry-run.md)
+  — step 3, the real dry run against `C:\AudiobookWorkspace`, with the
+  pre-repair copies of the one affected book's `cast.json`,
+  `cast-id-history.json` and `state.json` committed under
+  [`onbox-a34-results/backups/`](onbox-a34-results/backups/).
+
+**`--apply` has NOT been run on the real workspace.** Everything above is a
+dry run plus committed evidence; row A34 stays open, and the apply step is
+still owed on the box. Note the committed backups are a manual git commit,
+not a substitute for the script's own on-disk backups — since the pass-1
+review the script copies both files it touches to `.bak.a34-<date>` before
+writing either.
+
 ### 10.3 Code-level proof (PR #2640, shipped)
 
 - A real-shape unit test (`server/src/analyzer/roster-dedup.test.ts`, "#2584/#2570 real-shape regression") reproduces the reviewer's exact composed rewrite-table chain — `{"oduvan":"одуван","owdovan":"одуван"}` against a prior cast holding the established `oduvan` row — byte-identical to what was recorded on the real box's `cast-merges.json`, and drives it through both consuming functions (`remapFreshToPriorIds`, `applyRewriteToPriorCast`) with and without the fix, confirming it fails without `stripEstablishedAsciiRewrites` and passes with it.

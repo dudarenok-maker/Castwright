@@ -108,3 +108,51 @@ the paired test file, and via the actual liveness-probe/dry-run tests
 against `main()` itself over an fs fixture. `cd server && npm run build`
 has not been run in this worktree. Steps 3 (dry-run against the real
 workspace) and 4 (`--apply`) are separate, later steps.
+
+## Pass-1 review update (2026-09-07) — five corrections, one nit
+
+Everything above records the script AS FIRST WRITTEN. The PR's mandatory
+review pass found five correctness bugs in it; the notes below say what is
+now different, so this file does not read as a description of the shipped
+script when it is a description of its first draft.
+
+- **The `--apply` write path was untested.** The suite claimed to cover it,
+  but the test copied `applyBookPlan`'s body inline and asserted on the copy.
+  Four mutations of the REAL function left the suite fully green: swapping
+  `retireCharacterId`'s last two arguments (which drives its FORWARD branch
+  and re-inflicts the exact A34 defect this script exists to repair),
+  stubbing the whole function to `return;`, deleting the partial-repair
+  refusal, and turning the `ascii-id-already-live` branch into a repair.
+  `applyBookPlan` and `backupBeforeApply` are now exported and driven
+  directly; each of those four mutations reddens a named test.
+- **`collectBakNameEntries`'s `bakAvailable` flag was discarded.** One
+  unparseable `cast.json.bak.*` is swallowed to `null`, contributes zero
+  entries, and `buildNameIndex`'s `normSet.size > 1` then reads the
+  survivors as *unambiguous* rather than as *unknown* — so lost evidence
+  produced a **confirmed** repair. `planBookRepairs` now takes
+  `bakAvailable` and withholds every matched pair in the book when it is
+  `false` (`bak-evidence-unreadable`), the same gate
+  `repair-cast-id-drift.mjs` already applies. The "no bak evidence /
+  ambiguous / mismatch" list above is therefore now five reasons, not three.
+- **The same-name confirmation had no uniqueness rule.** A bare 1-1 name
+  comparison auto-confirmed when two live rows share a display name (Солдат,
+  Стражник, the `unknown-*` buckets), which would permanently bind the
+  retired id — and every attribution behind it — to possibly the wrong row,
+  at a different `voiceUuid`. `resolveTierAName`'s tie rule
+  (`repair-cast-id-drift.mjs`) is now mirrored: a tie means stop
+  (`live-name-not-unique`).
+- **The two-file write had no backup and ran in the wrong order.** The order
+  described above (cast.json first, history second) is reversed: history
+  first. If `retireCharacterId` throws — `CastIdHistoryUnreadableError`, its
+  own `withKeyLock` timeout, an AV-scanner EPERM — cast-first leaves the
+  live id ASCII while the history still points at the dead non-ASCII one,
+  which `buildCastResolver` drops, orphaning *every* attribution in the
+  book. History-first leaves every attribution resolvable. Both files are
+  also copied to `<file>.bak.a34-<date>` before either write, and a part-way
+  failure names those copies in its error.
+- **`KNOWN_STANDING_PORTS` blinded the shared liveness probe to 8090** —
+  this repo's own worktree slot-1 `PORT`, inside the default 8080
+  auto-rebind walk. Now a per-run `ALLOW_STANDING_PORTS` opt-in, empty by
+  default, with tests (there were none).
+
+The `25/25` figure above is that draft's. The suite is **43/43** as shipped.

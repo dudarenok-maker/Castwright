@@ -28,7 +28,13 @@
  *     server's own `normaliseForMatch` (replicated verbatim below — see its
  *     own comment for why replicating rather than importing from
  *     `server/dist` is the right call for JUST this one small pure
- *     function).
+ *     function), AND that name identifies a UNIQUE live row. The uniqueness
+ *     half is NOT inherited from `stripEstablishedAsciiRewrites` — it is
+ *     `resolveTierAName`'s tie rule (`repair-cast-id-drift.mjs:378-384`),
+ *     mirrored here because the blast radius differs. There, a wrong answer
+ *     skips one strip in a fresh analysis run a later run revisits; here it
+ *     is a permanent write to `cast.json` and `cast-id-history.json`
+ *     binding the retired id to possibly the WRONG live character.
  *
  * The THIRD test needs a name for `from` — but `from` is, by construction,
  * no longer a live row in `cast.json` (it was fully retired). The only
@@ -47,12 +53,13 @@
  * merge cannot be told apart without.
  *
  * Repair (per confirmed pair only — a book with no confirmed pair is never
- * touched, dry run or not):
+ * touched, dry run or not). Both files are COPIED to a timestamped
+ * `.bak.a34-<date>` sidecar before either is written (mirroring
+ * `repair-cast-id-drift.mjs`'s own `backupCastIdHistory`), so the operator
+ * has an on-disk undo for a run that dies part-way — the two writes are
+ * separate and there is no transaction across them:
  *
- *   1. `cast.json`: rename the live character's `id` from `to` (non-ASCII)
- *      back to `from` (ASCII) — every other field on the row is carried
- *      over unchanged.
- *   2. `cast-id-history.json`: call the server's own `retireCharacterId`
+ *   1. `cast-id-history.json`: call the server's own `retireCharacterId`
  *      (`server/src/store/cast-id-history.ts`), retiring `to` in favour of
  *      `from` — i.e. `retireCharacterId(bookDir, to, from)`. That function's
  *      own "direct reversal" branch is EXACTLY this case (its doc comment
@@ -62,6 +69,32 @@
  *      correctly transitively — this script does not hand-roll a second,
  *      divergent history writer for the one case retireCharacterId already
  *      gets right.
+ *   2. `cast.json`: rename the live character's `id` from `to` (non-ASCII)
+ *      back to `from` (ASCII) — every other field on the row is carried
+ *      over unchanged.
+ *
+ * That ORDER is a correctness argument, not a preference, and it is the
+ * reverse of the order the issue lists the two actions in. `retireCharacterId`
+ * can throw for reasons unrelated to this script (`CastIdHistoryUnreadableError`
+ * on a degraded read, `LockAcquisitionTimeoutError` from its own `withKeyLock`,
+ * an EPERM from an AV scanner), and there is no transaction across the two
+ * files, so the intermediate state has to be survivable:
+ *
+ *   - history first (what this script does): live id is still `to`, history
+ *     now says `to -> from`. `buildCastResolver` hits `to` in `byId`
+ *     exactly, so every attribution still resolves; only the
+ *     already-retired `from` dangles.
+ *   - cast.json first: live id is `from`, history still says `from -> to`.
+ *     `buildCastResolver` only counts a history entry whose TARGET is live
+ *     (`cast-resolve.ts:113-118`) and `to` no longer is, so the entry is
+ *     dropped; `normaliseIdKey` is lowercase + hyphen folding and does not
+ *     transliterate, so the two ids do not collide there either. Net:
+ *     `resolve(to)` returns `undefined` and EVERY attribution and frozen
+ *     render pointing at `to` — which is all of them, `to` being the live
+ *     id today — is orphaned.
+ *
+ * `retireCharacterId` never reads `cast.json`, so nothing about the repair
+ * depends on the old order.
  *
  * Dry-run by default; `--apply` writes both files. `--apply` refuses
  * outright if a server is live on the resolved `PORT`/`LAN_HTTPS_PORT` (incl.
@@ -83,17 +116,28 @@
  *                     (default 8080).
  *   LAN_HTTPS_PORT   LAN HTTPS port the --apply liveness probe ALSO checks
  *                     (default 8443).
+ *   ALLOW_STANDING_PORTS  comma-separated ports the shared liveness probe
+ *                     should SKIP (standing non-Castwright services only).
+ *                     Empty by default — see `parseStandingPorts` in
+ *                     repair-cast-id-drift.mjs for why this is a per-run
+ *                     opt-in rather than a hardcoded set, and why 8090 in
+ *                     particular must not be skipped blindly.
  *
  * Usage:
  *   node scripts/repair-a34-wrong-direction-ids.mjs            # dry run
  *   node scripts/repair-a34-wrong-direction-ids.mjs --apply    # write
  *
- * Tests: scripts/tests/repair-a34-wrong-direction-ids.test.mjs — the
- * planning helpers (`isAsciiKebabId`, `normaliseForMatch`,
- * `planBookRepairs`, `planWorkspaceRepairs`) are pure and unit-tested with no
- * `server/dist` build needed; only `main()`'s `--apply` write path needs the
- * compiled server (`retireCharacterId`, `writeJsonAtomic`) — same split
- * `repair-cast-id-drift.mjs`'s own test file already documents.
+ * Tests: scripts/tests/repair-a34-wrong-direction-ids.test.mjs. The planning
+ * helpers (`isAsciiKebabId`, `normaliseForMatch`, `planBookRepairs`,
+ * `planWorkspaceRepairs`) are pure and unit-tested with no `server/dist`
+ * build needed. `applyBookPlan` is exported and driven DIRECTLY by the write
+ * -path tests against an fs fixture with a fake `retireCharacterId` /
+ * `writeJsonAtomic`, so no build is needed there either — only `main()`'s
+ * own dynamic `import()` of `server/dist` is left uncovered, the same split
+ * `repair-cast-id-drift.mjs`'s test file already documents. Do NOT make
+ * `applyBookPlan` private again and assert on a re-implementation of it in
+ * the test: that is what the first revision did, and it left the argument
+ * swap, a `return;` stub, and the partial-repair refusal all invisible.
  */
 
 import fs from 'node:fs';
@@ -173,22 +217,63 @@ export function normaliseForMatch(s) {
  *  common case; see step 1's scope doc). `input.bakNameIndex` — the `Map`
  *  `buildNameIndex(collectBakNameEntries(audiobookDir), normaliseForMatch)`
  *  produces (id -> `{name, ambiguous, distinctNames}`).
+ *  `input.bakAvailable` — `collectBakNameEntries`'s SECOND return field: is
+ *  this book's bak evidence fully readable? `false` means the directory
+ *  could not be enumerated, or at least one `cast.json.bak.*` that exists
+ *  failed to parse / shape-check. `buildNameIndex` cannot represent that
+ *  state: an unparseable snapshot is swallowed to `null` by `readJsonSync`,
+ *  contributes zero entries, and `buildNameIndex`'s own `normSet.size > 1`
+ *  check then reads the SURVIVING entries as unambiguous rather than as
+ *  unknown — the exact #2135 fail-open shape. A book's bak evidence is
+ *  judged as a WHOLE (an unread file could have named ANY id ambiguously),
+ *  so `false` withholds every matched pair in the book, the same
+ *  over-cautious-but-safe shape `repair-cast-id-drift.mjs` already takes at
+ *  its own `bakAvailable` gate (`:2605`, `:2641`). Absent/`undefined` is NOT
+ *  read as `false`: a caller that simply has no bak index already gets
+ *  `no-name-evidence` per id; only an explicit `false` means evidence was
+ *  LOST.
  *
  *  Returns `{ repairs, reportOnly }`:
  *    - `repairs`   — confirmed wrong-direction pairs, safe to apply:
  *                    `{ asciiId, nonAsciiId, name }`.
  *    - `reportOnly` — a pair that matched the ASCII/non-ASCII id-shape but
- *                    could not be confirmed same-character (no bak
- *                    evidence, ambiguous bak evidence, or a name mismatch —
- *                    the last being the expected, common case of a
+ *                    could not be confirmed same-character:
+ *                    `{ asciiId, nonAsciiId, reason }`, never auto-repaired.
+ *                    Five reasons: `ascii-id-already-live`,
+ *                    `bak-evidence-unreadable` (the book's bak evidence was
+ *                    LOST, so its silence proves nothing),
+ *                    `no-name-evidence` (no/ambiguous bak entry for this
+ *                    id), `name-mismatch` (the expected, common case of a
  *                    genuine, deliberate id-shape rewrite that is NOT this
- *                    defect): `{ asciiId, nonAsciiId, reason }`. Never
- *                    auto-repaired. */
+ *                    defect), and `live-name-not-unique` (the names agree
+ *                    but two live rows share the name, so the evidence
+ *                    cannot say WHICH one). */
 export function planBookRepairs(input, deps = { normaliseForMatch }) {
-  const { liveCast, supersededBy, bakNameIndex } = input;
+  const { liveCast, supersededBy, bakNameIndex, bakAvailable } = input;
   const liveById = new Map(liveCast.map((c) => [c.id, c]));
   const repairs = [];
   const reportOnly = [];
+
+  /* Live-side uniqueness census for the same-name confirmation below. Counts
+     ARRAY ENTRIES, exactly as `resolveTierAName`
+     (`repair-cast-id-drift.mjs:378-384`) does — that function returns
+     `undefined` on a tie and its own doc comment says why: it is "the same
+     'a tie means stop' rule `buildCastResolver` and `remapFreshToPriorIds`
+     both already apply; this function must not reintroduce a looser one."
+     A bare 1-1 name comparison IS a looser one. Minor cast routinely shares
+     a display name (Солдат, Стражник, Голос, and the unknown-male/
+     unknown-female buckets), and here a wrong answer is not a skipped strip
+     in a fresh analysis run that a later run revisits — it is a PERMANENT
+     write binding the retired id, and every attribution behind it, to
+     possibly the wrong live row (a different `voiceUuid`, so the character
+     renders in the wrong voice). */
+  const liveNameCounts = new Map();
+  for (const c of liveCast) {
+    if (typeof c.name !== 'string') continue;
+    const norm = deps.normaliseForMatch(c.name);
+    if (!norm) continue;
+    liveNameCounts.set(norm, (liveNameCounts.get(norm) ?? 0) + 1);
+  }
 
   for (const [asciiId, nonAsciiId] of Object.entries(supersededBy ?? {})) {
     // Direction gate: `from` must be the established ASCII id, `to` the
@@ -213,6 +298,15 @@ export function planBookRepairs(input, deps = { normaliseForMatch }) {
       continue;
     }
 
+    // #2135's gate, applied here too: this book's bak evidence is not fully
+    // readable, so "the index has no ambiguous flag for this id" means
+    // NOTHING — the file that would have raised it is the one that failed to
+    // parse. Withhold every matched pair in the book. See the doc comment.
+    if (bakAvailable === false) {
+      reportOnly.push({ asciiId, nonAsciiId, reason: 'bak-evidence-unreadable' });
+      continue;
+    }
+
     const liveName = typeof liveChar.name === 'string' ? liveChar.name : '';
     const bakEntry = bakNameIndex?.get(asciiId);
     if (!liveName || !bakEntry || bakEntry.ambiguous || !bakEntry.name) {
@@ -221,6 +315,14 @@ export function planBookRepairs(input, deps = { normaliseForMatch }) {
     }
     if (deps.normaliseForMatch(bakEntry.name) !== deps.normaliseForMatch(liveName)) {
       reportOnly.push({ asciiId, nonAsciiId, reason: 'name-mismatch' });
+      continue;
+    }
+    // The names agree — but does that name identify a UNIQUE live character?
+    // If two live rows share it, nothing on disk says which one the retired
+    // ASCII id was, and the evidence cannot be made to answer that. Tie
+    // means stop (see the census above).
+    if (liveNameCounts.get(deps.normaliseForMatch(liveName)) !== 1) {
+      reportOnly.push({ asciiId, nonAsciiId, reason: 'live-name-not-unique' });
       continue;
     }
 
@@ -300,36 +402,93 @@ async function loadServerModules() {
   };
 }
 
-/** Applies one book's confirmed repairs: renames each matched character's
- *  `id` in `cast.json` from `nonAsciiId` back to `asciiId`, then retires
- *  `nonAsciiId` in `cast-id-history.json` via the server's own
- *  `retireCharacterId` (direct-reversal branch — see the module doc
- *  comment). Written unconditionally (this function is only ever called
- *  under `--apply`, gated in `main()`) — cast.json first, history second,
- *  matching the order the issue itself lists the two repair actions in. */
-async function applyBookPlan(bookPlan, mods) {
+/** Copies `filePath` to `<filePath>.bak.a34-<YYYY-MM-DD>` if it exists,
+ *  returning the backup path (or `null` when there was nothing to copy).
+ *  Same shape as `repair-cast-id-drift.mjs`'s `backupCastIdHistory`. This
+ *  script writes TWO files with no transaction across them, so the operator
+ *  needs an on-disk undo for both, not advice. `writeJsonAtomic`'s own
+ *  `{ rotate: { keep } }` is not used for this: it rotates only the file
+ *  being written, and the history file is not written by this script at all
+ *  — `retireCharacterId` writes it, from inside the server.
+ *
+ *  The cast.json copy lands as `cast.json.bak.a34-<date>`, which
+ *  `collectBakNameEntries` WILL pick up as bak evidence on a later run.
+ *  That is deliberate and correct: it is a genuine pre-repair snapshot of
+ *  this book's cast, the same class of file as the `cast.json.bak.castfix`
+ *  the workspace already carries, and it names the ids it really held at
+ *  that moment. */
+export function backupBeforeApply(filePath, deps = { fs }) {
+  if (!deps.fs.existsSync(filePath)) return null;
+  const stamp = new Date().toISOString().slice(0, 10);
+  const backupPath = `${filePath}.bak.a34-${stamp}`;
+  deps.fs.copyFileSync(filePath, backupPath);
+  return backupPath;
+}
+
+/** Applies one book's confirmed repairs: retires `nonAsciiId` in
+ *  `cast-id-history.json` via the server's own `retireCharacterId`
+ *  (direct-reversal branch), THEN renames each matched character's `id` in
+ *  `cast.json` from `nonAsciiId` back to `asciiId`. Both files are backed up
+ *  first. Written unconditionally (this function is only ever called under
+ *  `--apply`, gated in `main()`).
+ *
+ *  History-before-cast is deliberate and load-bearing — see the module doc
+ *  comment's "That ORDER is a correctness argument" paragraph for the two
+ *  intermediate states and why only this one keeps every attribution
+ *  resolvable.
+ *
+ *  Exported so the tests drive THIS function rather than a copy of it. An
+ *  earlier revision left it private and the test re-implemented its body;
+ *  four separate mutations to the real function — including swapping
+ *  `retireCharacterId`'s last two arguments, which re-inflicts the exact
+ *  A34 defect this script exists to repair — left the suite fully green. */
+export async function applyBookPlan(bookPlan, mods) {
   const cast = readJsonSync(bookPlan.castPath);
   if (!cast || !Array.isArray(cast.characters)) {
     throw new Error(`${bookPlan.castPath}: cast.json missing or malformed at apply time`);
   }
   const byNonAsciiId = new Map(bookPlan.repairs.map((r) => [r.nonAsciiId, r.asciiId]));
   let renamed = 0;
-  cast.characters = cast.characters.map((c) => {
+  const characters = cast.characters.map((c) => {
     const newId = byNonAsciiId.get(c.id);
     if (newId === undefined) return c;
     renamed += 1;
     return { ...c, id: newId };
   });
+  // Refuse BEFORE any backup or write: a plan that no longer matches the
+  // cast.json on disk means the file moved under us since planning, and a
+  // partial rename is worse than no rename.
   if (renamed !== bookPlan.repairs.length) {
     throw new Error(
       `${bookPlan.castPath}: expected to rename ${bookPlan.repairs.length} character(s), renamed ${renamed} — ` +
         `refusing to write a partial repair.`,
     );
   }
-  await mods.writeJsonAtomic(bookPlan.castPath, cast);
-  for (const r of bookPlan.repairs) {
-    await mods.retireCharacterId(bookPlan.bookDir, r.nonAsciiId, r.asciiId);
+  cast.characters = characters;
+
+  // Same path the server's own `castIdHistoryPath` builds
+  // (`cast-id-history.ts:197-199`, `join(bookDir, '.audiobook',
+  // 'cast-id-history.json')`) — this must back up the file
+  // `retireCharacterId` is about to write, not a neighbour of it.
+  const historyPath = path.join(bookPlan.bookDir, '.audiobook', 'cast-id-history.json');
+  const backups = [backupBeforeApply(bookPlan.castPath), backupBeforeApply(historyPath)].filter(Boolean);
+
+  try {
+    for (const r of bookPlan.repairs) {
+      await mods.retireCharacterId(bookPlan.bookDir, r.nonAsciiId, r.asciiId);
+    }
+    await mods.writeJsonAtomic(bookPlan.castPath, cast);
+  } catch (err) {
+    // Name the backups in the failure itself. A run that dies between the
+    // two writes leaves a book half-repaired, and the operator has to be
+    // told where the pre-repair copies are without going hunting.
+    throw new Error(
+      `${bookPlan.castPath}: repair failed part-way (${err?.message ?? err}). Pre-repair copies: ` +
+        `${backups.length ? backups.join(', ') : '(none — neither file existed)'}.`,
+      { cause: err },
+    );
   }
+  return { backups };
 }
 
 /**
@@ -375,7 +534,11 @@ export async function main(argv = process.argv.slice(2), workspaceDirOverride) {
   const bookInputs = books.map((book) => {
     const historyPath = path.join(book.audiobookDir, 'cast-id-history.json');
     const history = readJsonSync(historyPath);
-    const { entries: bakEntries } = collectBakNameEntries(book.audiobookDir);
+    // BOTH fields, not just `entries` — see planBookRepairs's doc comment
+    // for `input.bakAvailable`. Discarding the second one is #2135's
+    // fail-open shape: an unparseable snapshot vanishes into zero entries
+    // and the survivors then read as unambiguous rather than as unknown.
+    const { entries: bakEntries, bakAvailable } = collectBakNameEntries(book.audiobookDir);
     return {
       label: book.label,
       bookDir: book.bookDir,
@@ -383,6 +546,7 @@ export async function main(argv = process.argv.slice(2), workspaceDirOverride) {
       liveCast: book.cast.characters,
       supersededBy: history?.supersededBy ?? {},
       bakNameIndex: buildNameIndex(bakEntries, normaliseForMatch),
+      bakAvailable,
     };
   });
 
@@ -413,8 +577,9 @@ export async function main(argv = process.argv.slice(2), workspaceDirOverride) {
 
   const mods = await loadServerModules();
   for (const plan of bookPlans) {
-    await applyBookPlan(plan, mods);
+    const { backups } = await applyBookPlan(plan, mods);
     console.log(`  -> wrote ${plan.castPath} and its cast-id-history.json`);
+    if (backups.length) console.log(`     pre-repair copies: ${backups.join(', ')}`);
   }
   console.log(`\nApplied ${bookPlans.length} book(s).`);
 }

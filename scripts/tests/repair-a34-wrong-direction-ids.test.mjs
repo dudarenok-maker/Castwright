@@ -5,15 +5,26 @@
 
    Covers the pure planning helpers (isAsciiKebabId, normaliseForMatch,
    planBookRepairs, planWorkspaceRepairs) with no server/dist build needed,
-   plus an fs-fixture integration test of applyBookPlan's write shape via a
-   fake retireCharacterId/writeJsonAtomic (no server/dist import here
-   either — main()'s own server/dist wiring is exercised only by actually
-   running the script, per this repo's existing convention for this class
-   of script). */
+   plus fs-fixture tests that drive the REAL, exported applyBookPlan and
+   backupBeforeApply against a fake retireCharacterId/writeJsonAtomic (no
+   server/dist import here either — only main()'s own dynamic import() of
+   server/dist is left to a live run, per this repo's existing convention
+   for this class of script).
+
+   Do NOT re-implement applyBookPlan's body here and assert on the copy.
+   That is what the first revision did, and a review proved it invisible to
+   four separate mutations of the real function — including swapping
+   retireCharacterId's last two arguments, which re-inflicts the exact A34
+   defect this script exists to repair. A second implementation that happens
+   to agree with the first is not coverage.
+
+   Also covers ALLOW_STANDING_PORTS / parseStandingPorts, imported from
+   repair-cast-id-drift.mjs: this script shares that liveness probe, and the
+   port-skipping behaviour it inherits had no test of its own anywhere. */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
@@ -24,8 +35,11 @@ import {
   normaliseForMatch,
   planBookRepairs,
   planWorkspaceRepairs,
+  applyBookPlan,
+  backupBeforeApply,
   main,
 } from '../repair-a34-wrong-direction-ids.mjs';
+import { parseStandingPorts, probePortRangeRefused } from '../repair-cast-id-drift.mjs';
 
 // ---------------------------------------------------------------------------
 // parseArgs
@@ -211,6 +225,102 @@ test('planBookRepairs: bak name does not match live name -> report-only, not a f
   assert.deepEqual(reportOnly, [{ asciiId: 'shef', nonAsciiId: 'борис-игнатьевич', reason: 'name-mismatch' }]);
 });
 
+test('planBookRepairs: bakAvailable false withholds the pair even though the name index agrees', () => {
+  /* #2135's fail-open shape, one script over. `collectBakNameEntries`
+     returns `{entries, bakAvailable}`; `bakAvailable: false` means the
+     directory could not be enumerated OR at least one cast.json.bak.* that
+     EXISTS failed to parse. The unparseable file is swallowed to null and
+     contributes zero entries, so buildNameIndex's `normSet.size > 1` reads
+     the survivors as UNAMBIGUOUS — but the file it could not read might
+     have named this very id something else. Evidence lost is not evidence
+     of agreement. The sibling script gates on exactly this
+     (repair-cast-id-drift.mjs:2605,2641); this one discarded the field. */
+  const input = {
+    liveCast: [{ id: 'одуван', name: 'Одуван' }],
+    supersededBy: { oduvan: 'одуван' },
+    bakNameIndex: bakIndex([['oduvan', 'Одуван']]),
+    bakAvailable: false,
+  };
+  const { repairs, reportOnly } = planBookRepairs(input);
+  assert.deepEqual(repairs, [], 'lost bak evidence must never produce a confirmed repair');
+  assert.deepEqual(reportOnly, [{ asciiId: 'oduvan', nonAsciiId: 'одуван', reason: 'bak-evidence-unreadable' }]);
+});
+
+test('planBookRepairs: bakAvailable true (or absent) still confirms — the gate is not a blanket refusal', () => {
+  const base = {
+    liveCast: [{ id: 'одуван', name: 'Одуван' }],
+    supersededBy: { oduvan: 'одуван' },
+    bakNameIndex: bakIndex([['oduvan', 'Одуван']]),
+  };
+  const expected = [{ asciiId: 'oduvan', nonAsciiId: 'одуван', name: 'Одуван' }];
+  assert.deepEqual(planBookRepairs({ ...base, bakAvailable: true }).repairs, expected);
+  // Absent is NOT read as false — a caller with no bak index at all already
+  // gets `no-name-evidence` per id; only an explicit false means "lost".
+  assert.deepEqual(planBookRepairs(base).repairs, expected);
+});
+
+test('planBookRepairs: two live rows share the confirmed name -> withheld, the tie rule is not optional', () => {
+  /* resolveTierAName (repair-cast-id-drift.mjs:378-384) returns undefined on
+     a tie, and its own comment forbids reintroducing a looser rule. Minor
+     cast routinely shares a display name. Nothing on disk says WHICH
+     "Солдат" the retired `soldier` was, and --apply would permanently bind
+     the retired id, and every attribution behind it, to whichever row the
+     history entry happened to point at — a different voiceUuid, so the
+     mis-bound character renders in the wrong voice. */
+  const input = {
+    liveCast: [
+      { id: 'soldier-one', name: 'Солдат', voiceUuid: 'VOICE-A' },
+      { id: 'солдат', name: 'Солдат', voiceUuid: 'VOICE-B' },
+    ],
+    supersededBy: { soldier: 'солдат' },
+    bakNameIndex: bakIndex([['soldier', 'Солдат']]),
+    bakAvailable: true,
+  };
+  const { repairs, reportOnly } = planBookRepairs(input);
+  assert.deepEqual(repairs, [], 'a shared display name cannot confirm which character the retired id was');
+  assert.deepEqual(reportOnly, [{ asciiId: 'soldier', nonAsciiId: 'солдат', reason: 'live-name-not-unique' }]);
+});
+
+test('planBookRepairs: the tie is counted under normaliseForMatch, not raw equality', () => {
+  // "солдат" vs " Солдат " fold to the same normalised name, so this is a
+  // tie even though the raw strings differ. A census keyed on the raw name
+  // would miss it.
+  const input = {
+    liveCast: [
+      { id: 'soldier-one', name: ' Солдат ' },
+      { id: 'солдат', name: 'солдат' },
+    ],
+    supersededBy: { soldier: 'солдат' },
+    bakNameIndex: bakIndex([['soldier', 'Солдат']]),
+    bakAvailable: true,
+  };
+  const { repairs, reportOnly } = planBookRepairs(input);
+  assert.deepEqual(repairs, []);
+  assert.deepEqual(reportOnly, [{ asciiId: 'soldier', nonAsciiId: 'солдат', reason: 'live-name-not-unique' }]);
+});
+
+test('planBookRepairs: the ASCII id is somehow live too -> report-only, never a duplicate-id write', () => {
+  /* Should not happen given retireCharacterId's invariants, but this script
+     never assumes a file it did not write is well-formed. Turning this
+     branch into a repair writes a cast.json with TWO rows carrying the id
+     `oduvan`, which buildCastResolver's byId silently resolves to whichever
+     came first. */
+  const input = {
+    liveCast: [
+      { id: 'одуван', name: 'Одуван' },
+      // A distinct name on purpose, so this test can only be about the
+      // already-live branch and never about the uniqueness tie rule.
+      { id: 'oduvan', name: 'Одуван Старший' },
+    ],
+    supersededBy: { oduvan: 'одуван' },
+    bakNameIndex: bakIndex([['oduvan', 'Одуван']]),
+    bakAvailable: true,
+  };
+  const { repairs, reportOnly } = planBookRepairs(input);
+  assert.deepEqual(repairs, [], 'never rename onto an id that is already live');
+  assert.deepEqual(reportOnly, [{ asciiId: 'oduvan', nonAsciiId: 'одуван', reason: 'ascii-id-already-live' }]);
+});
+
 test('planBookRepairs: empty supersededBy -> nothing to do', () => {
   const input = { liveCast: [{ id: 'одуван', name: 'Одуван' }], supersededBy: {}, bakNameIndex: bakIndex([]) };
   const { repairs, reportOnly } = planBookRepairs(input);
@@ -383,53 +493,56 @@ test('main --apply refuses when a server is live on PORT — the liveness-probe 
   }
 });
 
-test('apply path: cast.json id is renamed and retireCharacterId is called from non-ASCII to ASCII', async () => {
+/* Apply-path fixture. Drives the REAL, exported `applyBookPlan` — never a
+   re-implementation of it. The first revision of this file copied
+   `applyBookPlan`'s body inline and asserted on the copy; a review proved
+   that four separate mutations to the real function (swapping
+   `retireCharacterId`'s last two arguments, stubbing the whole function to
+   `return;`, deleting the partial-repair refusal, and turning the
+   ascii-id-already-live branch into a repair) all left the suite 27/27
+   green. Every test below calls `applyBookPlan(plan, fakeMods)`. */
+function buildApplyFixture(tmp, opts = {}) {
+  const bookDir = join(tmp, 'book');
+  const audiobookDir = join(bookDir, '.audiobook');
+  mkdirSync(audiobookDir, { recursive: true });
+  const castPath = join(audiobookDir, 'cast.json');
+  const historyPath = join(audiobookDir, 'cast-id-history.json');
+  const castBefore = opts.cast ?? {
+    characters: [
+      { id: 'одуван', name: 'Одуван', role: 'Мастер-кузнец', lines: 28 },
+      { id: 'other', name: 'Other' },
+    ],
+  };
+  const historyBefore = opts.history ?? { schema: 1, supersededBy: { oduvan: 'одуван' } };
+  writeFileSync(castPath, JSON.stringify(castBefore));
+  writeFileSync(historyPath, JSON.stringify(historyBefore));
+
+  const calls = [];
+  const fakeMods = {
+    retireCharacterId: async (dir, from, to) => {
+      calls.push({ op: 'retire', bookDir: dir, from, to });
+      if (opts.retireThrows) throw new Error(opts.retireThrows);
+    },
+    writeJsonAtomic: async (p, value) => {
+      calls.push({ op: 'write', path: p });
+      writeFileSync(p, JSON.stringify(value));
+    },
+  };
+  const plan = {
+    book: 'Test Book',
+    bookDir,
+    castPath,
+    repairs: opts.repairs ?? [{ asciiId: 'oduvan', nonAsciiId: 'одуван', name: 'Одуван' }],
+  };
+  return { bookDir, audiobookDir, castPath, historyPath, castBefore, historyBefore, calls, fakeMods, plan };
+}
+
+test('applyBookPlan: renames the cast.json id and retires non-ASCII -> ASCII (real function, not a copy)', async () => {
   const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-apply-'));
   try {
-    const audiobookDir = join(tmp, '.audiobook');
-    mkdirSync(audiobookDir, { recursive: true });
-    const castPath = join(audiobookDir, 'cast.json');
-    const castBefore = {
-      characters: [
-        { id: 'одуван', name: 'Одуван', role: 'Мастер-кузнец', lines: 28 },
-        { id: 'other', name: 'Other' },
-      ],
-    };
-    writeFileSync(castPath, JSON.stringify(castBefore));
+    const { castPath, calls, fakeMods, plan, bookDir } = buildApplyFixture(tmp);
 
-    const retireCalls = [];
-    const writeCalls = [];
-    const fakeMods = {
-      retireCharacterId: async (bookDir, from, to) => {
-        retireCalls.push({ bookDir, from, to });
-      },
-      writeJsonAtomic: async (p, value) => {
-        writeCalls.push({ path: p, value });
-        writeFileSync(p, JSON.stringify(value));
-      },
-    };
-
-    const plan = {
-      book: 'Test Book',
-      bookDir: tmp,
-      castPath,
-      repairs: [{ asciiId: 'oduvan', nonAsciiId: 'одуван', name: 'Одуван' }],
-    };
-
-    // Re-implements applyBookPlan's exact contract against the fakes above
-    // (applyBookPlan itself is not exported — it is main()'s I/O-only
-    // helper — so this test drives the same shape through the module's
-    // public surface: read, rename, write, retire, in that order).
-    const cast = JSON.parse(readFileSync(plan.castPath, 'utf8'));
-    const byNonAsciiId = new Map(plan.repairs.map((r) => [r.nonAsciiId, r.asciiId]));
-    cast.characters = cast.characters.map((c) => {
-      const newId = byNonAsciiId.get(c.id);
-      return newId === undefined ? c : { ...c, id: newId };
-    });
-    await fakeMods.writeJsonAtomic(plan.castPath, cast);
-    for (const r of plan.repairs) {
-      await fakeMods.retireCharacterId(plan.bookDir, r.nonAsciiId, r.asciiId);
-    }
+    await applyBookPlan(plan, fakeMods);
 
     const written = JSON.parse(readFileSync(castPath, 'utf8'));
     assert.deepEqual(
@@ -444,8 +557,244 @@ test('apply path: cast.json id is renamed and retireCharacterId is called from n
     );
     assert.deepEqual(written.characters.find((c) => c.id === 'other'), { id: 'other', name: 'Other' });
 
-    assert.deepEqual(retireCalls, [{ bookDir: tmp, from: 'одуван', to: 'oduvan' }]);
+    /* The argument order is the whole point of this assertion. Swapping the
+       last two arguments of the `retireCharacterId` call inside
+       applyBookPlan does not merely fail to repair: it drives
+       retireCharacterId's FORWARD branch instead of its direct-reversal
+       branch and writes supersededBy["oduvan"] = "одуван" — re-inflicting
+       the exact A34 defect this script exists to remove, on a book whose
+       cast.json it has already rewritten. */
+    assert.deepEqual(
+      calls.filter((c) => c.op === 'retire'),
+      [{ op: 'retire', bookDir, from: 'одуван', to: 'oduvan' }],
+      'retireCharacterId(bookDir, nonAsciiId, asciiId) — retiring the non-ASCII id IN FAVOUR OF the ASCII one',
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyBookPlan: writes cast-id-history BEFORE cast.json, so a part-way failure never orphans the live id', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-order-'));
+  try {
+    const { calls, fakeMods, plan } = buildApplyFixture(tmp);
+
+    await applyBookPlan(plan, fakeMods);
+
+    /* Order is a correctness argument, not taste (module doc comment).
+       History first leaves the intermediate state "live id still non-ASCII,
+       history says non-ASCII -> ASCII", where buildCastResolver hits the
+       live id in byId exactly. Cast first leaves "live id ASCII, history
+       still ASCII -> non-ASCII", where cast-resolve.ts:113-118 drops the
+       entry (its target is no longer live) and normaliseIdKey does not
+       transliterate — so every attribution pointing at the non-ASCII id
+       becomes an orphan. */
+    assert.deepEqual(
+      calls.map((c) => c.op),
+      ['retire', 'write'],
+      'retireCharacterId must run before writeJsonAtomic(cast.json)',
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyBookPlan: backs up cast.json AND cast-id-history.json before either write', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-backup-'));
+  try {
+    const { audiobookDir, fakeMods, plan, castBefore, historyBefore } = buildApplyFixture(tmp);
+
+    const { backups } = await applyBookPlan(plan, fakeMods);
+
+    assert.equal(backups.length, 2, 'both files get a pre-repair copy');
+    const baks = readdirSync(audiobookDir).filter((f) => f.includes('.bak.a34-'));
+    assert.equal(baks.length, 2, `expected 2 a34 backups, saw ${baks.join(', ')}`);
+    const castBak = backups.find((p) => p.includes('cast.json.bak.a34-'));
+    const histBak = backups.find((p) => p.includes('cast-id-history.json.bak.a34-'));
+    assert.ok(castBak && histBak, 'one backup per file, each named after its own source');
+    // The copies hold the PRE-repair content — that is what makes them an undo.
+    assert.deepEqual(JSON.parse(readFileSync(castBak, 'utf8')), castBefore);
+    assert.deepEqual(JSON.parse(readFileSync(histBak, 'utf8')), historyBefore);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyBookPlan: a throwing retireCharacterId surfaces as an error naming the backups, and cast.json stays unwritten', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-throw-'));
+  try {
+    const { castPath, castBefore, fakeMods, plan } = buildApplyFixture(tmp, {
+      retireThrows: 'LockAcquisitionTimeoutError: cast-id-history:...',
+    });
+
+    await assert.rejects(
+      () => applyBookPlan(plan, fakeMods),
+      (err) => {
+        assert.match(err.message, /repair failed part-way/);
+        assert.match(err.message, /Pre-repair copies:/);
+        assert.match(err.message, /cast\.json\.bak\.a34-/);
+        assert.match(err.message, /cast-id-history\.json\.bak\.a34-/);
+        return true;
+      },
+    );
+    assert.equal(
+      readFileSync(castPath, 'utf8'),
+      JSON.stringify(castBefore),
+      'the history write failed, so cast.json must not have been rewritten',
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyBookPlan: refuses a partial repair — plan names an id cast.json no longer has', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-partial-'));
+  try {
+    // cast.json moved under us since planning: only ONE of the two planned
+    // non-ASCII ids is still present.
+    const { castPath, castBefore, calls, fakeMods, plan, audiobookDir } = buildApplyFixture(tmp, {
+      cast: { characters: [{ id: 'одуван', name: 'Одуван' }] },
+      repairs: [
+        { asciiId: 'oduvan', nonAsciiId: 'одуван', name: 'Одуван' },
+        { asciiId: 'soldier', nonAsciiId: 'солдат', name: 'Солдат' },
+      ],
+    });
+
+    await assert.rejects(
+      () => applyBookPlan(plan, fakeMods),
+      /expected to rename 2 character\(s\), renamed 1 .* refusing to write a partial repair/s,
+    );
+    assert.deepEqual(calls, [], 'refuses before it writes or retires anything');
+    assert.equal(readFileSync(castPath, 'utf8'), JSON.stringify(castBefore), 'cast.json untouched');
+    assert.deepEqual(
+      readdirSync(audiobookDir).filter((f) => f.includes('.bak.a34-')),
+      [],
+      'and before it even takes a backup — nothing was going to be written',
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyBookPlan: a malformed cast.json at apply time is refused, not written over', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-malformed-'));
+  try {
+    const { castPath, calls, fakeMods, plan } = buildApplyFixture(tmp);
+    writeFileSync(castPath, '{ not json');
+
+    await assert.rejects(() => applyBookPlan(plan, fakeMods), /cast\.json missing or malformed at apply time/);
+    assert.deepEqual(calls, []);
+    assert.equal(readFileSync(castPath, 'utf8'), '{ not json');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('backupBeforeApply: returns null and copies nothing when the source does not exist', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-nobak-'));
+  try {
+    const missing = join(tmp, 'cast-id-history.json');
+    assert.equal(backupBeforeApply(missing), null);
+    assert.equal(existsSync(`${missing}.bak.a34-${new Date().toISOString().slice(0, 10)}`), false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// End to end through main(): the bakAvailable gate must survive the wiring,
+// not just hold in planBookRepairs. Driven by a genuinely unparseable
+// cast.json.bak.* on disk, exactly #2135's repro.
+// ---------------------------------------------------------------------------
+
+test('main dry-run: an unparseable cast.json.bak.* downgrades a would-be confirmed repair to report-only', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-corruptbak-'));
+  const lines = [];
+  const realLog = console.log;
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    const bookDir = join(tmp, 'books', 'Author', 'Series', 'Title');
+    const audiobookDir = join(bookDir, '.audiobook');
+    mkdirSync(audiobookDir, { recursive: true });
+    writeFileSync(join(audiobookDir, 'cast.json'), JSON.stringify({ characters: [{ id: 'одуван', name: 'Одуван' }] }));
+    writeFileSync(join(audiobookDir, 'state.json'), JSON.stringify({ title: 'Title', chapters: [] }));
+    writeFileSync(join(audiobookDir, 'cast-id-history.json'), JSON.stringify({ schema: 1, supersededBy: { oduvan: 'одуван' } }));
+    // One good snapshot naming oduvan "Одуван" — on its own this confirms.
+    writeFileSync(
+      join(audiobookDir, 'cast.json.bak.castfix'),
+      JSON.stringify({ characters: [{ id: 'oduvan', name: 'Одуван' }] }),
+    );
+    // ...and one truncated mid-JSON. Its real content could have named
+    // oduvan anything, so the evidence for that id is UNKNOWN, not clean.
+    writeFileSync(join(audiobookDir, 'cast.json.bak.2026-01-01'), '{"characters":[{"id":"oduvan","na');
+
+    await main([], tmp);
+
+    const out = lines.join('\n');
+    assert.match(out, /bak-evidence-unreadable/, 'the lost-evidence reason must reach the operator');
+    assert.doesNotMatch(out, /confirmed repairs: /, 'and nothing may be reported as confirmed');
+  } finally {
+    console.log = realLog;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ALLOW_STANDING_PORTS — the liveness probe's port-skipping opt-in, shared
+// with repair-cast-id-drift.mjs's main(). Previously a hardcoded
+// `new Set([8090])`, which is this repo's OWN worktree slot-1 PORT
+// (scripts/tests/wt-new.test.mjs:83) and sits inside the default 8080
+// auto-rebind walk — so the exception blinded an apply-time safety probe to
+// a port a real Castwright server binds. Nothing covered it.
+// ---------------------------------------------------------------------------
+
+test('parseStandingPorts: empty/unset -> no port is skipped', () => {
+  assert.deepEqual([...parseStandingPorts(undefined)], []);
+  assert.deepEqual([...parseStandingPorts('')], []);
+  assert.deepEqual([...parseStandingPorts('  ,  ')], []);
+});
+
+test('parseStandingPorts: 8090 is NOT skipped by default — it is this repo\u0027s slot-1 PORT', () => {
+  assert.equal(parseStandingPorts(undefined).has(8090), false);
+  assert.equal(parseStandingPorts('8090').has(8090), true, 'only an explicit per-run opt-in skips it');
+});
+
+test('parseStandingPorts: parses a list, ignores out-of-range and junk tokens (fail closed = probe it)', () => {
+  assert.deepEqual([...parseStandingPorts('8090, 9000')], [8090, 9000]);
+  // A typo must fall back to PROBING the port, never to skipping something.
+  assert.deepEqual([...parseStandingPorts('80090')], []);
+  assert.deepEqual([...parseStandingPorts('abc')], []);
+  assert.deepEqual([...parseStandingPorts('0')], []);
+  assert.deepEqual([...parseStandingPorts('-1')], []);
+  assert.deepEqual([...parseStandingPorts('8090.5')], []);
+});
+
+test('probePortRangeRefused: a live listener inside the range is reported by default, and skipped only when opted out', async () => {
+  const server = net.createServer();
+  const prev = process.env.ALLOW_STANDING_PORTS;
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const livePort = server.address().port;
+    // Start the probe a few ports below the listener so the listener sits
+    // INSIDE the auto-rebind walk rather than at its floor — the #2090 shape.
+    const startPort = Math.max(1, livePort - 3);
+
+    delete process.env.ALLOW_STANDING_PORTS;
+    const seen = await probePortRangeRefused(startPort, '127.0.0.1');
+    assert.ok(
+      seen.includes(livePort),
+      `default probe must see the live listener on ${livePort}; saw ${JSON.stringify(seen)}`,
+    );
+
+    process.env.ALLOW_STANDING_PORTS = String(livePort);
+    const opted = await probePortRangeRefused(startPort, '127.0.0.1');
+    assert.equal(opted.includes(livePort), false, 'an explicitly opted-out port is skipped');
+  } finally {
+    if (prev === undefined) delete process.env.ALLOW_STANDING_PORTS;
+    else process.env.ALLOW_STANDING_PORTS = prev;
+    await new Promise((resolve) => server.close(resolve));
   }
 });

@@ -287,6 +287,15 @@
  *                        default) — npm run dev:lan / start:lan listens here
  *                        too, and is otherwise invisible to the probe.
  *                        Same auto-rebind-range coverage as PORT above.
+ *   ALLOW_STANDING_PORTS comma-separated ports the liveness probe should
+ *                        SKIP because a standing, permanent non-Castwright
+ *                        service holds them (e.g. `8090` for llama-swap on
+ *                        the operator's box). Empty by default — the probe
+ *                        is fail-closed for every port unless opted out for
+ *                        that run. Note 8090 is ALSO this repo's worktree
+ *                        slot-1 PORT and sits in the default 8080 rebind
+ *                        walk, so only set this when you know no Castwright
+ *                        server is on it. See parseStandingPorts.
  *
  * Usage:
  *   node scripts/repair-cast-id-drift.mjs                       # dry run
@@ -2037,19 +2046,51 @@ export const AUTO_REBIND_RANGE = 20;
  *  the probed set loses no real safety coverage — every port that COULD
  *  exist in the rebind range is still fully probed, and the fail-closed
  *  property is unaffected either way. */
-/** Standing, permanent non-Castwright services on this box's real workspace
- *  host that would otherwise read as "possibly live" on every future
- *  `--apply` run forever, because they hold their port permanently and are
- *  never one of this repo's own servers. Operator-approved exception
- *  (Castwright#2906, 2026-09-06): `llama-swap` (`C:\Claude\llama-swap`) sits
- *  on 8090, inside the default HTTP probe range (8080-8099), and is
- *  unrelated LLM-inference infrastructure this script has no business
- *  probing for. Skipping known entries here — rather than each script's
- *  `main()` routing around the probe with a narrowed `PORT` — keeps every
- *  script that reuses `probePortRangeRefused` fail-closed for the ports that
- *  actually matter to it. Add an entry only for a port that is standing and
- *  permanent, never for a one-off "server happens to be down right now". */
-export const KNOWN_STANDING_PORTS = new Set([8090]);
+/** Ports to skip probing because a standing, permanent NON-Castwright
+ *  service holds them. Read per run from `ALLOW_STANDING_PORTS` (a
+ *  comma-separated list); empty by default, so the probe is fail-closed for
+ *  every port unless the operator opts one out for that invocation.
+ *
+ *  This used to be a hardcoded `new Set([8090])` — the operator-approved
+ *  exception (Castwright#2906) for `llama-swap` (`C:\Claude\llama-swap`),
+ *  which does sit permanently on 8090. That exception was wrong in a way
+ *  the port number alone cannot express: **8090 is also this repo's own
+ *  `PORT` for worktree slot 1** — `wt-new.mjs`'s `BASE_PORTS.PORT = 8080`
+ *  plus `PORT_STEP = 10`, asserted at `scripts/tests/wt-new.test.mjs:83`,
+ *  used as the `server/.env` fixture value in
+ *  `scripts/tests/sidecar-sweep-port.test.mjs:358,373`, and documented in
+ *  CLAUDE.md's worktree-setup step 5 — and it sits inside the default
+ *  `PORT=8080` auto-rebind walk (8080-8099), which `listenWithAutoRebind`
+ *  (`server/src/crash-logging.ts:136-175`) reaches by incrementing on
+ *  EADDRINUSE. That is precisely the #2090 scenario the range probe exists
+ *  to catch. A global constant made every current and future consumer of
+ *  `probePortRangeRefused` permanently blind to a port a real Castwright
+ *  server actually binds, at the moment it is deciding whether it is safe
+ *  to write `cast.json` and `cast-id-history.json` out-of-process.
+ *
+ *  An opt-in was chosen over simply deleting 8090 because the llama-swap
+ *  collision is real on the operator's box and would otherwise refuse every
+ *  `--apply` there forever. Making it per-run and explicit is what confines
+ *  the blindness to the run whose operator asserted it: the default is the
+ *  safe one, and skipping a port is now a visible act rather than an
+ *  inherited constant. Listener-identity probing ("is this answering as a
+ *  Castwright server?") would be better still, but that is a new protocol
+ *  decision, not this fix.
+ *
+ *  A token that is not a valid TCP port is IGNORED rather than honoured, so
+ *  a typo (`ALLOW_STANDING_PORTS=80090`) fails closed to probing the port,
+ *  never to skipping something else. */
+export function parseStandingPorts(raw) {
+  const ports = new Set();
+  for (const token of String(raw ?? '').split(',')) {
+    const trimmed = token.trim();
+    if (!trimmed) continue;
+    const n = Number(trimmed);
+    if (!Number.isInteger(n) || n < 1 || n > 65535) continue;
+    ports.add(n);
+  }
+  return ports;
+}
 
 export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
   // C1 (pre-merge review, 2026-08-05): validate startPort itself BEFORE
@@ -2069,8 +2110,12 @@ export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
   // Two-sided on purpose — the old one-sided `<= 65535` clamp let a
   // negative startPort (e.g. PORT=-1) through to net.connect uncaught.
   if (!Number.isInteger(startPort) || startPort < 1 || startPort > 65535) return [startPort];
+  // Read per call, not once at module load: a test (and an operator running
+  // two probes in one process) must be able to set and clear the opt-in
+  // without the first read freezing the answer for the rest of the run.
+  const standing = parseStandingPorts(process.env.ALLOW_STANDING_PORTS);
   const ports = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i)
-    .filter((p) => p <= 65535 && !KNOWN_STANDING_PORTS.has(p));
+    .filter((p) => p <= 65535 && !standing.has(p));
   const results = await Promise.all(ports.map((p) => probePortRefused(p, host)));
   return ports.filter((_, i) => !results[i]);
 }
