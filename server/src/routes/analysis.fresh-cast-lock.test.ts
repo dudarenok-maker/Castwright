@@ -479,7 +479,7 @@ describe('#1981 Task 11 — "Start fresh" cannot be resurrected by a racing cast
       }
 
       expect(resAlias!.status).toBe(200);
-      /* The `vi.waitFor` poll below is the gate that this test pins after the
+      /* The `vi.waitFor` poll above is the gate that this test pins after the
          #3022 retarget: an add-alias write cannot interleave with a "Start
          fresh" delete to leave cast.json resurrected — whichever lock in
          analysis.ts's "Start fresh" path is what actually enforces that. This
@@ -489,12 +489,12 @@ describe('#1981 Task 11 — "Start fresh" cannot be resurrected by a racing cast
          already serialised against the job well before the job reaches the
          delete — which is exactly why asserting this outcome does not, by
          itself, prove the delete's own `withCastLock` is doing anything (see
-         the file header). This assertion is retained as a FORWARD guard.
+         the file header). The assertion below is retained as a FORWARD guard.
 
          This assertion is NOT what catches the mutation, despite reading like
-         it (PR #3060 review pass 1, finding 1). Pass 2 verified: removing
+         it (PR #3060 review pass 1, finding 1). Verified after pass 2: removing
          cast-lock protection from both `readPriorCastForMerge` and the delete
-         block (while leaving cast-aliases.ts:331's wrapper intact) DOES
+         block (while leaving add-alias's own wrapper in `cast-aliases.ts` intact) DOES
          redden the test — at the POLL above, because add-alias's write lands
          before the poll ever sees the file gone, so execution never reaches
          this line.
