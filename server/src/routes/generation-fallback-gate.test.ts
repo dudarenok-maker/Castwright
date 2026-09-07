@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import type { QwenInstallState } from '../workspace/user-settings.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -334,7 +334,7 @@ describe('fs-2 never-cross-language generation gate', () => {
     setQwenState('loaded');
   });
 
-  async function runRuStream(): Promise<string> {
+  async function runRuStream(extraBody: Record<string, unknown> = {}): Promise<string> {
     const res = await fetch(`${baseUrl}/api/books/${ruBookId}/generation`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -343,6 +343,7 @@ describe('fs-2 never-cross-language generation gate', () => {
         chapterIds: [1],
         force: true,
         queueEntryId: RU_ENTRY,
+        ...extraBody,
       }),
     });
     const reader = res.body!.getReader();
@@ -354,6 +355,11 @@ describe('fs-2 never-cross-language generation gate', () => {
       text += decoder.decode(value, { stream: true });
     }
     return text;
+  }
+
+  async function readRuEntry(): Promise<import('../workspace/queue-io.js').QueueEntry | undefined> {
+    const file = await readQueueFile(queuePath);
+    return file.entries.find((e) => e.id === RU_ENTRY);
   }
 
   beforeEach(async () => {
@@ -388,114 +394,35 @@ describe('fs-2 never-cross-language generation gate', () => {
     expect(lastSynthArgs?.cast?.every((c) => c.ttsEngine === 'qwen')).toBe(true);
   }, 10_000);
 
-  it('#1263: fails fast (no park, no synth) for a cross-language reused voice on a non-English book', async () => {
-    /* sofiya's designed voice was baked English — reusing it into a Russian book
-       must NOT render it. `forbidKokoroFallback` is unconditional for
-       non-English books, so "Render anyway" could never actually succeed here —
-       the gate must NOT park to awaiting_confirm (that offer would just
-       deterministically re-fail); it must fail the chapter immediately, naming
-       the affected character, without ever reaching synthesiseChapter. */
+  it('fs-60 (#1005): PARKS — not fails — a cross-language reused voice on a Coqui-eligible non-English book; confirming renders it through the Coqui fallback', async () => {
+    /* Before this fix, EVERY non-English book hard-failed here regardless of
+       Coqui eligibility (see the removed #1263 tests this replaces) — an
+       on-box live-render walkthrough (A5, #2962) found that live behaviour
+       contradicts both the voice-readiness gate's own "Proceed anyway —
+       generic Coqui fallback voices" copy and synthesiseChapter's actual
+       forbidKokoroFallback+coquiEligible substitution (Task 6's
+       applyQwenFallback), which was already correct and already reachable —
+       just never reached, because this earlier gate aborted first. Russian IS
+       Coqui-eligible (voice-mapping.ts), so sofiya's cross-language-reused
+       voice must park for confirmation exactly like the English/Kokoro case
+       above, and a confirmed re-dispatch must reach synthesiseChapter with
+       forbidKokoroFallback+coquiEligible so IT can substitute Coqui. */
     writeManifest('qwen-v_sofiya', 'English');
-    const body = await runRuStream();
-    expect(body).not.toContain('chapter_awaiting_fallback_confirm');
-    expect(body).toContain('chapter_failed');
-    expect(body).toMatch(/no designed qwen voice for sofiya/i);
-    expect(body).toContain('"errorCode":"voice-not-designed"');
+    const parkBody = await runRuStream();
+    expect(parkBody).toContain('chapter_awaiting_fallback_confirm');
+    expect(parkBody).toMatch(/sofiya/i);
     expect(synthCalled).toBe(false);
-  }, 10_000);
 
-  it('#1263: persists the failure to state.json so a reload shows Failed, not Queued', async () => {
-    writeManifest('qwen-v_sofiya', 'English');
-    await runRuStream();
-    const statePath = join(
-      workspaceRoot,
-      'books',
-      AUTHOR,
-      SERIES,
-      RU_TITLE,
-      '.audiobook',
-      'state.json',
-    );
-    const state = JSON.parse(await readFile(statePath, 'utf8'));
-    const ch = state.chapters.find((c: { id: number }) => c.id === 1);
-    expect(ch.generationState).toBe('failed');
-    expect(ch.generationError).toMatch(/no designed qwen voice for sofiya/i);
-    expect(ch.generationErrorCode).toBe('voice-not-designed');
-    expect(ch.generationRemediation).toBeTruthy();
-  }, 10_000);
+    const entry = await readRuEntry();
+    expect(entry?.status).toBe('awaiting_confirm');
+    expect(entry?.fallbackCharacters?.map((c) => c.id)).toEqual(['sofiya']);
 
-  it('#1263: pluralizes correctly and comma-joins names when 2+ (non-narrator) characters are undesigned', async () => {
-    /* Add a third speaking character (kade) alongside sofiya — both undesigned
-       (baked English, invalid reuse) — while the narrator keeps its valid
-       Russian voice and doesn't speak in this chapter, so it's absent from
-       fallbackSet and "(and the narrator)" still applies. Exercises the
-       `plural` branch ('them' + comma-joined names) that the single-character
-       cases above never reach. Restores cast.json + the shared cache after. */
-    const cacheModule = await import('../store/analysis-cache.js');
-    const castPath = join(workspaceRoot, 'books', AUTHOR, SERIES, RU_TITLE, '.audiobook', 'cast.json');
-    const originalCast = await readFile(castPath, 'utf8');
-    writeFileSync(
-      castPath,
-      JSON.stringify({
-        characters: [
-          { id: 'narrator', name: 'Narrator', voiceId: 'v_narr', overrideTtsVoices: { qwen: { name: 'qwen-v_narr' } } },
-          { id: 'sofiya', name: 'Sofiya', voiceId: 'v_sofiya', overrideTtsVoices: { qwen: { name: 'qwen-v_sofiya' } } },
-          { id: 'kade', name: 'Kade', voiceId: 'v_kade', overrideTtsVoices: { qwen: { name: 'qwen-v_kade' } } },
-        ],
-      }),
-    );
-    await cacheModule.saveAnalysisCache(RU_MANUSCRIPT, {
-      chapters: {
-        1: [
-          { id: 1, chapterId: 1, characterId: 'sofiya', text: 'Привет.' },
-          { id: 2, chapterId: 1, characterId: 'kade', text: 'Да.' },
-        ],
-      },
-    });
-    try {
-      writeManifest('qwen-v_sofiya', 'English');
-      writeManifest('qwen-v_kade', 'English');
-      const body = await runRuStream();
-      expect(body).toContain('chapter_failed');
-      /* computeQwenKokoroFallbackSet sorts by character id — kade < sofiya. */
-      expect(body).toMatch(/no designed qwen voice for kade, sofiya/i);
-      expect(body).toMatch(/design them \(and the narrator\)/i);
-    } finally {
-      writeFileSync(castPath, originalCast);
-      await cacheModule.saveAnalysisCache(RU_MANUSCRIPT, {
-        chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'sofiya', text: 'Привет.' }] },
-      });
-    }
-  }, 10_000);
-
-  it('#1263: omits the redundant "(and the narrator)" clause when the narrator itself is undesigned', async () => {
-    /* Give the narrator an actual speaking line this time (the shared fixture
-       only has sofiya speaking, so the narrator never enters fallbackSet) —
-       then bake its designed voice English, invalid reuse into this Russian
-       book, same as the sofiya case above. This time the UNDESIGNED character
-       IS the narrator, so "design them (and the narrator)" would otherwise
-       name it twice. Restore the shared single-line cache afterward so later
-       tests in this describe block see the fixture they expect. */
-    const cacheModule = await import('../store/analysis-cache.js');
-    await cacheModule.saveAnalysisCache(RU_MANUSCRIPT, {
-      chapters: {
-        1: [
-          { id: 1, chapterId: 1, characterId: 'narrator', text: 'Начало.' },
-          { id: 2, chapterId: 1, characterId: 'sofiya', text: 'Привет.' },
-        ],
-      },
-    });
-    try {
-      writeManifest('qwen-v_narr', 'English');
-      const body = await runRuStream();
-      expect(body).toContain('chapter_failed');
-      expect(body).toMatch(/no designed qwen voice for narrator/i);
-      expect(body).not.toMatch(/and the narrator/i);
-    } finally {
-      await cacheModule.saveAnalysisCache(RU_MANUSCRIPT, {
-        chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'sofiya', text: 'Привет.' }] },
-      });
-    }
+    const confirmBody = await runRuStream({ fallbackConfirmed: true });
+    expect(confirmBody).not.toContain('chapter_awaiting_fallback_confirm');
+    expect(confirmBody).not.toContain('chapter_failed');
+    expect(synthCalled).toBe(true);
+    expect(lastSynthArgs?.forbidKokoroFallback).toBe(true);
+    expect(lastSynthArgs?.bookLanguage).toBe('ru');
   }, 10_000);
 
   it('warns and proceeds (does not abort) when Qwen is unavailable on a Coqui-eligible Russian book', async () => {
