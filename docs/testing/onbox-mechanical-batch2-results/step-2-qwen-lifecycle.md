@@ -1,6 +1,7 @@
 # Step 2 — A24 design-contention wait + A105 base17 eviction guard + A35
-# three-model stranded VRAM — PARTIAL, in progress (7th run: A35 driven to a
-# real result)
+# three-model stranded VRAM — PARTIAL, in progress (8th run: A105 bullet 5's
+# core contention-timeout confirmed; the card_lock-leak half left open after a
+# real runaway-synthesis episode)
 
 Run 2026-09-06/07, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
@@ -498,6 +499,177 @@ fully re-synthesized this run (`audioQa.status: "ok"` this time, vs. the 6th
 run's `"suspect"` — a different render, not a regression signal, nothing
 chased).
 
+## A105 bullet 5 — `Base17ContentionTimeoutError` + card_lock leak check (8th run, 2026-09-07)
+
+**Real result: core contention-timeout CONFIRMED (reproduced 3 times, exact
+error shape). The lock-leak half is NOT confirmed this run** — the mint call
+used to hold `card_lock` hit a real, apparently pre-existing "runaway
+synthesis" episode (GPU genuinely active but not finishing after 800+s),
+forcing a sidecar restart mid-test rather than letting it resolve naturally.
+
+**Setup.** `_BASE17_CONTENTION_WAIT_S_DEFAULT` (`server/tts-sidecar/main.py`,
+normally `60.0`) governs both `unload_base17()`'s in-flight-load wait AND
+(less obviously) `design_voice()`'s own `card_lock.acquire(timeout=...)` at
+the eviction-guard site (`main.py:7084-7090`) — the same constant gates two
+different waits. Lowering it to `4.0` makes a real `card_lock` contention
+race land in seconds instead of up to a minute, without needing a
+purpose-built test harness. Edited the constant, then restarted this
+worktree's own sidecar (port 9170) via its own supervisor script
+(`server/tts-sidecar/start.ps1` — this worktree's sidecar has a small
+crash/recycle supervisor loop, not previously noted in this file; see
+"Operational discovery" below) so the change took effect.
+
+**First reproduction (device: cuda:1 this attempt — see the operational note
+below on why the device varied run to run).** Fired
+`POST :9170/qwen/mint-variant` (`baseVoiceId: qwen-uIRjRzpfDUZqLX_0eVctR`
+(`anna`, already designed from earlier runs), a fresh `variantVoiceId`,
+`emotionInstruct: "Delivered angrily, with raised intensity and edge."`) —
+this holds `_DEVICE_LEDGER.card_lock()` from base17 load through the
+anchoring + instruct-synth forwards (`main.py:7521`), backgrounded. ~1 s
+later (`inflight_synth: 1` confirmed genuinely in flight), fired
+`POST :9170/qwen/design-voice` for a different, fresh `voiceId` — this hits
+the SAME per-card lock at the eviction-guard site
+(`main.py:7084-7090`). Observed:
+
+```
+DESIGN_HTTP:503 TIME:4.309992
+{"detail":"Could not acquire per-card lock for Qwen design — a concurrent
+base17 load/mint or another design's model load has held it for over 4s.
+Retry the design shortly.","code":"base17_in_flight"}
+```
+
+Exact match for the row's own docstring template
+(`main.py:7086-7090`) and the route's mapping to a 503 with
+`code: "base17_in_flight"` (`main.py:11376-11386`, the
+`except Base17ContentionTimeoutError` arm). **Reproduced 3 times total**
+across this run (once mid-investigation of an incidental device-placement
+question, once under a forced `CUDA_VISIBLE_DEVICES=0` single-GPU
+environment, once in the final clean run below) — same 503, same code, same
+message shape (only the "4s" and elapsed time varying by a few hundred ms),
+timed at 4.2-4.4 s each time against the lowered 4.0 s bound. **This is the
+row's core claim, confirmed on real hardware with the real error text.**
+
+**Lock-leak check — attempted, inconclusive.** The row's other half needs
+the mint that was holding `card_lock` to actually finish (releasing the
+lock), then a fresh design/mint on the same card to succeed. In the final
+clean attempt (fresh supervisor restart, idle-confirmed sidecar, no
+concurrent GPU work from other lanes per `nvidia-smi`), the denied
+`design-voice` call above fired and 503'd exactly as expected, but the
+**mint call itself never returned** — polled `inflight_synth` for over
+800 s (13+ minutes) and it stayed `1` the entire time. This was not a dead
+hang: `nvidia-smi` showed `cuda:1` at a genuine (if low, 7-10%) utilization
+throughout, with `committed`/reserved VRAM slowly climbing
+(4323 MB → 4697 MB over the same window) — consistent with the *same*
+"runaway synthesis" failure mode this file's own 5th/6th-run notes already
+flagged (`audioQa.status: "suspect"`, "2 sentences flagged for
+runaway-synthesis duration") from the emotion-instruct/audio-generation
+side of Qwen, not from anything related to `card_lock`. The specific
+`emotionInstruct` string used ("Delivered angrily, with raised intensity and
+edge.") is a plausible trigger for that same class of issue. This is an
+**incidental finding, not chased further or fixed** (out of scope, per the
+issue's own rules) — flagged here because it directly blocked completing
+this bullet.
+
+Given no practical way to cancel a single in-flight sidecar request, and
+unwilling to let a real runaway generation run indefinitely on a shared box,
+killed and restarted this worktree's own sidecar (full process-tree kill via
+`taskkill /PID <supervisor> /T /F`, confirmed port 9170 fully released, GPU0
+and GPU1 both back to their idle baselines — `0 MiB`/`197 MiB` — before
+relaunching). **This means the lock-leak half of bullet 5 is genuinely
+unconfirmed, not silently assumed**: a restart always clears lock state
+regardless of whether the original event would have leaked it, so it proves
+nothing either way about the specific contention episode above. A follow-up
+plain `design-voice` call against the freshly-restarted sidecar (no
+contention, `instruct` only, no `language` field) returned `200` with real
+PCM audio in 100.6 s — confirming the sidecar itself is healthy post-restart,
+but not addressing the leak question.
+
+**Operational discoveries worth recording for the next run (not fixed, per
+scope):**
+- **This worktree's sidecar has its own supervisor script**,
+  `server/tts-sidecar/start.ps1` + `sidecar-restart-policy.ps1`: a
+  `while ($true) { & $venvPython -m uvicorn ...}` loop that only auto-relaunches
+  on the sidecar's own self-exit codes 42 (CUDA poison) or 43 (planned
+  recycle) — any other exit (including a manual `Stop-Process -Force`) breaks
+  the loop. A bare `Stop-Process -Force` on the uvicorn child, without also
+  killing the supervisor's own PowerShell process, can strand things in a
+  confusing half-state (this run hit several rounds of that before finding
+  `start.ps1`): always kill the whole tree (`taskkill /PID <supervisor.ps1 PID> /T /F`)
+  and relaunch via `start.ps1` itself, not a raw `python -m uvicorn` call —
+  a raw relaunch with the wrong Python (this run's first attempt used the
+  system `Python312\python.exe` directly instead of
+  `.venv\Scripts\python.exe`) silently loads with no `qwen`/`coqui` packages
+  importable (`qwen_package_installed: false` etc. in `/health`) despite
+  reporting `ok: true`.
+- **A single benign-looking log artifact**: every clean startup logs
+  `Application startup complete` immediately followed by
+  `ERROR: [Errno 10048] ... only one usage of each socket address` and a
+  second shutdown sequence. This looks alarming (looks like two processes
+  racing for the port) but is consistent across every restart this run did,
+  including ones that then served traffic correctly — read as an internal
+  re-exec/self-check this codebase's own startup does (not chased further;
+  not disruptive to actual serving), not a real fault. Recording it here so
+  the next run doesn't mistake it for a crash-loop.
+- **This worktree's Qwen device placement is still not landing reliably on
+  GPU0** (the 8 GB card this row is meant to be tested against) — three
+  independent cold starts this run picked `cuda:1` (the 16 GB card) for
+  `qwen_device_key` even with GPU0 completely idle and plenty of free VRAM.
+  This matches the exact issue A24 bullet 2's own notes (and step 1's) already
+  flagged as owed investigation. Forcing `CUDA_VISIBLE_DEVICES=0` before
+  launch does make torch land on GPU0 (confirmed via `/health`'s
+  `qwen_device_key`), but that's a blunt, non-default workaround (hides GPU1
+  from the process entirely) that this worktree's normal `.env` does not use —
+  `server/.env`'s own startup log even warns
+  "CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER is set in the environment — it
+  overrides every per-engine device pin", so a future run relying on this
+  workaround should remove it again afterward. **This finding is unrelated to
+  `card_lock`** — the `card_lock.acquire()` timeout fired correctly and
+  identically regardless of which physical GPU ended up hosting the model
+  (`_qwen_configured_card_idx()` is a fixed logical index, not tied to actual
+  runtime placement), so the core bullet-5 result above is unaffected by it.
+- **A real, reproducible, unrelated bug**: calling the raw sidecar
+  `POST /qwen/design-voice` (or `/qwen/mint-variant`) directly with
+  `"language": "ru"` in the body returns a fast (~0.2-30 s, varies), generic
+  `500 {"detail":"Internal error."}` — no traceback was recoverable this run
+  (see the restart/supervisor note above; the request-handling process's
+  stdout/stderr never showed the exception despite several restart attempts
+  with explicit redirection). Omitting `language` (defaults to English) or
+  going through the app's own route
+  (`POST /api/books/:bookId/cast/:characterId/design-voice/stream`, which
+  completed a real `anna` re-design end-to-end on the SAME sidecar instance
+  and device in 87.9 s, `{"type":"designed", ..., "voiceId":
+  "qwen-uIRjRzpfDUZqLX_0eVctR"}`) both work fine even for this `ru`-language
+  book. This strongly suggests the raw endpoint's own `_calibration_text("ru")`
+  path (or similar) has a gap the app route avoids by supplying its own
+  calibration text, but this was not confirmed with a traceback — reported as
+  observed behavior, not root-caused. **Not fixed, per scope** — flagged as a
+  incidental finding for a future issue, not chased further.
+
+**Bullet 5 verdict:** the row's headline claim — `design_voice()` raises the
+typed `Base17ContentionTimeoutError`, surfaced as a 503 with
+`code: "base17_in_flight"` and the documented message template, when it can't
+acquire the per-card lock within the (test-lowered) bound — is **CONFIRMED**
+on real hardware, 3 times. The second half — that the next design/mint on the
+same card still succeeds afterward, proving `card_lock` didn't leak — is
+**NOT CONFIRMED** this run: the specific attempt to observe it ran into an
+unrelated runaway-synthesis episode that outlasted this run's practical
+budget, and the recovery (sidecar restart) makes the leak question
+unobservable for that specific episode. Left as real remaining scope, not
+papered over with the post-restart sanity check (which only proves the
+sidecar recovers cleanly from a restart, an unrelated and much weaker claim).
+
+Cleanup for this bullet: `_BASE17_CONTENTION_WAIT_S_DEFAULT` reverted to
+`60.0` (confirmed via `git diff` showing a clean working tree before the
+final restart); sidecar restarted one last time via `start.ps1` on the
+reverted source; `POST :9170/unload {"engine":"qwen"}` issued, `/health`
+confirmed `qwen_loaded`/`qwen_base17_loaded`/`qwen_design_resident`/
+`kokoro_loaded`/`model_loaded` all `false`, `inflight_synth: 0`; `nvidia-smi`
+confirmed GPU0 `227 MiB` used / GPU1 `681 MiB` used (both near their session
+idle baselines, no stranded residency from the runaway mint). Stray log files
+this run created under `server/tts-sidecar/` while iterating on the restart
+(`_a105b5_*.log`, `_b5_final.*`, `_supervisor_restore.*`, `_final_restore.*`)
+were all deleted before finishing; they were never committed.
+
 ## Remaining scope — not attempted this session
 
 - **A24 bullets 2-4**: forcing a genuinely wedged design (bullet 2), the
@@ -511,22 +683,35 @@ chased).
   fixture setup, not code — see its own section above; the fixture's single
   chapter needs to be reset to unsynthesized (or a new chapter added) before
   the wait state this bullet needs can even be reached.
-- **A105 bullets 3 (direction 2), 4, 5**: bullet 3's second direction was
-  attempted this (6th) run and came back **inconclusive**, not driven to a
-  result — see its own section above for why (the render target doesn't
-  isolate Kokoro from Qwen contention on this fixture). Bullet 4 (two
-  overlapping designs) was scoped this run and found to need either a second
-  book or a direct sidecar-level drive, because the single-design route's own
-  per-book mutual exclusion 409s a same-book second design before it ever
-  reaches the arbiter — see its own section above. Bullet 5
-  (`Base17ContentionTimeoutError`) was not attempted. Bullets 1, 2, and 3
-  (direction 1) remain driven to a real result — see their own sections
-  above — with open sub-questions flagged for whoever picks up the rest:
-  log-line vs. race-timing distinction on bullet 2, the internal guard-branch
-  not directly observed on bullet 1, the `audioEngines` fallback question on
-  bullet 3 (now seen twice, 5th and 6th runs, still not chased), and the
-  per-book design mutual-exclusion shape newly found this run for bullet 4.
-- **A35**: driven this (7th) run — see its own section above. All 4 bullets
+- **A105 bullets 3 (direction 2), 4**: unchanged since the 6th run — bullet
+  3's second direction came back **inconclusive** (the render target doesn't
+  isolate Kokoro from Qwen contention on this fixture); bullet 4 (two
+  overlapping designs) needs either a second book or a direct sidecar-level
+  drive, because the single-design route's own per-book mutual exclusion 409s
+  a same-book second design before it ever reaches the arbiter — see their
+  own sections above.
+- **A105 bullet 5**: driven this (8th) run — see its own section above. The
+  core `Base17ContentionTimeoutError`/503/`base17_in_flight` claim is
+  **CONFIRMED** (reproduced 3 times with exact error text). The card_lock-
+  leak half (next design/mint on the same card still succeeds afterward) is
+  **NOT CONFIRMED** — the attempt to observe it ran into a real, unrelated
+  "runaway synthesis" episode that outlasted this run's practical budget, and
+  the recovery (a sidecar restart) makes that specific episode's leak
+  question unobservable after the fact. This is genuine remaining scope for
+  the next run, not a pass being claimed on partial evidence — see the
+  bullet's own section for a concrete retry strategy (a shorter/safer
+  `emotionInstruct`, or timing the follow-up call against an already-warm
+  base17+anchoring state to shorten the window a runaway generation has to
+  strike in).
+- **A105 bullets 1, 2, 3 (direction 1)**: unchanged, still driven to a real
+  result from the 3rd-5th runs — see their own sections above — with open
+  sub-questions still flagged for whoever picks up the rest: log-line vs.
+  race-timing distinction on bullet 2, the internal guard-branch not directly
+  observed on bullet 1, the `audioEngines` fallback question on bullet 3 (now
+  seen three times — 5th, 6th, and indirectly again this 8th run's `anna`
+  re-design control call — still not chased), and the per-book design
+  mutual-exclusion shape found in the 6th run for bullet 4.
+- **A35**: driven in the 7th run — see its own section above. All 4 bullets
   produced a real result; the one open thread is bullet 1's exact framing
   (all three engines were not caught resident in a single `/health` sample,
   though Base 0.6B + base17 co-residency was).
@@ -534,20 +719,24 @@ chased).
 **Why stopped here:** each of the remaining A24/A105 bullets needs its own
 precisely timed real race against a sidecar this box is already sharing with
 other live lanes — the same class of multi-hour, contention-sensitive
-real-hardware work the ledger's #2993 entry hit for the same reason.
-Continuing past A35 inside this run's remaining budget would mean either
-rushing the timing (an unreliable pass/fail read, indistinguishable from a
-false pass) or reporting results never actually observed. Neither is
-acceptable, so the claim is being left parked (Agent Working, still assigned,
-no AGENT DONE/BLOCKED/FAILED) rather than closed. Setup above (fixture book
-already in place, unload sequence already known to work, exact endpoints
-already traced, A105 bullets 1 and 2's `/load`+design/`/unload` race patterns
-demonstrated directly against the raw sidecar, `design-single/status`
-confirmed as a more reliable poll target than an SSE body a client-side
-timeout can sever, and `PUT /api/config` now demonstrated as the live,
-no-restart way to flip `SEG_ASR_ENABLED` for A35) should let the next run
-start directly on A24 bullet 2 or A105 bullet 3 instead of repeating this
-reconnaissance.
+real-hardware work the ledger's #2993 entry hit for the same reason. This
+(8th) run's own attempt at A105 bullet 5's second half is a direct
+illustration: a real, unrelated GPU-side failure mode (runaway synthesis)
+ate the remaining budget for that specific race before it could resolve
+naturally. Continuing past that inside this run's remaining budget would mean
+either rushing the timing on a fresh bullet (an unreliable pass/fail read,
+indistinguishable from a false pass) or reporting results never actually
+observed. Neither is acceptable, so the claim is being left parked (Agent
+Working, still assigned, no AGENT DONE/BLOCKED/FAILED) rather than closed.
+Setup above (fixture book already in place, unload sequence already known to
+work, exact endpoints already traced, the raw sidecar `/qwen/mint-variant` +
+`/qwen/design-voice` endpoints now demonstrated as a clean, direct way to
+force the `card_lock` race for bullet 5 without any app-level route in the
+way, the sidecar's own `start.ps1` supervisor now documented so the next run
+doesn't lose time on ad hoc restarts, and the `language: "ru"` raw-endpoint
+bug now flagged so it isn't mistaken for a card_lock or contention finding)
+should let the next run start directly on A105 bullet 5's second half, or
+A24 bullet 2/3, instead of repeating this reconnaissance.
 
 ## Cleanup / state at time of writing
 
@@ -580,15 +769,35 @@ reconnaissance.
   (`audioEngines: {"qwen":2,"coqui":1}`, `audioQa.status: "ok"`) — still no
   distinct 0.6B-vs-1.7B breakdown in `audioEngines`, a third data point for
   the open question the 5th/6th runs already flagged, not chased further.
+- **8th run's own cleanup**: `server/tts-sidecar/main.py`'s
+  `_BASE17_CONTENTION_WAIT_S_DEFAULT` was temporarily lowered to `4.0` for
+  the bullet-5 test and reverted to `60.0` before finishing (`git diff`
+  confirmed clean before the final sidecar restart). The sidecar was
+  restarted several times this run via its own `start.ps1` supervisor (see
+  the bullet-5 section's "operational discoveries") and left running,
+  fully idle (`qwen`/`coqui`/`kokoro`/`model_loaded` all `false`,
+  `inflight_synth: 0` per `/health`) on the reverted source. GPU0 (`227 MiB`
+  used) and GPU1 (`681 MiB` used) both sat near their session idle baselines
+  after the final `/unload {"engine":"qwen"}` — no stranded residency from
+  the runaway-synthesis mint call that this run had to kill via a full
+  sidecar restart. `anna`'s designed voice (`qwen-uIRjRzpfDUZqLX_0eVctR`) was
+  re-designed in place this run as a control check (idempotent overwrite,
+  same voiceId) — no cast-visible change. No other lane's process was
+  touched; `nvidia-smi` was checked before and after every restart to confirm
+  this.
 
-**Still not finished after seven runs.** A35 was driven to a real result this
-run (see its own section above). A24 bullets 2-4, A105 bullet 3's second
-direction (attempted, inconclusive) plus bullets 4 (scoped, needs a second
-book or a direct sidecar drive) and 5 remain undriven — same reasoning as
-above: forcing each precisely-timed race needs sustained, carefully sequenced
-real-hardware time no single run's budget has stretched to yet. This run's
-own confirmation that `PUT /api/config` flips `SEG_ASR_ENABLED` live (no
-restart) and the 6th run's `chapterIds` numeric-vs-slug correction plus
-per-book design-mutex finding should save the next run from repeating any of
-this reconnaissance. Parking again (Agent Working, still assigned) rather
-than reporting AGENT DONE against unfinished scope.
+**Still not finished after eight runs.** A105 bullet 5's core claim was
+driven to a real, confirmed result this (8th) run (see its own section
+above); its card_lock-leak half remains open, blocked on a real unrelated
+GPU-side failure mode this run ran out of budget to work around. A24 bullets
+2-4, A105 bullet 3's second direction (attempted, inconclusive), and bullet 4
+(scoped, needs a second book or a direct sidecar drive) remain undriven —
+same reasoning as above: forcing each precisely-timed race needs sustained,
+carefully sequenced real-hardware time no single run's budget has stretched
+to yet. This run's own documentation of the sidecar's `start.ps1` supervisor
+loop, the raw `/qwen/mint-variant` + `/qwen/design-voice` endpoints as a
+clean way to force `card_lock` races directly (no app-level route in the
+way), and the `language: "ru"` raw-endpoint bug (so it isn't mistaken for a
+contention finding) should save the next run from repeating this
+reconnaissance. Parking again (Agent Working, still assigned) rather than
+reporting AGENT DONE against unfinished scope.
