@@ -922,14 +922,13 @@ present (healthy), matching spec exactly. Card's own **Preview** button
 (independent of the wizard's inline audition) fires
 `POST /api/voice-library/<uuid>/sample` -> **200**
 `application/json` — confirms the audition route genuinely works from the
-UI. **Minor observation, not filed as a defect**: immediately after the
+UI. **Minor observation, not a defect**: immediately after the
 wizard's completion screen appeared, its own inline "Play preview" button
 was not yet visible (`previewUrl` is set by a separate best-effort
 `api.sampleLibraryVoice` call inside `handleSave`, wrapped in try/catch,
 and may not have resolved by the time of the check) — the persisted
 entry's own sample route works fine (see the card Preview 200 above), so
-this is at most a completion-screen timing/race, not a broken feature;
-worth a quick look if seen again on a calmer box. Script:
+this is at most a transient completion-screen timing quirk, not a broken feature. Script:
 `e2e/manual/fs38-a07-b02-record-wizard.mjs` (creation) +
 `e2e/manual/fs38-b01-card-check.mjs` (card check).
 
@@ -2870,8 +2869,7 @@ character list every time. Did not attempt a fix or a workaround (e.g.
 downgrading it to a background bucket) — that would change the cast/test
 setup this run is supposed to report on, and root-causing the stall itself is
 past this child's scope ("Fixing side-11" and anything broader is explicitly
-out of scope; this looks adjacent but distinct). Filed as a fact for whoever
-picks this row up next, not fixed here.
+out of scope; this looks adjacent but distinct). Filed as [#3080](https://github.com/dudarenok-maker/Castwright/issues/3080).
 
 Cleanup: the throwaway book (`qa-test-author__standalones__d-02-throwaway-coalfall`)
 and its stalled generation queue were left in place, on this worktree only, so

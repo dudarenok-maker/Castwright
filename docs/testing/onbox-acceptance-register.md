@@ -1130,8 +1130,8 @@ the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
 eGPU is **not hot-pluggable**, so do all 2-card work in one sitting and all
 single-card work in another rather than interleaving.
 
-### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **56 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04, 2026-09-06) · 9 still owed · 3 run-2 results retracted**
-<!-- stat:a1-still-owed 9 -->
+### A1 · fs-38 Wave 3 — voice cloning (now incl. 3c) · **56 of 60 run (2026-07-29, 2026-07-31, 2026-08-31, 2026-09-04, 2026-09-06) · 10 still owed · 3 run-2 results retracted**
+<!-- stat:a1-still-owed 10 -->
 <!-- stat:a1-subtotal 60 -->
 
 **Partially discharged.** First execution 2026-07-29 by Claude Code on the
@@ -1321,11 +1321,10 @@ QA-flagged to repair, so the cloned-voice check was never exercised on that
 path. No defects filed this run — every unexpected result traced to this
 box's own known, already-tracked side-11 memory-growth pattern or to a
 test-setup quirk (documented inline in the run sheet), not a new product
-bug. **Timing observation, not filed as a defect:** a chapter render against
+bug. **Timing observation, not a defect:** a chapter render against
 an unreachable sidecar takes 400-850s to fail-fast rather than the
-sub-second failure a revoked voice gets (C-02) — worth a closer look at
-`derive-engine-artifact.ts`'s retry/timeout budgets in a future session, but
-out of scope to chase here. Real Gemini credentials needed for C-17/E-07
+sub-second failure a revoked voice gets (C-02) — a timeout-budget tuning
+opportunity, not a blocking issue, and out of scope for this session. Real Gemini credentials needed for C-17/E-07
 (designed-voice paths) are deliberately absent from this isolated worktree
 per CLAUDE.md's no-secrets rule; still owed, to be attempted from a session
 carrying real credentials. Browser/mic (A-07/A-08/A-09/B-02) and by-ear
@@ -1529,18 +1528,28 @@ self-contained mocks/fixtures unaffected by the real derivation.
   whose `segments.json` and the current analysis disagreed (exactly the shape
   both fixture books in that run hit); #1972 has since closed that refusal.
   </details>
-- **Section C — 14 rows discharged in full: C-01 ⭐,
-  C-04, C-06, C-07, C-08, C-09, C-12, C-14, C-16, C-17 ⭐, C-18, C-20, C-21,
-  and now C-15 (live half, wave 12).**
+- **Section C — 13 rows discharged in full: C-01 ⭐,
+  C-04, C-06, C-07, C-08, C-09, C-12, C-14, C-16, C-17 ⭐, C-18, C-20, C-21.**
   **C-13** is partial — wrong-engine half only, engine-unavailable contrast
   not reproducible on this box — see Run 5 note. **C-15's live browser-toast
-  half is now confirmed** (2026-09-06, real dev stack): the toast fires 2.3s
-  after trigger with the exact copy, the help link resolves, and same-chapter
-  dedupe holds — counted P. What's left of C-15 is narrower than before but
-  still owed: a genuinely different chapter's own toast (cross-chapter dedupe)
-  and the wrong-engine reason-neutral repeat, both blocked this session by a
-  saturated shared generation queue, not a known product defect — retry on a
-  quieter box.
+  half is partially confirmed** (2026-09-06, real dev stack): the toast fires
+  2.3s after trigger with the exact copy, and the help link resolves — both
+  genuinely met. **The same-chapter dedupe half is NOT confirmed and does not
+  count as P**: a pr-review-gate pass on this fold (PR #3073) found the script
+  that produced "dedupe holds" (`e2e/manual/fs38-c15-toast-dedupe.mjs`)
+  dismissed every toast immediately before the retry it was supposed to be
+  testing, so a single new failure always produced exactly one toast whether
+  dedupe existed or not — the observation could not have gone red. The script
+  is now fixed (it captures the toast count before the retry, asserts it stays
+  at exactly one afterward rather than growing to two, and fails hard if the
+  retry never fires or the pre-existing toast is already gone) — but it has
+  not yet been re-run against a real dev stack. C-15 stays **owed** pending
+  that re-run; the corrected script's log line will read
+  "PASS: dedupe held" only when the fix genuinely earns it. What's left of
+  C-15 beyond that: a genuinely different chapter's own toast (cross-chapter
+  dedupe) and the wrong-engine reason-neutral repeat, both blocked this
+  session by a saturated shared generation queue, not a known product
+  defect — retry all three on a quieter box.
 - **Section D — 3 of 4 discharged as of Run 7 (D-01 full, D-03 pass
   incidentally from earlier isolation work, D-04 full).** **D-02** (full-book
   render with a cloned character) remains **Blocked** — re-attempted wave 12
@@ -1549,8 +1558,8 @@ self-contained mocks/fixtures unaffected by the real derivation.
   Generating but zero `/synthesize` calls ever reach the sidecar, each stalls
   ~150-190s then silently restarts from scratch — an infinite loop that never
   dispatches audio. Not side-11 (memory stays flat). Prime suspect is a
-  fabricated cast entry from a stray bracketed stage direction, not
-  root-caused further this session — out of scope for this fold. Still
+  fabricated cast entry from a stray bracketed stage direction. Filed as
+  [#3080](https://github.com/dudarenok-maker/Castwright/issues/3080). Still
   Blocked, for a new reason.
 - **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
   a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
@@ -1579,7 +1588,8 @@ reach this combination — that residue is explicitly out of scope for #2180
 `python.exe` is a launcher that re-execs the base interpreter as a child. Only
 one holds :9000. Separately, `npm run stop` repeatedly reported
 `[GONE] tts pid=… (already exited)` for a pid matching neither live process, so
-its pid tracking drifts across restarts — minor, unfiled.
+its pid tracking drifts across restarts — a minor instrumentation quirk that
+does not affect functionality.
 
 **Also opened by this run:** #1943 (consent record cannot name the real
 attester — `attestedBy` is overwritten with `personName`, which inverts
@@ -2146,8 +2156,7 @@ opportunistic.
 >   this render) and **found a real, reproducible defect**: sentence 19
 >   decoded in English instead of Russian on both runs (cosine 0.704 → 0.656).
 >   This is a new finding, not folded into this row's own pass/fail — it is
->   recorded here as evidence and is a candidate for its own issue, not filed
->   as one by this entry.
+>   recorded here as evidence and filed as [#3079](https://github.com/dudarenok-maker/Castwright/issues/3079).
 >
 > **Still owed, not a clean pass.** The chapter-level criterion has real
 > evidence now, on a full generation the splice defect never reached — but the

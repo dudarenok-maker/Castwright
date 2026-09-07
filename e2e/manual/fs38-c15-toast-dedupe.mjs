@@ -91,6 +91,13 @@ async function waitForFailureToast(page, maxMs = 60000) {
 }
 
 async function main() {
+  // Guard: ensure we're only running against a throwaway book, not real user data.
+  // The script fires real chapter regenerations and expects them to fail.
+  if (!BOOK_ID.includes('qa-throwaway')) {
+    console.error(`FATAL: BOOK_ID does not contain 'qa-throwaway' — refusing to run against non-throwaway book. Got: ${BOOK_ID}`);
+    process.exit(1);
+  }
+
   const browser = await chromium.launch();
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
@@ -105,8 +112,16 @@ async function main() {
   const t0 = Date.now();
   const ok1 = await clickChapterRetryOrRegenerate(page, 'Chapter 1');
   console.log('attempt1 dialog handled=', ok1);
+  if (!ok1) {
+    console.error('FAIL: attempt1 retry/regenerate button never fired (ok1=false) — dedupe cannot be measured without a first failure');
+    process.exit(1);
+  }
   const r1 = await waitForFailureToast(page);
   console.log(`Failure toast (attempt1) after ${Date.now() - t0}ms:`, r1.texts, '| all toasts seen:', r1.allTexts);
+  if (r1.texts.length === 0) {
+    console.error('FAIL: attempt1 failure toast never appeared — dedupe cannot be measured without a first failure to dedupe against');
+    process.exit(1);
+  }
 
   await page.waitForTimeout(1000);
   const ch1Row = page.locator('button', { hasText: 'Chapter 1' }).first();
@@ -127,11 +142,41 @@ async function main() {
   }
 
   console.log('\n=== ATTEMPT 2: SAME chapter (Chapter 1) again -> dedupe expected ===');
-  await dismissAllToasts(page);
+  // DO NOT dismiss toasts — we need to measure whether attempt 2 bumps the
+  // existing toast (dedupe) or creates a second one (no dedupe).
+  const toastsBeforeAttempt2 = await toastLocator(page).allTextContents().catch(() => []);
+  const failureToastsBeforeAttempt2 = toastsBeforeAttempt2.filter((t) => /failed|Cloned voice/i.test(t));
+  console.log(`  toasts before attempt2: ${failureToastsBeforeAttempt2.length} failure-class toast(s)`);
+  if (failureToastsBeforeAttempt2.length === 0) {
+    console.error('FAIL: no failure toast present before attempt2 — attempt1\'s toast must still be visible for dedupe to have anything to bump. Without this, a fresh toast after attempt2 would falsely read as "dedupe held".');
+    process.exit(1);
+  }
+
   const ok2 = await clickChapterRetryOrRegenerate(page, 'Chapter 1');
   console.log('attempt2 dialog handled=', ok2);
+  if (!ok2) {
+    console.error('FAIL: attempt2 retry/regenerate button never fired (ok2=false)');
+    process.exit(1);
+  }
+
   const r2 = await waitForFailureToast(page, 30000);
-  console.log('Failure toast (attempt2, same chapter):', r2.texts.length ? r2.texts : '(none — dedupe held)', '| all toasts seen:', r2.allTexts);
+  if (r2.texts.length === 0) {
+    console.error('FAIL: attempt2 failure toast never appeared after 30s');
+    process.exit(1);
+  }
+
+  const toastsAfterAttempt2 = await toastLocator(page).allTextContents().catch(() => []);
+  const failureToastsAfterAttempt2 = toastsAfterAttempt2.filter((t) => /failed|Cloned voice/i.test(t));
+  console.log(`  toasts after attempt2: ${failureToastsAfterAttempt2.length} failure-class toast(s)`);
+
+  // Dedupe assertion: should still have exactly 1 failure toast (bumped via dedupeKey),
+  // NOT 2 (which would mean dedupe failed and a second toast was added).
+  if (failureToastsAfterAttempt2.length !== 1) {
+    console.error(`FAIL: dedupe did not hold — expected 1 failure toast after attempt2, got ${failureToastsAfterAttempt2.length}`);
+    console.error('toasts after attempt2:', failureToastsAfterAttempt2);
+    process.exit(1);
+  }
+  console.log('✓ PASS: dedupe held — same-chapter retry bumped existing toast (count stayed at 1)');
 
   console.log('\n=== ATTEMPT 3: DIFFERENT chapter (Chapter 2 "The Knock") -> new toast expected ===');
   await dismissAllToasts(page);
