@@ -201,3 +201,83 @@ attempt changed nothing about the already-applied, already-verified repair.
 Left as `AGENT BLOCKED` asking the operator whether other box work can be
 quieted for a retry, per the same request that unblocked the 2026-09-08
 attempt.
+
+## Re-test attempt 5-6 (2026-09-09, post-reboot) — CLOSED, `oduvan` confirmed to hold, plus a self-inflicted detour and its recovery
+
+The box was rebooted between attempt 4 and this one (operator, to recover a
+dropped eGPU on an unrelated ticket). Confirmed the box was genuinely quiet
+before starting (no vitest/node battery running) — a live 13-worker vitest
+battery in the **primary checkout** was observed mid-run at one point and this
+attempt waited for it to clear rather than compete with it, which attempts
+1-4 never checked for.
+
+Started `server/dist/index.js` directly (`WORKSPACE_DIR=C:\AudiobookWorkspace`,
+`PORT=8156`), confirmed healthy. The TTS sidecar failed to spawn and gave up
+after 6 attempts — same as attempt 4, unrelated to text analysis, no impact.
+
+**Attempt 5 (self-inflicted regression, then recovered).** Reused attempt 4's
+exact recipe verbatim, including `{"fresh": true}` in the analysis POST body —
+**this was a mistake, not a repro of the prior failure.** The request
+completed cleanly this time (server did NOT crash — first clean completion in
+five tries), but `{"fresh": true}` is the app's own "Start Fresh" mode
+(`server/src/routes/analysis.ts:3803`, `requestedFresh` branch): it explicitly
+deletes `cast.json` and the reuse-carryover, and drops the cast-merge/dedup
+journals, before re-analysing from nothing — "fresh run regenerates ids from
+scratch, so old lineage is meaningless" per its own comment. Regenerating
+`oduvan` from raw manuscript text with no existing `cast.json` to reconcile
+against reproduced the ORIGINAL A34 bug live: the character came back as
+`одуван` (Cyrillic), and — because the reconciliation pipeline recorded this
+as a legitimate id migration — **wrote a wrong-direction entry
+(`"oduvan": "одуван"`) into the real `cast-id-history.json`**, i.e., this
+attempt's own methodology error corrupted the retirement record on the actual
+book, not a defect the row was testing for. A same-recipe follow-up with the
+`fresh` flag simply omitted (an ordinary re-analysis) faithfully re-confirmed
+`одуван` per that now-bad history — correct behaviour given corrupted input,
+not a second bug.
+
+**Recovery, using the repair tool itself.** `node
+scripts/repair-a34-wrong-direction-ids.mjs` (dry run) correctly detected the
+exact wrong-direction pattern it exists to catch:
+`[Castwright / Standalones / Заказ Коалфолла] would reinstate "oduvan" (was
+"одуван", "Одуван")`. Stopped the retest server (the script's own liveness
+probe refuses `--apply` against a live one), then re-ran with `--apply`
+(`ALLOW_STANDING_PORTS=8090` for `llama-swap`, the documented exception):
+wrote `cast.json` (id back to `oduvan`) and `cast-id-history.json` (direction
+corrected to `"одуван": "oduvan"`), with byte-verified `.bak.a34-*` copies of
+both. Read the full character roster back afterward — all 15 ids ASCII/sane,
+nothing else disturbed by the fresh-mode detour.
+
+**Attempt 6 (the actual, correctly-parameterised re-test) — CONFIRMED.**
+Relaunched the server, POSTed an ordinary re-analysis (`{}`, no `fresh` flag)
+against the now-repaired book. Completed cleanly (server stayed healthy
+throughout, 75 KB SSE response, no crash — second clean completion in a row
+once the box was actually quiet). Read `cast.json` directly afterward:
+`id: "oduvan"` — **holds** under a genuine fresh manuscript re-analysis, which
+is the row's actual criterion.
+
+**Root cause of attempts 1-4's crashes was very likely box contention, now
+resolved separately** (this attempt's own vitest-battery observation, plus
+the reboot). No further crash occurred once the box was confirmed quiet.
+
+**Root cause of the `{"fresh": true}` mistake, for whoever reads this next:**
+`{"fresh": true}` is the "Start Fresh" feature, not a plain re-analysis
+trigger — it is documented in the route's own comments to intentionally
+discard id lineage. Any future re-test of an id-retirement fix must use an
+ordinary `POST .../analysis` body (`{}`), never `fresh: true`. Attempt 4's own
+recipe already carried this mistake; it went unnoticed there only because the
+crash happened before the flag's effect could matter.
+
+## Result (final)
+
+- **Backup**: verified byte-identical to pre-apply live state before any
+  write. ✅
+- **Apply**: succeeded for the one confirmed pair; live `cast.json` id
+  confirmed `oduvan` (ASCII) by direct read, repeatedly across every session
+  including this one. ✅
+- **Re-test**: **CONFIRMED.** A genuine ordinary full-manuscript re-analysis
+  (no `fresh` flag) against the repaired book holds `id: "oduvan"`
+  afterward — attempt 6, 2026-09-09. The self-inflicted `fresh:true` detour in
+  attempt 5 is documented above and was fully recovered via the repair
+  script's own `--apply`, which also validates the script correctly detects
+  and fixes a freshly-created (not just historical) instance of the
+  wrong-direction pattern.
