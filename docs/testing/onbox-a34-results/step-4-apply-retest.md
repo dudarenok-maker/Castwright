@@ -156,3 +156,48 @@ per the issue's own text — has not been observed and needs a stable box.
   on this box, unrelated to the repair itself. **Owed** — needs a stable
   server session to complete: start the app, re-analyze *Заказ Коалфолла*,
   confirm the id holds `oduvan`.
+
+## Re-test attempt 4 (2026-09-09, fresh queue claim) — same failure, cleaner repro
+
+Re-confirmed the live `cast.json` id was still `oduvan` (unaffected by the
+three prior attempts) before starting.
+
+This attempt avoided the browser/frontend path entirely, to rule out anything
+UI-side: started `server/dist/index.js` directly (`WORKSPACE_DIR` pointed at
+the real workspace, `PORT=8155`, `LAN_HTTPS_PORT=8446` to avoid the standing
+`:8443` LAN dev server), confirmed it up via a plain HTTP probe, then drove
+the re-analysis with a single `curl -N` SSE request to
+`POST /api/manuscripts/mns_af35ec3ced/analysis` with `{"fresh": true}` —
+no browser, no Vite dev proxy, nothing that a prior attempt's notes flagged as
+a possible contributor.
+
+Server came up clean, the sidecar's TTS subprocess (`qwen3-tts-1.7b`) failed
+to spawn 6 times and gave up (`TTS is DOWN; restart the server to recover` at
+06:50:42.871) — unrelated to text analysis, no impact expected. The actual
+character-detection analysis (`phase=0`) proceeded normally: chapter 2/3
+finished cast detection at 06:51:08.993 ("5 characters in 52s"); chapter 3/3
+was still waiting on an Ollama response (45s+) at 06:51:01.890. **The server
+process (and its wrapping PowerShell host) then disappeared entirely between
+06:51:08.993 and the next poll ~5s later** — no further log lines, no error,
+no exit code, `Get-Process` on its PID returned nothing, the port stopped
+listening. The `curl` client's connection simply dropped (process exited on
+its own, not killed by the polling loop, which was still under its 900s
+`-m` cap).
+
+This is the same silent-death signature the three prior attempts on
+2026-09-06/07/08 recorded, reproduced with a strictly simpler request path
+(no browser, no proxy) — evidence against a browser- or Vite-specific cause
+and for a machine-level one. At the time of the crash the box was running
+~14 other `node.exe` processes and 2+ `ollama`/`python` model-serving
+processes at once (consistent with the several concurrent agent lanes this
+box runs), matching the earlier attempts' observation of unusually high
+`node.exe` counts each time this step has been tried.
+
+`cast.json` re-checked immediately after the crash: still `id: "oduvan"`,
+unaffected — the analysis died before writing any result back, so this
+attempt changed nothing about the already-applied, already-verified repair.
+
+**Still owed, now with a fourth reproduction ruling out browser/proxy causes.**
+Left as `AGENT BLOCKED` asking the operator whether other box work can be
+quieted for a retry, per the same request that unblocked the 2026-09-08
+attempt.
