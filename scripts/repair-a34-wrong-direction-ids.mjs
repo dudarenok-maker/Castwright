@@ -151,6 +151,8 @@ import {
   collectBakNameEntries,
   buildNameIndex,
   probePortRangeRefused,
+  parseStandingPorts,
+  formatStandingPortsSkippedLine,
   AUTO_REBIND_RANGE,
   formatBooksScannedLine,
   formatNotYetAnalysedLine,
@@ -561,6 +563,13 @@ export async function main(argv = process.argv.slice(2), workspaceDirOverride) {
       `probing 127.0.0.1:${port}-${port + AUTO_REBIND_RANGE - 1} and ` +
         `127.0.0.1:${lanPort}-${lanPort + AUTO_REBIND_RANGE - 1} for a live server...`,
     );
+    const standingPorts = parseStandingPorts(process.env.ALLOW_STANDING_PORTS);
+    for (const line of [
+      formatStandingPortsSkippedLine(port, standingPorts),
+      formatStandingPortsSkippedLine(lanPort, standingPorts),
+    ]) {
+      if (line) console.log(line);
+    }
     const [httpNotRefused, lanNotRefused] = await Promise.all([
       probePortRangeRefused(port),
       probePortRangeRefused(lanPort),
@@ -572,7 +581,9 @@ export async function main(argv = process.argv.slice(2), workspaceDirOverride) {
           `possibly-live. This script writes cast.json and cast-id-history.json out-of-process, with no ` +
           `in-process lock covering either against a running server's own writes. Stop the server on ` +
           `${port}-${port + AUTO_REBIND_RANGE - 1} (and LAN HTTPS ${lanPort}-${lanPort + AUTO_REBIND_RANGE - 1} ` +
-          `if running), or point PORT/LAN_HTTPS_PORT elsewhere.`,
+          `if running), or point PORT/LAN_HTTPS_PORT elsewhere. If one of these ports is a known standing service ` +
+          `unrelated to Castwright (e.g. llama-swap on 8090), set ALLOW_STANDING_PORTS=<port>[,<port>...] for this ` +
+          `run to skip probing it.`,
       );
       process.exitCode = 1;
       return;

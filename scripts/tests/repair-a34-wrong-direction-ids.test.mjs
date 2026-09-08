@@ -48,7 +48,12 @@ import {
   backupBeforeApply,
   main,
 } from '../repair-a34-wrong-direction-ids.mjs';
-import { parseStandingPorts, probePortRangeRefused, AUTO_REBIND_RANGE } from '../repair-cast-id-drift.mjs';
+import {
+  parseStandingPorts,
+  probePortRangeRefused,
+  formatStandingPortsSkippedLine,
+  AUTO_REBIND_RANGE,
+} from '../repair-cast-id-drift.mjs';
 
 // ---------------------------------------------------------------------------
 // parseArgs
@@ -1140,4 +1145,90 @@ test('probePortRangeRefused: a live listener inside the range is reported by def
     else process.env.ALLOW_STANDING_PORTS = prev;
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+// ---------------------------------------------------------------------------
+// formatStandingPortsSkippedLine — the operator transcript helper
+// ---------------------------------------------------------------------------
+
+test('formatStandingPortsSkippedLine: empty standing set -> returns empty string', () => {
+  const standing = new Set();
+  const line = formatStandingPortsSkippedLine(8080, standing);
+  assert.equal(line, '', 'empty standing set should return empty string');
+});
+
+test('formatStandingPortsSkippedLine: standing port inside range -> names that port', () => {
+  const standing = new Set([8085]);
+  const line = formatStandingPortsSkippedLine(8080, standing);
+  assert.match(line, /8085/, 'should name the port inside the range');
+  assert.ok(line.includes('NOT probing'), 'should indicate NOT probing');
+});
+
+test('formatStandingPortsSkippedLine: multiple standing ports inside range -> all named in range order', () => {
+  const standing = new Set([8085, 8087, 8091]);
+  const line = formatStandingPortsSkippedLine(8080, standing);
+  assert.match(line, /8085.*8087.*8091/, 'all standing ports should be named in order');
+  assert.ok(line.includes('NOT probing'), 'should indicate NOT probing');
+});
+
+test('formatStandingPortsSkippedLine: standing port outside range -> returns empty string', () => {
+  const standing = new Set([8100]);
+  const line = formatStandingPortsSkippedLine(8080, standing);
+  assert.equal(line, '', 'standing port outside range should return empty string');
+});
+
+test('formatStandingPortsSkippedLine: mixed standing ports (some inside, some outside) -> only names ports inside range', () => {
+  const standing = new Set([8085, 8100, 8088]);
+  const line = formatStandingPortsSkippedLine(8080, standing);
+  assert.match(line, /8085.*8088/, 'should name ports inside range (8085, 8088)');
+  assert.equal(line.includes('8100'), false, 'should not name port outside range');
+});
+
+test('formatStandingPortsSkippedLine: invalid startPort values -> returns empty string (guard blocks range that would otherwise match)', () => {
+  // NaN: guard present -> 'NaN < 1' is false, so guard doesn't catch it, but Array.from(...).filter returns empty
+  // anyway because NaN !== any integer in standing. CANNOT KILL THIS VIA GUARD REMOVAL.
+  const standing1 = new Set([NaN]);
+  assert.equal(formatStandingPortsSkippedLine(NaN, standing1), '', 'NaN startPort should return empty string');
+
+  // startPort = 0: guard catches it (0 < 1). Without guard, would generate [0,1,2,...,19].
+  // With standing containing 5, this WOULD produce a line — need standing={5} to kill the guard.
+  const standing0 = new Set([5]);
+  assert.equal(formatStandingPortsSkippedLine(0, standing0), '', 'port 0 should return empty string');
+
+  // startPort = -1: guard catches it (-1 < 1). Without guard, would generate [-1,0,1,...,18].
+  // With standing containing 5, this WOULD produce a line — need standing={5} to kill the guard.
+  const standingNeg = new Set([5]);
+  assert.equal(formatStandingPortsSkippedLine(-1, standingNeg), '', 'negative port should return empty string');
+
+  // startPort = 70000: guard catches it (70000 > 65535). Without guard, would generate [70000,70001,...,70019].
+  // With standing containing 70005, this WOULD produce a line — need standing={70005} to kill the guard.
+  const standing70k = new Set([70005]);
+  assert.equal(formatStandingPortsSkippedLine(70000, standing70k), '', 'port > 65535 should return empty string');
+
+  // startPort = 3.5: guard catches it (!Number.isInteger(3.5)). But even without the guard,
+  // Array.from generates only [3.5,4.5,5.5,...,23.5] (non-integers), never an integer that a Set
+  // of integers contains. CANNOT KILL THIS VIA GUARD REMOVAL. Kept for documentation that non-integers
+  // are rejected, but the filter (not the guard) is what stops them.
+  const standing3_5 = new Set([8085]);
+  assert.equal(formatStandingPortsSkippedLine(3.5, standing3_5), '', 'non-integer port should return empty string');
+});
+
+test('formatStandingPortsSkippedLine: valid port boundaries -> accepts 1 and 65535', () => {
+  const standing = new Set([1]);
+  const line1 = formatStandingPortsSkippedLine(1, standing);
+  assert.ok(line1.includes('NOT probing'), 'should accept port 1 as valid startPort');
+
+  const standing65535 = new Set([65535]);
+  const line65535 = formatStandingPortsSkippedLine(65535, standing65535);
+  assert.ok(line65535.includes('NOT probing'), 'should accept port 65535 as valid startPort');
+});
+
+test('formatStandingPortsSkippedLine: range derived from AUTO_REBIND_RANGE -> respects the constant', () => {
+  const standing = new Set([8080 + AUTO_REBIND_RANGE - 1]);
+  const lineInside = formatStandingPortsSkippedLine(8080, standing);
+  assert.ok(lineInside.includes('NOT probing'), 'last port in range should be included');
+
+  const standing2 = new Set([8080 + AUTO_REBIND_RANGE]);
+  const lineOutside = formatStandingPortsSkippedLine(8080, standing2);
+  assert.equal(lineOutside, '', 'first port outside range should not be included');
 });

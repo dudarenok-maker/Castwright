@@ -969,14 +969,19 @@ cites this run sheet) points at it:
   — step 3, the real dry run against `C:\AudiobookWorkspace`, with the
   pre-repair copies of the one affected book's `cast.json`,
   `cast-id-history.json` and `state.json` committed under
-  [`onbox-a34-results/backups/`](onbox-a34-results/backups/).
+  [`onbox-a34-results/backups/`](onbox-a34-results/backups/). Its own
+  pass-2/3 annotation records that a fresh dry run after those passes'
+  fixes now reports **27** books scanned, not 23 — a reporting change from
+  D1 (previously-dropped books are now enumerated), not a data change: the
+  same one confirmed pair and two report-only entries still stand.
 
 **`--apply` has NOT been run on the real workspace.** Everything above is a
 dry run plus committed evidence; row A34 stays open, and the apply step is
 still owed on the box. Note the committed backups are a manual git commit,
 not a substitute for the script's own on-disk backups — since the pass-1
-review the script copies both files it touches to `.bak.a34-<date>` before
-writing either.
+review the script copies both files it touches to a millisecond-resolution
+`.bak.a34-<stamp>` (was a date-only stamp until a later review pass found a
+same-day retry could clobber the first run's backup) before writing either.
 
 ### 10.3 Code-level proof (PR #2640, shipped)
 

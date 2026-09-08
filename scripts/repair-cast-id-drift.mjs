@@ -2103,6 +2103,27 @@ export function parseStandingPorts(raw) {
   return ports;
 }
 
+/** Names which candidate ports in `[startPort, startPort + AUTO_REBIND_RANGE)`
+ *  `ALLOW_STANDING_PORTS` excluded from probing, for the caller to log
+ *  alongside its "probing port X-Y" line (N2, PR #3057 review pass 2).
+ *  `probePortRangeRefused` silently drops these candidates before probing —
+ *  correct for the refusal decision, since a definitively-skipped port
+ *  cannot make it refuse — but that leaves the "probing ports X-Y" log line
+ *  claiming full coverage of a range one of these ports was never checked
+ *  in, with nothing else recording the gap. Callers print this line's
+ *  result (empty string when nothing in range is skipped) right after that
+ *  line so a transcript pasted into an acceptance doc says what actually
+ *  happened, not what the range implies. Purely additional logging — it
+ *  does not change what `probePortRangeRefused` probes or refuses. */
+export function formatStandingPortsSkippedLine(startPort, standing) {
+  if (!standing.size || !Number.isInteger(startPort) || startPort < 1 || startPort > 65535) return '';
+  const skipped = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i).filter((p) =>
+    standing.has(p),
+  );
+  if (!skipped.length) return '';
+  return `  (NOT probing port(s) ${skipped.join(', ')} — allowed via ALLOW_STANDING_PORTS for this run)`;
+}
+
 export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
   // C1 (pre-merge review, 2026-08-05): validate startPort itself BEFORE
   // building the candidate list, not merely clamp the list. main() derives
@@ -2519,6 +2540,13 @@ async function main() {
         `127.0.0.1:${lanPort}-${lanPort + AUTO_REBIND_RANGE - 1} (LAN HTTPS, incl. auto-rebind range) for a ` +
         `live server...`,
     );
+    const standingPorts = parseStandingPorts(process.env.ALLOW_STANDING_PORTS);
+    for (const line of [
+      formatStandingPortsSkippedLine(port, standingPorts),
+      formatStandingPortsSkippedLine(lanPort, standingPorts),
+    ]) {
+      if (line) console.log(line);
+    }
     const [httpNotRefused, lanNotRefused] = await Promise.all([
       probePortRangeRefused(port),
       probePortRangeRefused(lanPort),
@@ -2532,7 +2560,9 @@ async function main() {
           `refuse, not read as absent just because it missed the probe window, and a rebound server on any port ` +
           `in the auto-rebind range must refuse the same as one on the exact configured port). Stop the server ` +
           `on ${port}-${port + AUTO_REBIND_RANGE - 1} (and LAN HTTPS ${lanPort}-${lanPort + AUTO_REBIND_RANGE - 1} ` +
-          `if running), or point PORT/LAN_HTTPS_PORT elsewhere.`,
+          `if running), or point PORT/LAN_HTTPS_PORT elsewhere. If one of these ports is a known standing service ` +
+          `unrelated to Castwright (e.g. llama-swap on 8090), set ALLOW_STANDING_PORTS=<port>[,<port>...] for this ` +
+          `run to skip probing it.`,
       );
       process.exitCode = 1;
       return;

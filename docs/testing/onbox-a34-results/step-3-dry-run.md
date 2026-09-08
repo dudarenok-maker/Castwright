@@ -118,3 +118,29 @@ book with zero `repairs` entries is never touched by `--apply` in step 4.
   Neither is in `bookPlans`, so step 4's `--apply` will not touch this book.
 - **0 writes** — dry run only, as scoped. No file under
   `C:\AudiobookWorkspace\books\` was modified.
+
+## Pass-2/3 review update (2026-09-08) — this run predates D1/E1/E2
+
+Everything above records a dry run of the script **as it stood at step 3**,
+before the PR's review passes 2 and 3. Those passes found (and fixed) three
+more ways the scan could misreport a book: a book whose `cast.json` exists
+but is unreadable was silently dropped from the scan instead of being named
+and refusing `--apply` (**D1**); a corrupt `cast-id-history.json` read as an
+ordinary book with nothing to repair instead of being named and refused
+(**E1**); and a zero-book scan did not refuse `--apply` (**E2**). None of the
+three was present in the workspace at the time of this run — the script
+above scanned to completion with no dropped or unreadable books — so this
+run's *console transcript* is unaffected by any of them. But **D1 also
+changed what `books scanned:` counts**: books previously invisible to the
+scan (dropped without being named) are now enumerated and reported. A fresh
+dry run against the same live `C:\AudiobookWorkspace` workspace, after those
+fixes, now prints **`books scanned: 27`** plus a block naming 3 books as
+not-yet-analysed, where this document and
+[`cast-id-drift-onbox-acceptance.md`](../cast-id-drift-onbox-acceptance.md)
+§10.2b both still say 23. **This is a reporting change, not a data change**:
+the same one confirmed pair (`Заказ Коалфолла`'s `oduvan → одуван`) and the
+same two report-only entries (`Playing with Fire`'s `lightning-dave` and
+`the-torment`) are still what the script finds — nothing above needed
+re-verifying. This annotation records that fact rather than re-running the
+scan or rewriting the recorded output above, per this repo's rule against
+rewriting a results doc's history.

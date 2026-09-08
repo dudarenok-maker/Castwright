@@ -156,3 +156,15 @@ script when it is a description of its first draft.
   default, with tests (there were none).
 
 The `25/25` figure above is that draft's. The suite is **43/43** as shipped.
+
+## Pass-2/3 review update (2026-09-08) — backup stamp tightened again
+
+The pass-1 bullet above ("Both files are also copied to
+`<file>.bak.a34-<date>` before either write") described the stamp as it stood
+after pass 1: date-only. A later review pass found a same-day retry could
+overwrite that same file, destroying the one pre-repair backup a retry most
+needs — so the stamp is now `new Date().toISOString().replace(/[:.]/g, '-')`
+(millisecond resolution, filesystem-safe), giving each run its own
+`.bak.a34-<stamp>` file. The sibling script (`repair-cast-id-drift.mjs`) had
+the identical date-only-stamp defect and was fixed the same way (#3095). This
+file otherwise still reads as pass-1 described it.
