@@ -43,7 +43,8 @@ criterion below is driven from the app.
    **delete its `.pt` artifact** from the voice-library directory. That absence
    is what makes the lazy derive fire; without it nothing below happens.
 5. Confirm `COQUI_DEVICE` is **unset** in `server/.env` (this box's standing
-   policy normally pins it to `cuda:1` — see the register's line ~1445). Under
+   policy normally pins it to `cuda:1` — see row **A1**'s environmental notes
+   in [`onbox-acceptance-register.md`](onbox-acceptance-register.md)). Under
    that pin `_resolve_admission`'s `constraint` is set and the hint is skipped
    outright (`main.py:5184`), so every criterion below is a no-op until it's
    cleared. `QWEN_DEVICE` may stay pinned to `cuda:1` — that governs a
@@ -96,35 +97,93 @@ This criterion instead constructs the narrow band where `cuda:1` still fits
 the derive but is **not** the roomier card, so a hinted and an unhinted run
 provably diverge.
 
-1. With `COQUI_DEVICE` cleared (Setup step 5) and `QWEN_DEVICE=cuda:1` pinned,
-   load Qwen resident on `cuda:1` and drive it into an active voice-design
-   session (Base 0.6B + VoiceDesign 1.7B co-resident, ~5 GB combined per
-   `docs/features/108-qwen-coexistence.md`) so `cuda:1`'s free VRAM drops
-   below `cuda:0`'s ~8 GB free, while still leaving enough room for the Coqui
-   derive (~3.5 GB per `docs/features/264-vram-aware-gpu-placement.md`, plus
-   the reserve cushion). If Base+VoiceDesign alone doesn't push `cuda:1` low
-   enough, also warm Kokoro on `cuda:1` (`PRELOAD_KOKORO=1`, or an on-demand
-   synth) to add roughly another 1 GB.
-2. Confirm via `nvidia-smi --query-gpu=index,memory.free --format=csv` that
-   `cuda:0` free is now **greater than** `cuda:1` free, and that `cuda:1` free
-   still clears the Coqui derive's footprint plus reserve. This is the band
-   the whole criterion depends on — if you cannot reach it with the models
-   above, note the measured free-MB on both cards in the Result line rather
-   than forcing a pass; the exact fill level needs on-box tuning and hasn't
-   been confirmed against real hardware.
-3. Holding that state, trigger the lazy Coqui derive (Setup step 4) with the
+**Don't fill VRAM by loading real models** — a Qwen/Kokoro-based fill was
+tried and rejected: `_qwen_design_idle_watchdog` frees the ~4-5 GB
+VoiceDesign share 120-150 s after the last design
+(`server/tts-sidecar/main.py:9067`, `:9098`), or immediately at the next
+`/synthesize` (`:8141-8142`), so the band this criterion depends on evaporates
+mid-criterion. Fill with a scratch CUDA allocation instead — `probe_capacity`
+reads driver-level `mem_get_info` (`main.py:4210-4218`, `4297-4326`), so a
+`torch.empty(...)` tensor moves the same number the placement code reads, and
+unlike a resident engine nothing ever evicts it.
+
+1. With nothing loaded on either card and `COQUI_DEVICE` cleared (Setup step
+   5), read `nvidia-smi --query-gpu=index,memory.free,memory.total
+   --format=csv,noheader,nounits` for both devices. This run sheet assumes
+   `total0` ≈ 8192 MiB (RTX 4070) and `total1` ≈ 16376 MiB (RTX 5070 Ti); if
+   this box's cards report different totals, recompute the reserve figures
+   below from `_device_reserve_mb`'s own formula — `min(round(0.05 *
+   total_mb), 500)` (`main.py:4500-4506`) — before proceeding.
+2. Compute `cuda:0`'s headroom the same way the ledger does
+   (`ReservationLedger._headroom`, `main.py:4550-4557`, consumed by
+   `try_hold`/`best_fit` at `main.py:4560-4583`/`4585-4599`): with nothing
+   held yet, `headroom0 = free0 - min(round(0.05 * total0), 500)` — at
+   `total0 = 8192` that's `headroom0 = free0 - 410`.
+3. Query the sidecar's `GET /debug/memory` and read its `footprints.coqui`
+   block (`{seed_mb, learned_mb, sample_count}` — `FootprintTable.snapshot`,
+   `main.py:4480-4496`, served at `main.py:11056-11153`). The Coqui derive's
+   admission footprint (`peak`) is `learned_mb` once `sample_count >= 5`,
+   else the seed `SEED_FOOTPRINTS_MB["coqui"]` of **3584 MB**
+   (`main.py:4355`, `FootprintTable.peak_mb`, `main.py:4463-4470`) — call
+   this value `peak`. A fresh box with no prior Coqui admissions uses the
+   3584 MB seed unmodified.
+4. **The target band, in MB:** this criterion needs `headroom0 > peak + 400`
+   to have room to construct a discriminating band at all — if it doesn't,
+   record the measured `headroom0` and `peak` in the Result line rather than
+   forcing a pass — the exact headroom this box has needs on-box confirmation
+   either way. Otherwise the target is
+   `target_headroom1 = peak + 200` (comfortably inside the band's floor;
+   at the seed value that's **3784 MB**) — enough margin above `peak` to
+   survive nvidia-smi's own read noise, and (given the check above) still
+   short of `headroom0`. Since `total1`'s reserve is capped at 500 MB
+   (`min(round(0.05 * 16376), 500) = 500`), the free-VRAM figure to hit is
+   `target_free1 = target_headroom1 + 500` — **4284 MB** at the seed value.
+5. **Fill `cuda:1` to that target with a scratch allocation**, and leave it
+   running for the whole of steps 6-9. From a Python environment with the
+   sidecar's own torch install (e.g. the venv at
+   `server/tts-sidecar/.venv`):
+
+   ```python
+   import torch, time
+   torch.cuda.set_device(1)
+   TARGET_FREE_MB = 4284  # target_free1 from step 4 — recompute if peak differs
+   free_b, _ = torch.cuda.mem_get_info(1)
+   fill_mb = free_b // (1024 * 1024) - TARGET_FREE_MB
+   buf = torch.empty(fill_mb * 1024 * 1024, dtype=torch.uint8, device="cuda:1")
+   print(f"holding {fill_mb} MiB on cuda:1 -- Ctrl+C to release")
+   while True:
+       time.sleep(3600)
+   ```
+
+   Confirm via `nvidia-smi --query-gpu=index,memory.free --format=csv,noheader,nounits`
+   that `cuda:1`'s free VRAM has dropped to `target_free1`, and that
+   `headroom1` computed from it (`free1 - 500`) sits inside the band from
+   step 4.
+6. Holding that fill, trigger the lazy Coqui derive (Setup step 4) with the
    hint active (the shipped #3058 code path). Sample `nvidia-smi` across the
    derive.
-4. Reset back to the same `cuda:1`-loaded VRAM state (unload and reload Coqui
-   so nothing else changes), then repeat step 3 with the hint suppressed —
-   temporarily comment out the `X-Device-Hint` header assignment in
-   `derive-engine-artifact.ts:145-146` — and sample `nvidia-smi` again.
+7. **Without touching the scratch fill**, unload Coqui (Advanced Settings, or
+   `POST /api/sidecar/unload`) — leave it non-resident, don't reload it.
+   Reloading it here would re-admit it and pin `_resolve_admission`'s
+   `constraint` to wherever it just landed, which skips the `preferred`/hint
+   check entirely regardless of what the header says next (`main.py:5184`).
+   Then re-delete the `.pt` artifact for the same character (Setup step 4) —
+   step 6's derive already wrote a fresh one, and without deleting it again
+   the next call finds `ptExists && !stale` and skips the derive outright
+   (`clone-voice-resolver.ts:1025`), leaving nothing to observe.
+8. Comment out **only** the header assignment at
+   `derive-engine-artifact.ts:146` (`headers['X-Device-Hint'] =
+   input.deviceHint;`) — not the `if (input.deviceHint) {` at `:145` or the
+   `}` at `:147`, which must stay or the file won't parse. Trigger the same
+   derive again (same manuscript action as step 6) and sample `nvidia-smi`.
+9. Revert the comment from step 8, and kill the scratch-fill process from
+   step 5.
 
-**Pass:** with the hint active, the derive lands on `cuda:1`; with the hint
-suppressed under the *same* VRAM state, the derive lands on `cuda:0`
-(unconstrained placement now prefers it, since it has more free room). **Both
-halves must be observed** — a pass on only the hinted half is not a control
-and does not discharge this criterion.
+**Pass:** with the hint active (step 6), the derive lands on `cuda:1`; with
+the hint suppressed (step 8) under the *same* scratch-filled VRAM state, the
+derive lands on `cuda:0` (unconstrained placement now prefers it, since it
+has more headroom). **Both halves must be observed** — a pass on only the
+hinted half is not a control and does not discharge this criterion.
 
 **Fail:** either run lands on the same card as the other, or the derive
 fails/stalls in either state.
@@ -168,9 +227,18 @@ shipped code:
 - right after the fallback try at `main.py:5189`:
   `log.info("fallback held=%s", held)`
 
-1. Fill GPU1 so the derive cannot fit there — load a second resident model onto
-   it, or arrange the boot so the eGPU carries the load.
-2. Trigger the same lazy derive.
+1. Fill `cuda:1` so the derive cannot fit there — using the same scratch-CUDA
+   approach as Criterion 2 step 5 (not a second resident model: same
+   rationale as Criterion 2's note above on why a model-based fill doesn't
+   hold still), but targeting the opposite end of the band: `target_headroom1
+   = peak - 200` (at the 3584 MB seed value, **3384 MB** — comfortably below
+   what the derive needs, so the `preferred` try_hold provably fails rather
+   than merely being tight), so `target_free1 = target_headroom1 + 500`
+   (**3884 MB** at the seed value). Confirm via `nvidia-smi
+   --query-gpu=index,memory.free --format=csv,noheader,nounits` that
+   `cuda:1`'s free VRAM sits at or below that figure before proceeding.
+2. Trigger the same lazy derive. Leave the scratch fill running across it,
+   and kill it once this criterion's Result line is filled in.
 
 **Pass, all four:**
 
