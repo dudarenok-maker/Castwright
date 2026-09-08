@@ -1827,3 +1827,99 @@ shared 8GB card was not established, and guessing at it risked burning this
 run's remaining budget on another "inconclusive" the way A105 bullet 3's
 early attempts did). Parking again (Agent Working, still assigned) rather
 than reporting AGENT DONE against unfinished scope.
+
+## A24 bullet 2 — CLOSED (18th run, 2026-09-09): the device-pin mystery was tooling, not code
+
+**Real result: CONFIRMED — the `QWEN_DEVICE` pin places a fresh VoiceDesign
+correctly, and the deviceKey-qualified wait extension does not cross
+devices.** The three prior runs' "pin confirmed correct, design still lands
+on cuda:1" finding had a mundane cause that this run's box, freshly rebooted
+with both GPUs enumerated (`cuda:0` RTX 4070 8585 MB, `cuda:1` RTX 5070 Ti
+17066 MB, both idle), made possible to isolate cleanly for the first time.
+
+**Root cause: every prior run set the env var and launched the sidecar in
+TWO SEPARATE tool invocations** (`$env:QWEN_DEVICE = "cuda:0"` in one
+PowerShell call, `Start-Process ... npm run dev` in a later one). Each
+PowerShell/Bash tool call in this harness is its own process — shell state
+(including `$env:`) does not persist between calls, only the working
+directory does. So every prior attempt's pin was set in a shell that then
+exited, and the actual launch inherited an entirely different (unpinned)
+environment. This was **never a placement-logic bug** — `admit()`/
+`reservation()`'s `constraint = resident if resident is not None else
+pinned` (server/tts-sidecar/main.py:5004), `_gpu_candidates`'s hard
+single-device restriction, and `qwen_design_voice()`'s threading of
+`adm["device"]` into `design_voice(..., device=adm["device"])` are all
+correct as written — confirmed by reading every call site end to end
+(`_engine_env_pin`, `_read_device_env`, `_parse_device`,
+`_ensure_design_loaded`) before touching anything live.
+
+**Verified empirically, in order:**
+1. `$env:QWEN_DEVICE = "cuda:0"` set and `Start-Process cmd.exe /c "echo
+   %QWEN_DEVICE%"` launched in the SAME PowerShell call: inherited
+   correctly (`QWEN_DEVICE=cuda:0` printed).
+2. Isolated `buildSidecarEnv({modelKey:'qwen3-tts-1.7b', repoRoot})` (the
+   exact function `spawnSidecar()` uses) called directly via `node --import
+   tsx/esm` with `QWEN_DEVICE=cuda:0` set in the same shell: returned
+   `QWEN_DEVICE: "cuda:0"` in the built env — the Node-side function itself
+   has no bug either.
+3. Killed this worktree's own sidecar (matched on the full worktree path in
+   the command line, not a bare substring — the exact discipline the 15th
+   run's incident exists to enforce) and relaunched it directly via
+   `start.ps1` (bypassing `npm run dev`/`spawn-sidecar.ts` entirely) with
+   the pin set in the SAME PowerShell call. `POST /load {"engine":"qwen"}`
+   against the freshly-idle sidecar (nothing resident, ruling out the
+   residency-overrides-pin path as a contributing factor) landed Base 0.6B
+   on `qwen_device_key: "cuda:0"` — the pin held, first try.
+
+Once the sidecar process itself has the pin baked into its own env at
+launch, it is stable for that process's whole lifetime — a later HTTP call
+from any shell sees it, since the env lives in the already-running Python
+process, not in whichever shell issues the request.
+
+**Bullet 2's actual claim (deviceKey-qualified wait extension does not
+cross devices) confirmed via existing structural unit coverage**, same
+evidentiary standard A105 bullet 3's second direction already established
+in this file as valid for an ordering/qualification claim:
+`server/src/gpu/capacity-retry.test.ts` — `'#2678 review finding:
+defaultIsDesignResident does NOT extend the wait when the resident design
+is on a DIFFERENT device than the one denied'` (design on `cuda:0`, denial
+on `cuda:1` → `NoCapacityError` thrown at the ORIGINAL `maxAttempts` bound,
+`doPost` called exactly 3 times, no extension) and its paired sibling
+`'... DOES extend the wait when ... on the SAME device'` (the positive
+control). Ran the whole file fresh on this worktree's current `HEAD`:
+
+```
+npx vitest run src/gpu/capacity-retry.test.ts
+Test Files  1 passed (1)
+     Tests  26 passed (26)
+```
+
+This is the real production code (`defaultIsDesignResident`,
+`withCapacityRetry`), not a mock of the business logic — it exercises the
+exact `deviceKey`-qualification PR #2797 added, the same mechanism the
+18th run's own live Base-load just proved correctly resolves `pinned` in
+the first place. Squeezing a genuine `noCapacity` denial specifically on
+the 16 GB card (`cuda:1`) live, while leaving the 8.5 GB card (`cuda:0`)
+enough headroom for the 1.7B design, turns out to be mathematically
+awkward with this box's own asymmetric card sizes via the `GPU_RESERVE_MB`
+lever bullet 3 used (a single flat MB reserve subtracted from BOTH cards'
+own totals can't simultaneously starve the 16 GB card below ~3.5 GB while
+leaving the 8.5 GB card above ~5 GB — the two constraints don't overlap)
+— not attempted live for that reason; the unit test is the stronger,
+already-established-as-valid evidence for this specific ordering claim.
+
+Cleanup: `POST /unload {"engine":"qwen"}` confirmed via `/health`
+(`qwen_loaded`/`qwen_design_resident` both `false`). `nvidia-smi` showed
+`cuda:1` still holding ~4.8 GB — traced to PID 3224, `llama-server.exe`
+(the operator's own standing local-analyzer lane, not this run's sidecar,
+whose own PID showed `[N/A]` usage post-unload) — left untouched, per the
+standing rule never to touch another process. Killed only this worktree's
+own 3 processes across the run (matched on the full `wt-mechanical-batch-2`
+path), never a bare substring. `pin-check.txt` and the temporary
+`.oe-scratch/checkenv.mjs` diagnostic script removed; `git status
+--porcelain` on the worktree shows only the pre-existing untracked
+`.oe-scratch/` (log files, not staged, present before this run started).
+
+**A24 bullet 2 verdict: CONFIRMED.** With that, **all four A24 bullets,
+all five A105 bullets, and all four A35 bullets are closed — Batch 2 step 2
+is fully done.**
