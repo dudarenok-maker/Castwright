@@ -11,7 +11,11 @@
 # A24 bullets 2-3 remain; 15th run: diagnosed the exact code paths for both
 # remaining bullets — see "A24 bullets 2-3 — 15th run" below — but did not
 # reach a clean live confirmation of either, and hit an operational incident
-# worth flagging separately)
+# worth flagging separately; 16th run: bullet 3's race fired live for the
+# first time — the caller-timeout DID surface, but as a raw generic timeout,
+# not a `NoCapacityError` conversion, because GPU1 had no real capacity
+# contention to convert; bullet 3 still open pending a genuine contention
+# setup)
 
 Run 2026-09-06/07/08, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
@@ -909,6 +913,107 @@ next sidecar restart) — `anna`'s cast state is unchanged from the 14th run's
 own `qwen-uIRjRzpfDUZqLX_0eVctR` voiceId, confirmed no partial/corrupt state
 was left (the design job dies with the sidecar process, nothing persists
 until a `designed` event lands).
+
+## A24 bullet 3 — live race fired (16th run, 2026-09-08): timeout surfaced, but not the conversion
+
+**Not closed. First live firing of this race — real result, but the negative
+form, and for a different reason than the row's own negative case anticipates.**
+
+Found this worktree's own sidecar and dev server already up and idle from the
+15th run's cleanup (`/health`: all residency flags `false`, `inflight_synth:
+0`; `GET /api/queue` → 200 on port 8250) — no restart needed, so this run
+never touched the sidecar process at all (the 15th run's incident made that
+the priority to avoid).
+
+Made the same two temporary edits the 15th run identified but did not fire:
+`LOAD_TIMEOUT_MS` in `server/src/routes/sidecar-health.ts` `90_000` → `8_000`,
+and `GPU_CAPACITY_POLL_MS=500`/`GPU_CAPACITY_MAX_ATTEMPTS=3` appended to
+`server/.env`. The dev server (`tsx watch --include=.env`) picked up both
+live within ~8s (confirmed via `GET /api/queue` returning 200 again after a
+short gap).
+
+Sequence:
+1. `POST .../cast/anna/design-voice/stream` (same recipe as bullet 1:
+   `sampleVoiceId: char-onbox-test__standalones__untitled__anna`, `modelKey:
+   qwen3-tts-0.6b`), backgrounded.
+2. Polled `/health` until `qwen_design_resident: true` (~4s) — landed on
+   `qwen_device_key: "cuda:1"` (the 16 GB card; same landing-on-cuda:1
+   behavior the 15th run flagged as bullet 2's unresolved finding, not
+   chased further here since bullet 2 is out of scope for this section).
+3. Fired `POST /api/sidecar/load {"engine":"coqui"}` while the design held
+   `cuda:1` resident. Result after exactly 8.275s: `{"status":"error",
+   "error":"Sidecar /load did not complete within 8000ms — model load is
+   unusually slow or the process is stuck."}`.
+4. Checked `/health` immediately after: `"model_loaded":false,
+   "loading":true` for coqui — the cold-load was still genuinely in
+   progress, not stuck or denied.
+
+**Why this is the row's own negative case, not the positive one, and why:**
+the 15th run's own recipe note already named the risk — `"Sidecar /load did
+not complete within Nms..."` was flagged in advance as meaning "fell through
+as a raw AbortError instead" of the `NoCapacityError` conversion. That is
+exactly what happened, but the cause is capacity, not the conversion logic:
+`cuda:1` is the 16 GB card with ~15.7 GB free per this run's own
+`/health` reading before the design started, and the resident VoiceDesign
+(a 0.6B model) uses a small enough slice of that headroom that `coqui`'s own
+`admit()` call almost certainly cleared capacity immediately and just
+proceeded to a real cold weight-load — one slow enough (Coqui's XTTS weights
+are large) to blow through even the *original* 90s budget, let alone the
+shortened 8s one. `usingDesignBudget` in `withCapacityRetry` only flips true
+when `isDesignResident(noCap.deviceKey)` fires off an actual
+`NoCapacityError` from `admit()` in the first place — if `admit()` never
+denies coqui capacity, the generic/design-budget branching in
+`capacity-retry.ts` is never reached at all, and the caller's own hard
+timeout in `sidecar-health.ts` fires and reports its own generic message
+regardless of residency. This run's result cannot distinguish "the
+conversion is broken" from "the conversion was never exercised" — it is the
+latter, based on the coqui `loading:true` state observed, but that is
+inferred from timing/state, not a value confirmed from inside
+`withCapacityRetry` itself (no server-side log line was captured
+distinguishing the two code paths this run — the dev server's own stdout
+was not tailed during the race; that is a fixable gap for the next attempt).
+
+**What the next run needs to close this bullet:** genuine capacity
+contention on whichever card the design lands on, not just ambient
+headroom. Three options, in order of how much they touch the sidecar
+process (least risky first):
+1. Try again after occupying the design's own card first via another
+   in-worktree load — e.g. fire a Kokoro or a second Qwen load onto the same
+   `cuda:1` device *before* starting the design, so free VRAM on that card
+   is already thin when coqui's `admit()` runs. Needs no sidecar restart,
+   only more in-flight requests.
+2. If (1) doesn't leave enough of a squeeze, temporarily lower
+   `GPU_RESERVE_MB` — but this is a sidecar-process env var
+   (`main.py:5494`, `os.environ.get("GPU_RESERVE_MB", 500)`), not a
+   `server/.env` value the node layer can hot-reload, so exploiting it needs
+   restarting this worktree's own sidecar. If attempted, restart by this
+   worktree's own tracked PID/port (`.run/tts.pid`, `.run/tts.owner.9170.json`)
+   or `start.ps1`'s own stop/start pair — never a bare substring match like
+   `Where-Object { $_.CommandLine -match 'tts-sidecar' }`, which is exactly
+   what hit another lane's live pytest run in the 15th run's incident.
+3. Tail the dev server's own stdout during the race (redirect it to a file
+   at launch, or find wherever the running instance already logs to) so the
+   `withCapacityRetry`/`usingDesignBudget` branch is confirmed directly
+   instead of inferred from `/health` timing.
+
+Cleanup this run: both temporary edits reverted (`git status --porcelain`
+on the worktree returned empty after); confirmed by waiting for the dev
+server to come back up (`GET /api/queue` → 200) before finishing. The design
+this run fired *did* complete normally this time (`{"type":"designed",
+"characterId":"anna","voiceId":"qwen-uIRjRzpfDUZqLX_0eVctR",...}` — same
+voiceId as prior runs, confirming no new persisted state) — waited for it to
+finish before reverting the timeout edits so an in-flight design wasn't cut
+short by a config change. Then called `POST /unload {"engine":"qwen"}` to
+return the sidecar to idle — confirmed via `/health`:
+`qwen_loaded`/`qwen_design_resident` both `false`, `inflight_synth: 0`. This
+worktree's own sidecar and dev server were never restarted or killed at any
+point this run — the 15th run's incident was the reason to avoid it, and it
+turned out not to be necessary to reach a real (if negative) result.
+
+**Remaining scope after this run: A24 bullets 2-3, same as entering — bullet
+3 now has a live negative data point and a concrete next step (force
+capacity contention); bullet 2's device-placement gap is unchanged from the
+15th run's notes.**
 
 ## Remaining scope — not attempted this session
 
