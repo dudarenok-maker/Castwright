@@ -59,7 +59,7 @@ async function main() {
     await page.waitForFunction(() => {
       const ta = document.querySelector('textarea');
       return ta && ta.value && ta.value.length > 0;
-    }, { timeout: 90000 });
+    }, undefined, { timeout: 90000 });
   } catch (e) {
     console.log('INGEST TIMEOUT - dumping state');
     console.log('busy text visible=', await page.locator('text=Processing sample').isVisible().catch(() => false));

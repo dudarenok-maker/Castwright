@@ -28,7 +28,7 @@ async function main() {
   await page.waitForFunction(() => {
     const ta = document.querySelector('textarea');
     return ta && ta.value && ta.value.length > 0;
-  }, { timeout: 30000 });
+  }, undefined, { timeout: 30000 });
   const transcript = await page.evaluate(() => document.querySelector('textarea')?.value);
   console.log('TRANSCRIPT:', transcript);
 
