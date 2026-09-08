@@ -461,13 +461,35 @@ Design rationale:
   presence is not proof — `~/.cline/skills` is in that same list and was proven
   dead — so it stays unverified pending #2368. A
   **per-machine** step: the target is under `$HOME`, so CI cannot run it and a
-  fresh clone has no mirror. Re-run after any change under either directory;
-  the drift guard in `scripts/tests/review-gate-mechanism.test.mjs` checks
-  against the store root (`~/.agents/skills/`), so it only **skips**, loudly,
-  on a machine with no store at all — once the store exists (e.g. any box
-  where Cline has installed its global skills), the guard **fails** rather
-  than skips if this repo's mirror is missing or stale there, even if
-  `skills:sync` has never been run on that machine.
+  fresh clone has no mirror. **The mirror is shared machine state, read by
+  every worktree on the box, and it can only ever hold what's on `main`**
+  (#3001): `sync-agent-skills.mjs` reads every mirrored file's content via
+  `git show main:<path>` — never from this checkout's disk — so the write is
+  deterministic given `main`'s current commit, and **it is safe to run
+  `npm run skills:sync` from any branch or worktree**; a `FILES` entry that
+  isn't on `main` yet (e.g. this very change adding a new mirrored file) is
+  skipped with a loud log line rather than failing, and picks up on the next
+  sync after that change merges. This used to work the other way — reading
+  from disk, gated on the branch being `main` — and a feature branch that
+  synced its own unmerged edit to a mirrored skill overwrote the shared
+  mirror with that content, blocking every other lane's commits until
+  someone re-synced from `main` (PR #2999 vs. PR #2998, #3001). The drift
+  guard in `scripts/tests/review-gate-mechanism.test.mjs` checks the store
+  root (`~/.agents/skills/`) against what `main` has committed via that same
+  `git show` read (imported, not reimplemented, so guard and producer can't
+  diverge), so it only **skips**, loudly, on a machine with no store at all —
+  once the store exists (e.g. any box where Cline has installed its global
+  skills), the guard **fails** rather than skips if the mirror doesn't match
+  `main`, even if `skills:sync` has never been run on that machine. The sync
+  resolves `main` once per run — a local `main` branch if one exists, else
+  falling back to `origin/main` (the shape a CI checkout of a pull request
+  leaves, with no local `main` branch at all) — and throws loudly if neither
+  resolves, rather than silently syncing nothing. If this guard fires, run
+  `npm run skills:sync` after confirming whichever of those two this
+  machine's git actually has is up to date; a stale local `main` (with a
+  fresher `origin/main` sitting unused) is the one way this can still go
+  wrong, since a local `main` branch is always preferred over `origin/main`
+  when both exist.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
   is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not
@@ -1249,6 +1271,56 @@ Working practice below; this holds even under contention).
   dispatch tool reported the agent "completed" — a completed agent
   notification can still have live background children of its own still
   running commits/pushes.
+- **That process probe matches ITSELF.** The pattern you search for is in the
+  command line of the shell running the search, so a naive
+  `CommandLine -like "*<worktree-path>*"` reports phantom occupants on a
+  completely idle tree (observed 2026-09-06: five "live processes", all of them
+  the probe's own wrappers). Exclude your own **ancestry and that ancestry's
+  children** — excluding just `$PID` is not enough, because the harness spawns a
+  wrapper shell per call that is not on your ancestor chain but is a child of
+  something that is. A probe that always fires is indistinguishable from one
+  that works, so confirm it reports zero on a tree you know is idle before
+  trusting a zero on one you are about to write to.
+
+**Holding a tree against the Open Engine queue** (#3011, design of record:
+[docs/superpowers/specs/2026-09-06-worktree-exclusivity-design.md](docs/superpowers/specs/2026-09-06-worktree-exclusivity-design.md)):
+
+- **Never hand-commit in a worktree that has an open agent ticket.** Commit from
+  the primary checkout, or from a tree no ticket points at.
+- **To hold one anyway, move the ticket to `Parked`** — an existing board state
+  the gate never makes claimable. **Never `Agent Needs Input`**, which means
+  *waiting on a person*: **any comment on it is a resume trigger, including the
+  comment saying not to resume.** That is not hypothetical — it is exactly how
+  a second lane was launched into a tree a human was committing in.
+- **Announcing a park does not park it.** Change the state first.
+- **The tooling cannot see a non-lane writer.** A human, an interactive session,
+  a dispatched fix agent, and an orphaned battery are all invisible to the
+  queue's own exclusivity checks. The rules above are the protection; there is
+  no mechanism behind them.
+
+**Verify where a dispatched agent actually wrote**
+([#3044](https://github.com/dudarenok-maker/Castwright/issues/3044)):
+
+- **Capture the primary checkout's `git status --porcelain` before a dispatch
+  round and again after each agent returns.** Any entry that is not yours is a
+  **failed dispatch** — revert it and re-dispatch; do not adopt it. This is the
+  same before/after tree check the [`pr-review-gate`
+  skill](.claude/skills/pr-review-gate/SKILL.md#the-tree-check) already runs
+  around a reviewer pass, applied to the tree the agent was told *not* to touch.
+- **Check every tree the dispatch does not own**, not just the primary. The
+  observed writes went to the primary because that is the path most likely to be
+  resolved against by mistake, but nothing about the mechanism is specific to it.
+- **Inspecting the diff cannot tell you this happened.** Four occurrences are on
+  record across at least two sessions, and in the clearest one the content was
+  *byte-for-byte correct* — near-identical to entries already properly committed
+  on the branch that owned them. It is a path bug, not a content bug, so the
+  change looks right in every way except where it is. Had it been committed it
+  would have landed on `main` with no PR, and collided with two open ones.
+- **Do not rely on the brief.** Every occurrence involved a brief that already
+  named the absolute worktree path, in some cases with an explicit "do NOT work
+  anywhere else". Strengthening the prose has been tried and has not held; the
+  agent is not misunderstanding the instruction, it is resolving a path against
+  the wrong root mid-task.
 
 ### Planning agents
 

@@ -1,16 +1,19 @@
 // scripts/flake-repro.mjs — measure a test file's runtime under induced load.
-// Usage: node scripts/flake-repro.mjs --file server/src/routes/analysis-pipelining.test.ts --runs 3 --cpu-load --io-load
+// Usage: node scripts/flake-repro.mjs --file <test-file> --runs <N> [--cpu-load] [--io-load]
+//
+// --file accepts a relative or absolute path to a test file (not a vitest filter).
+//   Relative paths are resolved against the repo root. Absolute paths are accepted
+//   only if they resolve to a file within the repo; paths outside the repo are refused.
+//   Test files must exist and match the test-file glob patterns from the vitest configs.
+//   Partial path filters (e.g., 'src/routes/voices') are no longer accepted as of #3081.
+//
 import { spawn, spawnSync } from 'node:child_process';
-import { rmSync, mkdtempSync } from 'node:fs';
+import { rmSync, mkdtempSync, existsSync, statSync } from 'node:fs';
 import { tmpdir, cpus } from 'node:os';
-import { join } from 'node:path';
-
-const args = process.argv.slice(2);
-const get = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
-const has = (k) => args.includes(k);
-const file = get('--file');
-const runs = Number(get('--runs', '3'));
-if (!file) { console.error('--file <relpath> required'); process.exit(2); }
+import nodePath, { join, posix as pathPosix } from 'node:path';
+const posixNormalize = pathPosix.normalize;
+import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 // Decide config: slow files run via the slow config. This list is the exact
 // set of paths in server/vitest.config.slow.ts's SLOW_FILES, mirrored here
@@ -33,9 +36,75 @@ const SLOW = [
   'src/routes/venv-bootstrap.route.test.ts',
   'src/routes/analysis.interim-prune-prohibition.e2e.test.ts',
 ];
-const cwd = file.startsWith('server/') ? 'server' : '.';
-const rel = file.replace(/^server\//, '');
-const isSlow = SLOW.includes(rel);
+
+// Pure function: resolve a --file argument into { cwd, rel, isSlow, fullPath }.
+// PowerShell tab-completion produces backslash paths on Windows (the ordinary
+// way paths are typed on this repo's primary platform), but three separate
+// consumers below — cwd routing, server/ prefix strip, and SLOW exact-match —
+// all expect POSIX separators. Normalizing here once fixes all three; a
+// mismatch in any one leaves the others silently broken. The run goes to the
+// wrong config and still reports a timing, making the silent failure hard to
+// spot (issue #3081). The three consumers are:
+//   - `cwd` choice: checks startsWith('server/')
+//   - `rel` production: strips a leading `server/` (for vitest)
+//   - `isSlow` lookup: EXACT match against SLOW's POSIX paths
+//
+// Absolute paths (drive-letter, UNC, or POSIX) are relativised against repoRoot.
+// Paths that resolve outside the repo are returned as-is for validation by the
+// caller (which will refuse them with an appropriate diagnostic).
+//
+// `fullPath` is the relative or relativised path (before server/ stripping),
+// suitable for file-existence checks. `rel` is after stripping, for vitest filters.
+/* `pathImpl` is injectable ONLY so Windows semantics are testable from any
+   OS, and that is not a nicety: `test:hooks` runs on ubuntu-latest alone
+   (verify.yml's Windows leg runs `npm test` + `npm run test:server`, not this
+   harness). The R1 regression -- every in-repo absolute path refused -- was
+   invisible to a POSIX run because BOTH operands of the broken comparison
+   were '' there. A test exercising this on `path.posix` can never fail on it,
+   so the regression cases pass `path.win32` explicitly (#3082 pass 4, N1).
+   Defaults to the platform impl for real use. */
+export function resolveTarget(file, repoRoot, pathImpl = nodePath) {
+  /* posixNormalize collapses interior '.' and '..' segments, not just
+     separators. Without it 'server/./src/routes/book-state.test.ts' keeps its
+     './', fails the SLOW exact-match, and routes a slow-lane file to the
+     config that excludes it -- #3081's own mis-routing in a different
+     spelling (#3082 pass 3, R4). A leading './' and any TRAILING separator go
+     too; a trailing '/' was one further spelling of it (#3082 pass 4, N2). */
+  let normalized = posixNormalize(file.replace(/\\/g, '/'));
+  if (normalized.startsWith('./')) normalized = normalized.slice(2);
+  if (normalized.length > 1 && normalized.endsWith('/')) normalized = normalized.slice(0, -1);
+
+  /* ONE containment test for every shape of input. Absolute, relative,
+     '..'-escaping and drive-relative ('D:foo') all reduce to the same
+     question: where does this land, and is that inside the repo? Guarding
+     only the absolute branch left
+     'server/../../<sibling-worktree>/server/src/routes/book-state.test.ts'
+     reaching a real test file in ANOTHER lane's worktree, refused only by the
+     oracle and with the wrong sentence (#3082 pass 4, N3).
+
+     Cross-root and outside-the-tree are the SAME test: path.relative() cannot
+     express a route between two roots, so it returns the target absolute --
+     isAbsolute() on its output IS the cross-drive check. A hand-rolled drive
+     comparison was tried and shipped broken (#3082 pass 3, R1): it split a
+     path.resolve() result on '/', which is backslash-separated on Windows, so
+     both operands were the whole path and nothing ever matched. */
+  const repoAbs = pathImpl.resolve(repoRoot);
+  const abs = pathImpl.isAbsolute(file)
+    ? pathImpl.resolve(file)
+    : pathImpl.resolve(repoAbs, normalized);
+  const relativeToRepo = pathImpl.relative(repoAbs, abs).replace(/\\/g, '/');
+  if (relativeToRepo === '' || relativeToRepo.startsWith('..') || pathImpl.isAbsolute(relativeToRepo)) {
+    const absPath = abs.replace(/\\/g, '/');
+    return { cwd: null, rel: absPath, fullPath: absPath, isSlow: false, isOutsideRepo: true };
+  }
+  normalized = relativeToRepo;
+
+  const cwd = normalized.startsWith('server/') ? 'server' : '.';
+  const rel = normalized.replace(/^server\//, '');
+  const isSlow = SLOW.includes(rel);
+
+  return { cwd, rel, isSlow, fullPath: normalized, isOutsideRepo: false };
+}
 
 let cpuBurners = [];
 function startCpuLoad() {
@@ -61,21 +130,150 @@ function startIoLoad() {
 }
 function stopIoLoad() { if (ioBurner) ioBurner.kill('SIGKILL'); if (ioDir) rmSync(ioDir, { recursive: true, force: true }); }
 
-if (has('--cpu-load')) startCpuLoad();
-if (has('--io-load')) startIoLoad();
+function main() {
+  const args = process.argv.slice(2);
+  const get = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
+  const has = (k) => args.includes(k);
+  const file = get('--file');
+  const runsArg = get('--runs', '3');
+  const runs = Number(runsArg);
 
-const cmd = isSlow
-  ? ['vitest', 'run', '--config', 'vitest.config.slow.ts', rel]
-  : ['vitest', 'run', rel];
+  if (!file) { console.error('--file <relpath> required'); process.exitCode = 2; return; }
+  if (!Number.isInteger(runs) || runs <= 0) {
+    console.error(`flake-repro: --runs must be a positive integer, got '${runsArg}'`);
+    process.exitCode = 2;
+    return;
+  }
 
-const results = [];
-for (let i = 0; i < runs; i++) {
-  const t0 = process.hrtime.bigint();
-  const r = spawnSync('npx', cmd, { cwd, stdio: 'inherit', shell: process.platform === 'win32', windowsHide: true,
-    env: { ...process.env, RUN_QUARANTINE: '1' } }); // RUN_QUARANTINE=1 so quarantined cases run
-  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-  results.push({ run: i + 1, ms: Math.round(ms), code: r.status });
-  console.log(`run ${i + 1}: ${Math.round(ms)}ms exit=${r.status}`);
+  // Resolve the repo root from this script's location
+  const scriptDir = fileURLToPath(new URL('.', import.meta.url));
+  const repoRoot = nodePath.resolve(scriptDir, '..');
+
+  const { cwd, rel, isSlow, fullPath, isOutsideRepo } = resolveTarget(file, repoRoot);
+
+  if (isOutsideRepo) {
+    console.error('flake-repro: path resolves outside the repository');
+    console.error(`  --file      ${file}`);
+    console.error(`  resolved to ${fullPath}`);
+    console.error(`  repo root   ${repoRoot}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  const filePath = nodePath.resolve(repoRoot, fullPath);
+  if (!existsSync(filePath)) {
+    console.error('flake-repro: no such test file');
+    console.error(`  --file      ${file}`);
+    console.error(`  resolved to ${filePath}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  // Require a real file (not a directory)
+  let stats;
+  try {
+    stats = statSync(filePath);
+  } catch {
+    console.error('flake-repro: cannot stat file');
+    console.error(`  --file      ${file}`);
+    console.error(`  resolved to ${filePath}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  if (!stats.isFile()) {
+    console.error('flake-repro: not a regular file');
+    console.error(`  --file      ${file}`);
+    console.error(`  resolved to ${filePath}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  // Ask vitest authoritatively whether it will select this file.
+  // Run `npx vitest list` with the same cwd and config that the measured runs will use.
+  // If vitest outputs nothing, the file won't be tested under the chosen config.
+  const absoluteCwd = nodePath.resolve(repoRoot, cwd);
+  const listCmd = isSlow
+    ? ['vitest', 'list', '--config', 'vitest.config.slow.ts', rel]
+    : ['vitest', 'list', rel];
+  const listResult = spawnSync('npx', listCmd, {
+    cwd: absoluteCwd,
+    encoding: 'utf8',
+    stdio: ['inherit', 'pipe', 'pipe'],
+    shell: process.platform === 'win32',
+    windowsHide: true,
+    /* Must match the measured run's env EXACTLY or the oracle answers a
+       different question than the one asked. `vitest list` omits skipped
+       tests, so without RUN_QUARANTINE a file whose every case is
+       quarantined lists NOTHING -- byte-identical to the refusal signal,
+       and no status check can tell those apart (#3082 pass 3, R2). */
+    env: { ...process.env, RUN_QUARANTINE: '1' },
+  });
+
+  /* Empty stdout means 'selected nothing' ONLY if the oracle actually ran.
+     A failed spawn, a missing config, or a config that throws all produce
+     empty stdout too -- and on POSIX (shell:false) a failed spawn leaves
+     stdout undefined, which crashed on .trim() (#3082 pass 3, R3). Those
+     are a broken oracle, not a verdict, and must not be reported as
+     'not a test file'. */
+  if (listResult.error || listResult.status !== 0 || typeof listResult.stdout !== 'string') {
+    console.error('flake-repro: could not ask vitest which files it selects');
+    console.error(`  command     npx ${listCmd.join(' ')}`);
+    console.error(`  in          ${absoluteCwd}`);
+    if (listResult.error) console.error(`  spawn error ${listResult.error.message}`);
+    else console.error(`  exit        ${listResult.status}`);
+    const stderrHead = String(listResult.stderr || '').trim().slice(0, 200);
+    if (stderrHead) console.error(`  stderr      ${stderrHead}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  if (listResult.stdout.trim() === '') {
+    console.error('flake-repro: not a test file (vitest does not select it under the chosen config)');
+    console.error(`  --file      ${file}`);
+    console.error(`  resolved to ${filePath}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  // Note: process.exitCode = 2 before starting the load-inducer children is safe
+  // because the children's event loop keeps the process alive. A return after
+  // startCpuLoad() would hang (the main process exits but children keep running).
+  // Keep this early-exit block and comment together.
+
+  if (has('--cpu-load')) startCpuLoad();
+  if (has('--io-load')) startIoLoad();
+
+  const cmd = isSlow
+    ? ['vitest', 'run', '--config', 'vitest.config.slow.ts', rel]
+    : ['vitest', 'run', rel];
+
+  const results = [];
+  for (let i = 0; i < runs; i++) {
+    const t0 = process.hrtime.bigint();
+    const r = spawnSync('npx', cmd, { cwd: absoluteCwd, stdio: 'inherit', shell: process.platform === 'win32', windowsHide: true,
+      env: { ...process.env, RUN_QUARANTINE: '1' } }); // RUN_QUARANTINE=1 so quarantined cases run
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+
+    // If the spawn itself failed (r.error set), stop and report what we have so far
+    if (r.error) {
+      stopCpuLoad(); stopIoLoad();
+      console.error('flake-repro: spawn failed to start');
+      console.error(`  error: ${r.error.message}`);
+      if (results.length > 0) {
+        console.log('SUMMARY', JSON.stringify(results));
+      }
+      process.exitCode = 2;
+      return;
+    }
+
+    results.push({ run: i + 1, ms: Math.round(ms), code: r.status });
+    console.log(`run ${i + 1}: ${Math.round(ms)}ms exit=${r.status}`);
+  }
+  stopCpuLoad(); stopIoLoad();
+  console.log('SUMMARY', JSON.stringify(results));
 }
-stopCpuLoad(); stopIoLoad();
-console.log('SUMMARY', JSON.stringify(results));
+
+if (isDirectlyInvoked(import.meta.url)) {
+  main();
+}

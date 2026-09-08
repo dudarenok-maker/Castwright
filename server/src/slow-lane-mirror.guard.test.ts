@@ -62,11 +62,18 @@ async function loadSlowConfig(): Promise<SlowConfigModule> {
    which doesn't declare them, crashing the tool. That was found and fixed in
    PR #2998 review pass 2; this list must now be an EXACT set match against
    SLOW_FILES in both directions, not merely "every SLOW_FILES entry is
-   covered by something". A dynamic import of that module is NOT used here:
-   it reads `process.argv` at module-eval time and calls `process.exit(2)`
-   when `--file` is absent, which would kill this test process rather than
-   throw catchably. Reading the source and parsing out the `SLOW` array
-   literal is the honest way to reach it without triggering that exit. */
+   covered by something". Reading the source and parsing out the `SLOW` array
+   literal is deliberately retained instead of a dynamic import. That module is
+   now safely importable — its CLI half sits behind isDirectlyInvoked(), so it
+   no longer reads `process.argv` or exits at module-eval time, which was the
+   original reason this could not import it (#3081). The parse stays because a
+   drift guard wants the literal AS WRITTEN IN THE SOURCE TEXT -- readFileSync
+   reads this working tree, NOT git. (An earlier version of this comment said
+   "as committed (what is in git)", which was simply false: #3082 review pass
+   3, New-8.) The independence that matters is from module EVALUATION, not
+   from the index: a dynamic import reports whatever the module computes at
+   runtime, so it would keep passing if the list were built, filtered or
+   re-exported rather than declared. Parsing the declaration survives that. */
 function loadFlakeReproSlowList(): string[] {
   const srcPath = resolve(SERVER_ROOT, '..', 'scripts', 'flake-repro.mjs');
   const src = readFileSync(srcPath, 'utf8');

@@ -235,6 +235,17 @@ export default defineConfig({
       '{**/server/src/tts/synthesise-chapter.ts,**/.*/**/server/src/tts/synthesise-chapter.ts}',
       '{**/server/tts-sidecar/main.py,**/.*/**/server/tts-sidecar/main.py}',
       '{**/docs/features/264-vram-aware-gpu-placement.md,**/.*/**/docs/features/264-vram-aware-gpu-placement.md}',
+      /* engine-language-coverage.guard.test.ts (#3059): its third assertion
+         reads server/src/routes/generation.ts at RUNTIME (readFileSync +
+         a TypeScript parse) to scan for the resolveEligibleEngines(...) call
+         site, the same #1847 runtime-read trap as the entries above —
+         generation.ts is importable, but the guard doesn't import it, it
+         scans its source text, so there is no module-graph edge for
+         `vitest run --changed` to follow. Without this trigger, a
+         generation.ts-only diff selects zero tests from this suite and the
+         guard never runs in the scoped CI leg — silent on exactly the
+         call-site change it exists to catch. */
+      '{**/server/src/routes/generation.ts,**/.*/**/server/src/routes/generation.ts}',
     ],
     pool: 'forks',
     /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the

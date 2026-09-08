@@ -26,8 +26,33 @@
    between the "Start fresh" delete and Phase-0's own per-chapter cast.json
    mirror write (analysis.ts, `interim.length > 0` block) touches cast.json,
    so holding Phase 0 open guarantees the only write in play during the
-   race window is analysis.ts's locked delete and add-alias's own write —
-   never the job's own later, legitimate re-creation of cast.json. */
+   race window is analysis.ts's own writer(s) and add-alias's own write —
+   never the job's own later, legitimate re-creation of cast.json.
+
+   #3022 retarget (2026-09-06, owner decision "option 2"): this test pins the
+   OUTCOME — cast.json stays deleted after a "Start fresh" delete races a
+   concurrent add-alias write — not any one lock site. An earlier version of
+   this file asserted that outcome AND claimed it as proof the delete's own
+   `withCastLock` (analysis.ts, inside the `requestedFresh` block) was what
+   enforced it; that claim was false; replacing that wrapper with a
+   passthrough of identical arity left the assertion below green, because
+   `readPriorCastForMerge` (analysis.ts) takes the SAME cast lock earlier in
+   the same job, unconditionally whenever `recordRef.bookDir` is set, strictly
+   before the delete — so add-alias's write is already serialised against the
+   job well before the delete is reached, regardless of the delete's own
+   wrapper. The outcome is real and worth gating; which specific call site
+   delivers it is not something this test can pin without also breaking on a
+   configuration production never runs (removing the upstream lock, which
+   nothing in production ever does).
+
+   WHICH assertion gates this test: the `vi.waitFor` poll for the delete, not
+   the `expect(castExistsAfterRace)` at the bottom. Under the mutations that
+   break the invariant, add-alias's write lands before the poll ever observes
+   an absent file, so the poll throws and the bottom assertion is never
+   reached. An earlier version of this header sent the reader to the bottom
+   assertion; that was wrong (PR #3060 review pass 1, finding 1), and naming
+   the reddening assertion correctly is precisely what #3022's decision asked
+   for. */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
@@ -81,6 +106,17 @@ const AUTHOR = 'Fresh Lock Author';
 const SERIES = 'Standalones';
 const TITLE = 'Fresh Lock Book';
 const CHAPTER_BODY = 'Nova said the plan out loud.';
+
+/* Shared synchronization-wait budget (finding 4, PR #3009 review pass 1) —
+   one named constant so a raised timeout can't silently diverge from a
+   hardcoded copy in an error message. */
+const SYNC_WAIT_TIMEOUT_MS = 5_000;
+
+/* How long to let a late resurrection write land before sampling disk (PR
+   #3009 review pass 2, finding 1). NOT a synchronisation guess: the delete is
+   polled for separately, and this window exists purely to give a wrong writer
+   time to be wrong in. Longer is strictly safer here, so it is not tuned. */
+const RESURRECTION_SETTLE_MS = 400;
 
 let workspaceRoot: string;
 let app: Express;
@@ -151,7 +187,7 @@ function buildPhase1Analyzer(): Analyzer {
   };
 }
 
-describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent cast writer', () => {
+describe('#1981 Task 11 — "Start fresh" cannot be resurrected by a racing cast writer', () => {
   it(
     'an add-alias write does not resurrect cast.json after a concurrent "Start fresh" delete',
     async () => {
@@ -262,10 +298,29 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
         released = resolve;
       });
       let intercepted = false;
+      let signalIntercepted!: () => void;
+      const interceptedSignal = new Promise<void>((resolve) => {
+        signalIntercepted = resolve;
+      });
       const spy = vi.mocked(stateIo.readJson).mockImplementation(async (path: string) => {
         if (!intercepted && path === raceCastPath) {
           intercepted = true;
           const value = await actual.readJson(path); // real bytes, now — happens-before the delete
+          /* Signalled AFTER the real read, not at interceptor entry (PR #3009
+             review pass 1, finding 1). The SHAPE follows the sibling precedent
+             in book-state-preserve-voices.test.ts (#2215/#2232); the finding
+             that this file needed it is this PR's own, so credit both rather
+             than copying the sibling's attribution wholesale (pass 2, finding
+             4). The invariant this edge exists to establish is "add-alias's
+             read genuinely happens-before the delete" — resolving on entry
+             would release the delete while the read was still pending, which
+             is harmless while the route holds withCastLock but gives strictly
+             LESS slack than the 300ms sleep did. Deliberately NOT argued from
+             a single named lock site, the way the sibling's comment is: this
+             file pins the outcome across whichever lock enforces it (#3022
+             retarget), not one call site, so citing a specific wrapper here
+             would overstate what this interceptor's timing actually proves. */
+          signalIntercepted();
           await gate; // hold the RESOLUTION open until released below
           return value;
         }
@@ -284,10 +339,34 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
           .send({ characterId: 'nova', aliasName: 'Supernova' });
         aliasPromise.catch(() => {}); // supertest is lazy — force real dispatch now
         // Let add-alias acquire the cast lock and reach (and get stuck
-        // behind) its intercepted in-lock read. Generous — this file's first
-        // supertest request pays a cold Express/module-init cost a warmer
-        // file (many prior requests already run) wouldn't.
-        await new Promise((r) => setTimeout(r, 300));
+        // behind) its intercepted in-lock read. Wait for the interceptedSignal,
+        // which resolves only AFTER the real read completes (not at entry) — this
+        // is the genuine happens-before edge, deterministic regardless of machine
+        // load. A poll on a boolean at entry (the old pattern) gave a shorter
+        // critical window than even the 300ms fixed sleep it replaced.
+        /* The deadline timer is captured, unref'd and cleared (PR #3009 review
+           pass 2, finding 3). Left dangling it holds a live handle for the full
+           SYNC_WAIT_TIMEOUT_MS past the normal path — the exact hazard
+           workspace/file-lock.ts's own unref-the-pending-timer note names and
+           defends against, in a repo
+           that already fights "Worker exited unexpectedly" teardown noise. */
+        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            interceptedSignal,
+            new Promise<never>((_, reject) => {
+              deadlineTimer = setTimeout(
+                () => reject(new Error(
+                  `add-alias never reached its intercepted in-lock read within ${SYNC_WAIT_TIMEOUT_MS}ms`,
+                )),
+                SYNC_WAIT_TIMEOUT_MS,
+              );
+              deadlineTimer.unref?.();
+            }),
+          ]);
+        } finally {
+          if (deadlineTimer) clearTimeout(deadlineTimer);
+        }
         expect(intercepted).toBe(true);
 
         const recordRef = getManuscript(manuscriptId)!;
@@ -298,16 +377,91 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
         });
         jobPromise.catch(() => {}); // don't let a later stub-shape error surface here
 
+        // Finding 3 (PR #3009 review pass 1) — a `clearAnalysisCache`-completion
+        // signal was tried here as a replacement for this fixed sleep. It
+        // deadlocks: `readPriorCastForMerge` (analysis.ts, unconditional
+        // whenever bookDir exists, and unconditionally BEFORE this
+        // `requestedFresh` block) takes the SAME cast lock add-alias is
+        // holding open below, so the job cannot reach `clearAnalysisCache`
+        // (further down in the same block) — let alone signal its
+        // completion — until add-alias's lock is released. But `released()`
+        // below is gated on that very signal, so nothing ever fires; observed
+        // `LockAcquisitionTimeoutError` after 10s and the test's own 5s wait
+        // timing out. No duration-free synchronization point is AVAILABLE for
+        // this head start with the current interceptor shape: the job cannot
+        // even attempt this lock until add-alias releases it, so there is no
+        // earlier test-visible edge to poll or await. Stated as availability,
+        // not non-existence (PR #3009 review pass 2) — a lock-queue-ENTRY
+        // edge (workspace/file-lock.ts's `chains.set(key, mine)` queue-entry
+        // point, synchronous, fires while add-alias
+        // still holds) would not deadlock; it is simply not exposed to a test
+        // today. Do not re-run this experiment: it was tried once already and
+        // deadlocked for the reason above, which does not change with #3022's
+        // retarget below.
+        //
+        // #3022 retarget: under the outcome-level invariant this file now
+        // pins, this fixed sleep has exactly one job — give the job and
+        // add-alias a chance to actually interleave, so a real regression has
+        // a window to occur in. That is a legitimate use of a fixed delay
+        // (it does not gate correctness of anything the test asserts; it only
+        // widens the odds a wrong writer gets to run during the race), not a
+        // synchronisation guess standing in for a signal that doesn't exist —
+        // the sleep below is that window, not a timing assumption to defend.
         // Generous head start: the delete either completes immediately
-        // (unlocked — the bug window) or queues behind add-alias's held
-        // lock (locked — the fix). Not a tight window either way.
+        // (unlocked at every site — the bug window) or queues behind
+        // add-alias's held lock (locked at any site that matters — the fix).
+        // Not a tight window either way.
         await new Promise((r) => setTimeout(r, 100));
 
         released();
         resAlias = await aliasPromise;
         /* #2015 — three handoffs now, not one: add-alias releases, the job's
-           locked capture acquires+releases, then the delete acquires. */
-        await new Promise((r) => setTimeout(r, 400));
+           locked capture acquires+releases, then the delete acquires. Poll for
+           the delete to complete (file removal) rather than sleeping a fixed
+           duration, which can fail under lock-contention delays. No
+           resurrection write is possible after resAlias resolves, since the
+           add-alias write has already landed on disk (writeJsonAtomic happens
+           before the HTTP response) and Phase 0 is still gated. */
+        await vi.waitFor(
+          () => {
+            if (existsSync(castPath)) {
+              /* Message names BOTH causes deliberately. Under the retargeted
+                 invariant this is the assertion a real regression reddens, and
+                 the two ways to get here are indistinguishable from inside the
+                 poll: the delete may not have run yet (contention), or it ran
+                 and a racing writer put the file back (the #1981 Task 11 bug).
+                 A message naming only the first blames contention for the
+                 second, which is exactly the misdiagnosis PR #3009 review pass
+                 2 finding 1 caught in the previous wording. */
+              throw new Error(
+                `cast.json is still present after ${SYNC_WAIT_TIMEOUT_MS}ms ` +
+                  '— either the "Start fresh" delete never completed, or it ' +
+                  'completed and a concurrent writer resurrected the file. ' +
+                  'Both are failures of this invariant; check the job log for ' +
+                  'a cast_merge_base_stale advisory, which indicates the latter.',
+              );
+            }
+          },
+          { timeout: SYNC_WAIT_TIMEOUT_MS, interval: 10 },
+        );
+
+        /* Settle window, RESTORED (PR #3009 review pass 2, finding 1). The poll
+           above returns at the first instant of absence, so sampling absence
+           immediately after it would be tautological, so the sample is taken
+           at a moment the poll did not choose.
+
+           Be honest about what this currently buys: NOTHING on today's code
+           path. Per the reasoning above, no writer exists between the poll
+           seeing the file gone and this sample, so this window waits 400ms for
+           something that cannot happen, and the assertion it feeds cannot fail
+           (PR #3060 review pass 1, finding 2). It is retained as a FORWARD
+           guard, not as the gate: the invariant is "must not be resurrected",
+           and a writer added later between the delete and stage 1 would be
+           caught here and NOT by the poll, which exits at the first instant of
+           absence. If that ever stops being worth 400ms, delete the window and
+           the assertion together rather than leaving an assertion that reads
+           like a gate. The gate is the poll above. */
+        await new Promise((r) => setTimeout(r, RESURRECTION_SETTLE_MS));
 
         // Capture disk state NOW, before Phase 0 (still gated) is allowed to
         // proceed to the job's own later, legitimate cast.json write.
@@ -325,11 +479,54 @@ describe('#1981 Task 11 — "Start fresh" cast.json delete races a concurrent ca
       }
 
       expect(resAlias!.status).toBe(200);
-      /* The core assertion: whichever side acquired the lock first,
-         cast.json ends up deleted, never resurrected with add-alias's stale
-         snapshot. */
+      /* The `vi.waitFor` poll above is the gate that this test pins after the
+         #3022 retarget: an add-alias write cannot interleave with a "Start
+         fresh" delete to leave cast.json resurrected — whichever lock in
+         analysis.ts's "Start fresh" path is what actually enforces that. This
+         test does NOT claim to pin any one call site: `readPriorCastForMerge`
+         (analysis.ts) takes the cast lock unconditionally, before the delete
+         block, whenever `recordRef.bookDir` is set, so add-alias's write is
+         already serialised against the job well before the job reaches the
+         delete — which is exactly why asserting this outcome does not, by
+         itself, prove the delete's own `withCastLock` is doing anything (see
+         the file header). The assertion below is retained as a FORWARD guard.
+
+         This assertion is NOT what catches the mutation, despite reading like
+         it (PR #3060 review pass 1, finding 1). Verified after pass 2: removing
+         cast-lock protection from both `readPriorCastForMerge` and the delete
+         block (while leaving add-alias's own wrapper in `cast-aliases.ts` intact) DOES
+         redden the test — at the POLL above, because add-alias's write lands
+         before the poll ever sees the file gone, so execution never reaches
+         this line.
+         Review pass 1 measured which single-site removals redden it too:
+         add-alias's own wrapper (`cast-aliases.ts`) does; the delete's wrapper
+         alone and `readPriorCastForMerge`'s alone do not — the former being
+         the #1981 Task 11 line this file is named for, and the disclosure
+         #3022 signed up for when it chose to retarget. */
       expect(castExistsAfterRace).toBe(false);
     },
-    30_000,
+    /* Runaway backstop, not a synchronisation deadline. 60_000 is this suite's
+       house norm for the class (51 uses vs 17 of 30_000).
+
+       Corrected in PR #3009 review pass 2, finding 2. Pass 1 raised this citing
+       a test BODY of "10.4s then 22.0s on an UNLOADED box". That box was NOT
+       unloaded — three sibling worktrees were running node/python at the
+       time — and the claim was never checked before it was written down.
+       Five quiet isolation runs measure 3.56 / 4.85 / 4.74 / 6.28 / 4.54s, so
+       the honest body is ~5s and the old 30_000 already had ~5x headroom, not
+       the 1.4x pass 1 asserted. (#3007's own 25.23s figure for this shape came
+       from a contended box too.) The raise still stands, but only on the half
+       of the evidence that survives: two of six runs under
+       `flake-repro.mjs --cpu-load` blew 30_000 outright.
+
+       60_000 not 120_000: suite-wide `retry: 1` means a genuine wedge costs
+       twice the budget in fast-lane wall clock, so the ceiling is not free.
+       Raising it at all is still NOT the "wider constant" mistake this PR
+       fixes elsewhere — that sleep gated an ASSERTION on a timing guess,
+       while this only bounds a hang. The real detectors are the internal
+       bounded waits (SYNC_WAIT_TIMEOUT_MS above, withKeyLock's 10s per #2260),
+       which held across all six contended runs and fail naming what never
+       happened; this catches only what they cannot see. */
+    60_000,
   );
 });

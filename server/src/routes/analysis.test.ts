@@ -63,11 +63,12 @@ import { loadSuggestions } from '../store/cast-merge-suggestions.js';
    GPU/CPU placement must be cached wherever detectOllamaDevice() actually
    runs. Mock its two call-site dependencies so the test below can assert
    the wiring without touching real Ollama / real GPU-cost state. */
-const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(() => ({
+const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock, unloadResidentOllamaMock } = vi.hoisted(() => ({
   detectOllamaDeviceMock: vi.fn(async (): Promise<'cuda' | 'cpu' | 'unknown'> => 'cuda'),
   setLastKnownAnalyzerDeviceMock: vi.fn(),
+  unloadResidentOllamaMock: vi.fn(async () => {}),
 }));
-vi.mock('./ollama-health.js', () => ({ detectOllamaDevice: detectOllamaDeviceMock }));
+vi.mock('./ollama-health.js', () => ({ detectOllamaDevice: detectOllamaDeviceMock, unloadResidentOllama: unloadResidentOllamaMock }));
 vi.mock('../gpu/analyzer-device-state.js', () => ({
   setLastKnownAnalyzerDevice: setLastKnownAnalyzerDeviceMock,
 }));
@@ -8793,4 +8794,152 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       if (i >= 0) arr.splice(i, 1);
     }
   });
+
+  it('#3004 — a real rejoin POST surfaces rejoin-miss with the real persisted error, through the actual route', async () => {
+    /* Round-3 review (pr-review-gate) found the prior version of this test
+       asserted nothing route-level (just isAnalysisJobRunning === false with
+       no HTTP call at all). This version drives the real analysisRouter
+       end-to-end: a real book fixture (setUpBook, same helper
+       analysis.rejoin-miss.test.ts uses), a real endJob(job, {kind:'error'})
+       call to persist a real outcome file, then a real POST through the real
+       route. Reading the SSE stream progressively and destroying the
+       connection the moment the target event lands avoids waiting for (or
+       triggering) the full real analyzer run the rejoin would otherwise kick
+       off next, which needs a real engine and is out of scope here. */
+    const { endJob, __testRegisterJobForTest, analysisRouter } = await import('./analysis.js');
+    const { putManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { makeBookId } = await import('../workspace/paths.js');
+    const express = (await import('express')).default;
+    const http = await import('node:http');
+
+    const manuscriptId = `test-rejoin-route-${Date.now()}-${Math.random()}`;
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-rejoin-route-test-'));
+    const prevWorkspaceDir = process.env.WORKSPACE_DIR;
+    process.env.WORKSPACE_DIR = workspaceRoot;
+    const author = 'Rejoin Route Author';
+    const series = 'Standalones';
+    const title = 'Rejoin Route Book';
+    const chapterBody = 'Nova said the plan out loud.';
+    const bookDir = join(workspaceRoot, 'books', author, series, title);
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    const bookId = makeBookId(author, series, title);
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId,
+        title,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        language: 'en',
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title,
+      wordCount: 10,
+      byteSize: 100,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapterBody,
+      chapterHints: [{ id: 1, title: 'Chapter One', body: chapterBody }],
+      bookDir,
+    });
+
+    try {
+      const job = {
+        controller: new AbortController(),
+        subscribers: new Set(),
+        manuscriptId,
+        kind: 'main',
+        bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+          warnings: new Map(),
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as Parameters<typeof __testRegisterJobForTest>[0];
+      __testRegisterJobForTest(job);
+      endJob(job, { kind: 'error', code: 'cast_incomplete', message: 'route-test synthetic failure' });
+
+      /* endJob's outcome write is fire-and-forget (void, same pattern as the
+         pre-existing persistTerminalSnapshot calls) — wait for it to actually
+         land on disk before POSTing, or the rejoin can race the write and see
+         no file yet (same pattern as rejoin-miss.test.ts's waitForOutcome). */
+      const { readAnalysisLastOutcome } = await import('../store/analysis-state.js');
+      const deadline = Date.now() + 2_000;
+      for (;;) {
+        const outcome = await readAnalysisLastOutcome(bookDir);
+        if (outcome) break;
+        if (Date.now() > deadline) throw new Error('outcome file never landed within 2s');
+        await new Promise((r) => setTimeout(r, 20));
+      }
+
+      const app = express();
+      app.use(express.json());
+      app.use('/api/manuscripts', analysisRouter);
+      const server = app.listen(0);
+      const port = (server.address() as { port: number }).port;
+
+      const sseText = await new Promise<string>((resolvePromise, reject) => {
+        const req = http.request(
+          { host: '127.0.0.1', port, path: `/api/manuscripts/${manuscriptId}/analysis`, method: 'POST', headers: { 'Content-Type': 'application/json' } },
+          (res) => {
+            let buf = '';
+            res.on('data', (chunk: Buffer) => {
+              buf += chunk.toString('utf8');
+              if (buf.includes('rejoin-miss')) {
+                res.destroy();
+                req.destroy();
+                resolvePromise(buf);
+              }
+            });
+            res.on('end', () => resolvePromise(buf));
+            res.on('error', reject);
+          },
+        );
+        req.on('error', (err: NodeJS.ErrnoException) => {
+          // destroy()-ing the response also errors the request socket; the
+          // promise is already resolved by then, so an ECONNRESET here is
+          // expected and must not fail the test.
+          if (err.code !== 'ECONNRESET') reject(err);
+        });
+        req.end(JSON.stringify({}));
+      });
+      server.close();
+
+      expect(sseText).toContain('rejoin-miss');
+      const line = sseText.split('\n').find((l) => l.includes('rejoin-miss'));
+      expect(line).toBeDefined();
+      const payload = JSON.parse(line!.replace(/^data:\s*/, ''));
+      expect(payload.kind).toBe('rejoin-miss');
+      expect(payload.priorOutcome).toBeDefined();
+      expect(payload.priorOutcome.kind).toBe('error');
+      expect(payload.priorOutcome.code).toBe('cast_incomplete');
+      expect(payload.priorOutcome.message).toBe('route-test synthetic failure');
+      expect(typeof payload.priorOutcome.endedAt).toBe('number');
+    } finally {
+      removeManuscript(manuscriptId);
+      rmSync(workspaceRoot, { recursive: true, force: true });
+      if (prevWorkspaceDir === undefined) delete process.env.WORKSPACE_DIR;
+      else process.env.WORKSPACE_DIR = prevWorkspaceDir;
+    }
+  }, 30_000);
 });

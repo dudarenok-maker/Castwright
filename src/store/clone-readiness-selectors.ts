@@ -16,7 +16,7 @@
       slot for THIS engine — never the library entry's slot (a Qwen clone has
       no `xtts` library slot, so reading the library slot makes the ordinary
       Coqui-routed case misreport `wrong-engine`) and never the engine-
-      agnostic `characterHasClonedSlot` (which would make rule 3 true for
+      agnostic `characterHasClonedSlot` (which would make rule 4 true for
       every cloned character, reinstating the generic-substitution trap).
    2. Library slot lookup goes through `manifestSlotFor` — `coqui` maps to
       manifest slot `xtts`. Never index `entry.engines.coqui`.
@@ -120,19 +120,16 @@ function libraryUuidForClonedCharacter(character: Character, engine: TtsEngine):
     by the real per-character check (`engine` = the character's resolved
     render engine, Decision 4) and `castOnEngine` (`engine` = each
     routed-engine-excluded clone-capable candidate, Decision 5). Returns
-    `undefined` when no library uuid can be resolved at all — this plan has no
-    "misconfigured" verdict of its own.
+    `undefined` only when the character has no cloned (or legacy bare-uuid)
+    slot at all — `characterNeedsCloneCheck` is the single source of truth for
+    that, so a designed or catalogue slot never reaches the gate regardless of
+    what its own uuid-shaped field happens to contain.
 
-    That is a KNOWN GAP, not a covered case: the render does not ignore this
-    state, it hard-fails it (`clone-voice-resolver.ts`'s `misconfigured`
-    reason), so the gate is silent where the chapter will die. Filed as #2054.
-
-    Do NOT justify it with Decision 2's "what stays invisible" — that section
-    accepts DISK-integrity gaps only (`.pt` and clip-file existence) and says
-    in terms that "every state #1980 is about is metadata-visible". An
-    unresolvable `libraryUuid` is metadata. Closing it needs a seventh
-    `CloneUnready` value and a CTA row, i.e. a plan change — which is why it
-    is an issue rather than a line of code here. */
+    A cloned (or legacy) slot whose `libraryUuid` is missing, empty or
+    malformed still gets a real input, with `libraryUuidResolvable: false` —
+    `cloneReadiness`'s rule 1 turns that into the `unresolvable-uuid` verdict
+    (#2054) so the gate names it instead of going silent while the render
+    hard-fails it (`clone-voice-resolver.ts`'s `misconfigured` reason). */
 function buildInput(
   character: Character,
   engine: TtsEngine,
@@ -150,16 +147,16 @@ function buildInput(
   const libraryUuid = isLegacy
     ? (character.overrideTtsVoices?.qwen?.libraryUuid as string | undefined)
     : libraryUuidForClonedCharacter(character, engine);
+  const libraryUuidResolvable = !!libraryUuid;
 
-  if (!libraryUuid) return undefined;
-
-  const entry = entries.find((e) => e.voiceUuid === libraryUuid);
+  const entry = libraryUuid ? entries.find((e) => e.voiceUuid === libraryUuid) : undefined;
   /* Trap 2 + trap 3 — `manifestSlotFor`, never a raw `entry.engines.coqui`
      index; the status is used exactly as `GET /api/voice-library` served it. */
   const slotStatus =
     entry && isCloneEngine(engine) ? entry.engines?.[manifestSlotFor(engine)]?.status : undefined;
 
   return {
+    libraryUuidResolvable,
     entryFound: !!entry,
     consentRevoked: !!entry?.consent?.revokedAt,
     slotStatus,
