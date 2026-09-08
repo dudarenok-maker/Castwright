@@ -3486,7 +3486,12 @@ load, one drift simulation, one unpinned-auto load with its negative control.
 > unresolved sidecar defect. **Still owed:** re-attempt bullet 2 with
 > `QWEN_DEVICE=cuda:0` set and the sidecar launched in the SAME shell
 > invocation, then use Coqui plus a correctly-pinned Qwen to squeeze GPU0
-> under Kokoro's admission threshold.
+> under Kokoro's admission threshold. **The #2643 negative control (a box
+> with no CUDA build/device at all) is not testable on this box:** both
+> cards now genuinely construct CUDA sessions (confirmed above and in A102
+> bullet 3), so there is no "CUDA absent" state left to exercise here —
+> investigated and found permanently untestable on this hardware, not
+> silently dropped.
 
 ---
 
@@ -3831,15 +3836,25 @@ Qwen VoiceDesign 1.7B model, real sidecar, Kokoro resident for the third and fou
 *Cost:* moderate — concurrent-load/eviction scenarios + VRAM observation, plus one
 forced-contention run for the lock-leak criterion.
 
-> **Run 2026-09-06/08 (batch 2 step 2, claude) — bullets 1, 2, 3, and 5 all
-> CONFIRMED on real hardware; the co-residency bullet FAILED and is narrowed
-> to point at the new bug it surfaced.** Across the same 18-run on-box session
-> as A24 above (`docs/testing/onbox-mechanical-batch2-results/step-2-qwen-lifecycle.md`):
+> **Run 2026-09-06/08 (batch 2 step 2, claude) — bullets 1, 3, and 5 fully
+> CONFIRMED on real hardware; bullet 2 (Stop button) confirmed only for its
+> literal 200-not-500 claim, with the deeper unload-mechanism question still
+> open; the co-residency bullet FAILED and is narrowed to point at the new
+> bug it surfaced.** Across the same 18-run on-box session as A24 above
+> (`docs/testing/onbox-mechanical-batch2-results/step-2-qwen-lifecycle.md`):
 > the widened-eviction-guard/#1156 bullet is confirmed (a fresh design
 > correctly waited for/evicted an in-flight base17 load with no OOM); the
-> Stop-button-mid-base17-load bullet is confirmed (`/unload` returned 200
-> immediately, and separately the in-flight load it raced was not aborted by
-> the race, matching this bullet's own 200-not-500 ask); the bulk-design
+> Stop-button-mid-base17-load bullet is confirmed **only for its literal
+> claim** — `/unload` returned 200 immediately, and separately the in-flight
+> load it raced was not aborted by the race, matching this bullet's own
+> 200-not-500 ask — but this run's timing did NOT prove the deeper claim
+> implied by "immediate unload in the logs": whether `unload_base17()`'s
+> bounded wait actually holds up completion of the racing `/load`, or
+> whether `/unload` arriving before `_base17` is assigned is simply a no-op
+> with nothing to null yet, since both produce the identical external HTTP
+> result; that unload-mechanism question stays owed
+> (`docs/testing/onbox-mechanical-batch2-results/step-2-qwen-lifecycle.md:191-206`);
+> the bulk-design
 > Kokoro-pause bullet is confirmed **for both required directions** — Kokoro
 > paused for a same-card VoiceDesign forward through the full forward (not
 > just the load), and (via the codebase's own existing white-box unit
@@ -3853,7 +3868,8 @@ forced-contention run for the lock-leak criterion.
 > reproduced 4 times with the exact documented error text, and the
 > no-leak claim confirmed via a design-vs-design race (a fresh design
 > acquired the lock immediately and ran to completion with zero rejections
-> right after the contended pair resolved). **The co-residency bullet FAILED:
+> right after the contended pair resolved). **The co-residency
+> bullet FAILED:
 > a real, live repro (two raw `design-voice` calls confirmed genuinely
 > overlapping via `/health` polling, then a raw Kokoro `/synthesize` call
 > fired while both were still resident) showed the Kokoro call completing in
@@ -3864,10 +3880,15 @@ forced-contention run for the lock-leak criterion.
 > forward overlap a VoiceDesign forward" claim, with every no-op explanation
 > (device-sharing off, wrong build) ruled out from source.** Filed as
 > [Castwright#3086](https://github.com/dudarenok-maker/Castwright/issues/3086)
-> rather than silently fixed or dropped. **This row now stays open only for
-> #3086's own co-residency criterion** — the other four bullets (widened
-> eviction guard, Stop-button, bulk-design Kokoro-pause both directions,
-> failed-eviction/lock-leak) are fully discharged and don't need re-running.
+> rather than silently fixed or dropped. **This row now stays open for
+> #3086's own co-residency criterion and for the Stop-button bullet's
+> unresolved unload-mechanism question** — the other three bullets (widened
+> eviction guard, bulk-design Kokoro-pause both directions,
+> failed-eviction/lock-leak) are fully discharged and don't need re-running;
+> the Stop-button bullet's literal 200-not-500 claim is discharged, but the
+> deeper unload-mechanism question is not and does not need re-running
+> either — it needs a sidecar log line (or a deliberately landed race) to
+> distinguish the two cases, per the source evidence above.
 
 ## Group B — local Ollama analyzer only
 
