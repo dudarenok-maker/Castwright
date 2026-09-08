@@ -4917,6 +4917,7 @@ class PlacementController:
         cpu_capable: bool,
         heavy: bool,
         pinned: Optional[str] = None,
+        preferred: Optional[str] = None,
     ) -> dict:
         """PURE placement DECISION — holds NO reservation (that is
         `reservation()`'s job). Returns `{"device": key}` | `{"device": "cpu"}`
@@ -4929,6 +4930,16 @@ class PlacementController:
         device key (e.g. from an engine's *_DEVICE env) restricting candidates
         to that one device when the engine isn't already resident — residency
         always takes precedence since the model is already loaded there.
+        `preferred` mirrors `_resolve_admission`'s ADVISORY sibling (#3061
+        review C3/N6): tries that device first via the read-only `best_fit`
+        (never `try_hold` — this function holds nothing), then falls back to
+        the unconstrained candidates below if it doesn't fit or isn't given.
+        Kept in parity with `reservation()`/`_resolve_admission` even though
+        `admit()` has no production caller today (see test_placement.py) —
+        an advisory decision function that silently dropped a parameter its
+        binding twin honors would disagree with that twin the moment
+        something calls it with a hint, which is exactly the invariant this
+        docstring already claims to hold.
 
         Deliberately does NOT take `_admit_lock` (plan 273, T4), unlike
         `reservation()` — two reasons, not one:
@@ -4949,7 +4960,13 @@ class PlacementController:
         devices = self.probe()
         candidates = self._gpu_candidates(devices, constraint)
 
-        key = self.ledger.best_fit(candidates, peak, reserve_cap)
+        key = None
+        if preferred is not None and constraint is None:
+            key = self.ledger.best_fit(
+                [c for c in candidates if c[0] == preferred], peak, reserve_cap
+            )
+        if key is None:
+            key = self.ledger.best_fit(candidates, peak, reserve_cap)
         if key is not None:
             return {"device": key}
         if cpu_capable and not heavy:

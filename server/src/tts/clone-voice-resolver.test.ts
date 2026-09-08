@@ -17,7 +17,10 @@ import {
 } from './clone-voice-resolver.js';
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
 import { currentQwenBaseModel } from './model-paths.js';
-import { setLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
+import {
+  setLastKnownGpuDevices,
+  resetGpuDeviceListWarmForTests,
+} from '../gpu/gpu-device-list-state.js';
 import { fetchSidecarDevices } from '../gpu/fetch-sidecar-devices.js';
 
 /* #3061 review C1 — the lazy Coqui derive now WARMS the last-known GPU device
@@ -2085,7 +2088,7 @@ describe('resolveDesignedVoicesForChapter', () => {
        `resolveClonedVoicesForChapter` below) must keep omitting it. */
     describe('#3058 — lazy Coqui derive device hint', () => {
       afterEach(() => {
-        setLastKnownGpuDevices([]); // restore the no-GPU-list-yet default
+        resetGpuDeviceListWarmForTests(); // restore the no-GPU-list-yet default
         fetchSidecarDevicesMock.mockReset();
         fetchSidecarDevicesMock.mockResolvedValue(null);
       });
@@ -2120,7 +2123,7 @@ describe('resolveDesignedVoicesForChapter', () => {
          the warm this returns `undefined` and the whole of #3058 is
          pre-PR behaviour with no log line saying so. */
       it('warms the GPU device list itself when nothing else has, so the hint is still sent on a plain generation', async () => {
-        setLastKnownGpuDevices([]); // Advanced Settings never opened
+        resetGpuDeviceListWarmForTests(); // Advanced Settings never opened
         fetchSidecarDevicesMock.mockResolvedValue({
           devices: [
             { uuid: 'GPU-0', idx: 0, name: 'a', total_mb: 24000, free_mb: 20000 },
@@ -2144,7 +2147,7 @@ describe('resolveDesignedVoicesForChapter', () => {
          `fetchSidecarDevices` null path) must leave the cache empty and the
          hint unset, never throw and never fail the self-heal. */
       it('sends no hint and does not throw when the warm cannot reach the sidecar', async () => {
-        setLastKnownGpuDevices([]);
+        resetGpuDeviceListWarmForTests();
         fetchSidecarDevicesMock.mockResolvedValue(null);
         const deps = coquiDeriveDeps();
 

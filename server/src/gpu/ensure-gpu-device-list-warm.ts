@@ -18,17 +18,21 @@
    path warm the cache too. */
 
 import { fetchSidecarDevices } from './fetch-sidecar-devices.js';
-import { getLastKnownGpuDevices, setLastKnownGpuDevices } from './gpu-device-list-state.js';
+import { hasWarmedGpuDeviceList, setLastKnownGpuDevices } from './gpu-device-list-state.js';
 
-/** Populate the last-known GPU device list if it is empty. A no-op once
-    anything (this, `GET /api/gpu/devices`, `toUuidForm`) has already warmed
-    it, so it costs one sidecar round-trip per process at most on the happy
+/** Populate the last-known GPU device list if nothing has warmed it yet. A
+    no-op once anything (this, `GET /api/gpu/devices`, `toUuidForm`) already
+    has, so it costs one sidecar round-trip per process at most on the happy
     path. Never throws: `fetchSidecarDevices` returns null on any failure
-    (timeout, unreachable, non-2xx), and a null result leaves the cache empty
-    — every caller must still handle the empty case, because a box with no
-    sidecar running will always land there. */
+    (timeout, unreachable, non-2xx), and a null result leaves the cache
+    unwarmed — every caller must still handle the empty-list case, because a
+    box with no sidecar running will always land there and keep re-probing
+    (that failure case is the one this deliberately does NOT cache: only a
+    successful probe counts as warmed — #3061 review N5). A successful probe
+    that reports zero GPUs DOES count as warmed, so a genuinely GPU-less box
+    is probed once per process, not once per call. */
 export async function ensureGpuDeviceListWarm(): Promise<void> {
-  if (getLastKnownGpuDevices().length > 0) return;
+  if (hasWarmedGpuDeviceList()) return;
   const result = await fetchSidecarDevices();
   if (result) setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx })));
 }

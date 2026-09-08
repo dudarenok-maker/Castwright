@@ -261,8 +261,13 @@ describe('deriveEngineArtifact — X-Device-Hint (#3058)', () => {
     );
     /* Header READS only — `req.headers.get("X-Device-Hint")`. Mentions in
        comments and log strings are deliberately not counted; this asserts
-       where the value is consumed, not where it is discussed. */
-    const readSites = [...mainPy.matchAll(/headers\.get\(\s*["']X-Device-Hint["']\s*\)/g)];
+       where the value is consumed, not where it is discussed. Case-
+       INSENSITIVE: Starlette's `Headers.get` matches header names
+       case-insensitively, so `req.headers.get("x-device-hint")` in some
+       other route is a real second read site at runtime even though it
+       doesn't match the literal spelling used at the one known call —
+       a case-sensitive guard would stay green while that happened. */
+    const readSites = [...mainPy.matchAll(/headers\.get\(\s*["']X-Device-Hint["']\s*\)/gi)];
     expect(readSites).toHaveLength(1);
 
     /* And that one read is inside `xtts_clone_voice`, not some other route:
