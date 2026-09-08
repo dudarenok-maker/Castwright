@@ -1071,3 +1071,102 @@ path (raw sidecar Kokoro synth, not the app route) and removed one
 red herring (device-sharing) but did not close any of them. Parking again
 (Agent Working, still assigned) rather than reporting AGENT DONE against
 unfinished scope.
+
+## 11th run (2026-09-08) — A105 bullet 4 driven to a result: FAIL
+
+Real hardware, worktree `C:\Claude\Projects\wt-mechanical-batch-2`, sidecar
+port 9170 + dev server port 8250 — both were down at the start of this run
+(no process listening on either port, `nvidia-smi` showed 0 MiB used on
+both cards) and were started fresh via `server\tts-sidecar\start.ps1` and
+`npm run dev`.
+
+**Followed the 10th run's own recommendation exactly**: drove the sidecar's
+raw `/synthesize` endpoint directly (`engine:"kokoro"`, `model:"kokoro-v1"`,
+`voice:"af_bella"` — the underlying Kokoro voice ID backing the `unknown-male`
+cast character in the `Onbox Test` fixture, read from that character's
+`overrideTtsVoices.kokoro.name` in `cast.json`) instead of the app-level
+`/generation` route, to sidestep the cast-order confound the 10th run
+diagnosed.
+
+**Reproduced the 10th run's own overlapping-design technique** first, to
+confirm real overlap before firing Kokoro:
+- `POST /qwen/design-voice {"voiceId":"qwen-a105b4-E", ...}` fired at
+  01:31:06 UTC. Confirmed in flight via `/health` 3s later
+  (`qwen_design_resident: true`, `inflight_synth: 1`).
+- `POST /qwen/design-voice {"voiceId":"qwen-a105b4-F", ...}` fired 25s later
+  at 01:31:31. Confirmed BOTH concurrently in flight immediately after
+  (`qwen_design_resident: true`, `inflight_synth: 2`).
+- `POST /synthesize {"engine":"kokoro","model":"kokoro-v1","voice":"af_bella","text":"..."}`
+  fired 5s after that, at 01:31:36, while both designs were confirmed
+  resident.
+
+**Result: the Kokoro call did NOT wait.** It returned `HTTP 200` with a real
+142,336-byte PCM payload (`kokoro_loaded` flipped `false → true`, confirmed
+via polling) after 44.11s — i.e. it completed at ~01:32:20 UTC. Design E
+(`HTTP 200`, 94.59s) did not complete until ~01:32:41, and design F
+(`HTTP 200`, 98.75s) did not complete until ~01:33:10 — **both roughly 20-50s
+after the Kokoro call had already finished.** Since `_VD_KOKORO.design()` is
+entered manually inside `design_voice()` (`main.py:7126-7127`) and released
+only in that function's own `finally`, spanning the full model load *and*
+GPU forward (`main.py:7149-7165`'s comment: "remain inside
+`_VD_KOKORO.design()`" through the forwards) — and since the design route
+only sends its HTTP response after `design_voice()` returns
+(`main.py:11352-11375`) — a design's own HTTP completion time is an
+authoritative lower bound on how long it held `_design_active_count`. The
+Kokoro call's HTTP completion strictly precedes both designs' HTTP
+completion, so it necessarily ran and finished while `_design_active_count`
+was still ≥ 1 for at least one of E/F.
+
+This contradicts the arbiter's documented contract
+(`_VdKokoroArbiter.kokoro_synth()`, `main.py:1577-1591`: `while
+self._design_active_count > 0: self._cv.wait()`) and the exclusion
+`KokoroEngine.synthesize()` claims to hold
+(`main.py:3800-3804`, "never let this Kokoro forward overlap a VoiceDesign
+forward"). Ruled out `_shares_device` being `False` as the explanation: this
+worktree's `server/.env` has both `QWEN_DEVICE`/`KOKORO_DEVICE` unset (same
+as the 10th run confirmed), `/health` reports `devices: {"kokoro":"cuda",
+"qwen":"cuda"}` (both resolve to unindexed `cuda` → same card, `shares_device`
+computes `True` per `main.py:5646-5661`), and `_compute_vd_kokoro_shares_device`'s
+only failure path defaults `True` too — there is no code path here that
+would leave the arbiter in no-op mode.
+
+**Not chased further, not fixed** (out of scope for this ticket — the row
+asks to confirm behaviour, not repair it). Filed as a new tracked bug:
+`dudarenok-maker/Castwright#3086` — "VdKokoroArbiter does not block a raw
+Kokoro `/synthesize` call while a VoiceDesign forward holds
+`_design_active_count`", with this run's exact repro steps, log excerpts,
+and code citations.
+
+**Attempted a second, single-design confirmation run** (`qwen-a105b4-G`,
+then `-H` as a retry) to further isolate the finding from the two-design
+case, but both hit `503 {"noCapacity":true,"neededMb":6144,"deviceKey":"cuda:0"}`
+from the capacity-admission layer (`/capacity` showed `freeMb: 6532` on
+`cuda:0` against Kokoro's own recent residency — likely just under the
+6144 MB request once the `free_floor_mb: 1024` reservation floor is
+subtracted, 6532 − 1024 = 5508 < 6144). Did not chase this — it looks like
+ordinary capacity accounting, not a new bug, and the two-design case above
+already gives an unambiguous result for bullet 4. Noted here only so the
+next run doesn't waste time rediscovering that a single design may need the
+card fully idle first (unload Kokoro before design-loading it) to clear
+admission on this box's 8 GB card.
+
+**A105 bullet 4: answered — arbiter exclusion does NOT hold on this build.**
+Bullet 3's second direction (Kokoro proceeding unblocked during a
+base17-only eviction wait, no design active) was not driven this run — it
+needs its own isolated repro and is unaffected by this finding either way.
+
+Cleanup: final `/health` confirmed idle (`qwen_loaded`/`qwen_design_resident`/
+`kokoro_loaded` all `false`, `inflight_synth: 0`) after explicit
+`POST /unload` for both engines. `nvidia-smi`: GPU0 `119 MiB`, GPU1 `299 MiB`
+— both back near the idle baseline this run started from (no other lane's
+process touched, checked before and after). Working tree: this file is the
+only change, `git status --porcelain` clean otherwise. Dev server and
+sidecar processes were left running (background, detached — consistent with
+prior runs' practice) for whichever run picks this up next. No cast/fixture
+data touched — `qwen-a105b4-{E,F,G,H}` are throwaway, never-cast voiceIds,
+none touch the `Onbox Test` book's cast.
+
+**Still not finished.** A24 bullets 2-4 and A105 bullet 3's second direction
+remain undriven. A105 bullet 4 is now closed with a real (failing) result
+and a filed follow-up bug. Parking again (Agent Working, still assigned)
+rather than reporting AGENT DONE against unfinished scope.
