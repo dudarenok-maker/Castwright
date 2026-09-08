@@ -450,7 +450,7 @@ describe('fs-2 never-cross-language generation gate', () => {
    NO direct test: every currently-registered language (en/ru/es/fr/de/zh/ja)
    is Coqui-eligible, so nothing drives the `!coquiEligible` route path, and an
    unregistered code like 'ko' hits the earlier sidecarLanguageName throw
-   (line ~805) first. (The unit test 'still throws MissingDesignedVoiceError
+   (line ~854) first. (The unit test 'still throws MissingDesignedVoiceError
    when coquiEligible is false' in synthesise-chapter-coqui-fallback.test.ts
    pins a RELATED but DISTINCT path — synthesiseChapter's throw, not this route
    handler's chapter_failed + res.end() abort.) The route branch stays dormant

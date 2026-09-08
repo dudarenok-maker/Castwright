@@ -652,7 +652,26 @@ decode.
 - `candidate.json` records `"captureMethod": "record"` and `"transcriptSource": "whisper"`.
 - The candidate `master.wav` is a valid RIFF/WAVE (webm/opus decoded cleanly).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** 2026-09-06, real dev stack
+(`npm start` + `LAN_HTTPS=1`, server on `https://localhost:8443`, frontend
+Vite dev on `https://localhost:5363` proxying to it — NOT mock mode,
+`VITE_USE_MOCKS=false`). Chromium (Playwright, real download, not the MCP
+browser — needed custom launch flags) with
+`--use-fake-device-for-media-stream --use-fake-ui-for-media-stream
+--use-file-for-fake-audio-capture=C:\fixtures\fs38\F1-clean-20s.wav`.
+Recorder showed idle -> recording -> "Re-record" (recorded) correctly.
+Request was genuine `multipart/form-data`, field `audio` (`recording.webm`
+per source), `captureMethod=record`. HTTP **202**; response
+`{"candidateId":"e138384a-...","transcript":"ocean and then the rover boys
+in the jungle and then year after year they're followed the rover boys at
+West on the Great Lakes in the mountains.","durationSeconds":10.98,...}` —
+transcript matches the F1 fixture's real speech content (genuine Whisper
+transcription of decoded webm/opus, not a stub). Persisted
+`candidate.json`/`voice.json` confirmed `"captureMethod":"record"` and
+`"transcriptSource":"whisper"` (see B-02 below for the saved-entry check).
+`master.wav` on disk under `voice-library/<uuid>/master.wav` — valid,
+playable (see B-02's card-preview 200 below). Script:
+`e2e/manual/fs38-a07-b02-record-wizard.mjs`.
 
 ---
 
@@ -675,7 +694,22 @@ decode.
 - No dead control, no silent no-op, no thrown error in the console that breaks
   the modal.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** 2026-09-06, same real dev stack as
+A-07 (not mock mode). **Denied case**: Chromium launched with NO
+`--use-fake-ui-for-media-stream` and a context with `permissions: []`
+(mic never granted) — `getUserMedia` rejects, `VoiceRecorder` entered
+`denied` phase. Copy observed byte-for-byte: `"Mic access was blocked.
+Enable microphone permission or use the Upload tab instead."` — exact match
+to spec. "Try again" button visible. Switched to Upload tab, uploaded F1
+fixture, real ingest succeeded (202, real Whisper transcript) — Upload path
+fully functional after denial. Zero console errors, no thrown exception,
+modal not dead. **Control (mic granted)**: separate Chromium launch WITH
+`--use-fake-device-for-media-stream --use-fake-ui-for-media-stream
+--use-file-for-fake-audio-capture=...F1-clean-20s.wav`, same Record-tab
+flow — clicking Record entered the `recording` phase (Stop button visible)
+and the denied copy was **absent** (`Denied copy visible=false`). This
+proves the fallback copy is conditional on actual denial, not unconditional
+boilerplate. Script: `e2e/manual/fs38-a08-mic-denied.mjs`.
 
 ---
 
@@ -697,7 +731,16 @@ person name **and** the attest checkbox (`clone-capture-panel.tsx:33-34`).
 - The relationship `<select>` defaults to `self` and does not itself gate Continue.
 - The attest copy reads: `I attest I have this person's permission to clone their voice.`
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** 2026-09-06, real dev stack (not
+mock), headless Chromium, real Upload ingest of F1 fixture (real ffmpeg +
+Whisper, transcript populated genuinely). All four steps observed exactly
+as specified: (1) name empty -> Continue **disabled**; (2) name filled,
+attest unchecked -> **disabled**; (3) attest ticked -> **enabled**; (4)
+attest unticked again -> **disabled** again. Relationship `<select>`
+defaulted to `self` without any interaction. Attest sentence read
+byte-for-byte `"I attest I have this person's permission to clone their
+voice."` (curly apostrophe, matches source `clone-capture-panel.tsx`).
+Script: `e2e/manual/fs38-a09-consent-gate.mjs`.
 
 ---
 
@@ -866,7 +909,28 @@ fixture F-1; session engine = Qwen (P-23).
 
 **Record:** `$U` = ____________________  `baseModel` = ____________________
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Route+disk half previously P (see
+original note above, `$U=0abceba4-...`). **UI half completed 2026-09-06**,
+real dev stack (not mock), via the Upload-tab wizard end to end (see B-02
+below for the equivalent Record-tab run, same UI code paths). Completion
+screen text observed verbatim: `Cloned "A07-B02 Record 1788663912683".`
+(format `Cloned "<name>".` — matches spec). Wizard closed via **Done**, new
+card appeared immediately in My voices with the name. Card shows the
+**'Cloned'** badge, `<personName> · self`, `en`, `Qwen ✓` engine pill, and
+**Preview / Edit / Assign / Revoke** actions — **no** state/health chip
+present (healthy), matching spec exactly. Card's own **Preview** button
+(independent of the wizard's inline audition) fires
+`POST /api/voice-library/<uuid>/sample` -> **200**
+`application/json` — confirms the audition route genuinely works from the
+UI. **Minor observation, not a defect**: immediately after the
+wizard's completion screen appeared, its own inline "Play preview" button
+was not yet visible (`previewUrl` is set by a separate best-effort
+`api.sampleLibraryVoice` call inside `handleSave`, wrapped in try/catch,
+and may not have resolved by the time of the check) — the persisted
+entry's own sample route works fine (see the card Preview 200 above), so
+this is at most a transient completion-screen timing quirk, not a broken feature. Script:
+`e2e/manual/fs38-a07-b02-record-wizard.mjs` (creation) +
+`e2e/manual/fs38-b01-card-check.mjs` (card check).
 
 ---
 
@@ -886,9 +950,32 @@ upload variant (the webm/opus path all the way through derive, not just ingest).
   `master.captureMethod` is `"record"`.
 - Audition plays and is recognisably the recorded speaker.
 
-**Record:** second `$U` (keep for D-01) = ____________________
+**Record:** second `$U` (keep for D-01) = `a153d26e-1a99-467f-b9a2-0d5018008f69`
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** 2026-09-06, real dev stack (not
+mock), Chromium with
+`--use-fake-device-for-media-stream --use-fake-ui-for-media-stream
+--use-file-for-fake-audio-capture=C:\fixtures\fs38\F1-clean-20s.wav`.
+Recorded live on the Record tab for ~11s, real ffmpeg webm/opus decode,
+real Whisper transcript (202). Consent + name + Save completed the full
+wizard; completion screen `Cloned "A07-B02 Record 1788663912683".`
+appeared (took roughly 1-3 min end to end on this box — real Qwen clone
+derive + ECAPA `/embed` fidelity check on a machine under heavy concurrent
+GPU load from other worktrees, confirmed via `logs\tts.log`:
+`POST /qwen/clone-voice 200`, `POST /embed 200` — not a mock or a stub).
+Persisted entry (`GET /api/voice-library`) confirms exactly the B-02-specific
+claims: `master.captureMethod: "record"`, `engines.qwen.status: "ready"`,
+`baseModel: "Qwen/Qwen3-TTS-12Hz-0.6B-Base"`, real distinct
+`cloneCosine: 0.8127931957568856` (compare B-04's other real values — same
+shape, not a mock constant). Three separate record-tab clones were created
+across retries while tuning the script's timeouts; all three show the same
+correct shape (`captureMethod:"record"`, real distinct cosines
+0.7997/0.8056/0.8128) — left in the library as-is (throwaway QA voices,
+consistent with this sheet's existing convention). Audition: the **card's**
+own Preview control plays a fresh synth (`POST /:uuid/sample` -> 200); did
+not do a by-ear speaker-identity check (that is B-03's job, out of scope
+here — no human listener in this session). Script:
+`e2e/manual/fs38-a07-b02-record-wizard.mjs`.
 
 ---
 
@@ -1094,7 +1181,17 @@ sample cache is scoped per library voice (`cacheScope = "qwen-<uuid>"`).
   Kokoro/Qwen stock voice.
 - A cache file named `qwen-<uuid>-<modelKey>-<hash>.mp3` exists.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Measured, not by-ear (per #2923's
+explicit method). Cast sample fetched twice via `POST
+/api/voice-library/.../sample {modelKey:"coqui-xtts-v2"}`: 1st `cached:false`,
+2nd `cached:true` — cache correctly scoped to the `xtts-<uuid>` storage key
+(Coqui naming, not `qwen-<uuid>`, since this rerun used the cloned Coqui voice
+per #2923/E-04's own scope). Identity via sidecar `/embed` cosine,
+duration-matched at 11.7s: sample vs. its own source clip **0.364**; vs.
+mismatched-speaker floor (F9-speaker2-20s.wav, same duration) **0.026**;
+separate un-matched-duration sanity check (F1 vs F9 at 20s) **0.0037**, also
+near-zero, confirming the floor. Clear separation between same-voice and
+floor. See #2923 for full command log.
 
 ---
 
@@ -1123,7 +1220,18 @@ chapter under test.
 - No `Cloned + cached Qwen voice` line in the sidecar log for this run (the
   voice was Healthy — the resolver did no derive).
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Measured via cosine, not by-ear (per
+#2923). Genuine full-chapter generation (not splice/re-record) — English book
+chapter 2 ("Chapter One — The Knock"), `chapter_complete` event,
+`audioQa.status:"ok"`, duration 206.7s, `audioEngines:{"coqui":5}`. 5 narrator
+lines each cropped to an identical 2.4s window, embedded via sidecar
+`/embed`, compared pairwise and against source clip / floor
+(duration-matched): pairwise same-chapter same-voice cosines **0.576–0.704**
+(mean ≈0.64); vs. source clip (2.4s window) **0.185–0.239** (lower — short
+window vs. full clip, expected per "never compare across durations"); vs.
+floor (mismatched speaker) **-0.064 to 0.020**. Strong internal consistency,
+clearly above floor. No `cloned-voice-broken`, no drift. See #2923 for full
+command log.
 
 ---
 
@@ -1141,7 +1249,22 @@ change the rendered identity.
 - Both chapters complete; no re-derive fired between them.
 - `voice.json`'s `engines.qwen.baseModel` is unchanged from B-01.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Measured via cosine, not by-ear (per
+#2923). Three genuine full-chapter generations on the same cloned Coqui
+voice, none splices: EN ch2 "The Knock" (206.7s), EN ch3 "The Pour" (770.9s,
+163 segments — completed after retries needed due to real cross-worktree GPU
+contention on this shared dev box, see #2923 for detail), RU ch2 "Глава
+первая — Стук" (263.6s). 3–5 narrator lines per chapter cropped to matched
+2.4s windows, embedded, compared cross-chapter and against floor. Same
+book/language (EN ch2 vs EN ch3): cross-chapter cosines **0.524–0.665**,
+comparable to within-chapter pairwise (0.525–0.672); floor **-0.080 to
+-0.018**. Different book/language (EN ch2 vs RU ch2, same cloned voice): RU
+internal pairwise **0.570–0.714** (mean ≈0.65, comparable to EN internal
+consistency); cross-chapter/cross-language cosines **0.294–0.459** (positive,
+well above floor, lower than same-language as expected since content/language
+differ); floor **-0.121 to -0.044**. Identity holds across independent
+full-chapter renders with floors reported throughout. See #2923 for full
+command log.
 
 ---
 
@@ -2167,32 +2290,71 @@ generation view **open and visible** when the failure lands.
   when the underlying reason is `wrong-engine`. Repeat once against C-13's
   wrong-engine setup to confirm.
 
-**Result:** ☐ P ☐ F ☒ B ☐ N/A  **Notes:** Attempted 2026-09-04, same
-worktree/setup. **Underlying mechanism confirmed correct via a direct API
-call** — `POST /api/books/{id}/generation` for chapter 3 (Master Oduvan,
-revoked clone) returned the SSE stream `chapter_failed` event almost
-immediately after chapter 2's cached progress, with `errorCode:
-"cloned-voice-broken"` and `errorReason` naming `"Master Oduvan" (revoked)`
-verbatim per the expected shape — `state.json` persisted the same. **The
-live browser-toast half could not be observed**, blocked by severe,
-unrelated environment instability on this box during this session: repeated
-SSE-stream stalls (the client "no progress for now" watchdog firing on a
-backend that had, in fact, already finished), a `POST
-/api/books/.../generation` 503 from the UI's queue-wrapper path specifically
-(the *direct* endpoint call above succeeded on the same box moments later —
-so the 503 is in the queue layer, not the underlying generation code), and
-one full server-process exit (code 1) immediately after a correctly-logged
-`UnresolvableClonedVoiceError` — cause not isolated; flagged for follow-up,
-not filed as a specific issue since it couldn't be pinned to a single
-repro. Also found and fixed in passing (see commit): `getResolvedSidecarUrl()`'s
-per-worktree derivation built `http://localhost:$PORT` instead of
-`http://127.0.0.1:$PORT`, unlike every other sidecar-URL site in this
-codebase — real defect (Windows IPv6/IPv4 dual-stack resolution can hang the
-`localhost` attempt), but verified NOT the cause of the 503/stalls above
-(the 503 reproduced identically after the fix). **Retry this row properly
-on a box that isn't under heavy concurrent background load** — this
-session's environment issues look like resource contention, not a stable
-product defect, but that is inferred, not proven.
+**Result:** ☒ P (live toast + help link) ☐ F
+☒ B (same-chapter dedupe re-run + cross-chapter dedupe + wrong-engine
+reason-neutral repeat still owed) ☐ N/A  **Notes:** Retried
+2026-09-06, real dev stack (`npm start` + `LAN_HTTPS=1`, real server, not
+mock). **Live toast now confirmed** (the piece blocked on 2026-09-04):
+revoked the Narrator's cloned voice on "The Coalfall Commission" (a
+pre-existing throwaway book with 2/3 chapters already rendered), triggered
+Chapter 1 generation via the real UI (Resume generation -> Voice-Readiness
+"Proceed anyway" -> tier picker "Start generating" — both unrelated gate
+dialogs, cleared). Toast appeared **2.3s** after the click, exact text:
+`Chapter 1 failed — Cloned voice(s) unavailable — a cloned voice must never
+be substituted with another: "Narrator" (revoked). Restore the missing
+voice(s); reassign the character(s).` The failed chapter row's **"More
+help"** link had `href="#/help?code=cloned-voice-broken"` exactly; clicking
+it navigated to that URL and rendered the Help view titled verbatim
+**`Cloned voice can't render as itself`** under Voices, with the same
+remediation copy. **Per-chapter dedupe (same chapter) — claimed confirmed
+here, then withdrawn.** Re-triggering Chapter 1's failure a second time in
+the same session did not add a second stacked toast, which was read at the
+time as dedupe holding. A round-2 pr-review-gate pass on PR #3073
+(2026-09-07) found the measuring script
+(`e2e/manual/fs38-c15-toast-dedupe.mjs`) could not actually detect a broken
+dedupe: same-chapter failures produce identical toast text, so the script's
+toast-presence check could be satisfied by attempt 1's own still-visible
+toast without attempt 2 having done anything at all — a coincidental
+"count stayed at 1" that would read as PASS whether or not dedupe existed.
+The script has since been rewritten (captures the specific toast DOM
+element before the retry and verifies via `element.isConnected` that the
+same element persisted, on a real ~2.3s wait for the retry's own failure to
+land, rather than trusting text-match timing) but has **not yet been
+re-run against a real dev stack** — so same-chapter dedupe reverts to
+**owed**, not confirmed, pending that re-run. **Not cleanly re-confirmed
+live this session: a genuinely different chapter of the same book getting
+its own separate toast.** Set up a second, independent Broken voice
+(assigned + revoked a spare cloned voice on "Pell Hollis", who appears only
+in Chapter 2) specifically to test this, but this box's shared
+account-wide generation queue was saturated by concurrent activity from
+other worktrees on the same machine during this run (queue depth climbed
+from 4 to 10+ pending entries over the session) and produced a
+**genuinely stuck `in_progress` queue entry** for this book's Chapter 1
+that could not be cancelled even after `POST /api/queue/pause` (`DELETE
+/api/queue/:id` kept 409ing "is in_progress; pause the queue first" even
+while paused) — this blocked Chapter 2's queued retry from ever being
+picked up inside the session's time budget. This is the same class of
+environment instability as the 2026-09-04 attempt (SSE stalls / 503s /
+process exit that time; a wedged queue entry this time) — **not** something
+pinned to the toast/dedupe code itself. The dedupe key's structure
+(`bookId:chapterId` both embedded) is a source-level guarantee that a
+different `chapterId` cannot collide with another chapter's entry; this
+was re-read and confirmed in `generation-stream-runner.ts:439` this
+session, but not independently re-observed live for a second chapter.
+Also not repeated this session: the reason-neutral copy check against
+C-13's wrong-engine setup specifically (only the "revoked" reason was
+exercised live here) — the copy observed here was reason-specific
+("(revoked)") and did not mention any engine name, consistent with the
+reason-neutral design, but the wrong-engine variant itself needs a repeat
+run. Previously-found sidecar-URL defect (`getResolvedSidecarUrl()` using
+`localhost` instead of `127.0.0.1`) remains fixed and unrelated to any of
+this. **Net: promoted from fully Blocked to partially confirmed** — live
+toast + help link + help page are solid; same-chapter dedupe (re-run owed
+against the corrected script), cross-chapter dedupe, and the wrong-engine
+reason-neutral repeat are all still owed. Scripts:
+`e2e/manual/fs38-c15-toast-dedupe.mjs` (kept, now with a genuinely
+fail-capable dedupe check — see PR #3073 — but not yet exercised against a
+real dev stack).
 
 ---
 
@@ -2652,9 +2814,78 @@ assigned to a character who speaks in most chapters. Start from a clean state
 - No stray `.tmp` files under `$WS\voices\qwen\`.
 - Record any VRAM/capacity events and which card the run used.
 
-**Record:** chapters = ____ · failures = ____ · re-derives = ____ · card = ______
+**Record:** chapters = 0 of 2 completed · failures = 0 (never reached a terminal
+failure — stalled and silently restarted instead) · re-derives = 0 · card =
+cuda:1 (RTX 5070 Ti, 16 GB) · peak committed = ~10.9 GB (flat) · recycles = 0
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ B  **Notes:** 2026-09-06, wave-12 worktree
+(`wt-fs38-a1-wave12`, branch `chore/ops-fs38-a1-wave12`), server :8270 / sidecar
+:9190. Preconditions verified first: `server/node_modules`, `node_modules`,
+`server/tts-sidecar/.venv` and `server/tts-sidecar/voices` all confirmed real
+junctions to the primary checkout; `POST /api/sidecar/restart` → 200 (supervised,
+not orphaned) before starting.
+
+Imported a **fresh throwaway** copy of the canonical fixture
+(`qa-test-author__standalones__d-02-throwaway-coalfall`, title "D-02 Throwaway
+Coalfall") — no existing book touched. First analysis pass hit the existing
+attribution-drift guard (11/214 ≈ 5%, `Attribution drift exceeded threshold —
+refusing to flip cast.json`) and correctly refused to write cast — used the
+app's own "Start fresh" re-analysis, which passed on the second attempt (7/214
+≈ 3.3%). Cast confirmed with 11 characters detected (one, `[excited] Run, you
+fools — it'll have the lot of you!` filed under "Voice from lane", is itself a
+fabricated character — analysis mis-attributed a bracketed stage direction as
+a speaker name; not something this child's scope covers fixing).
+
+Cloned a real voice via the documented pipeline: `POST
+/api/voice-library/clone-sample` (fixture `C:\fixtures\fs38\F1-clean-20s.wav`,
+`captureMethod=upload`) → `POST /api/voice-library/clone` with a complete
+`self`/`personal` consent record. Produced a genuine Qwen clone,
+`qwen-c1487859-31c1-41d9-8f5a-80d44cbbccce`, advisory fidelity **0.868** cosine
+against the source clip. Assigned it to the protagonist (Wren) via the cast
+drawer's "Or use a voice from My voices" picker — a real cloned voice on a
+real character, not a stock/library-catalogue pick.
+
+Queued the whole book (2 analyzed chapters) and started generation. **This is
+where D-02 fails, and it fails before ever reaching the concern the criterion
+exists to test.** Both chapters immediately needed the "no designed Qwen voice
+for ... → would render in Kokoro" fallback confirmation (the other 9
+characters were never individually designed — `Design full cast` is gated on
+a `GEMINI_API_KEY` this box does not have configured, an environmental
+limitation, not this child's to fix). Confirmed "Render anyway" for both.
+Both chapters flipped to `Generating`, the activity log posted "Generation
+started — Synthesising Chapter N" for each — but **no `/synthesize` request
+ever reached the sidecar**: polled `GET /health` on the sidecar throughout,
+`inflight_synth` stayed `0` the entire time, and `logs\tts.log` shows zero
+`POST /synthesize` lines anywhere near the attempt (only `/health`/`/capacity`
+polling). After ~150–190 s with no progress the UI reported "Worker has gone
+quiet" / chapters flipped to `Stalled`, Chapter 2 reverted to the exact same
+"needs confirmation" fallback prompt as if generation had never been
+attempted, and a **fresh** "Generation started" activity entry appeared —
+i.e. the stack silently restarts the same two chapters from scratch rather
+than failing. Reproduced this full stall→restart cycle **twice** in a row,
+confirming for both chapters each time; never once did a synth call fire.
+
+Because generation never dispatches, none of the criterion's real acceptance
+checks are exercisable: no chapter completed, no re-derive to count, no
+identity to compare across chapters, and — critically — `committed_mb` never
+moved off its flat ~10.9 GB baseline and zero watchdog recycles occurred, so
+**this run cannot confirm OR rule out side-11**; it never got far enough to
+load-test memory at all. This is a **different, new blocker** from the
+2026-07-29 side-11 finding this row previously recorded solely as "B".
+
+Diagnosis, best-effort: the one common factor across every stall is the
+fabricated "Voice from lane" character appearing in the fallback-confirmation
+character list every time. Did not attempt a fix or a workaround (e.g.
+downgrading it to a background bucket) — that would change the cast/test
+setup this run is supposed to report on, and root-causing the stall itself is
+past this child's scope ("Fixing side-11" and anything broader is explicitly
+out of scope; this looks adjacent but distinct). Filed as [#3080](https://github.com/dudarenok-maker/Castwright/issues/3080).
+
+Cleanup: the throwaway book (`qa-test-author__standalones__d-02-throwaway-coalfall`)
+and its stalled generation queue were left in place, on this worktree only, so
+the stall is reproducible for a follow-up — nothing under the operator's real
+books/workspace was touched. The `D-02 QA Clone Speaker` library voice is
+likewise this worktree-local and harmless to leave.
 
 ---
 
@@ -2879,7 +3110,20 @@ XTTS has on long input without it).
 - Renders without crashing or truncating audibly mid-sentence.
 - No fallback to a stock catalogue voice.
 
-**Result:** ☐ P ☐ F ☐ B ☐ N/A  **Notes:**
+**Result:** ☒ P ☐ F ☐ B ☐ N/A  **Notes:** Re-run confirming PR #2039 (plain
+`spacy` dependency) fixed the prior FAIL (missing spacy left
+`enable_text_splitting=True` hardcoded but spacy absent from the sidecar
+venv, so XTTS 500'd past `char_limits[lang]`). Direct sidecar `/synthesize`
+calls, engine=coqui, voice=cloned Coqui voice, language=ru (limit 182 chars):
+control line 46 chars (below limit) → **200 OK**, 146944 bytes PCM (~3.06s);
+long line 199 chars (above limit) → **200 OK**, 552448 bytes PCM (~11.5s) —
+previously 500 pre-#2039. Above-limit line now returns 200 as expected.
+Bonus JA check (86 chars, above the 71-char ja limit): also 200 OK — the
+sidecar's `except ImportError` fallback (`enable_text_splitting=False`)
+swallows the SudachiPy gap rather than surfacing an HTTP failure in this
+build; informational only, not scored as a fail (Japanese/SudachiPy is the
+fs-59 CJK workstream's gap, out of scope here per #2923). See #2923 for full
+command log.
 
 ---
 
@@ -3121,9 +3365,9 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | A-04 | 4–8 s → warns, proceeds | **P** | 202; exactly one warning, `Sample is a little short (6.0s) — 8s+ clones better.` |
 | A-05 | Clipping → warns, proceeds | **P** | 202; `Audio is clipping — lower the input level or move back from the mic.` |
 | A-06 | >60 s → capped, not rejected | **P** | 202; `durationSeconds` 60 not 90; `master.wav` **2,880,044 bytes — delta 0**; no length warning |
-| A-07 | Browser recorder (webm/opus) end to end | **B** | needs a real browser + real microphone |
-| A-08 | Mic denied → Upload fallback | **B** | needs a browser with mic permission blocked |
-| A-09 | Consent gates Continue | **B** | wizard UI; needs a browser |
+| A-07 | Browser recorder (webm/opus) end to end | **P** | Real Chromium (fake mic device flags), real server. 202; real webm/opus decode; real Whisper transcript matching the fixture's actual speech; multipart `audio` field, `captureMethod=record`; persisted `transcriptSource:"whisper"` |
+| A-08 | Mic denied → Upload fallback | **P** | Real Chromium, denied case (no fake-ui flag, `permissions:[]`) shows exact copy `Mic access was blocked. Enable microphone permission or use the Upload tab instead.`; Upload still works after. Control (granted, fake mic) shows **no** fallback copy — proves conditionality |
+| A-09 | Consent gates Continue | **P** | Real server, real Upload ingest. All 4 steps exact: empty name disabled, name-only disabled, attested enabled, un-attested disabled again; attest sentence byte-for-byte match |
 | A-10 | Write-time consent guard; nothing persisted | **P** | 422 consent message; missing `candidateId` 400; unknown 404; lib entries 0→0; `.pt` 605→605; candidate NOT consumed |
 | A-11 | `/revoke` stamps `revokedAt` | **P** | 200; `revokedAt` set, `personName`/`relationship`/`permittedUse`/`attestedAt`/`attestedBy` unchanged; entry dir + `voice.json` survive; `master` now absent; unknown uuid → 404 |
 | A-12 | Sample route 403s a revoked voice | **P** | 403 `This cloned voice has no valid consent and cannot be played.` exact; healthy control 200 `cached:true` |
@@ -3133,16 +3377,16 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 
 | ID | Test | Result | Notes |
 |---|---|---|---|
-| B-01 | Wizard happy path (Upload) → ready cloned entry | **P** (route + disk) | 200; `$U` = `0abceba4-5eba-4d8f-8bdf-46bee14c931d`; baseModel `Qwen/Qwen3-TTS-12Hz-0.6B-Base`; entry dir `voice.json`+`master.wav`; `qwen-$U.{pt,json}`; `.pt` 605→606; candidate consumed; manifest `clone:true`, `designModel:null`, `refText`=transcript; no `preview.mp3` (expected). **UI assertions (completion screen, card badge) still owed** — driven via the API, not the wizard |
-| B-02 | Wizard happy path (Record) | **B** | needs a real browser + microphone |
-| B-03 | Audition **sounds like the person** | **B** | requires a human listener. Objective half done: `/embed` cosine audition-vs-source **0.822**, designed-voice control **0.158**. A/B kit left at `C:\fixtures\fs38\_EARCHECK\` |
+| B-01 | Wizard happy path (Upload) → ready cloned entry | **P** (route + disk + UI) | 200; `$U` = `0abceba4-5eba-4d8f-8bdf-46bee14c931d`; baseModel `Qwen/Qwen3-TTS-12Hz-0.6B-Base`; entry dir `voice.json`+`master.wav`; `qwen-$U.{pt,json}`; `.pt` 605→606; candidate consumed; manifest `clone:true`, `designModel:null`, `refText`=transcript; no `preview.mp3` (expected). **UI half done 2026-09-06**: completion screen `Cloned "<name>".`; card shows 'Cloned' badge, no state chip, Qwen ✓, Preview/Edit/Assign/Revoke; card Preview → real 200 sample |
+| B-02 | Wizard happy path (Record) | **P** | Real Chromium (fake mic), real server. Full Record-tab wizard to a ready entry: `master.captureMethod:"record"`, `engines.qwen.status:"ready"`, real distinct `cloneCosine:0.8128`; completion screen + card confirmed. `$U=a153d26e-1a99-467f-b9a2-0d5018008f69` |
+| B-03 | Audition **sounds like the person** | **B** | requires a human listener — **still owed**. Objective half done: `/embed` cosine audition-vs-source **0.822**, designed-voice control **0.158**. Ear kit **staged and complete** (#2919, 2026-09-06) at `C:\fixtures\fs38\_EARCHECK\b03-qwen-identity\` — source clip, completion-screen audition, 4 in-book Master-Oduvan lines from a genuine full chapter generation (*The Coalfall Commission* ch.1, qwen3-tts-0.6b), and a same-line different-speaker control. Listening sheet: `C:\fixtures\fs38\_EARCHECK\LISTEN-fs38-wave12.md`. Owner's verdict still owed |
 | B-04 | ECAPA cosine is a real number, not a mock constant | **P** | Three distinct finite values in [-1,1]: F-1 **0.8914416029109107**, F-1 again **0.8812903511976901** (similar, not byte-identical → computed, not stubbed), two-speaker mix **0.7727**. `cloneFidelityUnavailable` absent. A 4th clone post-fix scored 0.8916 on an independent speaker |
 | B-05 | Fidelity-unavailable is advisory, not fatal | **B** | no way to fail `/embed` independently of the clone path — the sheet's own caveat |
 | B-06 | Clone-fidelity advisory warning | **N/A — retired, automated** | Originally found **B — not reachable as written**: See **#1945**. The cosine scores clone-vs-source *faithfulness*, so degrading the source degrades the clone equally: clean 0.891, band-limited **0.881** (not lower), two speakers 0.773. Nothing realistic nears `CLONE_FIDELITY_MIN = 0.3`; **the advisory-warning path has never fired on hardware**. Resolved 2026-07-30: threshold kept as a catastrophe-only backstop (fires on a wrong-speaker clone — 0.158 datapoint); manual step replaced by `server/src/routes/voice-library.clone-fidelity.test.ts`. See DEF-C below |
 | B-07 | Assign to a character | **P** | 200 `{updated:1, written:["qwen","coqui"]}`; qwen slot `{name:qwen-$U, libraryUuid:$U, provenance:cloned}`; **`variants` map dropped** (had a `whisper` variant); `voiceUuid` unchanged; **coqui slot also written** `{name:xtts-$U,…}` per Task 24; all 13 characters diffed — only the target changed |
-| B-08 | Cast sample plays in the cloned voice | | |
-| B-09 | Chapter renders, consistent across lines | | |
-| B-10 | Consistent across chapters | | |
+| B-08 | Cast sample plays in the cloned voice | **P** (#2923) | Measured, not by-ear. Cache: `POST /api/voice-library/.../sample {modelKey:"coqui-xtts-v2"}` 1st `cached:false`, 2nd `cached:true`, scoped to `xtts-<uuid>` (Coqui naming, since this run used the cloned Coqui voice per E-04's scope). Identity via sidecar `/embed`, duration-matched 11.7s: sample vs. own source clip **0.364**; vs. mismatched-speaker floor **0.026**; separate duration-mismatched sanity check **0.0037**. Clear separation, floor confirmed |
+| B-09 | Chapter renders, consistent across lines | **P** (#2923) | Measured via cosine. Genuine full-chapter generation (not splice) — EN ch2 "The Knock", `chapter_complete`, `audioQa.status:"ok"`, 206.7s, `audioEngines:{"coqui":5}`. 5 narrator lines cropped to matched 2.4s windows, embedded, compared pairwise/vs source/vs floor: pairwise **0.576–0.704**; vs source clip **0.185–0.239** (shorter window, expected); floor **-0.064 to 0.020** |
+| B-10 | Consistent across chapters | **P** (#2923) | Measured via cosine. Three genuine full-chapter generations, no splices: EN ch2 (206.7s), EN ch3 "The Pour" (770.9s, 163 segments, completed after retries from real cross-worktree GPU contention), RU ch2 (263.6s). Same book/language cross-chapter cosines **0.524–0.665** (comparable to within-chapter); floor **-0.080 to -0.018**. Different book/language (EN vs RU, same cloned voice): cross cosines **0.294–0.459** (positive, above floor, lower than same-language as expected); floor **-0.121 to -0.044** |
 | B-11 | Un-derived clone assign → 409 | | |
 | B-12 | Capacity-admission-**ON** branch of `/qwen/clone-voice` | | |
 | B-13 | Sidecar failure status preserved, nothing persisted | | |
@@ -3165,7 +3409,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | C-12 | Atomic `.pt`: kill mid-write leaves no truncated `.pt` | **P** (weaker variant) | Run 5, 5 attempts — never caught a truncated `.pt`; every kill landed cleanly before or after the write. Consistent with atomicity but doesn't prove concurrent interruption directly |
 | C-13 | `wrong-engine` diagnosed distinctly at render time | **P** (wrong-engine half) · **B** (engine-unavailable contrast) | Run 5. Wrong-engine half confirmed exactly. Engine-unavailable contrast not reproducible on this box — a generation request lazily relaunches the sidecar regardless of `autoStartSidecar` |
 | C-14 | Assign-time `wrong-engine` 409, cause-specific copy, `modelKey` wins | **P** | Run 5. All 4 assign-time wrong-engine guard scenarios confirmed |
-| C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | **B** | Underlying mechanism confirmed via direct API call (fast `chapter_failed` with correct errorCode/errorReason) — live browser toast blocked by this session's own environment instability (SSE stalls, a queue-layer 503, one server exit), not reproduced as a stable product defect. Found+fixed in passing: `getResolvedSidecarUrl()` used `localhost` instead of `127.0.0.1` (real Windows IPv6 defect, verified not the cause here) |
+| C-15 | `cloned-voice-broken` toast + help link, per-chapter dedupe | **P** (live toast, help link, help page) · **B** (same-chapter dedupe re-run + cross-chapter dedupe + wrong-engine reason-neutral repeat) | 2026-09-06: live toast fired 2.3s after trigger, exact message; `More help` href `#/help?code=cloned-voice-broken`; Help view titled `Cloned voice can't render as itself`. Re-triggering the SAME chapter did not stack a second toast, initially read as dedupe holding — **withdrawn**: a round-2 pr-review-gate pass on PR #3073 (2026-09-07) found the measuring script could not distinguish dedupe working from dedupe being entirely absent (identical toast text across attempts let attempt 1's own stale toast satisfy the check). Script rewritten to verify DOM-element persistence instead; not yet re-run live, so same-chapter dedupe is owed again. A different-chapter toast could not be cleanly re-confirmed live this session — blocked by a saturated shared queue (10+ pending entries from concurrent worktree activity) and a stuck `in_progress` entry that resisted cancellation even paused; not a toast/dedupe code defect. `dedupeKey` embeds `chapterId` (source-confirmed) |
 | C-16 | Broken / Repairable card chip | **P** | All 5 states confirmed on `#/voices`: Healthy=no chip, Broken(revoked/no-master/failed)=danger `Needs attention`, Repairable(stale)=warning `Will re-derive`; per-engine pill correctly shows `Qwen ⚠`/`Qwen ⟳` on the two engine-status states |
 | C-17 ⭐ | §2.3 designed self-heal + **persona survives** + re-design works | **P** | Run 7: full chapter generation (not splice) on a throwaway primary-checkout book. `.pt` deleted → chapter completed, `.pt` reappeared, `instruct`/`designModel` byte-identical, `baseModel` refreshed. Re-design confirmed working (needed a Kokoro unload first — real, correctly-diagnosed VRAM contention, not a defect). Historical run-2 `F` was already withdrawn as a #1972 splice-attribution artifact — see the detailed section |
 | C-18 | §2.3 stale `.pt` deliberately left alone | **P** | Run 7: bumped `baseModel`+`status` to bogus/stale, `.pt` present. Chapter completed, `.pt` hash/mtime unchanged, zero new derives — designed-voice presence-only check confirmed, unlike a cloned voice's C-07 |
@@ -3178,7 +3422,7 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 | ID | Test | Result | Notes |
 |---|---|---|---|
 | D-01 | Concurrent multi-book render sharing a cloned voice | **P** | Run 5. Second throwaway book imported/analysed; concurrent healthy + concurrent repair-race renders both completed cleanly |
-| D-02 | Full-book render with a cloned character | **B** | blocked by side-11 (§7.2 BLOCKER-1). **Partially substituted:** a per-character re-record of a cloned character into a real chapter succeeded — `splice_complete`, 58 segments, `resolvedVoiceName` = the clone's key, `asr.verdict: ok`, WER 0 |
+| D-02 | Full-book render with a cloned character | **B** | 2026-07-29 attempt blocked by side-11 (§7.2 BLOCKER-1). **Partially substituted:** a per-character re-record of a cloned character into a real chapter succeeded — `splice_complete`, 58 segments, `resolvedVoiceName` = the clone's key, `asr.verdict: ok`, WER 0. **2026-09-06 re-run (wave 12): new blocker, NOT side-11.** Junctions verified present; stack up; sidecar supervised (`/restart` → 200). Fresh throwaway import + genuine Qwen clone (0.868 cosine) assigned to the protagonist. Both queued chapters entered `Generating`, but zero `/synthesize` calls ever reached the sidecar (`inflight_synth` stayed 0, `tts.log` shows none) across two full attempts; each stalled ~150–190s ("Worker has gone quiet"), then silently restarted the SAME two chapters from scratch, re-posing the "no designed Qwen voice for ... → would render in Kokoro" confirmation every time — an infinite generate/stall/restart loop that never dispatches audio. `committed_mb` stayed flat (~10.9 GB), no recycles — memory never grows enough to exercise side-11 at all. Prime suspect: a fabricated cast entry from a stray bracketed stage direction (`[excited] Run, you fools — it'll have the lot of you!`) that analysis mis-attributed as a speaking character with no voice, appearing in every stall's confirmation list. Not root-caused further — out of scope for this child. Throwaway book (`qa-test-author__standalones__d-02-throwaway-coalfall`) left in place for follow-up repro, primary checkout untouched. |
 | D-03 | Server + sidecar restart → still renders (cache-independent) | **P** (incidentally) | Proven repeatedly while isolating #1941: the on-disk `.pt` survived 6 stack restarts and rendered correctly each time from a cold cache. Not run as the sheet's scripted steps |
 | D-04 | Splice / QA-repair surface plain text (expected, KL-i) | **P** (both halves) | Splice half (Run 5): plain-text failure, no `errorCode`, names the voice + reason. QA-repair half (Run 7, after a reboot interrupted Run 6 mid-flight): tightened `qa.seg.minRatio`/`maxRatio` via the app's own config API to manufacture a genuinely QA-flagged sentence, then real QA-repair hit the revoked character and failed plain-text, same shape — thresholds restored afterward |
 
@@ -3191,9 +3435,9 @@ Mark each: **P** pass · **F** fail · **B** blocked · **N/A** not applicable.
 > **Run 2 (superseded, kept for history):** Russian Coalfall ch.2, `oduvan` reassigned to clone `563501c7-…` and its `ttsEngine` forced to `coqui` (run 1's trap: the character's own engine overrides the requested `modelKey`). Splice `rerecord/coqui-xtts-v2` → `splice_complete`, 80 segments, 244.42 s. **`voices\xtts\xtts-$U.pt` (135,509 B) + `.json` (172 B) created — the first XTTS clone artifacts ever produced on this box.** `resolvedVoiceName` = `xtts-$U`, `voiceEngine: coqui`. 21 oduvan spans (55.0 s) → `/transcribe` auto-detect: **`ru`**, `avg_logprob` **−0.368**. Sidecar logged `Coqui ready — 58 speakers in manifest` on `cuda:1` in a process that had already served `/embed` (#1962 holding). **Required a workaround first — see DEF-D.** **⚠️ The identity half is RETRACTED** — this used a splice re-record, and **13 of the 21 targeted segments diverge** between `segments.json` and the analysis cache ([#1972](https://github.com/dudarenok-maker/Castwright/issues/1972)), so roughly half the audio rendered in other characters' voices. That is what the unexplained ECAPA reading meant: **0.604** against the Russian narrator and **0.279** against the clone's own audition — a mixture, not a match, which run 2 recorded as "ambiguous" instead of investigating. What survives: the Coqui derive genuinely ran, the artifacts are real, and the language is right. Still owed: identity, the no-re-derive half, and the by-ear check
 | **E-02** ⭐ | Audition, then revoke — Play refuses afterwards | **P** (run 2) | Sample before revoke → 200 `{"url":"/audio/voices/qwen-$U-…-yqzvr6.mp3","cached":true}`. Revoke → 200, `revokedAt` set, `personName`/`relationship`/`permittedUse`/`attestedAt`/`attestedBy` intact, `master` block absent, **no `artifactPurgeIncomplete`**. Sample after revoke → **403** `This cloned voice has no valid consent and cannot be played.` (exact). Direct GET of the previously-cached audition URL → **404** — the cached clip of the revoked person is gone, not merely unlinked |
 | E-03 | Revoke lands during an in-flight Coqui derive | **P** | Run 2026-08-31. `revokedAt` survived, chapter failed naming "Pell Hollis", no orphaned `voices\xtts\` artifact — all three core guarantees held on first attempt. Minor non-defect wording deviation: reason read `(derive-failed)`, not `(revoked)` |
-| E-04 | A long sentence on a cloned Coqui voice | **F** | **Reproduced deliberately, not inferred.** Same cloned voice, same engine, same `language: ru` — only length differs: a **46-char** line → **200**, 178,176 B PCM (3.71 s); a **245-char** line → **500** `{"detail":"Internal error."}`. `main.py:2427` hardcodes `enable_text_splitting=True`; XTTS reaches `get_spacy_lang` only past `char_limits[lang]`; **spacy is not installed and not declared in any `requirements/*.txt`**. Thresholds: **ja 71, ru 182**, es 239, en 250, de 253, fr 273 — tightest exactly where cloned Coqui voices matter. Chapter 2 still rendered because **zero** of its lines reach 182 chars. Filed [#2017](https://github.com/dudarenok-maker/Castwright/issues/2017). **This is the crash class `test_xtts_clone_sanity` was written for** — it never ran: the golden tier is opt-in and SKIP-exits-0 without weights. **Update:** the fix landed in [PR #2039](https://github.com/dudarenok-maker/Castwright/pull/2039) — `requirements/base.txt` now declares plain `spacy`, and `_infer_from_latents` catches the `ImportError` and retries with `enable_text_splitting=False`, logged loudly. Verified only against a unit-test fake reproducing the upstream `ImportError` shape; this row's `F` stands until the exact reproduction above (46-char control → 200; 245-char Russian line → 200 + PCM) is re-run on a box with real Coqui weights |
+| E-04 | A long sentence on a cloned Coqui voice | **P** (re-run, #2923) | **Original F reproduced the bug deliberately**: 46-char control → 200, 245-char RU line → 500, isolating the missing-`spacy` gap fixed by [PR #2039](https://github.com/dudarenok-maker/Castwright/pull/2039). **Re-run on real Coqui weights (#2923, 2026-09-06)**, same cloned voice/engine, `language: ru` (limit 182): control line 46 chars → **200 OK**, 146944 B PCM (~3.06 s); long line **199 chars** (above limit) → **200 OK**, 552448 B PCM (~11.5 s) — the exact case that 500'd pre-#2039 now succeeds. Bonus JA check (86 chars, above the 71-char ja limit) also returned 200 — the sidecar's `except ImportError` fallback (`enable_text_splitting=False`) swallows the SudachiPy gap rather than surfacing an HTTP failure in this build; informational only, not scored (Japanese/SudachiPy is the separate fs-59 CJK workstream's gap). **F retired — fix confirmed on hardware.** |
 | E-05 | Audition matches render (KL-o caveat) | **P** | Card Play with `modelKey: coqui-xtts-v2` → 200 `{"url":"/audio/voices/xtts-$U-coqui-xtts-v2-47pmuw.mp3","cached":false}` — KL-o's fix holds, the card asks for Coqui. Audition vs the rendered chapter spans **0.5515**, against floors of **0.105** (rendered narrator) and **0.051** (the old designed oduvan). Same artifact, same identity — no drift between preview and delivery |
-| **E-06** ⭐ | A designed voice on a Coqui book — judged against the stock voice it replaces (D-B) | | |
+| **E-06** ⭐ | A designed voice on a Coqui book — judged against the stock voice it replaces (D-B) | **B** | kit **incomplete**, blocked on GPU capacity (#2919, 2026-09-06). Designed a fresh Qwen persona for **Мэйрин** (village reeve) in *Delo o Koalfolle* ch.2, minted `voiceUuid VTGaEDjVjqaupvlX68K9X`; staged her existing stock-catalogue rendering ("Sofia Hellen", from the already-completed real full-chapter render) at `C:\fixtures\fs38\_EARCHECK\e06-coqui-designed\`. **The Coqui-derive half could not be produced**: two genuine full-chapter regeneration attempts (`modelKey: coqui-xtts-v2`), the second after a clean app+sidecar restart, both failed `vram-spill` — GPU0 (8188 MB total, this app's only device) needs Qwen (~6.1 GB) and Coqui (~5.4 GB) resident concurrently for a fresh designed-voice derive, which exceeds its capacity even fully idle, and ~3.3–3.5 GB was already held by other processes on this shared box throughout. GPU1 (16 GB, idle) is not reachable from this app's settings. See `LISTEN-fs38-wave12.md` for the full account and the exact retry recipe once GPU0 has headroom or a device override exists. Owner's verdict not yet possible — pair isn't matched |
 | **E-07** ⭐ | A designed voice's forced derive failure still renders the chapter (D-F) | **P** | Run 7: corrupted the retained calibration clip so the Coqui derive genuinely fails; chapter completed on `coqui-xtts-v2` (fail-soft to the stock catalogue voice), no crash/silence, no new xtts artifact, coqui slot unchanged |
 | E-08 | Assign writes both slots, provenance-gated (Task 24) | **P** (via B-07) | Assigning a cloned entry wrote **both** `overrideTtsVoices.qwen` and `overrideTtsVoices.coqui` in one call — `{name: xtts-$U, libraryUuid: $U, provenance: cloned}`, `variants` absent. Confirmed twice (B-07 and the C-11 setup); C-11's delete then cleared both slots |
 | E-09 | Total erasure of the three Coqui artifact paths on delete | **P** (run 2) | Run 1 recorded this `N/A` because `voices\xtts\` had never existed; run 2's E-01 produced real artifacts, so this is its first genuine exercise. Pre-revoke set: **5 files across 3 locations** — `voices\qwen\qwen-$U.{json,pt}`, `qwen-$U__1.7b.pt`, `voices\xtts\xtts-$U.{json,pt}`, plus the cached audition mp3 under `server\audio\voices\`. After revoke: **0 remaining anywhere**, both `voices\xtts\` paths included. Entry dir survives holding **only `voice.json`** |
@@ -3311,13 +3555,7 @@ check, which **failed** for a reason unrelated to language — see **DEF-E**.
 resolution — see the B-06 row and DEF-C below. The historical "not reachable
 as written" finding is preserved in the row's Notes.)*
 
-#### Cumulative — current (through Run 8, 2026-09-04)
-
-The tables above are frozen historical snapshots (Run 1, Run 2, and Run 2's
-correction); this one reflects the full §7.1 table's current P/F/B/N/A counts
-across Sections A–E, recomputed after Runs 3–8 (Sections C, D, and most of E
-were run for the first time in this window; see each row's own Notes for the
-run number).
+#### Cumulative — through Run 8 (2026-09-04) [superseded, kept for history]
 
 | Section | Total | P | F | B | N/A | not reached |
 |---|---|---|---|---|---|---|
@@ -3328,15 +3566,42 @@ run number).
 | E (3c) | 9 | 7 | 1 | 0 | 0 | 1 |
 | **All** | **60** | **41** | **2** | **8** | **1** | **8** |
 
-**Two failures now stand** (C-05's narrator-fallback misattribution, #2023;
+**Two failures stood** (C-05's narrator-fallback misattribution, #2023;
 E-04's long-Coqui-sentence crash, #2017 — fixed in source per PR #2039 but
-not yet re-verified on hardware, so the row's `F` stands) — this is no longer
-the "zero failures" state Run 1/2 recorded. 8 tests remain not reached (A-13,
-B-08/09/10/11/12/13, E-06) and 8 remain blocked. Of the highest-risk ⭐ set
-(C-01, C-08, C-10, C-17, E-01, E-02, E-06, E-07), every one has now passed
-except **E-06**, still not reached. The one Critical defect Run 1 found
-(#1941) was discovered *outside* the scripted steps, while populating an
-artifact set for C-10.
+not yet re-verified on hardware). 8 tests remained not reached (A-13,
+B-08/09/10/11/12/13, E-06) and 8 remained blocked. Of the highest-risk ⭐ set
+(C-01, C-08, C-10, C-17, E-01, E-02, E-06, E-07), every one had passed
+except **E-06**, still not reached.
+
+#### Cumulative — current (through wave 12, 2026-09-06/07)
+
+Recomputed after wave 12's #2920/#2923 browser and cosine-identity runs
+(A-07/A-08/A-09/B-01 UI/B-02/C-15 live half, B-08/B-09/B-10, E-04 re-run) and
+#2919's ear-kit staging (B-03/E-06). This table reflects the full §7.1 result
+table's current P/F/B/N/A counts row by row; mixed-result rows (C-13, C-15,
+E-01) are counted under the half that actually discharges the row's core
+claim, consistent with how the Run 8 table above already counted C-13 and
+E-01 — the still-open half of each is named in prose (register row A1's
+"Still owed" section), not double-counted here.
+
+| Section | Total | P | F | B | N/A | not reached |
+|---|---|---|---|---|---|---|
+| A (3a) | 13 | 12 | 0 | 0 | 0 | 1 |
+| B (3b1) | 13 | 7 | 0 | 2 | 1 | 3 |
+| C (3b2) | 21 | 20 | 1 | 0 | 0 | 0 |
+| D (cross-cutting) | 4 | 3 | 0 | 1 | 0 | 0 |
+| E (3c) | 9 | 8 | 0 | 1 | 0 | 0 |
+| **All** | **60** | **50** | **1** | **4** | **1** | **4** |
+
+**One failure now stands** (C-05's narrator-fallback misattribution, #2023 —
+E-04's long-Coqui-sentence crash, #2017, is retired: PR #2039's fix was
+re-verified on real Coqui weights this wave, #2923). 4 tests remain not
+reached (A-13, B-11/12/13) and 4 remain blocked (B-03, B-05, D-02, E-06). Of
+the highest-risk ⭐ set (C-01, C-08, C-10, C-12, C-15, C-17, E-01, E-02, E-06,
+E-07), every one has now passed except **E-06**, whose kit is staged but
+whose Coqui-derive half is blocked on this box's GPU capacity. The one
+Critical defect Run 1 found (#1941) was discovered *outside* the scripted
+steps, while populating an artifact set for C-10.
 
 ### 7.2 Defects found
 

@@ -92,6 +92,22 @@ export const STEPS = [
            on exactly the diff that introduced it). .js/.ts currently match
            no file under scripts/, so this costs nothing today. */
         'scripts/**/*.{mjs,cjs,js,mts,cts,ts}',
+        /* **\/*.{ps1,psm1} is an input because scripts/tests/ps-ascii-scan.test.mjs
+           enumerates EVERY tracked PowerShell file with `git ls-files` and
+           readFileSync's each at RUNTIME — no module-graph edge, and the set
+           deliberately reaches outside scripts/** (server/tts-sidecar/**).
+           Without this glob a PowerShell-only diff — precisely the diff shape
+           that can reintroduce #3055's 5.1-unparseable module — scores
+           step_test_hooks=false through ci-scope.mjs's computeScopes, so
+           verify.yml skips the leg, and locally verify-cache.mjs prints
+           test:hooks [cached]. Measured on PR #3055 itself: the guard ran
+           there ONLY because the PR touches root package.json, which trips
+           computeShared. Third spelling of the #1847 trap fixtures/** above
+           documents and the #2216 one below it. Repo-wide rather than
+           scripts/**-scoped so it tracks the guard's own file set; both
+           diffFiles and the hashed fileList come from tracked git output, so
+           this can never sweep .venv/node_modules PowerShell. */
+        '**/*.{ps1,psm1}',
         'scripts/tests/fixtures/**',
         /* pinokio-scripts/** is an input because scripts/tests/git-scrub.test.mjs
            (#2216) scans that whole directory for unscrubbed `git` spawns — the
