@@ -24,7 +24,16 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  readdirSync,
+  copyFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
@@ -696,6 +705,76 @@ test('backupBeforeApply: returns null and copies nothing when the source does no
     const missing = join(tmp, 'cast-id-history.json');
     assert.equal(backupBeforeApply(missing), null);
     assert.equal(existsSync(`${missing}.bak.a34-${new Date().toISOString().slice(0, 10)}`), false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// PR #3057 review pass 2, correctness: a second run on the same day used to
+// silently clobber the first run's pre-repair copy (date-only stamp, plain
+// copyFileSync). This is the exact operator sequence the finding describes:
+// run 1 dies part-way, leaving the source half-repaired; the operator (or an
+// error message that reads like a transient lock timeout) retries the same
+// day; run 2's backup must NOT become the half-repaired file overwriting the
+// only genuine pre-repair copy.
+test('backupBeforeApply: a same-day retry does not destroy the first run\'s pre-repair copy', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-retry-'));
+  try {
+    const filePath = join(tmp, 'cast.json');
+    const preRepair = { pre: true, characters: ['original'] };
+    writeFileSync(filePath, JSON.stringify(preRepair));
+
+    const first = backupBeforeApply(filePath);
+    assert.ok(first, 'first run makes a backup');
+    assert.deepEqual(JSON.parse(readFileSync(first, 'utf8')), preRepair);
+
+    // Simulate run 1 dying part-way through: the source is now half-repaired.
+    const halfRepaired = { pre: false, characters: ['half-repaired'] };
+    writeFileSync(filePath, JSON.stringify(halfRepaired));
+
+    const second = backupBeforeApply(filePath);
+    assert.ok(second, 'the retry also makes a backup');
+    assert.notEqual(second, first, 'the retry must land at a distinct path, never the first run\'s path');
+
+    assert.deepEqual(
+      JSON.parse(readFileSync(first, 'utf8')),
+      preRepair,
+      "the FIRST run's pre-repair copy must still hold the original content after a same-day retry",
+    );
+    assert.deepEqual(JSON.parse(readFileSync(second, 'utf8')), halfRepaired);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// A forced exact-timestamp collision (simulated via a deps.fs stub that
+// throws EEXIST once) proves the retry-on-collision path itself, not just
+// that two calls a few milliseconds apart happen to land on different
+// stamps. Drives the real backupBeforeApply, not a reimplementation.
+test('backupBeforeApply: an exact stamp collision retries to a distinct path instead of overwriting', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-collide-'));
+  try {
+    const filePath = join(tmp, 'cast.json');
+    writeFileSync(filePath, JSON.stringify({ pre: true }));
+
+    let attempts = 0;
+    const fakeFs = {
+      existsSync,
+      copyFileSync: (src, dest, flags) => {
+        attempts += 1;
+        if (attempts === 1) {
+          const err = new Error('EEXIST: file already exists');
+          err.code = 'EEXIST';
+          throw err;
+        }
+        copyFileSync(src, dest, flags);
+      },
+    };
+
+    const backupPath = backupBeforeApply(filePath, { fs: fakeFs });
+    assert.ok(backupPath, 'succeeds after retrying past the simulated collision');
+    assert.equal(attempts, 2, 'retried exactly once after the simulated EEXIST');
+    assert.deepEqual(JSON.parse(readFileSync(backupPath, 'utf8')), { pre: true });
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

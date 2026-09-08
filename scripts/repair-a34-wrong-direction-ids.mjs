@@ -53,11 +53,12 @@
  * merge cannot be told apart without.
  *
  * Repair (per confirmed pair only — a book with no confirmed pair is never
- * touched, dry run or not). Both files are COPIED to a timestamped
- * `.bak.a34-<date>` sidecar before either is written (mirroring
- * `repair-cast-id-drift.mjs`'s own `backupCastIdHistory`), so the operator
- * has an on-disk undo for a run that dies part-way — the two writes are
- * separate and there is no transaction across them:
+ * touched, dry run or not). Both files are COPIED to a timestamped,
+ * collision-proof `.bak.a34-<stamp>` sidecar before either is written (see
+ * `backupBeforeApply`'s own doc comment for why this deliberately does NOT
+ * mirror `repair-cast-id-drift.mjs`'s `backupCastIdHistory` verbatim), so the
+ * operator has an on-disk undo for a run that dies part-way — the two writes
+ * are separate and there is no transaction across them:
  *
  *   1. `cast-id-history.json`: call the server's own `retireCharacterId`
  *      (`server/src/store/cast-id-history.ts`), retiring `to` in favour of
@@ -405,27 +406,61 @@ async function loadServerModules() {
   };
 }
 
-/** Copies `filePath` to `<filePath>.bak.a34-<YYYY-MM-DD>` if it exists,
- *  returning the backup path (or `null` when there was nothing to copy).
- *  Same shape as `repair-cast-id-drift.mjs`'s `backupCastIdHistory`. This
- *  script writes TWO files with no transaction across them, so the operator
- *  needs an on-disk undo for both, not advice. `writeJsonAtomic`'s own
- *  `{ rotate: { keep } }` is not used for this: it rotates only the file
- *  being written, and the history file is not written by this script at all
- *  — `retireCharacterId` writes it, from inside the server.
+/** Copies `filePath` to `<filePath>.bak.a34-<stamp>` if it exists, returning
+ *  the backup path (or `null` when there was nothing to copy). Same shape as
+ *  `repair-cast-id-drift.mjs`'s `backupCastIdHistory`, EXCEPT for the stamp
+ *  resolution and the `COPYFILE_EXCL` guard below — see PR #3057 review pass
+ *  2: a date-only stamp plus a plain `copyFileSync` meant a second run on the
+ *  same day silently overwrote the pre-repair copy with whatever the first
+ *  (possibly half-repaired-then-aborted) run had left on disk, and the error
+ *  message naming "Pre-repair copies" then pointed at a file that was no
+ *  longer the pre-repair state. This script writes TWO files with no
+ *  transaction across them, so the operator needs an on-disk undo for both,
+ *  not advice — an undo a retry can destroy is no undo at all.
  *
- *  The cast.json copy lands as `cast.json.bak.a34-<date>`, which
- *  `collectBakNameEntries` WILL pick up as bak evidence on a later run.
- *  That is deliberate and correct: it is a genuine pre-repair snapshot of
- *  this book's cast, the same class of file as the `cast.json.bak.castfix`
- *  the workspace already carries, and it names the ids it really held at
- *  that moment. */
+ *  The stamp carries millisecond resolution
+ *  (`toISOString().replace(/[:.]/g, '-')`, filesystem-safe), which makes a
+ *  same-day collision rare but not impossible (two runs in the same
+ *  millisecond, or a clock that doesn't advance in a test). `COPYFILE_EXCL`
+ *  closes that gap unconditionally: a collision throws `EEXIST` rather than
+ *  overwriting, and the loop below retries at a suffixed path instead of
+ *  giving up — so an existing pre-repair copy is NEVER overwritten, and the
+ *  one case that can't find a free slot fails loudly rather than falling
+ *  back to silent clobbering.
+ *
+ *  `writeJsonAtomic`'s own `{ rotate: { keep } }` is not used for this: it
+ *  rotates only the file being written, and the history file is not written
+ *  by this script at all — `retireCharacterId` writes it, from inside the
+ *  server.
+ *
+ *  The cast.json copy lands as `cast.json.bak.a34-<stamp>`, which
+ *  `collectBakNameEntries` WILL pick up as bak evidence on a later run (it
+ *  matches on the `cast.json.bak.*` glob, not on stamp shape). That is
+ *  deliberate and correct: it is a genuine pre-repair snapshot of this
+ *  book's cast, the same class of file as the `cast.json.bak.castfix` the
+ *  workspace already carries, and it names the ids it really held at that
+ *  moment. */
 export function backupBeforeApply(filePath, deps = { fs }) {
   if (!deps.fs.existsSync(filePath)) return null;
-  const stamp = new Date().toISOString().slice(0, 10);
-  const backupPath = `${filePath}.bak.a34-${stamp}`;
-  deps.fs.copyFileSync(filePath, backupPath);
-  return backupPath;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const MAX_ATTEMPTS = 1000;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const backupPath = attempt === 0 ? `${filePath}.bak.a34-${stamp}` : `${filePath}.bak.a34-${stamp}-${attempt}`;
+    try {
+      deps.fs.copyFileSync(filePath, backupPath, fs.constants.COPYFILE_EXCL);
+      return backupPath;
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+      // Someone else already holds this exact stamp — try the next suffix
+      // rather than overwriting it. Falls through to the loop's next
+      // iteration; the loop bound below is what fails loudly if every
+      // candidate in range is somehow taken.
+    }
+  }
+  throw new Error(
+    `${filePath}: could not create a pre-repair backup — ${MAX_ATTEMPTS} candidate paths at stamp ${stamp} ` +
+      `all already exist. Refusing to overwrite an existing pre-repair copy.`,
+  );
 }
 
 /** Applies one book's confirmed repairs: retires `nonAsciiId` in
