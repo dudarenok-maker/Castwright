@@ -6,7 +6,9 @@
 # 13th run: A105 bullet 3's second direction now CLOSED — not via a live
 # on-box repro (diagnosed why that approach can't work on this sidecar), but
 # via the codebase's own existing white-box unit coverage plus an on-box
-# finding that explains the methodology gap)
+# finding that explains the methodology gap; 14th run: A24 bullet 4 now
+# CLOSED via a live on-box repro — A105 and A35 are both fully closed, only
+# A24 bullets 2-3 remain)
 
 Run 2026-09-06/07/08, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
@@ -19,10 +21,10 @@ per the standing rule; this (7th) run found GPU0 otherwise idle
 sidecar fully down at the start (killed by the 8th run's own cleanup) and an
 unrelated lane's `pytest` process using GPU0 partway through — not touched.
 
-**This step is not finished.** A24 bullet 1, A105 bullets 1-3(direction 1)
-and bullet 5, and all of A35 have been driven to real observed results
-across nine runs — see "Remaining scope" at the bottom for exactly what's
-left (A24 bullets 2-4, A105 bullet 3's second direction, and A105 bullet 4).
+**This step is not finished.** A24 bullets 1 and 4, all of A105, and all of
+A35 have been driven to real observed results across fourteen runs — see
+"Remaining scope" at the bottom for exactly what's left (A24 bullets 2-3
+only).
 
 ## Setup (reusable by the next run)
 
@@ -780,6 +782,13 @@ edit.
 
 ## Remaining scope — not attempted this session
 
+**Superseded by later runs — see the bottom of the file for the current
+state.** As of the 14th run (2026-09-08): A105 (all 5 bullets) and A35 (all
+4 bullets) are fully closed; A24 bullet 4 is now closed too (see its own
+section above). Only A24 bullets 2-3 remain open. The bullet-by-bullet
+detail below is kept as the historical record of the 9th run's own state,
+not a current TODO list.
+
 - **A24 bullets 2-4**: forcing a genuinely wedged design (bullet 2), the
   2-card cross-device negative control (bullet 3, needs the box's second
   card deliberately targeted — this worktree's Qwen pin did not reliably
@@ -1368,3 +1377,122 @@ already-cached base.
 **Still not finished.** A24 bullets 2-4 remain fully undriven — the only
 scope left in this row group. Parking again (Agent Working, still
 assigned) rather than reporting AGENT DONE against unfinished scope.
+
+## A24 bullet 4 — CLOSED (14th run, 2026-09-08)
+
+**Real result: CONFIRMED — a real user Pause fired mid-design-wait surfaced
+as a plain `{"type":"idle"}` terminal SSE event, never a `chapter_failed`,
+never `NoCapacityError`/`vram-spill`.**
+
+**Setup note for the next run needing this fixture again:** this worktree's
+sidecar (port 9170) and dev server (port 8250) were NOT running at the start
+of this run — the 13th run's "left running" state had gone away by the time
+this run started (box idle-timeout or a restart; not chased further). Both
+were relaunched this run (`npm run tts:sidecar` and `npm --prefix server run
+dev` from the worktree root, detached via `Start-Process -WindowStyle
+Hidden`, output redirected to log files) and came up clean in under 30s
+real time. `npm run tts:sidecar`'s own spawn lost the port race to
+`dev:server`'s own managed sidecar supervisor (its spawned child exited
+immediately, then logged "already listening on :9170 ... skipping spawn" —
+harmless, just a redundant process, not a conflict) — the next run only
+needs `npm --prefix server run dev`; the sidecar comes up as its child.
+
+**Fixture-setup blocker from the 7th/earlier runs (chapter 1's only content
+already fully synthesized, so `force:true` still hit the resume-from-
+completed path) resolved by removing the on-disk audio from the equation
+entirely, rather than fighting the resume-shortcut's exact trigger
+condition:** moved `audio/01-chapter-1.{mp3,segments.json,...}` aside into a
+throwaway `audio/bullet4-backup/` subfolder before starting (so
+`chapterAudioExists()` genuinely returns `false`, independent of whichever
+code path the 7th run's `force:true` attempt didn't hit correctly), then
+moved the originals back once the render side of this bullet was done —
+restored byte-identical, confirmed via `GET .../state` afterward showing
+the same `audioRenderedAt`/`audioQa` values as before this run touched
+anything.
+
+**Also fixed this run: the PowerShell double-quote-stripping trap this
+prompt's own shell-quoting step warns about (`--jq`/native-command args
+losing their quotes) bit the design POST's JSON body on the first attempt**
+(`{persona:a warm...}` arrived at body-parser with every double-quote gone,
+400 `entity.parse.failed`, confirmed via `server.log.err`). Fixed the same
+way the step recommends for `gh`/`jq`: wrote the JSON body to a file and
+passed it via `curl --data-binary "@bodyfile.json"` instead of an inline
+`-d` string, for both the design POST and the render POST — no quoting
+trap possible once the JSON never passes through a PowerShell-interpolated
+argument at all.
+
+Sequence (fixture book `onbox-test__standalones__untitled`, sidecar
+confirmed idle first — `qwen_loaded`/`qwen_design_resident`/`kokoro_loaded`
+all `false`, `inflight_synth: 0`, GPU0 114 MiB / GPU1 197 MiB baseline,
+consistent with other lanes' idle residual, not this worktree's):
+1. `POST .../cast/anna/design-voice/stream` (persona supplied directly,
+   `sampleVoiceId: char-onbox-test__standalones__untitled__anna`,
+   `modelKey: qwen3-tts-0.6b`) — same recipe A24 bullet 1 already proved
+   works, backgrounded via a detached PowerShell helper, `-m 300`.
+2. Polled `design-single/status` until `phase` moved off `loading-model`
+   (confirmed `designing`, then `rendering` — genuinely mid-design, not a
+   race against an already-finished job).
+3. `POST .../generation` for chapter 1, `{"chapterIds":[1],"force":true,
+   "modelKey":"qwen3-tts-1.7b"}` (ivan-petrovich's own tier, a *different*
+   qwen character from the one being designed, same pattern as bullet 1) —
+   backgrounded, `-m 240`. `server.log` confirmed the VRAM-reconcile step
+   fired (`evicting unused Qwen tier(s) [0.6B ]`) and the SSE stream showed
+   `resume_from` (empty — the moved-aside audio confirmed absent) then two
+   `progress` events (`0.01`, then `0.005`) that never advanced again —
+   the same stuck-at-near-zero-progress signature bullet 1's own evidence
+   already established as "render is genuinely waiting on the resident
+   design," not stalled or errored.
+4. First `POST .../generation/pause` attempt (fired right after step 3,
+   before the render's own job had registered in the server's in-flight-job
+   map yet) returned `{"ok":true,"paused":false}` — a race against the
+   route's own bookkeeping, not a bug; recorded so the next run doesn't
+   mistake it for "pause didn't work." Re-issued once `design-single/status`
+   confirmed `phase: "rendering"` (design still mid-flight) and the render's
+   progress was still frozen at its step-3 values: `{"ok":true,
+   "paused":true}`.
+5. Render's SSE stream then emitted exactly one more event —
+   `{"type":"idle"}` — and closed (`curl` exit `0`). **No `chapter_failed`
+   event at any point**, confirming the code path this row's assertion
+   targets: `server/src/routes/generation.ts`'s catch block explicitly
+   special-cases `e.name === 'AbortError'` to "silently exit the worker" via
+   the `idle` tick rather than reporting it as a chapter failure — this run
+   observed exactly that behavior on real hardware, not just read the
+   comment describing it.
+6. Design job was NOT touched by the render's pause (by design — `/pause`
+   only aborts `inFlightByBook`'s generation jobs, not the single-design
+   job) and completed normally ~15s later: `design-single/status` returned
+   `{"active":false}`, and `design.log`'s SSE trace shows a real `designed`
+   event (`voiceId: qwen-uIRjRzpfDUZqLX_0eVctR` — same id anna already had,
+   so no cast-state drift).
+
+**Bullet 4 verdict: CONFIRMED.** A real Pause signal fired while a chapter
+render was genuinely blocked on a same-device resident VoiceDesign surfaces
+as a plain, non-error `idle` termination — never converted to
+`NoCapacityError` or `vram-spill` — matching this row's assertion exactly,
+on real hardware rather than by code inspection alone.
+
+Cleanup: `POST :9170/unload {"engine":"qwen"}` returned `{"status":"idle"}`,
+confirmed via `/health` (`qwen_loaded`/`qwen_base17_loaded`/
+`qwen_design_resident`/`kokoro_loaded` all `false`, `inflight_synth: 0`).
+`audio/01-chapter-1.*` moved back from `bullet4-backup/` to their original
+location (byte-identical, never regenerated — the render never reached a
+synth step before being paused). `.audiobook/cast.json` and `state.json`
+both confirmed unchanged (`git status` on the worktree shows no diff outside
+this doc). `GET /api/queue` confirmed `{"paused":false,"entries":[]}` — the
+book-level pause did not leak into queue state. No other lane's process was
+touched; this worktree's own sidecar/server (started fresh this run) were
+left running for the next run, same convention as prior runs.
+
+**Still not finished.** A24 bullets 2-3 remain — the 2-card cross-device
+negative control (bullet 2, needs the box's Qwen device-pin investigation
+prior runs flagged as owed) and the `/api/sidecar/load` 90s abort-budget
+conversion to `NoCapacityError` (bullet 3, needs a design-resident wait that
+outlasts the caller's 90s ceiling — `capacity-retry.ts`'s own comments
+confirm the *internal* poll budget only extends past the generic ~60s
+window when a design is resident, so the caller's 90s timer becomes the
+binding one; not attempted this run — the correct sidecar `/load` payload
+to reliably deny capacity against a resident 0.6B VoiceDesign on this box's
+shared 8GB card was not established, and guessing at it risked burning this
+run's remaining budget on another "inconclusive" the way A105 bullet 3's
+early attempts did). Parking again (Agent Working, still assigned) rather
+than reporting AGENT DONE against unfinished scope.
