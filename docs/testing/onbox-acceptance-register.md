@@ -1159,8 +1159,8 @@ process against the real cache.
 set — including the 60s truncation landing at 2,880,044 bytes, delta 0), A-10
 (write-time consent guard: 422/400/404, nothing written), A-11 (`/revoke`
 stamps `revokedAt`, rest of consent intact, entry survives), A-12 (sample route
-403s a revoked clone, healthy control 200), B-01 (route + on-disk half —
-UI assertions still owed), B-04 (ECAPA cosine is real: three distinct finite
+403s a revoked clone, healthy control 200), B-01 (route + on-disk + UI, all
+three — the UI half discharged wave 12, #2920), B-04 (ECAPA cosine is real: three distinct finite
 values, two clones of the same fixture gave 0.8914 vs 0.8813 — not a mock
 constant), B-07 (assign writes both qwen **and** coqui slots per Task 24, drops
 the stale `variants` map, leaves `voiceUuid` untouched; all 13 characters
@@ -1452,6 +1452,19 @@ self-contained mocks/fixtures unaffected by the real derivation.
   precondition can't be held still long enough to observe). Previously not
   counted in this row's own tally — a round-2 pr-review-gate pass on PR #3073
   caught the omission.
+- **The remaining 6 of the 11, spelled out here so the count is traceable in
+  one place (a round-3 pr-review-gate pass on PR #3073 found this row's own
+  tally never actually enumerated these, even though the live view's prose
+  did):** **B-05** (structural — no way to fail `/embed` independently of the
+  clone path) · **C-05** (open `F`, filed as
+  [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023), not
+  owed acceptance work in the usual sense but not discharged either) ·
+  **C-15** (same-chapter dedupe re-run + cross-chapter dedupe + wrong-engine
+  reason-neutral repeat — see the Section C paragraph below for the full
+  account) · **D-02** (full-book render, Blocked on a new stall found wave
+  12 — see "Two environment blockers" below) · **never reached: A-13,
+  B-11, B-12, B-13** (four rows whose §7.1 result is still blank — genuinely
+  untouched, not attempted-and-failed).
 - **Section E — 8 of 9 discharged as of wave 12; only E-06 (by-ear + GPU
   capacity) remains.** E-04's reproduction re-run landed this wave: retried on
   real Coqui weights (#2923, 2026-09-06) and the case that 500'd pre-#2039 now
@@ -1574,8 +1587,9 @@ self-contained mocks/fixtures unaffected by the real derivation.
   fabricated cast entry from a stray bracketed stage direction. Filed as
   [#3080](https://github.com/dudarenok-maker/Castwright/issues/3080). Still
   Blocked, for a new reason.
-- **C-05 (one of the 18 above) now has two recorded sub-observations owed, not
-  a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
+- **C-05 (open — an `F`, not one of the 18 discharged above, deliberately
+  excluded per its own note earlier in this row) now has two recorded
+  sub-observations owed, not a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
   / PR #2041 split it into C-05a (a healthy cloned narrator refuses an
   orphaned-characterId line) and C-05b (a designed narrator's substitution is
   recorded + surfaced) — see the run sheet's `Result (C-05a)`/`Result (C-05b)`
