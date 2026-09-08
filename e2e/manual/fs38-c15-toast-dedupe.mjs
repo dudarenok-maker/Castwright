@@ -212,7 +212,7 @@ async function main() {
   // since page.waitForFunction executes inside the browser and has no access to
   // Node.js closures.
   await page.waitForFunction(
-    async (params) => {
+    (params) => {
       const { capturedEl, startTime, minElapsedMs, maxElapsedMs } = params;
       const elapsed = Date.now() - startTime;
       if (elapsed > maxElapsedMs) return false; // Timeout
