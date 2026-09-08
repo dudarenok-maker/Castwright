@@ -55,10 +55,10 @@
  * Repair (per confirmed pair only — a book with no confirmed pair is never
  * touched, dry run or not). Both files are COPIED to a timestamped,
  * collision-proof `.bak.a34-<stamp>` sidecar before either is written (see
- * `backupBeforeApply`'s own doc comment for why this deliberately does NOT
- * mirror `repair-cast-id-drift.mjs`'s `backupCastIdHistory` verbatim), so the
- * operator has an on-disk undo for a run that dies part-way — the two writes
- * are separate and there is no transaction across them:
+ * `backupBeforeApply`'s own doc comment — `repair-cast-id-drift.mjs`'s
+ * `backupCastIdHistory` now shares this exact shape, PR #3057 review pass 2),
+ * so the operator has an on-disk undo for a run that dies part-way — the two
+ * writes are separate and there is no transaction across them:
  *
  *   1. `cast-id-history.json`: call the server's own `retireCharacterId`
  *      (`server/src/store/cast-id-history.ts`), retiring `to` in favour of
@@ -408,15 +408,16 @@ async function loadServerModules() {
 
 /** Copies `filePath` to `<filePath>.bak.a34-<stamp>` if it exists, returning
  *  the backup path (or `null` when there was nothing to copy). Same shape as
- *  `repair-cast-id-drift.mjs`'s `backupCastIdHistory`, EXCEPT for the stamp
- *  resolution and the `COPYFILE_EXCL` guard below — see PR #3057 review pass
- *  2: a date-only stamp plus a plain `copyFileSync` meant a second run on the
- *  same day silently overwrote the pre-repair copy with whatever the first
- *  (possibly half-repaired-then-aborted) run had left on disk, and the error
- *  message naming "Pre-repair copies" then pointed at a file that was no
- *  longer the pre-repair state. This script writes TWO files with no
- *  transaction across them, so the operator needs an on-disk undo for both,
- *  not advice — an undo a retry can destroy is no undo at all.
+ *  `repair-cast-id-drift.mjs`'s `backupCastIdHistory` — see PR #3057 review
+ *  pass 2: a date-only stamp plus a plain `copyFileSync` meant a second run
+ *  on the same day silently overwrote the pre-repair copy with whatever the
+ *  first (possibly half-repaired-then-aborted) run had left on disk, and the
+ *  error message naming "Pre-repair copies" then pointed at a file that was
+ *  no longer the pre-repair state. Round 2 of that same review carried the
+ *  identical defect and fix into `backupCastIdHistory` itself, which had it
+ *  independently. This script writes TWO files with no transaction across
+ *  them, so the operator needs an on-disk undo for both, not advice — an
+ *  undo a retry can destroy is no undo at all.
  *
  *  The stamp carries millisecond resolution
  *  (`toISOString().replace(/[:.]/g, '-')`, filesystem-safe), which makes a

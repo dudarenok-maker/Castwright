@@ -2378,12 +2378,56 @@ export async function collectSegmentOrphans(bookDir, chapters, cast, history, mo
   return { orphans, currentNonExact, resolver };
 }
 
-function backupCastIdHistory(historyPath) {
-  if (!fs.existsSync(historyPath)) return null;
-  const stamp = new Date().toISOString().slice(0, 10);
-  const backupPath = `${historyPath}.bak.id-drift-${stamp}`;
-  fs.copyFileSync(historyPath, backupPath);
-  return backupPath;
+/** Copies `historyPath` to `<historyPath>.bak.id-drift-<stamp>` if it
+ *  exists, returning the backup path (or `null` when there was nothing to
+ *  copy). Same shape as `repair-a34-wrong-direction-ids.mjs`'s
+ *  `backupBeforeApply` — see PR #3057 review pass 2: a date-only stamp plus
+ *  a plain `copyFileSync` meant a same-day retry silently overwrote the
+ *  first run's pre-repair copy with whatever the (possibly
+ *  half-repaired-then-aborted) first run had left on disk, and the "A backup
+ *  was taken at ..." message below then pointed at a file that was no
+ *  longer the pre-repair state.
+ *
+ *  The stamp carries millisecond resolution
+ *  (`toISOString().replace(/[:.]/g, '-')`, filesystem-safe), which makes a
+ *  same-day collision rare but not impossible (two runs in the same
+ *  millisecond, or a clock that doesn't advance in a test). `COPYFILE_EXCL`
+ *  closes that gap unconditionally: a collision throws `EEXIST` rather than
+ *  overwriting, and the loop below retries at a suffixed path instead of
+ *  giving up — so an existing pre-repair copy is NEVER overwritten, and the
+ *  one case that can't find a free slot fails loudly rather than falling
+ *  back to silent clobbering.
+ *
+ *  The backup filename is `cast-id-history.json.bak.id-drift-<stamp>`, not
+ *  `cast.json.bak.*` — `collectBakNameEntries` filters on files whose name
+ *  starts with `cast.json.bak`, so this backup was never picked up as bak
+ *  evidence before this change and still isn't after it; the stamp-shape
+ *  change doesn't touch that.
+ *
+ *  Exported for the same reason `backupBeforeApply` is — a direct fs-fixture
+ *  unit test drives THIS function, not a reimplementation of it. */
+export function backupCastIdHistory(historyPath, deps = { fs }) {
+  if (!deps.fs.existsSync(historyPath)) return null;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const MAX_ATTEMPTS = 1000;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const backupPath =
+      attempt === 0 ? `${historyPath}.bak.id-drift-${stamp}` : `${historyPath}.bak.id-drift-${stamp}-${attempt}`;
+    try {
+      deps.fs.copyFileSync(historyPath, backupPath, fs.constants.COPYFILE_EXCL);
+      return backupPath;
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+      // Someone else already holds this exact stamp — try the next suffix
+      // rather than overwriting it. Falls through to the loop's next
+      // iteration; the loop bound below is what fails loudly if every
+      // candidate in range is somehow taken.
+    }
+  }
+  throw new Error(
+    `${historyPath}: could not create a pre-repair backup — ${MAX_ATTEMPTS} candidate paths at stamp ${stamp} ` +
+      `all already exist. Refusing to overwrite an existing pre-repair copy.`,
+  );
 }
 
 /** #2128 — the one-shot `recordedAtSeq` back-fill, for EVERY book `main()`
