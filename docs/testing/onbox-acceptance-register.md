@@ -682,7 +682,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > **not** discharged — both have real, agent-checkable sub-criteria that
 > passed, but each also surfaced a genuinely ambiguous or not-fully-met
 > sub-check that needs a human listen or a human judgment call; see their own
-> rows for what remains. This lands on top of the independent E104 addition
+> rows for what remains. This lands on top of the independent E103 addition
 > below (55 owed at that point; the two changes touched disjoint groups —
 > Groups A/B/D here, Group E there — and never saw each other).
 
@@ -5364,7 +5364,7 @@ about the same time as before this change — the design's own budget is ~300ms 
 the query — and that `logs/reaper-census.jsonl` accumulates one entry per push with
 every root's command line present (the exact thing the 2026-09-05 census omitted).
 
-**Residual N4 (accepted):** `killTree()` performs no creation-time pid-reuse re-check before invoking `taskkill /PID <root> /T /F`. Review passes 2, 3, and 4 all agreed this is acceptable — the re-check would require a second `Get-CimInstance` query, doubling the pre-push cost. Since the reaper now actually fires (as of this PR), the PID-reuse window is live rather than theoretical; an operator running the acceptance should watch for the edge case where a process exits and Windows quickly recycles its PID before the taskkill lands.
+**Residual N4 (accepted):** `killTree()` performs no creation-time pid-reuse re-check before invoking `taskkill /PID <root> /T /F`. Review passes 2, 3, and 4 all agreed this is acceptable — closing it would need a second `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill. Since the reaper now actually fires (as of this PR), the PID-reuse window is live rather than theoretical; an operator running the acceptance should watch for the edge case where a process exits and Windows quickly recycles its PID before the taskkill lands.
 
 *Needs:* a Windows dev box, no GPU. *Cost:* ~20 minutes across a few pushes.
 *Criteria:* the four observations above; issue #3047's acceptance list.
