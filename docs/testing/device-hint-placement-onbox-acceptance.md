@@ -133,12 +133,40 @@ Result:
 
 ---
 
-## Criterion 3 — an unsatisfiable hint still lands the derive
+## Criterion 3 — an unsatisfiable hint still lands the derive (partly diagnostic — no log line distinguishes the fallback)
 
 This is the criterion that separates the shipped advisory behaviour from the
 hard pin that PR #3061's review rejected. Under a hard pin this scenario cost a
 ~60 s `withCapacityRetry` stall and then a **silently substituted stock
 catalogue voice**.
+
+**There is no log line that says "the preference was offered and not
+taken."** `_resolve_admission` (`main.py:5126-5253`) is the same function
+Criterion 1 already audited: the `preferred` try_hold at `main.py:5184-5187`
+and its unconstrained fallback at `main.py:5188-5189` are both silent — no
+`log.` call anywhere in that path records whether the preferred device was
+tried, or whether it was tried and rejected before falling through. A
+`noCapacity` refusal naming `cuda:1` isn't a log line either; it would surface
+as an HTTP 503 response body (`_no_capacity(adm)`,
+`{"noCapacity": {"deviceKey": "cuda:1", ...}}`) that Node's retry/substitution
+path consumes internally, not something written anywhere an operator can read
+after the fact.
+
+What genuinely is observable without instrumentation: bullets 1, 3, and 4
+below, taken together, already rule out the hard-pin failure mode this
+criterion exists to catch — a hard pin fails as a 60 s stall *plus* a silent
+substitution, not as a clean GPU0 success in normal time. A clean pass on
+those three is the real discriminator; the second bullet below is the
+diagnostic-only confirmation of *why*, not an independent proof.
+
+To observe the fallback directly anyway, add two temporary log lines in
+`_resolve_admission` and revert them after the run — they are not part of the
+shipped code:
+
+- right after the `preferred` try at `main.py:5187`:
+  `log.info("preferred=%s held=%s", preferred, held)`
+- right after the fallback try at `main.py:5189`:
+  `log.info("fallback held=%s", held)`
 
 1. Fill GPU1 so the derive cannot fit there — load a second resident model onto
    it, or arrange the boot so the eGPU carries the load.
@@ -147,8 +175,10 @@ catalogue voice**.
 **Pass, all four:**
 
 - the derive **succeeds on GPU0**, in its normal time;
-- the log shows the preference not taken, **not** a `noCapacity` refusal
-  naming `cuda:1`;
+- (diagnostic only, with the temporary log lines above) the first log line
+  shows `held=None` for `preferred="cuda:1"`, and the second shows a non-`None`
+  fallback `held` on `cuda:0` — i.e. the preference was tried, rejected, and
+  fallen through, rather than a `noCapacity` refusal ever reaching Node;
 - there is **no ~60 s stall** before it proceeds;
 - the character renders in **its own designed voice**.
 
