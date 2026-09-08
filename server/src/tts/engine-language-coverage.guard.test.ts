@@ -87,18 +87,24 @@
      returns the book's stored language raw without re-validating it. An
      already-imported book under a demoted language still reaches the gate
      with the arm gone.
-   - it #3's syntactic scan has its own blind spots, same class as
-     `cast-lock.guard.test.ts`'s: an ALIASED import of either name
-     (`import { resolveEligibleEngines as foo }` or
-     `import { ALL_TTS_ENGINES as bar }`) is invisible to it, since it
-     matches on the literal identifier text; and it cannot see through
-     INDIRECTION — `const installed = someOtherSet; resolveEligibleEngines(
-     bookLanguage, installed)` passes as long as the text `ALL_TTS_ENGINES`
-     doesn't appear as the literal second argument, even if `installed`
-     happens to equal it, and conversely a computed argument that isn't a
-     bare identifier is reported as a violation whether or not it is
-     equivalent to `ALL_TTS_ENGINES`. It also only scans `generation.ts` —
-     a second call site added elsewhere is invisible to it. */
+   - it #3's syntactic scan has blind spots, and this list is measured, not
+     guessed (#3083 review pass 3, finding H -- an earlier version of it got
+     one case backwards and omitted the only fail-open one).
+     FAIL CLOSED, so safe: aliasing the FUNCTION import moves the derivation
+     out of this file and the `calls.length > 0` assertion fires; aliasing
+     ALL_TTS_ENGINES at the import makes the second argument a different
+     identifier, which lands in `violations`; a computed second argument is
+     reported whether or not it is equivalent to ALL_TTS_ENGINES.
+     FAIL OPEN, so guarded separately below: REBINDING the identifier TEXT --
+     importing under an alias and re-declaring a local `const ALL_TTS_ENGINES
+     = ...` -- leaves the call site byte-identical and used to pass 3/3 while
+     coquiEligible was false for every language. That is the MINIMAL diff for
+     the very change #3059 parks, so it is the one spelling this guard cannot
+     afford to miss; it #3 now asserts the import is un-aliased and the name
+     is never re-declared.
+     STILL UNGUARDED: indirection through an equivalent value under another
+     name, and a second call site in another file -- this scan only reads
+     generation.ts. */
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -219,6 +225,37 @@ describe('engine/registry language coverage (#3059)', () => {
         "refusal path removed by #3059 needs restoring for a box that lacks Coqui — a " +
         'non-Coqui-eligible non-English book may now be reachable again. ' +
         'See https://github.com/dudarenok-maker/Castwright/issues/3059.',
+    ).toEqual([]);
+
+    /* The call site being textually `ALL_TTS_ENGINES` only means anything if
+       that name still refers to the real, whole engine set. Importing it
+       under an alias and shadowing the name locally keeps the call site
+       byte-identical while changing what it passes -- measured fail-open
+       (#3083 pass 3, H). Assert the binding, not just the spelling. */
+    const importAliases: string[] = [];
+    const redeclarations: string[] = [];
+    const visitBindings = (node: ts.Node): void => {
+      if (ts.isImportSpecifier(node) && node.propertyName?.text === 'ALL_TTS_ENGINES') {
+        importAliases.push(`imported as '${node.name.text}'`);
+      }
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'ALL_TTS_ENGINES') {
+        const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        redeclarations.push(`line ${line + 1}: ${node.getText(sourceFile)}`);
+      }
+      ts.forEachChild(node, visitBindings);
+    };
+    visitBindings(sourceFile);
+
+    const bindingProblems = [...importAliases, ...redeclarations];
+    expect(
+      bindingProblems,
+      'in server/src/routes/generation.ts the name ALL_TTS_ENGINES no longer binds directly ' +
+        'to the exported engine set (' + bindingProblems.join('; ') + '). The ' +
+        'resolveEligibleEngines(...) call site above can stay byte-identical while passing ' +
+        'something else entirely, which is the one spelling of this change that used to slip ' +
+        'through. If narrowing the engine set here is deliberate, decide whether the refusal ' +
+        'path removed by #3059 needs restoring for a book whose language the narrowed set ' +
+        'cannot render. See https://github.com/dudarenok-maker/Castwright/issues/3059.',
     ).toEqual([]);
   });
 });
