@@ -75,6 +75,10 @@ vi.mock('../lib/api', () => ({
        to an empty queue so the "GPU busy · N waiting ·" prefix stays
        hidden in these tests. */
     getGpuQueueState: () => Promise.resolve({ queueDepth: 0, devices: [] }),
+    /* useTtsLifecycle also polls the code-43 auto-revert trip status on the
+       same tick (task 16/16.5, #2974) — resolve to null so no trip banner
+       state lands, same pattern as getGpuQueueState above. */
+    getGpuTripStatus: () => Promise.resolve(null),
     loadSidecar: () => Promise.resolve({ status: 'idle' }),
     unloadSidecar: () => Promise.resolve({ status: 'idle' }),
     loadAnalyzer: () => Promise.resolve({ status: 'ready' }),
