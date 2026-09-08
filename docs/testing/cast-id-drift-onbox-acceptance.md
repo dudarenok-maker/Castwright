@@ -268,9 +268,9 @@ Result (roster otherwise intact — still 13 characters, no duplicate row, no ch
 Record what was observed, by whom, and when — here only; register row B3 was
 discharged on 2026-08-21 and no longer exists. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — this section is scoped to the early remap alone; Wave 3 has its own section (§8) below.
 
-> **Wave-5 step 4, 2026-08-23 — register row B2 (current numbering; "B4" above
-> in this section's own then-current numbering) DISCHARGED, but against a
-> DIFFERENT fixture, not this section's re-analysis.** Per that step's own
+> **Wave-5 step 4, 2026-08-23 — register row B2 discharged** ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313), PR [#2317](https://github.com/dudarenok-maker/Castwright/pull/2317) — stage-1 cast names check; current
+> numbering; "B4" above in this section's own then-current numbering), but
+> against a DIFFERENT fixture, not this section's re-analysis. Per that step's own
 > issue instruction, the check ran against the committed short-chapter
 > fixture `server/src/__fixtures__/the-coalfall-commission.ru.md` (a fresh
 > import with no prior `cast-id-history.json` to merge against) rather than
@@ -281,7 +281,7 @@ discharged on 2026-08-21 and no longer exists. An id that happens to match this 
 > is specific to a re-analysis of *Заказ Коалфолла* against its existing
 > `cast-id-history.json` (a second/third pass merging into prior history),
 > which a fresh import has no code path to exercise. #2584 stays open,
-> tracked on its own issue, independent of register row B2's discharge. Full
+> tracked on its own issue, independent of discharged register row B2. Full
 > evidence: `docs/testing/onbox-wave5-results/step-4-b2.md`.
 
 ---

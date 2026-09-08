@@ -547,21 +547,38 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 36 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
-| **D** | Multi-language TTS render + ASR | 2 |
+| **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**55 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**52 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-06, adding E103** (#3051, ops-75 Part 4, claude):
+> **Batch step 6, 2026-09-07 (claude) — 55 → 52 owed, three rows discharged.**
+> B2 (analysis language gate, real end-to-end loop confirmed including the
+> dash-attribution extended-fixture case — see `onbox-batch-results/b2.md`),
+> D1 (non-English ASR content-QA calibration, `qa.asr.maxWer.{es,fr,de,ru}` set
+> to `0.45` from observed WER distributions across real es/fr/de/ru chapter
+> renders — see `onbox-batch-results/d1.md` for why 0.45 and not each language's
+> own p90), and A37 (doubled-comma collapse pause survives the fix, real
+> Coqui/XTTS measurement — see `onbox-batch-results/a37.md`) all fully
+> agent-confirmed and removed. Group A 36 → 35 (A37), Group B 2 → 1 (B2),
+> Group D 2 → 1 (D1). A16 and A31 were re-evidenced this same batch but
+> **not** discharged — both have real, agent-checkable sub-criteria that
+> passed, but each also surfaced a genuinely ambiguous or not-fully-met
+> sub-check that needs a human listen or a human judgment call; see their own
+> rows for what remains. This lands on top of the independent E103 addition
+> below (55 owed at that point; the two changes touched disjoint groups —
+> Groups A/B/D here, Group E there — and never saw each other).
+
+> **Prior change: 2026-09-06, adding E103** (#3051, ops-75 Part 4, claude):
 > `scripts/wt-gc.mjs --prune`'s junction-first teardown against real worktree
 > junctions cannot be proven in-PR — every automated test (the node:test suite
 > and the new `wt-gc-junctions.Tests.ps1` Pester tests) runs against throwaway
@@ -2180,12 +2197,34 @@ opportunistic.
 ### A16 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
 
 > **EVIDENCED 2026-09-06 (wave 12) via full chapter generation — still owed,
-> one new defect.** Corrected after
+> 2 open findings.** Corrected after
 > [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) was
 > understood; the original 2026-07-31 entry claimed a full discharge from a
 > splice re-record and was wrong (see the RETRACTED note above — that result
 > measured narrator audio, not the clone). This entry replaces it with a
 > **full chapter-level generation**, which the splice defect never touched.
+> **Independently re-run 2026-09-06/07** on `chore/ops-analyzer-render-batch`
+> once [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) and
+> [#1969](https://github.com/dudarenok-maker/Castwright/issues/1969) were
+> both confirmed merged and present — a second, separate session's evidence,
+> not a repeat of the above: full logs, audio clips and embedding vectors at
+> [`onbox-batch-results/a16.md`](onbox-batch-results/a16.md), findings folded
+> in below alongside this session's own.
+>
+> **The chapter-level criterion this row was withdrawn over now passes for
+> real**, via a genuine full-chapter batch render (not a splice), on a
+> cloned Qwen voice cast onto a Russian character (Одуван, "Заказ
+> Коалфолла" chapter 2): Whisper auto-detect → `ru`, `avg_logprob −0.428`,
+> cosine 0.800 against the English source clip (same band as this row's
+> existing English 0.865 / German 0.809 rows). `resolvedVoiceName` held the
+> clone's storage key across **four** separate chapter renders, including
+> one after a real sidecar restart — never silently substituted. The title
+> beat (the chapter's one un-batched `/synthesize` call) transcribed as
+> clearly Russian, no English accent. A real designed-and-restarted-sidecar
+> voice (a second character, Рен) rendered the same content/language/
+> identity (cosine 0.891 between pre- and post-restart takes) both times,
+> not byte-identical (expected — Qwen3-TTS sampling is stochastic), but
+> never silently switched voice or language.
 >
 > **What still stands — the fix works, proven at the synthesis boundary.** Three
 > direct `POST /synthesize` calls on the same cloned voice, raw PCM transcribed
@@ -2233,6 +2272,24 @@ opportunistic.
 > below-band identity figure (attributed to #1998) and the measured-not-heard
 > self-heal caveat mean this row stays open rather than closing silently on a
 > partial result.
+>
+> **A second, independent finding from the `chore/ops-analyzer-render-batch`
+> re-run (6 of 7 sub-checks pass; 1 still open):** after discovering and
+> removing a real stale-data trap (that session's copied book carried a
+> pre-existing, weeks-old `render-integrity.json`/`embeddings.json` from its
+> original workspace, and `qa.speaker.enabled` defaults OFF in a fresh
+> checkout so none of three renders ever refreshed it — see `a16.md`'s
+> Bullet 7 for the full trail), a genuinely fresh, uncontaminated QA scoring
+> pass still flags **1 of 8** scored lines for the cloned character as
+> `voice-mismatch` (cosine 0.764 against a 0.83–0.90 cluster, `pSevere`
+> 0.793). `expectedEngine`/`renderedEngine` both correctly resolve to `qwen`
+> in this clean run — the historical #1969 failure mode (a stale reference
+> surviving a voice reassignment) is demonstrably **not** what produced this
+> flag — but the row's literal "zero mismatch rows" bar isn't met, so this
+> is a second, separate reason the row stays open, pending a human listen to
+> the one flagged line (`a16.md` names the exact clip/segment) to judge
+> genuine synthesis glitch vs. a tight percentile-cutoff false positive on a
+> small per-character sample.
 
 Before this fix a cloned Qwen voice rendered **every** book, in every language, as
 English — `QwenEngine.synthesize` took the caller's language and ignored it, and a
@@ -3603,6 +3660,59 @@ conflated once already during triage.
 *Cost:* short — a handful of `/synthesize` probes plus one attempt at
 reproducing the degenerate collapse.
 
+> **RUN 2026-09-06/07 (claude, batch step 2) — NOT discharged; two of four
+> bullets held clean, two are staged for human review.** Real GPU Coqui/XTTS
+> v2 (`Damien Black`, `ru`), no mocks. Full evidence, raw audio and
+> `ffprobe`/`ffmpeg silencedetect` output:
+> [`onbox-batch-results/a31.md`](onbox-batch-results/a31.md).
+>
+> **Leading em-dash pause (bullet 1) — agent-confirmed.** Measured gaps
+> (`silencedetect=noise=-30dB:d=0.05`) put the leading-dash-normalized clip's
+> internal gaps (0.055–0.109 s) in the same micro-pause band as a no-dash
+> baseline, while the interior-dash clip's clause-break gap (0.356 s) is
+> 6–7× larger than every other gap measured, including its own
+> no-punctuation control. Directionally exactly the issue's own claim (no
+> audible leading-dash pause, a real interior-dash pause), even though the
+> absolute magnitudes differ from the issue's +0.14 s/+1.53 s reference
+> (expected — different sentence, different stochastic draw). Numeric
+> separation is clean; not staged for human review.
+>
+> **Degeneracy-guard non-false-positive (bullet 2) — agent-confirmed.** Five
+> ordinary short Russian lines all rendered at 157–238 ms/speakable-char,
+> 7–12× above the guard's 20 ms/char floor; zero `degenerate`/`retrying`
+> log hits across the run. No false positive.
+>
+> **Degeneracy-guard recovery attempt (bullet 3) — STAGED FOR HUMAN REVIEW.**
+> The guard-does-not-fire claim is agent-confirmed (12/12 plausible-duration
+> renders across both collapse-prone lines, 0/12 guard activations, matching
+> the row's own prediction). But attempt 5 of `Тёплое море.` ASR'd as English
+> — `"warm sea."`, the literal translation, not phonetic gibberish — which
+> reads like a live, in-the-wild repro of the historical English-sounding
+> collapse captured during this run. That is a genuine collapse needing a
+> subjective call, not an agent-checkable outcome, so this row cannot
+> discharge on bullet 3 alone. **Listen to `m3-teploe-more-5.wav`
+> specifically** (`onbox-batch-results/a31-audio/`): does "Тёплое море"
+> audibly come out sounding like English rather than Russian? The two
+> `tr`/`en` `Хорошее олово.` attempts (2, 3) are lower-priority listens —
+> garbled, not a clean language switch.
+>
+> **Neuter `-ее` invariant (bullet 4) — STAGED FOR HUMAN REVIEW.** Three
+> takes of `Хорошее письмо лежало на столе.` all transcribed with the
+> correct `-ее` ending at high confidence, which taken at face value does
+> not reproduce the reported `-ая`/`-ие` mispronunciation — but Whisper's
+> decoder is itself a language model biased toward emitting valid Russian
+> word endings, so a correct transcript doesn't rule out a subtler phonetic
+> version of the defect. Cross-referencing bullet 3's `Хорошее олово.` runs
+> (a different, more collapse-prone sentence with the same `-ее` ending)
+> shows both an `-ая` swap (attempt 6) and an `-ие` swap (attempt 4) at
+> plausible confidence — suggesting the defect is real and present in this
+> environment, just not reliably captured by ASR on the `письмо` line
+> specifically. **Listen to `m4-horoshee-pismo.wav`** (and its two repeats)
+> for the `-ее` ending, and compare against `m2-05-horoshee-olovo.wav` /
+> `m3-horoshee-olovo-6.wav`. This is a baseline-confirmation bullet by
+> design (no fix exists or is expected), so the practical stakes are low —
+> recorded for a future `coqui-tts` upgrade to compare against.
+
 ### A32 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
 
 PR shipped `decodeNamedEntities` (`server/src/parsers/html-utils.ts`), widening
@@ -3927,26 +4037,6 @@ short — one idle render, explicit unloads for all three models, one reading.
 > single-model case is suggestive but doesn't rule out a leak that only shows
 > up with all three models' allocators interacting.
 
-### A37 · Russian dash-attributed dialogue — doubled-comma collapse pause by ear ([#2059](https://github.com/dudarenok-maker/Castwright/issues/2059), PR #2688) · **Coqui/XTTS resident, Russian text; no clone needed**
-
-PR #2688 fixed `softenDashes` (`server/src/tts/text-normalize.ts`) producing a
-doubled comma in dash-attributed Russian (also French/Spanish) dialogue, e.g.
-`"— Привет, — сказал Антон."` previously carried a `,,` in the TTS wire text.
-The collapse to a single comma is pinned only as a wire-text transform
-(`text-normalize.test.ts`); never confirmed whether removing the doubled
-comma changes the audible pause/prosody on real synthesized speech — same
-open shape as A31's leading-dash-to-ellipsis case.
-
-- **Doubled-comma collapse pause, by ear.** Render a dash-attributed line
-  (e.g. `"— Привет, — сказал Антон."`) and confirm collapsing the doubled
-  comma to one doesn't shorten or eliminate an audible pause the doubled
-  comma was incidentally providing, and doesn't introduce a new artifact.
-
-*Needs:* a Coqui-capable sidecar with XTTS resident, a Russian line (no
-clone needed — the stock catalogue voice `Damien Black` reproduces this
-shape). *Criteria:* the bullet above — [#2059](https://github.com/dudarenok-maker/Castwright/issues/2059)
-itself has only this one dialogue shape and no separate run sheet (unlike
-A31's). *Cost:* short — one or two renders of a Russian test sentence.
 
 ---
 
@@ -4163,48 +4253,6 @@ at K=4 with a monotonic per-phase bar.
 > against current `main` before this row is run** — a run against the
 > criteria as currently written would not be trustworthy. Re-derivation is
 > itself owed, not attempted here.
-
-### B2 · An unset book hits the analysis language gate, the prompt resolves it, and analysis then selects the right conventions table (#2246, [design](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md), [plan](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md))
-
-`resolveBookLanguageForManuscript` (`routes/analysis.ts:3160-3167`, the
-design's site 1) is the 25,063-line path the design gives its own
-three-point treatment: the gate now lives in the POST handler before the
-analysis job detaches (a returnable `409`), the `located === null`
-(pre-confirm, no book on disk) branch still resolves `'en'`, and the in-loop
-path — if a book's language is cleared after the job starts — emits an SSE
-`error` with `code: 'language_unset'` via `classifyAnalysisFailure`. Unit
-tests cover the gate against a mocked analyzer and a mocked
-`conventionsFor`. What they cannot prove is the full loop on a real book:
-that the `409` (or the confirm-screen "Decide later" / library "unset"
-affordance) actually surfaces to a user driving a real import, that setting
-the language through the resulting prompt actually unblocks the same book's
-analysis, and that the analyzer then picks
-`conventionsFor(<the set language>).quotePairs` rather than the English
-default — i.e. that a Russian (or other non-`'en'`) book's dash-opened
-dialogue is recognised as dialogue rather than narration once the language
-is set, which only a live analyzer run can show.
-
-- Produce a book with `language: null` on disk (import with detection
-  surrendered and "Decide later", or a bundle/restore/sample path that
-  leaves it unset).
-- Start analysis against it through the normal UI/API path; confirm the
-  request is refused with the `language_unset` shape (`409` pre-detach)
-  rather than silently analysing as English.
-- Resolve the language through the prompt (library "unset" badge → Book
-  settings row, or the confirm-screen re-entry), then re-start analysis on
-  the same book against a live local analyzer.
-- Confirm the analyzer's conventions table matches the language just set —
-  for a non-`'en'` language with a `dialogueOpen` marker (e.g. Russian),
-  confirm dash-opened dialogue lines are attributed as dialogue rather than
-  falling to the narrator, the same distinction #2325's dialogue-collapse
-  guard measures.
-
-*Needs:* a real local Ollama (or Gemini) analyzer; no TTS/GPU rendering
-required. *Criteria:*
-[`language-recurrence-onbox-acceptance.md`](language-recurrence-onbox-acceptance.md)
-§Analysis language gate. *Cost:* short — one import left unset, one refused
-analysis attempt, one prompt resolution, one real analysis run on a short
-chapter.
 
 ---
 
@@ -4568,21 +4616,6 @@ this row is not, and can be taken on any local re-analysis that reaches ch8.
 ## Group D — multi-language TTS render + ASR
 
 <!-- next-id: D101 -->
-
-### D1 · Non-English ASR content-QA calibration ([#1527](https://github.com/dudarenok-maker/Castwright/issues/1527), [#1084](https://github.com/dudarenok-maker/Castwright/issues/1084))
-
-Render real audio in es/ru (then fr/de), run the ASR content-QA gate against it,
-inspect the WER distribution per language, and set `qa.asr.maxWer.{es,fr,de,ru}` from
-observed data — they currently all inherit the English-tuned `0.4` default.
-
-Two named residual risks: gendered-number mismatch rate (es/fr/ru "one", ru "two"),
-and Russian oblique-case declension mismatches. Also whether Whisper's German output
-matches the single-fused-token assumption for compound numbers.
-
-*Prerequisite satisfied:* the fs-61 per-language Coalfall demo books **are**
-voice-designed — PR #1568 (merged 2026-07-13) ships "a language-matched Qwen cast
-designed from the same English personas" for each of the five samples, 0 `.pt`
-collisions across 101 files. Largely an unattended batch: render, then inspect.
 
 ### D2 · fs-61 zh/ja placeholder voices ([#1600](https://github.com/dudarenok-maker/Castwright/issues/1600))
 

@@ -248,10 +248,10 @@ the table's risk column shows each correctly.
 | ASR max re-records | Re-record budget for ASR drift; 0 = flag only | 2 | integer | live | low |
 | ASR sample rate | Transcribe 1-in-N sentences | 1 | integer | live | low |
 | ASR max WER | Word-error-rate threshold for drift | 0.4 | 0–1, step 0.05 | live | low |
-| ASR max WER (Spanish) | Spanish-specific WER cap | 0.4 | 0–1, step 0.05 | live | low |
-| ASR max WER (Russian) | Russian-specific WER cap | 0.4 | 0–1, step 0.05 | live | low |
-| ASR max WER (French) | French-specific WER cap | 0.4 | 0–1, step 0.05 | live | low |
-| ASR max WER (German) | German-specific WER cap | 0.4 | 0–1, step 0.05 | live | low |
+| ASR max WER (Spanish) | Spanish-specific WER cap | 0.45 | 0–1, step 0.05 | live | low |
+| ASR max WER (Russian) | Russian-specific WER cap | 0.45 | 0–1, step 0.05 | live | low |
+| ASR max WER (French) | French-specific WER cap | 0.45 | 0–1, step 0.05 | live | low |
+| ASR max WER (German) | German-specific WER cap | 0.45 | 0–1, step 0.05 | live | low |
 | Render-integrity QA (voice match) | ECAPA speaker-embed match check per rendered line | `false` | boolean | live | low |
 | Voice-QA device | cpu (0 VRAM) vs cuda for the ECAPA embed | `cpu` | string | restart · sidecar | **medium** |
 | Content-QA (Whisper) device | cpu vs cuda for Whisper | `cpu` | string | restart · sidecar | **medium** |

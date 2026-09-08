@@ -1,0 +1,1750 @@
+{
+  "bookId": "castwright__standalones__заказ-коалфолла",
+  "chapterId": 2,
+  "chapterTitle": "Глава первая — Стук",
+  "durationSec": 291.4540416666667,
+  "sampleRate": 24000,
+  "modelKey": "qwen3-tts-0.6b",
+  "synthesizedAt": "2026-09-06T21:30:25.517Z",
+  "castHistorySeq": 18,
+  "segments": [
+    {
+      "groupIndex": -1,
+      "characterId": "narrator",
+      "sentenceIds": [],
+      "startSec": 1.5,
+      "endSec": 4.284666666666666,
+      "kind": "title",
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara"
+    },
+    {
+      "groupIndex": 0,
+      "characterId": "narrator",
+      "sentenceIds": [
+        1
+      ],
+      "textHash": "ard8a5",
+      "startSec": 5.784666666666666,
+      "endSec": 13.390666666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1364182912685455,
+        "longestSilenceSec": 0.5504166666666667,
+        "durationSec": 7.606,
+        "expectedSec": 7.357142857142857
+      }
+    },
+    {
+      "groupIndex": 1,
+      "characterId": "одуван",
+      "sentenceIds": [
+        2
+      ],
+      "textHash": "wmvv8r",
+      "startSec": 13.390666666666666,
+      "endSec": 14.350666666666667,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.0485710981515557,
+        "longestSilenceSec": 0.4389166666666667,
+        "durationSec": 0.96,
+        "expectedSec": 0.5714285714285714
+      }
+    },
+    {
+      "groupIndex": 2,
+      "characterId": "narrator",
+      "sentenceIds": [
+        3
+      ],
+      "textHash": "s5qgek",
+      "startSec": 14.350666666666667,
+      "endSec": 18.244666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12706126633357345,
+        "longestSilenceSec": 0.576625,
+        "durationSec": 3.894,
+        "expectedSec": 2.7857142857142856
+      }
+    },
+    {
+      "groupIndex": 3,
+      "characterId": "narrator",
+      "sentenceIds": [
+        4
+      ],
+      "textHash": "ha3o1w",
+      "startSec": 18.244666666666667,
+      "endSec": 23.162666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13086988732905538,
+        "longestSilenceSec": 0.575375,
+        "durationSec": 4.918,
+        "expectedSec": 3.7142857142857144
+      }
+    },
+    {
+      "groupIndex": 4,
+      "characterId": "одуван",
+      "sentenceIds": [
+        5
+      ],
+      "textHash": "t1830h",
+      "startSec": 23.162666666666667,
+      "endSec": 25.402666666666665,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.044395523236517714,
+        "longestSilenceSec": 0.06175,
+        "durationSec": 2.24,
+        "expectedSec": 2.357142857142857
+      }
+    },
+    {
+      "groupIndex": 5,
+      "characterId": "ren",
+      "sentenceIds": [
+        6
+      ],
+      "textHash": "qums5p",
+      "startSec": 25.402666666666665,
+      "endSec": 26.922666666666668,
+      "voiceName": "qwen-FmurrCWbS2TY6m4rYvXN1",
+      "baseVoiceName": "qwen-FmurrCWbS2TY6m4rYvXN1",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04665509798379802,
+        "longestSilenceSec": 0.14279166666666668,
+        "durationSec": 1.52,
+        "expectedSec": 1.2857142857142858
+      }
+    },
+    {
+      "groupIndex": 6,
+      "characterId": "одуван",
+      "sentenceIds": [
+        7
+      ],
+      "textHash": "m90bst",
+      "startSec": 26.922666666666668,
+      "endSec": 31.162666666666667,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.043103663713316774,
+        "longestSilenceSec": 0.739375,
+        "durationSec": 4.24,
+        "expectedSec": 2.857142857142857
+      }
+    },
+    {
+      "groupIndex": 7,
+      "characterId": "одуван",
+      "sentenceIds": [
+        8
+      ],
+      "textHash": "ntzq4o",
+      "startSec": 31.162666666666667,
+      "endSec": 36.76266666666667,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04483169241197036,
+        "longestSilenceSec": 0.5314166666666666,
+        "durationSec": 5.6,
+        "expectedSec": 4.928571428571429
+      }
+    },
+    {
+      "groupIndex": 8,
+      "characterId": "narrator",
+      "sentenceIds": [
+        9
+      ],
+      "textHash": "z0jkp1",
+      "startSec": 36.76266666666667,
+      "endSec": 39.035333333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10899255250321069,
+        "longestSilenceSec": 0.55575,
+        "durationSec": 2.272666666666667,
+        "expectedSec": 1.9285714285714286
+      }
+    },
+    {
+      "groupIndex": 9,
+      "characterId": "narrator",
+      "sentenceIds": [
+        10
+      ],
+      "textHash": "am3kds",
+      "startSec": 39.035333333333334,
+      "endSec": 47.068,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10552731604325774,
+        "longestSilenceSec": 0.8832916666666667,
+        "durationSec": 8.032666666666668,
+        "expectedSec": 5
+      }
+    },
+    {
+      "groupIndex": 10,
+      "characterId": "mairin",
+      "sentenceIds": [
+        11
+      ],
+      "textHash": "o8q9w2",
+      "startSec": 47.068,
+      "endSec": 48.775333333333336,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12247890232956554,
+        "longestSilenceSec": 0.5887083333333333,
+        "durationSec": 1.7073333333333334,
+        "expectedSec": 0.5714285714285714
+      }
+    },
+    {
+      "groupIndex": 11,
+      "characterId": "mairin",
+      "sentenceIds": [
+        12
+      ],
+      "textHash": "yag2zt",
+      "startSec": 48.775333333333336,
+      "endSec": 51.69866666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1250794440653783,
+        "longestSilenceSec": 0.5667083333333334,
+        "durationSec": 2.9233333333333333,
+        "expectedSec": 1.9285714285714286
+      }
+    },
+    {
+      "groupIndex": 12,
+      "characterId": "narrator",
+      "sentenceIds": [
+        13
+      ],
+      "textHash": "nk53ub",
+      "startSec": 51.69866666666667,
+      "endSec": 56.52066666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12643228183821867,
+        "longestSilenceSec": 0.539125,
+        "durationSec": 4.822,
+        "expectedSec": 3.857142857142857
+      }
+    },
+    {
+      "groupIndex": 13,
+      "characterId": "mairin",
+      "sentenceIds": [
+        14
+      ],
+      "textHash": "6qy5p3",
+      "startSec": 56.52066666666666,
+      "endSec": 60.18,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11825052511408772,
+        "longestSilenceSec": 0.5577916666666667,
+        "durationSec": 3.6593333333333335,
+        "expectedSec": 2.2142857142857144
+      }
+    },
+    {
+      "groupIndex": 14,
+      "characterId": "mairin",
+      "sentenceIds": [
+        15
+      ],
+      "textHash": "prqj4p",
+      "startSec": 60.18,
+      "endSec": 62.314,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11641977910188059,
+        "longestSilenceSec": 0.567875,
+        "durationSec": 2.134,
+        "expectedSec": 1.2857142857142858
+      }
+    },
+    {
+      "groupIndex": 15,
+      "characterId": "mairin",
+      "sentenceIds": [
+        16
+      ],
+      "textHash": "wsbd4a",
+      "startSec": 62.314,
+      "endSec": 64.90666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1134929929520014,
+        "longestSilenceSec": 0.570875,
+        "durationSec": 2.5926666666666667,
+        "expectedSec": 1.7142857142857142
+      }
+    },
+    {
+      "groupIndex": 16,
+      "characterId": "narrator",
+      "sentenceIds": [
+        17
+      ],
+      "textHash": "masyhi",
+      "startSec": 64.90666666666667,
+      "endSec": 67.77666666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.07826751758788769,
+        "longestSilenceSec": 0.5975833333333334,
+        "durationSec": 2.87,
+        "expectedSec": 1.2857142857142858
+      },
+      "qaRetries": 1
+    },
+    {
+      "groupIndex": 17,
+      "characterId": "ren",
+      "sentenceIds": [
+        18
+      ],
+      "textHash": "79d3j3",
+      "startSec": 67.77666666666667,
+      "endSec": 68.97666666666667,
+      "voiceName": "qwen-FmurrCWbS2TY6m4rYvXN1",
+      "baseVoiceName": "qwen-FmurrCWbS2TY6m4rYvXN1",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.0337796395632464,
+        "longestSilenceSec": 0.27570833333333333,
+        "durationSec": 1.2,
+        "expectedSec": 0.8571428571428571
+      }
+    },
+    {
+      "groupIndex": 18,
+      "characterId": "mairin",
+      "sentenceIds": [
+        19
+      ],
+      "textHash": "6vxket",
+      "startSec": 68.97666666666667,
+      "endSec": 71.76133333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1336480233593006,
+        "longestSilenceSec": 0.5528333333333333,
+        "durationSec": 2.784666666666667,
+        "expectedSec": 1.7857142857142858
+      }
+    },
+    {
+      "groupIndex": 19,
+      "characterId": "narrator",
+      "sentenceIds": [
+        20
+      ],
+      "textHash": "frjnpq",
+      "startSec": 71.76133333333334,
+      "endSec": 74.034,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1036583103849546,
+        "longestSilenceSec": 0.5794583333333333,
+        "durationSec": 2.272666666666667,
+        "expectedSec": 1.5
+      }
+    },
+    {
+      "groupIndex": 20,
+      "characterId": "mairin",
+      "sentenceIds": [
+        21
+      ],
+      "textHash": "sgvyk6",
+      "startSec": 74.034,
+      "endSec": 75.37866666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.08368403057691713,
+        "longestSilenceSec": 0.5811666666666667,
+        "durationSec": 1.3446666666666667,
+        "expectedSec": 0.7142857142857143
+      }
+    },
+    {
+      "groupIndex": 21,
+      "characterId": "mairin",
+      "sentenceIds": [
+        22
+      ],
+      "textHash": "w0shkl",
+      "startSec": 75.37866666666666,
+      "endSec": 81.32066666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13547840349719734,
+        "longestSilenceSec": 0.551375,
+        "durationSec": 5.942,
+        "expectedSec": 5.785714285714286
+      }
+    },
+    {
+      "groupIndex": 22,
+      "characterId": "mairin",
+      "sentenceIds": [
+        23
+      ],
+      "textHash": "908t3t",
+      "startSec": 81.32066666666667,
+      "endSec": 83.40133333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11147496515566224,
+        "longestSilenceSec": 0.5600416666666667,
+        "durationSec": 2.0806666666666667,
+        "expectedSec": 1
+      }
+    },
+    {
+      "groupIndex": 23,
+      "characterId": "одуван",
+      "sentenceIds": [
+        24
+      ],
+      "textHash": "nt6gtk",
+      "startSec": 83.40133333333333,
+      "endSec": 85.48133333333334,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.06071556315096841,
+        "longestSilenceSec": 0.5162916666666667,
+        "durationSec": 2.08,
+        "expectedSec": 1.4285714285714286
+      }
+    },
+    {
+      "groupIndex": 24,
+      "characterId": "narrator",
+      "sentenceIds": [
+        25
+      ],
+      "textHash": "4ice26",
+      "startSec": 85.48133333333334,
+      "endSec": 87.18866666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10562985832650046,
+        "longestSilenceSec": 0.5600833333333334,
+        "durationSec": 1.7073333333333334,
+        "expectedSec": 1
+      }
+    },
+    {
+      "groupIndex": 25,
+      "characterId": "narrator",
+      "sentenceIds": [
+        26
+      ],
+      "textHash": "4dwga0",
+      "startSec": 87.18866666666666,
+      "endSec": 91.41333333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12392346432985236,
+        "longestSilenceSec": 0.5407083333333333,
+        "durationSec": 4.224666666666667,
+        "expectedSec": 3.0714285714285716
+      }
+    },
+    {
+      "groupIndex": 26,
+      "characterId": "narrator",
+      "sentenceIds": [
+        27
+      ],
+      "textHash": "ihq1ml",
+      "startSec": 91.41333333333333,
+      "endSec": 99.62733333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12688698244298946,
+        "longestSilenceSec": 1.1616666666666666,
+        "durationSec": 8.214,
+        "expectedSec": 7.285714285714286
+      }
+    },
+    {
+      "groupIndex": 27,
+      "characterId": "narrator",
+      "sentenceIds": [
+        28
+      ],
+      "textHash": "557nej",
+      "startSec": 99.62733333333334,
+      "endSec": 101.9,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1243376238164675,
+        "longestSilenceSec": 0.57675,
+        "durationSec": 2.272666666666667,
+        "expectedSec": 1.2142857142857142
+      }
+    },
+    {
+      "groupIndex": 28,
+      "characterId": "одуван",
+      "sentenceIds": [
+        29
+      ],
+      "textHash": "o5nys7",
+      "startSec": 101.9,
+      "endSec": 103.02,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.05310008435992473,
+        "longestSilenceSec": 0.3165,
+        "durationSec": 1.12,
+        "expectedSec": 0.7857142857142857
+      }
+    },
+    {
+      "groupIndex": 29,
+      "characterId": "одуван",
+      "sentenceIds": [
+        30
+      ],
+      "textHash": "ka4xo5",
+      "startSec": 103.02,
+      "endSec": 104.7,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04122766840620017,
+        "longestSilenceSec": 0.15920833333333334,
+        "durationSec": 1.68,
+        "expectedSec": 1.5714285714285714
+      }
+    },
+    {
+      "groupIndex": 30,
+      "characterId": "narrator",
+      "sentenceIds": [
+        31
+      ],
+      "textHash": "14ckum",
+      "startSec": 104.7,
+      "endSec": 111.986,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.15342906301322798,
+        "longestSilenceSec": 0.5665833333333333,
+        "durationSec": 7.286,
+        "expectedSec": 8.642857142857142
+      }
+    },
+    {
+      "groupIndex": 31,
+      "characterId": "narrator",
+      "sentenceIds": [
+        32
+      ],
+      "textHash": "l2rkxe",
+      "startSec": 111.986,
+      "endSec": 117.27733333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13593573634673278,
+        "longestSilenceSec": 0.5672916666666666,
+        "durationSec": 5.291333333333333,
+        "expectedSec": 4.071428571428571
+      }
+    },
+    {
+      "groupIndex": 32,
+      "characterId": "narrator",
+      "sentenceIds": [
+        33
+      ],
+      "textHash": "tbdmc8",
+      "startSec": 117.27733333333333,
+      "endSec": 127.34733333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13066013088189976,
+        "longestSilenceSec": 0.57275,
+        "durationSec": 10.07,
+        "expectedSec": 7.428571428571429
+      }
+    },
+    {
+      "groupIndex": 33,
+      "characterId": "narrator",
+      "sentenceIds": [
+        34
+      ],
+      "textHash": "bdbzv1",
+      "startSec": 127.34733333333334,
+      "endSec": 130.72933333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13600992576277934,
+        "longestSilenceSec": 0.579,
+        "durationSec": 3.382,
+        "expectedSec": 3.2142857142857144
+      }
+    },
+    {
+      "groupIndex": 34,
+      "characterId": "narrator",
+      "sentenceIds": [
+        35
+      ],
+      "textHash": "4xg2xb",
+      "startSec": 130.72933333333333,
+      "endSec": 133.18333333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10934143760234487,
+        "longestSilenceSec": 0.5667916666666667,
+        "durationSec": 2.454,
+        "expectedSec": 1.2142857142857142
+      }
+    },
+    {
+      "groupIndex": 35,
+      "characterId": "narrator",
+      "sentenceIds": [
+        36
+      ],
+      "textHash": "2ghrlg",
+      "startSec": 133.18333333333334,
+      "endSec": 136.886,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "suspect",
+        "reasons": [
+          "Suspiciously long — 3.7s rendered vs ~1.4s expected (possible runaway synthesis)."
+        ],
+        "rms": 0.09206078757236875,
+        "longestSilenceSec": 0.6063333333333333,
+        "durationSec": 3.7026666666666666,
+        "expectedSec": 1.4285714285714286
+      },
+      "suspect": true,
+      "qaRetries": 2
+    },
+    {
+      "groupIndex": 36,
+      "characterId": "narrator",
+      "sentenceIds": [
+        37
+      ],
+      "textHash": "d0tu5k",
+      "startSec": 136.886,
+      "endSec": 139.38266666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13824180309357378,
+        "longestSilenceSec": 0.5545833333333333,
+        "durationSec": 2.4966666666666666,
+        "expectedSec": 1.2142857142857142
+      }
+    },
+    {
+      "groupIndex": 37,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        38
+      ],
+      "textHash": "c6aal",
+      "startSec": 139.38266666666667,
+      "endSec": 142.21,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11331979493765454,
+        "longestSilenceSec": 0.6024583333333333,
+        "durationSec": 2.8273333333333333,
+        "expectedSec": 1.5714285714285714
+      }
+    },
+    {
+      "groupIndex": 38,
+      "characterId": "narrator",
+      "sentenceIds": [
+        39
+      ],
+      "textHash": "oftgcn",
+      "startSec": 142.21,
+      "endSec": 144.664,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10264816659264257,
+        "longestSilenceSec": 0.55325,
+        "durationSec": 2.454,
+        "expectedSec": 1
+      }
+    },
+    {
+      "groupIndex": 39,
+      "characterId": "narrator",
+      "sentenceIds": [
+        40
+      ],
+      "textHash": "2pjk0e",
+      "startSec": 144.664,
+      "endSec": 146.88333333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13110208234523751,
+        "longestSilenceSec": 0.5619583333333333,
+        "durationSec": 2.219333333333333,
+        "expectedSec": 1.7142857142857142
+      }
+    },
+    {
+      "groupIndex": 40,
+      "characterId": "narrator",
+      "sentenceIds": [
+        41
+      ],
+      "textHash": "dmbrp3",
+      "startSec": 146.88333333333333,
+      "endSec": 156.53733333333332,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10700352762051989,
+        "longestSilenceSec": 0.9302916666666666,
+        "durationSec": 9.654,
+        "expectedSec": 7.071428571428571
+      }
+    },
+    {
+      "groupIndex": 41,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        42
+      ],
+      "textHash": "2b173e",
+      "startSec": 156.53733333333332,
+      "endSec": 159.17266666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1287168750285581,
+        "longestSilenceSec": 0.5524583333333334,
+        "durationSec": 2.6353333333333335,
+        "expectedSec": 2.2142857142857144
+      }
+    },
+    {
+      "groupIndex": 42,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        43
+      ],
+      "textHash": "jz92uy",
+      "startSec": 159.17266666666666,
+      "endSec": 161.584,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11824195747279387,
+        "longestSilenceSec": 0.581875,
+        "durationSec": 2.4113333333333333,
+        "expectedSec": 1.8571428571428572
+      }
+    },
+    {
+      "groupIndex": 43,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        44
+      ],
+      "textHash": "ne25tr",
+      "startSec": 161.584,
+      "endSec": 166.26733333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11931536510319354,
+        "longestSilenceSec": 0.5667916666666667,
+        "durationSec": 4.683333333333334,
+        "expectedSec": 4
+      }
+    },
+    {
+      "groupIndex": 44,
+      "characterId": "одуван",
+      "sentenceIds": [
+        45
+      ],
+      "textHash": "h16msr",
+      "startSec": 166.26733333333334,
+      "endSec": 167.54733333333334,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.054073518846083996,
+        "longestSilenceSec": 0.260625,
+        "durationSec": 1.28,
+        "expectedSec": 1.2142857142857142
+      }
+    },
+    {
+      "groupIndex": 45,
+      "characterId": "narrator",
+      "sentenceIds": [
+        46
+      ],
+      "textHash": "r12t7b",
+      "startSec": 167.54733333333334,
+      "endSec": 170.09733333333332,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10046333620287676,
+        "longestSilenceSec": 0.5860833333333333,
+        "durationSec": 2.55,
+        "expectedSec": 1.2142857142857142
+      }
+    },
+    {
+      "groupIndex": 46,
+      "characterId": "одуван",
+      "sentenceIds": [
+        47
+      ],
+      "textHash": "engok0",
+      "startSec": 170.09733333333332,
+      "endSec": 173.85733333333334,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.0441379426639623,
+        "longestSilenceSec": 0.46991666666666665,
+        "durationSec": 3.76,
+        "expectedSec": 3.0714285714285716
+      }
+    },
+    {
+      "groupIndex": 47,
+      "characterId": "одуван",
+      "sentenceIds": [
+        48
+      ],
+      "textHash": "l5wai9",
+      "startSec": 173.85733333333334,
+      "endSec": 175.93733333333333,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04773897548573013,
+        "longestSilenceSec": 0.11833333333333333,
+        "durationSec": 2.08,
+        "expectedSec": 2.4285714285714284
+      }
+    },
+    {
+      "groupIndex": 48,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        49
+      ],
+      "textHash": "o3sgby",
+      "startSec": 175.93733333333333,
+      "endSec": 178.76466666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11752039338185705,
+        "longestSilenceSec": 0.5860833333333333,
+        "durationSec": 2.8273333333333333,
+        "expectedSec": 2.357142857142857
+      }
+    },
+    {
+      "groupIndex": 49,
+      "characterId": "одуван",
+      "sentenceIds": [
+        50
+      ],
+      "textHash": "wmsazi",
+      "startSec": 178.76466666666667,
+      "endSec": 181.56466666666665,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.049589616195155756,
+        "longestSilenceSec": 0.3486666666666667,
+        "durationSec": 2.8,
+        "expectedSec": 2.5
+      }
+    },
+    {
+      "groupIndex": 50,
+      "characterId": "narrator",
+      "sentenceIds": [
+        51
+      ],
+      "textHash": "mj6x26",
+      "startSec": 181.56466666666665,
+      "endSec": 188.008,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12996713980217586,
+        "longestSilenceSec": 0.5280833333333333,
+        "durationSec": 6.443333333333333,
+        "expectedSec": 5.714285714285714
+      }
+    },
+    {
+      "groupIndex": 51,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        52
+      ],
+      "textHash": "lqspq8",
+      "startSec": 188.008,
+      "endSec": 189.534,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10679904488239066,
+        "longestSilenceSec": 0.5406666666666666,
+        "durationSec": 1.526,
+        "expectedSec": 0.7142857142857143
+      }
+    },
+    {
+      "groupIndex": 52,
+      "characterId": "одуван",
+      "sentenceIds": [
+        53
+      ],
+      "textHash": "v144rz",
+      "startSec": 189.534,
+      "endSec": 191.214,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04795126636471437,
+        "longestSilenceSec": 0.39079166666666665,
+        "durationSec": 1.68,
+        "expectedSec": 0.9285714285714286
+      }
+    },
+    {
+      "groupIndex": 53,
+      "characterId": "одуван",
+      "sentenceIds": [
+        54
+      ],
+      "textHash": "7xavs2",
+      "startSec": 191.214,
+      "endSec": 195.374,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.03726490148188324,
+        "longestSilenceSec": 0.23766666666666666,
+        "durationSec": 4.16,
+        "expectedSec": 4.428571428571429
+      }
+    },
+    {
+      "groupIndex": 54,
+      "characterId": "одуван",
+      "sentenceIds": [
+        55
+      ],
+      "textHash": "mhb25f",
+      "startSec": 195.374,
+      "endSec": 203.134,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.045035420717872685,
+        "longestSilenceSec": 0.4489166666666667,
+        "durationSec": 7.76,
+        "expectedSec": 7.5
+      }
+    },
+    {
+      "groupIndex": 55,
+      "characterId": "ren",
+      "sentenceIds": [
+        56
+      ],
+      "textHash": "r0pptz",
+      "startSec": 203.134,
+      "endSec": 204.814,
+      "voiceName": "qwen-FmurrCWbS2TY6m4rYvXN1",
+      "baseVoiceName": "qwen-FmurrCWbS2TY6m4rYvXN1",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04805848567210994,
+        "longestSilenceSec": 0.15733333333333333,
+        "durationSec": 1.68,
+        "expectedSec": 1.6428571428571428
+      }
+    },
+    {
+      "groupIndex": 56,
+      "characterId": "narrator",
+      "sentenceIds": [
+        57
+      ],
+      "textHash": "tn9qo",
+      "startSec": 204.814,
+      "endSec": 207.31066666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10492297103282043,
+        "longestSilenceSec": 0.5618333333333333,
+        "durationSec": 2.4966666666666666,
+        "expectedSec": 2.2142857142857144
+      }
+    },
+    {
+      "groupIndex": 57,
+      "characterId": "narrator",
+      "sentenceIds": [
+        58
+      ],
+      "textHash": "6fhgmv",
+      "startSec": 207.31066666666666,
+      "endSec": 214.83133333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13354670677074543,
+        "longestSilenceSec": 0.5857916666666667,
+        "durationSec": 7.520666666666667,
+        "expectedSec": 7.214285714285714
+      }
+    },
+    {
+      "groupIndex": 58,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        59
+      ],
+      "textHash": "86ic9o",
+      "startSec": 214.83133333333333,
+      "endSec": 216.96533333333332,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1307485393064648,
+        "longestSilenceSec": 0.5742083333333333,
+        "durationSec": 2.134,
+        "expectedSec": 1.2857142857142858
+      }
+    },
+    {
+      "groupIndex": 59,
+      "characterId": "narrator",
+      "sentenceIds": [
+        60
+      ],
+      "textHash": "tw4811",
+      "startSec": 216.96533333333332,
+      "endSec": 218.96066666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10275388015249788,
+        "longestSilenceSec": 0.58325,
+        "durationSec": 1.9953333333333334,
+        "expectedSec": 0.7142857142857143
+      }
+    },
+    {
+      "groupIndex": 60,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        61
+      ],
+      "textHash": "bsstfl",
+      "startSec": 218.96066666666667,
+      "endSec": 222.67333333333335,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11831621836688538,
+        "longestSilenceSec": 0.60625,
+        "durationSec": 3.712666666666667,
+        "expectedSec": 3.5714285714285716
+      }
+    },
+    {
+      "groupIndex": 61,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        62
+      ],
+      "textHash": "wsfyb1",
+      "startSec": 222.67333333333335,
+      "endSec": 225.266,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12568570073834426,
+        "longestSilenceSec": 0.5847916666666667,
+        "durationSec": 2.5926666666666667,
+        "expectedSec": 1.2857142857142858
+      }
+    },
+    {
+      "groupIndex": 62,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        63
+      ],
+      "textHash": "o3a9dn",
+      "startSec": 225.266,
+      "endSec": 228.09333333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1252258613311288,
+        "longestSilenceSec": 0.5597083333333334,
+        "durationSec": 2.8273333333333333,
+        "expectedSec": 2.857142857142857
+      }
+    },
+    {
+      "groupIndex": 63,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        64
+      ],
+      "textHash": "rujpe",
+      "startSec": 228.09333333333333,
+      "endSec": 233.15,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12432377638718166,
+        "longestSilenceSec": 0.562875,
+        "durationSec": 5.056666666666667,
+        "expectedSec": 4.571428571428571
+      }
+    },
+    {
+      "groupIndex": 64,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        65
+      ],
+      "textHash": "juybhq",
+      "startSec": 233.15,
+      "endSec": 239.092,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13026363947419856,
+        "longestSilenceSec": 0.5615833333333333,
+        "durationSec": 5.942,
+        "expectedSec": 6.357142857142857
+      }
+    },
+    {
+      "groupIndex": 65,
+      "characterId": "narrator",
+      "sentenceIds": [
+        66
+      ],
+      "textHash": "qdrwzl",
+      "startSec": 239.092,
+      "endSec": 243.35933333333332,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11182242278859024,
+        "longestSilenceSec": 0.5891666666666666,
+        "durationSec": 4.267333333333333,
+        "expectedSec": 3.2142857142857144
+      }
+    },
+    {
+      "groupIndex": 66,
+      "characterId": "narrator",
+      "sentenceIds": [
+        67
+      ],
+      "textHash": "uuvq7w",
+      "startSec": 243.35933333333332,
+      "endSec": 246.28266666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12110388696080014,
+        "longestSilenceSec": 0.561125,
+        "durationSec": 2.9233333333333333,
+        "expectedSec": 2.142857142857143
+      }
+    },
+    {
+      "groupIndex": 67,
+      "characterId": "одуван",
+      "sentenceIds": [
+        68
+      ],
+      "textHash": "ywep1c",
+      "startSec": 246.28266666666667,
+      "endSec": 246.84266666666667,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04637255698424826,
+        "longestSilenceSec": 0.20958333333333334,
+        "durationSec": 0.56,
+        "expectedSec": 0.6428571428571429
+      }
+    },
+    {
+      "groupIndex": 68,
+      "characterId": "narrator",
+      "sentenceIds": [
+        69
+      ],
+      "textHash": "8d47ek",
+      "startSec": 246.84266666666667,
+      "endSec": 251.85666666666665,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11062376665543931,
+        "longestSilenceSec": 0.5806666666666667,
+        "durationSec": 5.014,
+        "expectedSec": 3.857142857142857
+      }
+    },
+    {
+      "groupIndex": 69,
+      "characterId": "одуван",
+      "sentenceIds": [
+        70
+      ],
+      "textHash": "23gumj",
+      "startSec": 251.85666666666665,
+      "endSec": 253.69666666666666,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.05393203227963716,
+        "longestSilenceSec": 0.16804166666666667,
+        "durationSec": 1.84,
+        "expectedSec": 1.7142857142857142
+      }
+    },
+    {
+      "groupIndex": 70,
+      "characterId": "одуван",
+      "sentenceIds": [
+        71
+      ],
+      "textHash": "dxeiff",
+      "startSec": 253.69666666666666,
+      "endSec": 261.13670833333333,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04699082070483321,
+        "longestSilenceSec": 0.52875,
+        "durationSec": 7.440041666666667,
+        "expectedSec": 6.857142857142857
+      }
+    },
+    {
+      "groupIndex": 71,
+      "characterId": "ren",
+      "sentenceIds": [
+        72
+      ],
+      "textHash": "orsnma",
+      "startSec": 261.13670833333333,
+      "endSec": 262.41670833333336,
+      "voiceName": "qwen-FmurrCWbS2TY6m4rYvXN1",
+      "baseVoiceName": "qwen-FmurrCWbS2TY6m4rYvXN1",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04635397038493895,
+        "longestSilenceSec": 0.25833333333333336,
+        "durationSec": 1.28,
+        "expectedSec": 0.9285714285714286
+      }
+    },
+    {
+      "groupIndex": 72,
+      "characterId": "одуван",
+      "sentenceIds": [
+        73
+      ],
+      "textHash": "unaht1",
+      "startSec": 262.41670833333336,
+      "endSec": 264.0167083333333,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04326838367064042,
+        "longestSilenceSec": 0.48541666666666666,
+        "durationSec": 1.6,
+        "expectedSec": 1.2857142857142858
+      }
+    },
+    {
+      "groupIndex": 73,
+      "characterId": "narrator",
+      "sentenceIds": [
+        74
+      ],
+      "textHash": "o5lhc6",
+      "startSec": 264.0167083333333,
+      "endSec": 269.03070833333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11481961794136764,
+        "longestSilenceSec": 0.5902916666666667,
+        "durationSec": 5.014,
+        "expectedSec": 4.071428571428571
+      }
+    },
+    {
+      "groupIndex": 74,
+      "characterId": "одуван",
+      "sentenceIds": [
+        75
+      ],
+      "textHash": "ia0maw",
+      "startSec": 269.03070833333334,
+      "endSec": 269.9907083333333,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.061604135536483334,
+        "longestSilenceSec": 0.049416666666666664,
+        "durationSec": 0.96,
+        "expectedSec": 1.0714285714285714
+      }
+    },
+    {
+      "groupIndex": 75,
+      "characterId": "одуван",
+      "sentenceIds": [
+        76
+      ],
+      "textHash": "2kmogv",
+      "startSec": 269.9907083333333,
+      "endSec": 274.47070833333333,
+      "voiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "baseVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.05304679418253018,
+        "longestSilenceSec": 0.5880833333333333,
+        "durationSec": 4.48,
+        "expectedSec": 4.071428571428571
+      }
+    },
+    {
+      "groupIndex": 76,
+      "characterId": "narrator",
+      "sentenceIds": [
+        77
+      ],
+      "textHash": "gukc07",
+      "startSec": 274.47070833333333,
+      "endSec": 286.07670833333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1474876490965819,
+        "longestSilenceSec": 0.5669583333333333,
+        "durationSec": 11.606,
+        "expectedSec": 11.714285714285714
+      }
+    },
+    {
+      "groupIndex": 77,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        78
+      ],
+      "textHash": "syxelm",
+      "startSec": 286.07670833333333,
+      "endSec": 289.65070833333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1187300118906467,
+        "longestSilenceSec": 0.5609166666666666,
+        "durationSec": 3.574,
+        "expectedSec": 2.4285714285714284
+      }
+    },
+    {
+      "groupIndex": 78,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        79
+      ],
+      "textHash": "m74ig9",
+      "startSec": 289.65070833333334,
+      "endSec": 291.4540416666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Wulf Carlevaro",
+      "baseVoiceName": "Wulf Carlevaro",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12230566296405153,
+        "longestSilenceSec": 0.5605416666666667,
+        "durationSec": 1.8033333333333332,
+        "expectedSec": 0.7857142857142857
+      }
+    }
+  ],
+  "characterSnapshots": {
+    "narrator": {
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 40
+      },
+      "gender": "neutral",
+      "ageRange": "adult",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Asya Anara",
+      "renderedFallbackEngine": "coqui",
+      "attributes": [
+        "formal",
+        "measured",
+        "observational",
+        "rhythmic"
+      ]
+    },
+    "одуван": {
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 80,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "qwen-ddbbecac-b943-4bdd-8415-272608b45158"
+    },
+    "ren": {
+      "tone": {
+        "warmth": 60,
+        "pace": 60,
+        "authority": 40,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "teen",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "qwen-FmurrCWbS2TY6m4rYvXN1"
+    },
+    "mairin": {
+      "tone": {
+        "warmth": 70,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 50
+      },
+      "gender": "female",
+      "ageRange": "adult",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Sofia Hellen",
+      "renderedFallbackEngine": "coqui"
+    },
+    "coalfall-dragon": {
+      "tone": {
+        "warmth": 60,
+        "pace": 30,
+        "authority": 90,
+        "emotion": 40
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Wulf Carlevaro",
+      "renderedFallbackEngine": "coqui"
+    }
+  },
+  "qa": {
+    "status": "suspect",
+    "reasons": [
+      "1 sentence(s) still flagged after re-recording (e.g. Suspiciously long — 3.7s rendered vs ~1.4s expected (possible runaway synthesis).)."
+    ],
+    "measuredLufs": -16.1,
+    "truePeakDb": -1.1,
+    "durationSec": 291.4540416666667,
+    "expectedSec": 228.85714285714286,
+    "checkedAt": "2026-09-06T21:30:25.517Z"
+  }
+}

@@ -75,9 +75,9 @@ or `executing-plans`).
   digit-stays-a-digit behavior (matching English's `spellInteger`, which also
   declines 3+ digit numbers).
 - `qa.asr.maxWer.{fr,de}` (this plan) and the pre-existing `.es`/`.ru` all
-  default to the global `qa.asr.maxWer` value (`0.4`) — none of the four
-  should ship at a different value without real on-box calibration evidence
-  behind it (tracked separately; see "Out of scope").
+  default to `0.45` — none of the four should ship at a different value
+  without real on-box calibration evidence behind it (tracked separately;
+  see "Out of scope").
 
 ## Test plan
 
