@@ -268,10 +268,12 @@ function countRawStateWrites(
 
 /* Per-file expected sites of `stateJsonPath(` — re-measured from current source
    at implementation time (NOT the plan's floor numbers, which have drifted once
-   already): 46 sites across 23 non-test files (voices.ts gained a 4th site in
+   already): 45 sites across 23 non-test files (voices.ts gained a 4th site in
    #2006's series-wide clone-consent veto — a per-book state.json read added to
-   the workspace scan). Asserted BOTH ways; aliasing one file's import reddens
-   that exact file (M5). */
+   the workspace scan; generation.ts dropped from 2 sites to 1 when #3059
+   removed the unreachable `!coquiEligible` arm, which held one of the two —
+   its `voice-not-designed` failure persist). Asserted BOTH ways; aliasing one
+   file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
@@ -281,7 +283,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'routes/analysis.ts': 2,
   'routes/book-state.ts': 9,
   'routes/chapters-restructure.ts': 1,
-  'routes/generation.ts': 2,
+  'routes/generation.ts': 1,
   'routes/import.ts': 1,
   'routes/library-sync-manifest.ts': 1,
   'routes/samples.ts': 2,
