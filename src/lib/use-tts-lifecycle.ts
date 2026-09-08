@@ -28,6 +28,35 @@ import { useEffect, useRef, useState } from 'react';
 import { api, type SidecarHealth, type GpuQueueState, type GpuTripStatus } from './api';
 import type { ModelControlState } from '../components/ModelControlPill';
 
+/* Task 16/16.5 — persists which trip `seq` the operator has already
+   dismissed, the same equality-based pattern update-notice.ts uses for the
+   update banner. Without this, dismissing the trip notice only cleared
+   in-memory state: the very next page load re-initialized lastTripSeq to
+   null, so the FIRST poll always satisfied `seq !== null` and re-showed a
+   trip from arbitrarily long ago, indefinitely, until the next real trip or
+   a server restart (found in review, PR #3113 pass 2). */
+const TRIP_DISMISS_KEY = 'castwright:dismissedTripSeq';
+
+function readDismissedTripSeq(): number | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(TRIP_DISMISS_KEY);
+    if (raw === null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null; // private mode / sandboxed webview → fail safe (notice shows)
+  }
+}
+
+function writeDismissedTripSeq(seq: number): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(TRIP_DISMISS_KEY, String(seq));
+  } catch {
+    /* swallow — in-memory dismissal still works this session */
+  }
+}
+
 export interface EngineLifecycle {
   state: ModelControlState;
   onLoad: () => Promise<void>;
@@ -131,7 +160,12 @@ export function useTtsLifecycle(): TtsLifecycle {
      of this dedup keyed on the string itself — so a second identical trip
      right after a dismiss never re-surfaced (found in review, PR #3113). */
   const [tripNotice, setTripNotice] = useState<string | null>(null);
-  const lastTripSeq = useRef<number | null>(null);
+  /* Seeded from the persisted dismissal (readDismissedTripSeq), not null —
+     a fresh mount must not re-show a trip the operator already dismissed in
+     an earlier session. An UN-dismissed trip still shows on reload: its
+     seq was never written to storage, so it still differs from whatever
+     (possibly older) seq IS persisted there. */
+  const lastTripSeq = useRef<number | null>(readDismissedTripSeq());
   /* In-flight op counter — guards the /health poll's unconditional pending-
      clear below against a Load/Stop that is still awaiting its response.
      Since #1894 a Stop can await a 90 s budget (the sidecar waits out an
@@ -355,6 +389,10 @@ export function useTtsLifecycle(): TtsLifecycle {
     setEvictionNotice(null);
     setLoadErrorNotice(null);
     setTripNotice(null);
+    // Persist so this exact trip doesn't re-show on the next page load —
+    // lastTripSeq.current is already the currently-displayed trip's seq
+    // (set by the poll effect above), or null if nothing has tripped yet.
+    if (lastTripSeq.current !== null) writeDismissedTripSeq(lastTripSeq.current);
   };
 
   return {

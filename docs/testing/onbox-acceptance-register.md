@@ -578,14 +578,19 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 >   both cards; bullet 2 (enumeration-order swap) deliberately left untouched —
 >   excluded from this chain for contention risk against the box's other live
 >   lanes, not a hardware gap (`step-5-a12.md`). Row count unchanged.
-> - **E7** DISCHARGED and dropped — Update took `classifyVenvState`'s `noop`
->   branch (unchanged `reqHash`) and `pip check` stayed clean throughout;
->   `ensureOrtMarker`'s boot-time self-heal ran without error but ALSO
->   reported `noop` (this install's state didn't need healing, so the actual
->   corrective-write branch was not exercised — recorded honestly as such,
->   not claimed as proof of the healing branch itself, which stays covered
->   by `ort-ensure-marker.test.ts`); a fresh Install confirmed the
->   `pip-in-place` branch cleanly; Qwen3 install confirmed no `WinError 5`
+> - **E7** DISCHARGED and dropped — Update took `classifyVenvState`'s
+>   `pip-in-place` branch (the v1.13.0→v1.15.0 span this throwaway exercised
+>   crosses many releases, so `reqHash` had genuinely changed): `pip check`
+>   was reproduced BROKEN at the pre-fix v1.13.0 baseline, then CLEAN
+>   immediately after Update with no server ever having started — exactly
+>   the `pip-in-place` branch's own documented shape. `ensureOrtMarker`'s
+>   boot-time self-heal separately ran without error and ALSO reported
+>   `noop` (Update's own `pip-in-place` step had already fixed the install,
+>   so there was nothing left for the self-heal to do — consistent, not
+>   contradictory; the self-heal's own corrective-write branch is unexercised
+>   by this run and stays covered by `ort-ensure-marker.test.ts`); a fresh
+>   Install confirmed the `pip-in-place` branch cleanly on a second,
+>   independent throwaway; Qwen3 install confirmed no `WinError 5`
 >   (`step-6-e7.md`). Group E 8 → 7.
 > - **E11** DISCHARGED and dropped — a genuinely CRLF-mangled
 >   `requirements/*.txt` was created from a pre-#2799 checkout, Update
@@ -1861,10 +1866,15 @@ output, not a memory checkbox
 (`docs/testing/onbox-2card-pinokio-batch-results/step-2-a3-checklist.md`).
 
 Task 16/16.5 (`runAutoRevert` + its operator toast, on a repeated card-specific
-bad pin) **was built** (`b6075855`) with real paired tests — a mutated guard
-(card-specific vs. not-card-specific branch flipped) reddens all four tests, and
-reverts clean
-(`docs/testing/onbox-2card-pinokio-batch-results/step-3-a3-build.md`).
+bad pin) **was built**, hardened across a pr-review-gate pass and its
+re-review (real target selection instead of reverting to `'auto'`, a
+zero-revertible-engines guard, canonical `cuda-uuid:` writes, a running
+per-card VRAM budget), with real paired tests — two independently-run
+mutations (the card-specific-vs-not guard, and the zero-revertible-engines
+guard) each redden the fixtures they own, reverts clean
+(`server/src/gpu/auto-revert.test.ts`,
+`docs/testing/onbox-2card-pinokio-batch-results/step-3-a3-build.md` for the
+original build's own mutation record).
 
 **What remains owed:** the real-hardware trigger. A forced card-specific
 three-exits-in-ten-minutes streak was run for real against this worktree's own

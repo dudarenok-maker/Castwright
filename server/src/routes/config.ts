@@ -55,7 +55,7 @@ let serverEnvPathOverride: string | null = null;
 async function ensureGpuDeviceListWarm(): Promise<void> {
   if (getLastKnownGpuDevices().length > 0) return;
   const result = await fetchSidecarDevices();
-  if (result) setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx, freeMb: d.free_mb })));
+  if (result) setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx })));
 }
 
 configRouter.get('/', async (_req, res) => {

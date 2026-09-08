@@ -28,7 +28,7 @@ describe('GET /api/gpu/trip-status', () => {
   it('returns the reverted outcome after a card-specific trip', async () => {
     await runAutoRevert(
       { card: { idx: 1 }, residentEngines: ['qwen'] },
-      { clearOverride: async () => {}, resetAndRespawn: async () => {}, getDevices: () => [] },
+      { resetAndRespawn: async () => {}, getDevices: async () => [] },
     );
 
     const res = await request(makeApp()).get('/api/gpu/trip-status');

@@ -414,16 +414,20 @@ shows the second (immediate, no-boot-needed) outcome.
 
 ### 6.3 Result
 
-**`reqHash` branch taken (`noop` or `pip-in-place`):** `noop` — unchanged
-`reqHash`, this release touches no `requirements/*.txt`.
-**`pip check` immediately post-Update:** unchanged, by design — `No broken
-requirements found.` (Update did nothing to `pip`'s state, correctly).
+**`reqHash` branch taken (`noop` or `pip-in-place`):** `pip-in-place` —
+the throwaway spans v1.13.0→v1.15.0, many releases apart, so `reqHash`
+had genuinely changed by the time Update ran.
+**`pip check` immediately post-Update:** clean — `No broken requirements
+found.`, with no server ever having started; `pip check` was reproduced
+BROKEN at the pre-fix v1.13.0 baseline first, so this is Update's own
+`pip-in-place` write, not a pre-existing clean state.
 **If `noop`: marker + clean `pip check` observed at next server boot instead:**
-`ensureOrtMarker` ran at boot and itself reported `noop` too — this
-particular install's state didn't need healing (`onnxruntime`/
-`onnxruntime-gpu` already coexisted cleanly), so the corrective-write branch
-was not exercised by this run; `pip check` stayed clean before and after
-boot. See `ort-ensure-marker.test.ts` for the healing branches' own coverage.
+N/A for this run (Update took `pip-in-place`, not `noop`) — but observed
+anyway: `ensureOrtMarker` ran at the next boot and itself reported `noop`,
+since Update's own `pip-in-place` step had already fixed the install and
+left nothing for the self-heal to do. `pip check` stayed clean before and
+after boot. See `ort-ensure-marker.test.ts` for the healing branches' own
+coverage; this run does not exercise them.
 **Qwen3 install result (WinError 5 present/absent):** absent — clean load
 (`{"status":"ready"}`, no `WinError5` anywhere in the sidecar log).
 **`install.js` pass (fresh install) outcome:** clean — `No broken

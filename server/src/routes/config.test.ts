@@ -597,7 +597,7 @@ describe('GET /api/config — warms the device-list cache before resolving (cold
     const { writeConfigOverride } = await import('../workspace/user-settings.js');
 
     await writeConfigOverride('tts.qwen.device', 'cuda-uuid:GPU-1');
-    setLastKnownGpuDevices([{ uuid: 'GPU-1', idx: 1, freeMb: 8000 }]);
+    setLastKnownGpuDevices([{ uuid: 'GPU-1', idx: 1 }]);
 
     const res = await request(app).get('/api/config');
     expect(res.status).toBe(200);

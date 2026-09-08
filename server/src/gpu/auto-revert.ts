@@ -5,21 +5,28 @@
 
    Two branches, both named in #1230:
      - card-specific (trip.card is non-null, shaped {idx: number} — the
-       sidecar's restart breadcrumb pinned the streak to one GPU) — the
-       device assignment for whichever engine(s) were resident on that card
-       looks structurally too small. Pick a DIFFERENT card with enough free
-       VRAM (or 'cpu') for each resident engine and write that as its device
-       override, then bring TTS back via resetAndRespawn(). An engine whose
-       device knob is currently env-locked (resolveKnob(...).locked) cannot
-       actually be moved — writing a config override for it is a silent
-       no-op, per config/resolver.ts's env-wins precedence — so it is
-       reported separately rather than folded into a false "reverted".
-     - non-card-specific (trip.card is null/undefined/malformed — a
+       sidecar's restart breadcrumb pinned the streak to one GPU) with at
+       least one revertible (qwen/coqui/kokoro) engine resident on that
+       card — the device assignment for those engine(s) looks structurally
+       too small. Pick a DIFFERENT card with enough free VRAM (or 'cpu') for
+       each and write that as its device override, then bring TTS back via
+       resetAndRespawn(). An engine whose device knob is currently env-locked
+       (resolveKnob(...).locked) cannot actually be moved — writing a config
+       override for it is a silent no-op, per config/resolver.ts's env-wins
+       precedence — so it is reported separately rather than folded into a
+       false "reverted".
+     - unrevertable: trip.card is null/undefined/malformed (a
        degraded/missing breadcrumb, a host-RAM ceiling, or a recycle-storm
        trip that isn't tied to any one card, per sidecar-supervisor.ts's
-       RESTART43_STREAK_WINDOW_MS doc) — no pin caused this, so there's
-       nothing to revert. Leave TTS held down and report
-       `status:'unrevertable'` for a human to investigate.
+       RESTART43_STREAK_WINDOW_MS doc), OR the card IS known but nothing
+       revertible was resident there (only asr/spk, or nothing at all —
+       main.py's `_resident_engines_by_card` can report either). Either way
+       there is no device pin this function can change, so respawning would
+       just repeat whatever actually caused the crash loop — the exact
+       failure mode the streak guard's terminal hold exists to prevent.
+       Found in review 2026-09-09: an earlier version of this file treated
+       the "known card, no revertible engine" case as a no-op success
+       (`status: 'reverted'`, `engines: []`) and respawned anyway.
 
    Every path below reaches a `lastTripStatus` assignment, including a throw
    partway through the revert loop — an earlier version of this module only
@@ -30,11 +37,11 @@
    `writeOverride`/`resetAndRespawn` left `lastTripStatus` however it was
    before the trip (`null` on a first-ever trip, or a stale prior outcome),
    never reflecting the failure. */
-import { clearConfigOverride, writeConfigOverride } from '../workspace/user-settings.js';
+import { writeConfigOverride } from '../workspace/user-settings.js';
 import { getKnob } from '../config/registry.js';
 import { resolveKnob } from '../config/resolver.js';
 import { ENGINE_DEVICE_KEY } from './engine-device.js';
-import { getLastKnownGpuDevices, type GpuDeviceInfo } from './gpu-device-list-state.js';
+import { fetchSidecarDevices } from './fetch-sidecar-devices.js';
 import { selectRevertTarget } from './auto-revert-selection.js';
 
 export type AutoRevertEngine = 'coqui' | 'kokoro' | 'qwen';
@@ -59,6 +66,15 @@ const ENGINE_PEAK_MB: Record<AutoRevertEngine, number> = {
 export interface AutoRevertTrip {
   card: unknown;
   residentEngines: string[];
+}
+
+/** A candidate landing card: an idx to write into a `cuda:N`/`cuda-uuid:`
+    override, its uuid (when known, for the canonical override form — see
+    `writeDeviceOverride` below), and its free VRAM. */
+export interface RevertDevice {
+  idx: number;
+  uuid: string | null;
+  freeMb: number;
 }
 
 /** True only when `card` is a shape `selectRevertTarget` can actually key
@@ -125,19 +141,53 @@ function record(status: WithoutSeq<TripStatus>): TripStatus {
   return withSeq;
 }
 
+/** Live per-card free VRAM, fetched fresh from the sidecar's own /devices
+    endpoint. Deliberately NOT the passively-populated
+    gpu-device-list-state.ts cache: that cache is warmed only by
+    GET/PUT /api/config and GET /api/gpu/devices, none of which the 30s
+    useTtsLifecycle poll (the actual trigger for most trips) ever calls —
+    found in review 2026-09-09, the cache is empty on the common path, which
+    silently forced every real revert through the no-data 'auto'/'cpu'
+    fallback regardless of what cards were actually available. A live fetch
+    at the moment of the trip is the only way to see real headroom on the
+    OTHER (non-tripped) cards, which is exactly what this function needs. */
+async function fetchLiveDevices(): Promise<RevertDevice[]> {
+  const result = await fetchSidecarDevices();
+  if (!result) return [];
+  return result.devices.map((d) => ({ idx: d.idx, uuid: d.uuid, freeMb: d.free_mb }));
+}
+
+/** Writes `key`'s device override to `target` (an idx chosen by
+    selectRevertTarget, or null for a 'cpu' choice). Prefers the canonical
+    `cuda-uuid:<uuid>` form — every other device-knob writer in this codebase
+    does (routes/config.ts's toUuidForm), specifically so the pin survives a
+    card renumbering across a reboot; resolver.ts only reconciles that form
+    against the live device cache, never a bare `cuda:N`. Falls back to
+    `cuda:N` only when this run's device list didn't carry a uuid for the
+    chosen idx (should not happen given fetchLiveDevices always asks for
+    one, but degrades safely rather than throwing if a future device source
+    ever omits it). */
+async function writeDeviceOverride(
+  writeOverride: (key: string, value: string) => Promise<void>,
+  key: string,
+  target: { idx: number; uuid: string | null } | null,
+): Promise<void> {
+  if (target === null) {
+    await writeOverride(key, 'cpu');
+    return;
+  }
+  await writeOverride(key, target.uuid ? `cuda-uuid:${target.uuid}` : `cuda:${target.idx}`);
+}
+
 export interface RunAutoRevertDeps {
-  /** Writes a device override to a specific target (e.g. 'cuda:1', 'cpu').
-      Defaults to the real workspace store; tests inject a spy instead of
-      touching disk. */
+  /** Writes a device override to a specific target (e.g. 'cuda-uuid:GPU-1',
+      'cpu'). Defaults to the real workspace store; tests inject a spy
+      instead of touching disk. */
   writeOverride?: (key: string, value: string) => Promise<void>;
-  /** Clears a device override back to its default ('auto'). Only used for
-      the legacy no-candidate-data fallback path (see below) — kept as its
-      own dependency so a test can distinguish "wrote a specific target"
-      from "cleared to auto" without inspecting call arguments. */
-  clearOverride?: (key: string) => Promise<void>;
-  /** Last-known per-card free VRAM, keyed by idx. Defaults to the real
-      cache (gpu-device-list-state.ts); tests inject fixed candidates. */
-  getDevices?: () => GpuDeviceInfo[];
+  /** Live per-card free VRAM. Defaults to a real fetch against the
+      sidecar's /devices endpoint (see fetchLiveDevices); tests inject fixed
+      candidates. */
+  getDevices?: () => Promise<RevertDevice[]>;
   /** Brings TTS back after a revert — the supervisor's own resetAndRespawn(),
       which also zeroes restart43Trip/restart43Timestamps so a fresh streak
       starts clean. */
@@ -145,20 +195,15 @@ export interface RunAutoRevertDeps {
   warn?: (...args: unknown[]) => void;
 }
 
-/** Consumes one tripEvent() firing. Card-specific → pick a different card
-    (or cpu) for each revertible resident engine and resetAndRespawn();
-    non-card-specific → leave TTS held down. Either way, records + returns
-    the outcome so GET /api/gpu/trip-status has something to report. Never
-    throws — every path, including a dependency rejecting, resolves to a
-    TripStatus. */
+/** Consumes one tripEvent() firing. Card-specific with at least one
+    revertible resident engine → pick a different card (or cpu) for each and
+    resetAndRespawn(); everything else → leave TTS held down. Either way,
+    records + returns the outcome so GET /api/gpu/trip-status has something
+    to report. Never throws — every path, including a dependency rejecting,
+    resolves to a TripStatus. */
 export async function runAutoRevert(trip: AutoRevertTrip, deps: RunAutoRevertDeps): Promise<TripStatus> {
-  const {
-    writeOverride = writeConfigOverride,
-    clearOverride = clearConfigOverride,
-    getDevices = getLastKnownGpuDevices,
-    resetAndRespawn,
-    warn = console.warn,
-  } = deps;
+  const { writeOverride = writeConfigOverride, getDevices = fetchLiveDevices, resetAndRespawn, warn = console.warn } =
+    deps;
 
   if (!isTrippedCardIdx(trip.card)) {
     return record({
@@ -168,10 +213,31 @@ export async function runAutoRevert(trip: AutoRevertTrip, deps: RunAutoRevertDep
     });
   }
 
+  const engines = trip.residentEngines.filter(isRevertibleEngine);
+  if (engines.length === 0) {
+    // The card is known, but nothing revertible (qwen/coqui/kokoro) was
+    // resident there — only asr/spk, or nothing at all. There is no device
+    // pin this function can change; respawning would just repeat whatever
+    // actually crashed the card (a host-level or ASR-side issue, say), which
+    // is exactly the failure mode the streak guard's terminal hold exists
+    // to prevent. Do NOT resetAndRespawn() here.
+    return record({
+      status: 'unrevertable',
+      toast:
+        'Voice engine kept crash-looping on a specific GPU card, but no TTS engine was resident there — manual investigation needed.',
+    });
+  }
+
   try {
     const trippedIdx = trip.card.idx;
-    const engines = trip.residentEngines.filter(isRevertibleEngine);
-    const devices = getDevices();
+    // A mutable running budget: two engines landing on the SAME card in one
+    // revert (e.g. qwen + kokoro both need to move off the tripped card) must
+    // not be sized independently against that card's ORIGINAL free VRAM —
+    // found in review 2026-09-09, each engine passing its own bounds check
+    // against the pre-revert reading could jointly overcommit a card neither
+    // alone would have. Each successful placement decrements its target
+    // card's remaining budget for the rest of this run.
+    const budget = (await getDevices()).map((d) => ({ ...d }));
     const reverted: AutoRevertEngine[] = [];
     const envLocked: AutoRevertEngine[] = [];
 
@@ -185,25 +251,20 @@ export async function runAutoRevert(trip: AutoRevertTrip, deps: RunAutoRevertDep
         envLocked.push(engine);
         continue;
       }
-      if (devices.length > 0) {
-        const target = selectRevertTarget({
-          trippedCardIdx: trippedIdx,
-          candidates: devices.map((d) => ({ idx: d.idx, freeMb: d.freeMb })),
-          requiredMb: ENGINE_PEAK_MB[engine],
-        });
-        await writeOverride(knobKey, target);
-      } else {
-        // No device-list data cached yet (e.g. the sidecar has never
-        // reported /devices this boot) — selectRevertTarget has nothing to
-        // choose between, so fall back to clearing to 'auto' rather than
-        // guessing a card. Worse than a real choice, but strictly no worse
-        // than the pre-fix behaviour for this one degraded case.
-        await clearOverride(knobKey);
-      }
+      const targetStr = selectRevertTarget({
+        trippedCardIdx: trippedIdx,
+        candidates: budget.map((d) => ({ idx: d.idx, freeMb: d.freeMb })),
+        requiredMb: ENGINE_PEAK_MB[engine],
+      });
+      const match = /^cuda:(\d+)$/.exec(targetStr);
+      const targetIdx = match ? Number(match[1]) : null;
+      const targetDevice = targetIdx === null ? null : budget.find((d) => d.idx === targetIdx) ?? null;
+      await writeDeviceOverride(writeOverride, knobKey, targetDevice);
+      if (targetDevice) targetDevice.freeMb -= ENGINE_PEAK_MB[engine];
       reverted.push(engine);
     }
 
-    if (engines.length > 0 && reverted.length === 0) {
+    if (reverted.length === 0) {
       // Every resident revertible engine was env-locked — nothing was
       // actually changed, so respawning would just re-trip identically.
       // Reporting 'reverted' here would be the exact false-positive this
@@ -222,7 +283,6 @@ export async function runAutoRevert(trip: AutoRevertTrip, deps: RunAutoRevertDep
     );
     await resetAndRespawn();
 
-    const engineLabel = reverted.length > 0 ? reverted.join(', ') : 'the voice engine';
     const lockedSuffix =
       envLocked.length > 0
         ? ` (${envLocked.join(', ')} is env-locked and was left untouched — the streak may recur for it)`
@@ -231,7 +291,7 @@ export async function runAutoRevert(trip: AutoRevertTrip, deps: RunAutoRevertDep
       status: 'reverted',
       card: trip.card,
       engines: reverted,
-      toast: `Auto-reverted: GPU pin for ${engineLabel} looked structurally too small and was moved${lockedSuffix}.`,
+      toast: `Auto-reverted: GPU pin for ${reverted.join(', ')} looked structurally too small and was moved${lockedSuffix}.`,
     });
   } catch (err) {
     warn(
