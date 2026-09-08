@@ -4359,8 +4359,6 @@ log instrumentation, a VRAM-fill scenario to construct the discriminating placem
 `GPU_RESERVE_MB`, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the
 run sheet's pin/stale-cache scenarios.
 
-
-
 ## Group B — local Ollama analyzer only
 
 <!-- next-id: B101 -->
