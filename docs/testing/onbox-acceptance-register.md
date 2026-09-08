@@ -4310,75 +4310,56 @@ Qwen VoiceDesign 1.7B model, real sidecar, Kokoro resident for the third and fou
 *Cost:* moderate — concurrent-load/eviction scenarios + VRAM observation, plus one
 forced-contention run for the lock-leak criterion.
 
-### A106 · X-Device-Hint reaches the sidecar from a real chapter render, and a wrong hint still lands the derive ([#3058](https://github.com/dudarenok-maker/Castwright/issues/3058), PR [#3061](https://github.com/dudarenok-maker/Castwright/pull/3061)) · **2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti), Qwen resident on GPU0, a designed Coqui voice whose `.pt` is missing**
+### A106 · X-Device-Hint lazy Coqui derive request signaling ([#3058](https://github.com/dudarenok-maker/Castwright/issues/3058), PR [#3061](https://github.com/dudarenok-maker/Castwright/pull/3061)) · **2-card boot (8 GB + 16 GB), Coqui XTTS NOT yet resident (cold-load), no `COQUI_DEVICE` pin**
 
-#3058 makes the lazy Coqui derive (the designed-voice self-heal, run mid-chapter
-while Qwen may already be generating) ask the sidecar to place THAT derive on
-`cuda:1`, via an `X-Device-Hint` header on `/xtts/clone-voice`. The sidecar
-treats it as an **advisory preference** (`reservation(preferred=...)`), not a
-pin: the hinted card is tried first and ordinary unconstrained placement is the
-fallback.
+A real chapter render from a server nobody has customized via Advanced Settings, on a
+book with a **designed** Coqui voice whose `.pt` artifact is missing. Only the lazy
+Coqui derive — the designed-voice self-heal in `resolveDesignedVoicesForChapter`
+(`server/src/tts/clone-voice-resolver.ts`) — sends the hint; the cloned-voice resolver
+never does, and Qwen ignores the header entirely. The single POST that carries it is
+`/xtts/clone-voice` (`deriveEngineArtifact`, `server/src/tts/derive-engine-artifact.ts:145-147`),
+never `/synthesize`. Against an already-resident Coqui, or under a `COQUI_DEVICE` pin, the
+hint is a documented no-op (`main.py:5183-5187`, `:11975-11979`) — the prerequisite above is
+the state in which the hint can actually do anything.
 
-**Read the first criterion before anything else.** #3058's own acceptance text
-read *"issue a hinted derive request and confirm via `nvidia-smi` that Coqui
-loads on GPU1"* — and a hand-issued `curl` with the header set exercises only
-the **sidecar** half. It passes green on a build where the Node side never
-emits the header at all, which is exactly the state PR #3061's review found the
-branch in (the device list the hint keys off was warmed only by the Advanced
-Settings screen). An acceptance that cannot fail on its own feature is not an
-acceptance. The run below therefore starts from the app, not from `curl`.
+**There is no log line for this on the success path.** `_parse_device_hint` and the
+admission path it feeds (`_resolve_admission`/`reservation()`) log nothing when a hint is
+honoured; the only `log.warning` calls (`main.py:4164/4172/4180/4183`) fire on the four
+*rejection* paths (oversized header, unresolved uuid, non-device-key value, unparsable
+value). And the hint does **not** "hint Coqui off Qwen's card" — `try_hold`/`best_fit`
+already pick the roomiest card, so on this box, where `cuda:1` is the 16 GB card, an
+*unhinted* derive can land there anyway, and a hint can equally park the derive on the exact
+card Qwen is generating on when that card merely fits (the corrected comment at
+`clone-voice-resolver.ts:906-916` is the authority here, not this row's earlier wording).
+Confirm the mechanism only via the run sheet's discriminating placement criterion, which
+forces `cuda:0` to be the momentarily roomier card so a hinted vs. unhinted derive provably
+diverge — VRAM/log inspection under the box's normal (`cuda:1`-favoring) state proves
+nothing, since an unhinted derive lands on `cuda:1` there too.
 
-- **The header is emitted by a real generation-path derive, on a server nobody
-  opened Advanced Settings on.** Start the stack (`npm start`), open a book
-  **and go straight to generating a chapter** — do NOT visit Account → Advanced
-  Settings first, at any point before the render. The chapter must contain a
-  character on a *designed* Coqui voice whose `.pt` artifact is absent (delete
-  it from the voice library directory beforehand) so the lazy derive actually
-  fires. Confirm in the sidecar log that the `/xtts/clone-voice` request
-  **carried `X-Device-Hint: cuda:1`** — the placement log line names the hinted
-  device, and a hint that never arrived logs nothing. **A run in which the
-  header is absent is a FAILURE even if the derive succeeds**, because the
-  derive succeeding is what it did before this feature existed.
-- **Coqui lands on GPU1 while Qwen stays on GPU0.** With Qwen resident and
-  generating on GPU0 and GPU1 free, sample `nvidia-smi` across the derive.
-  Confirm the XTTS weights appear on GPU1, Qwen's GPU0 footprint is unchanged,
-  and the render does not stall.
-- **A hint at a card that cannot take it still lands the derive — no stall, no
-  substituted voice.** This is the criterion that separates the shipped
-  advisory behaviour from the hard pin that was reviewed out. Fill GPU1 (a
-  second resident model, or boot with the eGPU carrying the load) so the derive
-  cannot fit there, then trigger the same lazy derive. Confirm: the derive
-  **succeeds on GPU0** within its normal time; the log shows the preference not
-  taken rather than a `noCapacity` refusal; there is **no ~60 s
-  `withCapacityRetry` stall**; and — the user-visible half — the character
-  renders in **its own designed voice, not a stock catalogue voice**. A
-  catalogue-voice substitution here is the failure the advisory contract
-  exists to prevent, and it is silent in the UI, so listen to (or inspect the
-  cast assignment of) the rendered chapter rather than trusting a green
-  render.
-- **An operator's own `COQUI_DEVICE` pin still wins.** Set `tts.coqui.device`
-  to `cuda:0` (Advanced Settings, or `COQUI_DEVICE=cuda:0` in `server/.env`),
-  restart, and run the same chapter. Confirm the derive lands on **GPU0**
-  despite the hint naming `cuda:1` — a per-request preference must not
-  overrule a `risk: 'high'` knob the operator set deliberately.
-- **A stale device list does not break anything.** Warm the list (open Advanced
-  Settings once on the 2-card boot), then restart the sidecar with only one card
-  visible (`CUDA_VISIBLE_DEVICES=0`) WITHOUT restarting the Node server, and
-  render again. The cached list still remembers an idx-1 card, so the hint is
-  still emitted and names a device that no longer exists. Confirm the derive
-  still succeeds on the remaining card. (Nothing resets the cache on sidecar
-  respawn — this is a known, accepted consequence of the advisory contract, and
-  the criterion pins that it stays harmless.)
+*Needs:* the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink — the single-card
+boot emits no hint at all, so nothing here reproduces there), real Qwen and Coqui/XTTS
+weights, real sidecar, a book with at least one character on a **designed** Coqui voice
+whose artifact has been deleted, and `COQUI_DEVICE` cleared (this box's standing policy
+otherwise pins it to `cuda:1`, which makes the hint a no-op — see row **A1**'s
+environmental notes above). Also: for the run sheet's Criteria 2, 3, and 5 (not
+Criteria 1 or 4), `QWEN_DEVICE` must be temporarily set to `cuda:0` (`server/.env`,
+restart) instead of the box's own standing `cuda:1` pin (also row **A1**) — otherwise
+Qwen's own render contends for the exact card those criteria's VRAM band is constructed
+on. Restore the standing `cuda:1` pin only once the whole sitting is done. See the run
+sheet's Setup step 5 for the full rationale.
+*Criteria:* the run sheet
+[`device-hint-placement-onbox-acceptance.md`](device-hint-placement-onbox-acceptance.md) —
+five criteria (header-parse diagnostic — no log line exists, see the run sheet for the
+one-line temporary instrumentation needed to observe it directly; discriminating
+hinted-vs-unhinted GPU1 placement; unsatisfiable-hint fallback; operator-pin override;
+stale-device-list harmlessness).
+*Cost:* moderate-to-high — a real chapter render with a deleted `.pt` artifact, temporary
+log instrumentation, a VRAM-fill scenario to construct the discriminating placement band
+(the fill target is now computed live from the box's own measured `peak` and
+`GPU_RESERVE_MB`, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the
+run sheet's pin/stale-cache scenarios.
 
-*Needs:* the 2-card boot for the first four criteria (the third also needs GPU1
-occupied); real Qwen + Coqui/XTTS weights; a real book with a designed Coqui
-character; a live sidecar. Not reproducible on the single-card boot — with no
-idx-1 card the feature deliberately emits no hint at all.
-*Criteria:* the five bullets above, expanded with the exact commands and
-sampling points in
-[`docs/testing/device-hint-placement-onbox-acceptance.md`](device-hint-placement-onbox-acceptance.md).
-*Cost:* moderate — one eGPU sitting; the third criterion needs GPU1 deliberately
-filled, the fifth needs a sidecar restart mid-session.
+
 
 ## Group B — local Ollama analyzer only
 

@@ -169,8 +169,6 @@ def test_admit_preferred_falls_back_when_hinted_device_does_not_fit():
 
     run_case(body())
 
-    run_case(body())
-
 
 def test_cheap_engine_falls_back_to_cpu():
     async def body():
