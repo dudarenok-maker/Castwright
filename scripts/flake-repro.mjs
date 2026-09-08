@@ -10,7 +10,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { rmSync, mkdtempSync, existsSync, statSync } from 'node:fs';
 import { tmpdir, cpus } from 'node:os';
-import { join, resolve, relative, isAbsolute, posix as pathPosix } from 'node:path';
+import nodePath, { join, posix as pathPosix } from 'node:path';
 const posixNormalize = pathPosix.normalize;
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
@@ -55,44 +55,49 @@ const SLOW = [
 //
 // `fullPath` is the relative or relativised path (before server/ stripping),
 // suitable for file-existence checks. `rel` is after stripping, for vitest filters.
-export function resolveTarget(file, repoRoot) {
-  // Normalize separators (Windows backslash, UNC), strip leading ./, and resolve .. segments
+/* `pathImpl` is injectable ONLY so Windows semantics are testable from any
+   OS, and that is not a nicety: `test:hooks` runs on ubuntu-latest alone
+   (verify.yml's Windows leg runs `npm test` + `npm run test:server`, not this
+   harness). The R1 regression -- every in-repo absolute path refused -- was
+   invisible to a POSIX run because BOTH operands of the broken comparison
+   were '' there. A test exercising this on `path.posix` can never fail on it,
+   so the regression cases pass `path.win32` explicitly (#3082 pass 4, N1).
+   Defaults to the platform impl for real use. */
+export function resolveTarget(file, repoRoot, pathImpl = nodePath) {
   /* posixNormalize collapses interior '.' and '..' segments, not just
-     separators. Without it 'server/./src/routes/book-state.test.ts' keeps
-     its './', fails the SLOW exact-match, and routes a slow-lane file to
-     the config that excludes it -- #3081's own mis-routing in a different
-     spelling (#3082 pass 3, R4). A leading './' is stripped after, since
-     normalize preserves that one. */
+     separators. Without it 'server/./src/routes/book-state.test.ts' keeps its
+     './', fails the SLOW exact-match, and routes a slow-lane file to the
+     config that excludes it -- #3081's own mis-routing in a different
+     spelling (#3082 pass 3, R4). A leading './' and any TRAILING separator go
+     too; a trailing '/' was one further spelling of it (#3082 pass 4, N2). */
   let normalized = posixNormalize(file.replace(/\\/g, '/'));
-  if (normalized.startsWith('./')) {
-    normalized = normalized.slice(2);
-  }
+  if (normalized.startsWith('./')) normalized = normalized.slice(2);
+  if (normalized.length > 1 && normalized.endsWith('/')) normalized = normalized.slice(0, -1);
 
-  // If absolute, relativise against repo root (or leave as absolute if outside repo)
-  if (isAbsolute(file)) {
-    const abs = resolve(file); // Resolve to absolute form
-    const repoAbs = resolve(repoRoot);
+  /* ONE containment test for every shape of input. Absolute, relative,
+     '..'-escaping and drive-relative ('D:foo') all reduce to the same
+     question: where does this land, and is that inside the repo? Guarding
+     only the absolute branch left
+     'server/../../<sibling-worktree>/server/src/routes/book-state.test.ts'
+     reaching a real test file in ANOTHER lane's worktree, refused only by the
+     oracle and with the wrong sentence (#3082 pass 4, N3).
 
-    /* Cross-root (a different Windows drive, or a UNC share) and
-       outside-the-tree are ONE test, not two: path.relative() cannot express
-       a route between two roots, so it hands back the target ABSOLUTE
-       instead. isAbsolute(relativeToRepo) IS therefore the cross-drive check.
-       A hand-rolled drive comparison was tried and shipped broken (#3082
-       review pass 3, R1): it split a path.resolve() result on '/', which on
-       Windows is backslash-separated, so both sides were the whole path and
-       EVERY in-repo absolute path was refused as 'outside the repository' --
-       while the same message printed a resolved path plainly inside the
-       printed root. Nothing could see it: test:hooks runs on ubuntu only,
-       where that comparison was '' === ''. */
-    const relativeToRepo = relative(repoAbs, abs).replace(/\\/g, '/');
-    if (!relativeToRepo.startsWith('..') && !isAbsolute(relativeToRepo)) {
-      normalized = relativeToRepo;
-    } else {
-      // Return as-is; the caller will refuse it as outside the repo
-      const absPath = abs.replace(/\\/g, '/');
-      return { cwd: null, rel: absPath, fullPath: absPath, isSlow: false, isOutsideRepo: true };
-    }
+     Cross-root and outside-the-tree are the SAME test: path.relative() cannot
+     express a route between two roots, so it returns the target absolute --
+     isAbsolute() on its output IS the cross-drive check. A hand-rolled drive
+     comparison was tried and shipped broken (#3082 pass 3, R1): it split a
+     path.resolve() result on '/', which is backslash-separated on Windows, so
+     both operands were the whole path and nothing ever matched. */
+  const repoAbs = pathImpl.resolve(repoRoot);
+  const abs = pathImpl.isAbsolute(file)
+    ? pathImpl.resolve(file)
+    : pathImpl.resolve(repoAbs, normalized);
+  const relativeToRepo = pathImpl.relative(repoAbs, abs).replace(/\\/g, '/');
+  if (relativeToRepo === '' || relativeToRepo.startsWith('..') || pathImpl.isAbsolute(relativeToRepo)) {
+    const absPath = abs.replace(/\\/g, '/');
+    return { cwd: null, rel: absPath, fullPath: absPath, isSlow: false, isOutsideRepo: true };
   }
+  normalized = relativeToRepo;
 
   const cwd = normalized.startsWith('server/') ? 'server' : '.';
   const rel = normalized.replace(/^server\//, '');
@@ -142,7 +147,7 @@ function main() {
 
   // Resolve the repo root from this script's location
   const scriptDir = fileURLToPath(new URL('.', import.meta.url));
-  const repoRoot = resolve(scriptDir, '..');
+  const repoRoot = nodePath.resolve(scriptDir, '..');
 
   const { cwd, rel, isSlow, fullPath, isOutsideRepo } = resolveTarget(file, repoRoot);
 
@@ -155,7 +160,7 @@ function main() {
     return;
   }
 
-  const filePath = resolve(repoRoot, fullPath);
+  const filePath = nodePath.resolve(repoRoot, fullPath);
   if (!existsSync(filePath)) {
     console.error('flake-repro: no such test file');
     console.error(`  --file      ${file}`);
@@ -187,7 +192,7 @@ function main() {
   // Ask vitest authoritatively whether it will select this file.
   // Run `npx vitest list` with the same cwd and config that the measured runs will use.
   // If vitest outputs nothing, the file won't be tested under the chosen config.
-  const absoluteCwd = resolve(repoRoot, cwd);
+  const absoluteCwd = nodePath.resolve(repoRoot, cwd);
   const listCmd = isSlow
     ? ['vitest', 'list', '--config', 'vitest.config.slow.ts', rel]
     : ['vitest', 'list', rel];

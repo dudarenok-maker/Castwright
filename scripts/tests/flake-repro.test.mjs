@@ -12,6 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -112,6 +113,61 @@ test('resolveTarget: frontend file with backslashes (regression)', () => {
     isSlow: false,
     isOutsideRepo: false,
   });
+});
+
+/* --- Cross-root / containment, driven on win32 semantics EXPLICITLY ---
+
+   These MUST NOT rely on the host OS. `npm run test:hooks` runs on
+   ubuntu-latest only (verify.yml's Windows leg runs `npm test` +
+   `npm run test:server`, not this harness), and the R1 regression -- every
+   in-repo absolute path refused as 'outside the repository' -- was
+   structurally invisible under POSIX semantics, because both operands of the
+   broken drive comparison were '' there. 16 existing cases could not tell the
+   broken predicate from the fixed one. Passing path.win32 is what makes these
+   able to fail at all (#3082 review pass 4, N1). */
+const WIN_REPO = String.raw`C:\repo`;
+const winTarget = (p) => resolveTarget(path.win32.join(WIN_REPO, p), WIN_REPO, path.win32);
+
+test('win32: an in-repo absolute path is NOT treated as outside the repo (R1 regression)', () => {
+  const r = winTarget(String.raw`server\src\routes\book-state.test.ts`);
+  assert.strictEqual(r.isOutsideRepo, false, 'an in-repo absolute path must resolve, not be refused');
+  assert.deepStrictEqual(
+    { cwd: r.cwd, rel: r.rel, isSlow: r.isSlow },
+    { cwd: 'server', rel: 'src/routes/book-state.test.ts', isSlow: true },
+  );
+});
+
+test('win32: a different drive IS outside the repo', () => {
+  const r = resolveTarget(String.raw`D:\elsewhere\x.test.ts`, WIN_REPO, path.win32);
+  assert.strictEqual(r.isOutsideRepo, true);
+});
+
+test('win32: a sibling directory sharing the repo name prefix is outside the repo', () => {
+  const r = resolveTarget(String.raw`C:\repo-EXTRA\server\src\x.test.ts`, WIN_REPO, path.win32);
+  assert.strictEqual(r.isOutsideRepo, true);
+});
+
+test('win32: a relative .. escape into a sibling worktree is outside the repo (N3)', () => {
+  const r = resolveTarget('server/../../other-worktree/server/src/routes/book-state.test.ts', WIN_REPO, path.win32);
+  assert.strictEqual(r.isOutsideRepo, true, 'a .. escape must be refused by containment, not left to the oracle');
+});
+
+test('win32: the repo root itself is not a target', () => {
+  const r = resolveTarget(WIN_REPO, WIN_REPO, path.win32);
+  assert.strictEqual(r.isOutsideRepo, true);
+});
+
+test('posix: an in-repo absolute path resolves (same predicate, other impl)', () => {
+  const r = resolveTarget('/repo/server/src/routes/book-state.test.ts', '/repo', path.posix);
+  assert.strictEqual(r.isOutsideRepo, false);
+  assert.strictEqual(r.rel, 'src/routes/book-state.test.ts');
+  assert.strictEqual(r.isSlow, true);
+});
+
+test('a trailing separator does not defeat the SLOW match (N2)', () => {
+  const r = resolveTarget('server/src/routes/book-state.test.ts/', WIN_REPO, path.win32);
+  assert.strictEqual(r.isSlow, true, 'a trailing slash must not route a slow-lane file to the wrong config');
+  assert.strictEqual(r.cwd, 'server');
 });
 
 // === CLI-level tests: spawn subprocess and check behavior ===
@@ -225,7 +281,11 @@ test('CLI: outside-repo diagnostic does not print undefined', () => {
 });
 
 test('CLI: invoked from subdirectory (server/) still runs with correct config', () => {
-  // Change to server directory, then run flake-repro with an absolute path to a test file
+  // Runs from server/ with a REPO-RELATIVE --file (not an absolute one, despite
+  // what an earlier version of this comment said -- #3082 pass 4 named that
+  // mismatch as the exact hole the absolute-path bug fell through). The point
+  // here is the CWD: the existence check is anchored at the repo root while
+  // spawnSync's cwd was once resolved against process.cwd().
   const serverDir = resolve(repoRoot, 'server');
   const result = spawnSync(process.execPath, [scriptPath, '--file', 'server/src/routes/book-state.test.ts', '--runs', '1'], {
     encoding: 'utf8',
