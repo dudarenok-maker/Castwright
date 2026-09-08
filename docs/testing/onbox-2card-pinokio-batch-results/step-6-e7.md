@@ -1,6 +1,6 @@
 # Step 6 — E7: ORT marker, the Pinokio Update path (Castwright#2963)
 
-Parent #2950, campaign #2435. Discharges register row **E7**
+Parent #2950, campaign #2435. Discharged register row **E7**
 (`docs/testing/onbox-acceptance-register.md:4361-4399`, #2192, plan 282) —
 `ensureOrtMarker`'s boot-time self-heal, and the underlying
 `applyOrtMarkerWrite` swap, reached through the real Pinokio Update and

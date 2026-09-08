@@ -1,6 +1,6 @@
 # Step 7 — E11: Pinokio Install/Update CRLF requirements normalization (Castwright#2961)
 
-Parent #2950, campaign #2435. Discharges register row **E11**
+Parent #2950, campaign #2435. Discharged register row **E11**
 (`docs/testing/onbox-acceptance-register.md:4683-4714`, #2596, PR #2799) —
 `renormalizeRequirementsCrlf()` (`pinokio-scripts/lib/resolve-release.js`,
 landed as `d6d54114`), including the documented one-update-lag behaviour.
