@@ -547,19 +547,58 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 6 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**52 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**49 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
+
+> **Last change: 2026-09-08 (step 9, #2954), 52 → 49.** Folded the six
+> register rows discharged by the 2-card-boot + Pinokio batch chain (#2950),
+> individually, per their own criteria:
+> - **A2** DISCHARGED and dropped — step 9's cross-card device-steer walkthrough
+>   confirmation ran for real on both cards, no OOM, no cross-card clobber, no
+>   silent wrong-card fallback (`step-1-a2.md`). Group A 35 → 34.
+> - **A3** NARROWED, not discharged — the 10-item checklist and task 16/16.5's
+>   build+tests both passed for real, but the real-hardware trigger did not
+>   reach `runAutoRevert` in production (`start.ps1` absorbs the code-43 streak
+>   before Node's own supervisor sees it); row narrows to that one remaining
+>   wiring gap (`step-2-a3-checklist.md`, `step-3-a3-build.md`,
+>   `step-4-a3-hardware.md`). Row count unchanged.
+> - **A12** NARROWED, not discharged — bullets 1/3/4 (pin-survives-respawn,
+>   codec-pin placement, codec-pin-falls-back-to-cpu) confirmed for real on
+>   both cards; bullet 2 (enumeration-order swap) deliberately left untouched —
+>   excluded from this chain for contention risk against the box's other live
+>   lanes, not a hardware gap (`step-5-a12.md`). Row count unchanged.
+> - **E7** DISCHARGED and dropped — Update's `noop` branch confirmed, the
+>   `ensureOrtMarker` self-heal confirmed clean at next boot, a fresh Install
+>   confirmed `pip-in-place`, Qwen3 install confirmed no `WinError 5`
+>   (`step-6-e7.md`). Group E 8 → 7.
+> - **E11** DISCHARGED and dropped — a genuinely CRLF-mangled
+>   `requirements/*.txt` was created from a pre-#2799 checkout, Update
+>   normalized it to LF without a spurious force-reinstall (`classifyVenvState`'s
+>   `noop` branch), and a subsequent fresh Install also normalized correctly
+>   (`step-7-e11.md`). Group E 7 → 6.
+> - **A18** item 4 alone DISCHARGED — `import torchcodec` runs clean inside the
+>   nested venv `pinokio/install.js` provisions on this box, recorded as fact
+>   (`step-8-a18-item4.md`); items 1/3 stay discharged from 2026-07-31, item 2
+>   stays open as previously scoped. Row count unchanged (A18 stays open on
+>   item 2).
+>
+> Net: **52 → 49** (only A2/E7/E11 leave the register outright; A3/A12/A18 stay
+> open with narrower remaining scope). This lands on top of every register
+> change the parent branch had already merged (fs-38, sentence-19, B2/D1/A37,
+> fs-38 closeout, D-02) — verified by row-ID-set diff against the true
+> `git merge-base`, not this branch's own stale base. `npm run
+> check:onbox-register` green.
 
 > **Batch step 6, 2026-09-07 (claude) — 55 → 52 owed, three rows discharged.**
 > B2 (analysis language gate, real end-to-end loop confirmed including the
@@ -1806,42 +1845,33 @@ above — batch them into the same session:**
 installed (`install-coqui.mjs`/`.ps1`/`.sh`), no additional prerequisites
 beyond what A1 already lists above.
 
-### A2 · Capacity-aware GPU placement (plan 264) — walkthrough step 9, cross-card device steer · **2-card boot only**
-
-**Owed:** walkthrough **step 9**, the on-box confirmation of the #1730
-cross-card device-steer fix. The code merged (PR #1732, 2026-07-19) but its
-confirmation never ran. The plan calls this "still owed before the
-concurrent-multi-card flag flip." **2-card boot only.**
-
-*Step 3* (eGPU fault-drop) is genuinely observe-only — yanking an OcuLink cable
-is a hard crash. Mark Blocked/N-A unless it happens on its own.
-
-*Criteria:* `docs/features/264-vram-aware-gpu-placement.md:129-179`, header `:9-22`.
-
-> **Ruling, 2026-08-21 — rows 6–8 are NOT owed; scope narrowed.** The
-> evict-under-contention rows (cold-`/load` device steer, `design_voice`
-> evicts Ollama, GPU-ASR 503→evict→retry) were previously carried here as an
-> ambiguous second debt. Plan 264 itself frames them as "deferred by choice,
-> not blocked" — rest on automated coverage for now, runnable on demand, not
-> a debt owed to this register. The repo owner confirmed this reading
-> 2026-08-21. This row's scope narrows to step 9 alone; the row does not
-> leave the register, since step 9 is still genuinely owed. **The prior ⚠️
-> about plan 264 contradicting itself (S6 listed as both force-driven and
-> not force-driven) is resolved** — Castwright#2559 fixed the plan text
-> (removed `S6` from the force-driven list), see
-> `docs/features/264-vram-aware-gpu-placement.md`.
-
 ### A3 · srv-57 Multi-GPU Wave 2 · **2-card boot**
 
-Ten unchecked items in [#1230](https://github.com/dudarenok-maker/Castwright/issues/1230).
-Real per-card UUIDs from torch · a starved card self-exits with code 43, `/health`
-showing the breach first · `QWEN_DEVICE`/`KOKORO_DEVICE` on different cards run
-concurrently, same-card pinning still blocks · three code-43 exits in ten minutes
-**twice** — once card-specific (trips the streak guard), once not (manual-investigation
-path).
+**Narrowed 2026-09-08 (step 9, #2954) — 9 of 10 items discharged, one real gap
+remains.** The 10-item checklist ran for real on both cards (real per-card UUIDs
+from torch, a starved card self-exiting with code 43 with `/health` showing the
+breach first, cross-card `QWEN_DEVICE`/`KOKORO_DEVICE` concurrency, same-card
+pinning still blocking) — each item's evidence is an actual command + actual
+output, not a memory checkbox
+(`docs/testing/onbox-2card-pinokio-batch-results/step-2-a3-checklist.md`).
 
-Task 16/16.5 (auto-revert on a repeated bad pin) is designed but **unbuilt**, gated
-on item 1 — it consumes the `tripEvent()` item 1 exercises.
+Task 16/16.5 (`runAutoRevert` + its operator toast, on a repeated card-specific
+bad pin) **was built** (`b6075855`) with real paired tests — a mutated guard
+(card-specific vs. not-card-specific branch flipped) reddens all four tests, and
+reverts clean
+(`docs/testing/onbox-2card-pinokio-batch-results/step-3-a3-build.md`).
+
+**What remains owed:** the real-hardware trigger. A forced card-specific
+three-exits-in-ten-minutes streak was run for real against this worktree's own
+sidecar and did **not** reach `runAutoRevert` in production — `/api/gpu/trip-status`
+stayed `null` throughout and no toast fired
+(`docs/testing/onbox-2card-pinokio-batch-results/step-4-a3-hardware.md`). Node's
+`onChildExit` never observes the streak because `start.ps1` absorbs and restarts
+the code-43 child internally on Windows before Node's own supervisor sees three
+distinct exits — the same root cause step 2's checklist items 5/6 already
+surfaced. The row narrows to this one item: **wire the streak-trip signal through
+`start.ps1`'s own restart loop (or an equivalent path) so `runAutoRevert` actually
+fires on real hardware**, then re-run the hardware trigger to confirm.
 
 ### A4 · Audition engine + tier fidelity ([#1849](https://github.com/dudarenok-maker/Castwright/pull/1849))
 
@@ -2059,23 +2089,36 @@ enumeration on every spawn. Verified by unit tests and CI; **never watched on re
 cards.** The behaviour that matters most is the one no test can reach — a respawn
 after the index actually changes.
 
-- Pin Qwen to a specific card in Advanced settings, restart the server, and force a
-  supervisor respawn (`POST /api/sidecar/restart`, or let a recycle fire). The engine
-  lands on the **pinned** card both times.
-- Then change the enumeration order — swap the cards, or set `CUDA_DEVICE_ORDER` —
+**Narrowed 2026-09-08 (step 9, #2954) — bullets 1/3/4 closed, bullet 2 stays
+open.** Each was run for real on both cards with actual command/response
+transcripts (`PUT /api/config` → forced respawn → `GET /health`, VRAM deltas
+cited):
+
+- ~~Pin Qwen to a specific card in Advanced settings, restart the server, and
+  force a supervisor respawn (`POST /api/sidecar/restart`, or let a recycle
+  fire). The engine lands on the **pinned** card both times.~~ **Confirmed.**
+- ~~Pin `tts.qwen.codecDevice` to a card and confirm the codec is actually
+  placed there. Before #1870 the pin was silently ignored — the literal failed
+  inside torch's `.to()` and rolled back to CPU.~~ **Confirmed.**
+- ~~Point the codec pin at a card that is **not** present and confirm the
+  sidecar logs `QWEN_CODEC_DEVICE=… did not match any visible GPU` and leaves
+  the codec on **cpu** — not on the model's card, which is what `auto` would
+  have done.~~ **Confirmed.**
+
+Still owed — deliberately left untouched, not silently attempted:
+
+- Change the enumeration order — swap the cards, or set `CUDA_DEVICE_ORDER` —
   and confirm a respawn still finds the pinned card by UUID rather than failing
   `_validate_cuda_index` or landing on the wrong one. **This is the regression the
   change exists to prevent**, and it was previously reachable only when the user had
-  opened Advanced settings during that server session.
-- Pin `tts.qwen.codecDevice` to a card and confirm the codec is actually placed there.
-  Before #1870 the pin was silently ignored — the literal failed inside torch's
-  `.to()` and rolled back to CPU.
-- Point the codec pin at a card that is **not** present and confirm the sidecar logs
-  `QWEN_CODEC_DEVICE=… did not match any visible GPU` and leaves the codec on **cpu**
-  — not on the model's card, which is what `auto` would have done.
+  opened Advanced settings during that server session. **Excluded from this
+  chain deliberately**, not for lack of a hardware path: this box runs several
+  other live lanes concurrently, and swapping enumeration order (or a reboot)
+  would disturb their GPU state mid-run — a contention risk, not a hardware
+  gap. Needs a dedicated, uncontended window.
 
-*Needs:* both cards, and the ability to change enumeration order between boots (the
-eGPU is not hot-pluggable, so batch this with A2 step 9 and A3). *Cost:* short.
+*Needs:* both cards, and the ability to change enumeration order between boots
+(the eGPU is not hot-pluggable). *Cost:* short.
 
 ### A13 · Idle Coqui is reclaimed under VRAM pressure ([#1894](https://github.com/dudarenok-maker/Castwright/issues/1894)) · **single 8 GB card**
 
@@ -2445,18 +2488,18 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 > also OOM the card. Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
 
-### A18 · Cloned-voice derive on Coqui no longer needs torchcodec ([#1967](https://github.com/dudarenok-maker/Castwright/issues/1967)) · **single 8 GB card + a real static-FFmpeg box; item 4 needs a Pinokio install**
+### A18 · Cloned-voice derive on Coqui no longer needs torchcodec ([#1967](https://github.com/dudarenok-maker/Castwright/issues/1967)) · **single 8 GB card + a real static-FFmpeg box**
 
 **The hot patch was reverted on 2026-07-31 and the dev box is now a genuine static-FFmpeg box again** — `ffmpeg 8.1.1-full_build-www.gyan.dev` on PATH, and the 25 copied FFmpeg DLLs removed from `site-packages/torchcodec/`. Note the revert is *not* "delete every non-hash-suffixed `*.dll`" as first written: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's **own** extensions, have no hash-suffixed twin, and must stay. The copied set is exactly those non-hash-suffixed files that *do* have a hash-suffixed twin. With #1967 merged the hot patch is no longer needed to unblock A1's Section E.
 
-**Partially discharged — items 1 and 3 are now DONE (2026-07-31); items 2 and 4 remain.** What ran, and what it proved:
+**Partially discharged — items 1, 3 and 4 are now DONE (item 4 as of 2026-09-08); item 2 remains.** What ran, and what it proved:
 
 - `import torchcodec` → `RuntimeError: Could not load libtorchcodec … FFmpeg is not properly installed`. The box is genuinely broken, so nothing below is a vacuous pass.
 - `torchaudio`'s own loader on a reference WAV → same failure. This is the pre-fix path.
 - **The real, installed `TTS.tts.models.xtts.load_audio`** — the exact function `get_conditioning_latents` calls — fails unpatched and returns a correct `(1, 22050)` tensor under `patched_xtts_load_audio()`. This is the seam #1967 is about, tested against the shipped upstream function rather than a fake.
 - `tests/test_xtts_audio_io.py` on that box → **10 passed, 2 skipped**, the skips being the fidelity tier correctly opting out when torchaudio's loader cannot run. That skip behaviour had never been exercised on a real static-FFmpeg box before; it was only inferred.
 
-**Still owed** is everything that needs the sidecar and a real voice — see items 1–4.
+**Still owed** — see item 2 below.
 
 - **1. Static-FFmpeg derive — DISCHARGED 2026-07-31.** Ran on the reverted box against a sidecar the server genuinely supervised. The derive **completed** through the full `CoquiEngine.clone_voice` path and wrote both artifacts into a directory that was **empty** beforehand, so no cached `.pt` could have short-circuited it:
 
@@ -2493,9 +2536,24 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 
   Driven through the **real** `COQUI_VERIFY_CODE` and the **real** branch predicate from `install-coqui.mjs:222-232`; perturbations injected via `PYTHONPATH` only (a `sitecustomize.py` rebinding `load_audio`, and a shadow `TTS/__init__.py` raising `ImportError`), so the shared venv was never mutated. The guard's other drift shape (attribute missing) is already unit-covered by `test_raises_when_load_audio_missing`; the on-box-unique part was the marker-driven branch selection, which is what ran.
 
-- **4. Pinokio's torchcodec outcome.** On a real Pinokio install, run `import torchcodec` inside the nested `.venv` that `pinokio/install.js` provisions and record whether it succeeds or fails — genuinely unknown at design time (design spec §11): conda-forge's ffmpeg is built shared, but a *nested* venv created from the conda interpreter does not automatically inherit loadable access to the conda env's `Library/bin` DLLs, so shared-ness there does not imply loadable here. #1967's fix makes the answer moot for *behaviour* either way — a Coqui clone derives correctly on Pinokio regardless — but the outcome itself is still owed as a recorded fact; see the correction note on `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md:83`. **Batch with E1**, which already owns the Pinokio box.
+- **4. Pinokio's torchcodec outcome — DISCHARGED 2026-09-08 (step 9, #2954).**
+  Ran for real: registered a fresh throwaway Pinokio app, ran `install.js`'s own
+  declared steps directly (conda env + `npm ci` ×2 + `bootstrap-venv.mjs`, since
+  Pinokio's own orchestrator is a known-stalling defect on this box, unrelated to
+  the code under test), then reproduced the exact `pip install torchcodec
+  --no-deps` step `install-coqui.mjs` uses against that nested venv. **Outcome:
+  `import torchcodec` SUCCEEDS** in this layout — no exception, no DLL-load
+  error, resolved to the CPU-only wheel (`0.16.0+cpu`, PyPI default index — the
+  same outcome the real pipeline gets, since no CUDA index is passed for
+  torchcodec). This resolves the design-time uncertainty (whether a nested venv
+  created from the conda interpreter inherits loadable access to conda's
+  `Library/bin` DLLs) empirically: on this box, at this version, a bare import
+  does not reach for ffmpeg's shared libraries at import time (only at decode
+  time, not exercised here). Moot for behaviour either way per #1967's fix, but
+  the fact itself was owed and is now recorded
+  (`docs/testing/onbox-2card-pinokio-batch-results/step-8-a18-item4.md`).
 
-*Needs:* items 1 and 3 want the 8 GB card with a real Coqui install — the dev box already satisfies item 1's static-FFmpeg prerequisite since the 2026-07-31 revert, so item 1 now needs only a post-merge sidecar and a consented sample; item 2's remaining half wants a box with a genuinely shared FFmpeg; item 4 wants a real Pinokio install (batch with E1). *Criteria:* [`docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`](../superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md) §12. *Cost:* short per item — the coordination cost of reverting the shared hot patch is now spent.
+*Needs:* items 1 and 3 want the 8 GB card with a real Coqui install — the dev box already satisfies item 1's static-FFmpeg prerequisite since the 2026-07-31 revert, so item 1 now needs only a post-merge sidecar and a consented sample; item 2's remaining half wants a box with a genuinely shared FFmpeg. *Criteria:* [`docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`](../superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md) §12. *Cost:* short per item — the coordination cost of reverting the shared hot patch is now spent.
 
 ---
 
@@ -4642,7 +4700,7 @@ D1's five languages, which are done.
 
 <!-- next-id: E104 -->
 
-Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5/E6/E8 for front-end acceptance), or platform-independent infrastructure (E1/E7/E9/E11/E12). E1/E7/E11 group on the Pinokio box; E6 needs two live checkouts.
+Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9/E103). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
 ### E1 · ops-16 Pinokio installer ([#822](https://github.com/dudarenok-maker/Castwright/issues/822)) · **macOS is the gap**
 
@@ -4803,46 +4861,6 @@ wizard "Review ›" chip, voice-library drag icon. Minutes, any machine.
 > intentional now that touch users are meant to use the `Assign` pill
 > instead. Full evidence:
 > `docs/testing/onbox-human-checkpoint-results/step6-e5.md`.
-
-### E7 · ORT marker — the Pinokio update path ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **group with E1**
-
-Design doc §On-box acceptance, criterion 4: `pinokio-scripts/update.js` — named
-specifically, not `install.js` — as "the deployment shape that reported the bug."
-`update.js` and `install.js` both invoke `bootstrap-venv.mjs` directly with **no
-server process at all**, but they are not interchangeable: `update.js` loads from
-the *currently checked-out* release and iterates its `run[]`, per the Pinokio
-installer's own documented one-update-lag behaviour (see E1) — a fresh-install
-pass does not stand in for an update pass. Every other on-box row for this feature
-runs through the dev server, a different process entirely; this is the only row
-that proves the out-of-process invocation applies the marker identically rather
-than taking some code path only the server-mediated call exercises.
-
-- On a machine with Pinokio and an **existing** (pre-fix) install (Windows, the
-  original reporter's platform, is the priority; **group with E1**, which already
-  owns the Pinokio box), run Update on the nvidia profile.
-- **This PR changes no `requirements/*.txt`, so on this release Update takes the
-  `noop` branch**: `bootstrap-venv.mjs`'s `classifyVenvState` sees an unchanged
-  `reqHash`, `main()` returns before ever calling `runInstall`, and no marker is
-  written by Update at all — that is expected, by design, not a failure. Confirm
-  instead that `pip check` is unchanged from its pre-Update state, then that the
-  marker arrives (and `pip check` goes clean) at the **next server boot** via
-  `ensureOrtMarker`'s self-heal — the same mechanism criterion 3 already proved,
-  reached through the Update entry point. A future release that *does* touch
-  `requirements/*.txt` takes the `pip-in-place` branch instead, and on that
-  branch `pip check` should be clean immediately after Update, with no server
-  ever having started — written directly by `bootstrap-venv.mjs`'s own call to
-  `applyOrtMarkerWrite`.
-- From within the app once it does start, install Qwen3 (the original bug's own
-  repro) and confirm no `WinError 5`.
-- **In the same session, also run a fresh Install** (`install.js`) and confirm the
-  same outcome — a second shape of this criterion, not a separate row. `install.js`
-  has no prior stamp, so it always takes the `pip-in-place`-shaped path (marker
-  written immediately, no boot needed) regardless of which branch Update took.
-
-*Needs:* a machine with Pinokio installed, an existing pre-fix install, nvidia
-profile. *Cost:* 20–40 minutes, sharing setup with E1. *Criteria:* design doc
-§On-box acceptance item 4; run sheet §6 in
-`docs/testing/ort-marker-onbox-acceptance.md`.
 
 ### E9 · `measure-attribution.mjs` against the real workspace ([#1984](https://github.com/dudarenok-maker/Castwright/issues/1984) Wave 1, [plan](../superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md)) · **real workspace, no GPU needed**
 
@@ -5005,39 +5023,6 @@ exists. *Criteria:* spec §On-box acceptance
 > both remain owed exactly as recorded above. No register edit was made by
 > that step itself — this note folds its verdict in per wave-5 step 6.
 > Evidence: `docs/testing/onbox-wave5-results/step-3-e9.md`.
-
-### E11 · Pinokio Install/Update: requirements CRLF normalization ([#2596](https://github.com/dudarenok-maker/Castwright/issues/2596), PR #2799) · **Windows box with pre-existing Pinokio install**
-
-PR #2799 adds `renormalizeRequirementsCrlf()` to `pinokio-scripts/lib/resolve-release.js`, 
-called during both `install.js` and `update.js` to normalize CRLF line endings in 
-`requirements/*.txt` files after `git checkout` of a release tag. Before `.gitattributes` 
-enforced `eol=lf` repo-wide, a user's pre-existing install may have stale CRLF 
-requirements. The normalization prevents spurious 'file changed' detections that would 
-trigger an unnecessary full `pip install --force-reinstall` on the next Update.
-
-- On a Windows machine with a **pre-existing** Pinokio install that has CRLF-mangled 
-  `requirements/*.txt` files (e.g. from a prior checkout before `.gitattributes` 
-  enforcement), run Update.
-- Confirm the requirements files are normalized to LF (check file endings via `file` 
-  or hex dump, or confirm the files read as unchanged after running the normalizer 
-  a second time).
-- Confirm that the normalization does not trigger an unnecessary `pip install` 
-  reinstall — `bootstrap-venv.mjs`'s `classifyVenvState` should see unchanged 
-  `reqHash` and take the `noop` branch, exiting before `runInstall`.
-- Confirm a subsequent Install (the `install.js` path) also normalizes any stale 
-  CRLF it finds to LF and proceeds with the normal install flow.
-
-*Needs:* a Windows machine with Pinokio installed, a pre-existing install with 
-CRLF-mangled `requirements/*.txt` (or ability to create one by checking out an old 
-release prior to `.gitattributes`). *Cost:* 10–15 minutes, grouping with E1's 
-Pinokio box. *Criteria:* this PR's `resolve-release.test.js` acceptance test 
-(automated verification of the CRLF→LF transform path), plus real-world confirmation 
-that a stale-CRLF install updates without spurious reinstall and that a fresh install 
-normalizes correctly. Issue #2596 and PR #2799 body.
-
-**One-update lag:** Updates FROM pre-#2799 releases run the old `resolve-release.js`, 
-so CRLF normalization only takes effect from the NEXT update onward (see E1 and 
-`pinokio-scripts/update.js` lines 19–28).
 
 ### E103 · `scripts/wt-gc.mjs --prune` — real junction-first teardown ([#3051](https://github.com/dudarenok-maker/Castwright/issues/3051), ops-75 Part 4)
 
