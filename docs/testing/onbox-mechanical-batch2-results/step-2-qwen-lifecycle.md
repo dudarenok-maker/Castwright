@@ -15,7 +15,12 @@
 # first time — the caller-timeout DID surface, but as a raw generic timeout,
 # not a `NoCapacityError` conversion, because GPU1 had no real capacity
 # contention to convert; bullet 3 still open pending a genuine contention
-# setup)
+# setup; 17th run: A24 bullet 3 now CLOSED — forced genuine capacity
+# contention on the single card present this run and confirmed the real
+# `NoCapacityError` conversion. Bullet 2 could not even be attempted this
+# run — the box exposed only ONE GPU (cuda:0, RTX 4070 8GB); the RTX 5070 Ti
+# (cuda:1) every prior run used for this bullet was not present. A24 bullet 2
+# is now the ONLY thing left open in this entire step.)
 
 Run 2026-09-06/07/08, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
@@ -1014,6 +1019,97 @@ turned out not to be necessary to reach a real (if negative) result.
 3 now has a live negative data point and a concrete next step (force
 capacity contention); bullet 2's device-placement gap is unchanged from the
 15th run's notes.**
+
+## A24 bullet 3 — CLOSED via genuine capacity contention (17th run, 2026-09-09)
+
+**Real result: CONFIRMED — the `NoCapacityError` conversion fires as
+documented.** This run's box exposed only ONE GPU via `nvidia-smi`/`/health`
+(`cuda:0`, RTX 4070 Laptop, 8585 MB total) — the RTX 5070 Ti (`cuda:1`,
+16 GB) every prior run on this issue used is not present this session. That
+rules out bullet 2 entirely for this run (needs two cards), but a single
+tight card turned out to be exactly what bullet 3 needed: the 16th run's own
+diagnosis (below) was that its negative result came from *too much* free
+headroom on the 16 GB card, not a code defect.
+
+**Root-cause read of the 16th run's negative result, confirmed from source
+this run (`server/src/gpu/capacity-retry.ts`):** `usingDesignBudget` only
+becomes `true` once the GENERIC bound (`GPU_CAPACITY_MAX_ATTEMPTS=30` ×
+`GPU_CAPACITY_POLL_MS=2000` ≈ 60s, both defaults) is exhausted AND
+`isDesignResident(deviceKey)` reads true at that instant — only from then on
+does a caller's own hard-timeout abort get converted to `NoCapacityError`
+(the `catch` block's `usingDesignBudget && isHardTimeoutAbort(...)` check).
+The 16th run had shortened `LOAD_TIMEOUT_MS` to 8s — far short of the ~60s
+needed to ever reach `usingDesignBudget` — so its caller-side abort always
+fired during the FIRST (generic) phase, before the design-budget branch was
+even reached, guaranteeing a plain `AbortError` regardless of residency.
+**The fix was to use the UNMODIFIED default `LOAD_TIMEOUT_MS` (90s)**, which
+sits naturally inside the window where conversion is possible (60s < 90s <
+~260s design-budget ceiling) — no source edits needed at all, only genuine
+capacity contention sustained across that window.
+
+**Setup, this run:**
+1. Loaded Kokoro first (`POST /api/sidecar/load {"engine":"kokoro"}`) to
+   probe headroom — found it left only ~6.86 GB free, not enough for a 1.7B
+   VoiceDesign's ~6144 MB floor once `admit()`'s own margins are applied (hit
+   the same `design_failed: Not enough GPU memory for qwen (6144MB)` message
+   the original setup section already documented for this fixture/card
+   combination). Unloaded Kokoro again rather than fight that margin.
+2. With the card fully idle (7409 MB free), started a **1.7B** VoiceDesign
+   for `anna` (`POST .../cast/anna/design-voice/stream`, `persona` supplied
+   inline since the route 400s without one — `modelKey: "qwen3-tts-1.7b"`,
+   deliberately heavier than bullet 1's `0.6b` so the resident footprint
+   would actually squeeze the rest of this 8 GB card). Confirmed resident via
+   `/health` (`qwen_design_resident: true`, `qwen_device_key: "cuda:0"`).
+3. Immediately fired `POST /api/sidecar/load {"engine":"coqui"}` (XTTS,
+   ~3584 MB) while the design held the card — timed with `time` from the
+   moment of the call.
+
+**Result:** after **90.308s** (`LOAD_TIMEOUT_MS` is 90_000ms — matches to
+within the network/JSON round-trip), the call returned:
+```
+{"status":"error","error":"Not enough GPU memory for coqui (3584MB). A voice
+design is loaded — Wait for the in-progress voice design to finish — it
+frees automatically once idle."}
+```
+This is **not** the generic caller-timeout text (`"Sidecar /load did not
+complete within 90000ms — model load is unusually slow or the process is
+stuck."`, `sidecar-health.ts:648`) — it is the blocker-naming message
+`NoCapacityError`'s constructor builds from `describeVramBlockers` (folded in
+via the `catch` block's conversion path, `capacity-retry.ts:362-369`), naming
+the resident voice design specifically and giving its real auto-recovery
+remedy. `/api/gpu/queue`'s `queueDepth` was observed at `1` during the
+in-between polls (t+70s/t+80s/t+90s), confirming this request was genuinely
+parked in the capacity-poll wait the whole time, not stuck on an unrelated
+slow load the way the 16th run's coqui cold-load was. Elapsed time landing
+almost exactly on `LOAD_TIMEOUT_MS` (not the ~60s generic bound, and nowhere
+near the ~260s design-budget ceiling) is itself strong evidence this is the
+caller's own hard-timeout firing mid-design-budget-wait and being converted
+— exactly the mechanism this row is verifying.
+
+Cleanup: waited for the in-flight `anna` design to finish naturally (same
+"don't cut off an in-flight design" discipline every prior run on this issue
+used) — completed normally (`{"type":"designed","voiceId":
+"qwen-uIRjRzpfDUZqLX_0eVctR",...}`, same voiceId as prior runs, no new
+persisted state). Called `POST /unload {"engine":"qwen"}` afterward;
+confirmed fully idle via `/health` (`qwen_loaded`/`qwen_design_resident`
+both `false`, `inflight_synth: 0`, `kokoro_loaded: false`, `free_mb: 7348`,
+close to this card's own established idle baseline). No source edits made
+this run (unlike the 15th/16th runs) — `git status --porcelain` was clean
+throughout, nothing to revert. Sidecar and dev server were both started
+fresh this run (neither was running at the start) and left running for the
+next run.
+
+**A24 bullet 2 — still not attempted, and not attemptable this run.** This
+bullet needs the design resident on one card and a denied Base render
+observed NOT to wait on a second, different card — this session's box has
+only one GPU, so there is no second card to place anything on. This is an
+environment fact for this run, not a new code finding; the next run should
+re-check `nvidia-smi`/`/health`'s `gpus` array length before assuming the
+5070 Ti is unavailable generally.
+
+**Step 2 status after this run: A24 bullet 2 is the ONLY thing left open in
+the entire step** (A24 bullets 1, 3, 4 closed; A105 all 5 bullets closed;
+A35 all 4 bullets closed).
 
 ## Remaining scope — not attempted this session
 
