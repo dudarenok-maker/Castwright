@@ -614,6 +614,23 @@ jobs:
         shell: bash
         run: npm run test:server
 
+      # `scripts/tests/reap-stale-batteries.test.mjs` carries one win32-guarded
+      # case (`C3`) that drives the real `collectProcessSnapshot()` against a
+      # real `Get-CimInstance Win32_Process` query rather than an injected
+      # fixture -- the net that closes pass 2's C3 and guards against pass 1's
+      # date-parsing bug ever reappearing. `test:hooks` already runs on the
+      # `lint-and-checks` job above, but that job is `runs-on: ubuntu-latest`,
+      # where the case's own `{ skip: process.platform !== 'win32' ... }`
+      # unconditionally skips it -- so no CI leg has ever executed it. This
+      # job is the only Windows runner in the file. Gated identically to the
+      # Ubuntu `test:hooks` leg (same scope key, no `shared`-only widening),
+      # so a PR outside that scope pays nothing extra here either.
+      # leg: test:hooks:windows
+      - name: Hooks tests (win32 real-process case)
+        if: fromJSON(needs.detect.outputs.scopes).step_test_hooks || fromJSON(needs.detect.outputs.scopes).shared
+        shell: bash
+        run: npm run test:hooks
+
   # Thin aggregator — see the top-of-file comment. Keeps the "npm run verify"
   # status-check name (required on main's branch-protection ruleset) stable
   # while the real work runs concurrently in the named jobs above.
