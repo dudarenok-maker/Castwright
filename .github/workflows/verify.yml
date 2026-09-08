@@ -581,6 +581,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Full history: `npm run test:hooks` runs the onbox-register replay
+          # test which needs 25 commits of git history via `git log -25 --`,
+          # and npm run skills:sync needs origin/main to resolve. A shallow
+          # (depth-1) clone wouldn't have either, causing test:hooks to fail
+          # (sync-agent-skills loudly) or silently iterate over nothing
+          # (register replay), appearing to pass while providing no coverage.
+          fetch-depth: 0
 
       - name: Setup Node + deps
         uses: ./.github/actions/setup
