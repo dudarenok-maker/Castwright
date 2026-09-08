@@ -1,13 +1,12 @@
 # Language recurrence + ambiguity prompt — on-box acceptance run sheet
 
-> **This is a working document.** Fill in the `Result:` lines AS you run this on
-> the box. Do not pre-fill them.
+> **This is now a historical record.** Rows B2 and A43 have been discharged
+> and the gate mechanism is proved in place. Evidence is recorded below
+> (§3 and §4 `Result:` lines refer to [`onbox-batch-results/b2.md`](onbox-batch-results/b2.md)
+> and are not repeated here).
 >
 > Design of record: [`docs/superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md`](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-13-language-recurrence-and-prompt.md`](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md)
-> Register rows: B2 is discharged (2026-09-07) and removed from the register
-> — the sibling voice-design row, A43, is discharged (2026-08-26) and removed
-> from the register too; this whole document is now historical record.
 > Issue: [#2246](https://github.com/dudarenok-maker/Castwright/issues/2246)
 
 ---
@@ -60,17 +59,17 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
    `409` with `{ error: 'language_unset' }` (or the client-visible
    equivalent), not a silently-started English analysis.
 
-   Result: _______________________________________________
+   Result: **409 Conflict, `{"error":"language_unset"}`**, refused pre-detach. `b2.md` Step 2.
 
 3. Resolve the language through the prompt — the library's "unset"
    affordance → Book settings language row, or the confirm-screen re-entry
    if the book is still at that stage.
 
-   Result (prompt reachable, language set): ________________
+   Result (prompt reachable, language set): **Language set to `ru` via Book settings API.** `b2.md` Step 3.
 
 4. Re-start analysis on the same book against the live analyzer.
 
-   Result (analysis proceeds, no gate this time): __________
+   Result (analysis proceeds, no gate this time): **200 OK, analysis completed.** 5-character cast detected, 55 sentences attributed. `b2.md` Step 4.
 
 5. **The conventions-table check — the reason this row exists.** On the
    non-English (Russian) fixture from Preconditions, once its language is
@@ -81,7 +80,7 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
    against #2325's calibrated bands: healthy well under 60%, collapsed well
    over).
 
-   Result (dialogue attributed correctly, not to narrator): __________
+   Result (dialogue attributed correctly, not to narrator): **All 4 dash-opened lines correctly attributed to speaking characters (dragon, Одуван), 0 to narrator.** `b2.md` Step 5.
 
 ## 4. §Voice-design gate — register row A43 (discharged 2026-08-26, removed from the register)
 
@@ -115,8 +114,8 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
 ## 5. Outcome
 
-- [ ] §3 run (register row B2, discharged 2026-09-07, removed from the register)
-- [ ] §4 run (register row A43, discharged 2026-08-26, removed from the register)
+- [x] §3 run (register row B2, discharged 2026-09-07, removed from the register) — evidence in [`onbox-batch-results/b2.md`](onbox-batch-results/b2.md)
+- [x] §4 run (register row A43, discharged 2026-08-26, removed from the register)
 - [ ] Defects filed: ____________________________________
 
 Record what was observed, by whom, and when — here and in the register rows.

@@ -157,31 +157,18 @@ function baseSubtag(language?: string | null): string {
   return (language ?? '').toLowerCase().split('-')[0];
 }
 
-/** True when a per-language `maxWer` knob's own registry `default` has been
-    calibrated away from the global `qa.asr.maxWer` knob's default (D1,
-    docs/testing/onbox-batch-results/d1.md) — the signal `perLanguageMaxWer`
-    uses to decide whether that language's default should apply at all.
-    Exported and unit-tested directly (segment-asr-qa.test.ts) because no
-    language calibrated today (es/ru/fr/de, all 0.45 vs the global 0.4) can
-    exercise the `false` case through the real registry — a future language
-    calibrated back down to the global default, or a change to the global
-    default itself, would otherwise reach this branch for the first time
-    with zero prior coverage. */
-export function isLanguageCalibrated(knobDefault: number, globalDefault: number): boolean {
-  return knobDefault !== globalDefault;
-}
 
 /** Per-language ASR `maxWer` override (#1084 scaffold). An operator's explicit
     env/app override for this language always wins. Next, an explicit
     env/app override on the GLOBAL `qa.asr.maxWer` knob wins too — otherwise
     an operator's `SEG_ASR_MAX_WER` change stops reaching es/fr/de/ru the
-    moment a language gets its own calibrated knob. Absent either override, a
-    CALIBRATED per-language knob (see `isLanguageCalibrated`) applies, so
-    calibration takes effect without requiring an operator to also set an env
-    var. A language with NO registry knob at all (never calibrated, e.g.
-    zh/ja per D2) returns undefined at the `!knob` guard below, before any of
-    this — it cascades to the global `maxWer` (including its own live
-    override) the same way an explicitly-uncalibrated knob would. */
+    moment a language gets its own calibrated knob. Absent either override,
+    the per-language knob's default applies whenever the global knob is
+    untouched, so calibration takes effect without requiring an operator to
+    also set an env var. A language with NO registry knob at all (never
+    calibrated, e.g. zh/ja per D2) returns undefined at the `!knob` guard
+    below, before any of this — it cascades to the global `maxWer` (including
+    its own live override) the same way an uncalibrated language would. */
 function perLanguageMaxWer(language?: string | null): number | undefined {
   const lang = baseSubtag(language);
   if (!lang) return undefined;
@@ -192,10 +179,7 @@ function perLanguageMaxWer(language?: string | null): number | undefined {
   const globalKnob = allKnobs().find((k) => k.key === 'qa.asr.maxWer');
   if (!globalKnob) return undefined;
   if (resolveKnob(globalKnob).source !== 'default') return undefined;
-  if (isLanguageCalibrated(knob.default as number, globalKnob.default as number)) {
-    return knob.default as number;
-  }
-  return undefined;
+  return knob.default as number;
 }
 
 export function resolveAsrThresholds(

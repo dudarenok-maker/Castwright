@@ -563,20 +563,20 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 > **Batch step 6, 2026-09-07 (claude) — 55 → 52 owed, three rows discharged.**
 > B2 (analysis language gate, real end-to-end loop confirmed including the
-> dash-attribution extended-fixture case), D1 (non-English ASR content-QA
-> calibration, `qa.asr.maxWer.{es,fr,de,ru}` set to `0.45` from observed WER
-> distributions across real es/fr/de/ru chapter renders — see
-> `onbox-batch-results/d1.md` for why 0.45 and not each language's own p90),
-> and A37 (doubled-comma collapse pause survives the fix, real Coqui/XTTS
-> measurement) all fully agent-confirmed and removed. Group A 36 → 35 (A37),
-> Group B 2 → 1 (B2), Group D 2 → 1 (D1). A16 and A31 were re-evidenced this
-> same batch but **not** discharged — both have real, agent-checkable
-> sub-criteria that passed, but each also surfaced a genuinely ambiguous or
-> not-fully-met sub-check that needs a human listen or a human judgment call;
-> see their own rows for what remains. This lands on top of the independent
-> E103 addition below (55 owed at that point; the two changes touched
-> disjoint groups — Groups A/B/D here, Group E there — and never saw each
-> other).
+> dash-attribution extended-fixture case — see `onbox-batch-results/b2.md`),
+> D1 (non-English ASR content-QA calibration, `qa.asr.maxWer.{es,fr,de,ru}` set
+> to `0.45` from observed WER distributions across real es/fr/de/ru chapter
+> renders — see `onbox-batch-results/d1.md` for why 0.45 and not each language's
+> own p90), and A37 (doubled-comma collapse pause survives the fix, real
+> Coqui/XTTS measurement — see `onbox-batch-results/a37.md`) all fully
+> agent-confirmed and removed. Group A 36 → 35 (A37), Group B 2 → 1 (B2),
+> Group D 2 → 1 (D1). A16 and A31 were re-evidenced this same batch but
+> **not** discharged — both have real, agent-checkable sub-criteria that
+> passed, but each also surfaced a genuinely ambiguous or not-fully-met
+> sub-check that needs a human listen or a human judgment call; see their own
+> rows for what remains. This lands on top of the independent E103 addition
+> below (55 owed at that point; the two changes touched disjoint groups —
+> Groups A/B/D here, Group E there — and never saw each other).
 
 > **Prior change: 2026-09-06, adding E103** (#3051, ops-75 Part 4, claude):
 > `scripts/wt-gc.mjs --prune`'s junction-first teardown against real worktree
@@ -2197,7 +2197,7 @@ opportunistic.
 ### A16 · A cloned voice renders a non-English book in the book's language (plan [275](../features/275-clone-voice-language.md), [#1951](https://github.com/dudarenok-maker/Castwright/issues/1951))
 
 > **EVIDENCED 2026-09-06 (wave 12) via full chapter generation — still owed,
-> one new defect.** Corrected after
+> 2 open findings.** Corrected after
 > [#1972](https://github.com/dudarenok-maker/Castwright/issues/1972) was
 > understood; the original 2026-07-31 entry claimed a full discharge from a
 > splice re-record and was wrong (see the RETRACTED note above — that result
@@ -2225,6 +2225,10 @@ opportunistic.
 > identity (cosine 0.891 between pre- and post-restart takes) both times,
 > not byte-identical (expected — Qwen3-TTS sampling is stochastic), but
 > never silently switched voice or language.
+>
+> **What still stands — the fix works, proven at the synthesis boundary.** Three
+> direct `POST /synthesize` calls on the same cloned voice, raw PCM transcribed
+> with Whisper auto-detect and embedded with `/embed`:
 >
 > | Call | detected | `avg_logprob` | cos vs source clip |
 > |---|---|---|---|
