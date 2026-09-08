@@ -8,7 +8,10 @@
 # via the codebase's own existing white-box unit coverage plus an on-box
 # finding that explains the methodology gap; 14th run: A24 bullet 4 now
 # CLOSED via a live on-box repro — A105 and A35 are both fully closed, only
-# A24 bullets 2-3 remain)
+# A24 bullets 2-3 remain; 15th run: diagnosed the exact code paths for both
+# remaining bullets — see "A24 bullets 2-3 — 15th run" below — but did not
+# reach a clean live confirmation of either, and hit an operational incident
+# worth flagging separately)
 
 Run 2026-09-06/07/08, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
@@ -779,6 +782,133 @@ logs for the detached sidecar/curl calls lived under this run's own
 `%OE_RUN_SCRATCH%` directory, never under `server/tts-sidecar/`. Working
 tree confirmed clean (`git status --porcelain` empty) before this file's own
 edit.
+
+## A24 bullets 2-3 — 15th run (2026-09-08): code-path diagnosis, no clean live confirmation
+
+**Not closed. Real progress: both remaining bullets' exact mechanisms are now
+traced through the source, including the reason three prior runs' "device
+placement not landing reliably on GPU0" note never resolved. No live repro
+was completed this run** — an operational incident (see below) cut the
+session short before either bullet reached a clean result, and the incident
+itself needs to be flagged ahead of anything else.
+
+**Bullet 3 (`/api/sidecar/load`'s 90s abort-budget conversion) — mechanism
+traced, setup built, not yet driven to a result.** Read
+`server/src/gpu/capacity-retry.ts` (`withCapacityRetry`) end to end:
+`GPU_CAPACITY_POLL_MS`/`GPU_CAPACITY_MAX_ATTEMPTS` (env-overridable, default
+~60s generic budget) gate when the generic retry loop checks
+`isDesignResident(noCap.deviceKey)`; once resident, `usingDesignBudget` flips
+true and the loop keeps polling on the extended (~200s) design budget. The
+catch block converts a caller abort to `NoCapacityError` only when
+`usingDesignBudget` is true AND the abort reason was tagged via
+`createHardTimeoutAbortReason()` — which `server/src/routes/sidecar-health.ts`'s
+`/load` route does via its `LOAD_TIMEOUT_MS` (hard-coded `90_000`) timer. This
+means the bullet is reachable by temporarily lowering `GPU_CAPACITY_POLL_MS`/
+`GPU_CAPACITY_MAX_ATTEMPTS` (via `server/.env`, no code edit needed — both are
+already `process.env`-driven) so the generic budget exhausts in a couple of
+seconds, and temporarily lowering `LOAD_TIMEOUT_MS` in `sidecar-health.ts`
+(same class of edit as the 8th/9th runs' `_BASE17_CONTENTION_WAIT_S_DEFAULT`
+change) so the whole race fits in single-digit seconds instead of ~90s+258s.
+Both edits were made (`LOAD_TIMEOUT_MS` → `8_000`; `GPU_CAPACITY_POLL_MS=500`,
+`GPU_CAPACITY_MAX_ATTEMPTS=3` in `server/.env`), the dev server (`tsx watch
+--include=.env`) picked up both live, and one design (`anna`) was fired to
+get a resident VoiceDesign — but the run pivoted to chasing bullet 2's device
+placement before actually firing the `/api/sidecar/load {"engine":"coqui"}`
+race against it, and then the incident below intervened. **Both edits were
+reverted before this run finished** (`server/src/routes/sidecar-health.ts`'s
+`LOAD_TIMEOUT_MS` back to `90_000`, the two `server/.env` lines removed;
+`git status --porcelain` on the worktree confirmed clean, `server/.env` isn't
+tracked so its revert isn't visible in `git diff` but was applied the same
+way). The next run can pick this up directly: make the same two edits, get a
+design resident, fire `/api/sidecar/load {"engine":"coqui"}` (or another
+engine light enough to be denied but not so light it fits anyway) while the
+design holds the card, and read the JSON body — `{"status":"error","error":
+<NoCapacityError message>}` confirms the conversion; `"Sidecar /load did not
+complete within Nms..."` would mean it fell through as a raw AbortError
+instead (the row's negative case).
+
+**Bullet 2 (2-card cross-device negative control) — the real blocker found,
+not yet exploited into a clean repro.** The three prior runs' "Qwen device
+placement not landing reliably on GPU0" note turns out to have a precise
+cause, not just noise: `server/tts-sidecar/main.py`'s `PlacementController.
+admit()` (the pure placement decision every load goes through) computes
+`constraint = resident if resident is not None else pinned`, where `resident
+= self.is_resident(engine)`. `_qwen_resident_device_key()`'s own docstring
+(quoted in this file's earlier sections) already flags that `is_resident`
+scans `_model`/`_kokoro`/`_base`/`_tts` and is **blind to a design-only
+residency** (`_design`/`_design_in_flight.busy` don't count) — this exists
+so `/api/sidecar/load`'s own noCapacity path stays reachable while only a
+design is loaded. The consequence for bullet 2: once a VoiceDesign is
+resident and Base is NOT, a fresh Base-render `admit()` call sees
+`resident=None` and falls through to `pinned` (`QWEN_DEVICE` env) — which
+this run confirmed, live, is set correctly end-to-end (a wrapper script set
+`$env:QWEN_DEVICE=cuda:0`, wrote it to a checked file
+(`pin-check.txt`, read back as `"QWEN_DEVICE set to: cuda:0"`) immediately
+before invoking `start.ps1`, and `start.ps1`'s own whitelist explicitly
+preserves an existing shell export rather than overwriting it) — and the
+design **still landed on `cuda:1` twice in a row** despite the confirmed
+`cuda:0` pin. This was not chased to a root cause this run (see the incident
+below for why), but the candidates worth checking first next time, in order:
+(1) whether `_ensure_device_resolved()`'s `_resolve_torch_device` genuinely
+receives `self._device_pref` unmodified, or something re-derives "auto" from
+capacity probing before the design's own cold-load path reaches it; (2)
+whether the *design* path (`design_voice()`'s own `admit()`/`reservation()`
+call, not `_ensure_base_loaded`'s) even threads `pinned=_engine_env_pin
+("qwen")` the same way the Base/render call sites do — this run read the
+call sites at lines ~11098/11123/11348/11481/11577 but did not confirm which
+one specifically governs a **fresh, never-before-resident** design's device
+choice; (3) whether `_gpu_candidates(devices, constraint)` treats a
+single-element `constraint` as a hard filter or merely a preference under
+some code path. Once the pin (or an equivalent forced placement) genuinely
+lands the design on one card, bullet 2 itself still needs a real capacity
+squeeze on the OTHER card to produce a genuine `noCapacity` denial there —
+`cuda:1` is the 16 GB card on this box, so denying anything on it needs
+either occupying it first (e.g. `COQUI_DEVICE=cuda:1` + a real Coqui load) or
+temporarily lowering `GPU_RESERVE_MB`/the sidecar's footprint estimate for
+the test, not just relying on ambient free space.
+
+**Operational incident this run needs to flag, not bury in the setup notes
+above: a broad process-match kill hit another lane's live work.** While
+investigating the device-pin question, this run needed to kill and relaunch
+this worktree's own sidecar (`server/tts-sidecar/start.ps1`) several times.
+One relaunch attempt used `Get-CimInstance Win32_Process | Where-Object {
+$_.CommandLine -match 'tts-sidecar' } | ForEach-Object { taskkill /PID
+$_.ProcessId /T /F }` to clean up what were believed to be only this
+worktree's own stray processes — but the pattern `'tts-sidecar'` also
+matched **`C:\Claude\Projects\Audiobook-Generator\server\tts-sidecar\...\
+python.exe -m pytest -m "not golden" ... tests`**, a different lane's live
+test run in the primary checkout, and its process tree was killed
+(`taskkill` reported `SUCCESS` for those PIDs same as this worktree's own).
+This is exactly the standing rule this issue and this file's own prior runs
+have been careful about ("never stop, kill, or restart another lane's
+process") — broken here by a pattern-matched kill instead of an explicit,
+verified PID. **Not silently left as-is**: re-checked immediately after
+(`Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match
+'Audiobook-Generator' }`) and found a **fresh** `pytest -m "not golden"`
+process already running again (new PID, parented under an `npm run
+test:sidecar` invocation with its own log path under a different session's
+scratch directory) — that lane's own tooling appears to have retried or
+relaunched it independently; this run did not touch it again and did not
+verify whether the interrupted run's own results/timing were affected.
+**Flagging this prominently rather than treating "it came back" as
+resolving it** — the operator should confirm with whoever owns that
+`Audiobook-Generator` test run whether it lost real progress or wall-clock
+time. The lesson for every future run touching this worktree's sidecar:
+match on the exact worktree path (`wt-mechanical-batch-2`) or an explicit,
+freshly-read PID, never a bare substring like `'tts-sidecar'` that every
+worktree's own copy of the same directory name will also match.
+
+Cleanup this run: both temporary edits (`LOAD_TIMEOUT_MS`,
+`GPU_CAPACITY_POLL_MS`/`GPU_CAPACITY_MAX_ATTEMPTS`) reverted, confirmed via
+`git status --porcelain` (worktree) returning empty. This worktree's own
+sidecar was left running and idle (`qwen_loaded`/`qwen_design_resident`
+both `false`, `inflight_synth: 0` per `/health`) and the dev server
+confirmed responsive (`GET /api/queue` → 200) before finishing. The `anna`
+design attempts this run fired never completed (each was interrupted by the
+next sidecar restart) — `anna`'s cast state is unchanged from the 14th run's
+own `qwen-uIRjRzpfDUZqLX_0eVctR` voiceId, confirmed no partial/corrupt state
+was left (the design job dies with the sidecar process, nothing persists
+until a `designed` event lands).
 
 ## Remaining scope — not attempted this session
 
