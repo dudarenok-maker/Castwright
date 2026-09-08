@@ -1170,3 +1170,92 @@ none touch the `Onbox Test` book's cast.
 remain undriven. A105 bullet 4 is now closed with a real (failing) result
 and a filed follow-up bug. Parking again (Agent Working, still assigned)
 rather than reporting AGENT DONE against unfinished scope.
+
+## A105 bullet 3, second direction — attempted, inconclusive (12th run, 2026-09-08)
+
+Real hardware, same worktree/sidecar (port 9170) + dev server (port 8250);
+both were already up and idle at the start of this run (started by an
+earlier run, per that run's own note that it leaves them running for the
+next one) — no fresh boot needed.
+
+**Goal:** isolate the row's second required direction — Kokoro must NOT
+pause for the base17-eviction wait alone, with no design forward in flight
+(`main.py:7101-7118`: `design_voice()` calls `unload_base17()` deliberately
+*before* `_VD_KOKORO.design()` opens, per #2070 review R5, specifically so
+this wait never stalls a concurrent Kokoro synth).
+
+**Setup, three attempts to reach a clean repro:**
+1st attempt — used a pre-existing cached voice (`qwen-uIRjRzpfDUZqLX_0eVctR`)
+as `mint-variant`'s `baseVoiceId`. Got an immediate `409` (`VoiceNotDesignedError`)
+— that voice's on-disk cache in this worktree's `QWEN_VOICES_DIR`
+(`castwright-workspace/voices/qwen/`) has a `.pt`/`.json` pair but no
+`__1.7b.pt`, so it isn't valid for minting. base17 never actually started
+loading; the concurrent `design-voice` call proceeded without ever seeing
+`_base17_in_flight.busy` or `_base17 is not None`, so this attempt tested
+nothing about the eviction wait (though the concurrent Kokoro synth firing
+during it — 45.87s, unblocked — is a second data point consistent with
+the bullet-4 finding above: `#3086`).
+2nd attempt — switched to a different pre-cached voice that does have a
+`__1.7b.pt` (`qwen-F-lKfWgmxmPoLNK7nfUkk`); got a `503
+{"noCapacity":true,"neededMb":6144,"deviceKey":"cuda:0"}` from the
+capacity-admission layer instead, for reasons not chased (same shape as
+bullet-4's noted admission quirk above).
+3rd attempt — designed a fresh, known-good base voice in-run
+(`qwen-a105b3d2-base-A`, plain neutral-narrator `instruct`, no `language`
+field), unloaded qwen to force a genuinely cold base17 load, then fired
+`mint-variant` (`qwen-a105b3d2-mint-E`, base = the fresh voice) followed
+1.7s later by a concurrent `design-voice` (`qwen-a105b3d2-design-C`), with
+Kokoro pre-warmed resident. This combination avoided both earlier failure
+modes — mint returned `200` and design returned `200`.
+
+**Timing result:** with Kokoro resident and both `mint-variant` (base17
+load + mint forward, settled after 71.9s) and `design-voice` (settled
+after 127.6s) concurrently in flight, a synchronous raw Kokoro `/synthesize`
+fired 1.2s after the design call returned in 38.35s — faster than this
+run's own unblocked baseline (45.6-45.9s in the two failed setup attempts
+above, and the 11th run's 44.11s) — i.e. no sign of being stalled by
+anything.
+
+**Why this is reported as inconclusive, not a pass.** The result is
+consistent with the row's requirement, but this run could not confirm via
+the sidecar's own log (`logs/tts.err.log`) that `design_voice()` actually
+took the base17-eviction branch (`log.info("Evicting resident/in-flight
+Qwen 1.7B-Base...")`, `main.py:7102`) during this specific window — no such
+line appears in the log for this run's timestamps (13:38-13:41 AUSEST /
+03:38-03:41 UTC), only earlier lines from 2026-09-07 and one from
+09:31:10 the same day. The likely explanation: base17's actual weight
+*load* (as opposed to `mint-variant`'s full load+forward span) is fast
+enough that by the time the concurrent `design-voice` call reached its
+eviction check (~1.7s after mint started), `_base17_in_flight.busy` had
+already cleared — so `unload_base17()` nulled an already-idle model
+near-instantly rather than genuinely waiting, and the "no stall" result
+here may just be restating bullet-4's already-confirmed "Kokoro isn't
+excluded" finding rather than proving the base17-wait-specifically-doesn't-
+block-Kokoro claim this bullet is actually about. A clean repro needs the
+concurrent `design-voice` fired precisely while `_base17_in_flight.busy` is
+still true (i.e., during the load, not after it) and a log line confirming
+the wait branch was entered — this run did not achieve that precision and
+does not claim to.
+
+**Operational note for the next run:** `mint-variant`'s `baseVoiceId` must
+have a cached `<id>__1.7b.pt` in this worktree's own `QWEN_VOICES_DIR`
+(`castwright-workspace/voices/qwen/`, not the legacy junctioned
+`server/tts-sidecar/voices/`) — check for that file before picking a
+`baseVoiceId`, or design a fresh one first as this run did. The sidecar
+self-recycled (fresh `Started server process` in `tts.err.log`) within
+~4s of this run's design call settling — not chased (a normal watchdog
+recycle per `main.py`'s own memory-watchdog log line, not a crash), but it
+means the process this run exercised is not the one currently listening;
+`nvidia-smi` and `/health` both confirm the fresh process is idle
+(`GPU0 0 MiB`, `GPU1 197 MiB`, `qwen_loaded`/`kokoro_loaded` both `false`).
+
+Cleanup: confirmed via `/health` and `nvidia-smi` above — idle, matching
+this run's own start-of-run baseline. No cast/fixture data touched —
+`qwen-a105b3d2-{base-A,mint-E,design-C}` and the two earlier failed
+attempts' ids are throwaway, never-cast voiceIds.
+
+**Still not finished.** A24 bullets 2-4 remain fully undriven. A105 bullet
+3's second direction was attempted but not cleanly confirmed (see above —
+a future run should retry with tighter timing and a log-line check, not
+just wall-clock inference). Parking again (Agent Working, still assigned)
+rather than reporting AGENT DONE against unfinished scope.
