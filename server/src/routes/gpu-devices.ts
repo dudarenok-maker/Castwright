@@ -20,7 +20,7 @@ gpuDevicesRouter.get('/devices', async (_req: Request, res: Response) => {
   if (!result) {
     return res.json({ devices: [], cpu: true });
   }
-  setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx })));
+  setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx, freeMb: d.free_mb })));
   const url = getResolvedSidecarUrl();
   const merged = await mergeResidentData(url, result.devices);
   return res.json({ devices: merged, cpu: result.cpu });

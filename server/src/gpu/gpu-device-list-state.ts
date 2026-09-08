@@ -10,6 +10,13 @@
 export interface GpuDeviceInfo {
   uuid: string;
   idx: number;
+  /** Free VRAM at the time of the last successful sidecar poll, per
+      `fetch-sidecar-devices.ts`'s `SidecarDevice.free_mb` — the same
+      staleness tradeoff as `idx`/`uuid` above. Feeds
+      `auto-revert-selection.ts`'s target choice so a code-43 revert can land
+      on a card that actually has room, not just "auto" (which re-resolves to
+      the same undersized card and loops). */
+  freeMb: number;
 }
 
 let lastKnownGpuDevices: GpuDeviceInfo[] = [];

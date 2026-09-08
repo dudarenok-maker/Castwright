@@ -122,13 +122,16 @@ export function useTtsLifecycle(): TtsLifecycle {
   const [evictionNotice, setEvictionNotice] = useState<string | null>(null);
   const [loadErrorNotice, setLoadErrorNotice] = useState<string | null>(null);
   /* Task 16/16.5 — last-seen trip-status toast, or null once dismissed or
-     never tripped. Tracks the toast STRING, not the raw GpuTripStatus, so a
-     dismiss doesn't need to remember which trip it dismissed — the poll
-     below only re-sets it when the toast text actually changes (see the
-     lastTripToast ref), so a dismissed notice doesn't reappear on the very
-     next 30s tick for the same still-current trip. */
+     never tripped. The poll below only re-sets it when the trip's `seq`
+     changes (see the lastTripSeq ref), so a dismissed notice doesn't
+     reappear on the very next 30s tick for the same still-current trip.
+     Deliberately keys on `seq` (a monotonic per-trip counter), NOT the
+     toast text: two genuinely different trips can produce byte-identical
+     toast strings (same engine, same reason, twice), and an earlier version
+     of this dedup keyed on the string itself — so a second identical trip
+     right after a dismiss never re-surfaced (found in review, PR #3113). */
   const [tripNotice, setTripNotice] = useState<string | null>(null);
-  const lastTripToast = useRef<string | null>(null);
+  const lastTripSeq = useRef<number | null>(null);
   /* In-flight op counter — guards the /health poll's unconditional pending-
      clear below against a Load/Stop that is still awaiting its response.
      Since #1894 a Stop can await a 90 s budget (the sidecar waits out an
@@ -192,17 +195,18 @@ export function useTtsLifecycle(): TtsLifecycle {
 
       /* Task 16/16.5 — same permissive-error posture as the queue probe above:
          an older server or a transient failure just means no trip toast, not
-         a user-visible error. Only pushes a NEW toast into state (via the
-         lastTripToast ref) — a dismissed notice must not resurrect itself on
-         the very next tick for the same still-current trip. */
+         a user-visible error. Only pushes a NEW toast into state when the
+         trip's `seq` changes (via the lastTripSeq ref) — a dismissed notice
+         must not resurrect itself on the very next tick for the same
+         still-current trip. */
       api
         .getGpuTripStatus()
         .then((t: GpuTripStatus) => {
           if (cancelled) return;
-          const toast = t?.toast ?? null;
-          if (toast !== lastTripToast.current) {
-            lastTripToast.current = toast;
-            setTripNotice(toast);
+          const seq = t?.seq ?? null;
+          if (seq !== lastTripSeq.current) {
+            lastTripSeq.current = seq;
+            setTripNotice(t?.toast ?? null);
           }
         })
         .catch(() => {

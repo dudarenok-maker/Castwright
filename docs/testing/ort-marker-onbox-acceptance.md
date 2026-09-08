@@ -414,14 +414,24 @@ shows the second (immediate, no-boot-needed) outcome.
 
 ### 6.3 Result
 
-**`reqHash` branch taken (`noop` or `pip-in-place`):** _(fill in)_
-**`pip check` immediately post-Update:** _(fill in — if `noop`, record "unchanged,
-by design" rather than treating a still-broken `pip check` as a failure)_
+**`reqHash` branch taken (`noop` or `pip-in-place`):** `noop` — unchanged
+`reqHash`, this release touches no `requirements/*.txt`.
+**`pip check` immediately post-Update:** unchanged, by design — `No broken
+requirements found.` (Update did nothing to `pip`'s state, correctly).
 **If `noop`: marker + clean `pip check` observed at next server boot instead:**
-_(fill in)_
-**Qwen3 install result (WinError 5 present/absent):** _(fill in)_
-**`install.js` pass (fresh install) outcome:** _(fill in)_
-**Run by:** _(fill in)_ **Date:** _(fill in)_ **Platform:** _(fill in)_
+`ensureOrtMarker` ran at boot and itself reported `noop` too — this
+particular install's state didn't need healing (`onnxruntime`/
+`onnxruntime-gpu` already coexisted cleanly), so the corrective-write branch
+was not exercised by this run; `pip check` stayed clean before and after
+boot. See `ort-ensure-marker.test.ts` for the healing branches' own coverage.
+**Qwen3 install result (WinError 5 present/absent):** absent — clean load
+(`{"status":"ready"}`, no `WinError5` anywhere in the sidecar log).
+**`install.js` pass (fresh install) outcome:** clean — `No broken
+requirements found.` on a second, separate throwaway, `pip-in-place`-shaped.
+**Run by:** claude (2-card-boot + Pinokio batch chain, #2950, step 6)
+**Date:** 2026-09-08 **Platform:** Windows, Pinokio-managed throwaway installs
+(`castwright-e7-throwaway`, `castwright-e7-fresh`) — full evidence:
+`docs/testing/onbox-2card-pinokio-batch-results/step-6-e7.md`.
 
 ---
 
@@ -800,13 +810,15 @@ _(Update as each remaining criterion runs.)_
   2026-08-20, re-check 2026-08-21 wave-4 step 8, then STILL OWED through two more
   root-cause narrowings on 2026-08-23).
   Wave-3 run: marker/pip-check mechanics pass; GPU provider check fails (CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap, #2534 blocker). Wave-4 re-run (after PR #2576 resolved the blocker): re-ran the GPU-provider check against fixed pin, still fails but on a new root cause — `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by `install-ort.mjs`. Follow-up filed: #2600. 2026-08-31: `install-ort.mjs` gained the missing `cufft`/`cuda-runtime` pins and a corrected, torch-line-matched cuDNN pin (`~=9.19.0`) — a real Kokoro CUDA load now succeeds end-to-end on this box. See onbox-acceptance-register.md A28 row (now retired) for full details and evidence.*
-- Criterion 2 — the reported bug, in-app Qwen3 install (A29): **STILL OWED — partially run.** Clicking
-  Install on Qwen3-TTS Base (0.6B) in Model Manager completed cleanly with no
-  `WinError 5`, but follow-on Kokoro GPU-provider check unreachable on this box
-  due to port contention (distinct from #2534); see
-  `docs/testing/onbox-wave4-results/step-5c-a40.md`.
+- Criterion 2 — the reported bug, in-app Qwen3 install (A29): **DISCHARGED
+  2026-09-07.** Re-ran the exact procedure against the merged fix in a fresh
+  worktree: confirmed Qwen3-TTS genuinely absent beforehand, clicked Install
+  for real, install completed cleanly with no `WinError 5`. A29 is retired
+  from the register (allocate-once, same precedent as A28/A36). See
+  `docs/testing/onbox-a29-results/step-3-post-fix-verify.md`.
 - Criterion 3 — self-heal: **Discharged 2026-08-07.**
-- Criterion 4 — Pinokio update path (E7): owed.
+- Criterion 4 — Pinokio update path (E7): **DISCHARGED 2026-09-08.** See §6.3
+  above and `docs/testing/onbox-2card-pinokio-batch-results/step-6-e7.md`.
 - Criterion 5 — AMD box: blocked, no hardware.
 - Criterion 6 — clobbered box (formerly A38, now removed): **DISCHARGED,
   2026-08-23 (§8.6).** Re-verified against a full copy of the real

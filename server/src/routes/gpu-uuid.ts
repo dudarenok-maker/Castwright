@@ -38,7 +38,7 @@ export async function toUuidForm(
   const idx = Number(m[1]);
   const result = prefetchedDevices !== undefined ? prefetchedDevices : await fetchSidecarDevices();
   if (!result) return value;
-  setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx })));
+  setLastKnownGpuDevices(result.devices.map((d) => ({ uuid: d.uuid, idx: d.idx, freeMb: d.free_mb })));
   const card = result.devices.find((d) => d.idx === idx);
   return card ? `cuda-uuid:${card.uuid}` : value;
 }

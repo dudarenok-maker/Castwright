@@ -578,9 +578,14 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 >   both cards; bullet 2 (enumeration-order swap) deliberately left untouched —
 >   excluded from this chain for contention risk against the box's other live
 >   lanes, not a hardware gap (`step-5-a12.md`). Row count unchanged.
-> - **E7** DISCHARGED and dropped — Update's `noop` branch confirmed, the
->   `ensureOrtMarker` self-heal confirmed clean at next boot, a fresh Install
->   confirmed `pip-in-place`, Qwen3 install confirmed no `WinError 5`
+> - **E7** DISCHARGED and dropped — Update took `classifyVenvState`'s `noop`
+>   branch (unchanged `reqHash`) and `pip check` stayed clean throughout;
+>   `ensureOrtMarker`'s boot-time self-heal ran without error but ALSO
+>   reported `noop` (this install's state didn't need healing, so the actual
+>   corrective-write branch was not exercised — recorded honestly as such,
+>   not claimed as proof of the healing branch itself, which stays covered
+>   by `ort-ensure-marker.test.ts`); a fresh Install confirmed the
+>   `pip-in-place` branch cleanly; Qwen3 install confirmed no `WinError 5`
 >   (`step-6-e7.md`). Group E 8 → 7.
 > - **E11** DISCHARGED and dropped — a genuinely CRLF-mangled
 >   `requirements/*.txt` was created from a pre-#2799 checkout, Update
@@ -1871,7 +1876,9 @@ the code-43 child internally on Windows before Node's own supervisor sees three
 distinct exits — the same root cause step 2's checklist items 5/6 already
 surfaced. The row narrows to this one item: **wire the streak-trip signal through
 `start.ps1`'s own restart loop (or an equivalent path) so `runAutoRevert` actually
-fires on real hardware**, then re-run the hardware trigger to confirm.
+fires on real hardware**, then re-run the hardware trigger to confirm. Tracked as
+[#3121](https://github.com/dudarenok-maker/Castwright/issues/3121) — a design
+decision (where the exit-visibility boundary moves to), not a one-line fix.
 
 ### A4 · Audition engine + tier fidelity ([#1849](https://github.com/dudarenok-maker/Castwright/pull/1849))
 

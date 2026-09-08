@@ -13,7 +13,7 @@ interface TtsNoticeBannerProps {
       investigation needed." (TTS is still held down). Distinct from
       `loadErrorNotice` (rose) — this isn't a user-initiated Load/Stop
       failure, it's the supervisor acting on its own. */
-  tripNotice?: string | null;
+  tripNotice: string | null;
   /** Clears all three notices (shared dismiss from useTtsLifecycle). */
   onDismiss: () => void;
   /** Kokoro's lifecycle. When resident (`state === 'ready'`), a Stop control

@@ -27,17 +27,18 @@ describe('GET /api/gpu/trip-status', () => {
 
   it('returns the reverted outcome after a card-specific trip', async () => {
     await runAutoRevert(
-      { card: 1, residentEngines: ['qwen'] },
-      { clearOverride: async () => {}, resetAndRespawn: async () => {} },
+      { card: { idx: 1 }, residentEngines: ['qwen'] },
+      { clearOverride: async () => {}, resetAndRespawn: async () => {}, getDevices: () => [] },
     );
 
     const res = await request(makeApp()).get('/api/gpu/trip-status');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       status: 'reverted',
-      card: 1,
+      card: { idx: 1 },
       engines: ['qwen'],
       toast: expect.stringMatching(/auto-reverted/i),
+      seq: expect.any(Number),
     });
   });
 
@@ -49,6 +50,7 @@ describe('GET /api/gpu/trip-status', () => {
     expect(res.body).toEqual({
       status: 'unrevertable',
       toast: expect.stringMatching(/not tied to a specific gpu card/i),
+      seq: expect.any(Number),
     });
   });
 });

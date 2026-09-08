@@ -568,6 +568,7 @@ describe('useTtsLifecycle', () => {
       card: 1,
       engines: ['qwen'],
       toast: 'Auto-reverted: GPU pin for qwen looked structurally too small and was reset to auto.',
+      seq: 1,
     });
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() =>
@@ -581,6 +582,7 @@ describe('useTtsLifecycle', () => {
     mocks.getGpuTripStatus.mockResolvedValue({
       status: 'unrevertable',
       toast: 'Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed.',
+      seq: 1,
     });
     const { result } = renderHook(() => useTtsLifecycle());
     await waitFor(() => expect(result.current.tripNotice).not.toBeNull());
@@ -589,6 +591,40 @@ describe('useTtsLifecycle', () => {
       result.current.dismissNotices();
     });
     expect(result.current.tripNotice).toBeNull();
+  });
+
+  it('a SECOND trip with an identical toast string still re-surfaces after a dismiss, because dedup keys on seq not text (PR #3113 review finding)', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.getGpuTripStatus.mockResolvedValueOnce({
+        status: 'unrevertable',
+        toast: 'Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed.',
+        seq: 1,
+      });
+      const { result } = renderHook(() => useTtsLifecycle());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.tripNotice).not.toBeNull();
+
+      act(() => {
+        result.current.dismissNotices();
+      });
+      expect(result.current.tripNotice).toBeNull();
+
+      // A genuinely new trip (seq: 2) with the exact same toast text.
+      mocks.getGpuTripStatus.mockResolvedValueOnce({
+        status: 'unrevertable',
+        toast: 'Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed.',
+        seq: 2,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(result.current.tripNotice).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports qwen1_7bInstalled=true when /health (reachable) affirms the 1.7B weights are present', async () => {

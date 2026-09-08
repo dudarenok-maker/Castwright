@@ -7862,8 +7862,9 @@ async function mockGetGpuQueueState(): Promise<GpuQueueState> {
    "not tied to a specific GPU card... manual investigation" toast. `null`
    means nothing has tripped since the server booted. */
 export type GpuTripStatus =
-  | { status: 'reverted'; card: unknown; engines: string[]; toast: string }
-  | { status: 'unrevertable'; toast: string }
+  | { status: 'reverted'; card: unknown; engines: string[]; toast: string; seq: number }
+  | { status: 'unrevertable'; toast: string; seq: number }
+  | { status: 'failed'; toast: string; seq: number }
   | null;
 
 async function realGetGpuTripStatus(): Promise<GpuTripStatus> {

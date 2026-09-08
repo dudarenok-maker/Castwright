@@ -16,7 +16,7 @@ function makeReadyLifecycle(): EngineLifecycle {
 describe('TtsNoticeBanner', () => {
   it('renders nothing when both notices are clear', () => {
     const { container } = render(
-      <TtsNoticeBanner evictionNotice={null} loadErrorNotice={null} onDismiss={vi.fn()} />,
+      <TtsNoticeBanner evictionNotice={null} loadErrorNotice={null} tripNotice={null} onDismiss={vi.fn()} />,
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -26,6 +26,7 @@ describe('TtsNoticeBanner', () => {
       <TtsNoticeBanner
         evictionNotice="Analyzer unloaded to free VRAM for the voice engine."
         loadErrorNotice={null}
+        tripNotice={null}
         onDismiss={vi.fn()}
       />,
     );
@@ -40,6 +41,7 @@ describe('TtsNoticeBanner', () => {
       <TtsNoticeBanner
         evictionNotice={null}
         loadErrorNotice="[Errno 22] Invalid argument"
+        tripNotice={null}
         onDismiss={onDismiss}
       />,
     );
@@ -54,6 +56,7 @@ describe('TtsNoticeBanner', () => {
       <TtsNoticeBanner
         evictionNotice="Analyzer unloaded to free VRAM for the voice engine."
         loadErrorNotice="Voice engine failed to load. Check the voice engine logs."
+        tripNotice={null}
         onDismiss={vi.fn()}
       />,
     );
@@ -105,6 +108,7 @@ describe('TtsNoticeBanner', () => {
         <TtsNoticeBanner
           evictionNotice={null}
           loadErrorNotice={null}
+          tripNotice={null}
           onDismiss={vi.fn()}
           kokoro={makeReadyLifecycle()}
         />,
@@ -124,6 +128,7 @@ describe('TtsNoticeBanner', () => {
         <TtsNoticeBanner
           evictionNotice={null}
           loadErrorNotice={null}
+          tripNotice={null}
           onDismiss={vi.fn()}
           kokoro={makeReadyLifecycle()}
         />,
@@ -136,6 +141,7 @@ describe('TtsNoticeBanner', () => {
         <TtsNoticeBanner
           evictionNotice={null}
           loadErrorNotice={null}
+          tripNotice={null}
           onDismiss={vi.fn()}
           kokoro={makeReadyLifecycle()}
           coqui={makeReadyLifecycle()}
@@ -150,6 +156,7 @@ describe('TtsNoticeBanner', () => {
         <TtsNoticeBanner
           evictionNotice={null}
           loadErrorNotice={null}
+          tripNotice={null}
           onDismiss={vi.fn()}
           kokoro={{ state: 'idle', onLoad: vi.fn(), onStop: vi.fn() }}
         />,

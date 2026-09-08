@@ -197,8 +197,8 @@ describe('buildSidecarEnv hands the sidecar a UUID device pin verbatim (#1857)',
      form itself, live, per spawn — that is the safe branch, so make it the only
      branch. */
   for (const [label, cache] of [
-    ['cold cache', [] as { uuid: string; idx: number }[]],
-    ['warm cache', [{ uuid: 'GPU-1', idx: 1 }]],
+    ['cold cache', [] as { uuid: string; idx: number; freeMb: number }[]],
+    ['warm cache', [{ uuid: 'GPU-1', idx: 1, freeMb: 8000 }]],
   ] as const) {
     it(`emits the raw cuda-uuid literal with a ${label}`, () => {
       (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
