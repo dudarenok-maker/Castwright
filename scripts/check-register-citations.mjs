@@ -33,6 +33,14 @@
 // unconditional/uncached local leg (independent of scope-gating), and whether
 // a git hook should wire it.
 //
+// Scanned file set, and how it is read: the checker reads every non-frozen,
+// non-self-referential git-tracked file (see `gitLsFiles` /
+// `runCheckRegisterCitationsCli`). The single-backtick inline code-span
+// blanking (`stripInlineCodeSpans`) applies to MARKDOWN files only (`.md`,
+// `.html`): non-markdown sources are read raw, unblanked, so a template
+// literal's backticks can never silently hide a citation. See
+// `isMarkdownScanPath` and `stripInlineCodeSpans`'s own comments.
+//
 // Four checks, ordered by precision (least to most likely to need
 // judgment):
 //
@@ -1015,8 +1023,8 @@ function isDischargeAssertionNegated(scanText, dm, clauseStart) {
  * this flips zero of today's citations — see #2858 for the false-positive
  * analysis of the 4 citations a looser, unshared polarity scan misflagged.
  */
-function idSpecificAnnotationPresent(sectionText, id) {
-  const dischargeScanText = stripInlineCodeSpans(sectionText);
+function idSpecificAnnotationPresent(sectionText, id, isMarkdown) {
+  const dischargeScanText = stripInlineCodeSpans(sectionText, { isMarkdown });
   const dischargeMatches = [
     ...dischargeScanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
   ];
@@ -1083,10 +1091,36 @@ function idSpecificAnnotationPresent(sectionText, id) {
 // DOES occur, as a composite-key separator, in two real tracked files) — so
 // `\s+`-based regexes can no longer bridge across a blanked span the way a
 // plain-space blank did.
+//
+// SCOPE (per #3062): blanking applies to MARKDOWN scanned files only (`.md`,
+// `.html`). In a non-markdown source file a template literal's backticks are
+// read by this transform as the same markdown delimiter and would silently
+// blank a citation inside one (e.g. `` `row A101` `` in a template string),
+// so `stripInlineCodeSpans(text, { isMarkdown: false })` returns `text`
+// unchanged. Every call site threads `isMarkdown` (from the scanned path)
+// through — see `isMarkdownScanPath`.
 const CODE_SPAN_BLANK_CHAR = '';
 const SINGLE_ID_SPAN_REGEX = new RegExp(`^${ROW_ID_TOKEN}$`);
 
-function stripInlineCodeSpans(text) {
+/**
+ * Whether a repo-relative scanned-file path (e.g. `docs/foo.md`,
+ * `scripts/foo.mjs`) should have its single-backtick inline code spans
+ * blanked as markdown. Blanking is scoped to markdown sources only (`.md`,
+ * `.html`): in a source file (`.mjs`/`.ts`/`.py`/...) a template literal's
+ * backticks would be misread as markdown delimiters and a register citation
+ * inside one (e.g. `` `row A101` `` in a template string) would be silently
+ * blanked and never checked — while the identical text inside a `'...'` or
+ * `"..."` string is scanned and can be fatal. Every other tracked file is
+ * therefore scanned raw, unblanked. (Decided 2026-09-08 per #3062.)
+ */
+function isMarkdownScanPath(relPath) {
+  return /\.(md|html)$/i.test(relPath);
+}
+
+// `stripInlineCodeSpans` takes an explicit `{ isMarkdown }` flag: when false
+// (a non-markdown scanned source), it returns `text` unchanged.
+function stripInlineCodeSpans(text, { isMarkdown = true } = {}) {
+  if (!isMarkdown) return text;
   return text.replace(/\u0060([^\u0060\n]*)\u0060/g, (m, inner) => {
     const trimmed = inner.trim();
     if (SINGLE_ID_SPAN_REGEX.test(trimmed)) {
@@ -1177,9 +1211,9 @@ function deBold(text) {
  * span, so this costs nothing on a real citation today.
  * @returns {Map<number, Set<string>>}
  */
-function extractCitationsByLine(text) {
+function extractCitationsByLine(text, isMarkdown) {
   const stripped = deBold(stripFences(text));
-  const scanLines = stripInlineCodeSpans(stripped).split('\n');
+  const scanLines = stripInlineCodeSpans(stripped, { isMarkdown }).split('\n');
   const byLine = new Map();
   const add = (i, ids) => {
     if (!ids.length) return;
@@ -1210,14 +1244,15 @@ function extractCitationsByLine(text) {
 export function checkNonexistentIds(text, filePath, registerRows) {
   const errors = [];
   const annotated = [];
+  const isMarkdown = isMarkdownScanPath(filePath);
   const lines = deBold(stripFences(text)).split('\n');
-  const byLine = extractCitationsByLine(text);
+  const byLine = extractCitationsByLine(text, isMarkdown);
   const sortedLineIndexes = [...byLine.keys()].sort((a, b) => a - b);
   for (const i of sortedLineIndexes) {
     for (const id of [...byLine.get(i)].sort()) {
       if (registerRows.has(id)) continue;
       const message = `${filePath}:${i + 1} — cited ${id} — no such row in ${REGISTER_PATH} (nonexistent ID)`;
-      if (idSpecificAnnotationPresent(enclosingSectionText(lines, i), id)) {
+      if (idSpecificAnnotationPresent(enclosingSectionText(lines, i), id, isMarkdown)) {
         annotated.push(`${message} — annotated as discharged/removed, not failing`);
       } else {
         errors.push(message);
@@ -1740,7 +1775,7 @@ function recordSubjectConflict(
     }
     if (currentSubjects && currentSubjects.size > 0) {
       const currentSubjectsText = [...currentSubjects].sort((a, b) => a - b).join('/');
-      if (idSpecificAnnotationPresent(enclosingSectionText(lines, lineIndex), id)) {
+      if (idSpecificAnnotationPresent(enclosingSectionText(lines, lineIndex), id, isMarkdownScanPath(filePath))) {
         annotatedDischarge.push(
           `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but ${id} now tracks ` +
             `#${currentSubjectsText} (#${subject}'s row has discharged and ${id} was re-minted) — ` +
@@ -1807,7 +1842,7 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
     // citation (see `stripInlineCodeSpans`'s own comment) — anchored
     // headings can't appear inside a code span at all (`^#{2,6}`), so this
     // only ever changes behaviour on the `Criteria source:` surface.
-    const text = stripInlineCodeSpans(deBold(stripFences(rawText)));
+    const text = stripInlineCodeSpans(deBold(stripFences(rawText)), { isMarkdown: isMarkdownScanPath(filePath) });
     const lines = text.split('\n');
     lines.forEach((line, i) => {
       const citedIds = citationShapedLineIds(line);
@@ -1984,7 +2019,7 @@ export function measureWrongIdEligibleLines(fileTexts, registerRows) {
     // an unblanked copy here would silently disagree with Check C again the
     // moment a `Criteria source:`-shaped example command inside a code span
     // is counted as eligible here but is (correctly) blanked away there.
-    const text = stripInlineCodeSpans(deBold(stripFences(rawText)));
+    const text = stripInlineCodeSpans(deBold(stripFences(rawText)), { isMarkdown: isMarkdownScanPath(filePath) });
     for (const line of text.split('\n')) {
       if (extractSubjectNumbers(line).size === 0) continue;
       const shapedIds = citationShapedLineIds(line);
@@ -2080,9 +2115,9 @@ function stripMarkdownLinkUrls(text) {
   return text.replace(MARKDOWN_LINK_REGEX, '$1');
 }
 
-function titleDriftTokens(text) {
+function titleDriftTokens(text, isMarkdown) {
   const withoutLinks = stripMarkdownLinkUrls(text);
-  const withoutCodeSpans = stripInlineCodeSpans(withoutLinks);
+  const withoutCodeSpans = stripInlineCodeSpans(withoutLinks, { isMarkdown });
   const raw = withoutCodeSpans.toLowerCase().match(TITLE_DRIFT_TOKEN_REGEX) ?? [];
   const tokens = new Set();
   for (const t of raw) {
@@ -2118,9 +2153,9 @@ function titleDriftScore(titleTokens, proseTokens) {
  * surface is invented here.
  * @returns {{ lineIndex: number, ids: string[], titleEcho: string }[]}
  */
-function extractHeadingTitleEchoes(text) {
+function extractHeadingTitleEchoes(text, isMarkdown) {
   const stripped = deBold(stripFences(text));
-  const lines = stripInlineCodeSpans(stripped).split('\n');
+  const lines = stripInlineCodeSpans(stripped, { isMarkdown }).split('\n');
   const citations = [];
   lines.forEach((line, i) => {
     const m = line.match(HEADING_ID_REGEX);
@@ -2157,13 +2192,13 @@ function extractHeadingTitleEchoes(text) {
  * A31, etc., which do). This relaxation moves A8 from `findings` to
  * `annotatedFindings` by treating a single-id case more generously.
  */
-function dischargeAnnotationPresentAnywhere(sectionText, id) {
+function dischargeAnnotationPresentAnywhere(sectionText, id, isMarkdown) {
   // For single-ID headings, look for discharge in the header section only
   // (first ~300 chars) to avoid false positives from body text mentioning
   // other IDs. This covers the criteria-source blockquote region.
   const HEADER_CHARS = 300;
   const headerText = sectionText.slice(0, HEADER_CHARS);
-  const headerScanText = stripInlineCodeSpans(headerText);
+  const headerScanText = stripInlineCodeSpans(headerText, { isMarkdown });
 
   const dischargeMatches = [
     ...headerScanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
@@ -2225,13 +2260,14 @@ function dischargeAnnotationPresentAnywhere(sectionText, id) {
 export function checkCitationTitleDrift(text, filePath, registerRows) {
   const findings = [];
   const annotatedFindings = [];
+  const isMarkdown = isMarkdownScanPath(filePath);
   const lines = deBold(stripFences(text)).split('\n');
-  for (const { lineIndex, ids, titleEcho } of extractHeadingTitleEchoes(text)) {
-    const proseTokens = titleDriftTokens(titleEcho);
+  for (const { lineIndex, ids, titleEcho } of extractHeadingTitleEchoes(text, isMarkdown)) {
+    const proseTokens = titleDriftTokens(titleEcho, isMarkdown);
     for (const id of ids) {
       const row = registerRows.get(id);
       if (!row) continue;
-      const titleTokens = titleDriftTokens(row.title);
+      const titleTokens = titleDriftTokens(row.title, isMarkdown);
       const { ratio, shared } = titleDriftScore(titleTokens, proseTokens);
       if (ratio > TITLE_DRIFT_RATIO_THRESHOLD || shared >= TITLE_DRIFT_MIN_SHARED_TOKENS) continue;
       const message =
@@ -2245,8 +2281,8 @@ export function checkCitationTitleDrift(text, filePath, registerRows) {
       // anywhere in section, or next to this heading's ID). For multi-ID headings,
       // require ID-proximity to avoid one ID's discharge excusing another's drift.
       const isAnnotated = ids.length === 1
-        ? dischargeAnnotationPresentAnywhere(sectionText, id)
-        : idSpecificAnnotationPresent(sectionText, id);
+        ? dischargeAnnotationPresentAnywhere(sectionText, id, isMarkdown)
+        : idSpecificAnnotationPresent(sectionText, id, isMarkdown);
 
       if (isAnnotated) {
         annotatedFindings.push(`${message} — annotated as discharged/removed, not flagged as drift`);

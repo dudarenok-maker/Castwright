@@ -633,6 +633,32 @@ test('checkNonexistentIds: a backticked ID on a "Register rows:" label line is s
   assert.equal(annotated.length, 0);
 });
 
+test('checkNonexistentIds: a nonexistent-ID citation inside a template literal\'s backtick span in a NON-MARKDOWN scanned file is now caught, not silently blanked away (#3062/#3088)', () => {
+  // Before #3088, stripInlineCodeSpans blanked every single-backtick span
+  // unconditionally, including a JS template literal's backticks in a
+  // scanned .mjs/.ts/.py source — so a citation shaped like a worked example
+  // (more than just a bare ID token) inside one vanished before Check A ever
+  // saw it. Scoping blanking to markdown-only means a non-markdown scanned
+  // file is read raw: this exact span is no longer misread as a markdown
+  // code span at all, so the citation surfaces and A999 (not in the
+  // register) is now flagged.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'const s = `see row A999`;\n';
+  const { errors } = checkNonexistentIds(text, 'scripts/foo.mjs', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A999/);
+});
+
+test('checkNonexistentIds: paired control — the identical shape in a MARKDOWN file keeps its citation blanked/exempted, unchanged from before #3088', () => {
+  // Same worked-example shape as the test above, but scanned as a .md file:
+  // markdown blanking is untouched by #3088, so this span is still blanked
+  // (it is not a bare single-ID span) and the citation stays exempted.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'see `see row A999` for details.\n';
+  const { errors } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+});
+
 test('checkConflictingSubjects: a "Criteria source:" phrase INSIDE an example command\'s code span does not fatally fire (finding AD)', () => {
   // Check C used to read the UNBLANKED text — the same class of bug finding
   // AB already fixed for Check A's citation scan, left armed one caller
