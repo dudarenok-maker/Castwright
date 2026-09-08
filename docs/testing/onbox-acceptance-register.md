@@ -1641,10 +1641,23 @@ self-contained mocks/fixtures unaffected by the real derivation.
   supervised) and hit a **new, different** blocker: both queued chapters enter
   Generating but zero `/synthesize` calls ever reach the sidecar, each stalls
   ~150-190s then silently restarts from scratch — an infinite loop that never
-  dispatches audio. Not side-11 (memory stays flat). Prime suspect is a
-  fabricated cast entry from a stray bracketed stage direction. Filed as
-  [#3080](https://github.com/dudarenok-maker/Castwright/issues/3080). Still
-  Blocked, for a new reason.
+  dispatches audio. Not side-11 (memory stays flat). Filed as
+  [#3080](https://github.com/dudarenok-maker/Castwright/issues/3080).
+  **Re-investigated, Castwright#3080/#3091/#3092 (2026-09-08):** two named
+  suspects were traced against the current code and both ruled out — a
+  bracketed stage direction fabricating a spurious cast entry (the
+  analyzer's only bracket-adjacent regex only ever promotes a *missing*
+  roster entry; a cloned character is already cast, so it can't fire), and
+  a dispatch/queue loop retrying silently forever (every traced failure
+  path in `synthesise-chapter.ts`/`generation.ts` — timeout, stall
+  watchdog, recycle-storm budget, unresolvable-clone, no-capacity, the
+  srv-11 circuit breaker — fails loud, not silently). No alternate root
+  cause could be confirmed without a live GPU/TTS sidecar box. **Still
+  owed:** a full-book render with a cloned character on a real box,
+  capturing `state.json` + server logs if/when the reported symptom
+  reproduces, to identify the actual mechanism — see
+  [PR #3112](https://github.com/dudarenok-maker/Castwright/pull/3112) for
+  the full investigation trace.
 - **C-05 (open — an `F`, not one of the 18 discharged above, deliberately
   excluded per its own note earlier in this row) now has two recorded
   sub-observations owed, not a new row:** [#2023](https://github.com/dudarenok-maker/Castwright/issues/2023)
