@@ -2269,6 +2269,25 @@ every mechanism test while leaving the whole book wrong.
   character thin enough on in-book anchors to trigger the audition fallback (a
   few-line character is the easy way), so treat it as opportunistic within this same
   render rather than something to engineer.
+- **Sentence-19 cross-language regression, unconfirmed
+  ([#3079](https://github.com/dudarenok-maker/Castwright/issues/3079)).** Wave 12's
+  A16 render on the Coalfall Commission Russian chapter one, cloned Qwen voice,
+  flagged one sentence (index 19) decoding in English via Whisper auto-detect on
+  both attempts (identity cosine 0.704 → 0.656). Investigation
+  ([#3093](https://github.com/dudarenok-maker/Castwright/issues/3093),
+  [#3094](https://github.com/dudarenok-maker/Castwright/issues/3094)) traced the
+  full dispatch path and found no per-sentence language mechanism — `langCode` is
+  resolved once per chapter (`synthesise-chapter.ts:1371`) and threaded uniformly
+  into every title, single-group and batched call, including the sidecar's
+  per-item `language` override (`main.py:8151`, `:8228`) — and ruled out the
+  #1998 whole-book English-manifest fallback (every cloned group's `cloned` flag
+  is set correctly by `buildSentenceGroups`/`resolveGroup`). Genuinely blocked
+  pending a real render: needs the same chapter re-rendered with the same cloned
+  Qwen voice, sentence 19 isolated, to confirm whether the *audio* itself renders
+  in English or whether the Whisper auto-detect measurement is the artifact —
+  this row's own withdrawn note above documents this exact row producing
+  unreliable voice-identity/language measurements before. Track separately from
+  the rest of this row; do not treat as discharged by a passing chapter-level run.
 
 *Needs:* a single GPU with Qwen resident, a non-English book, and ASR available
 (`ASR_DEVICE` and `ASR_COMPUTE_TYPE` must agree — a `cpu` device with a pinned
