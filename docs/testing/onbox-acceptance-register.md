@@ -1452,7 +1452,7 @@ self-contained mocks/fixtures unaffected by the real derivation.
   precondition can't be held still long enough to observe). Previously not
   counted in this row's own tally — a round-2 pr-review-gate pass on PR #3073
   caught the omission.
-- **The remaining 6 of the 11, spelled out here so the count is traceable in
+- **The remaining 8 of the 11, spelled out here so the count is traceable in
   one place (a round-3 pr-review-gate pass on PR #3073 found this row's own
   tally never actually enumerated these, even though the live view's prose
   did):** **B-05** (structural — no way to fail `/embed` independently of the
