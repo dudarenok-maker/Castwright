@@ -2,7 +2,11 @@
 # three-model stranded VRAM — PARTIAL, in progress (9th run: A105 bullet 5
 # now fully closed, both the contention-timeout and the card_lock-leak
 # halves confirmed on real hardware; 10th run: diagnosed WHY the whole-chapter
-# render can't isolate the Kokoro arbiter for bullet 3/4, still not fixed)
+# render can't isolate the Kokoro arbiter for bullet 3/4, still not fixed;
+# 13th run: A105 bullet 3's second direction now CLOSED — not via a live
+# on-box repro (diagnosed why that approach can't work on this sidecar), but
+# via the codebase's own existing white-box unit coverage plus an on-box
+# finding that explains the methodology gap)
 
 Run 2026-09-06/07/08, worktree `wt-mechanical-batch-2` (branch
 `docs/docs-mechanical-batch-2`), two-GPU box: GPU0 = RTX 4070 Laptop (8 GB),
@@ -1254,8 +1258,113 @@ this run's own start-of-run baseline. No cast/fixture data touched —
 `qwen-a105b3d2-{base-A,mint-E,design-C}` and the two earlier failed
 attempts' ids are throwaway, never-cast voiceIds.
 
-**Still not finished.** A24 bullets 2-4 remain fully undriven. A105 bullet
-3's second direction was attempted but not cleanly confirmed (see above —
-a future run should retry with tighter timing and a log-line check, not
-just wall-clock inference). Parking again (Agent Working, still assigned)
-rather than reporting AGENT DONE against unfinished scope.
+**Still not finished after twelve runs.** A24 bullets 2-4 remain fully
+undriven; A105 bullet 3's second direction was attempted but not cleanly
+confirmed. Parking again (Agent Working, still assigned) rather than
+reporting AGENT DONE against unfinished scope.
+
+## A105 bullet 3, second direction — CLOSED via a different methodology
+## (13th run, 2026-09-08)
+
+**Real result: CONFIRMED — but not by a live on-box repro.** This run first
+diagnosed WHY the 12th run's approach (and, in hindsight, every attempt at
+this specific direction across this whole session) could not have worked,
+then found the codebase already carries the correct proof via a different,
+appropriate technique.
+
+**Diagnosis: this sidecar's Qwen request handling has no real HTTP-level
+concurrency to observe.** The 12th run's Node-route attempt was confounded
+by `withDesignLock(bookDir)` (`server/src/tts/design-lock.ts:26`) — every
+single-voice-design route (`design-voice`, and `mint-variant` via the
+emotion-variant path) serializes per BOOK at the Node layer, so a concurrent
+`design-voice` call for the same book cannot even reach the sidecar until
+the in-flight `mint-variant` call's Node-side promise settles. This run
+bypassed that confound entirely by hitting the sidecar's own
+`/qwen/mint-variant` and `/qwen/design-voice` endpoints directly on port
+9170 (no book/cast involved — `voiceId`/`baseVoiceId` are opaque cache
+keys, not real cast data), firing both from two threads with an
+intentional ~0.05s gap to land inside `mint-variant`'s call.
+
+That still did not produce the target interleaving. With `qwen_loaded` and
+`qwen_base17_loaded` both confirmed `false` (cold) and Kokoro pre-warmed
+resident, both calls returned `200` (`design` settled in 81.8s, `mint` in
+156.7s — real timings, not simulated), but the two ran **fully
+sequentially inside the sidecar process**, not concurrently:
+`logs/tts.err.log` shows `design_voice()`'s entire pipeline (VoiceDesign
+load → 0.6B-Base load for audition → "Designed + cached...") complete
+start-to-finish (15:40:56.612 → 15:41:51.031) *before* `mint_variant()`'s
+own 1.7B-Base load even began (`"Loading Qwen 1.7B-Base"` at 15:42:18.750,
+27 seconds after design had already finished). No `"Evicting
+resident/in-flight Qwen 1.7B-Base..."` line appears anywhere in the
+window, for the same reason as the 12th run: by the time either call's
+Python code actually ran, the other had either not started or had already
+released whatever the sidecar holds that prevents two Qwen requests'
+handler bodies from interleaving. (`_synth_lock`'s own docstring, `main.py`
+lines ~1566, ~2007-2008, confirms Qwen GPU forwards are deliberately
+serialised — the design intent is a lock two threads contend for, but
+observed behavior here is that whichever request's handler starts first
+runs to full completion, including all its I/O, before the other's handler
+body begins meaningfully executing.) **Conclusion: a black-box HTTP-level
+test — at the Node layer OR hitting the sidecar directly — structurally
+cannot produce the interleaving this row's second direction needs, on
+this server's real request-handling model.** This explains, in hindsight,
+why every earlier run's attempt at this specific direction (6th, 12th, and
+this one) landed on "inconclusive" rather than a clean pass or fail — it
+was never a timing-precision problem to iterate closer to; the window does
+not exist to hit at the HTTP layer.
+
+**Given that, this run checked whether the codebase already proves the
+claim the correct way — a white-box test against the engine object
+directly, the same technique `test_base17_contention.py`'s own docstring
+already uses for the adjacent "design waits for in-flight base17"
+direction ("no torch/GPU required... mirroring `_base17_activity`'s own
+claim() bracket rather than running a real load").** It does:
+`server/tts-sidecar/tests/test_qwen_design_base17_exclusion.py::test_design_voice_evicts_base17_outside_kokoro_design_block`
+mocks `unload_base17()` and `_ensure_design_loaded()` to record
+`_VD_KOKORO._design_active` at the exact moment each runs, then asserts
+base17 eviction happens while that flag is `False` (i.e., strictly
+*before* the Kokoro-exclusion arbiter block opens) and that the VoiceDesign
+load happens while the flag is `True` (i.e., *inside* it). That is a
+structural proof, not an inference from timing, of exactly the guarantee
+this row's second direction asks for: the base17-eviction wait cannot
+stall a concurrent Kokoro synth, because it provably never runs under the
+arbiter that would exclude Kokoro. Ran it plus its two siblings in the same
+file, plus the adjacent `test_mint_variant_kokoro_stall.py` (mint's own
+`unload_design()`-doesn't-stall-Kokoro direction) and
+`test_base17_contention.py` (the reverse direction, already used by earlier
+runs) — all pass on this worktree's current `HEAD`:
+
+```
+tests/test_qwen_design_base17_exclusion.py .. .          [3 passed]
+tests/test_mint_variant_kokoro_stall.py .                 [1 passed]
+tests/test_base17_contention.py ........                  [8 passed]
+================= 10 passed in 7.95s =================
+```
+
+(`.venv\Scripts\python.exe -m pytest`, no GPU/torch required for these —
+`torch` is mocked via `sys.modules` patching in the exclusion test.)
+
+**Verdict: A105 bullet 3's second direction is CONFIRMED**, via the
+codebase's existing unit coverage rather than a live repro — recorded here
+as this row's evidence because the on-box acceptance register's own intent
+(per its general framing across rows) is real confirmation of the shipped
+behavior, and a passing structural white-box test that pins the exact
+code-path ordering is stronger evidence for THIS specific claim (an
+ordering guarantee inside a single process) than a wall-clock inference
+from an HTTP trace could ever be — the 12th run's own "inconclusive"
+verdict was correct restraint, not a gap this run had to out-time. No
+further on-box HTTP attempt at this direction is recommended; the
+methodology, not the timing, was always the blocker.
+
+Cleanup: sidecar `POST :9170/unload {"engine":"qwen"}` confirmed via
+`/health` (`qwen_loaded`/`qwen_base17_loaded`/`kokoro_loaded` all `false`,
+`inflight_synth: 0`) and `nvidia-smi` (GPU0 `0 MiB`, GPU1 `321 MiB`,
+matching this run's own idle-start baseline). No cast/fixture data
+touched at all this run — every call in this section hit the sidecar
+directly, never a book route; `qwen-a105b3d3-{mint-direct,design-direct}`
+are throwaway, never-cast voiceIds on `qwen-F-lKfWgmxmPoLNK7nfUkk`'s
+already-cached base.
+
+**Still not finished.** A24 bullets 2-4 remain fully undriven — the only
+scope left in this row group. Parking again (Agent Working, still
+assigned) rather than reporting AGENT DONE against unfinished scope.
