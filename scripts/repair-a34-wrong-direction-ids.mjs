@@ -151,6 +151,9 @@ import {
   buildNameIndex,
   probePortRangeRefused,
   AUTO_REBIND_RANGE,
+  formatBooksScannedLine,
+  formatNotYetAnalysedLine,
+  shouldRefuseApplyForUnreadableBooks,
 } from './repair-cast-id-drift.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -528,8 +531,49 @@ export async function main(argv = process.argv.slice(2), workspaceDirOverride) {
     }
   }
 
-  const { books } = collectBooks(workspaceDir);
-  console.log(`books scanned: ${books.length}\n`);
+  const { books, droppedBooks } = collectBooks(workspaceDir);
+  // #2108-shape: goes through the same formatBooksScannedLine() the sibling
+  // repair-cast-id-drift.mjs summary uses, so a zero-book scan reads as
+  // "nothing was examined" rather than as an unremarkable "books scanned:
+  // 0" indistinguishable from "0 confirmed wrong-direction pairs — nothing
+  // to repair" below.
+  console.log(`${formatBooksScannedLine(books.length)}\n`);
+
+  // #2097-shape (finding from PR #3057 review pass 2): a book dropped by
+  // collectBooks used to be discarded here entirely — droppedBooks was
+  // destructured away, so a book whose cast.json exists but is truncated
+  // read as a clean, fully-scanned workspace with nothing to repair. Named
+  // and, for an 'unreadable' drop, refused under --apply, mirroring
+  // repair-cast-id-drift.mjs's own handling of the same collectBooks
+  // output (see that script's doc comments on `shouldRefuseApplyForUnreadableBooks`
+  // for why only 'unreadable' — evidence LOSS, not legitimate absence —
+  // refuses).
+  const unreadableBooks = droppedBooks.filter((b) => b.reason === 'unreadable');
+  const notYetAnalysedBooks = droppedBooks.filter((b) => b.reason === 'not-yet-analysed');
+  if (notYetAnalysedBooks.length) {
+    console.log(formatNotYetAnalysedLine(notYetAnalysedBooks.length));
+    for (const b of notYetAnalysedBooks) console.log(`  - ${b.label}`);
+  }
+  if (unreadableBooks.length) {
+    console.log(
+      `books DROPPED — cast.json/state.json present but unreadable or wrong-shaped (evidence LOST, not ` +
+        `absent): ${unreadableBooks.length}`,
+    );
+    for (const b of unreadableBooks) console.log(`  - ${b.label}`);
+  }
+  if (notYetAnalysedBooks.length || unreadableBooks.length) console.log('');
+
+  if (shouldRefuseApplyForUnreadableBooks(apply, unreadableBooks.length)) {
+    console.error(
+      `\nRefusing --apply: ${unreadableBooks.length} book(s) have a cast.json/state.json that exists but ` +
+        `could not be read — this pass cannot scan them for wrong-direction characterId retirements at all, ` +
+        `so it cannot rule out damage sitting unrepaired in them: ` +
+        `${unreadableBooks.map((b) => b.label).join('; ')}. Fix or restore each book's cast.json/state.json ` +
+        `and re-run.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
 
   const bookInputs = books.map((book) => {
     const historyPath = path.join(book.audiobookDir, 'cast-id-history.json');

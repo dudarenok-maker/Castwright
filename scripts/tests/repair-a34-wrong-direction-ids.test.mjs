@@ -39,7 +39,7 @@ import {
   backupBeforeApply,
   main,
 } from '../repair-a34-wrong-direction-ids.mjs';
-import { parseStandingPorts, probePortRangeRefused } from '../repair-cast-id-drift.mjs';
+import { parseStandingPorts, probePortRangeRefused, AUTO_REBIND_RANGE } from '../repair-cast-id-drift.mjs';
 
 // ---------------------------------------------------------------------------
 // parseArgs
@@ -733,6 +733,151 @@ test('main dry-run: an unparseable cast.json.bak.* downgrades a would-be confirm
     const out = lines.join('\n');
     assert.match(out, /bak-evidence-unreadable/, 'the lost-evidence reason must reach the operator');
     assert.doesNotMatch(out, /confirmed repairs: /, 'and nothing may be reported as confirmed');
+  } finally {
+    console.log = realLog;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// droppedBooks (PR #3057 review pass 2, same shape as C2/`bakAvailable`):
+// collectBooks's second return field used to be destructured away here, so
+// a book whose cast.json is present-but-unreadable vanished silently — its
+// wrong-direction evidence was LOST, not merely absent, and the workspace
+// still read as clean. Mirrors repair-cast-id-drift.mjs's own #2097/#2108
+// handling of the same collectBooks output.
+// ---------------------------------------------------------------------------
+
+/** Same rationale as repair-cast-id-drift.test.mjs's own `findVerifiedFreeRange`
+ *  (M5, independent review 2026-08-05): a hardcoded "high, unusual" base port
+ *  is a guess, not a guarantee, on a shared CI/dev box. This proves a
+ *  `rangeSize`-port CONSECUTIVE window is free by actually binding a real
+ *  listener on every port in it, then releases them immediately before the
+ *  probe under test runs. Not imported from that file because the helper
+ *  isn't exported there — duplicated deliberately rather than exported
+ *  speculatively for a single other caller. */
+async function findVerifiedFreeRange(rangeSize, host = '127.0.0.1') {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const base = 40000 + Math.floor(Math.random() * 20000);
+    const servers = [];
+    try {
+      for (let i = 0; i < rangeSize; i += 1) {
+        const s = net.createServer();
+        await new Promise((resolve, reject) => {
+          s.once('error', reject);
+          s.listen(base + i, host, resolve);
+        });
+        servers.push(s);
+      }
+      await Promise.all(servers.map((s) => new Promise((resolve) => s.close(resolve))));
+      return base;
+    } catch {
+      await Promise.all(servers.map((s) => new Promise((resolve) => s.close(() => resolve()))));
+    }
+  }
+  throw new Error(`could not find ${rangeSize} consecutive free ports after 25 attempts`);
+}
+
+/** One good, cleanly-scannable book, plus one book whose cast.json is
+ *  truncated mid-JSON (present but unreadable — evidence LOST) alongside a
+ *  cast-id-history.json carrying a wrong-direction entry. The broken book's
+ *  wrong-direction pair can never be confirmed or repaired because its live
+ *  cast can't even be read — that is exactly the finding: it must be NAMED
+ *  as dropped, never silently absorbed into "0 confirmed pairs". */
+function buildMixedGoodAndUnreadableWorkspace(tmp) {
+  const goodDir = join(tmp, 'books', 'Author', 'Series', 'GoodBook', '.audiobook');
+  mkdirSync(goodDir, { recursive: true });
+  writeFileSync(join(goodDir, 'cast.json'), JSON.stringify({ characters: [{ id: 'other', name: 'Other' }] }));
+  writeFileSync(join(goodDir, 'state.json'), JSON.stringify({ title: 'GoodBook', chapters: [] }));
+
+  const brokenDir = join(tmp, 'books', 'Author', 'Series', 'BrokenBook', '.audiobook');
+  mkdirSync(brokenDir, { recursive: true });
+  const brokenCastPath = join(brokenDir, 'cast.json');
+  const brokenHistoryPath = join(brokenDir, 'cast-id-history.json');
+  writeFileSync(brokenCastPath, '{"characters":[{"id":"od'); // truncated mid-JSON
+  writeFileSync(join(brokenDir, 'state.json'), JSON.stringify({ title: 'BrokenBook', chapters: [] }));
+  writeFileSync(brokenHistoryPath, JSON.stringify({ schema: 1, supersededBy: { oduvan: 'одуван' } }));
+
+  return { brokenCastPath, brokenHistoryPath };
+}
+
+test('main dry-run: a book with a present-but-unreadable cast.json is NAMED as dropped, not silently absorbed', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-unreadable-dry-'));
+  const lines = [];
+  const realLog = console.log;
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    buildMixedGoodAndUnreadableWorkspace(tmp);
+
+    await main([], tmp);
+
+    const out = lines.join('\n');
+    assert.match(out, /books DROPPED/, 'the dropped book must be surfaced, not silently discarded');
+    assert.match(out, /BrokenBook/, 'the specific dropped book must be named');
+  } finally {
+    console.log = realLog;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('main --apply: a book with a present-but-unreadable cast.json REFUSES the write, even though the good book has nothing to repair', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-unreadable-apply-'));
+  const errors = [];
+  const realError = console.error;
+  console.error = (...args) => errors.push(args.join(' '));
+  const prevPort = process.env.PORT;
+  const prevLan = process.env.LAN_HTTPS_PORT;
+  try {
+    const { brokenCastPath, brokenHistoryPath } = buildMixedGoodAndUnreadableWorkspace(tmp);
+    const brokenCastBefore = readFileSync(brokenCastPath, 'utf8');
+    const brokenHistoryBefore = readFileSync(brokenHistoryPath, 'utf8');
+
+    // Two disjoint verified-free ranges so the liveness probe (which must
+    // pass for this test to reach the collectBooks-driven refusal at all)
+    // never reports a false live listener.
+    const httpBase = await findVerifiedFreeRange(AUTO_REBIND_RANGE, '127.0.0.1');
+    const lanBase = await findVerifiedFreeRange(AUTO_REBIND_RANGE, '127.0.0.1');
+    process.env.PORT = String(httpBase);
+    process.env.LAN_HTTPS_PORT = String(lanBase);
+
+    await main(['--apply'], tmp);
+
+    assert.equal(process.exitCode, 1, 'main must refuse rather than report a clean apply');
+    const errOut = errors.join('\n');
+    assert.match(errOut, /Refusing --apply/);
+    assert.match(errOut, /BrokenBook/, 'the refusal must name which book is unreadable');
+    // Never touched — refusal fires before any write, including to the
+    // one broken book itself.
+    assert.equal(readFileSync(brokenCastPath, 'utf8'), brokenCastBefore);
+    assert.equal(readFileSync(brokenHistoryPath, 'utf8'), brokenHistoryBefore);
+  } finally {
+    console.error = realError;
+    process.exitCode = 0;
+    if (prevPort === undefined) delete process.env.PORT;
+    else process.env.PORT = prevPort;
+    if (prevLan === undefined) delete process.env.LAN_HTTPS_PORT;
+    else process.env.LAN_HTTPS_PORT = prevLan;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('main dry-run: a zero-book workspace reads as "nothing was examined", distinguishable from "nothing to repair"', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-emptyws-'));
+  const lines = [];
+  const realLog = console.log;
+  console.log = (...args) => lines.push(args.join(' '));
+  try {
+    // No books/ directory at all — the emptiest possible workspace.
+    await main([], tmp);
+
+    const out = lines.join('\n');
+    assert.match(out, /books scanned: 0/);
+    assert.match(
+      out,
+      /WARNING: nothing was examined/,
+      'a zero-book scan must call itself out, not read like an ordinary clean-zero count',
+    );
+    assert.match(out, /0 confirmed wrong-direction pairs — nothing to repair\./);
   } finally {
     console.log = realLog;
     rmSync(tmp, { recursive: true, force: true });
