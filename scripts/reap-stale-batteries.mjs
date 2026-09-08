@@ -22,14 +22,14 @@
 //      subtree) — catches doomed orphans regardless of how busy they are,
 //      but misses a live-parented battery that is truly wedged.
 // The "two samples" for test 1 are NOT two queries in one invocation (the
-// hook budget is ONE Win32_Process query, ~300ms, no pool) — they are THIS
+// hook budget is ONE Win32_Process query, no pool) — they are THIS
 // census and the immediately-preceding one, read back from the append-only
 // log. That is also why the log records each root's command line: it is the
 // dataset, not a debugging aid (see the design doc's "Deferred work" section).
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statSync } from 'node:fs';
+import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
@@ -62,18 +62,264 @@ const GIT_NAME_RE = /^git(?:\.exe)?$/i;
 // orphaned vitest tree, and CPU sums would be meaningless).
 const SUPERVISOR_NAME_RE = /^(node|cmd|sh|bash|powershell|pwsh)(?:\.exe)?$/i;
 
-// A subtree is only EVER a reap candidate if some member's command line
-// carries a real test-runner marker — the actual repo invocations bottom out
-// in one of these (npm run test[:server] -> vitest, npm run test:sidecar ->
-// `python -m pytest`, npm run test:scripts -> Invoke-Pester). This is an
-// ALLOWLIST of what may be killed, evaluated BEFORE and independently of the
-// python/git-overlap/self-ancestry protections below (defense in depth: a
-// battery-shaped subtree can still be protected by those). Without this gate,
-// classify() reasons over every Win32_Process row on the box — verified live
-// (PR #3063 review) to reach `npm run dev`, a sibling worktree's running
-// battery, Ollama, Steam, and OS processes once the date-parsing bug (see
-// collectProcessSnapshot below) is fixed and the collector stops returning [].
-const BATTERY_COMMAND_RE = /\b(vitest|pytest|invoke-pester)\b/i;
+// ---------------------------------------------------------------------------
+// What counts as a "battery": an allowlist of recognised runner INVOCATIONS
+// ---------------------------------------------------------------------------
+//
+// A subtree is only EVER a reap candidate if some member is RUNNING a
+// recognised test runner. The first version of this gate was a substring test
+// (a word-boundary match for vitest/pytest/invoke-pester) applied to the whole
+// command line, which is not an allowlist at all: it matched any process whose
+// argv merely CONTAINED the word. Verified live (PR #3063 review pass 2, C2) —
+// an idle "tail -f logs/vitest.log" and the reviewer's own grep probe shell
+// (whose search PATTERN was the runner names) both classified
+// orphaned-unreachable, and as lone roots nothing refused the taskkill /T /F.
+// Orphaned tail.exe/head.exe/bash.exe are routine on this box, so that was a
+// live, unattended kill of unrelated processes on every push.
+//
+// So this gate keys on the thing being RUN — the resolved executable, and the
+// argv POSITION a runner entry point occupies — never on a word appearing
+// somewhere in the string. isBatteryInvocation() below is the whole rule.
+//
+// DECLARED GAPS (enumerated on purpose; an honest gap beats an implied one —
+// PR #3063 review pass 2, C1; PR #3063 review pass 4, P1; PR #3063 review
+// pass 5, Q1):
+//   * Invoke-Pester runs IN-PROCESS (scripts/tests/run.ps1:32) and never
+//     appears on any command line, so a Pester run is recognisable ONLY via
+//     this repo's own launcher path (scripts/tests/run.ps1, spawned by
+//     run-powershell.mjs:52). A Pester run started any other way is invisible
+//     to this tool and will never be reaped. Pinned by a named test.
+//   * pytest IS recognised as an invocation, but can never ENABLE a kill:
+//     every pytest subtree contains python.exe, and classify()'s
+//     protected:python arm is evaluated first. Also pinned by a named test.
+//   * The REAL gap, found by mining this tool's own census log (review pass
+//     5, Q1): npm's Windows `.bin` shim does not expand to a clean
+//     `node_modules/vitest/vitest.mjs` path. A live `npm test` was captured
+//     verbatim as `node_modules\.bin\\..\vitest\vitest.mjs` — a doubled
+//     backslash and a `..` segment neither pattern below could see, so this
+//     was a 0-for-5,620 miss rate across 16 real censuses, one platform, one
+//     entry point. isRunnerScriptPath() now runs the token through
+//     `path.posix.normalize()` (after the existing backslash-to-slash and
+//     lowercase pass) before testing it against the patterns below, which
+//     collapses `.bin/../vitest` down to `vitest` and closes this for every
+//     pattern here, not just vitest's. Pinned by test Q1.
+
+const SHELL_NAMES = new Set(['cmd', 'sh', 'bash', 'powershell', 'pwsh']);
+const POWERSHELL_NAMES = new Set(['powershell', 'pwsh']);
+// Flags after which the NEXT argument is a command string to run, not a flag.
+const SHELL_INLINE_COMMAND_FLAGS = new Set(['-c', '/c', '/k', '-command', '-encodedcommand']);
+// npx flags that consume the NEXT argv token as their value (space-separated
+// form) rather than taking it inline via `=`. That next token is a flag
+// value, never the package/binary to run.
+const NPX_VALUE_FLAGS = new Set(['-p', '--package', '--registry', '-c', '--call', '--cache']);
+
+/** powershell.exe/pwsh accept any unambiguous prefix of `-Command` as that
+ *  same switch (`-Comm`, `-Comma`, ...). Anchored at 5 chars ("-comm") so it
+ *  can never collide with another `-Co...` switch (e.g. `-ConfigurationName`
+ *  diverges at the 4th letter) while still covering the abbreviations
+ *  actually seen in the wild. */
+function isPowerShellCommandFlagPrefix(token) {
+  const t = String(token ?? '').toLowerCase();
+  return t.length >= 5 && '-command'.startsWith(t);
+}
+// Extensions a runner shim can wear without ceasing to be that runner.
+const SHIM_EXTENSION_RE = /\.(cmd|bat|ps1|mjs|cjs|js)$/;
+// Runner entry points identified by their PATH, anchored on the package or
+// repo directory they must live in — never on a bare, generic filename.
+// Crucially: these anchor on actual FILES (ending in .js/.mjs/.cjs/etc), not
+// directory mentions, so a bare mention like "node_modules/vitest/" does not
+// match and a quoted path with spaces still matches the file at its end.
+const RUNNER_SCRIPT_PATH_RES = [
+  // vitest entry point files under its package directory.
+  /(^|\/)node_modules\/vitest\/[^\s\u0022\u0027]*\.(m?js|cjs)$/i,
+  /(^|\/)node_modules\/\.bin\/vitest(\.cmd|\.ps1)?$/i,
+  // Playwright's CLI (npm run test:e2e). "cli.js" alone is far too generic,
+  // so this is anchored on the package directory it must live in, and on the
+  // actual cli.js file it ends with.
+  /(^|\/)node_modules\/(@playwright\/test|playwright|playwright-core)\/[^\s\u0022\u0027]*cli\.js$/i,
+  // Playwright's real per-test WORKER entry point — verified live (review
+  // pass 5, Q1) by capturing a real `npm run test:e2e` process tree: the
+  // cli.js root forks one `node .../playwright/lib/worker/workerProcessEntry.js`
+  // per worker, with no further shell/cli.js wrapper in between. If the
+  // cli.js root dies (or is itself reaped) before its workers exit, an
+  // orphaned worker subtree would carry no recognised member at all without
+  // this — cli.js alone is not enough.
+  /(^|\/)node_modules\/playwright\/lib\/worker\/workerprocessentry\.js$/i,
+  // node:test — npm run test:hooks. run-hooks-tests.mjs forks one child per
+  // file, so it IS a pool and IS orphan-generating.
+  /(^|\/)scripts\/run-hooks-tests\.mjs$/i,
+  // Pester — npm run test:scripts bottoms out in this launcher (see the
+  // declared gap above).
+  /(^|\/)scripts\/tests\/run\.ps1$/i,
+];
+// Runner names, matched against a RESOLVED executable or against a runner
+// argument handed to npx — never against arbitrary text.
+const RUNNER_BARE_NAMES = new Set(['vitest', 'pytest', 'playwright']);
+
+const QUOTE_CHARS = new Set(['\u0022', '\u0027']);
+
+/** Split a command line into argv-ish tokens, honouring single and double
+ *  quotes as grouping (and stripping them). Deliberately simple: this is a
+ *  classifier for `Win32_Process.CommandLine`, not a shell. */
+export function tokenizeCommandLine(line) {
+  const tokens = [];
+  let current = '';
+  let quote = null;
+  let started = false;
+  for (const ch of String(line ?? '')) {
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (QUOTE_CHARS.has(ch)) {
+      quote = ch;
+      started = true;
+      continue;
+    }
+    if (ch === ' ' || ch === '\t') {
+      if (started) {
+        tokens.push(current);
+        current = '';
+        started = false;
+      }
+      continue;
+    }
+    current += ch;
+    started = true;
+  }
+  if (started) tokens.push(current);
+  return tokens;
+}
+
+/** The lowercased basename of a path-or-name token, with a trailing `.exe`
+ *  removed. A fully-qualified Git-for-Windows bash path becomes `bash`. */
+function executableName(token) {
+  const normalised = String(token ?? '').replace(/\\/g, '/');
+  const base = normalised.slice(normalised.lastIndexOf('/') + 1).toLowerCase();
+  return base.endsWith('.exe') ? base.slice(0, -4) : base;
+}
+
+function isRunnerScriptPath(token) {
+  // Backslash-to-slash first, THEN posix-normalise, so a `..`/`//`-laden
+  // Windows shim path collapses to the plain file path the patterns below
+  // expect. Verified live (review pass 5, Q1): npm's Windows `.bin` shim
+  // does not expand to `node_modules/vitest/vitest.mjs` — it was captured
+  // verbatim as `node_modules\.bin\\..\vitest\vitest.mjs`, which neither
+  // pattern below could ever match un-normalised (no `node_modules/vitest/`
+  // substring, and it does not end at `.bin/vitest`). Without this, EVERY
+  // npm-script-invoked runner on this repo's only supported platform was
+  // unrecognisable — confirmed against this tool's own census log: 0 of
+  // 5,620 root records recognised across 16 real censuses.
+  const p = posix.normalize(
+    String(token ?? '')
+      .replace(/\\/g, '/')
+      .toLowerCase(),
+  );
+  return RUNNER_SCRIPT_PATH_RES.some((re) => re.test(p));
+}
+
+function isRunnerBareName(token) {
+  return RUNNER_BARE_NAMES.has(executableName(token).replace(SHIM_EXTENSION_RE, ''));
+}
+
+/**
+ * True when `commandLine` is a recognised test-runner invocation — i.e. this
+ * process is RUNNING a battery, not merely mentioning one. See the block
+ * comment above for why that distinction is the entire point of the gate.
+ *
+ * A shell wrapper is not itself a battery: its inline command argument is
+ * unwrapped and the SAME test applied to that. That is what keeps
+ * `cmd /c npx vitest run` recognised while a shell whose -c payload merely
+ * greps for the word is not — the inner executable is grep, and grep runs no
+ * battery.
+ */
+export function isBatteryInvocation(commandLine, depth = 0) {
+  if (depth > 3) return false; // bounded: a shell wrapping a shell wrapping ...
+  const tokens = tokenizeCommandLine(commandLine);
+  if (tokens.length === 0) return false;
+  const exe = executableName(tokens[0]);
+  const args = tokens.slice(1);
+
+  if (SHELL_NAMES.has(exe)) {
+    const isPowerShellExe = POWERSHELL_NAMES.has(exe);
+    const flagIdx = args.findIndex(
+      (a) => SHELL_INLINE_COMMAND_FLAGS.has(a.toLowerCase()) || (isPowerShellExe && isPowerShellCommandFlagPrefix(a)),
+    );
+    if (flagIdx >= 0 && flagIdx + 1 < args.length) {
+      return isBatteryInvocation(args.slice(flagIdx + 1).join(' '), depth + 1);
+    }
+    // `pwsh -ExecutionPolicy Bypass -NoProfile -File .../run.ps1` — a script
+    // PATH argument bound to -File specifically, never a mention anywhere
+    // else in argv (npm run test:scripts).
+    const fileIdx = args.findIndex((a) => a.toLowerCase() === '-file');
+    if (fileIdx >= 0 && fileIdx + 1 < args.length) {
+      return isRunnerScriptPath(args[fileIdx + 1]);
+    }
+    if (isPowerShellExe) {
+      // powershell/pwsh bind a bare (non-switch) argument positionally to
+      // -Command when nothing else has claimed it (`powershell "Get-Content
+      // ..."`). Recurse on that ONE bound argument — never scan the rest of
+      // argv for a runner path.
+      const positional = args.find((a) => !a.startsWith('-'));
+      if (positional !== undefined) return isBatteryInvocation(positional, depth + 1);
+    }
+    // No recognised shell-invocation shape: an unmatched/unknown flag, or a
+    // bare POSIX shell (bash/sh/cmd) given no -c/-file/-command argument at
+    // all. Falling back to `args.some(isRunnerScriptPath)` here is exactly
+    // the C1/C2 hole this gate exists to close (PR #3063 review pass 3) —
+    // it substring-scans an opaque, unparsed payload for a runner path
+    // appearing ANYWHERE inside it, which a `vim .../run.ps1` or a
+    // `tail -f .../vitest/x.log` also satisfies. "We could not parse this
+    // shell's arguments" is a different statement from "this is a battery",
+    // and this script force-kills process trees unattended, so the
+    // unrecognised case must fail closed: not a battery.
+    return false;
+  }
+  if (exe === 'node' || exe === 'nodejs') {
+    // `node --test <files>` — node:test's own per-file fork pool (test:hooks).
+    if (args.some((a) => a === '--test' || a.startsWith('--test='))) return true;
+    // Check arguments for runner script paths. The RUNNER_SCRIPT_PATH_RES
+    // patterns now anchor on actual FILES (ending in .js/.mjs/.cjs), not
+    // directory mentions — so they safely ignore inline -e payloads,
+    // log filenames, and other false positives without needing a whitespace
+    // guard. A quoted path with spaces (from a shell) becomes a single
+    // token with internal spaces, and the file-anchored regex still matches
+    // if the basename is a recognised entry point.
+    return args.some((a) => isRunnerScriptPath(a));
+  }
+  if (exe === 'npx' || exe === 'npx.cmd') {
+    // npx's first non-flag argument is the package/binary to run. Find it
+    // and check ONLY that one, never scan the rest of argv for a runner name
+    // appearing anywhere (that was the C2 substring-matching hole). Flags
+    // start with `-` and some take their OWN value as a separate argv
+    // token (`--registry <url>`, `-p vitest@4`), not just the `--flag=value`
+    // form the loop already skipped for free. Without skipping that value
+    // token too, it gets mistaken for the package/binary argument and the
+    // loop returns on it — `npx --registry <url> vitest run` and
+    // `npx -p vitest@4 vitest run` both regressed true -> false this way
+    // (review pass 5, Q3) even though the code comment already claimed
+    // value-taking flags were handled.
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i];
+      if (arg.startsWith('-')) {
+        if (!arg.includes('=') && NPX_VALUE_FLAGS.has(arg.toLowerCase())) i += 1; // skip its value token
+        continue;
+      }
+      // This is the package name argument — the only one we check.
+      return isRunnerBareName(arg) || isRunnerScriptPath(arg);
+    }
+    return false;
+  }
+  if (exe === 'python' || exe === 'python3' || exe === 'py') {
+    // `python -m pytest ...` — the module NAME argument, in its own argv
+    // position, never a mention anywhere in the line.
+    const moduleIdx = args.indexOf('-m');
+    return moduleIdx >= 0 && args[moduleIdx + 1] === 'pytest';
+  }
+  // A runner shim invoked directly: vitest.cmd, pytest.exe, playwright.cmd.
+  return isRunnerBareName(exe);
+}
 
 // ---------------------------------------------------------------------------
 // Pure classification
@@ -168,7 +414,7 @@ export function classify(snapshot, now, thresholds) {
     const hasPython = members.some((m) => NEVER_REAP_NAME_RE.test(m.name));
     const hasGit = members.some((m) => GIT_NAME_RE.test(m.name));
     const overlapsProtected = memberPids.some((pid) => protectedPids.has(pid));
-    const isBatteryCandidate = members.some((m) => BATTERY_COMMAND_RE.test(m.commandLine));
+    const isBatteryCandidate = members.some((m) => isBatteryInvocation(m.commandLine));
 
     const prior = priorSamples[root.pid];
     let cpuRatePerMin = null;
@@ -194,11 +440,14 @@ export function classify(snapshot, now, thresholds) {
       // blanket, independent of either test below.
       reasons = ['protected:git-overlap'];
     } else if (isBatteryCandidate) {
-      // Nothing below this line can fire for a subtree that never carried a
-      // test-runner marker — see BATTERY_COMMAND_RE's comment. An orphaned,
+      // Nothing below this line can fire for a subtree that never RAN a
+      // recognised runner — see isBatteryInvocation's comment. An orphaned,
       // idle `steam.exe` and a busy, live-parented `npm run dev` both fall
       // through with verdict 'alive', reasons [], regardless of how they'd
-      // otherwise score.
+      // otherwise score. Note the arm ORDER: this gate is the LAST arm, after
+      // python / self-ancestry / git-overlap, not before them. No behavioural
+      // difference — every earlier arm also yields 'alive' — but the comment
+      // used to claim the reverse (PR #3063 review pass 2, N2).
       if (cpuRatePerMin !== null && cpuRatePerMin <= thresholds.deadRateCpuSecPerMin) {
         reasons.push('stalled-rate');
       }
@@ -252,7 +501,11 @@ export function rowsToProcesses(rows) {
 }
 
 /** One Win32_Process query — the entire OS-touching cost of a pre-push
- *  census (~300ms). Deliberately does NOT spawn a pool: exactly one
+ *  census. Measured live (PR #3063 review pass 2, N1): ~694ms for this
+ *  query alone, and ~0.8-3.5s for a whole runCensus on a 415-root box — NOT
+ *  the "~300ms" earlier drafts of this file, the hook, and the release note
+ *  all claimed. The invariant that matters is unchanged and is the one the
+ *  hook guard actually enforces: NO POOL. Deliberately spawns exactly one
  *  `powershell` child. Returns [] (never throws) on a non-Windows host or
  *  any PowerShell failure — a census that can't run must never block a push.
  *
@@ -309,18 +562,37 @@ export function ownAncestryPids(processes, selfPid = process.pid) {
   return out;
 }
 
-// Bound for readPriorSamples' tail read. Measured live (PR #3063 review):
-// ~200KB per census entry on a real 416-process box, and the log is
-// append-only and never rotated by this script — re-parsing the WHOLE file
-// every push grows unboundedly and blows the hook's "~300ms, no pool"
-// budget. 2MB covers roughly the last ten entries, comfortably more than any
-// realistic minSampleAgeMs lookback needs (the default is 10 minutes; even a
-// push every couple of minutes stays inside this window). The full log still
-// grows unboundedly ON DISK for the deferred concurrency-governor dataset
-// (see the top-of-file comment) — this only bounds what gets loaded into
-// memory and parsed on the hot path; older entries are still there for that
-// dataset, just not re-read on every push.
-const DEFAULT_TAIL_BYTES = 2 * 1024 * 1024;
+// Bound for readPriorSamples' tail read, SIZED AGAINST THE TRUST WINDOW rather
+// than picked as a round number. The log is append-only and never re-read in
+// full: re-parsing the whole file every push grows unboundedly and blows the
+// hook's budget. But the window must still be big enough to CONTAIN a sample
+// old enough to trust — a prior sample only counts once it is
+// `minSampleAgeMs` old (default 10 min), so a tail that holds fewer entries
+// than the fastest realistic census cadence produces in that span silently
+// switches the rate detector off.
+//
+// Measured live (PR #3063 review pass 2, C6): 214,013 bytes per entry on a
+// 415-root box. The previous flat 2 MB therefore held only NINE entries, and
+// E104's own acceptance criterion (2) — "run it again ~10+ minutes later",
+// with a handful of `npm run doctor` runs in between — evicted every
+// sufficiently-old sample from the window, so `stalled-rate` went dark for
+// every root exactly while an operator was using the tool to look for a stall.
+const CENSUS_ENTRY_BYTES = 220 * 1024;
+// The shortest interval between two censuses worth sizing for: a human
+// running `npm run doctor` repeatedly while investigating, or a burst of
+// pushes across sibling worktrees. Faster than this and the fallback (an
+// untrusted rate) is the correct answer anyway.
+const FASTEST_CENSUS_INTERVAL_MS = 30_000;
+
+/** Bytes of trailing census log that must be read to still contain a sample
+ *  at least `minSampleAgeMs` old at the fastest cadence worth sizing for.
+ *  Exported so the sizing rule itself is testable, not just its output. */
+export function tailBytesFor(minSampleAgeMs) {
+  // +1 entry for the boundary: the Nth-oldest entry in the window must be
+  // strictly older than the threshold, not exactly at it.
+  const entries = Math.ceil(minSampleAgeMs / FASTEST_CENSUS_INTERVAL_MS) + 1;
+  return entries * CENSUS_ENTRY_BYTES;
+}
 
 /** Read the trailing `maxBytes` of `path` as UTF-8 text without loading the
  *  whole file. A read that starts partway through the file may begin
@@ -357,12 +629,15 @@ function readTailText(path, maxBytes) {
  *  untrusted, same as before this fix. */
 export function readPriorSamples(
   logPath = CENSUS_LOG_PATH,
-  { now = Date.now(), minSampleAgeMs = DEFAULT_THRESHOLDS.minSampleAgeMs, tailBytes = DEFAULT_TAIL_BYTES } = {},
+  { now = Date.now(), minSampleAgeMs = DEFAULT_THRESHOLDS.minSampleAgeMs, tailBytes } = {},
 ) {
   if (!existsSync(logPath)) return {};
+  // Derived from the CALLER's window, not from a module-level default, so a
+  // caller that widens minSampleAgeMs automatically widens the tail with it.
+  const windowBytes = tailBytes ?? tailBytesFor(minSampleAgeMs);
   let text;
   try {
-    text = readTailText(logPath, tailBytes);
+    text = readTailText(logPath, windowBytes);
   } catch {
     return {};
   }
@@ -397,21 +672,90 @@ export function readPriorSamples(
   return priorSamples;
 }
 
+// Retention (PR #3063 review pass 2, N3): at ~214 KB per entry this log gains
+// ~214 KB per push PER WORKTREE, and with 18 live trees that is ~3.9 MB per
+// round. It is deliberately kept — it IS the dataset the design's deferred
+// concurrency-governor question needs — but "kept" is not the same as
+// "unbounded". At this cap each generation holds roughly 300 entries and total
+// on-disk cost is bounded at 2x the cap, since exactly ONE previous generation
+// is retained (`<log>.1`, replaced on each roll). Rolling loses the prior
+// samples for exactly one census, whose only effect is an untrusted rate for
+// that run — the same fail-closed path a fresh log already takes.
+export const MAX_CENSUS_LOG_BYTES = 64 * 1024 * 1024;
+
 /** Append one census entry — every root's command line, per the ticket
- *  ("the 2026-09-05 census omitted it"). */
-export function appendCensusLog(entry, logPath = CENSUS_LOG_PATH) {
+ *  ("the 2026-09-05 census omitted it"), plus what was actually DONE to it
+ *  (see runCensus). Rolls the log once it passes `maxBytes` (see above).
+ *
+ *  Guards a missing trailing newline before appending: a census killed
+ *  mid-`appendFileSync` leaves a fragment, and without this the NEXT append
+ *  concatenates onto it and that entry is lost too (N5). The fragment itself
+ *  still fails to parse and is skipped, which is expected and tolerated. */
+export function appendCensusLog(entry, logPath = CENSUS_LOG_PATH, { maxBytes = MAX_CENSUS_LOG_BYTES } = {}) {
   mkdirSync(dirname(logPath), { recursive: true });
-  appendFileSync(logPath, `${JSON.stringify(entry)}\n`, 'utf8');
+  let needsLeadingNewline = false;
+  if (existsSync(logPath)) {
+    let size = 0;
+    try {
+      size = statSync(logPath).size;
+    } catch {
+      size = 0;
+    }
+    if (size >= maxBytes) {
+      try {
+        renameSync(logPath, `${logPath}.1`);
+        size = 0;
+      } catch {
+        // A locked/undeletable previous generation must never block a push:
+        // keep appending to the current log rather than throwing.
+      }
+    }
+    if (size > 0) {
+      const fd = openSync(logPath, 'r');
+      try {
+        const last = Buffer.alloc(1);
+        readSync(fd, last, 0, 1, size - 1);
+        needsLeadingNewline = last[0] !== 0x0a;
+      } finally {
+        closeSync(fd);
+      }
+    }
+  }
+  appendFileSync(logPath, `${needsLeadingNewline ? '\n' : ''}${JSON.stringify(entry)}\n`, 'utf8');
 }
+
+// The kill's own spawn budget. `collectProcessSnapshot` has always bounded its
+// child; `killTree` did not, which made the killer the ONE unbounded spawn on
+// the hook path (PR #3063 review pass 2, C5). runCli's try/catch converts a
+// THROW into exit 0 but cannot observe a HANG, so a `taskkill` that blocks —
+// an uninterruptible or debugger-attached target — would hang `git push`
+// indefinitely, defeating the headline "never blocks a push" on the exact path
+// the suite could not reach. A timed-out spawn sets `result.error`, so it
+// reports false and the root is never recorded as killed.
+export const KILL_TIMEOUT_MS = 15000;
 
 /** Kill one subtree by its root pid. Windows-only (matches this repo's
  *  primary platform and the prior art in scripts/stop-app.mjs); a no-op
- *  elsewhere rather than a throw. */
-export function killTree(pid) {
-  if (!isWindows) return false;
-  const result = spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+ *  elsewhere rather than a throw.
+ *
+ *  `spawn`/`windows` are injectable purely so the spawn BUDGET and the
+ *  timed-out-spawn path are testable on any platform — nothing in production
+ *  passes them.
+ *
+ *  Residual, accepted and named rather than fixed (PR #3063 review pass 2,
+ *  N4): this call re-validates nothing about `pid` itself. The census
+ *  enumeration completes 0.7-3.5 s before the first taskkill, so if the root
+ *  exits inside that window and Windows recycles its pid, `/T` lands on an
+ *  unrelated new tree. classify() guards PID reuse for CLASSIFICATION (the
+ *  startedAt checks in resolveRoot and the prior-sample match); the kill site
+ *  has no equivalent, and closing it would need a second
+ *  `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill. */
+export function killTree(pid, { spawn = spawnSync, windows = isWindows } = {}) {
+  if (!windows) return false;
+  const result = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
     stdio: 'ignore',
     windowsHide: true,
+    timeout: KILL_TIMEOUT_MS,
   });
   return !result.error && result.status === 0;
 }
@@ -496,7 +840,10 @@ function findKillRefusalReason(rootPid, processes, protectedPids, pidToRoot, roo
  * re-checks the root's real OS descendant closure (not classify()'s subtree)
  * and refuses rather than kills when that closure reaches anything protected
  * or alive — see its own doc comment. Refused roots land in `refused`
- * (`{rootPid, reason}`), never in `killed`.
+ * (`{rootPid, reason}`), never in `killed`. A kill that was ATTEMPTED but
+ * whose `taskkill` failed or timed out (`killFn` returns falsy) lands in
+ * `failed`, never silently in neither bucket — a failed kill must stay
+ * distinguishable from one never attempted at all.
  *
  * Every argument the OS/filesystem touches is injectable so tests never
  * need a real Windows box or a real stale process.
@@ -519,25 +866,9 @@ export function runCensus({
 
   const verdicts = classify({ processes, priorSamples, protectedPids: protectedPidsList }, now, thresholds);
 
-  appendLog(
-    {
-      ts: now,
-      roots: verdicts.map((v) => ({
-        rootPid: v.rootPid,
-        name: v.name,
-        commandLine: v.commandLine,
-        startedAt: processes.find((p) => p.pid === v.rootPid)?.startedAt ?? null,
-        cpuSecondsNow: v.cpuSecondsNow,
-        cpuRatePerMin: v.cpuRatePerMin,
-        verdict: v.verdict,
-        reasons: v.reasons,
-      })),
-    },
-    logPath,
-  );
-
   const killed = [];
   const refused = [];
+  const failed = [];
   if (kill) {
     const pidToRoot = new Map();
     const rootVerdict = new Map();
@@ -554,11 +885,43 @@ export function runCensus({
         refused.push({ rootPid: v.rootPid, reason: refusalReason });
         continue;
       }
-      if (killFn(v.rootPid)) killed.push(v.rootPid);
+      if (killFn(v.rootPid)) {
+        killed.push(v.rootPid);
+      } else {
+        failed.push(v.rootPid);
+      }
     }
   }
 
-  return { verdicts, killed, refused };
+  // The log is written AFTER the kill loop, deliberately: it used to be
+  // appended before it, so by construction it could never carry what was
+  // actually DONE — a pre-push reap produced empty stdout, empty stderr, exit
+  // 0, and a log line recording only a VERDICT (PR #3063 review pass 2, C4).
+  // A tool that silently kills processes on every push is not acceptable; the
+  // record is half of making that observable, and runCli's pre-push stderr
+  // line is the other half.
+  const refusalByRoot = new Map(refused.map((r) => [r.rootPid, r.reason]));
+  appendLog(
+    {
+      ts: now,
+      roots: verdicts.map((v) => ({
+        rootPid: v.rootPid,
+        name: v.name,
+        commandLine: v.commandLine,
+        startedAt: processes.find((p) => p.pid === v.rootPid)?.startedAt ?? null,
+        cpuSecondsNow: v.cpuSecondsNow,
+        cpuRatePerMin: v.cpuRatePerMin,
+        verdict: v.verdict,
+        reasons: v.reasons,
+        killed: killed.includes(v.rootPid),
+        refusalReason: refusalByRoot.get(v.rootPid) ?? null,
+        killFailed: failed.includes(v.rootPid),
+      })),
+    },
+    logPath,
+  );
+
+  return { verdicts, killed, refused, failed };
 }
 
 // ---------------------------------------------------------------------------
@@ -577,7 +940,7 @@ export function runCli(args, { runCensusFn = runCensus } = {}) {
   const isPrePush = args.includes('--pre-push');
 
   try {
-    const { verdicts, killed, refused } = runCensusFn({
+    const { verdicts, killed, refused, failed } = runCensusFn({
       kill: isPrePush || wideKill,
       // Pre-push is the narrow, never-blocking path: only kill what is
       // PROVABLY orphaned (dead parent), never a merely-slow subtree that
@@ -586,13 +949,35 @@ export function runCli(args, { runCensusFn = runCensus } = {}) {
       killReasons: isPrePush && !wideKill ? ['orphaned-unreachable'] : ['orphaned-unreachable', 'stalled-rate'],
     });
 
-    if (!isPrePush) {
+    if (isPrePush) {
+      // A pre-push kill must never be silent (C4). The full per-root report
+      // stays off this path (it is hundreds of lines), but anything ACTED on
+      // is named, on stderr so it cannot be confused with tool output and
+      // cannot affect the push's own exit status. Nothing is printed on the
+      // common case where nothing was killed or refused.
+      for (const pid of killed) {
+        const v = verdicts.find((x) => x.rootPid === pid);
+        process.stderr.write(
+          `reap-stale-batteries: KILLED stale battery pid=${pid} reasons=${v?.reasons?.join(',') || '-'} :: ${v?.commandLine ?? ''}\n`,
+        );
+      }
+      for (const entry of refused ?? []) {
+        process.stderr.write(`reap-stale-batteries: REFUSED pid=${entry.rootPid} :: ${entry.reason}\n`);
+      }
+      for (const pid of failed ?? []) {
+        const v = verdicts.find((x) => x.rootPid === pid);
+        process.stderr.write(
+          `reap-stale-batteries: KILL FAILED pid=${pid} reasons=${v?.reasons?.join(',') || '-'} :: ${v?.commandLine ?? ''}\n`,
+        );
+      }
+    } else {
       for (const v of verdicts) {
         const killedTag = killed.includes(v.rootPid) ? ' [KILLED]' : '';
         const refusedEntry = (refused ?? []).find((r) => r.rootPid === v.rootPid);
         const refusedTag = refusedEntry ? ` [REFUSED: ${refusedEntry.reason}]` : '';
+        const failedTag = (failed ?? []).includes(v.rootPid) ? ' [KILL FAILED]' : '';
         process.stdout.write(
-          `${v.verdict.padEnd(9)} pid=${v.rootPid} rate=${v.cpuRatePerMin === null ? 'n/a' : v.cpuRatePerMin.toFixed(2)} reasons=${v.reasons.join(',') || '-'}${killedTag}${refusedTag} :: ${v.commandLine}\n`,
+          `${v.verdict.padEnd(9)} pid=${v.rootPid} rate=${v.cpuRatePerMin === null ? 'n/a' : v.cpuRatePerMin.toFixed(2)} reasons=${v.reasons.join(',') || '-'}${killedTag}${refusedTag}${failedTag} :: ${v.commandLine}\n`,
         );
       }
     }
