@@ -106,7 +106,7 @@ two renders racing to write the same `render-integrity` state.
    the ceiling is live where it was previously inert.
    - Result:
 
-### D1 · Non-English ASR content-QA calibration ([#1527](https://github.com/dudarenok-maker/Castwright/issues/1527), [#1084](https://github.com/dudarenok-maker/Castwright/issues/1084))
+### D1 · Non-English ASR content-QA calibration — discharged 2026-09-07, removed from the register ([#1527](https://github.com/dudarenok-maker/Castwright/issues/1527), [#1084](https://github.com/dudarenok-maker/Castwright/issues/1084))
 
 > **Criteria source:** `onbox-acceptance-register.md` D1 (`:2854-2867`).
 > Re-resolved 2026-08-20: `gh issue view 1527` → still **OPEN**

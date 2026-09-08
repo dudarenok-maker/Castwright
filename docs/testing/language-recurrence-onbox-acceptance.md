@@ -5,9 +5,9 @@
 >
 > Design of record: [`docs/superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md`](../superpowers/specs/2026-08-13-language-recurrence-and-prompt-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-13-language-recurrence-and-prompt.md`](../superpowers/plans/2026-08-13-language-recurrence-and-prompt.md)
-> Register rows: [`onbox-acceptance-register.md` B2](onbox-acceptance-register.md) —
-> the sibling voice-design row, A43, is discharged (2026-08-26) and removed from
-> the register; §§2-4 below (the voice-design half) are its historical record.
+> Register rows: B2 is discharged (2026-09-07) and removed from the register
+> — the sibling voice-design row, A43, is discharged (2026-08-26) and removed
+> from the register too; this whole document is now historical record.
 > Issue: [#2246](https://github.com/dudarenok-maker/Castwright/issues/2246)
 
 ---
@@ -49,7 +49,7 @@ sittings if the box is contended.
 
 SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
-## 3. §Analysis language gate — register row B2
+## 3. §Analysis language gate — register row B2 (discharged 2026-09-07)
 
 1. Confirm the test book's `state.json` carries `language: null` (not
    `"en"`, not absent-and-defaulted — an explicit `null`).
@@ -115,7 +115,7 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
 ## 5. Outcome
 
-- [ ] §3 run (register row B2)
+- [ ] §3 run (register row B2, discharged 2026-09-07, removed from the register)
 - [ ] §4 run (register row A43, discharged 2026-08-26, removed from the register)
 - [ ] Defects filed: ____________________________________
 
