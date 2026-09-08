@@ -156,11 +156,18 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
             /* srv-11 — track the consecutive-IDENTICAL-failure streak for this
                book. Only a repeated identical reason trips the breaker; a
                differing reason resets the count to 1 + records the new reason.
-               voice-not-designed is exempt: it's a deterministic per-book
-               cast-config issue (the #1263 fail-fast that replaced the
-               awaiting_confirm park, which was ALSO exempt from this streak),
-               not the "something's systemically wrong" signal the breaker
-               exists to catch — it shouldn't pause unrelated books' queues. */
+               voice-not-designed is exempt: it was the #1263 fail-fast's
+               deterministic per-book cast-config error code. That fail-fast
+               was removed from generation.ts by #3059 as provably
+               unreachable — no server path currently emits this code — but
+               the exemption is kept deliberately rather than deleted: #3059's
+               own review named a live scenario where the fail-fast gets
+               restored (see engine-language-coverage.guard.test.ts's header),
+               and re-adding the exemption later would only re-litigate this
+               same "not the systemically-wrong signal the breaker exists to
+               catch" reasoning. The awaiting_confirm park is ALSO exempt from
+               this streak, for the same reason — neither should pause
+               unrelated books' queues. */
             if (failure.errorCode !== 'voice-not-designed' && failure.errorCode !== 'language-unset') {
               const streak = failureStreakByBook.get(bookId);
               if (streak && streak.reason === failure.reason) {
