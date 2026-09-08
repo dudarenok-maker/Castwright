@@ -443,6 +443,17 @@ thunks/components in isolation.
 > assign-readiness gate and the `applyQwenFallback` exemption behave the
 > same against a live sidecar as they do against the vitest mocks. Track
 > alongside the existing `/qwen/design-voice` on-box acceptance debt.
+>
+> **Wave 12 update (2026-09-06/07) — still not `stable`.** The ECAPA half of
+> (a) is long since discharged (B-04, B-07 through B-10) and the mechanism is
+> proven in a real book render. What remains owed, per
+> [`docs/testing/onbox-acceptance-register.md`](../testing/onbox-acceptance-register.md)
+> row A1: the **by-ear** verdict on that same identity claim (**B-03**) — the
+> listening kit is staged and complete, but a human (the repo owner) has not
+> yet rendered a verdict, and no instrument substitutes for that judgment —
+> and **B-11**, the live-hardware confirmation of the assign-readiness gate
+> against a routed (not just Qwen-default) engine, which is still
+> §7.1-blank/never-reached. This plan stays `active` until both close.
 
 ## Delivered in 3b1
 
