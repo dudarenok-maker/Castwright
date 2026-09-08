@@ -963,6 +963,125 @@ test('main dry-run: a zero-book workspace reads as "nothing was examined", disti
   }
 });
 
+test('main --apply: a zero-book workspace refuses rather than silently succeeding (E2 — the fourth #2097/#2108 helper wired in)', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-emptyws-apply-'));
+  const errors = [];
+  const realError = console.error;
+  console.error = (...args) => errors.push(args.join(' '));
+  const prevPort = process.env.PORT;
+  const prevLan = process.env.LAN_HTTPS_PORT;
+  try {
+    // No books/ directory at all — the emptiest possible workspace.
+    const httpBase = await findVerifiedFreeRange(AUTO_REBIND_RANGE, '127.0.0.1');
+    const lanBase = await findVerifiedFreeRange(AUTO_REBIND_RANGE, '127.0.0.1');
+    process.env.PORT = String(httpBase);
+    process.env.LAN_HTTPS_PORT = String(lanBase);
+
+    await main(['--apply'], tmp);
+
+    assert.equal(process.exitCode, 1, 'must refuse --apply against a zero-book scan, not exit 0 having written nothing');
+    const errOut = errors.join('\n');
+    assert.match(errOut, /Refusing --apply/);
+    assert.match(errOut, /0 books found/);
+  } finally {
+    console.error = realError;
+    process.exitCode = 0;
+    if (prevPort === undefined) delete process.env.PORT;
+    else process.env.PORT = prevPort;
+    if (prevLan === undefined) delete process.env.LAN_HTTPS_PORT;
+    else process.env.LAN_HTTPS_PORT = prevLan;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// E1 (PR #3057 review): a present-but-unreadable cast-id-history.json used to
+// read as "no history file" — readJsonSync collapsed ENOENT/EACCES/parse
+// failure to one `null`, and supersededBy is the only thing planBookRepairs
+// iterates, so a corrupt history silently produced zero repairs while still
+// counting toward "books scanned". The reviewer's own control/probe pair
+// (two fixtures differing only in whether cast-id-history.json is readable)
+// is reproduced directly below.
+// ---------------------------------------------------------------------------
+
+test('main dry-run: control (history intact, confirmed repair) vs probe (same book, history truncated) are distinguishable', async () => {
+  const control = mkdtempSync(join(tmpdir(), 'a34-repair-history-control-'));
+  const probe = mkdtempSync(join(tmpdir(), 'a34-repair-history-probe-'));
+  const realLog = console.log;
+  try {
+    buildFixtureWorkspace(control);
+    const { historyPath } = buildFixtureWorkspace(probe);
+    writeFileSync(historyPath, '{"schema":1,"supersededBy":{"oduvan"'); // truncated mid-JSON
+
+    const controlLines = [];
+    console.log = (...args) => controlLines.push(args.join(' '));
+    await main([], control);
+    const controlOut = controlLines.join('\n');
+
+    const probeLines = [];
+    console.log = (...args) => probeLines.push(args.join(' '));
+    await main([], probe);
+    const probeOut = probeLines.join('\n');
+
+    // CONTROL: history readable, wrong-direction entry confirmed and reported.
+    assert.match(controlOut, /confirmed repairs: 1/, 'control must find the confirmed pair');
+    assert.doesNotMatch(controlOut, /books DROPPED/, 'control has nothing dropped');
+
+    // PROBE: history truncated — must be NAMED as dropped, never silently
+    // read as "this book has no history, therefore nothing to repair".
+    assert.match(probeOut, /books DROPPED/, 'a book with unreadable history must be named as dropped');
+    assert.match(probeOut, /cast-id-history\.json/);
+    assert.match(probeOut, /0 confirmed wrong-direction pairs — nothing to repair\./);
+
+    // The two outputs must actually differ — this is the reviewer's own
+    // demonstrated defect: CONTROL and PROBE printed byte-identical
+    // "0 confirmed..." / "1 confirmed..." framing with no distinguishing
+    // line at all before this fix.
+    assert.notEqual(controlOut, probeOut);
+  } finally {
+    console.log = realLog;
+    rmSync(control, { recursive: true, force: true });
+    rmSync(probe, { recursive: true, force: true });
+  }
+});
+
+test('main --apply: a book with a present-but-unreadable cast-id-history.json REFUSES the write, even though its cast.json is otherwise fine', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'a34-repair-history-unreadable-apply-'));
+  const errors = [];
+  const realError = console.error;
+  console.error = (...args) => errors.push(args.join(' '));
+  const prevPort = process.env.PORT;
+  const prevLan = process.env.LAN_HTTPS_PORT;
+  try {
+    const { castPath, historyPath, castBefore } = buildFixtureWorkspace(tmp);
+    writeFileSync(historyPath, '{"schema":1,"supersededBy":{"oduvan"'); // truncated mid-JSON
+    const historyBeforeRaw = readFileSync(historyPath, 'utf8');
+
+    const httpBase = await findVerifiedFreeRange(AUTO_REBIND_RANGE, '127.0.0.1');
+    const lanBase = await findVerifiedFreeRange(AUTO_REBIND_RANGE, '127.0.0.1');
+    process.env.PORT = String(httpBase);
+    process.env.LAN_HTTPS_PORT = String(lanBase);
+
+    await main(['--apply'], tmp);
+
+    assert.equal(process.exitCode, 1, 'main must refuse rather than report a clean apply on unreadable history');
+    const errOut = errors.join('\n');
+    assert.match(errOut, /Refusing --apply/);
+    assert.match(errOut, /cast-id-history\.json/);
+    // Never touched — refusal fires before any write.
+    assert.equal(readFileSync(castPath, 'utf8'), JSON.stringify(castBefore));
+    assert.equal(readFileSync(historyPath, 'utf8'), historyBeforeRaw);
+  } finally {
+    console.error = realError;
+    process.exitCode = 0;
+    if (prevPort === undefined) delete process.env.PORT;
+    else process.env.PORT = prevPort;
+    if (prevLan === undefined) delete process.env.LAN_HTTPS_PORT;
+    else process.env.LAN_HTTPS_PORT = prevLan;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // ALLOW_STANDING_PORTS — the liveness probe's port-skipping opt-in, shared
 // with repair-cast-id-drift.mjs's main(). Previously a hardcoded

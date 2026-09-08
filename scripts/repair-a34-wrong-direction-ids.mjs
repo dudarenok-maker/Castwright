@@ -155,6 +155,8 @@ import {
   formatBooksScannedLine,
   formatNotYetAnalysedLine,
   shouldRefuseApplyForUnreadableBooks,
+  shouldRefuseApplyForEmptyScan,
+  readJsonTriState,
 } from './repair-cast-id-drift.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -218,7 +220,14 @@ export function normaliseForMatch(s) {
  *  `input.liveCast` — `cast.json`'s `characters` array (only `id`/`name`
  *  are read). `input.supersededBy` — `cast-id-history.json`'s
  *  `supersededBy` map (`{}` if the book has no history file at all — the
- *  common case; see step 1's scope doc). `input.bakNameIndex` — the `Map`
+ *  common case; see step 1's scope doc — OR if the history file exists but
+ *  could not be read/parsed. This function cannot and does not tell those
+ *  two apart: "no entries" is the correct planning input either way. What
+ *  differs is whether `main()` may proceed to `--apply` — an unreadable
+ *  history is evidence LOST, not evidence of a clean book, and `main()`
+ *  surfaces it separately via `readJsonTriState` and refuses `--apply` on
+ *  it the same way it already refuses on an unreadable `cast.json`/
+ *  `state.json`, per `shouldRefuseApplyForUnreadableBooks`). `input.bakNameIndex` — the `Map`
  *  `buildNameIndex(collectBakNameEntries(audiobookDir), normaliseForMatch)`
  *  produces (id -> `{name, ambiguous, distinctNames}`).
  *  `input.bakAvailable` — `collectBakNameEntries`'s SECOND return field: is
@@ -339,10 +348,13 @@ export function planBookRepairs(input, deps = { normaliseForMatch }) {
 /** Workspace-wide plan: given every `collectBooks` entry plus each book's
  *  loaded history + bak index, returns only the books that have at least
  *  one CONFIRMED repair — a book with zero confirmed pairs (whether it has
- *  no history file at all, or a history file with no wrong-direction entry,
- *  or only report-only pairs) is never included, so a caller that only acts
- *  on `bookPlans` never touches `cast.json` for a book with nothing to fix
- *  (the issue's own "do not touch a book with no detected entry" rule). */
+ *  no history file at all, a history file that could not be read (which
+ *  `main()` surfaces separately, as a dropped book that refuses `--apply`,
+ *  never silently folded in here as "nothing to repair"), a history file
+ *  with no wrong-direction entry, or only report-only pairs) is never
+ *  included, so a caller that only acts on `bookPlans` never touches
+ *  `cast.json` for a book with nothing to fix (the issue's own "do not
+ *  touch a book with no detected entry" rule). */
 export function planWorkspaceRepairs(bookInputs, deps = { normaliseForMatch }) {
   const bookPlans = [];
   const reportOnly = [];
@@ -611,24 +623,91 @@ export async function main(argv = process.argv.slice(2), workspaceDirOverride) {
     return;
   }
 
-  const bookInputs = books.map((book) => {
+  // E2 (PR #3057 review): the fourth #2097/#2108 helper, left behind when
+  // the other three were imported. `formatBooksScannedLine`'s own doc
+  // comment (repair-cast-id-drift.mjs) claims "--apply refuses before ever
+  // reaching the summary when booksScanned === 0" — that was false in THIS
+  // script, which had no equivalent refusal at all: a wrong WORKSPACE_DIR
+  // scanning zero books used to fall straight through to "0 confirmed
+  // wrong-direction pairs — nothing to repair" and exit 0, indistinguishable
+  // from a genuinely clean, fully-scanned workspace. Wired in at the same
+  // point repair-cast-id-drift.mjs's own main() checks it — after the
+  // unreadable-books refusal, before touching server/dist.
+  if (shouldRefuseApplyForEmptyScan(apply, books.length)) {
+    console.error(
+      `\nRefusing --apply: 0 books found at workspace (${workspaceDir}). This usually means ` +
+        `WORKSPACE_DIR is wrong — this script does not read server/.env, so a bare invocation ` +
+        `defaults to <home>/AudiobookWorkspace, which may not be where the real workspace lives. ` +
+        `Point WORKSPACE_DIR (or BASE/AUDIOBOOK_WORKSPACE) at the real workspace root and re-run.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  // E1 (PR #3057 review): a book whose cast.json/state.json are fine but
+  // whose cast-id-history.json is present-but-unreadable (permission
+  // denied, truncated, wrong-shaped) used to be indistinguishable from a
+  // book with genuinely no history file — the old `readJsonSync` above
+  // collapsed ENOENT/EACCES/parse-failure to one `null`, and `supersededBy`
+  // is the ONLY thing `planBookRepairs` iterates, so the book silently
+  // contributed zero repairs while still counting toward "books scanned".
+  // `readJsonTriState` (reused from repair-cast-id-drift.mjs — the same
+  // #2097-defect-10 instrument `collectBooks` already uses for
+  // cast.json/state.json) distinguishes 'missing' (no history file at all —
+  // the common case) from 'unreadable' (evidence LOST). An unreadable
+  // history routes into the SAME --apply refusal as an unreadable
+  // cast.json/state.json below: this book "cannot be scanned for
+  // wrong-direction retirements at all" is exactly as true here as it is
+  // for a book collectBooks itself dropped, and that refusal's own wording
+  // already says so — the code now agrees with it.
+  const bookInputs = [];
+  const historyUnreadableBooks = [];
+  for (const book of books) {
     const historyPath = path.join(book.audiobookDir, 'cast-id-history.json');
-    const history = readJsonSync(historyPath);
+    const historyResult = readJsonTriState(historyPath);
+    let supersededBy = {};
+    if (historyResult.status === 'unreadable') {
+      historyUnreadableBooks.push({ label: book.label });
+    } else if (historyResult.status === 'ok') {
+      supersededBy = historyResult.value?.supersededBy ?? {};
+    }
     // BOTH fields, not just `entries` — see planBookRepairs's doc comment
     // for `input.bakAvailable`. Discarding the second one is #2135's
     // fail-open shape: an unparseable snapshot vanishes into zero entries
     // and the survivors then read as unambiguous rather than as unknown.
     const { entries: bakEntries, bakAvailable } = collectBakNameEntries(book.audiobookDir);
-    return {
+    bookInputs.push({
       label: book.label,
       bookDir: book.bookDir,
       castPath: path.join(book.audiobookDir, 'cast.json'),
       liveCast: book.cast.characters,
-      supersededBy: history?.supersededBy ?? {},
+      supersededBy,
       bakNameIndex: buildNameIndex(bakEntries, normaliseForMatch),
       bakAvailable,
-    };
-  });
+    });
+  }
+
+  if (historyUnreadableBooks.length) {
+    console.log(
+      `books DROPPED — cast-id-history.json present but unreadable or wrong-shaped (evidence LOST, not ` +
+        `absent; each book's cast.json/state.json are otherwise fine, so collectBooks still scans it, but ` +
+        `this pass cannot check it for wrong-direction retirements at all): ${historyUnreadableBooks.length}`,
+    );
+    for (const b of historyUnreadableBooks) console.log(`  - ${b.label}`);
+    console.log('');
+  }
+
+  if (shouldRefuseApplyForUnreadableBooks(apply, historyUnreadableBooks.length)) {
+    console.error(
+      `\nRefusing --apply: ${historyUnreadableBooks.length} book(s) have a cast-id-history.json that exists ` +
+        `but could not be read — this pass cannot scan them for wrong-direction characterId retirements at ` +
+        `all, so it cannot rule out damage sitting unrepaired in them: ` +
+        `${historyUnreadableBooks.map((b) => b.label).join('; ')}. Fix or restore each book's ` +
+        `cast-id-history.json and re-run.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
 
   const { bookPlans, reportOnly } = planWorkspaceRepairs(bookInputs);
 

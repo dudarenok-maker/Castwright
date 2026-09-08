@@ -1568,8 +1568,19 @@ const readJsonSync = (p) => {
  *  Reading the file directly and inspecting the thrown error's `code`
  *  removes that blind spot: the attempted read itself is the source of
  *  truth, not a separate existence probe that can lie about why it
- *  failed. */
-function readJsonTriState(p) {
+ *  failed.
+ *
+ *  Exported (PR #3057 review, E1/E2): `repair-a34-wrong-direction-ids.mjs`
+ *  needs the identical tri-state read for `cast-id-history.json`, which
+ *  `collectBooks` never touches (it only reads `cast.json`/`state.json`).
+ *  That caller was collapsing a present-but-unreadable history file to the
+ *  same `null` as a genuinely-absent one via a bare `try { JSON.parse(...) }
+ *  catch { return null }` — indistinguishable from "no history file", even
+ *  though `supersededBy` is the only thing its detector iterates. Reusing
+ *  this instrument closes that the same way `collectBooks` already closed
+ *  it for `cast.json`/`state.json`, rather than a third, independently-
+ *  written variant of the same three-way read. */
+export function readJsonTriState(p) {
   let raw;
   try {
     raw = fs.readFileSync(p, 'utf8');
