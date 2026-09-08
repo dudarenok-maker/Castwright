@@ -53,20 +53,26 @@ criterion below is driven from the app.
    alongside the derive it measures, and Qwen actually generates somewhere
    during that render. Under the standing `cuda:1` pin, Qwen's own render
    would compete for the exact card the constructed VRAM band lives on.
-   In **Criterion 2** (two measured derives around one render) that can evict
-   the Coqui the first derive just placed on `cuda:1` before the second,
-   control derive runs (confounding the control half — see Criterion 2 step
-   6). In **Criterion 3** — a single measured derive, but `cuda:1` is filled
+   In **Criterion 2** — two separate renders, one per measured derive (step 6
+   triggers the first, step 8 the second; the interval that matters spans all
+   of render #1, not just its own derive) — that can evict the Coqui the
+   first derive just placed on `cuda:1` before the second, control derive
+   runs (confounding the control half — see Criterion 2 step 6). In
+   **Criterion 3** — a single measured derive, but `cuda:1` is filled
    *tighter* there (`target_free1` is lower) — Qwen's own admission onto an
    already-tight `cuda:1` is the likelier failure: a `noCapacity` stall on
-   the render itself, before the criterion's own derive is even reached. For
-   the duration of Criteria 2 and 3 only, set `QWEN_DEVICE=cuda:0` in
+   the render itself. The derive always runs first (it's the voice-resolution
+   self-heal, which completes before this render loads Qwen at all), so a
+   stall here would not block the derive's own success — it would corrupt
+   the criterion's other two Pass conditions instead ("no ~60 s stall" and
+   "renders in its own designed voice"). For the duration of Criteria 2 and 3
+   — **and Criterion 5, see its own note below** — set `QWEN_DEVICE=cuda:0` in
    `server/.env` (restart) so Qwen's render lands on the *other* card and
-   never touches the band — restore the box's standing `cuda:1` pin once
-   both criteria are done. This does add one precondition of its own:
-   `cuda:0`'s pristine (nothing-loaded) headroom from step 1 below must
-   itself be large enough for whichever Qwen model the render's book
-   actually chooses (`SEED_FOOTPRINTS_MB`: 0.6B seed 3072 MB at
+   never touches the band — restore the box's standing `cuda:1` pin only
+   once the whole sitting (Criteria 2, 3, **and** 5) is done. This does add
+   one precondition of its own: `cuda:0`'s pristine (nothing-loaded) headroom
+   from step 1 below must itself be large enough for whichever Qwen model the
+   render's book actually chooses (`SEED_FOOTPRINTS_MB`: 0.6B seed 3072 MB at
    `main.py:4340`, 1.7B seed 6144 MB at `main.py:4341`) — routine on an
    empty 8 GB card, but pick a 0.6B-only book if this render also has to
    compete with the `headroom0 > peak + 400` check at step 4.
@@ -138,17 +144,17 @@ unlike a resident engine nothing ever evicts it.
    different totals, recompute the reserve figures below from
    `_device_reserve_mb`'s own formula — `min(round(0.05 * total_mb),
    GPU_RESERVE_MB)` (`main.py:4500-4506`) — before proceeding. Also read the
-   box's actual `GPU_RESERVE_MB` (`server/.env`, or the default 500 if
-   unset) rather than assuming 500 — see the reserve-formula note at step 4.
+   box's actual `GPU_RESERVE_MB` rather than assuming 500 — see the
+   reserve-formula note at step 4 for where it can actually come from (it is
+   not `server/.env`-or-500).
 2. Compute `cuda:0`'s headroom the same way the ledger does
    (`ReservationLedger._headroom`, `main.py:4550-4558`, consumed by
    `try_hold`/`best_fit` at `main.py:4560-4583`/`4585-4600`): with nothing
    held yet, `headroom0 = free0 - min(round(0.05 * total0), GPU_RESERVE_MB)`
    — at `total0 = 8192` and the default `GPU_RESERVE_MB = 500` that's
    `headroom0 = free0 - 410`; recompute the subtracted figure from your
-   box's actual `GPU_RESERVE_MB` (`server/.env`, or the config-registry
-   default of 500 if unset — `gpu.reserveMb`,
-   `server/src/config/registry.ts:829-838`) if it differs.
+   box's actual `GPU_RESERVE_MB` if it differs — see the reserve-formula
+   note at step 4 for where to read it from.
 3. Query the sidecar's `GET /debug/memory` and read its `footprints.coqui`
    block (`{seed_mb, learned_mb, sample_count}` — `FootprintTable.snapshot`,
    `main.py:4480-4497`, served at `main.py:11056-11153`). The Coqui derive's
@@ -168,11 +174,21 @@ unlike a resident engine nothing ever evicts it.
    short of `headroom0`. **The reserve subtracted per device is
    `reserve(total_mb) = min(round(0.05 * total_mb), GPU_RESERVE_MB)` —
    `GPU_RESERVE_MB` is the operator-configurable ceiling (`gpu.reserveMb`,
-   `server/src/config/registry.ts:829-838`; env `GPU_RESERVE_MB`, default
-   500), not a hardcoded 500.** Read your box's actual value from
-   `server/.env` before computing `target_free1` below — this box's own
-   register row (**A1**) already runs non-default GPU env policy, so do not
-   assume the default. `target_free1 = target_headroom1 + reserve(total1)`
+   `server/src/config/registry.ts:829-838`), not a hardcoded 500.** The value
+   actually handed to the sidecar is NOT simply "`server/.env`, or 500 if
+   unset" — `gpu.reserveMb` is a `risk: 'high'` knob resolved through the
+   full config chain (`process.env` → `readConfigOverrides()`, i.e.
+   `user-settings.json` as written by Advanced Settings' `PUT /api/config` →
+   the knob's own default — `server/src/config/resolver.ts:16-58`), and the
+   sidecar receives the resolved result via `resolveKnobForSidecarEnv`
+   (`spawn-sidecar.ts:590-596`), not the raw env text. An env var absent from
+   `server/.env` does **not** imply 500 if Advanced Settings has ever set it.
+   Read the box's actual effective value (Advanced Settings' GPU reserve
+   field, or `GET /api/config`, is authoritative over an env-only read) before
+   computing `target_free1` below — this box's own register row (**A1**)
+   already runs non-default GPU env policy (`server/.env` sets
+   `GPU_RESERVE_MB=768` on this box as of this writing), so do not assume the
+   default. `target_free1 = target_headroom1 + reserve(total1)`
    — at `total1 = 16376`, `round(0.05 * 16376) = 819`, so
    `reserve(16376) = min(819, GPU_RESERVE_MB)`, which is `min(819, 500) =
    500` at the default, giving `target_free1 = 3784 + 500 = 4284` at the
@@ -195,12 +211,22 @@ unlike a resident engine nothing ever evicts it.
    ```python
    import torch, time
    torch.cuda.set_device(1)
-   TARGET_FREE_MB = 4284  # target_free1 from step 4 -- recompute if peak or GPU_RESERVE_MB differs
-   total_b, free_b = torch.cuda.mem_get_info(1)
-   assert total_b // (1024 * 1024) in range(16350, 16400), (
-       f"cuda:1 reports total={total_b // (1024*1024)} MiB -- confirm this is "
-       "actually the 16 GB card and CUDA's device ordering matches nvidia-smi's "
-       "before trusting anything below (a real trap on this box)."
+   TARGET_FREE_MB = 4284  # target_free1 from step 4 at the seed peak and the DEFAULT
+                          # GPU_RESERVE_MB=500 -- this box's own server/.env sets
+                          # GPU_RESERVE_MB=768, which recomputes to 4552; always
+                          # recompute from your box's actual peak/GPU_RESERVE_MB
+                          # rather than pasting either literal.
+   _free0_b, total0_b = torch.cuda.mem_get_info(0)
+   free_b, total_b = torch.cuda.mem_get_info(1)
+   assert total_b > total0_b, (
+       f"cuda:1 reports total={total_b // (1024*1024)} MiB, cuda:0 reports "
+       f"total={total0_b // (1024*1024)} MiB -- cuda:1 (the 16 GB card) should "
+       "report more total memory than cuda:0 (the 8 GB card); if it doesn't, "
+       "CUDA's device ordering doesn't match nvidia-smi's and nothing below can "
+       "be trusted (a real trap on this box). This checks relative size, not an "
+       "exact figure -- this box's own recorded nvidia-smi total for cuda:1 is "
+       "16303 MiB, not the 16376 MiB some other run sheets estimate from the "
+       "card's spec sheet, and either is fine as long as it's larger than cuda:0's."
    )
    fill_mb = free_b // (1024 * 1024) - TARGET_FREE_MB
    assert fill_mb > 0, (
@@ -227,20 +253,20 @@ unlike a resident engine nothing ever evicts it.
    Qwen, which lands on `cuda:0` per the `QWEN_DEVICE=cuda:0` override in
    Setup step 5. Sample `nvidia-smi` across the derive.
 
-   **The band measured in steps 1-4 is now stale on `cuda:0`.** This render
-   leaves Qwen resident on `cuda:0` for the rest of this criterion — nothing
-   unloads it before step 8. Before continuing, re-read `nvidia-smi
-   --query-gpu=index,memory.free --format=csv,noheader,nounits` for `cuda:0`
-   and recompute `headroom0 = free0 - min(round(0.05 * total0),
-   GPU_RESERVE_MB)` with Qwen's footprint now subtracted — this is the
-   headroom step 8's control half actually contends with, not the
-   nothing-loaded `headroom0` from step 2. If it has fallen to at or below
-   `target_headroom1`, record the measured figures in the Result line rather
-   than forcing step 8's expected outcome: pick a book/character whose
-   render stays on the Qwen 0.6B model (~1952 MB, `main.py:4335`) rather
-   than the 1.7B (~3915 MB, `main.py:4344`) if this keeps tripping, since the
-   1.7B alone can exceed the margin this band was built with. Also re-confirm
-   `cuda:1`'s free VRAM still reads `target_free1` before continuing to step
+   **Qwen is guaranteed non-resident at the moment this derive is admitted —
+   the band from steps 1-4 does not go stale here.** The derive is the
+   voice-resolution self-heal, and it runs before this render ever loads
+   Qwen: `resolveDesignedVoicesForChapter` (`synthesise-chapter.ts:2063`)
+   completes ahead of the anchor group (`:2680`) and the body dispatch
+   (`:3003`) that actually synthesises Qwen's sentences. On top of that,
+   `beforeFirstCoquiDerive` (wired at `:2013`, awaited immediately before the
+   derive call itself at `clone-voice-resolver.ts:1056`) issues a real
+   `POST /unload {"engine":"qwen"}` before the derive fires regardless — so
+   even if Qwen were already resident from an earlier chapter, it would be
+   evicted at that point, not "for the rest of this criterion". `headroom0`
+   from step 2 (nothing loaded) is the number this half of the criterion
+   actually contends with. Re-confirm `cuda:1`'s free VRAM still reads
+   `target_free1` and `cuda:0` is still fully free before continuing to step
    7.
 7. **Without touching the scratch fill**, unload Coqui (Advanced Settings, or
    `POST /api/sidecar/unload`) — leave it non-resident, don't reload it.
@@ -253,14 +279,25 @@ unlike a resident engine nothing ever evicts it.
    (`clone-voice-resolver.ts:1025`), leaving nothing to observe.
 8. **Re-verify one more time immediately before this step** — re-read
    `nvidia-smi` for both cards and confirm both readings still match what
-   step 6's check recorded (`cuda:1` at `target_free1`, `cuda:0`'s
-   Qwen-adjusted `headroom0` still above `target_headroom1`). This is the
-   last point at which the band can have silently moved. Comment out
-   **only** the header assignment at `derive-engine-artifact.ts:146`
+   step 6's check recorded (`cuda:1` at `target_free1`, `cuda:0` still fully
+   free per step 6's re-confirmation). This is the last point at which the
+   band can have silently moved. Comment out **only** the header assignment
+   at `derive-engine-artifact.ts:146`
    (`headers['X-Device-Hint'] = input.deviceHint;`) — not the
    `if (input.deviceHint) {` at `:145` or the `}` at `:147`, which must stay
    or the file won't parse. Trigger the same derive again (same manuscript
    action as step 6) and sample `nvidia-smi`.
+
+   **This step's own real risk, once the hint is suppressed:** unconstrained
+   placement now prefers `cuda:0` (the roomier card per step 4's construction),
+   so the control derive parks Coqui there — and this same render's Qwen
+   phase then admits Qwen onto that same card (`QWEN_DEVICE=cuda:0` per Setup
+   step 5), landing alongside the Coqui the derive just placed. Sample
+   `nvidia-smi` tightly across the derive itself (before Qwen's own phase
+   runs) rather than at the render's end, and prefer a book whose render
+   stays on the Qwen 0.6B model (~1952 MB, `main.py:4335`) over the 1.7B
+   (~3915 MB, `main.py:4344`) if this keeps contending with the just-placed
+   Coqui on an 8 GB card.
 9. Revert the comment from step 8, and kill the scratch-fill process from
    step 5.
 
@@ -322,7 +359,9 @@ shipped code:
    `target_free1 = target_headroom1 + reserve(total1)` (per Criterion 2 step
    4's formula — **3884 MB** at the seed value and the default
    `GPU_RESERVE_MB = 500`; recompute `reserve(total1)` from your box's
-   actual `GPU_RESERVE_MB` if it isn't 500. Use `reserve(total1)`
+   actual effective value if it isn't 500 — see Criterion 2 step 4's note on
+   where that value actually comes from (not just `server/.env`). Use
+   `reserve(total1)`
    consistently here and when reading `headroom1` back in step 2 below —
    substituting a hardcoded 500 for one side while the box actually runs a
    different `GPU_RESERVE_MB` reopens exactly Criterion 2's gap: at a cap
@@ -379,6 +418,14 @@ Result:
 The device-list cache is never invalidated when the sidecar respawns, so it can
 outlive the cards it describes. That is accepted; this criterion pins that it
 costs nothing.
+
+**Leave `QWEN_DEVICE=cuda:0` (or unset) through this criterion too — do not
+restore the box's standing `cuda:1` pin yet.** Step 2 restarts the sidecar
+with only one CUDA device visible; under a `cuda:1` pin, `_validate_cuda_index`
+(`main.py:5787-5797`) rejects that as out of range and the Qwen load fails
+outright, which fails the render before this criterion's own observation is
+ever reached. Restore the standing pin only once this criterion (the last one
+in the sitting) is also done.
 
 1. Warm the list on the 2-card boot (open Advanced Settings once).
 2. Restart **only the sidecar**, with `CUDA_VISIBLE_DEVICES=0` so one card is
