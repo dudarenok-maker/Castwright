@@ -6,11 +6,15 @@ owner: null
 
 # Voice cloning — read a book in your own (or your family's) voice
 
-> Status: active — Wave 1 shipped; Wave 3a (ingest/consent/recorder, behind-flag)
-> delivered; Waves 3b1/3b2/3c + polish outstanding ([`fs-38` · #624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
-> Key files (anticipated): `server/tts-sidecar/` (Qwen clone extraction + XTTS clone), `server/src/tts/`, `src/store/cast-slice.ts`, `src/views/voices.tsx`, `src/components/voice-library-panel.tsx`, `openapi.yaml`
+> Status: active — Wave 1 shipped; Waves 3a/3b1/3b2/3c all delivered (PRs
+> #1809, #1827, #1936); on-box acceptance register row A1 still carries 11
+> owed items (see "Wave 12 update" below), so this plan stays `active` rather
+> than `stable`. Only wave-5 polish (A/B compare, drift auditions, sharing,
+> catalogue rebuild) remains genuinely outstanding, and that was always scoped
+> out of v1 ([`fs-38` · #624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
+> Key files: `server/tts-sidecar/` (Qwen clone extraction + XTTS clone), `server/src/tts/`, `src/store/cast-slice.ts`, `src/views/voices.tsx`, `src/components/voice-library-panel.tsx`, `openapi.yaml`
 > URL surface: `#/voices` (cloned-voice section + capture flow), cast profile drawer
-> OpenAPI ops: `POST /api/voice-library/clone-sample`, `POST /api/voice-library/{voiceUuid}/revoke` (3a, shipped); `POST /api/voice-library/clone` (3b1, TBD)
+> OpenAPI ops: `POST /api/voice-library/clone-sample`, `POST /api/voice-library/{voiceUuid}/revoke` (3a, shipped); `POST /api/voice-library/clone` (3b1, shipped)
 > Wave 3 umbrella spec: [`docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`](../superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md)
 
 ## Wave 1 shipped (2026-07-24)
@@ -145,15 +149,19 @@ in v1.
    - **3a — Ingest, consent, recorder.** **Delivered** (originally behind the
      since-removed `voices.library.enabled` flag, no reachable production
      caller until 3b1 — see plan [267](267-fs38-wave3-voice-clone.md)).
-   - **3b1 — Qwen clone (happy path).** `POST /qwen/clone-voice` extraction, `POST
-     /api/voice-library/clone`, wizard phase 2, cast assignment, ECAPA fidelity, and the
-     `applyQwenFallback` cloned-voice exemption (closing the first silent-substitution
-     hole). **First user-visible clone.**
-   - **3b2 — Resolver + lifecycle.** The three-state (Healthy/Repairable/Broken) resolver
-     as an async per-chapter pre-pass, orphan self-heal, revocation-at-render.
-   - **3c — XTTS clone.** `POST /xtts/clone-voice`, the latents-backed Coqui synth branch,
-     designed-voice XTTS-eligibility.
+   - **3b1 — Qwen clone (happy path).** **Delivered** (PR #1809). `POST /qwen/clone-voice`
+     extraction, `POST /api/voice-library/clone`, wizard phase 2, cast assignment, ECAPA
+     fidelity, and the `applyQwenFallback` cloned-voice exemption (closing the first
+     silent-substitution hole) — see plan [267](267-fs38-wave3-voice-clone.md). **First
+     user-visible clone.**
+   - **3b2 — Resolver + lifecycle.** **Delivered** (PR #1827). The three-state
+     (Healthy/Repairable/Broken) resolver as an async per-chapter pre-pass, orphan
+     self-heal, revocation-at-render — see plan [268](268-fs38-wave3b2-resolver.md).
+   - **3c — XTTS clone.** **Delivered** (PR #1936). `POST /xtts/clone-voice`, the
+     latents-backed Coqui synth branch, designed-voice XTTS-eligibility — see plan
+     [271](271-fs38-wave3c-xtts.md).
 4. **Polish** — auditions, A/B vs a designed alternative, drift handling for cloned voices.
+   **Out of v1 scope**, not owed acceptance.
 
 ## Test plan / acceptance
 
@@ -167,4 +175,16 @@ in v1.
 
 ## Ship notes
 
-_(to fill on ship)_
+**Not yet `stable`.** All four Wave 3 sub-waves (3a/3b1/3b2/3c) shipped and
+merged (PRs #1809, #1827, #1936, plus 3a's earlier delivery — see plan
+[267](267-fs38-wave3-voice-clone.md)), but on-box acceptance register row
+**A1** (`docs/testing/onbox-acceptance-register.md`) still stands with **11
+items owed** as of wave 12 (2026-09-06/07) — most load-bearingly the two
+by-ear verdicts **B-03** and **E-06**, which only the repo owner can close
+(no instrument substitutes for a listening judgment). The remaining nine are
+B-05, C-05, C-15, D-02, and four never-reached rows (A-13, B-11, B-12, B-13).
+This plan flips to `stable` and archives once row A1 closes — moving it now,
+over owed acceptance, is exactly the failure the register exists to prevent.
+This plan's own wave-5 polish items (A/B compare, cloned-voice drift
+auditions, sharing, catalogue rebuild) were always scoped out of v1 and are
+not part of what is owed here.
