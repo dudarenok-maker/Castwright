@@ -547,7 +547,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -557,50 +557,45 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**49 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**47 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-09, two independent single-row changes merged together —
-> net 49 → 49, Group A 34 → 34.** New row **A106** added for #3058's
-> `X-Device-Hint` derive placement (PR #3061, claude), AND **A34 DISCHARGED and
-> removed** (#2905, A34 repair-and-retest chain #2903/#2435, claude) — these two
-> PRs branched from the same 49-owed base independently, so their deltas net to
-> zero on the totals even though both are real, substantive changes; see each
-> row/removal note below for what actually happened.
+> **Last change: 2026-09-09 (batch 2 step 5, claude), 49 → 47.** Rows **A35**
+> (stranded VRAM after a chapter render, #2656) and **A102** (CUDA self-test on
+> real ORT session detects Kokoro CPU fallback, #2582) fully discharged and
+> dropped — both are retired, not reused (allocate-once). A35: batch 2 step 2's
+> on-box run drove the row's own decisive diff (explicit `/unload` of Qwen Base
+> 0.6B + Qwen 1.7B-Base, TTL-lapsed Whisper, `/debug/memory` re-read) to
+> `allocated≈163MB`/`reserved≈271MB` on `cuda:0` — close to the established
+> ~137/192MB single-model baseline (same order of magnitude, no multi-hundred-MB
+> residual), the row's own "drops to near-zero" discharge condition; #2656
+> closes as working-as-intended, correcting #1976/#1996's language for the
+> record. A102: batch 2 step 1's on-box run confirmed all three bullets for
+> real (`cuda_verified` populated on real load; the documented CUDA-self-test
+> warning and `/health`/`api/info` fields on a forced CUDA→CPU fallback; no
+> warning and no log line when CUDA genuinely succeeds). Six other Group A rows
+> (A20, A24, A26, A27, A32, A33, A104, A105) were narrowed this same batch —
+> real on-box evidence resolved most of each row's remaining bullets, but each
+> keeps a genuine remainder (an unconfirmed echo mechanism, a wedged-design
+> timeout never attempted, a false-positive now tracked as
+> [#3118](https://github.com/dudarenok-maker/Castwright/issues/3118), an
+> untouched RAM-hard-restart bullet, an audio-level dash-pause check, a
+> Qwen-pin re-attempt, a driver-dependent prerequisite, and a co-residency
+> regression now tracked as
+> [#3086](https://github.com/dudarenok-maker/Castwright/issues/3086)) — see
+> each row's own update block. Group A: 34 → 32. `next-id` markers unaffected
+> (allocate-once IDs are never reused, so a drop never frees or renumbers a
+> slot).
 >
-> **A106** minted from Group A's `next-id` floor; marker bumped `A106` → `A107`
-> in the same change. The row deliberately does NOT reuse #3058's own acceptance
-> sentence: that read "issue a hinted derive request", which exercises the
-> sidecar half only and passes green on a build where the Node side emits no
-> header at all — the exact state PR #3061's review found. A106's first
-> criterion starts from a real chapter render on a server nobody opened Advanced
-> Settings on, and fails if the header never arrives.
->
-> **A34 removal:** step 4 (#2906) applied `repair-a34-wrong-direction-ids.mjs
-> --apply` for real against *Заказ Коалфолла*'s live workspace (byte-verified
-> backup first) and re-tested the row's actual criterion — a genuine, ordinary
-> full-manuscript re-analysis (no `fresh` flag) against the repaired book.
-> Result: the character's `cast.json` id came back `oduvan` (ASCII), not
-> `одуван` (Cyrillic) — the row's exact criterion, met with real evidence, no
-> human judgment outstanding (attempt 6 of the run; attempt 5 was a
-> self-inflicted `fresh` detour that briefly re-inflicted the defect — the
-> `cast.json` id itself was recovered via the repair script before attempt 6
-> confirmed the real criterion, but the detour's own separate deletion of the
-> book's reuse-carryover and `manuscript-edits.json` is NOT recovered and is a
-> genuine, disclosed side effect on the real workspace; see the write-up for
-> the full inventory, including why the merge/dedup journal itself is not part
-> of that loss). Full write-up:
-> `docs/testing/onbox-a34-results/step-4-apply-retest.md`. Per the 2026-08-22
-> discharge ruling, the row is removed rather than kept annotated. **A34 is
-> retired, not reused** (allocate-once, same precedent as A28/A29/A36). Only one
-> book (*Заказ Коалфолла*) was in scope for the repair — step 3's dry run found
-> no other affected books.
->
-> Both lands are on top of every register change the parent branch had already
-> merged (the 2-card-boot + Pinokio batch chain, #2950) — verified by row-ID-set
-> diff against the true `git merge-base`, not either branch's own stale base.
-> `npm run check:onbox-register` green.
+> **Prior change: 2026-09-09, A34 DISCHARGED and removed** (#2905, repair-and-retest
+> chain #2903/#2435). The row's own criterion was met on a real re-analysis of
+> *Заказ Коалфолла* — `cast.json` came back `oduvan` (ASCII), not `одуван`. Full
+> write-up: `docs/testing/onbox-a34-results/step-4-apply-retest.md`. A34 is
+> retired, not reused (allocate-once). That change landed on `main` while this
+> batch was in flight, as did **A106** (#3058's `X-Device-Hint` derive
+> placement, PR #3061) which ADDS a row; all three are reflected in the
+> counts above.
 
 > **Prior change: 2026-09-08 (step 9, #2954), 52 → 49.** Folded the six
 > register rows discharged by the 2-card-boot + Pinokio batch chain (#2950),
@@ -2792,6 +2787,43 @@ weights can prove, and neither was exercised on real hardware for this PR:
   confirm the run now **FAILS** rather than SKIPping — the #1987 defect this
   PR closed. Restore the weights afterward.
 
+> **PARTIALLY run 2026-09-06 (batch 2 step 1, claude) — the forced-refusal and
+> engine-failure bullets are confirmed; the accept-path echo is still owed, and
+> #2066's own open question is answered.** Real hardware, two-GPU box.
+> `kokoro-baseline.json`'s routine, unflagged re-bless completed silently and
+> wrote through a genuine ASR noise diff (a comma Whisper inserted) with no
+> flag and no refusal — confirms the guard doesn't rubber-stamp real content
+> changes while correctly not demanding a flag for semantic-equivalent ASR
+> noise; also confirms this row's own already-amended "byte-identical" framing
+> doesn't hold literally for `kokoro-baseline.json` on real hardware ("written
+> through, semantically unchanged" is what actually happens, not silence with
+> no diff at all). `instruct-baseline.json`'s routine re-bless, by contrast,
+> refused twice in a row on `tolerances.rtf_max` (epsilon 0.0) even on a
+> confirmed-idle box, purely from real run-to-run `rtf` measurement noise
+> (`rtf_max` climbed 1.0 → 1.5 → 1.35 → 1.55 across this session's repeated
+> runs) — a real finding that an idle box's own timing noise, not contention,
+> can force `GOLDEN_REBLESS_THRESHOLDS` on an otherwise-routine re-bless; not
+> chased to a fix, flagged for whoever owns `rtf_max`'s epsilon next. The two
+> forced-refusal bullets (null `transcript`, `identity.cosine.angry` +0.05)
+> both confirmed exactly as specified, including the `GOLDEN_REBLESS_MEASUREMENTS`-not-`_THRESHOLDS`
+> flag-split boundary, with byte-identical reverts. The `.onnx` corruption
+> bullet confirmed real **FAIL, not SKIP** (all three tests), with the
+> weights restored and SHA-256/size-verified afterward. **#2066 answered from
+> this run's own per-leaf identity deltas** (the deliverable this row's text
+> asks for): the `angry` leaf's single-run delta (+0.0052) already exceeds
+> `IDENTITY_COSINE_EPSILON` (0.005) on genuine hardware noise with no
+> engine/model change — **0.005 is too tight**, at least for `angry` on this
+> box; recorded as the requested measurement, not chased into a constant
+> change here. **Still owed:** the accept-path echo (`[golden-bless] identity
+> moved ... (noise -- reference unchanged) ...` / `loudness_dbfs moved ...`)
+> was never actually observed printing on a genuine PASSING bless this run —
+> `run-golden-tests.ps1`'s pytest args (`-q -rs`, no `-s`) suppress stdout on
+> a pass, and a `-- -s` retry hit the `tolerances` refusal before reaching the
+> echo point instead. The echo is the row's own stated "falsifiable signal"
+> and remains unconfirmed; the next run needs either a forced-flags run with
+> `-s` that reaches a clean accept, or a direct read of the guard's own
+> `print(...)`/log output.
+
 *Needs:* Kokoro weights on disk, a box quiet enough that `--bless` measures a
 stable, reproducible value (no concurrent GPU work), and permission to
 hand-edit a baseline JSON for the refusal drill (revert before committing).
@@ -3512,6 +3544,36 @@ above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
 > original fix — only against simulated/unit-level state, not a real sidecar. This row
 > stays open for the same reason as before.
 
+> **Update 2026-09-06/09 (batch 2 step 2, claude, 14th-18th runs) — five of the
+> six bullets above now CONFIRMED on real hardware; only the original wedged-design
+> bullet remains owed.** Across an 18-run on-box session
+> (`docs/testing/onbox-mechanical-batch2-results/step-2-qwen-lifecycle.md`):
+> the render-waits-not-vram-spill bullet and the design-completes-normally bullet
+> are both confirmed (render waited on a resident design, no `vram-spill`, design
+> completed normally afterward); the post-#2678 extended-budget-wait bullet is
+> confirmed the same way; the cross-device bullet is confirmed — a genuine
+> `QWEN_DEVICE=cuda:0` pin (once set and the sidecar launched in the SAME shell
+> invocation — splitting the two across separate tool calls, which every earlier
+> attempt on this row had done, loses the env var entirely and was the real cause
+> of three prior runs' "pin confirmed correct, still lands on the other card"
+> finding, not a placement-logic bug) lands a fresh design correctly, and the
+> deviceKey-qualified no-cross-device-extension claim is confirmed via the
+> codebase's own `capacity-retry.test.ts` (26 tests passed) rather than a live
+> squeeze, which this box's asymmetric card sizes make impractical to force
+> live; the abort-budget-conversion bullet is confirmed live (a caller's 90s
+> timeout converted to the blocker-naming `NoCapacityError`, not the generic
+> caller-timeout text, after 90.3s against a genuinely resident 1.7B design);
+> and the real-Pause-stays-a-plain-AbortError bullet is confirmed live (a Pause
+> fired mid-design-wait surfaced as a plain `{"type":"idle"}`, never
+> `NoCapacityError`/`vram-spill`). **Still owed: the original wedged-design
+> bullet** — force a genuinely wedged/hung design (a killed sidecar thread while
+> `_design_in_flight` stays claimed) and confirm the waiting synth times out into
+> a `design_in_flight` 503 (via `unload_design()`'s own bounded ~150s wait and
+> `DesignContentionTimeoutError`) rather than hanging forever. This is a
+> different mechanism from the Base17 contention path A105 bullet 5 exercised
+> (`_BASE17_CONTENTION_WAIT_S_DEFAULT`/`Base17ContentionTimeoutError`) and was not
+> attempted anywhere in this 18-run session.
+
 ### A25 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
 
 Unit tests (`test_footprints.py`, `test_transcribe_embed_admission.py`,
@@ -3632,6 +3694,31 @@ comment in `server/src/tts/segment-asr-qa.ts`; #2026's own repro recipe.
 *Cost:* short-to-medium — the collapse is intermittent, so budget a few
 repeated renders of the same short lines, not one pass.
 
+> **PARTIALLY run 2026-09-09 (batch 2 step 3, claude) — first bullet not
+> reproduced this session (accepted, per this row's own text); second bullet
+> surfaced a real false-positive, filed as
+> [#3118](https://github.com/dudarenok-maker/Castwright/issues/3118).** Real
+> Coqui/XTTS + real Whisper, no mocks, real production `classifyTranscript()`.
+> 10 attempts across #2026's own two historical collapse lines did not
+> reproduce a language-swap collapse this session (same order of magnitude as
+> #2026's own 6-run hit rate) — every mistranscription stayed inside Russian.
+> What WAS observed: 3 genuine same-language mismatches correctly fired
+> `drift` with a plain WER-threshold reason, confirming the WER-drift
+> mechanism end to end, but Whisper's confidence signals never crossed the
+> "untrustworthy" threshold in any attempt, so the plain pre-existing
+> `wer > maxWer` branch fired every time — **the #2055 override branch itself
+> (fluent-but-catastrophically-wrong overriding an `untrustworthy →
+> inconclusive` verdict) was never exercised**, only its neighbour. The
+> false-positive control (`Мастер Одуван кивнул.`, an invented-name line, 2
+> attempts) fired `drift` both times (WER 1.67 and 0.67) — Whisper could not
+> transcribe the invented name `Одуван` reliably on a 2-3 word reference,
+> exactly the "A26's false-positive check fires wrongly" shape this row's own
+> chain calls out as a defect, not a discharge. Not fixed here (no pre-#2055
+> baseline run to diff against this session, sample too small to prove a rate
+> change) — filed as #3118 rather than silently dropped or fixed. **Still
+> owed:** a genuine #2026-style collapse actually caught by the override
+> (bullet 1), and #3118's own false-positive-rate question.
+
 ### A27 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install (#2179, PR #2210) · **single 8 GB card is enough**
 
 `.env.example` used to ship `SIDECAR_RESTART_MB=0` / `SIDECAR_VRAM_RECYCLE_SOFT_MB=0`
@@ -3679,6 +3766,37 @@ synthetic memory/VRAM hog run alongside it). *Criteria:*
 before/after values. *Cost:* short-to-medium — the VRAM-pressure legs need a
 way to actually saturate the card, which may need a synthetic hog rather
 than a real render.
+
+> **PARTIALLY run 2026-09-09 (batch 2 step 4, claude) — fresh-install and
+> no-thrash bullets confirmed; VRAM ceiling legs partially satisfied via real
+> production history; RAM hard-restart bullet untouched.** Real hardware, no
+> mocks. Confirmed a fresh-install `server/.env` shape (all three vars absent)
+> and the startup log's auto-computed thresholds match this box's real
+> hardware exactly (RAM hard-restart 47583MB = 70.00% of this box's real
+> 64826 MiB physical RAM; VRAM soft/hard 7727MB/8414MB = 90.00%/98.00% of GPU
+> 0's real 8585MB total, independently verified via `Get-CimInstance` and
+> `/health`). **Correction to this row's own intro:** the *RAM* soft-recycle
+> tier is `DISABLED` by default in current code (a fourth threshold this row's
+> own bullets don't separately test) — only RAM hard-restart and both VRAM
+> tiers are live out of the box; not a defect, just a framing note for whoever
+> reads the intro's "70%/90%/98%" list expecting four live tiers. **No-thrash
+> bullet confirmed from genuine production history** rather than a fresh
+> push: this worktree's sidecar has driven real chapter-render work since
+> 2026-09-06 (23 process starts) with zero soft/hard recycle events and its
+> closest real approach to the 7727MB soft ceiling landing 22MB under it
+> during genuine multi-model rendering, then dropping back — the ceiling held
+> through real pressure without firing. **VRAM soft/hard ceiling legs (drive
+> live to 90%/98%) NOT attempted this run**, stated plainly: GPU 0 already
+> carried another lane's live 2587MB at claim time, and a live attempt to load
+> Qwen onto it to test contention instead auto-placed onto GPU 1 (the
+> sidecar's own capacity-aware placement avoiding the other lane's card) —
+> forcing a pin+restart to override was judged not worth the risk to that
+> resident process, for a leg this row's own text explicitly allows recording
+> as "not attempted, reason stated" once the soft-threshold observation is
+> otherwise covered (which the historical near-miss above does). **Still
+> fully owed, not even attempted this session: the RAM hard-restart bullet**
+> (drive committed RAM toward the 70% ceiling and confirm the sidecar
+> self-exits with code 43) — no host-memory push was made this run at all.
 
 ---
 
@@ -3881,6 +3999,33 @@ its heading and/or body, a working analyzer + TTS pipeline. *Criteria:* the
 two bullets above. *Cost:* short — one import + one chapter-title listen, plus
 one body-line listen if a suitable entity-laden EPUB is available.
 
+> **PARTIALLY run 2026-09-09 (batch 2 step 3, claude) — lead (chapter-title)
+> bullet fully confirmed at both text and audio level; secondary (body-line)
+> bullet confirmed at text level only.** No suitable real-world EPUB with
+> named entities was available on this box this session — hand-built a
+> minimal, valid, throwaway EPUB carrying named HTML entities in exactly the
+> row's asked-for shapes (title `L&rsquo;&Eacute;t&eacute;`, body
+> `&mdash;`/accented-letter entities), stated plainly per this row's own
+> allowance, and imported it through the real `POST /api/import` pipeline —
+> not a unit test fixing the string. **Lead criterion:** the import's parsed
+> `candidate.chapters[0].title` came back clean (`"Chapter One — L'Été"`, real
+> apostrophe/accents, no entity markup) — the "no model behaviour can mask
+> this" text-level check. Audio-level: synthesizing the decoded title on the
+> right-language engine (Coqui/XTTS, `language:"fr"`) produced a real ASR
+> transcript beginning `"L'été..."` — a clean, correctly-pronounced rendering,
+> no "ampersand/semicolon" artifact. **Lead criterion CONFIRMED, both levels.**
+> **Secondary criterion:** the body text's decode is confirmed at the text
+> level (`candidate.sourceText` came back with a real em dash and real
+> accented words, every named entity in the fixture decoded correctly through
+> the same pipeline) but was **not** carried through to an audio-level
+> listen this session — the dash-pause timing and accented-word pronunciation
+> on synthesized body audio remain unconfirmed, deprioritized this run in
+> favour of the two decisive title-beat checks. **Still owed:** an audio-level
+> confirmation of the dash-opened-dialogue pause and accented-word
+> pronunciation on real synthesized body text (the pre-fix reproduction check
+> this row's design spec also raises was likewise not attempted, for the same
+> time-budget reason).
+
 ### A33 · Kokoro's silent-CPU-fallback alarm actually fires on a genuine CUDA→CPU fallback, and stays quiet on a ledger-admitted CPU placement and under kokoro-onnx API drift ([#2647](https://github.com/dudarenok-maker/Castwright/issues/2647)) · **single 8 GB card, live Kokoro sidecar, `KOKORO_DEVICE` settable per run**
 
 `_engine_actual_card`'s `fell_back` flag (#2631 review B3, the silent-CPU-fallback
@@ -4027,117 +4172,44 @@ load, one drift simulation, one unpinned-auto load with its negative control.
 > the resident entry carries **no** `stale_reason` (deliberate admission,
 > not a fallback) — same recipe the row's own bullet 2 already specifies.
 
----
-
-### A35 · Stranded VRAM after a chapter render — resident-model floor or genuine leak? ([#2656](https://github.com/dudarenok-maker/Castwright/issues/2656), successor to closed [#1976](https://github.com/dudarenok-maker/Castwright/issues/1976)/[#1996](https://github.com/dudarenok-maker/Castwright/issues/1996)) · **single or dual GPU box, real render**
-
-The 2026-08-25 idle-gated measurement
-(`docs/testing/1996-stranded-vram-measurement.md` @ `45b913ce`, on
-`fix/sidecar-1996-idle-vram-measurement`, unmerged; PR [#2655](https://github.com/dudarenok-maker/Castwright/pull/2655)) found the ~5.45 GB
-`allocated` after a chapter render is byte-identical across a confirmed-idle
-21 s window, and `/debug/reclaim` recovers only 6.4% of `reserved` — neither
-a self-heal, nor uncollected cache, nor fragmentation. **HOWEVER, the run's
-measurement carried two instrument bugs that invalidated its conclusion:**
-(1) the `/debug/memory` snapshot was missing a `base17_loaded` key, so it
-could not see the Qwen 1.7B-Base model (which loads during cast-design phases
-and has its own 120 s idle TTL, `QWEN_BASE17_IDLE_TTL`) — the run could have
-had three resident models live, not two; (2) the idle-gate poll (`_inflight_synth`)
-is blind to `/transcribe`/`/embed` activity (ASR), so the "confirmed-idle" 21 s
-window may have overlapped live Whisper transcription, making it not truly idle.
-Both bugs are now fixed on PR #2655 (commits d4aa7a6c and 42dddeb8). The corrected
-reading says: at the idle point, `qwen.base_loaded=true` (Qwen Base 0.6B has
-**no idle TTL** — button-driven, evicts only on explicit `/unload`),
-`qwen.base17_loaded` was unobserved (now visible), and `whisper.model_loaded=true`
-(120 s TTL, only 21 s elapsed). Because the run never captured what `allocated`
-looks like *after* all three models are actually unloaded, it cannot rule out
-a genuine leak sitting on top of the resident floor. Nothing in any existing log
-or prior measurement attempt (including the original #1976 report, predating the
-`/debug/memory` diagnostics) contains this reading — it does not exist yet at any
-recorded point in this repo's history.
-
-- Reproduce P2/P3 from the linked run sheet: render a chapter, confirm the
-  box idle (poll `inflight_synth`, not a fixed wall-clock; note the poll is
-  ASR-blind, so verify via logs that no `/transcribe`/`/embed` was active).
-- **New step:** issue `POST /unload {qwen, base17}` and confirm/force both
-  Whisper and Qwen 1.7B-Base past their respective idle TTLs (120 s each,
-  `ASR_IDLE_TTL` and `QWEN_BASE17_IDLE_TTL`), then read `/debug/memory` again.
-- Diff that post-unload `allocated`/`reserved` against the P3 baseline
-  already on record for this box's device.
-  - Drops to near-zero (matching Qwen Base 0.6B + Whisper + Qwen 1.7B-Base's
-    known weight sizes) → the resident floor fully explains #1976's original
-    "stranded" report; no lever ever needed, close #2656 as working-as-intended
-    and correct #1976/#1996's language for the record.
-  - Residual gap remains → that gap is a genuine leak, needs its own
-    root-cause pass in the placement/eviction code.
-
-*Needs:* a live sidecar with all three models potentially resident (Qwen Base 0.6B,
-Qwen 1.7B-Base, Whisper), and the ability to force explicit `/unload` + TTL lapse
-mid-session. *Criteria:* [#2656](https://github.com/dudarenok-maker/Castwright/issues/2656)
-— extend `docs/testing/1996-stranded-vram-measurement.md`, don't replace it. *Cost:*
-short — one idle render, explicit unloads for all three models, one reading.
-
-> **PARTIALLY run 2026-08-27 (wave 8) — the post-unload diff this row asks
-> for was taken, but only for one of the three models; still owed for the
-> full three-way scenario.** In an isolated worktree workspace (not the real
-> book — this row's mechanism is engine-agnostic), rendered a full 3-chapter
-> fixture book via Qwen Base 0.6B with the box otherwise idle. Confirmed via
-> `/debug/memory` a real resident footprint (`cuda:1` `allocated≈1974 MB`,
-> `reserved≈2024 MB`, `qwen.base_loaded=true`) — but in THIS run only Qwen
-> Base 0.6B was actually resident: `whisper.model_loaded=false` throughout
-> (ASR is off by default, `SEG_ASR_ENABLED` unset in this worktree) and
-> `qwen.base17_loaded=false` (the transient 1.7B-Base model used during
-> voice design had already idled out before the render). Issued
-> `POST /api/sidecar/unload {engine: qwen}` and re-read `/debug/memory`:
-> `cuda:1` `allocated` dropped to **≈137 MB**, `reserved` to **≈192 MB** — a
-> ~93% reduction, landing in the range of ordinary CUDA-context baseline
-> overhead, not a multi-GB residual. **This is real evidence against a
-> genuine per-model leak in the unload path itself** — explicit unload of the
-> only thing that was loaded reclaims almost everything. **Still owed:** the
-> row's actual scenario (Qwen Base 0.6B + Qwen 1.7B-Base + Whisper all
-> resident together, as in the original #1976 report) — this run's simplified
-> single-model case is suggestive but doesn't rule out a leak that only shows
-> up with all three models' allocators interacting.
-
+> **Update 2026-09-06 (batch 2 step 1, claude) — bullet 3 (idle positive
+> control) now confirmed, with a wording correction; bullet 2 (contended CPU
+> admission) still not achieved.** Real hardware, two-GPU box, everything
+> pinned to the 8 GB card (`KOKORO_DEVICE=cuda:0`/`QWEN_DEVICE=cuda:0`/
+> `COQUI_DEVICE=cuda:0`) to reproduce this row's "single 8 GB card" scenario.
+> **Bullet 3 confirmed:** with GPU0 idle, Kokoro landed on a real CUDA session
+> (`cuda_verified: true`) with no `stale_reason` — quiet, as expected.
+> **Correction to this row's own bullet 2 wording:** the "confirm the resident
+> entry now carries the real GPU index (not the -1 bucket)" positive-control
+> check can never pass for Kokoro specifically — `main.py`'s
+> `_build_gpus_payload` puts every ORT/CT2 engine (Kokoro/Whisper) in the
+> synthetic `idx: -1` bucket unconditionally, by design, since an ONNX Runtime
+> session has no torch ordinal to report at all; this is not something a
+> future run can fix by trying harder. The actually-checkable "genuinely on
+> GPU" signal is `devices.kokoro`/`cuda_verified` plus the absence of
+> `stale_reason`, which is what this run verified. **Bullet 2 still not
+> achieved:** `QWEN_DEVICE=cuda:0` was not honoured this run — the design
+> landed on `cuda:1` despite the pin, leaving Coqui (the only lever that did
+> honour its pin) unable to squeeze GPU0 enough to push Kokoro's admission
+> under threshold. **This anomaly is very likely the same tooling artifact
+> Castwright's batch-2 step-2 session later root-caused (18th run,
+> 2026-09-09): setting the env var and launching the sidecar as two separate
+> tool/shell invocations loses the variable entirely, because shell state does
+> not persist between this harness's own tool calls** — not a placement-logic
+> bug in `admit()`/`_gpu_candidates`. This run did not use the single-invocation
+> launch procedure that later run confirmed fixes it, so bullet 2 remains
+> genuinely unattempted with the correct procedure, not evidence of an
+> unresolved sidecar defect. **Still owed:** re-attempt bullet 2 with
+> `QWEN_DEVICE=cuda:0` set and the sidecar launched in the SAME shell
+> invocation, then use Coqui plus a correctly-pinned Qwen to squeeze GPU0
+> under Kokoro's admission threshold. **The #2643 negative control (a box
+> with no CUDA build/device at all) is not testable on this box:** both
+> cards now genuinely construct CUDA sessions (confirmed above and in A102
+> bullet 3), so there is no "CUDA absent" state left to exercise here —
+> investigated and found permanently untestable on this hardware, not
+> silently dropped.
 
 ---
-
-### A102 · CUDA self-test on real ORT session detects Kokoro CPU fallback ([#2582](https://github.com/dudarenok-maker/Castwright/issues/2582), PR [#2719](https://github.com/dudarenok-maker/Castwright/pull/2719)) · **single 8 GB card, live Kokoro sidecar with real ORT session**
-
-PR #2719's `_cuda_selftest_or_warn` method (`server/tts-sidecar/main.py`) inspects
-the real ORT `InferenceSession` returned by Kokoro's first load and checks whether
-CUDA was requested but the session landed on CPU instead. The verification result
-(`cuda_verified`, `cuda_verification_detail`) rides the existing `_ensure_loaded`
-load at the `from_session` code path and is surfaced through `/health` →
-`/api/info` → the device-panel amber warning in the UI. Unit tests mock
-`InferenceSession` and cannot prove the mechanism against a genuine CUDA→CPU
-degradation on real hardware.
-
-- **Self-test fires at the real load boundary.** On first Kokoro load via the
-  real `_ensure_loaded`/`from_session` path (during a chapter render or
-  `PRELOAD_KOKORO` warm-up), confirm `/health`'s top-level `cuda_verified`
-  field is populated with one of three values: `true` (CUDA was requested and
-  landed), `false` (CUDA was requested but landed on CPU), or `null` (CUDA was
-  not requested for this load).
-- **CUDA fallback detection on real CUDA unavailability.** Force a real CUDA→CPU
-  fallback using the same missing-`nvidia-cudnn-cu12` gap A33 and A28 already use
-  to force CPU-only providers. Load Kokoro and confirm `/health`'s
-  `cuda_verified === false` (CUDA was requested but did not land), the log shows
-  the warning *"Kokoro CUDA self-test: CUDAExecutionProvider was requested but did
-  not land …"* (Castwright#2709), and `/api/info`'s `cudaVerified` field reads
-  `false`. Confirm the device-panel UI renders the amber warning *"GPU
-  acceleration was configured for Kokoro, but it's running on CPU instead."*
-- **Silent verification when CUDA genuinely succeeds.** On a box with working
-  CUDA support, load Kokoro and confirm `/health`'s `cuda_verified === true`
-  (CUDA was requested and landed), that the log contains NO CUDA self-test
-  warning message, and the device-panel warning stays absent. When CUDA was not
-  requested for the load, `/health`'s `cuda_verified === null`; this is not a
-  failure state and no warning should appear.
-
-*Needs:* a single 8 GB GPU, a live Kokoro-capable sidecar, and a real ORT
-session accessible during `_ensure_loaded`. *Criteria:* the three bullets above —
-no separate run sheet; mechanism is integrated into Kokoro's existing health
-reporting. *Cost:* short — one Kokoro load with CPU-forced providers, one with
-CUDA working (or default unforced), and UI verification.
 
 ### A104 · Analyzer GPU-split warning fires (and stays silent) correctly on real nvidia-smi output ([#2367](https://github.com/dudarenok-maker/Castwright/issues/2367)) · **two NVIDIA GPUs of different sizes** · PR #2753
 
@@ -4177,6 +4249,37 @@ verify child for this chain) checklist item 6; the four task briefs under
 #2367 for the exact behaviour each piece owns. *Cost:* short — one oversized
 load that splits, one genuinely-too-big load that doesn't, one
 `expectedDevice` mismatch check.
+
+> **PARTIALLY run 2026-09-09 (batch 2 step 4, claude) — prerequisite resolved
+> definitively; the split/no-split/mismatch bullets are structurally
+> untestable on this box's driver, not merely unattempted.** Real hardware,
+> two genuine NVIDIA GPUs of different sizes, real Ollama. **Prerequisite
+> confirmed:** `nvidia-smi --query-compute-apps=...,used_memory` returns
+> `[N/A]`, not a number, under this box's WDDM driver — confirmed both cold
+> (a pre-existing other-lane process) and with a real 13GB Ollama model
+> resident (`qwen38-cw-iq3-80k:latest`, landed 100% on GPU 1 per `ollama ps`).
+> A live, unmocked call to `detectOllamaGpuSplit()` (in-process via `tsx`, no
+> mock) against that resident model returned `dataUnavailable: true`, traced
+> to the exact code path: `used_memory` is unparseable, so
+> `parseComputeAppsCsv` routes it to `unparseableProcessNames`, the process
+> name matches `/ollama/i`, and `ollamaRows.length === 0` short-circuits to
+> the empty/no-split result — **regardless of the model's real, genuine
+> single-GPU placement.** Read the source and confirmed both warning sites in
+> `server/src/analyzer/ollama.ts` gate on `!dataUnavailable`, so **no split
+> warning and no device-mismatch warning can ever fire on this box, under
+> this driver, no matter what Ollama actually does** — the split/no-split/
+> mismatch bullets are not "not yet run," they are unreachable here. Read
+> (not click-tested through the live UI) `src/views/advanced.tsx:579-587` and
+> confirmed it renders the `dataUnavailable`-specific "can't determine GPU
+> split status" message and suppresses the amber split/mismatch block
+> whenever `gpuSplit.dataUnavailable` is true — the correct behaviour for
+> this hardware, on source-level evidence rather than a live click-through.
+> **Still owed, and not attemptable from this box:** the split/no-split/
+> mismatch bullets themselves need a driver/OS combination where
+> `nvidia-smi` reports numeric `used_memory` for Ollama's own process (e.g. a
+> non-WDDM/Linux box, or a future driver) — this is an environment fact, not
+> a code gap, and this row should stay open until run from such a box rather
+> than being narrowed further from here.
 
 ### A105 · Qwen base17 eviction guard and _DEVICE_LEDGER serialization ([#2752](https://github.com/dudarenok-maker/Castwright/issues/2752), PR [#2790](https://github.com/dudarenok-maker/Castwright/pull/2790)) · **single 8 GB GPU card, Qwen VoiceDesign 1.7B resident, real sidecar with base17 weights**
 
@@ -4268,6 +4371,60 @@ Qwen VoiceDesign 1.7B model, real sidecar, Kokoro resident for the third and fou
 *Criteria:* the five bullets above — no separate run sheet.
 *Cost:* moderate — concurrent-load/eviction scenarios + VRAM observation, plus one
 forced-contention run for the lock-leak criterion.
+
+> **Run 2026-09-06/08 (batch 2 step 2, claude) — bullets 1, 3, and 5 fully
+> CONFIRMED on real hardware; bullet 2 (Stop button) confirmed only for its
+> literal 200-not-500 claim, with the deeper unload-mechanism question still
+> open; the co-residency bullet FAILED and is narrowed to point at the new
+> bug it surfaced.** Across the same 18-run on-box session as A24 above
+> (`docs/testing/onbox-mechanical-batch2-results/step-2-qwen-lifecycle.md`):
+> the widened-eviction-guard/#1156 bullet is confirmed (a fresh design
+> correctly waited for/evicted an in-flight base17 load with no OOM); the
+> Stop-button-mid-base17-load bullet is confirmed **only for its literal
+> claim** — `/unload` returned 200 immediately, and separately the in-flight
+> load it raced was not aborted by the race, matching this bullet's own
+> 200-not-500 ask — but this run's timing did NOT prove the deeper claim
+> implied by "immediate unload in the logs": whether `unload_base17()`'s
+> bounded wait actually holds up completion of the racing `/load`, or
+> whether `/unload` arriving before `_base17` is assigned is simply a no-op
+> with nothing to null yet, since both produce the identical external HTTP
+> result; that unload-mechanism question stays owed
+> (`docs/testing/onbox-mechanical-batch2-results/step-2-qwen-lifecycle.md:191-206`);
+> the bulk-design
+> Kokoro-pause bullet is confirmed **for both required directions** — Kokoro
+> paused for a same-card VoiceDesign forward through the full forward (not
+> just the load), and (via the codebase's own existing white-box unit
+> coverage, `test_qwen_design_base17_exclusion.py` +
+> `test_mint_variant_kokoro_stall.py` + `test_base17_contention.py`, 10/10
+> passing — a live HTTP-level repro of this specific direction was diagnosed
+> as structurally impossible on this server's real request-handling model, not
+> just hard to time) did NOT pause for a base17-eviction-only wait; and the
+> failed-base17-eviction/lock-leak bullet is confirmed **both halves** — the
+> `Base17ContentionTimeoutError`/503/`base17_in_flight` contention claim
+> reproduced 4 times with the exact documented error text, and the
+> no-leak claim confirmed via a design-vs-design race (a fresh design
+> acquired the lock immediately and ran to completion with zero rejections
+> right after the contended pair resolved). **The co-residency
+> bullet FAILED:
+> a real, live repro (two raw `design-voice` calls confirmed genuinely
+> overlapping via `/health` polling, then a raw Kokoro `/synthesize` call
+> fired while both were still resident) showed the Kokoro call completing in
+> 44.11s while BOTH designs were still in flight (their own HTTP completions,
+> an authoritative lower bound on how long they held the arbiter, landed
+> 20-50s later) — directly contradicting `_VdKokoroArbiter`'s documented
+> contract and `KokoroEngine.synthesize()`'s own "never let this Kokoro
+> forward overlap a VoiceDesign forward" claim, with every no-op explanation
+> (device-sharing off, wrong build) ruled out from source.** Filed as
+> [Castwright#3086](https://github.com/dudarenok-maker/Castwright/issues/3086)
+> rather than silently fixed or dropped. **This row now stays open for
+> #3086's own co-residency criterion and for the Stop-button bullet's
+> unresolved unload-mechanism question** — the other three bullets (widened
+> eviction guard, bulk-design Kokoro-pause both directions,
+> failed-eviction/lock-leak) are fully discharged and don't need re-running;
+> the Stop-button bullet's literal 200-not-500 claim is discharged, but the
+> deeper unload-mechanism question is not and does not need re-running
+> either — it needs a sidecar log line (or a deliberately landed race) to
+> distinguish the two cases, per the source evidence above.
 
 ### A106 · X-Device-Hint lazy Coqui derive request signaling ([#3058](https://github.com/dudarenok-maker/Castwright/issues/3058), PR [#3061](https://github.com/dudarenok-maker/Castwright/pull/3061)) · **2-card boot (8 GB + 16 GB), Coqui XTTS NOT yet resident (cold-load), no `COQUI_DEVICE` pin**
 
