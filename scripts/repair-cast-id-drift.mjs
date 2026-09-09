@@ -287,6 +287,15 @@
  *                        default) — npm run dev:lan / start:lan listens here
  *                        too, and is otherwise invisible to the probe.
  *                        Same auto-rebind-range coverage as PORT above.
+ *   ALLOW_STANDING_PORTS comma-separated ports the liveness probe should
+ *                        SKIP because a standing, permanent non-Castwright
+ *                        service holds them (e.g. `8090` for llama-swap on
+ *                        the operator's box). Empty by default — the probe
+ *                        is fail-closed for every port unless opted out for
+ *                        that run. Note 8090 is ALSO this repo's worktree
+ *                        slot-1 PORT and sits in the default 8080 rebind
+ *                        walk, so only set this when you know no Castwright
+ *                        server is on it. See parseStandingPorts.
  *
  * Usage:
  *   node scripts/repair-cast-id-drift.mjs                       # dry run
@@ -1559,8 +1568,19 @@ const readJsonSync = (p) => {
  *  Reading the file directly and inspecting the thrown error's `code`
  *  removes that blind spot: the attempted read itself is the source of
  *  truth, not a separate existence probe that can lie about why it
- *  failed. */
-function readJsonTriState(p) {
+ *  failed.
+ *
+ *  Exported (PR #3057 review, E1/E2): `repair-a34-wrong-direction-ids.mjs`
+ *  needs the identical tri-state read for `cast-id-history.json`, which
+ *  `collectBooks` never touches (it only reads `cast.json`/`state.json`).
+ *  That caller was collapsing a present-but-unreadable history file to the
+ *  same `null` as a genuinely-absent one via a bare `try { JSON.parse(...) }
+ *  catch { return null }` — indistinguishable from "no history file", even
+ *  though `supersededBy` is the only thing its detector iterates. Reusing
+ *  this instrument closes that the same way `collectBooks` already closed
+ *  it for `cast.json`/`state.json`, rather than a third, independently-
+ *  written variant of the same three-way read. */
+export function readJsonTriState(p) {
   let raw;
   try {
     raw = fs.readFileSync(p, 'utf8');
@@ -2037,6 +2057,73 @@ export const AUTO_REBIND_RANGE = 20;
  *  the probed set loses no real safety coverage — every port that COULD
  *  exist in the rebind range is still fully probed, and the fail-closed
  *  property is unaffected either way. */
+/** Ports to skip probing because a standing, permanent NON-Castwright
+ *  service holds them. Read per run from `ALLOW_STANDING_PORTS` (a
+ *  comma-separated list); empty by default, so the probe is fail-closed for
+ *  every port unless the operator opts one out for that invocation.
+ *
+ *  This used to be a hardcoded `new Set([8090])` — the operator-approved
+ *  exception (Castwright#2906) for `llama-swap` (`C:\Claude\llama-swap`),
+ *  which does sit permanently on 8090. That exception was wrong in a way
+ *  the port number alone cannot express: **8090 is also this repo's own
+ *  `PORT` for worktree slot 1** — `wt-new.mjs`'s `BASE_PORTS.PORT = 8080`
+ *  plus `PORT_STEP = 10`, asserted at `scripts/tests/wt-new.test.mjs:83`,
+ *  used as the `server/.env` fixture value in
+ *  `scripts/tests/sidecar-sweep-port.test.mjs:358,373`, and documented in
+ *  CLAUDE.md's worktree-setup step 5 — and it sits inside the default
+ *  `PORT=8080` auto-rebind walk (8080-8099), which `listenWithAutoRebind`
+ *  (`server/src/crash-logging.ts:136-175`) reaches by incrementing on
+ *  EADDRINUSE. That is precisely the #2090 scenario the range probe exists
+ *  to catch. A global constant made every current and future consumer of
+ *  `probePortRangeRefused` permanently blind to a port a real Castwright
+ *  server actually binds, at the moment it is deciding whether it is safe
+ *  to write `cast.json` and `cast-id-history.json` out-of-process.
+ *
+ *  An opt-in was chosen over simply deleting 8090 because the llama-swap
+ *  collision is real on the operator's box and would otherwise refuse every
+ *  `--apply` there forever. Making it per-run and explicit is what confines
+ *  the blindness to the run whose operator asserted it: the default is the
+ *  safe one, and skipping a port is now a visible act rather than an
+ *  inherited constant. Listener-identity probing ("is this answering as a
+ *  Castwright server?") would be better still, but that is a new protocol
+ *  decision, not this fix.
+ *
+ *  A token that is not a valid TCP port is IGNORED rather than honoured, so
+ *  a typo (`ALLOW_STANDING_PORTS=80090`) fails closed to probing the port,
+ *  never to skipping something else. */
+export function parseStandingPorts(raw) {
+  const ports = new Set();
+  for (const token of String(raw ?? '').split(',')) {
+    const trimmed = token.trim();
+    if (!trimmed) continue;
+    const n = Number(trimmed);
+    if (!Number.isInteger(n) || n < 1 || n > 65535) continue;
+    ports.add(n);
+  }
+  return ports;
+}
+
+/** Names which candidate ports in `[startPort, startPort + AUTO_REBIND_RANGE)`
+ *  `ALLOW_STANDING_PORTS` excluded from probing, for the caller to log
+ *  alongside its "probing port X-Y" line (N2, PR #3057 review pass 2).
+ *  `probePortRangeRefused` silently drops these candidates before probing —
+ *  correct for the refusal decision, since a definitively-skipped port
+ *  cannot make it refuse — but that leaves the "probing ports X-Y" log line
+ *  claiming full coverage of a range one of these ports was never checked
+ *  in, with nothing else recording the gap. Callers print this line's
+ *  result (empty string when nothing in range is skipped) right after that
+ *  line so a transcript pasted into an acceptance doc says what actually
+ *  happened, not what the range implies. Purely additional logging — it
+ *  does not change what `probePortRangeRefused` probes or refuses. */
+export function formatStandingPortsSkippedLine(startPort, standing) {
+  if (!standing.size || !Number.isInteger(startPort) || startPort < 1 || startPort > 65535) return '';
+  const skipped = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i).filter((p) =>
+    standing.has(p),
+  );
+  if (!skipped.length) return '';
+  return `  (NOT probing port(s) ${skipped.join(', ')} — allowed via ALLOW_STANDING_PORTS for this run)`;
+}
+
 export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
   // C1 (pre-merge review, 2026-08-05): validate startPort itself BEFORE
   // building the candidate list, not merely clamp the list. main() derives
@@ -2055,7 +2142,12 @@ export async function probePortRangeRefused(startPort, host = '127.0.0.1') {
   // Two-sided on purpose — the old one-sided `<= 65535` clamp let a
   // negative startPort (e.g. PORT=-1) through to net.connect uncaught.
   if (!Number.isInteger(startPort) || startPort < 1 || startPort > 65535) return [startPort];
-  const ports = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i).filter((p) => p <= 65535);
+  // Read per call, not once at module load: a test (and an operator running
+  // two probes in one process) must be able to set and clear the opt-in
+  // without the first read freezing the answer for the rest of the run.
+  const standing = parseStandingPorts(process.env.ALLOW_STANDING_PORTS);
+  const ports = Array.from({ length: AUTO_REBIND_RANGE }, (_, i) => startPort + i)
+    .filter((p) => p <= 65535 && !standing.has(p));
   const results = await Promise.all(ports.map((p) => probePortRefused(p, host)));
   return ports.filter((_, i) => !results[i]);
 }
@@ -2318,12 +2410,56 @@ export async function collectSegmentOrphans(bookDir, chapters, cast, history, mo
   return { orphans, currentNonExact, resolver };
 }
 
-function backupCastIdHistory(historyPath) {
-  if (!fs.existsSync(historyPath)) return null;
-  const stamp = new Date().toISOString().slice(0, 10);
-  const backupPath = `${historyPath}.bak.id-drift-${stamp}`;
-  fs.copyFileSync(historyPath, backupPath);
-  return backupPath;
+/** Copies `historyPath` to `<historyPath>.bak.id-drift-<stamp>` if it
+ *  exists, returning the backup path (or `null` when there was nothing to
+ *  copy). Same shape as `repair-a34-wrong-direction-ids.mjs`'s
+ *  `backupBeforeApply` — see PR #3057 review pass 2: a date-only stamp plus
+ *  a plain `copyFileSync` meant a same-day retry silently overwrote the
+ *  first run's pre-repair copy with whatever the (possibly
+ *  half-repaired-then-aborted) first run had left on disk, and the "A backup
+ *  was taken at ..." message below then pointed at a file that was no
+ *  longer the pre-repair state.
+ *
+ *  The stamp carries millisecond resolution
+ *  (`toISOString().replace(/[:.]/g, '-')`, filesystem-safe), which makes a
+ *  same-day collision rare but not impossible (two runs in the same
+ *  millisecond, or a clock that doesn't advance in a test). `COPYFILE_EXCL`
+ *  closes that gap unconditionally: a collision throws `EEXIST` rather than
+ *  overwriting, and the loop below retries at a suffixed path instead of
+ *  giving up — so an existing pre-repair copy is NEVER overwritten, and the
+ *  one case that can't find a free slot fails loudly rather than falling
+ *  back to silent clobbering.
+ *
+ *  The backup filename is `cast-id-history.json.bak.id-drift-<stamp>`, not
+ *  `cast.json.bak.*` — `collectBakNameEntries` filters on files whose name
+ *  starts with `cast.json.bak`, so this backup was never picked up as bak
+ *  evidence before this change and still isn't after it; the stamp-shape
+ *  change doesn't touch that.
+ *
+ *  Exported for the same reason `backupBeforeApply` is — a direct fs-fixture
+ *  unit test drives THIS function, not a reimplementation of it. */
+export function backupCastIdHistory(historyPath, deps = { fs }) {
+  if (!deps.fs.existsSync(historyPath)) return null;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const MAX_ATTEMPTS = 1000;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const backupPath =
+      attempt === 0 ? `${historyPath}.bak.id-drift-${stamp}` : `${historyPath}.bak.id-drift-${stamp}-${attempt}`;
+    try {
+      deps.fs.copyFileSync(historyPath, backupPath, fs.constants.COPYFILE_EXCL);
+      return backupPath;
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+      // Someone else already holds this exact stamp — try the next suffix
+      // rather than overwriting it. Falls through to the loop's next
+      // iteration; the loop bound below is what fails loudly if every
+      // candidate in range is somehow taken.
+    }
+  }
+  throw new Error(
+    `${historyPath}: could not create a pre-repair backup — ${MAX_ATTEMPTS} candidate paths at stamp ${stamp} ` +
+      `all already exist. Refusing to overwrite an existing pre-repair copy.`,
+  );
 }
 
 /** #2128 — the one-shot `recordedAtSeq` back-fill, for EVERY book `main()`
@@ -2404,6 +2540,13 @@ async function main() {
         `127.0.0.1:${lanPort}-${lanPort + AUTO_REBIND_RANGE - 1} (LAN HTTPS, incl. auto-rebind range) for a ` +
         `live server...`,
     );
+    const standingPorts = parseStandingPorts(process.env.ALLOW_STANDING_PORTS);
+    for (const line of [
+      formatStandingPortsSkippedLine(port, standingPorts),
+      formatStandingPortsSkippedLine(lanPort, standingPorts),
+    ]) {
+      if (line) console.log(line);
+    }
     const [httpNotRefused, lanNotRefused] = await Promise.all([
       probePortRangeRefused(port),
       probePortRangeRefused(lanPort),
@@ -2417,7 +2560,9 @@ async function main() {
           `refuse, not read as absent just because it missed the probe window, and a rebound server on any port ` +
           `in the auto-rebind range must refuse the same as one on the exact configured port). Stop the server ` +
           `on ${port}-${port + AUTO_REBIND_RANGE - 1} (and LAN HTTPS ${lanPort}-${lanPort + AUTO_REBIND_RANGE - 1} ` +
-          `if running), or point PORT/LAN_HTTPS_PORT elsewhere.`,
+          `if running), or point PORT/LAN_HTTPS_PORT elsewhere. If one of these ports is a known standing service ` +
+          `unrelated to Castwright (e.g. llama-swap on 8090), set ALLOW_STANDING_PORTS=<port>[,<port>...] for this ` +
+          `run to skip probing it.`,
       );
       process.exitCode = 1;
       return;

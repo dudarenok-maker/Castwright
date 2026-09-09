@@ -454,3 +454,35 @@ reassigned, so the clone was scored against the *previous* voice's reference
 (`{cleanMean 0.8388, pSevere 0.7852}` → clone at 0.750 → `severity: severe`).
 Filed as [#1969](https://github.com/dudarenok-maker/Castwright/issues/1969).
 Correct the register text when that lands.
+
+### Cross-language source clip measurement (Coqui-routed, 2026-08-01) — answers #1998's open acceptance bullet
+
+Issue [#1998](https://github.com/dudarenok-maker/Castwright/issues/1998) left one acceptance
+bullet open: "establish whether a language-matched reference clip materially recovers
+cross-language identity — measure, do not assume." This is **not a new measurement**: it
+was taken on-box in **Run 3 (2026-08-01)** of register row
+[A1 · fs-38 Wave 3](../testing/onbox-acceptance-register.md), as criterion **E-01** of the
+[Wave 3 run sheet](../testing/fs38-wave3-onbox-acceptance.md) §5 — a **Coqui-routed** clone
+derived and rendered against a Russian book fixture. It is recorded here because #1998's
+acceptance bullet is what it answers; the register remains the source of record. (An earlier
+draft of this section dated it 2026-09-04 and named no engine — both wrong.)
+
+| Source clip language | Rendered chapter language | ECAPA-cosine identity |
+|---|---|---|
+| English | Russian | **0.2321** |
+| Russian | Russian | **0.7824** |
+
+Cloning the same speaker from a Russian source clip and rendering the Russian chapter scores
+0.7824 against its own source (via ECAPA fidelity check), against 0.2321 for the English-sourced
+clone of the same speaker in the same chapter — a language-matched source clip largely
+preserves identity across the language boundary that an English-sourced clone loses.
+
+**Caveat that must travel with the 0.7824 figure:** the floor it is measured against is
+contaminated. The Russian source clip was itself a Qwen-*designed* voice, and Qwen's Russian
+voices cluster — the narrator voice scores 0.577 against that same Russian source. The
+margin above is real but narrower than the raw 0.7824 suggests; do not quote 0.7824 without
+this caveat.
+
+This is a source-clip-language effect, not a synth-time language effect — it is orthogonal
+to (and does not change) the `/synthesize` vs. `/synthesize-batch` request-language fix
+documented above.

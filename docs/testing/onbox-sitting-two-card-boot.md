@@ -67,7 +67,7 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 5. **(A8.5) 12/16 GB eGPU:** observe **no eviction** — analyzer + TTS coexist (set `GPU_SAFE_COEXIST_MB` if the detected total straddles the default 11000).
    - Result: **PASS (owner-confirmed 2026-08-27)** — no eviction observed, analyzer + TTS coexisted on the 12/16 GB box.
 
-### A2 · Capacity-aware GPU placement (plan 264) — step 9, step 3 (N-A)
+### A2 · Capacity-aware GPU placement (plan 264) — step 9, step 3 (N-A) — DISCHARGED and removed from the register 2026-09-08
 
 > **Criteria source:** [`../features/264-vram-aware-gpu-placement.md`](../features/264-vram-aware-gpu-placement.md) §"Manual acceptance walkthrough (owed on-box — the 'no OOM' bar)" at `:129-179`; header `:9-22`.
 >
@@ -77,11 +77,15 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 > coverage, per plan 264's own closing sentence. The plan's self-
 > contradiction (`S6` listed as both force-driven and not) was fixed
 > separately (Castwright#2559). This row's remaining scope is step 9 alone.
+>
+> **DISCHARGED 2026-09-08** (2-card-boot + Pinokio batch chain, #2950) —
+> item 6 below ran for real on both cards; row A2 removed from the register.
+> See `docs/testing/onbox-2card-pinokio-batch-results/step-1-a2.md`.
 
 6. **(A2.9 — #1730, 2-card only) Concurrent cross-card ops keep to their card:** with both cards up, run `design_voice` + `mint_variant` (and, if `ASR_DEVICE=cuda`, a `/transcribe` + `/embed`) concurrently so they land on **different** admitted cards. Observe: each op's entire run — load **and** forward — stays on its own card; no cross-card clobber, no OOM. (`GET /capacity` confirms the reservation per device.) This is the on-box confirmation of PR #1732 (re-resolved: merged 2026-07-19T22:44:02Z) still owed before the concurrent-multi-card flag flip. *Single-8 GB-card runs never hit this path — it is a 2-card-only check.*
-   - Result:
+   - Result: **PASS (2026-09-08)** — cold `design_voice`/`mint_variant` and a fully-cold concurrent pair both resolved atomically with no cross-card clobber and no OOM; one contention-driven `503 noCapacity` observed under real multi-tenant load, a clean typed refusal not a crash. The `ASR_DEVICE=cuda` half of step 9 was not exercised (this box defaults `ASR_DEVICE=cpu`), consistent with the walkthrough marking it conditional. Full evidence: `step-1-a2.md`.
 7. **(A2.3 — observe-only, N-A) eGPU fault-drop:** IF the eGPU ever drops off the CUDA bus on its own mid-run ("GPU is lost"), the in-flight op fails fast, its reservation releases, a toast fires, and it re-queues onto the 8 GB card. **Cannot be safely triggered on OcuLink** (add/remove is reboot-only; yanking the cable is a hard crash). Mark **Blocked / N-A** unless it happens on its own; the recovery path is unit-covered and not required for sign-off.
-    - Result:
+    - Result: **N-A** — did not happen on its own during this run; out of scope per the row's own instructions, not attempted.
 
 ### A3 · srv-57 Multi-GPU Wave 2 — ten checklist items (#1230)
 

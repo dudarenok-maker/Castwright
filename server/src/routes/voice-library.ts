@@ -63,7 +63,7 @@ import {
   voiceSamplePublicUrl,
 } from '../tts/voice-sample-cache.js';
 import { getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
-import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
+import { findBookByBookId, bookStateLanguage, bookStateLanguageOrNull } from '../workspace/scan.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock, withLibraryVoiceLock } from '../workspace/cast-lock.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
@@ -717,7 +717,7 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
        with whatever this returns, so a raw response silently downgrades the
        client's copy from the computed status to the persisted one. A
        version-stale-but-`ready` slot then reads `'ready'` on the client
-       instead of `'stale'`, and `cloneReadiness`'s rules 5/6 — gated on
+       instead of `'stale'`, and `cloneReadiness`'s rules 6/7 — gated on
        `slotStatus !== 'ready'` — stop firing. That is a false negative of
        exactly the class that killed rev 2, and the plan's own "Add
        transcript" flow triggers it: the CTA PATCHes, this response lands in
@@ -752,14 +752,14 @@ voiceLibraryRouter.patch('/:voiceUuid', async (req: Request, res: Response) => {
    early return.
 
    [R3] Why this does not reintroduce the loop the `failed` stamp exists to
-   prevent. `cloneReadiness`'s rule 4 (`slotStatus === 'failed'` ->
-   `derive-failed`) is ordered BEFORE rules 5/6 (`missing-master` /
+   prevent. `cloneReadiness`'s rule 5 (`slotStatus === 'failed'` ->
+   `derive-failed`) is ordered BEFORE rules 6/7 (`missing-master` /
    `no-transcript`) — see clone-readiness.ts. Once this route deletes the
    stamp, the predicate re-evaluates the UNDERLYING cause on the next
    check: a derive-failed voice with a blank transcript immediately reports
    `no-transcript` again, and the cast-time gate stays up with the CTA that
    actually fixes it. Only a failure whose cause isn't expressible in rules
-   5-6 (e.g. a transient sidecar OOM) clears to "ready to try" and can fail
+   6-7 (e.g. a transient sidecar OOM) clears to "ready to try" and can fail
    again on the next derive — that residue is real and is why the CTA is
    labelled "Retry derive", not "Fix"; a repeat failure simply re-stamps
    `failed`. The policy `clone-voice-resolver.ts:229-231` protects is that a
@@ -1714,10 +1714,34 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
          route. With no registry entry there is no sidecar word to compare
          the manifest against, so there is no mismatch to assert either way:
          skip the warning, exactly like the pre-#1953 behaviour, never 500. */
+      /* #1998 — `bookLanguage` is needed by BOTH provenance branches below
+         (designed-voice sidecar mismatch at #1953, cloned-voice `languageCode`
+         mismatch at #1998), so it stays here, outside either `if`, rather than
+         being re-derived inside each one. */
+      const bookLanguage = bookStateLanguage(located.state);
+      /* #1998 — the cloned-voice warning splits the two readers, taking
+         PRESENCE from the honest one and VALUE from the normalising one. Same
+         composition as chapter-splice.ts (:115 presence, :342 value); do not
+         collapse it back to a single reader.
+
+         Presence must come from `bookStateLanguageOrNull`, because absence
+         (missing key, null, empty, whitespace) is the "detection surrendered"
+         state, not English. `bookStateLanguage` defaults it to 'en', which
+         made the route claim a book was English when it had never said so and
+         advise a destructive re-clone.
+
+         The VALUE must still come from `bookStateLanguage`, because that
+         reader also NORMALISES, and `entry.languageCode` is always stored
+         normalised (:1220). Reading the raw `state.language` for the
+         comparison regressed exactly that way (PR #3033 review pass 2,
+         finding A): a book stored as "ru-RU", "RU" or " ru " no longer
+         matched a 'ru' clone, and since `sidecarLanguageName` normalises
+         internally, both sides rendered as "Russian" — so the user was told
+         their Russian clone mismatched their Russian book. */
+      const bookLanguageForClonedCheck = bookStateLanguageOrNull(located.state);
       let expectedSidecarLang: string | undefined;
       let designedManifest: { language?: string } | null = null;
       if (entry.provenance === 'designed') {
-        const bookLanguage = bookStateLanguage(located.state);
         try {
           expectedSidecarLang = sidecarLanguageName(bookLanguage);
         } catch {
@@ -1740,13 +1764,15 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
 
         const character = characters[charIndex];
 
-        /* #1933 — `clonedAdvisory` and `languageWarning` (declared together,
-           set inside their own respective provenance-scoped blocks below) are
-           mutually exclusive by construction: `clonedAdvisory` is only ever set
-           inside a `provenance === 'cloned'` branch, `languageWarning` only
-           inside a `provenance === 'designed'` one — an entry is never both —
-           so the two can share the single `warning` response field with no
-           collision to disambiguate. */
+        /* #1933/#1998 — `clonedAdvisory` and `languageWarning` share the
+           single `warning` response field. `clonedAdvisory` is only ever set
+           inside a `provenance === 'cloned'` branch (engine-readiness);
+           `languageWarning` is set inside EITHER provenance — designed
+           (#1953 sidecar mismatch) or cloned (#1998 `languageCode` mismatch)
+           — but never both at once because an entry is never both cloned
+           and designed. When a cloned voice triggers BOTH `clonedAdvisory`
+           AND `languageWarning`, the `??` below picks the advisory (the
+           engine-readiness message is the more actionable of the two). */
         let clonedAdvisory: string | undefined;
         let languageWarning: string | undefined;
 
@@ -1851,6 +1877,47 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
           }
         }
 
+        /* #1998 — sibling of the designed-voice warning above: a CLONED voice
+           whose source clip was recorded in a language different from the
+           book's renders at ~0.23 ECAPA cosine identity (vs ~0.60 same-
+           language — see #1998's own measurement table). Warn, do not block:
+           the owner's v1 decision is expectation-setting, not engine re-
+           routing. The comparison is CODE-vs-CODE (`entry.languageCode`
+           against the NORMALISED `bookLanguage`; `bookLanguageForClonedCheck`
+           is the presence guard only — see the split above), never
+           code-vs-sidecar-word:
+           a BCP-47 code is never equal to a human-readable sidecar name, so
+           a word-valued comparand would fire on every correctly-matched
+           assignment. That is a design rule for this comparison, NOT
+           something the paired mutations demonstrate — an earlier version
+           of this comment claimed mutation 2 pinned it, and it does not
+           (PR #3033 review pass 1, finding 6). `expectedSidecarLang` is
+           assigned only inside the `provenance === 'designed'` branch above,
+           so on THIS path it is permanently `undefined`: swapping the
+           comparand to it reddens on `'en' !== undefined`, never on the
+           code-vs-word distinction, which therefore goes unexercised.
+           Mutation 2 pins a different and real property — that the honest
+           reader gates presence, so an unset book language is not read as
+           English. */
+        if (entry.provenance === 'cloned') {
+          if (
+            entry.languageCode &&
+            bookLanguageForClonedCheck &&
+            entry.languageCode !== bookLanguage
+          ) {
+            let cloneLangName: string | undefined;
+            let bookLangName: string | undefined;
+            try { cloneLangName = sidecarLanguageName(entry.languageCode); } catch { /* unregistered — skip */ }
+            try { bookLangName = sidecarLanguageName(bookLanguage); } catch { /* unregistered — skip */ }
+            if (cloneLangName && bookLangName) {
+              languageWarning =
+                `"${character.name ?? characterId}"'s voice was cloned in ${cloneLangName}, but this ` +
+                `book is ${bookLangName} — the clone will sound less like the person it was ` +
+                `cloned from. Re-clone the voice in ${bookLangName} to fix it.`;
+            }
+          }
+        }
+
         /* Review I-4 — a prior DESIGNED voice's minted emotion `variants` are
            anchored to that base identity (qwen-<old-uuid>__<emotion>). Assigning
            a library voice swaps the base identity to qwen-<voiceUuid>, and
@@ -1901,9 +1968,10 @@ voiceLibraryRouter.post('/:voiceUuid/assign', async (req: Request, res: Response
            disagree. Order mirrors the write: qwen is unconditional, coqui is
            conditional. */
         const written: CloneEngine[] = shouldWriteCoquiSlot ? ['qwen', 'coqui'] : ['qwen'];
-        /* #1933 — `clonedAdvisory` and `languageWarning` are mutually exclusive
-           by construction (see their shared declaration comment above), so
-           there is no collision picking one over the other here. */
+        /* #1933/#1998 — `clonedAdvisory` wins when both are set for a cloned
+           voice (see their shared declaration comment above). For a designed
+           voice only `languageWarning` can be set; for a cloned voice either
+           or both, with the advisory taking priority. */
         const warning = clonedAdvisory ?? languageWarning;
         return res.status(200).json({ updated: 1, written, ...(warning ? { warning } : {}) });
       });

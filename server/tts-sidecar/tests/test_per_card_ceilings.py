@@ -112,7 +112,32 @@ def test_write_restart_breadcrumb_persists_card(tmp_path, monkeypatch):
     assert body["card"] == {"uuid": "GPU-1", "idx": 1}
     assert body["reason"] == "reserved VRAM"
     assert body["residentEngines"] == ["coqui"]
+    assert body["devices"] == []
     assert "ts" in body
+
+
+def test_write_restart_breadcrumb_persists_the_full_device_enumeration(tmp_path, monkeypatch):
+    """PR #3113 pass 3 — the Node-side auto-revert consumer needs a per-card
+    free-VRAM reading to pick a DIFFERENT card than the one that tripped, but
+    by the time it runs the sidecar that could answer a live /devices query
+    is the one that just exited. The full enumeration must be captured HERE,
+    before the process is gone, not just the tripped card's resident-engine
+    names."""
+    breadcrumb = tmp_path / ".run" / "last-restart-trip.json"
+    monkeypatch.setattr(main, "_RESTART_BREADCRUMB_PATH", str(breadcrumb))
+    both_cards = [
+        {"uuid": "GPU-0", "idx": 0, "name": "RTX 4070", "total_mb": 8188, "free_mb": 500},
+        {"uuid": "GPU-1", "idx": 1, "name": "RTX 5070 Ti", "total_mb": 16303, "free_mb": 12000},
+    ]
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: both_cards)
+    monkeypatch.setattr(main, "_resident_engines_by_card", lambda cards: {0: [{"engine": "qwen", "actual_card": 0}]})
+    main._write_restart_breadcrumb({"uuid": "GPU-0", "idx": 0}, "reserved VRAM")
+    import json
+    body = json.loads(breadcrumb.read_text(encoding="utf-8"))
+    # The OTHER card (idx 1, not the tripped one) must be present with its
+    # real free VRAM — this is exactly what selectRevertTarget needs to land
+    # qwen somewhere that actually has room.
+    assert body["devices"] == both_cards
 
 
 def test_write_restart_breadcrumb_never_raises_on_failure(tmp_path, monkeypatch):

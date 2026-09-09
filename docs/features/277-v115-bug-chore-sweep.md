@@ -904,8 +904,9 @@ actually be done.
 - **#1984**, **#2128** — live worktrees as of 2026-08-11. #1984 is at revision 7
   with rounds 5/6/7 all failing their gates and **scope growth awaiting owner
   sign-off**. Neither is touched by this sweep.
-- **#2068**, **#2054**, **#1600** — fs-38 Wave 3, which is **paused** with E-04
+- **#2068**, **#1600** — fs-38 Wave 3, which is **paused** with E-04
   failing and on-box at 16/60. They unpause with the wave or not at all.
+  (#2054 closed by PR #3014.)
 
 ### Sequencing
 
@@ -970,7 +971,8 @@ copied forward as-is. **Correction (found while auditing live worktrees for
 this update):** a separate, parallel on-box acceptance campaign (tracked by
 #2435, not this sweep's Group 8 list) ran waves 6 through 9 in this same
 window — PRs #2679 (wave 6, rows A19/A20/A24/A26/A31–A33), #2693 (wave 8,
-rows A34–A37), and #2658/#2664 (A46, for #2656) all merged 08-25 → 08-27.
+rows A34–A37, A34 since discharged and removed from the register), and
+#2658/#2664 (A46, for #2656) all merged 08-25 → 08-27.
 None of those waves' rows overlap this sweep's own tracked Group 8 items,
 which is why "zero sittings for these seven items" is accurate but "zero
 on-box sittings" is not — say the narrower claim, not the broader one.
@@ -1248,8 +1250,8 @@ re-decremented pending #2765's disposition (see Wave 2) — if #2765 is closed
 as duplicate rather than producing a second fix, #2582 drops out and the real
 total is 57.
 
-**Gated — paused wave, unchanged (2):** #2054, #1600 — fs-38 Wave 3 stays
-paused pending its own unpause decision.
+**Gated — paused wave, unchanged (1):** #1600 — fs-38 Wave 3 stays
+paused pending its own unpause decision. (#2054 closed by PR #3014.)
 
 ### Sequencing
 
@@ -1276,7 +1278,7 @@ paused pending its own unpause decision.
 4. **Wave 7 blocked** — park with a label, or collapse into one tracking
    issue? (Carried, unanswered, from Round 4.)
 5. **Wave 5** — is a GPU sitting available? Fourth round asking.
-6. **fs-38 Wave 3** — stays paused, or unpauses (#2054, #1600)?
+6. **fs-38 Wave 3** — stays paused, or unpauses (#1600)? (#2054 closed by PR #3014.)
 
 ## Invariants to preserve
 

@@ -8,11 +8,12 @@
 > Design of record: [`docs/superpowers/specs/2026-08-01-cast-character-identity-design.md`](../superpowers/specs/2026-08-01-cast-character-identity-design.md)
 > Plan of record: [`docs/superpowers/plans/2026-08-01-cast-character-identity.md`](../superpowers/plans/2026-08-01-cast-character-identity.md)
 > Regression plan: [`docs/features/278-cast-character-identity.md`](../features/278-cast-character-identity.md)
-> Register rows: [`onbox-acceptance-register.md` A22](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A23](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), and [A34](onbox-acceptance-register.md) (#2584/#2570 wrong-direction retirement fix, §10 below) — **B3 is discharged (2026-08-21)
-and A45 (2026-08-11); neither is in the register any more, and §7 and §9
-below are their records. Do not follow B3 or A45 to whatever now sits at
-those positions — both groups renumbered since (under the pre-#2599
-positional-ID rule; IDs are stable and never reused from 2026-08-27).**
+> Register rows: [`onbox-acceptance-register.md` A22](onbox-acceptance-register.md) (Wave 1, §§1-6 below), B3 (Wave 2, §7 below), [A23](onbox-acceptance-register.md) (Wave 3, §8 below), A45 (#2128 audio currency, §9 below), and A34 (#2584/#2570 wrong-direction retirement fix, §10 below) — **B3 is discharged (2026-08-21),
+A45 (2026-08-11), and A34 (2026-09-09, repair-and-retest chain #2903/#2435);
+none of the three is in the register any more, and §7, §9 and §10 below are
+their records. Do not follow B3, A45 or A34 to whatever now sits at those
+positions — groups renumbered since (under the pre-#2599 positional-ID rule;
+IDs are stable and never reused from 2026-08-27).**
 > Issue: [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040)
 
 ---
@@ -268,9 +269,9 @@ Result (roster otherwise intact — still 13 characters, no duplicate row, no ch
 Record what was observed, by whom, and when — here only; register row B3 was
 discharged on 2026-08-21 and no longer exists. An id that happens to match this run's non-deterministic analyzer output is a weaker result than a genuine mismatch that gets correctly recorded — if the ids come back unchanged, note whether the analyzer's raw output (before the remap) could be inspected to confirm the remap actually did something, rather than the model simply reproducing `mairin`/`coalfall-dragon` on its own. **Do not run the Wave-3 repair pass against this book as part of this acceptance run** — this section is scoped to the early remap alone; Wave 3 has its own section (§8) below.
 
-> **Wave-5 step 4, 2026-08-23 — register row B2 (current numbering; "B4" above
-> in this section's own then-current numbering) DISCHARGED, but against a
-> DIFFERENT fixture, not this section's re-analysis.** Per that step's own
+> **Wave-5 step 4, 2026-08-23 — register row B2 discharged** ([#2313](https://github.com/dudarenok-maker/Castwright/issues/2313), PR [#2317](https://github.com/dudarenok-maker/Castwright/pull/2317) — stage-1 cast names check; current
+> numbering; "B4" above in this section's own then-current numbering), but
+> against a DIFFERENT fixture, not this section's re-analysis. Per that step's own
 > issue instruction, the check ran against the committed short-chapter
 > fixture `server/src/__fixtures__/the-coalfall-commission.ru.md` (a fresh
 > import with no prior `cast-id-history.json` to merge against) rather than
@@ -281,7 +282,7 @@ discharged on 2026-08-21 and no longer exists. An id that happens to match this 
 > is specific to a re-analysis of *Заказ Коалфолла* against its existing
 > `cast-id-history.json` (a second/third pass merging into prior history),
 > which a fresh import has no code path to exercise. #2584 stays open,
-> tracked on its own issue, independent of register row B2's discharge. Full
+> tracked on its own issue, independent of discharged register row B2. Full
 > evidence: `docs/testing/onbox-wave5-results/step-4-b2.md`.
 
 ---
@@ -896,8 +897,16 @@ silently produce a confident wrong answer rather than an error:
 
 ## 10. #2584 fix (PR #2640) — wrong-direction retirement, code-level fix
 
-> Register row: A34 (Group A) in
-> [`onbox-acceptance-register.md`](onbox-acceptance-register.md).
+> **DISCHARGED 2026-09-09** (A34 repair-and-retest chain #2903/#2435) — the
+> `--apply` repair ran for real against *Заказ Коалфолла*'s live workspace
+> and a genuine full re-analysis (attempt 6 of the run) confirmed the
+> character's `cast.json` id holds `oduvan` (ASCII). Row A34 is discharged
+> and removed from the register. Full write-up:
+> [`onbox-a34-results/step-4-apply-retest.md`](onbox-a34-results/step-4-apply-retest.md).
+>
+> Former register row: A34 (Group A) in
+> [`onbox-acceptance-register.md`](onbox-acceptance-register.md) — no longer
+> in the register; §10.2/§10.2b below are its historical record.
 
 ### 10.1 Purpose & scope
 
@@ -921,7 +930,7 @@ The real, live-corrupted book: *Заказ Коалфолла* at `C:\AudiobookW
 1. The character's `cast.json` id comes back as `oduvan` (ASCII), not `одуван` (Cyrillic).
 2. If the id changed at the raw-analyzer-output layer, it is recorded in `cast-id-history.json`'s `supersededBy` map with the **correct direction** (fresh → established).
 
-This is the exact real reproduction this issue was filed from, still live on this box today — validating the fix requires a human or agent with real hardware access and a real analyzer (local Ollama, or Gemini). A full re-analysis through the real analyzer pipeline remains the only way to prove the fix end-to-end; nothing below substitutes for it, and register row A34 stays open until it runs.
+This is the exact real reproduction this issue was filed from, live on this box at the time of writing — validating the fix required a human or agent with real hardware access and a real analyzer (local Ollama, or Gemini). Row A34 was later discharged (2026-09-09) by §10.2b's repair-and-retest evidence below — the direct re-analysis path below did not itself satisfy the criterion (see the 2026-08-27 run note immediately below), which is why the repair-pass chain in §10.2b was needed.
 
 **RUN 2026-08-27 (wave 8) — real run performed; criterion 1 NOT met, root cause
 understood.** A genuine full manuscript re-analysis (confirmed real via
@@ -942,6 +951,53 @@ already-corrupted book. A hand-edit of the real `cast.json` to force the
 guarded precondition was considered and correctly declined by a permission
 gate; it was not worked around.
 
+### 10.2b Repair pass for books already damaged (#2903 chain) — evidence
+
+The 2026-08-27 run above establishes what the code-level fix can and cannot
+do: `stripEstablishedAsciiRewrites` stops a *new* wrong-direction retirement,
+and has no path to repair a book whose established id was already non-ASCII
+before PR #2640 shipped. Parent issue
+[#2903](https://github.com/dudarenok-maker/Castwright/issues/2903) is the
+repair-and-retest chain for that pre-existing damage, and its evidence is
+what row A34 was discharged by (2026-09-09, see the note atop §10). Its
+on-box evidence is recorded here:
+
+- [`onbox-a34-results/step-1-scope.md`](onbox-a34-results/step-1-scope.md) —
+  step 1, the real-workspace scope scan: 23 books scanned, **1** hit
+  (*Заказ Коалфолла*'s `oduvan` -> `одуван`), plus the 4 books that matched
+  the id shape for a legitimate, different reason and must not be touched.
+  Also the `cast.json.bak.*` cross-check that establishes `oduvan` and
+  `одуван` are the same character by name.
+- [`onbox-a34-results/step-2-implement.md`](onbox-a34-results/step-2-implement.md)
+  — step 2, the repair script itself
+  (`scripts/repair-a34-wrong-direction-ids.mjs`): detection gate, the
+  two-file repair, and why it reuses the server's own `retireCharacterId`
+  and the sibling script's `collectBooks`/`probePortRangeRefused` rather
+  than re-implementing any of them.
+- [`onbox-a34-results/step-3-dry-run.md`](onbox-a34-results/step-3-dry-run.md)
+  — step 3, the real dry run against `C:\AudiobookWorkspace`, with the
+  pre-repair copies of the one affected book's `cast.json`,
+  `cast-id-history.json` and `state.json` committed under
+  [`onbox-a34-results/backups/`](onbox-a34-results/backups/). Its own
+  pass-2/3 annotation records that a fresh dry run after those passes'
+  fixes now reports **27** books scanned, not 23 — a reporting change from
+  D1 (previously-dropped books are now enumerated), not a data change: the
+  same one confirmed pair and two report-only entries still stand.
+- [`onbox-a34-results/step-4-apply-retest.md`](onbox-a34-results/step-4-apply-retest.md)
+  — step 4, the real `--apply` run against `C:\AudiobookWorkspace` (byte-verified
+  SHA-256 backup taken first) and the re-test that discharged this row: a
+  genuine, ordinary full-manuscript re-analysis (no `fresh` flag, attempt 6
+  of the run) against the repaired book, confirming the character's
+  `cast.json` id holds `oduvan` (ASCII).
+
+**`--apply` ran for real on the workspace 2026-09-09** (see step-4 above) —
+row A34 is discharged and removed from the register. Note the committed
+backups are a manual git commit, not a substitute for the script's own
+on-disk backups — since the pass-1 review the script copies both files it
+touches to a millisecond-resolution `.bak.a34-<stamp>` (was a date-only stamp
+until a later review pass found a same-day retry could clobber the first
+run's backup) before writing either.
+
 ### 10.3 Code-level proof (PR #2640, shipped)
 
 - A real-shape unit test (`server/src/analyzer/roster-dedup.test.ts`, "#2584/#2570 real-shape regression") reproduces the reviewer's exact composed rewrite-table chain — `{"oduvan":"одуван","owdovan":"одуван"}` against a prior cast holding the established `oduvan` row — byte-identical to what was recorded on the real box's `cast-merges.json`, and drives it through both consuming functions (`remapFreshToPriorIds`, `applyRewriteToPriorCast`) with and without the fix, confirming it fails without `stripEstablishedAsciiRewrites` and passes with it.
@@ -950,6 +1006,6 @@ gate; it was not worked around.
 - `remap-fresh-to-prior.test.ts` (in `server/src/store/`, not `merge-analysis-cast.test.ts`) still separately proves the exact-name matcher itself handles the simple case unaided — a baseline, not the whole proof, since it doesn't exercise the real collision that made the matcher's own "already converged" guard skip.
 - `merge-analysis-cast.test.ts`'s F2 regression (reserved fold-bucket id never a name-fallback survivor via `mergeCore`) is untouched and still passes, since `mergeCore` itself is untouched by this fix.
 - The narrowly-scoped bolt-on from attempt 1 (`mergeCore` in `server/src/store/merge-analysis-cast.ts`) was introduced and reverted within this same PR's history (commits `90032fd6` then `2bd7b6ef`) — not, as an earlier draft of this section claimed, part of PR #2633's merge commit.
-- Only 2 of the 4 real call sites in `server/src/routes/analysis.ts` are independently asserted by route-level `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in `analysis.test.ts` — the two `cumulativeForRemap` sites feeding `remapFreshToPriorIds` (main-route and subset-route). The other 2 (`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same test runs but are not independently asserted: a revert of either to the bare `composeRewrites(...)` call (skipping the strip) still leaves the whole `analysis.test.ts` suite green, because their effect is currently masked by an unrelated mechanism, `refuseRetirementsOfLiveIds` — verified during round 5 (see the register's A34 entry for the same finding).
+- Only 2 of the 4 real call sites in `server/src/routes/analysis.ts` are independently asserted by route-level `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in `analysis.test.ts` — the two `cumulativeForRemap` sites feeding `remapFreshToPriorIds` (main-route and subset-route). The other 2 (`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same test runs but are not independently asserted: a revert of either to the bare `composeRewrites(...)` call (skipping the strip) still leaves the whole `analysis.test.ts` suite green, because their effect is currently masked by an unrelated mechanism, `refuseRetirementsOfLiveIds` — verified during round 5 (this same finding was also recorded on register row A34 while that row existed and in `docs/release-notes-next.md`; A34 itself has since been discharged and removed from the register).
 
 Defects NOT filed: none. The fix is narrowly scoped (one function's gating condition changed, four call sites re-plumbed to pass the fresh roster instead of a tier-membership set) and passes the full server test suite, including `analysis.test.ts`'s 222 tests.

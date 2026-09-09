@@ -156,7 +156,18 @@ function buildAuditionTexts(
 export async function auditionCentroid(
   character: AuditionCharacter,
   opts?: AuditionCentroidOpts,
-): Promise<{ centroid: Float32Array; embeddings: Float32Array[]; kind: 'audition' | 'too-short' } | null> {
+): Promise<{
+  centroid: Float32Array;
+  embeddings: Float32Array[];
+  kind: 'audition' | 'too-short';
+  /** A36 — true when the returned pool contains NO real in-book anchors:
+   *  either Phase B ran (anchors dropped for a bimodal split) or Phase A
+   *  started with zero anchors to begin with. The caller (aggregate.ts) uses
+   *  this as the structural signal to apply the wider, synthetic-only-pool
+   *  severity band (score.ts's SYNTHETIC_ONLY_CUTOFFS) instead of the normal
+   *  percentile cutoffs. False when real anchors are blended into the pool. */
+  syntheticOnly: boolean;
+} | null> {
   const { voiceName, modelKey, voice, hint, language, cloned } = character;
   const targetN = opts?.targetN ?? AUDITION_POOL_TARGET_N;
   const margin = opts?.margin ?? AUDITION_POOL_MARGIN;
@@ -233,11 +244,11 @@ export async function auditionCentroid(
   const result = buildCentroid(combinedPool, { minN: targetN });
 
   if (result.kind === 'too-thin') {
-    return { centroid: result.centroid, embeddings: combinedPool, kind: 'too-short' };
+    return { centroid: result.centroid, embeddings: combinedPool, kind: 'too-short', syntheticOnly: existingAnchors.length === 0 };
   }
 
   if (!(result.bimodal && existingAnchors.length > 0)) {
-    return { centroid: result.centroid, embeddings: combinedPool, kind: 'audition' };
+    return { centroid: result.centroid, embeddings: combinedPool, kind: 'audition', syntheticOnly: existingAnchors.length === 0 };
   }
 
   // ── Phase B: bimodal safety check on the blended pool ──────────────────
@@ -262,7 +273,7 @@ export async function auditionCentroid(
   // anchors+synthetic mixing failure mode this redesign introduces).
   const fallback = buildCentroid(newEmbeddings, { minN: targetN });
   if (fallback.kind === 'too-thin') {
-    return { centroid: fallback.centroid, embeddings: newEmbeddings, kind: 'too-short' };
+    return { centroid: fallback.centroid, embeddings: newEmbeddings, kind: 'too-short', syntheticOnly: true };
   }
-  return { centroid: fallback.centroid, embeddings: newEmbeddings, kind: 'audition' };
+  return { centroid: fallback.centroid, embeddings: newEmbeddings, kind: 'audition', syntheticOnly: true };
 }

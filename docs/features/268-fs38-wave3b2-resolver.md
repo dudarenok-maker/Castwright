@@ -354,6 +354,22 @@ only exercises the frontend/store seams.
 > itself (`deleteMasterClip`) are confirmed gone via `ls`, not
 > just asserted against a temp-workspace test fixture. Track alongside the
 > existing 267 on-box acceptance debt.
+>
+> **Wave 12 update (2026-09-06/07) — still not `stable`.** (a), (b) and (c)
+> above are now discharged on real hardware — register rows C-02 (revoked
+> voice fails loud), C-07 (base-model-bump re-derive), and C-10/C-11 (total
+> erasure confirmed via a wildcard disk sweep, not just a temp-workspace
+> assertion). The concurrency/atomicity set flagged as this plan's
+> highest-risk unproven behaviour (C-01, C-08, C-12, C-17) is also now
+> discharged. This plan does not get its own clean bill of health yet,
+> though: it shares
+> [`docs/testing/onbox-acceptance-register.md`](../testing/onbox-acceptance-register.md)
+> row A1 with 267/271, and that row still stands with 11 items owed overall
+> — most load-bearingly the **B-03** by-ear identity verdict (only the repo
+> owner can close it) and **B-11**, the live confirmation of the
+> per-routed-engine assign-readiness gate (#1933) that supersedes this
+> plan's own Invariant 7 assign-time guard and is still §7.1-blank. Stays
+> `active` until row A1 clears.
 
 ## Known limitations / owed on-box acceptance
 

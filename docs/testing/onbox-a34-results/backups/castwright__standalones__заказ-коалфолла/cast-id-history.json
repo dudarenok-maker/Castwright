@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "supersededBy": {
+    "mayrin": "mairin",
+    "coalfall": "coalfall-dragon",
+    "мэйрин": "mairin",
+    "коалфолл": "coalfall-dragon",
+    "widow-casper": "widow-kasper",
+    "brann": "brann-wire",
+    "berrin": "berrin-wire",
+    "lessom": "father-lessom",
+    "oduvan": "одуван",
+    "brann-weir": "brann-wire",
+    "berrin-weir": "berrin-wire"
+  },
+  "seq": 18,
+  "recordedAtSeq": {
+    "mayrin": 1,
+    "coalfall": 1,
+    "мэйрин": 2,
+    "коалфолл": 3,
+    "widow-casper": 4,
+    "brann": 13,
+    "berrin": 14,
+    "lessom": 9,
+    "oduvan": 12,
+    "brann-weir": 13,
+    "berrin-weir": 14
+  },
+  "recordedAtIso": {
+    "mayrin": "2026-08-11T04:36:43.849Z",
+    "coalfall": "2026-08-11T04:36:43.849Z",
+    "мэйрин": "2026-08-20T06:02:50.318Z",
+    "коалфолл": "2026-08-20T06:02:50.321Z",
+    "widow-casper": "2026-08-20T06:02:50.325Z",
+    "brann": "2026-08-21T07:47:44.963Z",
+    "berrin": "2026-08-21T07:47:44.970Z",
+    "lessom": "2026-08-21T07:25:12.314Z",
+    "oduvan": "2026-08-21T07:47:44.959Z",
+    "brann-weir": "2026-08-21T07:47:44.963Z",
+    "berrin-weir": "2026-08-21T07:47:44.970Z"
+  }
+}

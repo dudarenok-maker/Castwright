@@ -5,7 +5,7 @@
    rendered when one exists" is satisfiable by a single always-on button).
 
    `selectCloneReadinessVerdicts` is mocked — it has its own exhaustive
-   suite at `src/store/clone-readiness-selectors.test.ts` (rule 7 silence,
+   suite at `src/store/clone-readiness-selectors.test.ts` (rule 8 silence,
    the C1 regression, the characterHasSlot trap, etc.); this file's job is
    the CONSUMER: given a verdict, does the modal render the right row, the
    right CTA, and nothing else. */
@@ -135,6 +135,18 @@ describe('CloneReadinessGateModal', () => {
 
   it('missing-entry renders "Assign a different voice" and no other CTA', () => {
     mockVerdicts = [verdict({ characterId: 'c1', reason: 'missing-entry', engine: 'kokoro' })];
+    const store = makeStore({ characters: [char({ id: 'c1' })] });
+    render(
+      <Provider store={store}>
+        <CloneReadinessGateModal />
+      </Provider>,
+    );
+    const row = screen.getByTestId('clone-readiness-row-c1');
+    expect(ctaButtonsIn(row)).toEqual(['Assign a different voice']);
+  });
+
+  it('unresolvable-uuid renders "Assign a different voice" and no other CTA — reuses missing-entry\'s CTA per the repo owner\'s decision', () => {
+    mockVerdicts = [verdict({ characterId: 'c1', reason: 'unresolvable-uuid', engine: 'kokoro' })];
     const store = makeStore({ characters: [char({ id: 'c1' })] });
     render(
       <Provider store={store}>

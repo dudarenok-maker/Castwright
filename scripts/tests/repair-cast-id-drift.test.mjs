@@ -50,6 +50,7 @@ import {
   collectBakNameEntries,
   shouldRefuseApplyForUnreadableBooks,
   stampScannedBooks,
+  backupCastIdHistory,
 } from '../repair-cast-id-drift.mjs';
 
 // Simple stand-ins for the real server normalisers — deliberately NOT a
@@ -414,7 +415,7 @@ describe('snapshotsConsistent', () => {
 });
 
 describe('classifySnapshotEvidence (#2134)', () => {
-  test("'no-evidence': real rendered segments, zero snapshot entries — the exact register-row-A29 the-torment/lightning-dave shape", () => {
+  test("'no-evidence': real rendered segments, zero snapshot entries — the exact register-row-A22 the-torment/lightning-dave shape", () => {
     assert.equal(classifySnapshotEvidence({ segments: 67, snapshots: [] }), 'no-evidence');
   });
 
@@ -1121,7 +1122,7 @@ describe('planBookRepairs', () => {
     assert.match(plan.reportOnly[0].reason, /disagree across chapters/);
   });
 
-  test("#2134 round 2: a Tier B (id-shape) match with real rendered segments but NO characterSnapshots evidence under its own key STILL auto-records, annotated 'no-evidence' — the register-row-A29 the-torment shape", () => {
+  test("#2134 round 2: a Tier B (id-shape) match with real rendered segments but NO characterSnapshots evidence under its own key STILL auto-records, annotated 'no-evidence' — the register-row-A22 the-torment shape", () => {
     // 'the-torment' normalises the same as live 'the_torment' and carries
     // NO name evidence anywhere (no cacheNameIndex/bakNameIndex entry) —
     // this is the real workspace's actual the-torment shape: Tier B only
@@ -1139,7 +1140,7 @@ describe('planBookRepairs', () => {
     // Round 2 (independent review, 2026-08-05): 'no-evidence' is no longer
     // a veto — characterSnapshots is written only for a LIVE id at render
     // time, so its ABSENCE here means the narrator was substituted at
-    // render time (the actual A29 damage this pass exists to fix), not a
+    // render time (the actual A22 damage this pass exists to fix), not a
     // reason to distrust the alias. This id — real workspace evidence —
     // is one of the two aliases (with coalfall) that a round-1 veto would
     // have wrongly blocked, per the owner-accepted register row A30 write.
@@ -1162,7 +1163,7 @@ describe('planBookRepairs', () => {
     assert.equal(plan.autoRecord[0].snapshotEvidence, 'no-evidence');
   });
 
-  test("#2134 round 2: a Tier A (name) match with real rendered segments but no characterSnapshots evidence ALSO auto-records, annotated 'no-evidence' — the register-row-A29 lightning-dave shape", () => {
+  test("#2134 round 2: a Tier A (name) match with real rendered segments but no characterSnapshots evidence ALSO auto-records, annotated 'no-evidence' — the register-row-A22 lightning-dave shape", () => {
     // 'lightning-dave' matches via an unambiguous CACHE name ("Lightning
     // Dave" == live "Lightning Dave") — the real workspace's actual
     // lightning-dave shape is Tier A (dry-run evidence string: `analysis
@@ -2777,12 +2778,12 @@ describe("buildOrphansFromSegments (#2093 residual 6; #2107 widened by owner dec
     assert.equal(orphans.size, 0);
   });
 
-  test("CRITICAL (#2107, widened by owner decision): an id resolving via 'normalised-id' is now an orphan too — register row A29's the-torment/lightning-dave real-workspace counter-example", () => {
+  test("CRITICAL (#2107, widened by owner decision): an id resolving via 'normalised-id' is now an orphan too — register row A22's the-torment/lightning-dave real-workspace counter-example", () => {
     // A narrower first version of this fix kept 'normalised-id' out of
     // orphans, reasoning it can't depend on the mutable supersededBy table
     // so it can't post-date the render. Independent review found that
     // proves only that no RENAME happened, not that the rendered bytes are
-    // correct — register row A29 records a real case where a
+    // correct — register row A22 records a real case where a
     // 'normalised-id' match was rendered BEFORE Wave 1's resolver existed
     // at all, substituting the narrator regardless of tier. The owner
     // decided: over-reporting is the safe failure direction for a one-shot
@@ -3230,5 +3231,87 @@ describe("formatNotYetAnalysedLine (round 4 review, 2026-08-05) — pins the ope
 
   test('a zero count still renders (defensive — main() only calls this when notYetAnalysedBooks.length is truthy, but the formatter itself makes no such assumption)', () => {
     assert.match(formatNotYetAnalysedLine(0), /: 0$/);
+  });
+});
+
+describe('backupCastIdHistory (PR #3057 review pass 2 — the sibling script incidental finding: this function carried the identical date-only-stamp + plain-copyFileSync defect that was just fixed in repair-a34-wrong-direction-ids.mjs\'s backupBeforeApply)', () => {
+  test('returns null and copies nothing when the source does not exist', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'id-drift-nobak-'));
+    try {
+      const missing = path.join(tmp, 'cast-id-history.json');
+      assert.equal(backupCastIdHistory(missing), null);
+      assert.equal(fs.existsSync(`${missing}.bak.id-drift-${new Date().toISOString().slice(0, 10)}`), false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  // The finding itself: a second run on the same day must not destroy the
+  // first run's pre-repair copy. Before this fix, the date-only stamp made
+  // every same-day retry collide on the exact same backup path, and the
+  // plain copyFileSync then silently overwrote the first run's genuine
+  // pre-repair snapshot with whatever the (possibly half-repaired) second
+  // run's source file held.
+  test('a same-day retry does not destroy the first run\'s pre-repair copy', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'id-drift-retry-'));
+    try {
+      const historyPath = path.join(tmp, 'cast-id-history.json');
+      const preRepair = { supersededBy: { from: 'to' } };
+      fs.writeFileSync(historyPath, JSON.stringify(preRepair));
+
+      const first = backupCastIdHistory(historyPath);
+      assert.ok(first, 'first run makes a backup');
+      assert.deepEqual(JSON.parse(fs.readFileSync(first, 'utf8')), preRepair);
+
+      // Simulate run 1 dying part-way through: the source is now half-repaired.
+      const halfRepaired = { supersededBy: {} };
+      fs.writeFileSync(historyPath, JSON.stringify(halfRepaired));
+
+      const second = backupCastIdHistory(historyPath);
+      assert.ok(second, 'the retry also makes a backup');
+      assert.notEqual(second, first, 'the retry must land at a distinct path, never the first run\'s path');
+
+      assert.deepEqual(
+        JSON.parse(fs.readFileSync(first, 'utf8')),
+        preRepair,
+        "the FIRST run's pre-repair copy must still hold the original content after a same-day retry",
+      );
+      assert.deepEqual(JSON.parse(fs.readFileSync(second, 'utf8')), halfRepaired);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  // A forced exact-timestamp collision (simulated via a deps.fs stub that
+  // throws EEXIST once) proves the retry-on-collision path itself, not just
+  // that two calls a few milliseconds apart happen to land on different
+  // stamps. Drives the real backupCastIdHistory, not a reimplementation.
+  test('an exact stamp collision retries to a distinct path instead of overwriting', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'id-drift-collide-'));
+    try {
+      const historyPath = path.join(tmp, 'cast-id-history.json');
+      fs.writeFileSync(historyPath, JSON.stringify({ pre: true }));
+
+      let attempts = 0;
+      const fakeFs = {
+        existsSync: fs.existsSync,
+        copyFileSync: (src, dest, flags) => {
+          attempts += 1;
+          if (attempts === 1) {
+            const err = new Error('EEXIST: file already exists');
+            err.code = 'EEXIST';
+            throw err;
+          }
+          fs.copyFileSync(src, dest, flags);
+        },
+      };
+
+      const backupPath = backupCastIdHistory(historyPath, { fs: fakeFs });
+      assert.ok(backupPath, 'succeeds after retrying past the simulated collision');
+      assert.equal(attempts, 2, 'retried exactly once after the simulated EEXIST');
+      assert.deepEqual(JSON.parse(fs.readFileSync(backupPath, 'utf8')), { pre: true });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

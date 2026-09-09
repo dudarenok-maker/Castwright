@@ -157,18 +157,29 @@ function baseSubtag(language?: string | null): string {
   return (language ?? '').toLowerCase().split('-')[0];
 }
 
-/** Per-language ASR `maxWer` override (#1084 scaffold). Returns the configured
-    value ONLY when an operator has explicitly set this language's knob (env or
-    app override); otherwise undefined, so the global `maxWer` (including its own
-    override) applies. The per-language knobs default to the global value, so
-    behaviour is unchanged until the owed on-box calibration tunes them. */
+
+/** Per-language ASR `maxWer` override (#1084 scaffold). An operator's explicit
+    env/app override for this language always wins. Next, an explicit
+    env/app override on the GLOBAL `qa.asr.maxWer` knob wins too — otherwise
+    an operator's `SEG_ASR_MAX_WER` change stops reaching es/fr/de/ru the
+    moment a language gets its own calibrated knob. Absent either override,
+    the per-language knob's default applies whenever the global knob is
+    untouched, so calibration takes effect without requiring an operator to
+    also set an env var. A language with NO registry knob at all (never
+    calibrated, e.g. zh/ja per D2) returns undefined at the `!knob` guard
+    below, before any of this — it cascades to the global `maxWer` (including
+    its own live override) the same way an uncalibrated language would. */
 function perLanguageMaxWer(language?: string | null): number | undefined {
   const lang = baseSubtag(language);
   if (!lang) return undefined;
   const knob = allKnobs().find((k) => k.key === `qa.asr.maxWer.${lang}`);
   if (!knob) return undefined;
   const state = resolveKnob(knob);
-  return state.source === 'default' ? undefined : (state.effective as number);
+  if (state.source !== 'default') return state.effective as number;
+  const globalKnob = allKnobs().find((k) => k.key === 'qa.asr.maxWer');
+  if (!globalKnob) return undefined;
+  if (resolveKnob(globalKnob).source !== 'default') return undefined;
+  return knob.default as number;
 }
 
 export function resolveAsrThresholds(

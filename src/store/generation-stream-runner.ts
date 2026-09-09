@@ -421,9 +421,15 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
       }
       /* voice-not-designed and cloned-voice-broken are both deterministic
          per-book cast-config issues, not stochastic infra failures — the old
-         chapter_awaiting_fallback_confirm park voice-not-designed replaces
-         (#1263) always toasted immediately rather than waiting for the
-         srv-11 streak breaker to trip, so restore that same visibility here.
+         #1263 fail-fast that produced voice-not-designed always toasted
+         immediately rather than waiting for the srv-11 streak breaker to
+         trip, so restore that same visibility here. That fail-fast was
+         removed from generation.ts by #3059 as provably unreachable — no
+         server path currently emits voice-not-designed today — but this
+         handling (and the taxonomy plumbing behind it) is kept deliberately
+         rather than deleted, since #3059's own review named a live scenario
+         where the fail-fast gets restored (see
+         server/src/tts/engine-language-coverage.guard.test.ts's header).
          cloned-voice-broken (fs-38 Wave 3b2 T8) joins it for the same reason:
          a cloned voice can't silently render as someone else, so the user
          must see it right away rather than after 3 streak-breaker failures.

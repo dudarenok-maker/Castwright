@@ -166,7 +166,8 @@ check fails on a real dependency gap.
 > Unit tests pin the wiring, but **whether CUDA is genuinely used cannot be
 > proven off-box**: get_available_providers() reports CUDA whether or not any
 > session uses it, which is exactly what hid this. Criteria 1 and 2 still need
-> a real load here — row A28 is discharged (2026-08-31); row A29 stays owed —
+> a real load here — row A28 is discharged (2026-08-31); row A29 is discharged
+> (2026-09-07, retired, not reused) —
 > read the provider off a live Kokoro, not off the available-providers list.
 >
 > **A CPU session here is not automatically this criterion failing (#2631
@@ -262,8 +263,9 @@ GPU-provider check would have measured the other lane's venv, not this
 one — worthless evidence. A structural box-contention limitation, distinct
 from the already-filed #2534 CUDA13/cuDNN9 gap.
 **Run by:** claude (wave-4 step 5c, Castwright#2561). **Date:** 2026-08-21.
-**Disposition:** Register row A29 (renumbered from A39 this wave) stays
-STILL OWED — partially run. Full evidence:
+**Disposition:** Register row **A29 is discharged** (2026-09-07, retired, not
+reused; renumbered from A39 this wave) — at this point in the chain it stayed
+STILL OWED, partially run. Full evidence:
 `docs/testing/onbox-wave4-results/step-5c-a40.md`.
 
 > **2026-08-23 (Castwright#2621) — STILL OWED, blocked by box-wide sidecar
@@ -282,6 +284,24 @@ STILL OWED — partially run. Full evidence:
 > `LOCAL_TTS_PORT`'s per-worktree value. Evidence:
 > `docs/testing/onbox-wave5-results/step-ort-a-a37-a38.md`. Run by: claude
 > (Castwright#2621).
+
+> **2026-09-06 (chain #2913 retry, Castwright#2916/#2914/#3015) — one datum
+> retired, Qwen3 install click-through still not run.** #2632's per-worktree
+> `LOCAL_TTS_PORT` fix genuinely closes the box-wide port-contention class
+> that made wave-4 step 5c's and wave-5's Kokoro-provider checks
+> UNREACHABLE above: this worktree's sidecar bound its own assigned `:9080`,
+> a real in-app Kokoro install + load ran against it, and `GET /health`'s
+> `devices.kokoro` (read from the live ONNX session's own providers, not
+> `get_available_providers()`) reported `"cuda"` — proof the isolated venv's
+> GPU runtime works end to end once a worktree can actually reach its own
+> sidecar. That retires the port-contention *reason* stated in §4.3 above,
+> but does not discharge this row: Qwen3-TTS was already installed from this
+> worktree's own bootstrap, so the Install action never rendered and no
+> fresh `pip install` ran — criterion 2 (a real Install click, watched for
+> `WinError 5`) remains genuinely untested. Full evidence:
+> `docs/testing/onbox-a29-results/step-1-retry.md`. Redo filed separately,
+> chain Castwright#2913 → #3020 → #3019. Run by: claude
+> (Castwright#2916/#2914).
 
 ---
 
@@ -394,14 +414,28 @@ shows the second (immediate, no-boot-needed) outcome.
 
 ### 6.3 Result
 
-**`reqHash` branch taken (`noop` or `pip-in-place`):** _(fill in)_
-**`pip check` immediately post-Update:** _(fill in — if `noop`, record "unchanged,
-by design" rather than treating a still-broken `pip check` as a failure)_
+**`reqHash` branch taken (`noop` or `pip-in-place`):** `pip-in-place` —
+the throwaway spans v1.13.0→v1.15.0, many releases apart, so `reqHash`
+had genuinely changed by the time Update ran.
+**`pip check` immediately post-Update:** clean — `No broken requirements
+found.`, with no server ever having started; `pip check` was reproduced
+BROKEN at the pre-fix v1.13.0 baseline first, so this is Update's own
+`pip-in-place` write, not a pre-existing clean state.
 **If `noop`: marker + clean `pip check` observed at next server boot instead:**
-_(fill in)_
-**Qwen3 install result (WinError 5 present/absent):** _(fill in)_
-**`install.js` pass (fresh install) outcome:** _(fill in)_
-**Run by:** _(fill in)_ **Date:** _(fill in)_ **Platform:** _(fill in)_
+N/A for this run (Update took `pip-in-place`, not `noop`) — but observed
+anyway: `ensureOrtMarker` ran at the next boot and itself reported `noop`,
+since Update's own `pip-in-place` step had already fixed the install and
+left nothing for the self-heal to do. `pip check` stayed clean before and
+after boot. See `ort-ensure-marker.test.ts` for the healing branches' own
+coverage; this run does not exercise them.
+**Qwen3 install result (WinError 5 present/absent):** absent — clean load
+(`{"status":"ready"}`, no `WinError5` anywhere in the sidecar log).
+**`install.js` pass (fresh install) outcome:** clean — `No broken
+requirements found.` on a second, separate throwaway, `pip-in-place`-shaped.
+**Run by:** claude (2-card-boot + Pinokio batch chain, #2950, step 6)
+**Date:** 2026-09-08 **Platform:** Windows, Pinokio-managed throwaway installs
+(`castwright-e7-throwaway`, `castwright-e7-fresh`) — full evidence:
+`docs/testing/onbox-2card-pinokio-batch-results/step-6-e7.md`.
 
 ---
 
@@ -780,13 +814,15 @@ _(Update as each remaining criterion runs.)_
   2026-08-20, re-check 2026-08-21 wave-4 step 8, then STILL OWED through two more
   root-cause narrowings on 2026-08-23).
   Wave-3 run: marker/pip-check mechanics pass; GPU provider check fails (CUDA 12.4 vs. CUDA 13.x/cuDNN 9.x gap, #2534 blocker). Wave-4 re-run (after PR #2576 resolved the blocker): re-ran the GPU-provider check against fixed pin, still fails but on a new root cause — `onnxruntime-gpu` 1.26.0 requires `nvidia-cudnn-cu12~=9.0` via optional `[cudnn]` extra, never requested by `install-ort.mjs`. Follow-up filed: #2600. 2026-08-31: `install-ort.mjs` gained the missing `cufft`/`cuda-runtime` pins and a corrected, torch-line-matched cuDNN pin (`~=9.19.0`) — a real Kokoro CUDA load now succeeds end-to-end on this box. See onbox-acceptance-register.md A28 row (now retired) for full details and evidence.*
-- Criterion 2 — the reported bug, in-app Qwen3 install (A29): **STILL OWED — partially run.** Clicking
-  Install on Qwen3-TTS Base (0.6B) in Model Manager completed cleanly with no
-  `WinError 5`, but follow-on Kokoro GPU-provider check unreachable on this box
-  due to port contention (distinct from #2534); see
-  `docs/testing/onbox-wave4-results/step-5c-a40.md`.
+- Criterion 2 — the reported bug, in-app Qwen3 install (A29): **DISCHARGED
+  2026-09-07.** Re-ran the exact procedure against the merged fix in a fresh
+  worktree: confirmed Qwen3-TTS genuinely absent beforehand, clicked Install
+  for real, install completed cleanly with no `WinError 5`. A29 is retired
+  from the register (allocate-once, same precedent as A28/A36). See
+  `docs/testing/onbox-a29-results/step-3-post-fix-verify.md`.
 - Criterion 3 — self-heal: **Discharged 2026-08-07.**
-- Criterion 4 — Pinokio update path (E7): owed.
+- Criterion 4 — Pinokio update path (E7): **DISCHARGED 2026-09-08.** See §6.3
+  above and `docs/testing/onbox-2card-pinokio-batch-results/step-6-e7.md`.
 - Criterion 5 — AMD box: blocked, no hardware.
 - Criterion 6 — clobbered box (formerly A38, now removed): **DISCHARGED,
   2026-08-23 (§8.6).** Re-verified against a full copy of the real
