@@ -567,9 +567,12 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > Коалфолла*'s live workspace (byte-verified backup first) and re-tested the
 > row's actual criterion — a genuine, ordinary full-manuscript re-analysis
 > (no `fresh` flag) against the repaired book. Result: the character's
-> `cast.json` id came back `oduvan` (ASCII), not `одуван` (Cyrillic), and
-> held under a second confirming pass — the row's exact criterion, met with
-> real evidence, no human judgment outstanding. Full write-up:
+> `cast.json` id came back `oduvan` (ASCII), not `одуван` (Cyrillic) —
+> the row's exact criterion, met with real evidence, no human judgment
+> outstanding (attempt 6 of the run; attempt 5 was a self-inflicted `fresh`
+> detour that briefly re-inflicted the defect, fully recovered via the
+> repair script itself before attempt 6 confirmed the real criterion). Full
+> write-up:
 > `docs/testing/onbox-a34-results/step-4-apply-retest.md`. Per the
 > 2026-08-22 discharge ruling, the row is removed rather than kept
 > annotated. **A34 is retired, not reused** (allocate-once, same precedent

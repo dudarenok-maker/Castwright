@@ -899,9 +899,9 @@ silently produce a confident wrong answer rather than an error:
 
 > **DISCHARGED 2026-09-09** (A34 repair-and-retest chain #2903/#2435) — the
 > `--apply` repair ran for real against *Заказ Коалфолла*'s live workspace
-> and a genuine full re-analysis confirmed the character's `cast.json` id
-> holds `oduvan` (ASCII), across two confirming passes. Row A34 is
-> discharged and removed from the register. Full write-up:
+> and a genuine full re-analysis (attempt 6 of the run) confirmed the
+> character's `cast.json` id holds `oduvan` (ASCII). Row A34 is discharged
+> and removed from the register. Full write-up:
 > [`onbox-a34-results/step-4-apply-retest.md`](onbox-a34-results/step-4-apply-retest.md).
 >
 > Former register row: A34 (Group A) in
@@ -986,9 +986,9 @@ on-box evidence is recorded here:
 - [`onbox-a34-results/step-4-apply-retest.md`](onbox-a34-results/step-4-apply-retest.md)
   — step 4, the real `--apply` run against `C:\AudiobookWorkspace` (byte-verified
   SHA-256 backup taken first) and the re-test that discharged this row: a
-  genuine, ordinary full-manuscript re-analysis (no `fresh` flag) against the
-  repaired book, confirming the character's `cast.json` id holds `oduvan`
-  (ASCII) across two confirming passes.
+  genuine, ordinary full-manuscript re-analysis (no `fresh` flag, attempt 6
+  of the run) against the repaired book, confirming the character's
+  `cast.json` id holds `oduvan` (ASCII).
 
 **`--apply` ran for real on the workspace 2026-09-09** (see step-4 above) —
 row A34 is discharged and removed from the register. Note the committed
