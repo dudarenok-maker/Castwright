@@ -1,10 +1,12 @@
 # A34 step 4 — backup, apply the repair for real, re-test the fix
 
-Register row A34 (#2584, #2040), parent #2903, chain issue #2906.
+Former register row A34 (discharged and removed 2026-09-09; #2584, #2040),
+parent #2903, chain issue #2906.
 
-**Status: repair applied and verified. Re-test NOT completed — blocked by
-environment instability on this box (see below). Recorded as owed, not
-silently skipped.**
+**Status: repair applied and verified; re-test CONFIRMED (attempt 6,
+2026-09-09) after four attempts blocked by environment instability and a
+fifth that hit a self-inflicted detour — see "Result (final)" below. Row A34
+was discharged by this result.**
 
 ## Precondition — read step 3's dry-run evidence
 
