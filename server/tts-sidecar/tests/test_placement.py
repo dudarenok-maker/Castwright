@@ -135,6 +135,41 @@ def test_prefers_roomier_device():
     run_case(body())
 
 
+# #3061 review N6 — `admit()` picked up a `preferred` parameter mirroring
+# `_resolve_admission`'s (`reservation()`'s) ADVISORY sibling, restoring the
+# parity the file's own docstring (on `admit()`, just above `resident =
+# self.is_resident(engine)`) claims: an advisory decision function must not
+# disagree with the binding one it mirrors. `admit()` has no production
+# caller today, which is exactly why nothing would have noticed the
+# parameter's absence rot silently — see test_starved_qwen_admits_after_
+# coqui_is_evicted's docstring for the same "admit() pins the seam, the
+# route test pins the wire" split.
+def test_admit_preferred_overrides_best_fit_when_it_fits():
+    async def body():
+        # Unconstrained best-fit would pick cuda:0 (much roomier). A
+        # `preferred="cuda:1"` hint that still fits must win instead — same
+        # rule `_resolve_admission`'s `try_hold`-restricted branch applies.
+        devices = [dev(index=0, total=24000, free=18000), dev(index=1, total=16000, free=7000)]
+        a = await make(devices, 4000).admit("coqui", "xtts_v2", {}, False, True, preferred="cuda:1")
+        assert a["device"] == "cuda:1"
+        return _RAN
+
+    run_case(body())
+
+
+def test_admit_preferred_falls_back_when_hinted_device_does_not_fit():
+    async def body():
+        # The hinted device (cuda:1) cannot fit the peak; unconstrained
+        # best-fit must still find cuda:0 — the hint degrades to ordinary
+        # placement rather than reporting noCapacity.
+        devices = [dev(index=0, total=24000, free=18000), dev(index=1, total=16000, free=2000)]
+        a = await make(devices, 4000).admit("coqui", "xtts_v2", {}, False, True, preferred="cuda:1")
+        assert a["device"] == "cuda:0"
+        return _RAN
+
+    run_case(body())
+
+
 def test_cheap_engine_falls_back_to_cpu():
     async def body():
         a = await make([dev(free=200)], 1200).admit("kokoro", None, {}, cpu_capable=True, heavy=False)

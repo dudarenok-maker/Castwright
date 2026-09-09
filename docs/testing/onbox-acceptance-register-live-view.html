@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">48</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">49</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->33<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->34<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->1<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">33 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">34 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -730,6 +730,22 @@
         <p class="src">single 8 GB GPU card, Qwen base17 weights, Qwen VoiceDesign 1.7B model, real sidecar, Kokoro resident for the third and fourth criteria · <a href="https://github.com/dudarenok-maker/Castwright/issues/2752">#2752</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/2790">PR #2790</a>, reworded/extended by <a href="https://github.com/dudarenok-maker/Castwright/issues/2809">#2809</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/2810">PR #2810</a> · no separate run sheet · moderate — concurrent-load/eviction scenarios + VRAM observation, plus one forced-contention run for the lock-leak criterion</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">A106</span><span class="iname">X-Device-Hint lazy Coqui derive request signaling</span><span class="risk">2-card boot (8 GB + 16 GB), Coqui XTTS NOT yet resident (cold-load), no COQUI_DEVICE pin</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>A real chapter render from a server nobody has customized via Advanced Settings, on a book with a <b>designed</b> Coqui voice whose <code>.pt</code> artifact is missing. Only the lazy Coqui derive — the designed-voice self-heal in <code>resolveDesignedVoicesForChapter</code> (<code>server/src/tts/clone-voice-resolver.ts</code>) — sends the hint; the cloned-voice resolver never does, and Qwen ignores the header entirely. The single POST that carries it is <code>/xtts/clone-voice</code> (<code>deriveEngineArtifact</code>, <code>server/src/tts/derive-engine-artifact.ts:145-147</code>), never <code>/synthesize</code>. Against an already-resident Coqui, or under a <code>COQUI_DEVICE</code> pin, the hint is a documented no-op (<code>main.py:5183-5187</code>, <code>:11994-11998</code>) — the prerequisite above is the state in which the hint can actually do anything.</p>
+        <p><b>There is no log line for this on the success path.</b> <code>_parse_device_hint</code> and the admission path it feeds (<code>_resolve_admission</code>/<code>reservation()</code>) log nothing when a hint is honoured; the only <code>log.warning</code> calls (<code>main.py:4164/4172/4180/4183</code>) fire on the four <i>rejection</i> paths (oversized header, unresolved uuid, non-device-key value, unparsable value). And the hint does <b>not</b> "hint Coqui off Qwen's card" — <code>try_hold</code>/<code>best_fit</code> already pick the roomiest card, so on this box, where <code>cuda:1</code> is the 16 GB card, an <i>unhinted</i> derive can land there anyway, and a hint can equally park the derive on the exact card Qwen is generating on when that card merely fits (the corrected comment at <code>clone-voice-resolver.ts:906-916</code> is the authority here, not this row's earlier wording). Confirm the mechanism only via the run sheet's discriminating placement criterion, which forces <code>cuda:0</code> to be the momentarily roomier card so a hinted vs. unhinted derive provably diverge — VRAM/log inspection under the box's normal (<code>cuda:1</code>-favoring) state proves nothing, since an unhinted derive lands on <code>cuda:1</code> there too.</p>
+        <ul>
+          <li>Header-parse diagnostic — no log line exists; see the run sheet for the one-line temporary instrumentation needed to observe the header directly.</li>
+          <li>Discriminating GPU1 placement — with the VRAM state constructed so <code>cuda:0</code> is momentarily roomier, the derive lands on GPU1 with the hint and on GPU0 without it.</li>
+          <li>Unsatisfiable-hint fallback — a full GPU1 still lets the derive land on GPU0, no stall, no silent voice substitution.</li>
+          <li>Operator-pin override — a <code>tts.coqui.device</code> pin still wins over the hint.</li>
+          <li>Stale-device-list harmlessness — a cache that still remembers a since-removed idx-1 card costs nothing.</li>
+        </ul>
+        <p class="src">the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink — the single-card boot emits no hint at all, so nothing here reproduces there), real Qwen and Coqui/XTTS weights, real sidecar, a book with at least one character on a <b>designed</b> Coqui voice whose artifact has been deleted, <code>COQUI_DEVICE</code> cleared (this box's standing policy otherwise pins it to <code>cuda:1</code>). Also: for Criteria 2, 3, and 5 of the run sheet (not 1 or 4), <code>QWEN_DEVICE</code> must be temporarily set to <code>cuda:0</code> instead of the box's own standing <code>cuda:1</code> pin, restored only once the whole sitting is done — see the run sheet's Setup step 5 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3058">#3058</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/3061">PR #3061</a> · run sheet <code>docs/testing/device-hint-placement-onbox-acceptance.md</code> · moderate-to-high — a real chapter render with a deleted <code>.pt</code> artifact, temporary log instrumentation, a VRAM-fill scenario to construct the discriminating placement band (the fill target is now computed live from the box's own measured <code>peak</code> and <code>GPU_RESERVE_MB</code>, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the run sheet's pin/stale-cache scenarios</p>
+      </div>
+    </details>
+
 
 </section>
 
