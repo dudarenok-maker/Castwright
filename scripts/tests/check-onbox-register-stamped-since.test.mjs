@@ -85,6 +85,18 @@ test('checkStampedSince: content changed AND counter differs (higher) -> passes'
   assert.deepEqual(checkStampedSince({ workingHtml, baselineHtml }), []);
 });
 
+test('checkStampedSince: content changed, counter moved UP but nonce unchanged (hand-bumped) -> fails with hand-edit message', () => {
+  const workingHtml = page(6, 'nAAAAAA', '<p>changed</p>');  // counter 5→6, but nonce stayed nAAAAAA
+  const baselineHtml = page(5, 'nAAAAAA', '<p>original</p>');
+  const errors = checkStampedSince({ workingHtml, baselineHtml });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /hand-edited counter/i);
+  assert.match(errors[0], /5 → 6/);
+  assert.match(errors[0], /npm run stamp:publish-token/);
+  // Verify this message is distinct from the legitimate higher-counter message
+  assert.doesNotMatch(errors[0], /BEHIND/);
+});
+
 test('checkStampedSince: content changed, counter is BEHIND (lower than baseline) -> fails with distinct "behind" message', () => {
   const workingHtml = page(16, 'nBBBBBB', '<p>changed</p>');
   const baselineHtml = page(17, 'nAAAAAA', '<p>original</p>');

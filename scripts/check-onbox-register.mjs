@@ -608,6 +608,13 @@ export function checkStampedSince({ workingHtml, baselineHtml }) {
         '`npm run stamp:publish-token` — never hand-edit the number — then commit the result.',
     ];
   }
+  if (w.n > b.n && w.nonce === b.nonce) {
+    return [
+      `Publish token: the counter moved (${b.n} → ${w.n}), but the nonce stayed the same. ` +
+        `This is a hand-edited counter, bypassing the stamp command. Run ` +
+        '`npm run stamp:publish-token` — never hand-edit the number.',
+    ];
+  }
 
   return [];
 }
