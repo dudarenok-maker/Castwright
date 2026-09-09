@@ -1,6 +1,7 @@
 # A34 step 3 — dry-run the repair script against the real workspace
 
-Register row A34 (#2584, #2040), parent #2903. Read-only step: ran
+Former register row A34 (discharged and removed 2026-09-09; #2584, #2040),
+parent #2903. Read-only step: ran
 `scripts/repair-a34-wrong-direction-ids.mjs` with no `--apply` against the
 **real** `C:\AudiobookWorkspace`. No file under `C:\AudiobookWorkspace\books\`
 was written by this step.

@@ -1,6 +1,7 @@
 # A34 step 1 — scope every book with the wrong-direction characterId shape
 
-Read-only investigation for register row A34 (#2584, #2040), parent #2903.
+Read-only investigation for former register row A34 (discharged and removed
+2026-09-09; #2584, #2040), parent #2903.
 No file under `C:\AudiobookWorkspace\books\` was written by this step.
 
 ## Detection logic used
