@@ -111,7 +111,16 @@ const SHELL_INLINE_COMMAND_FLAGS = new Set(['-c', '/c', '/k', '-command', '-enco
 // npx flags that consume the NEXT argv token as their value (space-separated
 // form) rather than taking it inline via `=`. That next token is a flag
 // value, never the package/binary to run.
-const NPX_VALUE_FLAGS = new Set(['-p', '--package', '--registry', '-c', '--call', '--cache']);
+const NPX_VALUE_FLAGS = new Set([
+  '-p',
+  '--package',
+  '--registry',
+  '-c',
+  '--call',
+  '--cache',
+  '--userconfig',
+  '--shell',
+]);
 
 /** powershell.exe/pwsh accept any unambiguous prefix of `-Command` as that
  *  same switch (`-Comm`, `-Comma`, ...). Anchored at 5 chars ("-comm") so it
@@ -278,7 +287,13 @@ export function isBatteryInvocation(commandLine, depth = 0) {
   }
   if (exe === 'node' || exe === 'nodejs') {
     // `node --test <files>` — node:test's own per-file fork pool (test:hooks).
-    if (args.some((a) => a === '--test' || a.startsWith('--test='))) return true;
+    // Checked at args[0] ONLY, matching the real invocation shape
+    // (run-hooks-tests.mjs's spawnSync(process.execPath, ['--test', ...files]))
+    // — a node CLI flag must precede any positional script path, so `--test`
+    // appearing later in argv belongs to a user SCRIPT's own flag parsing
+    // (`node my-script.js --test`), not to node itself, and must not be
+    // treated as node:test activation (review pass 6, N4).
+    if (args[0] === '--test' || (args[0] ?? '').startsWith('--test=')) return true;
     // Check arguments for runner script paths. The RUNNER_SCRIPT_PATH_RES
     // patterns now anchor on actual FILES (ending in .js/.mjs/.cjs), not
     // directory mentions — so they safely ignore inline -e payloads,

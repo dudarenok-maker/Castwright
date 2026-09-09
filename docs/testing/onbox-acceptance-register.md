@@ -686,16 +686,6 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > below (55 owed at that point; the two changes touched disjoint groups —
 > Groups A/B/D here, Group E there — and never saw each other).
 
-> **Prior change: 2026-09-06, adding E104** (#3047, ops-71 Part 3, claude): the
-> stale-battery reaper's `classify()` and its census/kill-scoping/never-blocks-push
-> orchestration are unit- and mutation-tested in-PR, but `Win32_Process`
-> classification against real, running processes on a real box cannot be. Row
-> renumbered E103 → **E104** to avoid colliding with #3051 (ops-75 Part 4), which
-> independently allocated E103 off the same `next-id` marker and landed first —
-> both PRs read `next-id: E103` before either merged; the register's IDs allocate
-> once, globally, so the second one to land moves. 52 → 53 owed, Group E 8 → 9.
-> `next-id` bumped E104 → E105 in the same change.
-
 > **Prior change: 2026-09-06, adding E103** (#3051, ops-75 Part 4, claude):
 > `scripts/wt-gc.mjs --prune`'s junction-first teardown against real worktree
 > junctions cannot be proven in-PR — every automated test (the node:test suite
@@ -5349,25 +5339,35 @@ and `UserModeTime`/`KernelModeTime` actually growing at the CPU-s/min rates the
 thresholds are calibrated against (2/min dead, 30–100/min healthy for a vitest
 subtree).
 
-**What to observe, concretely:** on a Windows dev box with a few real batteries
+**What to observe, concretely**, on a Windows dev box with a few real batteries
 running (e.g. a `vitest`/`npm run test:server` battery, a real `git commit`, and
-the TTS sidecar's `python.exe` if it's up), run `npm run doctor` (report-only) and
-confirm: (1) every root's command line and verdict look right by eye — no live
-battery misclassified as `reap`, no `python.exe`/`git.exe` subtree flagged; (2) run
-it again ~10+ minutes later and confirm a subtree that has genuinely gone idle
-since the first run now shows `stalled-rate`; (3) start a battery, then kill its
-owning terminal/agent process out from under it (simulating the 2026-09-05
-incident) and confirm the ORPHANED subtree shows `orphaned-unreachable` even while
-still burning CPU, and that `npm run doctor -- --kill` reaps it. Separately confirm
-`git push` (which now runs the pre-push census automatically) still completes in
-about the same time as before this change — the design's own budget is ~300ms for
-the query — and that `logs/reaper-census.jsonl` accumulates one entry per push with
-every root's command line present (the exact thing the 2026-09-05 census omitted).
+the TTS sidecar's `python.exe` if it's up):
+
+- Run `npm run doctor` (report-only) and confirm every root's command line and
+  verdict look right by eye — no live battery misclassified as `reap`, no
+  `python.exe`/`git.exe` subtree flagged.
+- Run it again ~10+ minutes later and confirm a subtree that has genuinely gone
+  idle since the first run now shows `stalled-rate`.
+- Start a battery, then kill its owning terminal/agent process out from under
+  it (simulating the 2026-09-05 incident) and confirm the orphaned subtree
+  shows `orphaned-unreachable` even while still burning CPU, and that
+  `npm run doctor -- --kill` reaps it — and that when the pre-push census is
+  the thing that reaps it, `git push` PRINTS the kill (a
+  `reap-stale-batteries: KILLED stale battery pid=… :: <command line>` line on
+  stderr) rather than removing it silently.
+- Confirm nothing that merely NAMES a runner is touched: leave an orphaned
+  `tail -f logs/vitest.log` (or any shell whose argv mentions vitest/pytest)
+  running across a push and check it survives.
+- Confirm `git push` (which now runs the pre-push census automatically) still
+  completes in about the same time as before this change — the query itself
+  measures ~694ms, ~0.8-3.5s for a whole census on a 415-root box — and that
+  `logs/reaper-census.jsonl` accumulates one entry per push with every root's
+  command line present (the exact thing the 2026-09-05 census omitted).
 
 **Residual N4 (accepted):** `killTree()` performs no creation-time pid-reuse re-check before invoking `taskkill /PID <root> /T /F`. Review passes 2, 3, and 4 all agreed this is acceptable — closing it would need a second `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill. Since the reaper now actually fires (as of this PR), the PID-reuse window is live rather than theoretical; an operator running the acceptance should watch for the edge case where a process exits and Windows quickly recycles its PID before the taskkill lands.
 
 *Needs:* a Windows dev box, no GPU. *Cost:* ~20 minutes across a few pushes.
-*Criteria:* the four observations above; issue #3047's acceptance list.
+*Criteria:* the five observations above; issue #3047's acceptance list.
 
 ## Group G — GitHub Actions itself
 

@@ -274,6 +274,7 @@ const REQUIRED_LEGS = {
   'test:server': 'shared|step_test_server|step_test_server_slow',
   'test:windows': 'shared|step_test',
   'test:server:windows': 'shared|step_test_server',
+  'test:hooks:windows': 'shared|step_test_hooks',
 };
 
 test('every required leg is present and gated on exactly its own scope keys', () => {

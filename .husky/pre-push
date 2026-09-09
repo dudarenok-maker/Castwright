@@ -28,7 +28,8 @@
 #
 # ops-71 (#3047, Part 3 of the same design, "A reaper that actually runs"):
 # every push also runs the stale-battery census — ONE Win32_Process query,
-# ~300ms, no pool — which appends a log entry (every root's command line
+# ~694ms for the query alone, ~0.8-3.5s for a whole census on a 415-root box,
+# no pool — which appends a log entry (every root's command line
 # included, the dataset the deferred concurrency-governor question needs)
 # and kills only PROVABLY orphaned trees (a dead parent, per classify()'s
 # reachability test). It never blocks the push: reap-stale-batteries.mjs's
@@ -36,8 +37,8 @@
 # its "always returns 0, even when the census throws" test).
 #
 # Deliberately placed BEFORE the is-docs-only-push branch, so it runs on
-# EVERY push, docs-only included: the census costs ~300ms and spawns no
-# pool, so a docs-only push isn't cheapened by skipping it, and a docs-only
+# EVERY push, docs-only included: the census costs under a second and spawns
+# no pool, so a docs-only push isn't cheapened by skipping it, and a docs-only
 # push is exactly as likely as any other to be the one that happens to run
 # after an earlier battery orphaned a subtree — the orphan doesn't know or
 # care what kind of diff is being pushed next. Skipping the census on

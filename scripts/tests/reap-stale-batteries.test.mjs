@@ -764,6 +764,19 @@ test('C2: isBatteryInvocation keys on the executable and argv position, not on a
   assert.equal(isBatteryInvocation('C:/repo/node_modules/.bin/vitest.cmd run'), true);
 });
 
+test("N4: node's own --test flag is checked at args[0], not anywhere in argv", () => {
+  // The real shape (run-hooks-tests.mjs): --test is node's OWN CLI flag,
+  // preceding every file argument.
+  assert.equal(isBatteryInvocation('node --test C:/repo/scripts/tests/verify-cache.test.mjs'), true);
+  assert.equal(isBatteryInvocation('node --test=C:/repo/scripts/tests/verify-cache.test.mjs'), true);
+  // A user SCRIPT's own --test flag, consumed by the script itself after
+  // node has already resolved its script-path argument — syntactically
+  // identical to the real shape if only "does argv contain --test" is
+  // asked, but this is not node:test activation at all.
+  assert.equal(isBatteryInvocation('node C:/repo/scripts/some-cli.mjs --test'), false);
+  assert.equal(isBatteryInvocation('node C:/repo/scripts/some-cli.mjs --test=unit'), false);
+});
+
 test('C2: tokenizeCommandLine groups quoted arguments so an executable path with spaces still resolves', () => {
   const tokens = tokenizeCommandLine('"C:\\Program Files\\Git\\bin\\bash.exe" -c "grep -iE vitest f.txt"');
   assert.deepEqual(tokens, ['C:\\Program Files\\Git\\bin\\bash.exe', '-c', 'grep -iE vitest f.txt']);
@@ -1327,5 +1340,18 @@ test('Q3: npx with -p <package> before the runner (`npx -p vitest@4 vitest run`)
     isBatteryInvocation('npx -p vitest@4 vitest run'),
     true,
     'npx -p vitest@4 vitest run MUST still qualify on the real runner arg',
+  );
+});
+
+test('N5: npx --userconfig/--shell (the two flags NPX_VALUE_FLAGS omitted) still qualify on the real runner arg', () => {
+  assert.equal(
+    isBatteryInvocation('npx --userconfig /home/me/.npmrc vitest run'),
+    true,
+    'npx --userconfig <path> vitest run MUST still qualify on the real runner arg',
+  );
+  assert.equal(
+    isBatteryInvocation('npx --shell bash vitest run'),
+    true,
+    'npx --shell <shell> vitest run MUST still qualify on the real runner arg',
   );
 });
