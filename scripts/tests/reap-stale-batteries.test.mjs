@@ -1355,3 +1355,30 @@ test('N5: npx --userconfig/--shell (the two flags NPX_VALUE_FLAGS omitted) still
     'npx --shell <shell> vitest run MUST still qualify on the real runner arg',
   );
 });
+
+test('R3: npx --prefix <dir> before the runner still qualifies on the real runner arg', () => {
+  assert.equal(
+    isBatteryInvocation('npx --prefix /home/me/repo vitest run'),
+    true,
+    'npx --prefix <dir> vitest run MUST still qualify on the real runner arg',
+  );
+});
+
+test('R2: node:test\'s own per-file WORKER process qualifies, not just the --test supervisor', () => {
+  // Captured live (review pass 7): a real node:test worker re-execs node
+  // with a long tail of internal V8/node flags -- no bare --test anywhere,
+  // since that flag belongs to the supervisor and is consumed before
+  // forking -- and the resolved test-file path as the final argument.
+  assert.equal(
+    isBatteryInvocation(
+      '"C:\\Program Files\\nodejs\\node.exe" --use-largepages=off --test-isolation=process ' +
+        '--test-concurrency=0 --test-timeout=0 scripts\\tests\\reap-stale-batteries.test.mjs',
+    ),
+    true,
+    "an orphaned node:test worker (supervisor already reaped or dead) MUST still be recognised",
+  );
+  // The suffix anchor is deliberately narrow to the .test.{js,mjs,cjs}
+  // convention -- an ordinary node script sharing no such name still does
+  // not qualify.
+  assert.equal(isBatteryInvocation('node C:/repo/scripts/summarise-pytest-output.mjs'), false);
+});

@@ -574,7 +574,7 @@ jobs:
   # job-level `defaults: run: shell:`, so a bare `run:` on windows-latest
   # would default to pwsh, not bash.
   windows-tests:
-    name: Windows (test + test:server)
+    name: Windows (test + test:server + test:hooks)
     needs: detect
     runs-on: windows-latest
     timeout-minutes: 30

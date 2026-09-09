@@ -303,7 +303,7 @@ test('every required leg is present and gated on exactly its own scope keys', ()
 });
 
 // The structural half of the same finding (#3053 review pass 2, N3).
-// REQUIRED_LEGS above names four legs; a NAMED list cannot see a fifth one
+// REQUIRED_LEGS above names five legs; a NAMED list cannot see a sixth one
 // arriving unmarked, and neither can the `legs.size >= 11` floor below --
 // measured headroom at the time was 19 markers against a floor of 11, i.e.
 // 8 legs could go unparseable with every assertion in this file still

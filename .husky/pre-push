@@ -37,10 +37,10 @@
 # its "always returns 0, even when the census throws" test).
 #
 # Deliberately placed BEFORE the is-docs-only-push branch, so it runs on
-# EVERY push, docs-only included: the census costs under a second and spawns
-# no pool, so a docs-only push isn't cheapened by skipping it, and a docs-only
-# push is exactly as likely as any other to be the one that happens to run
-# after an earlier battery orphaned a subtree — the orphan doesn't know or
+# EVERY push, docs-only included: the census costs the same ~0.8-3.5s either
+# way and spawns no pool, so a docs-only push isn't cheapened by skipping it,
+# and a docs-only push is exactly as likely as any other to be the one that
+# happens to run after an earlier battery orphaned a subtree — the orphan doesn't know or
 # care what kind of diff is being pushed next. Skipping the census on
 # docs-only pushes would just mean orphans from an all-docs stretch of work
 # never get swept until a code push finally happens along.

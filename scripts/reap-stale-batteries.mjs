@@ -103,6 +103,14 @@ const SUPERVISOR_NAME_RE = /^(node|cmd|sh|bash|powershell|pwsh)(?:\.exe)?$/i;
 //     lowercase pass) before testing it against the patterns below, which
 //     collapses `.bin/../vitest` down to `vitest` and closes this for every
 //     pattern here, not just vitest's. Pinned by test Q1.
+//   * NPX_VALUE_FLAGS is a curated list (review passes 5-7's own Q3/N5/R3
+//     findings each added one or two more it was missing), not derived from
+//     npm's full config-flag list — npx forwards npm's config options, which
+//     is a much longer set than what is enumerated here. A value-taking flag
+//     not yet in the set has its value token mistaken for the package/binary
+//     argument, the same false-negative shape Q3 first found. Each addition
+//     so far came from a real command line seen live, not from auditing the
+//     whole config-flag surface up front.
 
 const SHELL_NAMES = new Set(['cmd', 'sh', 'bash', 'powershell', 'pwsh']);
 const POWERSHELL_NAMES = new Set(['powershell', 'pwsh']);
@@ -120,6 +128,7 @@ const NPX_VALUE_FLAGS = new Set([
   '--cache',
   '--userconfig',
   '--shell',
+  '--prefix',
 ]);
 
 /** powershell.exe/pwsh accept any unambiguous prefix of `-Command` as that
@@ -157,6 +166,19 @@ const RUNNER_SCRIPT_PATH_RES = [
   // node:test — npm run test:hooks. run-hooks-tests.mjs forks one child per
   // file, so it IS a pool and IS orphan-generating.
   /(^|\/)scripts\/run-hooks-tests\.mjs$/i,
+  // node:test's own per-file WORKER processes (review pass 7, R2) — captured
+  // live: the worker re-execs node with a long tail of internal V8/node
+  // flags (--use-largepages=off, --test-isolation=process, etc. — no `--test`
+  // anywhere, since that flag belongs to the SUPERVISOR and is consumed
+  // before forking) and the resolved test-file PATH as the final argument.
+  // Those internal flags are node-version-dependent and not a stable anchor;
+  // the file's own `.test.{js,mjs,cjs}` suffix is node:test's own file-
+  // discovery convention and this repo's own test-file naming, so it is
+  // used here as the anchor instead of a package directory. Without this,
+  // an orphaned node:test worker (its run-hooks-tests.mjs supervisor already
+  // reaped, or dead on its own) carries no recognised member at all — the
+  // identical hole Playwright's worker entry above was added to close.
+  /\.test\.(m?js|cjs)$/i,
   // Pester — npm run test:scripts bottoms out in this launcher (see the
   // declared gap above).
   /(^|\/)scripts\/tests\/run\.ps1$/i,
