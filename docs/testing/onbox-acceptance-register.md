@@ -4319,7 +4319,7 @@ Coqui derive — the designed-voice self-heal in `resolveDesignedVoicesForChapte
 never does, and Qwen ignores the header entirely. The single POST that carries it is
 `/xtts/clone-voice` (`deriveEngineArtifact`, `server/src/tts/derive-engine-artifact.ts:145-147`),
 never `/synthesize`. Against an already-resident Coqui, or under a `COQUI_DEVICE` pin, the
-hint is a documented no-op (`main.py:5183-5187`, `:11975-11979`) — the prerequisite above is
+hint is a documented no-op (`main.py:5183-5187`, `:11994-11998`) — the prerequisite above is
 the state in which the hint can actually do anything.
 
 **There is no log line for this on the success path.** `_parse_device_hint` and the

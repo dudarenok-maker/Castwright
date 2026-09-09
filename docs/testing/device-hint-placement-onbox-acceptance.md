@@ -91,7 +91,7 @@ what actually proves the mechanism**, end to end, without needing this one.
 
 To observe the header directly anyway, temporarily add one line in
 `xtts_clone_voice` right after `device_hint = _parse_device_hint(...)`
-(`main.py:11992`): `log.info("device_hint=%s", device_hint)`. Revert it after
+(`main.py:12011`): `log.info("device_hint=%s", device_hint)`. Revert it after
 the run — it is not part of the shipped code.
 
 **Do not open Account → Advanced Settings at any point before the render.**
@@ -157,7 +157,7 @@ unlike a resident engine nothing ever evicts it.
    note at step 4 for where to read it from.
 3. Query the sidecar's `GET /debug/memory` and read its `footprints.coqui`
    block (`{seed_mb, learned_mb, sample_count}` — `FootprintTable.snapshot`,
-   `main.py:4480-4497`, served at `main.py:11056-11153`). The Coqui derive's
+   `main.py:4480-4497`, served at `main.py:11075-11172`). The Coqui derive's
    admission footprint (`peak`) is `learned_mb` once `sample_count >= 5`,
    else the seed `SEED_FOOTPRINTS_MB["coqui"]` of **3584 MB**
    (`main.py:4355`, `FootprintTable.peak_mb`, `main.py:4463-4470`) — call
@@ -375,10 +375,20 @@ shipped code:
    `cuda:1` and confirm it still sits at or below `target_free1` (confirm the
    step-1 scratch-fill process is still alive). Trigger the same lazy
    derive — this is also the chapter render that loads Qwen, which lands on
-   `cuda:0` per the `QWEN_DEVICE=cuda:0` override in Setup step 5, so it
-   never contends with the `cuda:1` band this criterion depends on. Leave
-   the scratch fill running across it, and kill it once this criterion's
-   Result line is filled in.
+   `cuda:0` per the `QWEN_DEVICE=cuda:0` override in Setup step 5. **This does
+   not mean Qwen "never contends" with the derive** — Setup step 5 sizes the
+   book against `cuda:0`'s *pristine* headroom, before the Coqui derive this
+   criterion forces onto that same card has landed. Sample `nvidia-smi`
+   tightly across the derive itself (before Qwen's own phase runs), and
+   prefer a book whose render stays on the Qwen 0.6B model (~1952 MB,
+   `main.py:4335`) over the 1.7B (~3915 MB, `main.py:4344`) — on a
+   `cuda:0` actually holding the just-landed Coqui derive rather than its
+   pristine reading, a 1.7B book's own admission can trigger `_evict_until`
+   (`main.py:5199`) and evict the very Coqui this criterion exists to
+   observe, which a green render can silently absorb (a substituted stock
+   voice is not visible in the render's status — see the fourth Pass bullet
+   below). Leave the scratch fill running across it, and kill it once this
+   criterion's Result line is filled in.
 
 **Pass, all four:**
 
