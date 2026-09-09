@@ -1382,3 +1382,22 @@ test('R2: node:test\'s own per-file WORKER process qualifies, not just the --tes
   // not qualify.
   assert.equal(isBatteryInvocation('node C:/repo/scripts/summarise-pytest-output.mjs'), false);
 });
+
+test('S1 (declared gap, review pass 8): a *.test.mjs path handed as a DATA argument, not the file being run, is a known false positive', () => {
+  // Real shape: pre-commit-lint.mjs spawns `node <eslint.js> ...staged-files`,
+  // and any staged *.test.mjs file in that batch (every commit on this branch
+  // itself produces one) makes the whole invocation match, because
+  // isRunnerScriptPath checks EVERY argv position, not just the file node is
+  // actually running. See the DECLARED GAPS comment above isBatteryInvocation
+  // for why the three obvious narrowings each fail. This test exists to make
+  // the false positive VISIBLE to any future change, not to assert it as
+  // correct -- if this ever flips to `false` without a corresponding removal
+  // of the DECLARED GAPS bullet, the comment has gone stale.
+  assert.equal(
+    isBatteryInvocation(
+      'node C:/repo/node_modules/eslint/bin/eslint.js --no-color scripts/tests/some-unrelated.test.mjs',
+    ),
+    true,
+    'known false positive -- see the DECLARED GAPS comment, not a target to silently fix here',
+  );
+});

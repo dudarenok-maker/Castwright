@@ -111,6 +111,28 @@ const SUPERVISOR_NAME_RE = /^(node|cmd|sh|bash|powershell|pwsh)(?:\.exe)?$/i;
 //     argument, the same false-negative shape Q3 first found. Each addition
 //     so far came from a real command line seen live, not from auditing the
 //     whole config-flag surface up front.
+//   * The node:test worker pattern above (review pass 7, R2) has no directory
+//     anchor, unlike every other RUNNER_SCRIPT_PATH_RES entry — it is checked
+//     against EVERY argv position (isRunnerScriptPath is `args.some(...)`),
+//     so any `node` process handed a `*.test.mjs` PATH as a DATA argument,
+//     not as the file it is running, is now a false-positive kill candidate.
+//     Live repro (review pass 8, S1): this repo's own `pre-commit-lint.mjs`
+//     spawns `node <eslint.js> ...batch-of-staged-files`, and a staged
+//     `*.test.mjs` file in that batch (which every commit on this branch
+//     itself produces) makes the whole invocation match. Three narrowings
+//     were considered and rejected: anchoring to the LAST argument fails
+//     because pre-commit-lint's own file batch is also spread last; requiring
+//     a bare `node` executable with nothing else recognisable ahead of it
+//     fails because `eslint.js` is not itself a runner path under any
+//     existing pattern; and anchoring to a known launcher path (the same
+//     fix used for run-hooks-tests.mjs and Playwright's worker entry) is not
+//     available here, since the whole reason this pattern exists is that a
+//     raw node:test worker re-exec carries NO stable launcher path at all —
+//     only internal, version-dependent V8 flags and the file argument. Harm
+//     is bounded: BOTH the false-positive shape AND a genuinely orphaned
+//     process must coincide, and `classify()`'s reachability/protected-name
+//     guards still apply on top. Accepted as a real, narrower gap rather than
+//     chasing a fourth variant of this recogniser under time pressure.
 
 const SHELL_NAMES = new Set(['cmd', 'sh', 'bash', 'powershell', 'pwsh']);
 const POWERSHELL_NAMES = new Set(['powershell', 'pwsh']);

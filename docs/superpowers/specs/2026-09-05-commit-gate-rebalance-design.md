@@ -306,7 +306,10 @@ while the risk table credited it with automatic cleanup. That gap is closed here
   blocks the push.
 - **From Part 2's timeout path:** after `taskkill /T /F`, sweep for survivors the `/T` walk
   could not see.
-- **`npm run doctor --kill`:** the manual, wider-scoped path.
+- **`npm run doctor -- --kill`:** the manual, wider-scoped path. The `--`
+  separator is required — `npm run doctor --kill` (without it) forwards
+  nothing to the script and silently runs the report-only path instead,
+  verified against the real CLI (review pass 8, S3).
 
 `classify(snapshot, now, thresholds) → verdicts` is a pure function — the testable seam. Never
 touches `python.exe` (TTS sidecars, Ringer) or the caller's own ancestor chain.
