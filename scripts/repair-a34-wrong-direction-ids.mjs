@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /*
- * repair-a34-wrong-direction-ids.mjs — register row A34 (#2584, #2040),
- * parent #2903, step 2 of the on-box repair-and-retest chain.
+ * repair-a34-wrong-direction-ids.mjs — former register row A34 (discharged
+ * and removed 2026-09-09; #2584, #2040), parent #2903, step 2 of the on-box
+ * repair-and-retest chain.
  *
  * Repairs the WRONG-DIRECTION `characterId` retirement shape: an
  * already-established ASCII-kebab id that a prior analysis run retired in

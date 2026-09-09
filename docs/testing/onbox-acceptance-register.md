@@ -547,7 +547,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -557,11 +557,38 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**49 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**48 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-08 (step 9, #2954), 52 → 49.** Folded the six
+> **Last change: 2026-09-09, A34 DISCHARGED and removed** (#2905, A34
+> repair-and-retest chain #2903/#2435, claude): step 4 (#2906) applied
+> `repair-a34-wrong-direction-ids.mjs --apply` for real against *Заказ
+> Коалфолла*'s live workspace (byte-verified backup first) and re-tested the
+> row's actual criterion — a genuine, ordinary full-manuscript re-analysis
+> (no `fresh` flag) against the repaired book. Result: the character's
+> `cast.json` id came back `oduvan` (ASCII), not `одуван` (Cyrillic) —
+> the row's exact criterion, met with real evidence, no human judgment
+> outstanding (attempt 6 of the run; attempt 5 was a self-inflicted `fresh`
+> detour that briefly re-inflicted the defect — the `cast.json` id itself was
+> recovered via the repair script before attempt 6 confirmed the real
+> criterion, but the detour's own separate deletion of the book's
+> reuse-carryover and `manuscript-edits.json` is NOT recovered and is a
+> genuine, disclosed side effect on the real workspace; see the write-up for
+> the full inventory, including why the merge/dedup journal itself is not
+> part of that loss).
+> Full write-up:
+> `docs/testing/onbox-a34-results/step-4-apply-retest.md`. Per the
+> 2026-08-22 discharge ruling, the row is removed rather than kept
+> annotated. **A34 is retired, not reused** (allocate-once, same precedent
+> as A28/A29/A36). 49 → 48, Group A 34 → 33. Only one book (*Заказ
+> Коалфолла*) was in scope for the repair — step 3's dry run found no other
+> affected books. This lands on top of every register change the parent
+> branch had already merged (the 2-card-boot + Pinokio batch chain, #2950) —
+> verified by row-ID-set diff against the true `git merge-base`, not this
+> branch's own stale base. `npm run check:onbox-register` green.
+
+> **Prior change: 2026-09-08 (step 9, #2954), 52 → 49.** Folded the six
 > register rows discharged by the 2-card-boot + Pinokio batch chain (#2950),
 > individually, per their own criteria:
 > - **A2** DISCHARGED and dropped — step 9's cross-card device-steer walkthrough
@@ -3985,74 +4012,6 @@ load, one drift simulation, one unpinned-auto load with its negative control.
 > consume the 8 GB card's headroom, then trigger a Kokoro load and confirm
 > the resident entry carries **no** `stale_reason` (deliberate admission,
 > not a fallback) — same recipe the row's own bullet 2 already specifies.
-
----
-
-### A34 · Cast/analysis `characterId` drift — #2584/#2570 wrong-direction retirement fix ([#2584](https://github.com/dudarenok-maker/Castwright/issues/2584), [#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), PR [#2640](https://github.com/dudarenok-maker/Castwright/pull/2640)) · **real analyzer (local Ollama or Gemini), no TTS needed**
-
-Wave 2's re-analysis (§7 rerun, A22/A23's sibling campaign) surfaced a
-defect PR #2640 fixed at the code level across five rounds of review:
-`stripEstablishedAsciiRewrites` (`server/src/analyzer/roster-dedup.ts`)
-now strips a same-run dedup rewrite that retires an established ASCII cast
-id in favour of a freshly-minted non-ASCII one, gated on a direct
-name-equivalence check (`normaliseForMatch`, the same "same character by
-name" comparator `remapFreshToPriorIds`/`mergeAnalysisResultWithExistingCast`
-already use) between the established prior row and the fresh survivor it
-would be retired in favour of — not on which dedup tier produced the entry,
-which round 5 found is not a sound signal (a Tier-3 alias merge can produce
-the identical id shape without ever passing through Tier-1). The fix is
-proven unit-level (`roster-dedup.test.ts`) at all four of `analysis.ts`'s
-call sites, but only 2 of those 4 are independently asserted at route level
-by real `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in
-`analysis.test.ts` — the two feeding `remapFreshToPriorIds`
-(`cumulativeForRemap`, main-route and subset-route). The other 2
-(`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same
-test runs but are not independently asserted: their effect is currently
-masked by an unrelated mechanism, `refuseRetirementsOfLiveIds`
-(`server/src/routes/analysis.ts`), so a revert of either of those two sites
-to the bare `composeRewrites(...)` call (skipping the strip) still leaves
-the whole `analysis.test.ts` suite green (verified during round 5). Nothing
-in the suite runs the real analyzer against the real, already-corrupted
-book — that needs live hardware.
-
-- Re-analyse *Заказ Коалфолла*
-  (`C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ Коалфолла`) — a
-  **full** manuscript re-analysis, not a subset/chapter retry — against its
-  existing `cast-id-history.json`.
-- Confirm the character's `cast.json` id comes back as `oduvan` (ASCII), not
-  `одуван` (Cyrillic) — the defect's exact shape.
-- If the raw analyzer output still mints a different id this run, confirm
-  any recorded `cast-id-history.json` entry names the correct direction
-  (fresh id superseded by the established one), not the reverse.
-
-*Needs:* the real workspace above and a real analyzer (local Ollama or
-Gemini) — no GPU/TTS sidecar required, since this is an analysis-only
-defect. *Criteria:*
-[`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md) §10.
-*Cost:* short — one full re-analysis of an already-imported book.
-
-> **RUN 2026-08-27 (wave 8) — real re-analysis performed; criterion NOT met,
-> root cause understood.** Ran a genuine full re-analysis of *Заказ Коалфолла*
-> against its existing `cast-id-history.json` (confirmed real via `.audiobook/
-> *.json` mtimes, all rewritten together). Result: `cast.json` still resolves
-> the smith character to `одуван` (Cyrillic), not `oduvan` (ASCII) — bullet 2
-> not met. This is not a regression of PR #2640's fix: `stripEstablishedAsciiRewrites`
-> only strips a rewrite that would retire an *established ASCII* id in favour
-> of a fresh non-ASCII one — it has no path to repair a book whose established
-> id was *already* Cyrillic before the fix shipped (this book's corruption
-> dates to 2026-08-21, per the unchanged `oduvan`→`одуван` `supersededBy` entry
-> and its untouched `recordedAtIso`/`recordedAtSeq`). The fresh analyzer run
-> also proposed `одуван` again (matching the already-established id), so no
-> retirement event ever fired for the fix's guard to intercept — bullet 3
-> doesn't apply either (no *different* fresh id was minted this run). Did
-> **not** attempt to hand-repair the real `cast.json`'s id to force the
-> guarded precondition — a permission classifier correctly declined that
-> real-workspace edit, and it wasn't worked around. **Still owed:** either
-> re-run against a book whose established id is currently ASCII (to test the
-> fix's actual guarantee — that a *future* corruption is stopped) or accept
-> that this row's criterion, as worded, cannot be satisfied by an
-> already-corrupted book and needs re-scoping to "does the fix stop a *new*
-> corruption" rather than "does it repair an old one."
 
 ---
 

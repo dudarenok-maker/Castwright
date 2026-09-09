@@ -1,6 +1,7 @@
 # A34 step 2 — implement + test the wrong-direction repair script
 
-Register row A34 (#2584, #2040), parent #2903. No file under
+Former register row A34 (discharged and removed 2026-09-09; #2584, #2040),
+parent #2903. No file under
 `C:\AudiobookWorkspace\books\` was read or written by this step — this is a
 code + tests step only, per scope (running against the real workspace is
 steps 3-4).
