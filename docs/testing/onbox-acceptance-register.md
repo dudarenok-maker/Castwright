@@ -570,9 +570,12 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > `cast.json` id came back `oduvan` (ASCII), not `одуван` (Cyrillic) —
 > the row's exact criterion, met with real evidence, no human judgment
 > outstanding (attempt 6 of the run; attempt 5 was a self-inflicted `fresh`
-> detour that briefly re-inflicted the defect, fully recovered via the
-> repair script itself before attempt 6 confirmed the real criterion). Full
-> write-up:
+> detour that briefly re-inflicted the defect — the `cast.json` id itself was
+> recovered via the repair script before attempt 6 confirmed the real
+> criterion, but the detour's own separate deletion of the book's
+> reuse-carryover and merge/dedup journals is NOT recovered and is a genuine,
+> disclosed side effect on the real workspace; see the write-up for detail).
+> Full write-up:
 > `docs/testing/onbox-a34-results/step-4-apply-retest.md`. Per the
 > 2026-08-22 discharge ruling, the row is removed rather than kept
 > annotated. **A34 is retired, not reused** (allocate-once, same precedent

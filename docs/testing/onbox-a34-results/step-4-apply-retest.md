@@ -246,8 +246,14 @@ probe refuses `--apply` against a live one), then re-ran with `--apply`
 (`ALLOW_STANDING_PORTS=8090` for `llama-swap`, the documented exception):
 wrote `cast.json` (id back to `oduvan`) and `cast-id-history.json` (direction
 corrected to `"одуван": "oduvan"`), with byte-verified `.bak.a34-*` copies of
-both. Read the full character roster back afterward — all 15 ids ASCII/sane,
-nothing else disturbed by the fresh-mode detour.
+both. Read the full character roster back afterward — all 15 ids ASCII/sane.
+**This recovers only the two files the repair script touches.** The
+`{"fresh": true}` detour (per its own route comment, above) also deleted the
+reuse-carryover and dropped the cast-merge/dedup journals for this book —
+neither is restored by the repair script, and neither was restored by
+anything else in this session. That lineage is genuinely gone from the real
+workspace's copy of *Заказ Коалфолла*. It has no bearing on this row's own
+criterion (the `cast.json` id), which the repair script does fully restore.
 
 **Attempt 6 (the actual, correctly-parameterised re-test) — CONFIRMED.**
 Relaunched the server, POSTed an ordinary re-analysis (`{}`, no `fresh` flag)
@@ -279,7 +285,11 @@ crash happened before the flag's effect could matter.
 - **Re-test**: **CONFIRMED.** A genuine ordinary full-manuscript re-analysis
   (no `fresh` flag) against the repaired book holds `id: "oduvan"`
   afterward — attempt 6, 2026-09-09. The self-inflicted `fresh:true` detour in
-  attempt 5 is documented above and was fully recovered via the repair
-  script's own `--apply`, which also validates the script correctly detects
-  and fixes a freshly-created (not just historical) instance of the
-  wrong-direction pattern.
+  attempt 5 is documented above; the repair script's own `--apply` restored
+  the row's own criterion (the `cast.json` id) and validated that the script
+  correctly detects and fixes a freshly-created (not just historical)
+  instance of the wrong-direction pattern. **It did not, and cannot, restore
+  the reuse-carryover and cast-merge/dedup journals the `fresh:true` detour
+  separately deleted** — that lineage is genuinely lost on the real
+  workspace's copy of this book, a real (if narrow) side effect of this
+  session's own methodology error, disclosed here rather than glossed over.
