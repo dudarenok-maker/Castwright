@@ -25,8 +25,37 @@
    warm independently. Plan 30 explicitly preserves that path. */
 
 import { useEffect, useRef, useState } from 'react';
-import { api, type SidecarHealth, type GpuQueueState } from './api';
+import { api, type SidecarHealth, type GpuQueueState, type GpuTripStatus } from './api';
 import type { ModelControlState } from '../components/ModelControlPill';
+
+/* Task 16/16.5 — persists which trip `seq` the operator has already
+   dismissed, the same equality-based pattern update-notice.ts uses for the
+   update banner. Without this, dismissing the trip notice only cleared
+   in-memory state: the very next page load re-initialized lastTripSeq to
+   null, so the FIRST poll always satisfied `seq !== null` and re-showed a
+   trip from arbitrarily long ago, indefinitely, until the next real trip or
+   a server restart (found in review, PR #3113 pass 2). */
+const TRIP_DISMISS_KEY = 'castwright:dismissedTripSeq';
+
+function readDismissedTripSeq(): number | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(TRIP_DISMISS_KEY);
+    if (raw === null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null; // private mode / sandboxed webview → fail safe (notice shows)
+  }
+}
+
+function writeDismissedTripSeq(seq: number): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(TRIP_DISMISS_KEY, String(seq));
+  } catch {
+    /* swallow — in-memory dismissal still works this session */
+  }
+}
 
 export interface EngineLifecycle {
   state: ModelControlState;
@@ -95,6 +124,14 @@ export interface TtsLifecycle {
       (older builds / partial deploys) — UI degrades to no prefix in that
       case. */
   gpuQueueDepth?: number;
+  /** Task 16/16.5 (#1230 item 2, #2974) — "Auto-reverted: GPU pin for ... was
+      reset to auto." (a card-specific code-43 streak was reverted and TTS
+      brought back) or "...not tied to a specific GPU card... manual
+      investigation needed." (a non-card-specific streak — nothing was
+      reverted, TTS is still held down). `null` when nothing has tripped
+      since the server booted, or the server predates GET /api/gpu/trip-status.
+      Surface-local dismiss via `dismissNotices()`, same as the other two. */
+  tripNotice: string | null;
 }
 
 type EngineId = 'coqui' | 'kokoro' | 'qwen' | 'qwen1_7b';
@@ -113,6 +150,22 @@ export function useTtsLifecycle(): TtsLifecycle {
   const [pendingQwen17b, setPendingQwen17b] = useState<ModelControlState | null>(null);
   const [evictionNotice, setEvictionNotice] = useState<string | null>(null);
   const [loadErrorNotice, setLoadErrorNotice] = useState<string | null>(null);
+  /* Task 16/16.5 — last-seen trip-status toast, or null once dismissed or
+     never tripped. The poll below only re-sets it when the trip's `seq`
+     changes (see the lastTripSeq ref), so a dismissed notice doesn't
+     reappear on the very next 30s tick for the same still-current trip.
+     Deliberately keys on `seq` (a monotonic per-trip counter), NOT the
+     toast text: two genuinely different trips can produce byte-identical
+     toast strings (same engine, same reason, twice), and an earlier version
+     of this dedup keyed on the string itself — so a second identical trip
+     right after a dismiss never re-surfaced (found in review, PR #3113). */
+  const [tripNotice, setTripNotice] = useState<string | null>(null);
+  /* Seeded from the persisted dismissal (readDismissedTripSeq), not null —
+     a fresh mount must not re-show a trip the operator already dismissed in
+     an earlier session. An UN-dismissed trip still shows on reload: its
+     seq was never written to storage, so it still differs from whatever
+     (possibly older) seq IS persisted there. */
+  const lastTripSeq = useRef<number | null>(readDismissedTripSeq());
   /* In-flight op counter — guards the /health poll's unconditional pending-
      clear below against a Load/Stop that is still awaiting its response.
      Since #1894 a Stop can await a 90 s budget (the sidecar waits out an
@@ -172,6 +225,26 @@ export function useTtsLifecycle(): TtsLifecycle {
         .catch(() => {
           if (cancelled) return;
           setGpuQueue(null);
+        });
+
+      /* Task 16/16.5 — same permissive-error posture as the queue probe above:
+         an older server or a transient failure just means no trip toast, not
+         a user-visible error. Only pushes a NEW toast into state when the
+         trip's `seq` changes (via the lastTripSeq ref) — a dismissed notice
+         must not resurrect itself on the very next tick for the same
+         still-current trip. */
+      api
+        .getGpuTripStatus()
+        .then((t: GpuTripStatus) => {
+          if (cancelled) return;
+          const seq = t?.seq ?? null;
+          if (seq !== lastTripSeq.current) {
+            lastTripSeq.current = seq;
+            setTripNotice(t?.toast ?? null);
+          }
+        })
+        .catch(() => {
+          /* leave whatever notice/dismiss state is already showing */
         });
     };
     probe();
@@ -315,6 +388,11 @@ export function useTtsLifecycle(): TtsLifecycle {
   const dismissNotices = () => {
     setEvictionNotice(null);
     setLoadErrorNotice(null);
+    setTripNotice(null);
+    // Persist so this exact trip doesn't re-show on the next page load —
+    // lastTripSeq.current is already the currently-displayed trip's seq
+    // (set by the poll effect above), or null if nothing has tripped yet.
+    if (lastTripSeq.current !== null) writeDismissedTripSeq(lastTripSeq.current);
   };
 
   return {
@@ -352,5 +430,6 @@ export function useTtsLifecycle(): TtsLifecycle {
     loadErrorNotice,
     dismissNotices,
     gpuQueueDepth: gpuQueue?.queueDepth,
+    tripNotice,
   };
 }

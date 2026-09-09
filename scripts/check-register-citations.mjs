@@ -2331,6 +2331,13 @@ const SELF_REFERENTIAL_PATHS = new Set([
   // see this Set's own header comment above.
   'scripts/check-register-row-citations.mjs',
   'scripts/tests/check-register-row-citations.test.mjs',
+  // build-register-live-view.mjs's own test fixtures use short synthetic IDs
+  // (A1/A2/A3, ...) as generic parser inputs, the same worked-example shape
+  // as the entries above — found 2026-09-08 when discharging the REAL row A2
+  // made this file's synthetic "### A2" fixtures collide with a nonexistent-ID
+  // citation for the first time (they had been silently riding the real row's
+  // existence, not an intentional exemption).
+  'scripts/tests/build-register-live-view.test.mjs',
 ]);
 
 export function runCheckRegisterCitationsCli(options = {}) {

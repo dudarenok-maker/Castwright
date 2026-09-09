@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="14" data-publish-id="b69a8bb984af"></div>
+  <div hidden data-published-as="15" data-publish-id="cda0446df438"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">52</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">49</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,11 +209,11 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->35<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->34<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->1<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->8<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->6<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">35 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">34 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -288,20 +288,11 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A2</span><span class="iname">Capacity-aware GPU placement (plan 264)</span><span class="risk">Two debts</span><span class="chev">›</span></summary>
+      <summary><span class="num">A3</span><span class="iname">srv-57 Multi-GPU Wave 2</span><span class="risk">Narrowed 09-08 · real-hardware trigger gap</span><span class="chev">›</span></summary>
       <div class="body">
-        <p><b>The gate to <code>stable</code></b> is the plan header's own words: the <b>evict-under-contention rows 6–8</b> — cold-<code>/load</code> device steer, <code>design_voice</code> evicts Ollama, GPU-ASR 503→evict→retry — were not force-driven on-box and “rest on automated coverage for now.” Deferred by choice, <b>not blocked</b>; runnable on demand.</p>
-        <p><b>Separately owed:</b> walkthrough <b>step 9</b>, the on-box confirmation of the #1730 cross-card device-steer fix. The code merged (PR #1732, 2026-07-19); the confirmation never ran. Still owed before the concurrent-multi-card flag flip. <b>2-card boot only.</b></p>
-        <div class="flag"><b>The plan contradicts itself</b> — the same paragraph lists <code>S6</code> among items already exercised on-box <em>and</em> item 6 among rows not force-driven. Treat 6–8 as owed per the closing sentence, and fix the plan text while you are there.</div>
-        <p>Step 3 (eGPU fault-drop) is genuinely observe-only — yanking an OcuLink cable is a hard crash. Mark Blocked/N-A.</p>
-        <p class="src"><code>docs/features/264-vram-aware-gpu-placement.md:129-179</code>, header <code>:9-22</code></p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">A3</span><span class="iname">srv-57 Multi-GPU Wave 2</span><span class="risk">2-card · blocks a build</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>Ten unchecked items. Forces real crashes on purpose: real per-card UUIDs from torch · a starved card self-exits with code 43, <code>/health</code> showing the breach first · <code>QWEN_DEVICE</code>/<code>KOKORO_DEVICE</code> on different cards run concurrently, same-card pinning still blocks · three code-43 exits in ten minutes <b>twice</b> — once card-specific (trips the streak guard), once not.</p>
-        <p>Task 16/16.5 (auto-revert on a repeated bad pin) is designed but <b>unbuilt</b>, gated on item 1 — it consumes the <code>tripEvent()</code> item 1 exercises.</p>
+        <p><b>Narrowed 2026-09-08 (step 9, #2954) — 9 of 10 items discharged.</b> The 10-item checklist ran for real on both cards: real per-card UUIDs from torch · a starved card self-exits with code 43, <code>/health</code> showing the breach first · <code>QWEN_DEVICE</code>/<code>KOKORO_DEVICE</code> on different cards run concurrently, same-card pinning still blocks.</p>
+        <p>Task 16/16.5 (<code>runAutoRevert</code> + its operator toast) <b>was built</b> with real paired tests — a mutated guard reddens all four tests, and reverts clean.</p>
+        <p><b>What remains owed:</b> the real-hardware trigger. A forced card-specific three-exits-in-ten-minutes streak did <b>not</b> reach <code>runAutoRevert</code> in production — <code>/api/gpu/trip-status</code> stayed <code>null</code> throughout, no toast fired. <code>start.ps1</code> absorbs and restarts the code-43 child internally on Windows before Node's own supervisor sees three distinct exits. Remaining scope: wire the streak-trip signal through <code>start.ps1</code>'s own restart loop (or an equivalent path), then re-run the hardware trigger.</p>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1230">#1230</a></p>
       </div>
     </details>
@@ -362,17 +353,18 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A12</span><span class="iname">Device-pin resolution survives a respawn</span><span class="risk">2-card · the point of the fix</span><span class="chev">›</span></summary>
+      <summary><span class="num">A12</span><span class="iname">Device-pin resolution survives a respawn</span><span class="risk">Narrowed 09-08 · bullet 2 stays open</span><span class="chev">›</span></summary>
       <div class="body">
-        <p><code>buildSidecarEnv</code> now hands the sidecar the raw <code>cuda-uuid:</code> literal instead of a translated <code>cuda:N</code>, so the sidecar re-resolves the pin against live torch enumeration on every spawn. CI can prove the right string is emitted; it cannot prove the right <b>card</b> is selected.</p>
+        <p><code>buildSidecarEnv</code> now hands the sidecar the raw <code>cuda-uuid:</code> literal instead of a translated <code>cuda:N</code>, so the sidecar re-resolves the pin against live torch enumeration on every spawn.</p>
+        <p><b>Narrowed 2026-09-08 (step 9, #2954) — bullets 1/3/4 closed, bullet 2 stays open.</b> Each was run for real on both cards with actual command/response transcripts:</p>
         <ul>
-          <li>Pin Qwen to a card, restart the server, force a supervisor respawn — the engine lands on the <b>pinned</b> card both times.</li>
-          <li>Then <b>change the enumeration order</b> (swap the cards, or set <code>CUDA_DEVICE_ORDER</code>) and confirm a respawn still finds it by UUID rather than failing <code>_validate_cuda_index</code> or landing on the wrong card.</li>
-          <li>Pin <code>tts.qwen.codecDevice</code> to a card — the codec is actually placed there. Before #1870 the pin was silently ignored: the literal failed inside torch's <code>.to()</code> and rolled back to CPU.</li>
-          <li>Point the codec pin at an <b>absent</b> card — the sidecar logs <code>QWEN_CODEC_DEVICE=… did not match any visible GPU</code> and leaves the codec on <b>cpu</b>, not on the model's card (which is what <code>auto</code> would have done).</li>
+          <li><s>Pin Qwen to a card, restart the server, force a supervisor respawn — the engine lands on the <b>pinned</b> card both times.</s> Confirmed.</li>
+          <li><s>Pin <code>tts.qwen.codecDevice</code> to a card — the codec is actually placed there. Before #1870 the pin was silently ignored: the literal failed inside torch's <code>.to()</code> and rolled back to CPU.</s> Confirmed.</li>
+          <li><s>Point the codec pin at an <b>absent</b> card — the sidecar logs <code>QWEN_CODEC_DEVICE=… did not match any visible GPU</code> and leaves the codec on <b>cpu</b>, not on the model's card (which is what <code>auto</code> would have done).</s> Confirmed.</li>
         </ul>
+        <p><b>Still owed</b> — deliberately left untouched, not silently attempted: <b>change the enumeration order</b> (swap the cards, or set <code>CUDA_DEVICE_ORDER</code>) and confirm a respawn still finds it by UUID rather than failing <code>_validate_cuda_index</code> or landing on the wrong card. Excluded from this chain deliberately — this box runs several other live lanes concurrently, and swapping enumeration order (or a reboot) would disturb their GPU state mid-run. A contention risk, not a hardware gap.</p>
         <div class="flag">Row 2 is the whole reason the change exists. Before <a href="https://github.com/dudarenok-maker/Castwright/pull/1870">#1870</a> the spawn env depended on whether Advanced settings had been opened that session — a warm cache froze a <code>cuda:N</code> that every respawn re-emitted.</div>
-        <p class="src">Both cards, and the ability to change enumeration order between boots — batch with A2 step 9 and A3 · <a href="https://github.com/dudarenok-maker/Castwright/pull/1870">#1870</a> closes <a href="https://github.com/dudarenok-maker/Castwright/issues/1857">#1857</a> · short</p>
+        <p class="src">Both cards, and the ability to change enumeration order between boots · <a href="https://github.com/dudarenok-maker/Castwright/pull/1870">#1870</a> closes <a href="https://github.com/dudarenok-maker/Castwright/issues/1857">#1857</a> · short</p>
       </div>
     </details>
     <details class="item">
@@ -452,9 +444,9 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A18</span><span class="iname">Cloned-voice derive on Coqui no longer needs torchcodec</span><span class="risk">Items 1+3 DONE 07-31 · 2+4 owed</span><span class="chev">›</span></summary>
+      <summary><span class="num">A18</span><span class="iname">Cloned-voice derive on Coqui no longer needs torchcodec</span><span class="risk">Items 1+3+4 DONE · 2 owed</span><span class="chev">›</span></summary>
       <div class="body">
-        <div class="flag"><b>Items 1 and 3 DISCHARGED 2026-07-31; items 2 and 4 remain.</b><br><br><b>Item 1 — the static-FFmpeg derive.</b> Completed through the full <code>CoquiEngine.clone_voice</code> path and wrote <code>xtts-0abceba4-….pt</code> (135,509 B) + <code>.json</code> into a directory that was <b>empty</b> beforehand, so no cached <code>.pt</code> could short-circuit it. Log: <code>Cloned + cached Coqui voice … from caller clip.</code> No <code>derive-failed</code>. The audio is the clone, not a substitute — <b>0.229</b> cosine vs the source clip against a <b>0.014</b> different-speaker floor, measured through <code>/synthesize</code> → <code>/embed</code> rather than read off <code>resolvedVoiceName</code>. Three preconditions were verified rather than assumed: <code>import torchcodec</code> still fails (and the 25 stray hash-suffixed DLLs the first revert left behind are now gone, 62.6 MB); the running sidecar was <b>orphaned</b> — <code>/restart</code> returned <b>409</b>, i.e. unsupervised and of unknown vintage, so the stack was restarted until it returned <b>200</b>; and <code>voices/xtts/</code> was empty. <b>Deviation:</b> a full chapter generation was used, not E-01&#39;s splice, because #1972 makes the splice unsafe on that book. <b>Does NOT discharge E-01</b> — the chapter failed <em>after</em> the derive with <code>vram-spill</code> (see A18), so &ldquo;the chapter renders&rdquo; and the by-ear check are still owed.<br><br><b>Item 3 — install verification, both directions.</b> Control: exit 0, marker present. <b>Loader drift</b>: exit 1, marker <b>present</b> → MSG-1, naming <code>coqui-tts 0.27.5</code>. <b>Unrelated crash</b>: exit 1, marker <b>absent</b> → MSG-2, the neutral message. Getting MSG-1 for the second case was the specific defect this item existed to rule out, and it did not happen. Driven through the real <code>COQUI_VERIFY_CODE</code> and the real branch predicate, with perturbations injected via <code>PYTHONPATH</code> only so the shared venv was never mutated.<br><br>Side finding: a clone rendered in a language other than its source clip&#39;s loses most of its identity on XTTS — 0.600 (EN) → 0.229 (RU), same derive — filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/1998">#1998</a>.</div>
+        <div class="flag"><b>Items 1, 3 and 4 DISCHARGED (item 4 as of 2026-09-08); item 2 remains.</b><br><br><b>Item 4 — Pinokio's torchcodec outcome.</b> Registered a fresh throwaway Pinokio app, ran <code>install.js</code>'s own declared steps directly (conda env + <code>npm ci</code> ×2 + <code>bootstrap-venv.mjs</code>), then reproduced the exact <code>pip install torchcodec --no-deps</code> step <code>install-coqui.mjs</code> uses against that nested venv. <code>import torchcodec</code> <b>SUCCEEDS</b> in this layout — no exception, no DLL-load error, resolved to the CPU-only wheel (<code>0.16.0+cpu</code>). Moot for behaviour either way per #1967's fix, but the fact itself was owed and is now recorded.<br><br><b>Item 1 — the static-FFmpeg derive.</b> Completed through the full <code>CoquiEngine.clone_voice</code> path and wrote <code>xtts-0abceba4-….pt</code> (135,509 B) + <code>.json</code> into a directory that was <b>empty</b> beforehand, so no cached <code>.pt</code> could short-circuit it. Log: <code>Cloned + cached Coqui voice … from caller clip.</code> No <code>derive-failed</code>. The audio is the clone, not a substitute — <b>0.229</b> cosine vs the source clip against a <b>0.014</b> different-speaker floor, measured through <code>/synthesize</code> → <code>/embed</code> rather than read off <code>resolvedVoiceName</code>. Three preconditions were verified rather than assumed: <code>import torchcodec</code> still fails (and the 25 stray hash-suffixed DLLs the first revert left behind are now gone, 62.6 MB); the running sidecar was <b>orphaned</b> — <code>/restart</code> returned <b>409</b>, i.e. unsupervised and of unknown vintage, so the stack was restarted until it returned <b>200</b>; and <code>voices/xtts/</code> was empty. <b>Deviation:</b> a full chapter generation was used, not E-01&#39;s splice, because #1972 makes the splice unsafe on that book. <b>Does NOT discharge E-01</b> — the chapter failed <em>after</em> the derive with <code>vram-spill</code> (see A18), so &ldquo;the chapter renders&rdquo; and the by-ear check are still owed.<br><br><b>Item 3 — install verification, both directions.</b> Control: exit 0, marker present. <b>Loader drift</b>: exit 1, marker <b>present</b> → MSG-1, naming <code>coqui-tts 0.27.5</code>. <b>Unrelated crash</b>: exit 1, marker <b>absent</b> → MSG-2, the neutral message. Getting MSG-1 for the second case was the specific defect this item existed to rule out, and it did not happen. Driven through the real <code>COQUI_VERIFY_CODE</code> and the real branch predicate, with perturbations injected via <code>PYTHONPATH</code> only so the shared venv was never mutated.<br><br>Side finding: a clone rendered in a language other than its source clip&#39;s loses most of its identity on XTTS — 0.600 (EN) → 0.229 (RU), same derive — filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/1998">#1998</a>.</div>
 
         <p><code>xtts_audio_io.py</code>'s poison test and its mechanism/fidelity tiers prove the patch swaps and restores correctly against a fake <code>TTS.tts.models.xtts</code>; what they <b>cannot</b> reach is whether the same patch actually rescues a real cloned-voice derive on a box whose only FFmpeg is genuinely static, or whether the replacement decoder is bit-faithful against real XTTS latents.</p>
         <div class="flag"><b>The hot patch was reverted on 2026-07-31 and the dev box is now a genuine static-FFmpeg box again</b> — <code>ffmpeg 8.1.1-full_build-www.gyan.dev</code> on PATH, the 25 copied FFmpeg DLLs removed from <code>site-packages/torchcodec/</code>. The revert is <b>not</b> &ldquo;delete every non-hash-suffixed <code>*.dll</code>&rdquo; as first written: <code>libtorchcodec_core4-8.dll</code> and <code>libtorchcodec_custom_ops4-8.dll</code> are torchcodec's <b>own</b> extensions, have no hash-suffixed twin, and must stay — the copied set is exactly the non-hash-suffixed files that <em>do</em> have a hash-suffixed twin. With <a href="https://github.com/dudarenok-maker/Castwright/issues/1967">#1967</a> merged, the hot patch is no longer needed to unblock A1's Section E.</div>
@@ -1048,7 +1040,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">8 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">6 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1086,19 +1078,6 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">E7</span><span class="iname">ORT marker — the Pinokio update path</span><span class="risk">The original reporter's deployment shape</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>Design doc criterion 4: <code>pinokio-scripts/update.js</code> — named specifically, not <code>install.js</code> — as &ldquo;the deployment shape that reported the bug.&rdquo; Both invoke <code>bootstrap-venv.mjs</code> directly with <b>no server process at all</b>, but they are not interchangeable: <code>update.js</code> loads from the currently checked-out release (see E1&#39;s documented one-update lag), so a fresh-install pass does not stand in for an update pass.</p>
-        <ul>
-          <li>On a Pinokio machine with an <b>existing</b> (pre-fix) install (Windows priority — group with E1), run Update on the nvidia profile.</li>
-          <li>Confirm <code>pip check</code> is clean immediately after Update, with no server ever having started — the marker must come from <code>bootstrap-venv.mjs</code> itself, not the server-boot self-heal.</li>
-          <li>From the app, install Qwen3 (the original bug&#39;s repro) and confirm no <code>WinError 5</code>.</li>
-          <li><b>In the same session, also run a fresh Install</b> and confirm the same outcome — a second shape of this criterion, not a separate row.</li>
-        </ul>
-        <p class="src">A machine with Pinokio, an existing pre-fix install, nvidia profile · 20–40 min, sharing setup with E1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 4</p>
-      </div>
-    </details>
-    <details class="item">
       <summary><span class="num">E9</span><span class="iname">measure-attribution.mjs against the real workspace (#1984 Wave 1)</span><span class="risk">Run complete; D13 drop confirmed (#2357) — 2 sub-items still owed</span><span class="chev">›</span></summary>
       <div class="body">
         <p>New read-only <code>scripts/measure-attribution.mjs</code> — every unit test mocks its inputs; nothing automated runs it against the real <code>C:\AudiobookWorkspace</code> library, and the spec&#39;s own acceptance criteria are stated as properties of that run, not of a fixture.</p>
@@ -1112,20 +1091,6 @@
         <div class="flag"><b>Re-run 2026-08-21 against PR #2577's fix (commit <code>d9eb03ad</code>), STILL FAILS.</b> Same recipe; 22 of 23 books remain byte-identical, <i lang="ru">Ночной дозор</i> still diverges on the same fields. <b>Correction, 2026-08-23 (pass-5 review, #2577):</b> an earlier note here called this "a residual real-data gap, not the original defect recurring unfixed" — that overstated what the run showed. <code>d9eb03ad</code> predates the fix's final mechanism (attempt 4, commit <code>5a60b088</code>), which itself needed two further blocking-regression fixes (P1/P2) found in later review passes of the same PR. Whether this book's divergence is closed by the fix as it now stands is <b>unconfirmed</b>; item (2) stays STILL OWED pending a fresh on-box re-run against the current commit, not <code>d9eb03ad</code>. <code>docs/testing/onbox-wave4-results/step-1-e11-item2-rerun.md</code>.</div>
         <div class="flag"><b>Wave-5 step 3, 2026-08-23 — reconfirmation only, disposition unchanged (STILL OWED).</b> Re-ran item (1) (the full real-workspace run) from a second checkout (<code>wt-2606-onbox-wave5</code>, not the primary), after confirming from source that the script's only filesystem write is its own JSON report — never the workspace. Observed figures matched the 2026-08-14 discharge run's values everywhere directly comparable (23 book rows, none blank; both CJK books <code>spokenTotal&gt;0</code>; <code>orphanSpoken</code>/<code>dashOnlySpoken</code> shapes unchanged; <i lang="ru">Ночной дозор (Tetralogy)</i> at <code>spokenTotal=2122</code>, <code>orphanSpoken=32</code>). No regression found. Items (2) and (3) were not attempted this step (out of scope); both remain owed. No register edit was made by that step itself — this note folds its verdict in per wave-5 step 6. Evidence: <code>docs/testing/onbox-wave5-results/step-3-e9.md</code>.</div>
         <p class="src">A checkout (or worktree with its cache populated from one) whose cache holds the real library&#39;s analyses, <code>cd server &amp;&amp; npm run build</code>, then <code>WORKSPACE_DIR=C:\AudiobookWorkspace node scripts/measure-attribution.mjs</code> · under 5 min once <code>server/dist</code> exists · <a href="https://github.com/dudarenok-maker/Castwright/issues/1984">#1984</a> Wave 1 · <a href="https://github.com/dudarenok-maker/Castwright/blob/main/docs/superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md">plan</a> · full checklist: <code>docs/testing/attribution-collapse-visibility-onbox-acceptance.md</code></p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">E11</span><span class="iname">Pinokio Install/Update: requirements CRLF normalization</span><span class="risk">Windows box with pre-existing Pinokio install</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>PR #2799 adds <code>renormalizeRequirementsCrlf()</code> to <code>pinokio-scripts/lib/resolve-release.js</code>, called during both <code>install.js</code> and <code>update.js</code> to normalize CRLF line endings in <code>requirements/*.txt</code> files after <code>git checkout</code> of a release tag. Before <code>.gitattributes</code> enforced <code>eol=lf</code> repo-wide, a user&#39;s pre-existing install may have stale CRLF requirements. The normalization prevents spurious &#8216;file changed&#8217; detections that would trigger an unnecessary full <code>pip install --force-reinstall</code> on the next Update.</p>
-        <ul>
-          <li>On a Windows machine with a <b>pre-existing</b> Pinokio install that has CRLF-mangled <code>requirements/*.txt</code> files (e.g. from a prior checkout before <code>.gitattributes</code> enforcement), run Update.</li>
-          <li>Confirm the requirements files are normalized to LF (check file endings via <code>file</code> or hex dump, or confirm the files read as unchanged after running the normalizer a second time).</li>
-          <li>Confirm that the normalization does not trigger an unnecessary <code>pip install</code> reinstall — <code>bootstrap-venv.mjs</code>&#39;s <code>classifyVenvState</code> should see unchanged <code>reqHash</code> and take the <code>noop</code> branch, exiting before <code>runInstall</code>.</li>
-          <li>Confirm a subsequent Install (the <code>install.js</code> path) also normalizes any stale CRLF it finds to LF and proceeds with the normal install flow.</li>
-        </ul>
-        <p class="src">Windows box with Pinokio installed, a pre-existing install with CRLF-mangled <code>requirements/*.txt</code> (or ability to create one by checking out an old release prior to <code>.gitattributes</code>) · <a href="https://github.com/dudarenok-maker/Castwright/issues/2596">#2596</a>, PR #2799 · automated acceptance test in <code>resolve-release.test.js</code>; real-world confirmation that a stale-CRLF install updates without spurious reinstall and that a fresh install normalizes correctly · 10–15 minutes, grouping with <a href="#ge1">E1</a></p>
-        <p><b>One-update lag:</b> Updates FROM pre-#2799 releases run the old <code>resolve-release.js</code>, so CRLF normalization only takes effect from the NEXT update onward (see <a href="#ge1">E1</a> and <code>pinokio-scripts/update.js</code> lines 19–28).</p>
       </div>
     </details>
     <details class="item">

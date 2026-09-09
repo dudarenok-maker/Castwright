@@ -132,7 +132,10 @@ agent-runnable).
 > agent-runnable set even though half its debt isn't agent-runnable at all.
 > E7 moves here, to `onbox-sitting-device-browser.md`, joining E1, E2, E3,
 > E5, E6, E9, E10 (the same no-GPU, browser-shaped sitting). §2.2 and the
-> arithmetic in §6 are corrected to match.
+> arithmetic in §6 are corrected to match. **E7 was later fully discharged
+> and removed from the register 2026-09-08** (2-card-boot + Pinokio batch
+> chain, #2950) — this section is historical record of the sitting/agent
+> split, not a live pointer to a current row.
 
 > **Correction, 2026-08-21 (wave 4, #2551 step 6).** Wave 4 retired/
 > discharged/reclassified several rows, changing the register's own total
@@ -435,7 +438,8 @@ Every pack child in this chain produces one file following the shape of
 
 The staleness audit is trustworthy but not proven — its verify pass (#2451)
 **sampled** the STILL-OWED rows' citations rather than re-running all 69, and the
-one defect it caught proves what that leaves open: row **A2**'s audit Evidence
+one defect it caught proves what that leaves open: row **A2**'s (discharged and
+removed from the register 2026-09-08, #2950) audit Evidence
 wrote up a `grep` as returning no matches when the pattern in fact matches at
 line 16 — *inside the very header range the row cites as its own evidence*. A
 false claim of that shape survives any amount of reading and only a real re-run

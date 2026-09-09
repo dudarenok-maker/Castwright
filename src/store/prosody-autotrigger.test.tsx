@@ -81,6 +81,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       pollRevisionsBulk: vi.fn(async () => ({ byBookId: {} })),
       getSidecarHealth: vi.fn(async () => ({ status: 'unreachable', url: '(test)' })),
       getGpuQueueState: vi.fn(async () => ({ queueDepth: 0, devices: [] })),
+      getGpuTripStatus: vi.fn(async () => null),
       matchVoices: vi.fn(async () => ({ matches: [] })),
       getSeriesRoster: vi.fn(async () => ({ characters: [] })),
       getSetupReadiness: () =>

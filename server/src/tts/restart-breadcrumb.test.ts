@@ -23,11 +23,26 @@ describe('readRestartBreadcrumb', () => {
     readFileSyncImpl = null;
   });
 
-  it('parses a valid breadcrumb file', () => {
+  it('parses a valid breadcrumb file, including the device enumeration', () => {
+    const devices = [{ uuid: 'GPU-1', idx: 1, name: 'RTX 5070 Ti', total_mb: 16303, free_mb: 12000 }];
+    readFileSyncImpl = () =>
+      JSON.stringify({
+        card: { uuid: 'GPU-1', idx: 1 },
+        reason: 'reserved VRAM',
+        residentEngines: ['coqui'],
+        devices,
+        ts: 123,
+      });
+    expect(readRestartBreadcrumb()).toEqual({
+      card: { uuid: 'GPU-1', idx: 1 }, reason: 'reserved VRAM', residentEngines: ['coqui'], devices,
+    });
+  });
+
+  it('reads devices as undefined (not []) from an OLDER breadcrumb written before this field existed', () => {
     readFileSyncImpl = () =>
       JSON.stringify({ card: { uuid: 'GPU-1', idx: 1 }, reason: 'reserved VRAM', residentEngines: ['coqui'], ts: 123 });
     expect(readRestartBreadcrumb()).toEqual({
-      card: { uuid: 'GPU-1', idx: 1 }, reason: 'reserved VRAM', residentEngines: ['coqui'],
+      card: { uuid: 'GPU-1', idx: 1 }, reason: 'reserved VRAM', residentEngines: ['coqui'], devices: undefined,
     });
   });
 

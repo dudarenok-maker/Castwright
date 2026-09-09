@@ -1667,6 +1667,7 @@ export function Layout() {
         <TtsNoticeBanner
           evictionNotice={ttsLifecycle.evictionNotice}
           loadErrorNotice={ttsLifecycle.loadErrorNotice}
+          tripNotice={ttsLifecycle.tripNotice}
           onDismiss={ttsLifecycle.dismissNotices}
           kokoro={ttsLifecycle.kokoro}
           coqui={ttsLifecycle.coqui}

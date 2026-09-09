@@ -79,6 +79,10 @@ vi.mock('../lib/api', async (importOriginal) => {
          prefix). Stub to an empty queue so the pill renders without the
          prefix in these tests. */
       getGpuQueueState: vi.fn(async () => ({ queueDepth: 0, devices: [] })),
+      /* useTtsLifecycle also polls the code-43 auto-revert trip status on the
+         same cadence (task 16/16.5, #2974) — resolve to null so no trip
+         banner state lands, same pattern as getGpuQueueState above. */
+      getGpuTripStatus: vi.fn(async () => null),
       /* Task 10 (#1839) — the resident-model Stop control in the global TTS
          notice banner calls ttsLifecycle.kokoro/coqui.onStop(), which hits
          these. Not exercised by most tests in this file, but useTtsLifecycle
