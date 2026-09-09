@@ -16,6 +16,10 @@ on:
       # editing the checker exercises it against the real register, rather
       # than only ever running against a register that hasn't changed.
       - 'scripts/check-onbox-register.mjs'
+      # #3116: the publish-token check (--stamped-since) depends on
+      # publish-token.mjs's parsePublishToken and publishTokenRegex functions,
+      # so changes to those must exercise the real register too.
+      - 'scripts/publish-token.mjs'
       - 'scripts/build-register-live-view.mjs'
       - '.github/workflows/onbox-register-check.yml'
 

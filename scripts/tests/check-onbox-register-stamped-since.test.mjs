@@ -79,9 +79,26 @@ test('checkStampedSince: content changed, counter unchanged -> fails, names both
   assert.match(errors[0], /stayed at 5/);
 });
 
-test('checkStampedSince: content changed AND counter differs -> passes', () => {
+test('checkStampedSince: content changed AND counter differs (higher) -> passes', () => {
   const workingHtml = page(6, 'nBBBBBB', '<p>changed</p>');
   const baselineHtml = page(5, 'nAAAAAA', '<p>original</p>');
+  assert.deepEqual(checkStampedSince({ workingHtml, baselineHtml }), []);
+});
+
+test('checkStampedSince: content changed, counter is BEHIND (lower than baseline) -> fails with distinct "behind" message', () => {
+  const workingHtml = page(16, 'nBBBBBB', '<p>changed</p>');
+  const baselineHtml = page(17, 'nAAAAAA', '<p>original</p>');
+  const errors = checkStampedSince({ workingHtml, baselineHtml });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /BEHIND.*16 vs 17/i);
+  assert.match(errors[0], /rebase or re-derive/);
+  // Verify this message is distinct from the equal-counter message
+  assert.doesNotMatch(errors[0], /stamp:publish-token/);
+});
+
+test('checkStampedSince: lower counter with same content stays green (no change detected)', () => {
+  const workingHtml = page(16, 'nBBBBBB', '<p>same</p>');
+  const baselineHtml = page(17, 'nAAAAAA', '<p>same</p>');
   assert.deepEqual(checkStampedSince({ workingHtml, baselineHtml }), []);
 });
 
@@ -419,6 +436,30 @@ test('CLI --stamped-since, real subprocess: passed twice -> refused, exit 1', ()
     const r = runFixtureCli(root, ['--stamped-since', 'HEAD', '--stamped-since', 'HEAD~1']);
     assert.equal(r.status, 1, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
     assert.match(r.stdout + r.stderr, /more than once/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('CLI --stamped-since, real subprocess: combined with --against-published -> refused, exit 1', () => {
+  const root = buildCliFixture();
+  try {
+    writeFileSync(join(root, 'docs', 'testing', 'onbox-acceptance-register-live-view.html'), page(1, 'nAAAAAA'), 'utf8');
+    const r = runFixtureCli(root, ['--stamped-since', 'HEAD', '--against-published', '/tmp/fake.html']);
+    assert.equal(r.status, 1, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.match(r.stdout + r.stderr, /cannot be combined with --against-published/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('CLI --stamped-since, real subprocess: combined with --discharging -> refused, exit 1', () => {
+  const root = buildCliFixture();
+  try {
+    writeFileSync(join(root, 'docs', 'testing', 'onbox-acceptance-register-live-view.html'), page(1, 'nAAAAAA'), 'utf8');
+    const r = runFixtureCli(root, ['--stamped-since', 'HEAD', '--discharging', 'A1']);
+    assert.equal(r.status, 1, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.match(r.stdout + r.stderr, /cannot be combined with --discharging/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

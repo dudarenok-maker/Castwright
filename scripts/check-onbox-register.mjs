@@ -594,6 +594,13 @@ export function checkStampedSince({ workingHtml, baselineHtml }) {
     return [`Publish token (base ref): ${b.malformed}. Investigate before trusting this comparison.`];
   }
 
+  if (w.n < b.n) {
+    return [
+      `Publish token: the live view's rendered content changed since the base ref, but the ` +
+        `publish counter is BEHIND (${w.n} vs ${b.n}). This is the "undo a bad fold" shape: ` +
+        `rebase or re-derive from the base ref; do not just bump the number.`,
+    ];
+  }
   if (w.n === b.n) {
     return [
       `Publish token: the live view's rendered content changed since the base ref, but the ` +
@@ -1380,7 +1387,16 @@ export function checkLiveView(
 // of erroring. See scripts/git-env.mjs's header for the full account.
 const GIT_TIMEOUT_MS = 15_000;
 function runGitCommand(args, cwd) {
-  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, env: scrubGitEnv() });
+  // #3116 review finding 4: locale-pin git's stderr messages. Missing-path
+  // detection depends on specific English substrings from `git show`, and
+  // those strings are translated depending on the ambient LANG/LC_ALL. Setting
+  // LC_ALL: 'C' ensures consistent English messages regardless of the system's
+  // locale, so the check is deterministic rather than silently failing in
+  // non-English environments.
+  const env = scrubGitEnv();
+  env.LC_ALL = 'C';
+  env.LANG = 'C';
+  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, env });
 }
 
 // #2199 review round 2: fetches `origin/main` FRESH before reading it,
@@ -1497,6 +1513,15 @@ export function resolveBaselineTexts(
 // not a failure here (it's the newly-added-file case the issue calls out) —
 // it must not be folded into the same bucket as "the ref itself is garbage."
 //
+// #3116 review finding 5: correctness depends on the working tree being
+// `merge(base, head)` — the merged state of the base ref into the current
+// branch. In CI this is guaranteed: `actions/checkout@v7` on a
+// pull_request event checks out `refs/pull/N/merge`, which is exactly that
+// virtual commit. On hand-run invocations from an un-rebased branch that has
+// diverged from the base ref (not recommended, but possible), comparing
+// un-merged trees might report OK when they genuinely differ — the comparison
+// is only meaningful when the working tree contains the base ref's content.
+//
 // `git show <ref>:<path>` exits 128 for BOTH "path missing at that ref" and
 // "ref doesn't resolve at all"; the only way to tell them apart is the
 // stderr text. Git's own C code uses TWO distinct messages for "missing at
@@ -1601,8 +1626,32 @@ function runCheckOnboxRegisterCli() {
   // the no-flag run's offline guarantee a lie if this block ever grew a
   // dependency on it; the caller (the workflow, or an operator by hand) is
   // responsible for making `ref` resolvable locally first.
+  //
+  // Correctness assumes the working tree is merge(base, head): the result of
+  // merging `ref` into the current branch. CI: actions/checkout@v7 guarantees
+  // this with refs/pull/N/merge. Hand-run: only meaningful from a rebased
+  // branch; comparing un-merged trees from an un-rebased branch may report
+  // OK when they genuinely differ.
   const stampedSinceIdx = process.argv.indexOf('--stamped-since');
   if (stampedSinceIdx !== -1) {
+    // #3116 review finding 2: --stamped-since is incompatible with
+    // --against-published and --discharging. Both are part of the
+    // pre-publish check, not the CI gate, so they cannot appear together.
+    // Refuse explicitly rather than silently ignoring them.
+    const againstPublishedIdx = process.argv.indexOf('--against-published');
+    const dischargingIdx = process.argv.indexOf('--discharging');
+    if (againstPublishedIdx !== -1 || dischargingIdx !== -1) {
+      const conflicting = [];
+      if (againstPublishedIdx !== -1) conflicting.push('--against-published');
+      if (dischargingIdx !== -1) conflicting.push('--discharging');
+      console.error(
+        `--stamped-since cannot be combined with ${conflicting.join(' and ')}. ` +
+          `--stamped-since is for CI (checks if content moved without a stamp); ` +
+          `${conflicting.join(' and ')} are for hand-run pre-publish checks. ` +
+          `Run them separately.`,
+      );
+      throw new CliExitError(1);
+    }
     // Same "flag given twice" refusal as --against-published/--discharging
     // above (well, below in file order, same convention): a second
     // occurrence is silently dropped by `indexOf`, which would otherwise

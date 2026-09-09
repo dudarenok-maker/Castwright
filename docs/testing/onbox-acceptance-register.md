@@ -75,13 +75,14 @@ Bumping the counter without minting a new id is that same failure with an extra
 step. Two of the eight designs considered for this token died on precisely that,
 which is why the stamper does both halves or neither.
 
-The token is inert today: nothing reads it yet. The check that does — a
-comparison against the live page's own token, to catch a lane publishing over
-work it never saw — lands separately (#2599). It is seeded first and on its own
-because a guard cannot ship in the same change as the data it requires: the
-checker validates `origin/main`'s copy, so the data has to be on `main` already
-or the guard's first run fails on its own delivery. That is the same
-data-then-guard split the stable row IDs needed (#2629).
+The token is now LIVE: `npm run check:onbox-register --stamped-since <ref>` 
+(#3116) checks in CI that the live view's content did not change without the 
+counter moving — catching cases where a branch reverts the live view to an 
+older revision, or where a conflict was resolved by taking one side wholesale 
+over the other. The check reads the two copies at the PR base and HEAD and 
+**reports** an unstamped change in content (see #3138 for the decision whether 
+to enforce it as a merge gate). **Any PR that changes the live view's RENDERED 
+content should re-stamp it.**
 
 **One more thing has to happen before that check can pass, and it is easy to
 miss because it is not a code change: the live view must be PUBLISHED at least
@@ -103,6 +104,11 @@ floor — the floor gates the NEXT id a group may mint, not the ids already in
 use), and that each group's glance-table count matches the rows in its body
 section. Both fail CI when rows are added, removed, or miscounted, so
 **adding or removing a row here and missing the live view build fails CI**.
+
+**A PR that changes the live view's RENDERED content must re-stamp it** — this
+includes any markdown-only edit that moves a count (even though only the
+markdown changed, the live view's `<!-- BEGIN GENERATED -->` section regenerates
+with the new count, so `--stamped-since` sees rendered content that moved).
 Know its edges, because three of them are wide:
 
 - **A wording-only edit to a numbered Group row does not fail — but the same
