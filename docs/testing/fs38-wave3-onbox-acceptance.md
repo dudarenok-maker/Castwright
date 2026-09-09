@@ -3712,9 +3712,10 @@ hash-suffixed originals so their internal imports still resolve.
 **What:** reassigning a character's voice keeps scoring it against the **old**
 voice's persisted audition centroid, so every line of the new voice is flagged
 `voice-mismatch` / `severity: severe` on audio that is correct.
-**Test ID:** register row A35 (later renumbered A34), final bullet ("no
-`voice-mismatch` rows") — **discharged and removed 2026-08-27, on-box wave 9**;
-see `onbox-acceptance-register.md`'s wave-9 changelog entry.
+**Test ID:** register row A35 — **discharged and removed 2026-08-27, on-box
+wave 9** (later renumbered A34, likewise discharged and removed) — final
+bullet ("no `voice-mismatch` rows"); see `onbox-acceptance-register.md`'s
+wave-9 changelog entry.
 **Repro:** 1. A character thin enough on in-book anchors to take the audition
 reference path, rendered once so `render-integrity.centroids.json` holds an
 `audition` row. 2. Reassign it to a clearly different voice. 3. Re-render.
