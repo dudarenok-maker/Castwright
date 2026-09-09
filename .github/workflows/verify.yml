@@ -215,6 +215,13 @@ jobs:
         if: fromJSON(needs.detect.outputs.scopes).step_check_budget_poll || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run check:budget-poll
 
+      # Register-citation check (unconditional — see #3122: the checker
+      # scans the WHOLE tree for citations, so no diff-scope reliably
+      # predicts whether one broke; must run on every PR, docs-only included.
+      # leg: check:register-citations
+      - name: Register citation check
+        run: npm run check:register-citations
+
       # #2434 → #2779: npm audit against the root lockfile, gated so it only
       # runs on a root package-lock.json diff (or a shared/global change).
       # leg: audit
