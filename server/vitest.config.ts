@@ -269,6 +269,18 @@ export default defineConfig({
          properly, by having guards export their own scan targets. */
       '{**/server/src/analyzer/rate-limit.ts,**/.*/**/server/src/analyzer/rate-limit.ts}',
       '{**/server/src/tts/segment-asr-qa.ts,**/.*/**/server/src/tts/segment-asr-qa.ts}',
+      /* state-language.guard.test.ts (#3085): a tree-wide scanner —
+         collectSourceFiles(SRC_ROOT) reads every non-test .ts file under
+         server/src/** at RUNTIME (readFileSync), so there is no module-graph
+         edge from the guard to any file it scans. Its declared scope lives in
+         server/src/workspace/state-language.guard-targets.ts
+         (STATE_LANGUAGE_GUARD_SCAN_GLOB), which force-rerun-triggers.test.ts
+         imports and checks THIS entry against, so the two can never
+         independently drift. Deliberately broad: this guard's real scan
+         target is the whole tree, so almost any server source change forces
+         a full --changed rerun — that is the cost of the tree-wide scan, not
+         a defect (#3085's chosen design, option 2). */
+      '{**/server/src/**,**/.*/**/server/src/**}',
     ],
     pool: 'forks',
     /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the

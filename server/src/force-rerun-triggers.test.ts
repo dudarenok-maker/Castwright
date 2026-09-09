@@ -30,6 +30,7 @@ import { existsSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS } from './tts/coqui-residency-policy.guard-targets.js';
+import { STATE_LANGUAGE_GUARD_SCAN_GLOB } from './workspace/state-language.guard-targets.js';
 
 const SERVER_ROOT = resolve(__dirname, '..');
 const REPO_ROOT = resolve(SERVER_ROOT, '..');
@@ -170,6 +171,18 @@ const MAIN_COVERED = [
      #1847 runtime-read trap as the entries above. */
   { rel: 'src/analyzer/rate-limit.ts', file: 'the rate-limit dynamic-reader lookup', base: SERVER_ROOT },
   { rel: 'src/tts/segment-asr-qa.ts', file: 'the per-language maxWer dynamic-reader lookup', base: SERVER_ROOT },
+  /* state-language.guard.test.ts (#3085): a tree-wide scanner —
+     collectSourceFiles(SRC_ROOT) reads every non-test .ts file under
+     server/src/** at RUNTIME, no module-graph edge to any of them. The rel
+     path below is DERIVED from STATE_LANGUAGE_GUARD_SCAN_GLOB (the same
+     constant the guard itself imports), not a second hand-typed literal that
+     happens to agree with it today — so this assertion and the guard's
+     declared scope can never independently drift. */
+  {
+    rel: STATE_LANGUAGE_GUARD_SCAN_GLOB.replace(/\*\*$/, 'index.ts'),
+    file: 'a file under the state-language guard scan scope (STATE_LANGUAGE_GUARD_SCAN_GLOB)',
+    base: REPO_ROOT,
+  },
 ];
 
 const SLOW_COVERED = [
@@ -181,9 +194,24 @@ const SLOW_COVERED = [
    trigger to something like `**` + a suffix glob is caught rather than only
    the crudest `**`. */
 const NOT_COVERED = [
-  { rel: 'src/index.ts', file: 'an ordinary server source file', base: SERVER_ROOT },
   { rel: 'tsconfig.json', file: 'a JSON file that is not a manifest', base: REPO_ROOT },
   { rel: 'apps/android/pubspec.yaml', file: 'a YAML file that is not the contract', base: REPO_ROOT },
+];
+
+/* The slow config's triggers are untouched by #3085, so an ordinary server
+   source file is still a valid not-covered case there. */
+const SLOW_NOT_COVERED = [
+  ...NOT_COVERED,
+  { rel: 'src/index.ts', file: 'an ordinary server source file', base: SERVER_ROOT },
+];
+
+/* #3085: state-language.guard.test.ts's new trigger deliberately covers the
+   whole server/src/** tree, so "an ordinary server source file" is no longer
+   a valid not-covered case for the MAIN config — matching it is the point.
+   Swap in a file outside every guard's declared scope instead. */
+const MAIN_NOT_COVERED = [
+  ...NOT_COVERED,
+  { rel: 'CONTRIBUTING.md', file: 'an ordinary repo file outside every guard scope', base: REPO_ROOT },
 ];
 
 const crossProduct = (covered: typeof MAIN_COVERED) =>
@@ -210,10 +238,22 @@ describe('server/vitest.config.ts forceRerunTriggers', () => {
     },
   );
 
+  /* #3085: the file-coverage case above only proves the CURRENT scope is
+     covered — narrowing STATE_LANGUAGE_GUARD_SCAN_GLOB to a subtree (e.g.
+     'server/src/tts/**') would still pass it, because a narrower scope is
+     still a subset of the real (unchanged) trigger below. This assertion
+     checks the trigger array contains the EXACT brace-glob built from the
+     imported constant, so narrowing OR widening the constant without
+     updating vitest.config.ts's literal entry to match is caught either way. */
+  it('main forceRerunTriggers has the exact entry derived from STATE_LANGUAGE_GUARD_SCAN_GLOB (#3085)', () => {
+    const expected = `{**/${STATE_LANGUAGE_GUARD_SCAN_GLOB},**/.*/**/${STATE_LANGUAGE_GUARD_SCAN_GLOB}}`;
+    expect(mainTriggers).toContain(expected);
+  });
+
   /* Guards against "fixing" a dead trigger by widening it to something that
      matches everything — that would force a full run on every diff and
      quietly undo the point of --changed. */
-  it.each(crossProduct(NOT_COVERED))('does not match $file from $shape', ({ rel, base, root }) => {
+  it.each(crossProduct(MAIN_NOT_COVERED))('does not match $file from $shape', ({ rel, base, root }) => {
     expect(matchesTrigger(mainTriggers, absPathUnder(root, base, rel))).toBe(false);
   });
 });
@@ -226,7 +266,7 @@ describe('server/vitest.config.slow.ts forceRerunTriggers', () => {
     },
   );
 
-  it.each(crossProduct(NOT_COVERED))('does not match $file from $shape', ({ rel, base, root }) => {
+  it.each(crossProduct(SLOW_NOT_COVERED))('does not match $file from $shape', ({ rel, base, root }) => {
     expect(matchesTrigger(slowTriggers, absPathUnder(root, base, rel))).toBe(false);
   });
 });
