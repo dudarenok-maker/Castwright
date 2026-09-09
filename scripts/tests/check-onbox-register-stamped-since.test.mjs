@@ -93,7 +93,7 @@ test('checkStampedSince: content changed, counter moved UP but nonce unchanged (
   assert.match(errors[0], /hand-edited counter/i);
   assert.match(errors[0], /5 → 6/);
   assert.match(errors[0], /npm run stamp:publish-token/);
-  // Verify this message is distinct from the legitimate higher-counter message
+  // Verify this message is distinct from the BEHIND message
   assert.doesNotMatch(errors[0], /BEHIND/);
 });
 

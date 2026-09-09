@@ -608,6 +608,9 @@ export function checkStampedSince({ workingHtml, baselineHtml }) {
         '`npm run stamp:publish-token` — never hand-edit the number — then commit the result.',
     ];
   }
+  // w.n > b.n is unconditionally true here (both earlier branches returned), but stating
+  // it documents the predicate: when counter is higher AND nonce is unchanged, that's a
+  // hand-edit. Keeping it guards against future branch reordering.
   if (w.n > b.n && w.nonce === b.nonce) {
     return [
       `Publish token: the counter moved (${b.n} → ${w.n}), but the nonce stayed the same. ` +

@@ -79,10 +79,13 @@ The token is now LIVE: `npm run check:onbox-register -- --stamped-since <ref>`
 (#3116) checks in CI that the live view's content did not change without the
 counter moving — catching cases where a branch reverts the live view to an
 older revision, or where a conflict was resolved by taking one side wholesale
-over the other. The check reads the two copies at `merge(base, head)` and
-**reports** an unstamped change in content (see #3138 for the decision whether
-to enforce it as a merge gate). **Any PR that changes the live view's RENDERED
-content must re-stamp it.**
+over the other. The check reads the base ref's copy and the working tree's,
+which on a PR is `merge(base, head)`, and **reports** an unstamped change in
+content (see #3138 for the decision whether to enforce it as a merge gate).
+**Any PR that changes the live view's RENDERED content must re-stamp it** — this
+includes any markdown-only edit that moves a count (even though only the
+markdown changed, the live view's `<!-- BEGIN GENERATED -->` section regenerates
+with the new count, so `--stamped-since` sees rendered content that moved).
 
 The live view carries derived figures — owed count, per-group counts, oldest
 debt — that are **generated** on every build. Rows can be right while the
@@ -94,11 +97,6 @@ floor — the floor gates the NEXT id a group may mint, not the ids already in
 use), and that each group's glance-table count matches the rows in its body
 section. Both fail CI when rows are added, removed, or miscounted, so
 **adding or removing a row here and missing the live view build fails CI**.
-
-**A PR that changes the live view's RENDERED content must re-stamp it** — this
-includes any markdown-only edit that moves a count (even though only the
-markdown changed, the live view's `<!-- BEGIN GENERATED -->` section regenerates
-with the new count, so `--stamped-since` sees rendered content that moved).
 
 Know its edges, because three of them are wide:
 
@@ -358,9 +356,10 @@ comparison, see the edge list above). The merge step that closes this, run
        Observed 2026-09-07: live at 11 against a tracked 9 located PR #3073 in
        one command, before any row-by-row comparison. The row-content report
        named A1/A16/A21 — true, but it reads identically in both directions,
-       which is the whole reason to check the counter first. Note this works
-       even though nothing yet *enforces* the token (#2599): reading it by eye
-       costs nothing and does not wait on that check landing.
+       which is the whole reason to check the counter first. Note that nothing
+       yet enforces the token *at publish time* (#2599 — `comparePublishTokens`
+       still has no production consumer), so reading it by eye costs nothing and
+       does not wait on that enforcement landing.
      - **The published page matches the baseline, but your local copy doesn't**
        — you have a local edit not yet merged to `origin/main`, and the
        published page is simply unchanged (still at baseline) because nothing

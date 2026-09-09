@@ -12,18 +12,14 @@ on:
       # change to either side has to fire it — a live-view-only edit is exactly
       # the shape that drifts the published page away from the markdown.
       - 'docs/testing/onbox-acceptance-register-live-view.html'
-      # Also fire on the checker itself (and its own workflow file) so
-      # editing the checker exercises it against the real register, rather
-      # than only ever running against a register that hasn't changed.
-      - 'scripts/check-onbox-register.mjs'
-      # #3116: the publish-token check (--stamped-since) depends on
-      # publish-token.mjs's parsePublishToken and publishTokenRegex functions,
-      # and on git-env.mjs and lib/is-main-module.mjs, so changes to those
-      # must exercise the real register too.
-      - 'scripts/publish-token.mjs'
-      - 'scripts/git-env.mjs'
-      - 'scripts/lib/is-main-module.mjs'
-      - 'scripts/build-register-live-view.mjs'
+      # Fire on any scripts/* change (and the workflow file itself) so editing
+      # the checkers or their transitive dependencies exercises them against the
+      # real register. The transitive local-import graph is under-listed on the
+      # third attempt to enumerate it (#1847, #2216, #3055 hit this exact shape
+      # in scripts/verify-cache.mjs and resolved it the same way). A glob is
+      # durable: the walk over relative imports in scripts/lib/module-graph.mjs
+      # proves the dependencies; a hand list drifts after the first new import.
+      - 'scripts/**/*.mjs'
       - '.github/workflows/onbox-register-check.yml'
 
 permissions:
