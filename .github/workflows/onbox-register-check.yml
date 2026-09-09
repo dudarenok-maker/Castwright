@@ -43,3 +43,17 @@ jobs:
 
       - name: Check the generated live-view surfaces are up to date
         run: node scripts/build-register-live-view.mjs --check
+
+      # #3116: mandatory-but-unenforced until now. The register's own
+      # procedure says every publish must bump the live view's publish
+      # token; nothing checked it. A shallow `actions/checkout@v7` has no
+      # base ref available, so fetch just the PR's base commit (not
+      # `fetch-depth: 0` — that would pull the whole history for a single
+      # commit) before invoking the check.
+      - name: Fetch PR base for the publish-token check
+        if: github.event_name == 'pull_request'
+        run: git fetch --depth=1 origin ${{ github.event.pull_request.base.sha }}
+
+      - name: Check the live view was re-stamped if its content changed
+        if: github.event_name == 'pull_request'
+        run: node scripts/check-onbox-register.mjs --stamped-since ${{ github.event.pull_request.base.sha }}
