@@ -567,13 +567,13 @@ describe('GET /api/config — warms the device-list cache before resolving (cold
   });
 
   it('does not report uuid_unresolved for a valid pin when the cache starts cold', async () => {
-    const { setLastKnownGpuDevices } = await import('../gpu/gpu-device-list-state.js');
+    const { resetGpuDeviceListWarmForTests } = await import('../gpu/gpu-device-list-state.js');
     const { writeConfigOverride } = await import('../workspace/user-settings.js');
 
     // Simulate a pin already persisted from a PRIOR session (survives a restart).
     await writeConfigOverride('tts.qwen.device', 'cuda-uuid:GPU-1');
     // Simulate a fresh boot: the cache hasn't been warmed by anything yet.
-    setLastKnownGpuDevices([]);
+    resetGpuDeviceListWarmForTests();
     // The sidecar (reached fresh by this route's own warm-up) reports the card is real.
     fetchMock.mockResolvedValue(
       new Response(
@@ -606,11 +606,11 @@ describe('GET /api/config — warms the device-list cache before resolving (cold
   });
 
   it('still reports uuid_unresolved when the sidecar is genuinely unreachable', async () => {
-    const { setLastKnownGpuDevices } = await import('../gpu/gpu-device-list-state.js');
+    const { resetGpuDeviceListWarmForTests } = await import('../gpu/gpu-device-list-state.js');
     const { writeConfigOverride } = await import('../workspace/user-settings.js');
 
     await writeConfigOverride('tts.qwen.device', 'cuda-uuid:GPU-1');
-    setLastKnownGpuDevices([]);
+    resetGpuDeviceListWarmForTests();
     fetchMock.mockRejectedValue(
       Object.assign(new TypeError('fetch failed'), {
         cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),

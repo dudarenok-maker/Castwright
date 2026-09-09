@@ -547,7 +547,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 31 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -557,11 +557,11 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**46 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**47 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-09 (batch 2 step 5, claude), 48 → 46.** Rows **A35**
+> **Last change: 2026-09-09 (batch 2 step 5, claude), 49 → 47.** Rows **A35**
 > (stranded VRAM after a chapter render, #2656) and **A102** (CUDA self-test on
 > real ORT session detects Kokoro CPU fallback, #2582) fully discharged and
 > dropped — both are retired, not reused (allocate-once). A35: batch 2 step 2's
@@ -584,7 +584,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > Qwen-pin re-attempt, a driver-dependent prerequisite, and a co-residency
 > regression now tracked as
 > [#3086](https://github.com/dudarenok-maker/Castwright/issues/3086)) — see
-> each row's own update block. Group A: 33 → 31. `next-id` markers unaffected
+> each row's own update block. Group A: 34 → 32. `next-id` markers unaffected
 > (allocate-once IDs are never reused, so a drop never frees or renumbers a
 > slot).
 >
@@ -593,7 +593,9 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > *Заказ Коалфолла* — `cast.json` came back `oduvan` (ASCII), not `одуван`. Full
 > write-up: `docs/testing/onbox-a34-results/step-4-apply-retest.md`. A34 is
 > retired, not reused (allocate-once). That change landed on `main` while this
-> batch was in flight; both discharges are reflected in the counts above.
+> batch was in flight, as did **A106** (#3058's `X-Device-Hint` derive
+> placement, PR #3061) which ADDS a row; all three are reflected in the
+> counts above.
 
 > **Prior change: 2026-09-08 (step 9, #2954), 52 → 49.** Folded the six
 > register rows discharged by the 2-card-boot + Pinokio batch chain (#2950),
@@ -1264,7 +1266,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A106 -->
+<!-- next-id: A107 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -4423,6 +4425,55 @@ forced-contention run for the lock-leak criterion.
 > deeper unload-mechanism question is not and does not need re-running
 > either — it needs a sidecar log line (or a deliberately landed race) to
 > distinguish the two cases, per the source evidence above.
+
+### A106 · X-Device-Hint lazy Coqui derive request signaling ([#3058](https://github.com/dudarenok-maker/Castwright/issues/3058), PR [#3061](https://github.com/dudarenok-maker/Castwright/pull/3061)) · **2-card boot (8 GB + 16 GB), Coqui XTTS NOT yet resident (cold-load), no `COQUI_DEVICE` pin**
+
+A real chapter render from a server nobody has customized via Advanced Settings, on a
+book with a **designed** Coqui voice whose `.pt` artifact is missing. Only the lazy
+Coqui derive — the designed-voice self-heal in `resolveDesignedVoicesForChapter`
+(`server/src/tts/clone-voice-resolver.ts`) — sends the hint; the cloned-voice resolver
+never does, and Qwen ignores the header entirely. The single POST that carries it is
+`/xtts/clone-voice` (`deriveEngineArtifact`, `server/src/tts/derive-engine-artifact.ts:145-147`),
+never `/synthesize`. Against an already-resident Coqui, or under a `COQUI_DEVICE` pin, the
+hint is a documented no-op (`main.py:5183-5187`, `:11994-11998`) — the prerequisite above is
+the state in which the hint can actually do anything.
+
+**There is no log line for this on the success path.** `_parse_device_hint` and the
+admission path it feeds (`_resolve_admission`/`reservation()`) log nothing when a hint is
+honoured; the only `log.warning` calls (`main.py:4164/4172/4180/4183`) fire on the four
+*rejection* paths (oversized header, unresolved uuid, non-device-key value, unparsable
+value). And the hint does **not** "hint Coqui off Qwen's card" — `try_hold`/`best_fit`
+already pick the roomiest card, so on this box, where `cuda:1` is the 16 GB card, an
+*unhinted* derive can land there anyway, and a hint can equally park the derive on the exact
+card Qwen is generating on when that card merely fits (the corrected comment at
+`clone-voice-resolver.ts:906-916` is the authority here, not this row's earlier wording).
+Confirm the mechanism only via the run sheet's discriminating placement criterion, which
+forces `cuda:0` to be the momentarily roomier card so a hinted vs. unhinted derive provably
+diverge — VRAM/log inspection under the box's normal (`cuda:1`-favoring) state proves
+nothing, since an unhinted derive lands on `cuda:1` there too.
+
+*Needs:* the 2-card boot (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink — the single-card
+boot emits no hint at all, so nothing here reproduces there), real Qwen and Coqui/XTTS
+weights, real sidecar, a book with at least one character on a **designed** Coqui voice
+whose artifact has been deleted, and `COQUI_DEVICE` cleared (this box's standing policy
+otherwise pins it to `cuda:1`, which makes the hint a no-op — see row **A1**'s
+environmental notes above). Also: for the run sheet's Criteria 2, 3, and 5 (not
+Criteria 1 or 4), `QWEN_DEVICE` must be temporarily set to `cuda:0` (`server/.env`,
+restart) instead of the box's own standing `cuda:1` pin (also row **A1**) — otherwise
+Qwen's own render contends for the exact card those criteria's VRAM band is constructed
+on. Restore the standing `cuda:1` pin only once the whole sitting is done. See the run
+sheet's Setup step 5 for the full rationale.
+*Criteria:* the run sheet
+[`device-hint-placement-onbox-acceptance.md`](device-hint-placement-onbox-acceptance.md) —
+five criteria (header-parse diagnostic — no log line exists, see the run sheet for the
+one-line temporary instrumentation needed to observe it directly; discriminating
+hinted-vs-unhinted GPU1 placement; unsatisfiable-hint fallback; operator-pin override;
+stale-device-list harmlessness).
+*Cost:* moderate-to-high — a real chapter render with a deleted `.pt` artifact, temporary
+log instrumentation, a VRAM-fill scenario to construct the discriminating placement band
+(the fill target is now computed live from the box's own measured `peak` and
+`GPU_RESERVE_MB`, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the
+run sheet's pin/stale-cache scenarios.
 
 ## Group B — local Ollama analyzer only
 
