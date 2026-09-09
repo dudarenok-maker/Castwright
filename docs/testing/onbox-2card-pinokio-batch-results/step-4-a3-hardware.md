@@ -2,8 +2,12 @@
 
 Parent #2950, campaign #2435. Step 4 of the 2-card-boot + Pinokio batch
 chain — the ONLY place step 3's `runAutoRevert` (`server/src/gpu/auto-revert.ts`,
-commit b6075855, #2974) is watched against real hardware rather than a unit
-test's injected `tripEvent()` payload.
+as first built, #2974) is watched against real hardware rather than a unit
+test's injected `tripEvent()` payload. (The specific commit tested here was
+later superseded by three pr-review-gate rounds on PR #3113 that hardened
+the function significantly — this file records the wiring-level finding
+below, which the review rounds did not change: the gap is in
+`spawn-sidecar.ts`/`start.ps1`, upstream of `runAutoRevert` entirely.)
 
 ## Result: BLOCKED by the same architecture gap step 2 already found
 

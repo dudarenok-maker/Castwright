@@ -330,7 +330,17 @@ async function main(): Promise<void> {
          can actually fire (a live code-43 streak), createSidecarSupervisor
          has long since returned and sidecarSupervisor is assigned. */
       onTrip: (trip) => {
-        void runAutoRevert(trip, { resetAndRespawn: () => sidecarSupervisor!.resetAndRespawn() });
+        void runAutoRevert(
+          {
+            card: trip.card,
+            residentEngines: trip.residentEngines,
+            // Map the breadcrumb's raw snake_case device shape (main.py's
+            // _sample_card) to runAutoRevert's own RevertDevice — undefined
+            // stays undefined (an older breadcrumb), never coerced to [].
+            devices: trip.devices?.map((d) => ({ idx: d.idx, uuid: d.uuid, freeMb: d.free_mb })),
+          },
+          { resetAndRespawn: () => sidecarSupervisor!.resetAndRespawn() },
+        );
       },
     });
     void sidecarSupervisor.start();

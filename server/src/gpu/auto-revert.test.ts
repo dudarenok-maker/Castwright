@@ -16,15 +16,17 @@ describe('runAutoRevert', () => {
     vi.restoreAllMocks();
   });
 
-  it('card-specific streak, no cached device list: falls back to clearing each engine to cpu', async () => {
+  it('card-specific streak, an OLDER breadcrumb with devices undefined: falls back to getDevices(), which itself falls back to cpu', async () => {
     const writeOverride = vi.fn().mockResolvedValue(undefined);
     const resetAndRespawn = vi.fn().mockResolvedValue(undefined);
+    const getDevices = vi.fn().mockResolvedValue([]);
 
     const status = await runAutoRevert(
-      { card: { idx: 1 }, residentEngines: ['qwen', 'kokoro'] },
-      { writeOverride, resetAndRespawn, getDevices: async () => [] },
+      { card: { idx: 1 }, residentEngines: ['qwen', 'kokoro'] }, // devices: undefined
+      { writeOverride, resetAndRespawn, getDevices },
     );
 
+    expect(getDevices).toHaveBeenCalledTimes(1);
     expect(writeOverride).toHaveBeenCalledWith('tts.qwen.device', 'cpu');
     expect(writeOverride).toHaveBeenCalledWith('tts.kokoro.device', 'cpu');
     expect(writeOverride).toHaveBeenCalledTimes(2);
@@ -39,9 +41,10 @@ describe('runAutoRevert', () => {
     expect(getTripStatus()).toEqual(status);
   });
 
-  it('card-specific streak WITH a live device list: lands each engine on a DIFFERENT card with enough headroom, using the canonical cuda-uuid form', async () => {
+  it('trip.devices (the sidecar-supplied pre-crash snapshot) is used directly and getDevices() is NEVER called when it is present', async () => {
     const writeOverride = vi.fn().mockResolvedValue(undefined);
     const resetAndRespawn = vi.fn().mockResolvedValue(undefined);
+    const getDevices = vi.fn().mockResolvedValue([{ idx: 1, uuid: 'WRONG', freeMb: 99999 }]);
     // card 0 tripped (too small); card 1 has plenty of room for qwen (6500 MB).
     const devices = [
       { idx: 0, uuid: 'GPU-0', freeMb: 500 },
@@ -49,11 +52,27 @@ describe('runAutoRevert', () => {
     ];
 
     const status = await runAutoRevert(
-      { card: { idx: 0 }, residentEngines: ['qwen'] },
-      { writeOverride, resetAndRespawn, getDevices: async () => devices },
+      { card: { idx: 0 }, residentEngines: ['qwen'], devices },
+      { writeOverride, resetAndRespawn, getDevices },
     );
 
+    expect(getDevices).not.toHaveBeenCalled();
     expect(writeOverride).toHaveBeenCalledWith('tts.qwen.device', 'cuda-uuid:GPU-1');
+    expect(status.status).toBe('reverted');
+  });
+
+  it('trip.devices as a genuine empty array (no CUDA at all) is trusted as-is — falls to cpu WITHOUT calling getDevices()', async () => {
+    const writeOverride = vi.fn().mockResolvedValue(undefined);
+    const resetAndRespawn = vi.fn().mockResolvedValue(undefined);
+    const getDevices = vi.fn().mockResolvedValue([{ idx: 5, uuid: 'SHOULD-NOT-BE-USED', freeMb: 99999 }]);
+
+    const status = await runAutoRevert(
+      { card: { idx: 0 }, residentEngines: ['qwen'], devices: [] },
+      { writeOverride, resetAndRespawn, getDevices },
+    );
+
+    expect(getDevices).not.toHaveBeenCalled();
+    expect(writeOverride).toHaveBeenCalledWith('tts.qwen.device', 'cpu');
     expect(status.status).toBe('reverted');
   });
 
@@ -66,8 +85,8 @@ describe('runAutoRevert', () => {
     ];
 
     const status = await runAutoRevert(
-      { card: { idx: 0 }, residentEngines: ['qwen'] },
-      { writeOverride, resetAndRespawn, getDevices: async () => devices },
+      { card: { idx: 0 }, residentEngines: ['qwen'], devices },
+      { writeOverride, resetAndRespawn },
     );
 
     expect(writeOverride).toHaveBeenCalledWith('tts.qwen.device', 'cuda:1');
@@ -86,8 +105,8 @@ describe('runAutoRevert', () => {
     ];
 
     const status = await runAutoRevert(
-      { card: { idx: 0 }, residentEngines: ['qwen', 'kokoro'] },
-      { writeOverride, resetAndRespawn, getDevices: async () => devices },
+      { card: { idx: 0 }, residentEngines: ['qwen', 'kokoro'], devices },
+      { writeOverride, resetAndRespawn },
     );
 
     expect(writeOverride).toHaveBeenCalledWith('tts.qwen.device', 'cuda-uuid:GPU-1');
@@ -104,8 +123,8 @@ describe('runAutoRevert', () => {
     ];
 
     const status = await runAutoRevert(
-      { card: { idx: 0 }, residentEngines: ['qwen'] },
-      { writeOverride, resetAndRespawn, getDevices: async () => devices },
+      { card: { idx: 0 }, residentEngines: ['qwen'], devices },
+      { writeOverride, resetAndRespawn },
     );
 
     expect(writeOverride).toHaveBeenCalledWith('tts.qwen.device', 'cpu');
@@ -263,20 +282,22 @@ describe('runAutoRevert', () => {
   });
 });
 
-/* ── Mutation check (task item 3) ─────────────────────────────────────────
+/* ── Mutation check (task item 3), re-run against the trip.devices rewrite
+   (PR #3113 pass 3 — the sidecar-supplied pre-crash device snapshot
+   replaced the doomed live-fetch-at-trip-time approach) ─────────────────
    Actually run, not just asserted: inverted the card-specific branch guard
    in auto-revert.ts from
      if (!isTrippedCardIdx(trip.card))
    to
      if (isTrippedCardIdx(trip.card))
    and re-ran `vitest run src/gpu/auto-revert.test.ts` (server workspace).
-   12 of 14 cases reddened, with `--reporter=verbose` used to identify the
+   13 of 15 cases reddened, with `--reporter=verbose` used to identify the
    exact 2 survivors, not just the aggregate count. The mutation swaps which
    branch every fixture takes, so most assertions tied to that branch flip:
-   the card-specific fixtures (real revert, env-lock, rejected-dependency
-   cases) fell into the unrevertable early return; the null-card fixture fell
-   into the card-specific branch and called revert deps that should never
-   fire for it.
+   the card-specific fixtures (real revert, trip.devices priority, env-lock,
+   rejected-dependency cases) fell into the unrevertable early return; the
+   null-card fixture fell into the card-specific branch and called revert
+   deps that should never fire for it.
 
    The 2 survivors are coincidental convergence with the SEPARATE
    zero-revertible-engines guard a few lines below this one, not evidence
@@ -297,7 +318,7 @@ describe('runAutoRevert', () => {
 
    Reverted the mutation immediately after capturing this output; the
    committed auto-revert.ts has the original (correct) guard, confirmed
-   green again (14 passed) before this commit.
+   green again (15 passed) before this commit.
 
    Second mutation, same discipline: changed the separate
    `if (engines.length === 0)` guard a few lines below isTrippedCardIdx's
@@ -310,4 +331,4 @@ describe('runAutoRevert', () => {
    no-ops on nothing, landing on the env-lock 'failed' message instead).
    Together with the first mutation, every fixture in this file is now
    confirmed sensitive to at least one of the two guards. Reverted
-   immediately; confirmed green again (14 passed) before this commit. */
+   immediately; confirmed green again (15 passed) before this commit. */

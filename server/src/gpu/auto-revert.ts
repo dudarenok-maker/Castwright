@@ -63,11 +63,6 @@ const ENGINE_PEAK_MB: Record<AutoRevertEngine, number> = {
   kokoro: 1000,
 };
 
-export interface AutoRevertTrip {
-  card: unknown;
-  residentEngines: string[];
-}
-
 /** A candidate landing card: an idx to write into a `cuda:N`/`cuda-uuid:`
     override, its uuid (when known, for the canonical override form — see
     `writeDeviceOverride` below), and its free VRAM. */
@@ -75,6 +70,23 @@ export interface RevertDevice {
   idx: number;
   uuid: string | null;
   freeMb: number;
+}
+
+export interface AutoRevertTrip {
+  card: unknown;
+  residentEngines: string[];
+  /** The sidecar's own per-card free-VRAM enumeration, captured a moment
+      BEFORE it exited (restart-breadcrumb.ts's `devices` field) — the
+      PRIMARY source for selectRevertTarget. `undefined` only for an older
+      breadcrumb written before this field existed; an empty array is a
+      genuine "no CUDA" answer from the sidecar, trusted as-is, not treated
+      as "missing data". Found in review 2026-09-09 (PR #3113 pass 3): a
+      LIVE fetch at the moment runAutoRevert runs cannot work — the sidecar
+      process that would answer it is the one that just crashed, so a fetch
+      here always failed with ECONNREFUSED, silently forcing every real
+      revert through the no-data 'cpu' fallback regardless of what cards
+      were actually available. */
+  devices?: RevertDevice[];
 }
 
 /** True only when `card` is a shape `selectRevertTarget` can actually key
@@ -141,16 +153,14 @@ function record(status: WithoutSeq<TripStatus>): TripStatus {
   return withSeq;
 }
 
-/** Live per-card free VRAM, fetched fresh from the sidecar's own /devices
-    endpoint. Deliberately NOT the passively-populated
-    gpu-device-list-state.ts cache: that cache is warmed only by
-    GET/PUT /api/config and GET /api/gpu/devices, none of which the 30s
-    useTtsLifecycle poll (the actual trigger for most trips) ever calls —
-    found in review 2026-09-09, the cache is empty on the common path, which
-    silently forced every real revert through the no-data 'auto'/'cpu'
-    fallback regardless of what cards were actually available. A live fetch
-    at the moment of the trip is the only way to see real headroom on the
-    OTHER (non-tripped) cards, which is exactly what this function needs. */
+/** Degraded-case-only fallback for an OLDER breadcrumb with no `devices`
+    field (see AutoRevertTrip.devices). Attempts a live fetch against the
+    sidecar's own /devices endpoint — which, on the actual common path,
+    always fails: the sidecar process that would answer it is the one that
+    just crashed (ECONNREFUSED). Kept only so this degraded case still
+    degrades safely to the no-data 'cpu' fallback rather than throwing,
+    exactly like the pre-pass-3 default did for every trip. Not the primary
+    data source — trip.devices is. */
 async function fetchLiveDevices(): Promise<RevertDevice[]> {
   const result = await fetchSidecarDevices();
   if (!result) return [];
@@ -184,9 +194,11 @@ export interface RunAutoRevertDeps {
       'cpu'). Defaults to the real workspace store; tests inject a spy
       instead of touching disk. */
   writeOverride?: (key: string, value: string) => Promise<void>;
-  /** Live per-card free VRAM. Defaults to a real fetch against the
-      sidecar's /devices endpoint (see fetchLiveDevices); tests inject fixed
-      candidates. */
+  /** Degraded-case fallback used ONLY when trip.devices is undefined (an
+      older breadcrumb). Defaults to a live fetch against the sidecar's
+      /devices endpoint (see fetchLiveDevices) — which fails on the real
+      common path, same as it always did before trip.devices existed; tests
+      inject fixed candidates to exercise that fallback deliberately. */
   getDevices?: () => Promise<RevertDevice[]>;
   /** Brings TTS back after a revert — the supervisor's own resetAndRespawn(),
       which also zeroes restart43Trip/restart43Timestamps so a fresh streak
@@ -237,7 +249,7 @@ export async function runAutoRevert(trip: AutoRevertTrip, deps: RunAutoRevertDep
     // against the pre-revert reading could jointly overcommit a card neither
     // alone would have. Each successful placement decrements its target
     // card's remaining budget for the rest of this run.
-    const budget = (await getDevices()).map((d) => ({ ...d }));
+    const budget = (trip.devices ?? (await getDevices())).map((d) => ({ ...d }));
     const reverted: AutoRevertEngine[] = [];
     const envLocked: AutoRevertEngine[] = [];
 

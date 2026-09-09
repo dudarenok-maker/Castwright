@@ -9670,14 +9670,33 @@ def _write_restart_breadcrumb(card: Optional[dict], metric_label: str) -> None:
     BEFORE the drain thread starts, so it's on disk well before this process
     can vanish. A write failure here must never block the exit path — logged
     and swallowed, since Plan 2's auto-revert simply lacks card info for that
-    one trip if it can't be written."""
+    one trip if it can't be written.
+
+    Also persists the full device enumeration (`devices`), not just this
+    card's resident-engine names — found in review (PR #3113 pass 3): the
+    Node-side auto-revert that consumes this breadcrumb needs to pick a
+    DIFFERENT card with free VRAM, but by the time it runs the sidecar
+    process that could answer a live `/devices` query is the one that just
+    exited. `_enumerate_cuda_devices()` is already called here for the
+    resident-engine lookup one line below — this is the one moment its full
+    per-card free-VRAM reading is available at zero extra cost, since it is
+    computed from the box's live state a moment before the crash rather than
+    fetched after it."""
     try:
         os.makedirs(os.path.dirname(_RESTART_BREADCRUMB_PATH), exist_ok=True)
         resident = []
+        devices: list[dict] = []
         if card is not None:
-            by_card = _resident_engines_by_card(_enumerate_cuda_devices())
+            devices = _enumerate_cuda_devices()
+            by_card = _resident_engines_by_card(devices)
             resident = [r["engine"] for r in by_card.get(card["idx"], [])]
-        body = json.dumps({"card": card, "reason": metric_label, "residentEngines": resident, "ts": time.time()})
+        body = json.dumps({
+            "card": card,
+            "reason": metric_label,
+            "residentEngines": resident,
+            "devices": devices,
+            "ts": time.time(),
+        })
         # Write-then-rename: os.replace is atomic on the same volume (POSIX and
         # Windows both), so a hard kill mid-write can never leave a truncated/
         # partial breadcrumb for the reader to trip over — the very trip that

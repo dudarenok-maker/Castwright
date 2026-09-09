@@ -19,7 +19,17 @@ import {
   probeSidecarHealth,
   adoptCommittedCeilingMb,
 } from './spawn-sidecar.js';
-import { readRestartBreadcrumb } from './restart-breadcrumb.js';
+import { readRestartBreadcrumb, type RestartBreadcrumbDevice } from './restart-breadcrumb.js';
+
+/** One code-43 streak trip, as handed to onTrip/tripEvent(). `devices` is the
+    sidecar's own pre-crash device enumeration (see restart-breadcrumb.ts) —
+    carried through unchanged so a downstream auto-revert can pick a
+    different card without needing to ask the (now-dead) sidecar itself. */
+export interface RestartTrip {
+  card: unknown;
+  residentEngines: string[];
+  devices?: RestartBreadcrumbDevice[];
+}
 
 async function defaultRecycleSidecar(host: string, port: number): Promise<boolean> {
   try {
@@ -112,7 +122,7 @@ export interface SidecarSupervisorOpts {
       pin + resetAndRespawn()) or not (leave TTS held down, distinct
       "unrevertable" toast). Not awaited — the caller fires-and-forgets its
       own async work; this callback itself must not throw. */
-  onTrip?: (trip: { card: unknown; residentEngines: string[] }) => void;
+  onTrip?: (trip: RestartTrip) => void;
 }
 
 export interface SidecarSupervisor {
@@ -135,7 +145,7 @@ export interface SidecarSupervisor {
       stops respawning once this trips (TTS held down); Plan 2's auto-revert
       route (Task 16) reads this to rewrite the offending knob, then calls
       resetAndRespawn() to actually bring TTS back. */
-  tripEvent: () => { card: unknown; residentEngines: string[] } | null;
+  tripEvent: () => RestartTrip | null;
   /** True once consecutiveFailures has exceeded maxConsecutiveFailures and the
       supervisor gave up respawning (the plain, non-code-43 give-up path).
       Computed live from consecutiveFailures — clears the instant
@@ -286,7 +296,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
   let lastSpawnAt = 0;
   /* code-43-specific streak state — see RESTART43_STREAK_WINDOW_MS above. */
   let restart43Timestamps: number[] = [];
-  let restart43Trip: { card: unknown; residentEngines: string[] } | null = null;
+  let restart43Trip: RestartTrip | null = null;
   /* True while a watchdog loop is polling an adopted sidecar's port. Guards
      against starting a second loop if the adopt callback fires again before
      the first loop has released. */
@@ -581,7 +591,11 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
       restart43Timestamps.push(now);
       if (restart43Timestamps.length >= RESTART43_STREAK_TRIP_COUNT) {
         const breadcrumb = readRestartBreadcrumb();
-        restart43Trip = { card: breadcrumb?.card ?? null, residentEngines: breadcrumb?.residentEngines ?? [] };
+        restart43Trip = {
+          card: breadcrumb?.card ?? null,
+          residentEngines: breadcrumb?.residentEngines ?? [],
+          devices: breadcrumb?.devices,
+        };
         handle = null;
         isRecycling = true;
         warn(
