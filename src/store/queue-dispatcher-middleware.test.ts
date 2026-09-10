@@ -175,13 +175,17 @@ function failStream(
   onTick({ type: 'idle' } as GenerationTick);
 }
 
-/* Drive a stream to a loud-fallback-gate PARK, mirroring the server's real
-   ordering (server/src/routes/generation.ts): a `chapter_awaiting_fallback_confirm`
-   tick, then `idle` — both on the SAME response, with no queue-snapshot update
-   dispatched in between (nothing in generation-stream-runner.ts's handling of
-   that tick touches the queue slice). #1284's regression test relies on this
-   NOT seeding the store with `status: 'awaiting_confirm'` first, unlike the
-   older "does NOT /complete" test above — that's the real race. */
+/* Drive a stream to a loud-fallback-gate PARK: a `chapter_awaiting_fallback_confirm`
+   tick, with no queue-snapshot update dispatched in between (nothing in
+   generation-stream-runner.ts's handling of that tick touches the queue
+   slice). #1284's regression test relies on this NOT seeding the store with
+   `status: 'awaiting_confirm'` first, unlike the older "does NOT /complete"
+   test above — that's the real race.
+   No trailing `idle` tick here (#3029): the runner now closes the stream
+   handle synchronously off the park tick itself (see generation-stream-
+   runner.ts), so a subsequent `idle` — which the real server still sends on
+   the same response — early-returns on the already-missing handle and would
+   assert nothing. */
 function parkStream(
   bookId: string,
   chapterId: number,
@@ -189,7 +193,6 @@ function parkStream(
 ): void {
   const onTick = findOnTick(bookId, chapterId);
   onTick({ type: 'chapter_awaiting_fallback_confirm', chapterId, fallbackCharacters } as GenerationTick);
-  onTick({ type: 'idle' } as GenerationTick);
 }
 
 const openedBookIds = () =>
