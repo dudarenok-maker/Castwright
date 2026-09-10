@@ -19,12 +19,15 @@ import {
   resolvePhase1MinLagChapters,
   DEFAULT_PHASE1_MIN_LAG_CHAPTERS,
 } from './select-analyzer.js';
-import {
-  DEFAULT_USER_SETTINGS,
-  _resetUserSettingsCache,
-  _setUserSettingsCacheForTest,
-  type UserSettings,
-} from '../workspace/user-settings.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
+
+/** Test helper — seeds a single `configOverrides` key atop
+    DEFAULT_USER_SETTINGS via the synchronous in-process cache (no disk
+    round-trip), mirroring the Advanced Settings persisted-override store
+    the resolver reads through `readConfigOverrides()`. */
+function setConfigOverride(key: string, value: number | boolean | string): void {
+  _setUserSettingsCacheForTest({ configOverrides: { [key]: value } });
+}
 
 const originalEnv = { ...process.env };
 
@@ -293,18 +296,14 @@ describe('selectAnalyzerForPhase — plan 88 per-phase selector', () => {
     expect(s.model).toBe('gemma-4-31b-it');
   });
 
-  it('per-request model override beats user-settings + hardcoded default', () => {
+  it('per-request model override beats a saved Advanced Settings override + hardcoded default', () => {
     /* When NO env var is set, the per-request `opts.model` wins over
-       both the user-settings saved value and the hardcoded default. */
+       both the saved Advanced Settings override and the hardcoded default. */
     process.env.GEMINI_API_KEY = 'test-key';
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase0Model: 'gemma-4-31b-it',
-    };
+    setConfigOverride('analyzer.phase0.model', 'gemma-4-31b-it');
     const s = selectAnalyzerForPhase({
       phase: 'phase0',
       model: 'gemini-2.5-flash',
-      userSettings,
     });
     expect(s.model).toBe('gemini-2.5-flash');
   });
@@ -323,7 +322,7 @@ describe('selectAnalyzerForPhase — plan 88 per-phase selector', () => {
 });
 
 describe('isPerPhaseModelSelectionActive', () => {
-  it('returns false when neither env var nor user-settings is set', () => {
+  it('returns false when neither env nor a saved Advanced Settings override is set', () => {
     expect(isPerPhaseModelSelectionActive()).toBe(false);
   });
 
@@ -337,159 +336,125 @@ describe('isPerPhaseModelSelectionActive', () => {
     expect(isPerPhaseModelSelectionActive()).toBe(true);
   });
 
-  it('returns true when user-settings analyzerPhase0Model is set (plan 88 phase-2)', () => {
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase0Model: 'gemma-4-31b-it',
-    };
-    expect(isPerPhaseModelSelectionActive(userSettings)).toBe(true);
+  it('returns true when a saved analyzer.phase0.model override is set (#3141 step 1)', () => {
+    setConfigOverride('analyzer.phase0.model', 'gemma-4-31b-it');
+    expect(isPerPhaseModelSelectionActive()).toBe(true);
   });
 
-  it('returns true when user-settings analyzerPhase1Model is set (plan 88 phase-2)', () => {
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase1Model: 'gemini-3.1-flash-lite',
-    };
-    expect(isPerPhaseModelSelectionActive(userSettings)).toBe(true);
+  it('returns true when a saved analyzer.phase1.model override is set (#3141 step 1)', () => {
+    setConfigOverride('analyzer.phase1.model', 'gemini-3.1-flash-lite');
+    expect(isPerPhaseModelSelectionActive()).toBe(true);
   });
 });
 
-/* Plan 88 phase-2 — user-settings precedence layer. Sits between
-   per-request `opts.model` and the hardcoded default. The full chain
-   is:  env > opts.model > user-settings > hardcoded default. */
-describe('selectAnalyzerForPhase — user-settings precedence (plan 88 phase-2)', () => {
-  it('user-settings analyzerPhase0Model beats the hardcoded default when no env / opts.model', () => {
+/* #3141 step 1 — saved Advanced Settings override precedence layer. Sits
+   between per-request `opts.model` and the hardcoded default. The full
+   chain is: env > opts.model > saved override > hardcoded default. */
+describe('selectAnalyzerForPhase — saved Advanced Settings override precedence (#3141 step 1)', () => {
+  it('a saved analyzer.phase0.model override beats the hardcoded default when no env / opts.model', () => {
     process.env.GEMINI_API_KEY = 'test-key';
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase0Model: 'gemma-4-31b-it',
-    };
-    const s = selectAnalyzerForPhase({ phase: 'phase0', userSettings });
+    setConfigOverride('analyzer.phase0.model', 'gemma-4-31b-it');
+    const s = selectAnalyzerForPhase({ phase: 'phase0' });
     expect(s.engine).toBe('gemini');
     expect(s.model).toBe('gemma-4-31b-it');
   });
 
-  it('user-settings analyzerPhase1Model beats the hardcoded default when no env / opts.model', () => {
+  it('a saved analyzer.phase1.model override beats the hardcoded default when no env / opts.model', () => {
     process.env.GEMINI_API_KEY = 'test-key';
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase1Model: 'gemini-3.1-flash-lite',
-    };
-    const s = selectAnalyzerForPhase({ phase: 'phase1', userSettings });
+    setConfigOverride('analyzer.phase1.model', 'gemini-3.1-flash-lite');
+    const s = selectAnalyzerForPhase({ phase: 'phase1' });
     expect(s.model).toBe('gemini-3.1-flash-lite');
   });
 
-  it('env var beats user-settings (ops triage wins)', () => {
+  it('env var beats a saved override (ops triage wins)', () => {
     process.env.ANALYZER_PHASE0_MODEL = 'gemma-4-31b-it';
     process.env.GEMINI_API_KEY = 'test-key';
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase0Model: 'gemini-2.5-flash',
-    };
-    const s = selectAnalyzerForPhase({ phase: 'phase0', userSettings });
+    setConfigOverride('analyzer.phase0.model', 'gemini-2.5-flash');
+    const s = selectAnalyzerForPhase({ phase: 'phase0' });
     expect(s.model).toBe('gemma-4-31b-it');
   });
 
-  it('opts.model beats user-settings (per-request UI dropdown wins over saved default)', () => {
+  it('opts.model beats a saved override (per-request UI dropdown wins over saved default)', () => {
     process.env.GEMINI_API_KEY = 'test-key';
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase0Model: 'gemma-4-31b-it',
-    };
+    setConfigOverride('analyzer.phase0.model', 'gemma-4-31b-it');
     const s = selectAnalyzerForPhase({
       phase: 'phase0',
       model: 'gemini-2.5-flash',
-      userSettings,
     });
     expect(s.model).toBe('gemini-2.5-flash');
   });
 
-  it('null user-settings field falls through to hardcoded default', () => {
+  it('no saved override falls through to hardcoded default', () => {
     process.env.GEMINI_API_KEY = 'test-key';
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase0Model: null,
-      analyzerPhase1Model: null,
-    };
-    const s = selectAnalyzerForPhase({ phase: 'phase0', userSettings });
+    const s = selectAnalyzerForPhase({ phase: 'phase0' });
     /* The model falls through to selectAnalyzer({}); with the local-first
        default (Part 0) the engine resolves to 'local' on a cold cache and
        the model to the resolved Ollama tag. The contract here is just
-       "fell through" — no env, no user-settings model, hardcoded default. */
+       "fell through" — no env, no saved override, hardcoded default. */
     expect(s).toBeDefined();
-    /* Concretely the model resolves through selectAnalyzer({}) — the
-       exact id depends on DEFAULT_USER_SETTINGS.defaultAnalysisModel.
-       The contract here is just "fell through" — no env, no
-       user-settings, hardcoded default route taken. */
     expect(s.model).toBeTruthy();
   });
 
-  it('empty / whitespace user-settings field is ignored (falls through)', () => {
+  it('empty / whitespace saved override is ignored (falls through)', () => {
     process.env.GEMINI_API_KEY = 'test-key';
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase0Model: '   ',
-    };
-    const s = selectAnalyzerForPhase({ phase: 'phase0', userSettings });
+    setConfigOverride('analyzer.phase0.model', '   ');
+    const s = selectAnalyzerForPhase({ phase: 'phase0' });
     /* Hardcoded default kicked in instead of the whitespace value. */
     expect(s.model).not.toBe('   ');
   });
 });
 
-/* Plan 88 phase-2 — Phase 1 min-lag resolver. Mirror the precedence
-   shape of the model picker: env > user-settings > hardcoded default
-   (10). No per-request override layer (there is no UI knob for per-
-   request lag). */
-describe('resolvePhase1MinLagChapters (plan 88 phase-2)', () => {
-  it('returns DEFAULT_PHASE1_MIN_LAG_CHAPTERS when no env / no user-settings', () => {
+/* #3141 step 1 — Phase 1 min-lag resolver, rewired onto the config
+   resolver. Mirrors the precedence shape of the model picker: env > saved
+   Advanced Settings override > hardcoded default (10). No per-request
+   override layer (there is no UI knob for per-request lag). */
+describe('resolvePhase1MinLagChapters (#3141 step 1)', () => {
+  it('returns DEFAULT_PHASE1_MIN_LAG_CHAPTERS when no env / no saved override', () => {
     expect(resolvePhase1MinLagChapters()).toBe(DEFAULT_PHASE1_MIN_LAG_CHAPTERS);
     expect(DEFAULT_PHASE1_MIN_LAG_CHAPTERS).toBe(10);
   });
 
-  it('env wins over user-settings (ops triage)', () => {
+  it('env wins over a saved override (ops triage)', () => {
     process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '7';
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase1MinLagChapters: 20,
-    };
-    expect(resolvePhase1MinLagChapters(userSettings)).toBe(7);
+    setConfigOverride('analyzer.phase1.minLagChapters', 20);
+    expect(resolvePhase1MinLagChapters()).toBe(7);
   });
 
-  it('user-settings beats the hardcoded default when env is absent', () => {
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase1MinLagChapters: 15,
-    };
-    expect(resolvePhase1MinLagChapters(userSettings)).toBe(15);
+  it('a saved override beats the hardcoded default when env is absent', () => {
+    setConfigOverride('analyzer.phase1.minLagChapters', 15);
+    expect(resolvePhase1MinLagChapters()).toBe(15);
   });
 
-  it('accepts 0 from user-settings (explicit "release the lag" choice)', () => {
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase1MinLagChapters: 0,
-    };
-    expect(resolvePhase1MinLagChapters(userSettings)).toBe(0);
+  it('accepts 0 from a saved override (explicit "release the lag" choice)', () => {
+    setConfigOverride('analyzer.phase1.minLagChapters', 0);
+    expect(resolvePhase1MinLagChapters()).toBe(0);
   });
 
-  it('null user-settings field falls through to hardcoded default', () => {
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase1MinLagChapters: null,
-    };
-    expect(resolvePhase1MinLagChapters(userSettings)).toBe(DEFAULT_PHASE1_MIN_LAG_CHAPTERS);
+  it('a non-finite/negative saved override falls through to the hardcoded default', () => {
+    setConfigOverride('analyzer.phase1.minLagChapters', -1);
+    expect(resolvePhase1MinLagChapters()).toBe(DEFAULT_PHASE1_MIN_LAG_CHAPTERS);
   });
 
-  it('non-finite / negative env value falls through to user-settings', () => {
+  it('non-finite / negative env value falls through to a saved override', () => {
     process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = 'not-a-number';
-    const userSettings: UserSettings = {
-      ...DEFAULT_USER_SETTINGS,
-      analyzerPhase1MinLagChapters: 12,
-    };
-    expect(resolvePhase1MinLagChapters(userSettings)).toBe(12);
+    setConfigOverride('analyzer.phase1.minLagChapters', 12);
+    expect(resolvePhase1MinLagChapters()).toBe(12);
   });
 
-  it('floors fractional values', () => {
+  it('a fractional env value is not a valid integer knob value — falls through to the hardcoded default', () => {
+    /* Unlike the old ad-hoc `Number(rawEnv)` + floor, the resolver validates
+       `analyzer.phase1.minLagChapters` as an 'integer' knob via
+       coerceAndValidate, so a non-integer env string is rejected (with a
+       one-shot console.warn) rather than silently floored. */
     process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '7.9';
+    expect(resolvePhase1MinLagChapters()).toBe(DEFAULT_PHASE1_MIN_LAG_CHAPTERS);
+  });
+
+  it('floors a fractional saved override', () => {
+    /* Overrides aren't re-validated by coerceAndValidate on read (only env
+       goes through it), so this exercises resolvePhase1MinLagChapters' own
+       Math.floor safety net directly. */
+    setConfigOverride('analyzer.phase1.minLagChapters', 7.9);
     expect(resolvePhase1MinLagChapters()).toBe(7);
   });
 });

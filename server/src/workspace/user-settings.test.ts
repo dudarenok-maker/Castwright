@@ -14,6 +14,8 @@ import {
   getResolvedAnalysisEngine,
   getResolvedAllowCloudFallback,
   getResolvedSidecarUrl,
+  getResolvedOllamaUrl,
+  getResolvedOllamaModel,
   resolveUserSettingsPath,
   migrateLegacyUserSettings,
   _resetUserSettingsCache,
@@ -333,6 +335,61 @@ describe('userSettingsSchema — generationWorkers (plan 111)', () => {
       delete process.env.GEN_WORKERS;
       expect(getResolvedGenerationWorkers()).toBe(1);
     });
+  });
+});
+
+/* #3141 step 1 — getResolvedOllamaUrl / getResolvedOllamaModel resolve
+   through the config resolver (env -> saved Advanced Settings override ->
+   registry default) instead of reading the Account `ollamaUrl` field /
+   process.env directly. */
+describe('getResolvedOllamaUrl / getResolvedOllamaModel (#3141 step 1)', () => {
+  beforeEach(() => {
+    _resetUserSettingsCache();
+    delete process.env.OLLAMA_URL;
+    delete process.env.OLLAMA_MODEL;
+  });
+
+  afterEach(() => {
+    delete process.env.OLLAMA_URL;
+    delete process.env.OLLAMA_MODEL;
+    _resetUserSettingsCache();
+  });
+
+  it('getResolvedOllamaUrl returns the registry default with no env / no override', () => {
+    expect(getResolvedOllamaUrl()).toBe('http://localhost:11434');
+  });
+
+  it('getResolvedOllamaUrl returns a saved analyzer.ollama.url override', () => {
+    _setUserSettingsCacheForTest({
+      configOverrides: { 'analyzer.ollama.url': 'http://192.168.1.20:11434' },
+    });
+    expect(getResolvedOllamaUrl()).toBe('http://192.168.1.20:11434');
+  });
+
+  it('OLLAMA_URL env beats a saved analyzer.ollama.url override', () => {
+    process.env.OLLAMA_URL = 'http://10.0.0.5:11434';
+    _setUserSettingsCacheForTest({
+      configOverrides: { 'analyzer.ollama.url': 'http://192.168.1.20:11434' },
+    });
+    expect(getResolvedOllamaUrl()).toBe('http://10.0.0.5:11434');
+  });
+
+  it('getResolvedOllamaModel returns a saved analyzer.ollama.model override when no Account default-with-colon is set', () => {
+    /* A Gemini id (no ':') doesn't count as an Ollama-tag Account default,
+       so resolution falls through to the saved override. */
+    _setUserSettingsCacheForTest({
+      defaultAnalysisModel: 'gemini-2.5-flash',
+      configOverrides: { 'analyzer.ollama.model': 'qwen3.5:9b' },
+    });
+    expect(getResolvedOllamaModel()).toBe('qwen3.5:9b');
+  });
+
+  it("an Account defaultAnalysisModel with ':' shape still beats a saved analyzer.ollama.model override", () => {
+    _setUserSettingsCacheForTest({
+      defaultAnalysisModel: 'qwen3.5:4b',
+      configOverrides: { 'analyzer.ollama.model': 'qwen3.5:9b' },
+    });
+    expect(getResolvedOllamaModel()).toBe('qwen3.5:4b');
   });
 });
 

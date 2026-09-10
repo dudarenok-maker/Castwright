@@ -57,15 +57,15 @@
    BLIND SPOTS (documented, not silently accepted):
      - Computed/interpolated keys (`process.env[someVariable]`,
        `` process.env[`GEMINI_RPM_${slug}`] ``) are still invisible by
-       construction — there's no static literal name to match. Real sites
-       of this shape: `select-analyzer.ts`'s `process.env[phaseEnvKey]`
-       (harmless — a truthy check gating a fall-through to the next
-       priority tier, not a fallback-VALUE substitution) and
-       `rate-limit.ts`'s `` process.env[`GEMINI_RPM_${slug}`] `` (audited by
-       hand: for the two registered slugs, `gemma-4-31b-it` and
+       construction — there's no static literal name to match. Real site
+       of this shape: `rate-limit.ts`'s `` process.env[`GEMINI_RPM_${slug}`] ``
+       (audited by hand: for the two registered slugs, `gemma-4-31b-it` and
        `gemma-4-26b-a4b-it`, the `BUILTIN_LIMITS` fallback table's
        rpm/tpm/rpd values are identical to the matching
-       `GEMINI_{RPM,TPM,RPD}_GEMMA_*` registry defaults).
+       `GEMINI_{RPM,TPM,RPD}_GEMMA_*` registry defaults). `select-analyzer.ts`
+       no longer reads `process.env` directly at all (#3141 step 1 — its
+       phase-model and min-lag knobs resolve through `configValue()`/
+       `resolveKnob()` like everything else).
      - A fallback embedded in a helper this scan can't see through (e.g. a
        function that takes the raw env string as a parameter from
        elsewhere) reads as "no occurrence" here. This is a floor, not a
@@ -74,10 +74,8 @@
        short, textually-pinnable literal or identifier reachable within a
        bounded window of the read. It is NOT auto-derived from
        `ALLOWLISTED_SITES` — an allowlisted site with no `EXPECTED_FALLBACKS`
-       entry (e.g. `ANALYZER_PHASE0_MODEL`/`ANALYZER_PHASE1_MODEL` in
-       `select-analyzer.ts`, which only participate in a truthiness check
-       with no substituted value at all) is still protected by the
-       occurrence-count check, just not by a value pin.
+       entry is still protected by the occurrence-count check, just not by
+       a value pin.
      - The regex-literal fix below is a heuristic (division-vs-regex is
        genuinely ambiguous without a real parser), not a proof. It reduces
        the risk, it does not eliminate it: a regex literal in a position
@@ -356,12 +354,6 @@ function stripOpaque(src: string): string {
 const ALLOWLISTED_SITES: Record<string, number> = {
   // OLLAMA_URL ?? 'http://localhost:11434' — matches the registry default.
   'server/src/analyzer/attribution-eval/run-eval-cli.ts': 1,
-  // Line 1: `ANALYZER_PHASE0_MODEL || ANALYZER_PHASE1_MODEL` truthiness
-  // check only (registry default '' for both — '' and undefined are both
-  // falsy, so no substituted value ever differs). Line 2:
-  // ANALYZER_PHASE1_MIN_LAG_CHAPTERS, invalid/absent falls through to
-  // DEFAULT_PHASE1_MIN_LAG_CHAPTERS (10), which matches the registry default.
-  'server/src/analyzer/select-analyzer.ts': 3,
   // GPU_RESERVE_MB: non-finite/absent falls back to 500, the registry default.
   'server/src/gpu/gpu-load.ts': 1,
   // SEG_QA_MAX_RERECORDS: non-finite/absent falls back to 2, the registry default.
@@ -373,12 +365,11 @@ const ALLOWLISTED_SITES: Record<string, number> = {
   'server/src/tts/spawn-sidecar.ts': 1,
   // ACCELERATOR ?? null — same reasoning as spawn-sidecar.ts above.
   'server/src/upgrade/apply.ts': 1,
-  // OLLAMA_URL falls through to DEFAULT_USER_SETTINGS.ollamaUrl
-  // ('http://localhost:11434'); GEN_WORKERS falls through (via override,
-  // cached settings) to DEFAULT_USER_SETTINGS.generationWorkers (1);
-  // OLLAMA_MODEL falls through to DEFAULT_OLLAMA_MODEL ('qwen3.5:4b'). All
-  // three match their registry defaults.
-  'server/src/workspace/user-settings.ts': 3,
+  // GEN_WORKERS falls through (via override, cached settings) to
+  // DEFAULT_USER_SETTINGS.generationWorkers (1) — matches the registry
+  // default. OLLAMA_URL / OLLAMA_MODEL no longer read process.env directly
+  // here (#3141 step 1 — both resolve through configValue()/resolveKnob()).
+  'server/src/workspace/user-settings.ts': 1,
   // ACCELERATOR ?? null — same reasoning as spawn-sidecar.ts above. Widened
   // into scope by #2210 (the walk used to stop at server/src).
   'server/tts-sidecar/scripts/bootstrap-venv.mjs': 1,
@@ -398,8 +389,8 @@ const ALLOWLISTED_SITES: Record<string, number> = {
     `stripOpaque` blanks by design.
 
     Not every `ALLOWLISTED_SITES` entry has a matching row here — a site
-    with no substituted fallback value at all (the two `select-analyzer.ts`
-    truthiness-only reads) has nothing to pin; see BLIND SPOTS above. */
+    with no substituted fallback value at all has nothing to pin; see
+    BLIND SPOTS above. */
 const FALLBACK_WINDOW = 900;
 const EXPECTED_FALLBACKS: Array<{ file: string; name: string; fallback: string }> = [
   {
@@ -407,29 +398,14 @@ const EXPECTED_FALLBACKS: Array<{ file: string; name: string; fallback: string }
     name: 'OLLAMA_URL',
     fallback: "'http://localhost:11434'",
   },
-  {
-    file: 'server/src/analyzer/select-analyzer.ts',
-    name: 'ANALYZER_PHASE1_MIN_LAG_CHAPTERS',
-    fallback: 'DEFAULT_PHASE1_MIN_LAG_CHAPTERS',
-  },
   { file: 'server/src/gpu/gpu-load.ts', name: 'GPU_RESERVE_MB', fallback: '500' },
   { file: 'server/src/routes/chapter-qa-repair.ts', name: 'SEG_QA_MAX_RERECORDS', fallback: ': 2;' },
   { file: 'server/src/tts/spawn-sidecar.ts', name: 'ACCELERATOR', fallback: 'null' },
   { file: 'server/src/upgrade/apply.ts', name: 'ACCELERATOR', fallback: 'null' },
   {
     file: 'server/src/workspace/user-settings.ts',
-    name: 'OLLAMA_URL',
-    fallback: 'DEFAULT_USER_SETTINGS.ollamaUrl',
-  },
-  {
-    file: 'server/src/workspace/user-settings.ts',
     name: 'GEN_WORKERS',
     fallback: 'DEFAULT_USER_SETTINGS.generationWorkers',
-  },
-  {
-    file: 'server/src/workspace/user-settings.ts',
-    name: 'OLLAMA_MODEL',
-    fallback: 'DEFAULT_OLLAMA_MODEL',
   },
   { file: 'server/tts-sidecar/scripts/bootstrap-venv.mjs', name: 'ACCELERATOR', fallback: 'null' },
   { file: 'server/tts-sidecar/scripts/install-whisper.mjs', name: 'ASR_MODEL', fallback: "'base'" },

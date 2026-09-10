@@ -22,6 +22,14 @@ import {
   LEGACY_USER_SETTINGS_PATH,
 } from './user-settings-path.js';
 import type { CloneEngine } from '../tts/clone-engines.js';
+/* configValue (config/resolver.ts) imports readConfigOverrides FROM this
+   module — a deliberate circular import. Safe here because both sides only
+   call into the other from inside function bodies, never at module-eval
+   time; getResolvedGenerationWorkers below avoids it anyway by reading
+   readConfigOverrides() directly (see its comment), but
+   getResolvedOllamaUrl/getResolvedOllamaModel need the full env→override→
+   default precedence, which only the resolver computes. */
+import { configValue } from '../config/resolver.js';
 
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that
@@ -592,11 +600,11 @@ let lastWarnedSidecarUrl: string | null = null;
    which names a different source in its log line. */
 let lastWarnedEnvSidecarUrl: string | null = null;
 
-/** Same fallback chain as getResolvedSidecarUrl, but for the local Ollama
-    daemon: cached user-settings → OLLAMA_URL env → DEFAULT_USER_SETTINGS. */
+/** Resolved through the config resolver (#3141 step 1): OLLAMA_URL env →
+    saved Advanced Settings override (`analyzer.ollama.url`) → registry
+    default. The Account `ollamaUrl` field is no longer read here. */
 export function getResolvedOllamaUrl(): string {
-  const c = cached;
-  const raw = c?.ollamaUrl ?? process.env.OLLAMA_URL ?? DEFAULT_USER_SETTINGS.ollamaUrl;
+  const raw = configValue<string>('analyzer.ollama.url');
   return raw.replace(/\/+$/, '');
 }
 
@@ -756,18 +764,18 @@ export const DEFAULT_OLLAMA_MODEL = 'qwen3.5:4b';
 
 /** Ollama model tag passed to /api/chat. Resolution chain:
       1. cached `defaultAnalysisModel` if it has Ollama tag shape (':')
-      2. process.env.OLLAMA_MODEL
-      3. DEFAULT_OLLAMA_MODEL ('qwen3.5:4b')
-    The per-request `model` override (see selectAnalyzer) trumps all
-    three. Only a `:`-tagged saved model is honoured here — a Gemini id
+      2. config resolver (#3141 step 1): OLLAMA_MODEL env → saved Advanced
+         Settings override (`analyzer.ollama.model`) → registry default
+         (DEFAULT_OLLAMA_MODEL, `qwen3.5:4b`)
+    The per-request `model` override (see selectAnalyzer) trumps both.
+    Only a `:`-tagged saved model is honoured for step 1 — a Gemini id
     saved as defaultAnalysisModel (engine=gemini) must not be handed to
-    Ollama, so it falls through to OLLAMA_MODEL / DEFAULT_OLLAMA_MODEL
-    (both `qwen3.5:4b`, which now also matches the DEFAULT). */
+    Ollama, so it falls through to step 2. */
 export function getResolvedOllamaModel(): string {
   const c = cached;
   const fromSettings = c?.defaultAnalysisModel;
   if (fromSettings && fromSettings.includes(':')) return fromSettings;
-  return process.env.OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL;
+  return configValue<string>('analyzer.ollama.model');
 }
 
 /** Analyzer engine selector — reads the saved user-settings value only.

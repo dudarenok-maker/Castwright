@@ -78,12 +78,7 @@ import {
   type MissingSpeaker,
 } from '../analyzer/roster-coverage.js';
 import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
-import {
-  readUserSettings,
-  getCachedUserSettings,
-  getResolvedGeminiApiKey,
-  type UserSettings,
-} from '../workspace/user-settings.js';
+import { readUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
 import {
   clearAnalysisCache,
   loadAnalysisCache,
@@ -576,11 +571,11 @@ function engineLabel(engine: 'local' | 'gemini', modelId: string): string {
    knobs are active. Otherwise the sequential stub (Phase 1 waits for
    `markPhase0AllDone()` exactly like today's hard phase gate). Exported
    for unit testing. */
-export function createWatermarkForJob(userSettings?: UserSettings): PhaseWatermark {
-  if (!isPerPhaseModelSelectionActive(userSettings)) {
+export function createWatermarkForJob(): PhaseWatermark {
+  if (!isPerPhaseModelSelectionActive()) {
     return createSequentialWatermark();
   }
-  return createPhaseWatermark({ minLagChapters: resolvePhase1MinLagChapters(userSettings) });
+  return createPhaseWatermark({ minLagChapters: resolvePhase1MinLagChapters() });
 }
 
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
@@ -3305,17 +3300,14 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      view's "Accept smaller roster" button re-fires the same request
      with this flag so the next attempt skips the gate. */
   const allowStage1Shrink = req.body?.allowStage1Shrink === true;
-  /* Plan 118 — read the user-settings snapshot once at request start and
-     resolve the Phase 0 (cast detection) analyzer via the per-phase
-     selector, so the saved `analyzerPhase0Model` is honoured rather than
-     ignored (the old `selectAnalyzer({ model })` only ever saw the
-     per-request model + the GEMINI_MODEL default). The same snapshot is
-     threaded into the job so every per-phase / watermark / lag decision
-     reflects one read-once view of the file. */
-  const userSettings = await readUserSettings();
+  /* Plan 118 / #3141 step 1 — resolve the Phase 0 (cast detection) analyzer
+     via the per-phase selector, so a saved Advanced Settings override
+     (`analyzer.phase0.model`) is honoured rather than ignored (the old
+     `selectAnalyzer({ model })` only ever saw the per-request model + the
+     GEMINI_MODEL default). */
   let selection: AnalyzerSelection;
   try {
-    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, userSettings });
+    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
     clearInterval(keepAlive);
@@ -3439,7 +3431,6 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     requestedFresh,
     allowStage1Shrink,
     requestedModel,
-    userSettings,
   });
 });
 
@@ -3450,13 +3441,8 @@ export interface MainAnalyzerJobOpts {
      request body, that per-request id wins (precedence priority 2). Both
      phases resolve through `selectAnalyzerForPhase`, so a present
      `requestedModel` collapses the split to a single model for this run;
-     when absent, the saved per-phase models (priority 3) apply. */
+     when absent, the saved per-phase override (priority 3) applies. */
   requestedModel: string | undefined;
-  /* Plan 118 — read-once user-settings snapshot from request start, so
-     per-phase model resolution and the watermark / lag decisions all see
-     the same view of the file. Optional: tests and any legacy caller may
-     omit it and the job falls back to the in-process cache. */
-  userSettings?: UserSettings;
 }
 
 /* Detached analyzer loop body. Runs as a background promise spawned
@@ -3561,19 +3547,14 @@ export async function runMainAnalyzerJob(
      the model that's actually running, not the dead local primary. */
   let activeModelId = selection.model;
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
-  /* Read-once user-settings snapshot — the handler passes one in; legacy
-     callers / tests fall back to the in-process cache. Drives both the
-     Phase 1 model resolution and the watermark / lag below so they agree
-     with the Phase 0 resolution done in the route handler. */
-  const userSettings = opts.userSettings ?? getCachedUserSettings();
 
-  /* Plan 88 / 118 — pipelined two-model analyzer.
+  /* Plan 88 / 118 / #3141 step 1 — pipelined two-model analyzer.
      Both phases resolve through `selectAnalyzerForPhase`, which applies
      the documented precedence (env ANALYZER_PHASE{0,1}_MODEL > per-request
-     `model` > saved `analyzerPhase{0,1}Model` > default). So:
-       - No per-phase models + no per-request model → both phases run the
+     `model` > saved Advanced Settings override > default). So:
+       - No per-phase override + no per-request model → both phases run the
          same default model (single-model path, unchanged).
-       - Per-phase models set + no per-request model → Phase 0 and Phase 1
+       - Per-phase overrides set + no per-request model → Phase 0 and Phase 1
          run DIFFERENT models, splitting the load across two free-tier
          rate-limit buckets.
        - A per-request `model` (priority 2) collapses both phases to that
@@ -3588,7 +3569,6 @@ export async function runMainAnalyzerJob(
   const phase1Selection: AnalyzerSelection = selectAnalyzerForPhase({
     phase: 'phase1',
     model: opts.requestedModel,
-    userSettings,
   });
   const phase1Analyzer = phase1Selection.analyzer;
   /* Mutable for the same reason as activeModelId — Phase 1's stage2Call.onFallback
@@ -3607,16 +3587,16 @@ export async function runMainAnalyzerJob(
      when it is. */
   const escalationAnalyzer =
     configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
-  const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive(userSettings);
+  const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive();
   if (pipelinedPerPhase) {
     console.log(
       `[analysis] manuscript=${manuscriptId} pipelined ` +
         `phase0=${selection.engine}:${selection.model} ` +
         `phase1=${phase1Selection.engine}:${phase1Selection.model} ` +
-        `lag=${resolvePhase1MinLagChapters(userSettings)}`,
+        `lag=${resolvePhase1MinLagChapters()}`,
     );
   }
-  const watermark: PhaseWatermark = createWatermarkForJob(userSettings);
+  const watermark: PhaseWatermark = createWatermarkForJob();
 
   /* Best-effort GPU/CPU detection for the first-chapter ETA rate (issue 3).
      Only meaningful for local Ollama; cloud engines pass 'unknown' → the
@@ -6536,19 +6516,18 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   }
 
   const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
-  /* Plan 118 — resolve cast (Phase 0) and attribution (Phase 1) analyzers
-     via the per-phase selector so a saved split applies to the subset
-     retry too. This path is sequential (no watermark); the split only
-     changes which model each pass uses. */
-  const userSettings = await readUserSettings();
+  /* Plan 118 / #3141 step 1 — resolve cast (Phase 0) and attribution
+     (Phase 1) analyzers via the per-phase selector so a saved Advanced
+     Settings override applies to the subset retry too. This path is
+     sequential (no watermark); the split only changes which model each
+     pass uses. */
   let selection: AnalyzerSelection;
   let phase1Selection: AnalyzerSelection;
   try {
-    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, userSettings });
+    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel });
     phase1Selection = selectAnalyzerForPhase({
       phase: 'phase1',
       model: requestedModel,
-      userSettings,
     });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
