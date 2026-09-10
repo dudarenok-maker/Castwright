@@ -135,6 +135,11 @@ export interface UiState {
       "Resume generation" CTAs disable on this so a slow fetch can't be
       double-clicked into two starts. */
   startGenerationPending: boolean;
+  /** #3141 step 5 — per-run phase-model picks made from the analysing view's
+      PhaseModelSwap control, keyed by manuscript id. Applies only to the next
+      analysis run started from that view; never written to UserSettings.
+      Cleared for a manuscript once its pick has been sent on a start request. */
+  analyzerPhasePicks: Record<string, { phase0?: string; phase1?: string }>;
 }
 
 const initialState: UiState = {
@@ -165,6 +170,7 @@ const initialState: UiState = {
   voiceReadinessGate: null,
   cloneReadinessGate: null,
   startGenerationPending: false,
+  analyzerPhasePicks: {},
 };
 
 export const uiSlice = createSlice({
@@ -453,6 +459,27 @@ export const uiSlice = createSlice({
     clearReupload: (s) => {
       s.reuploadingBookId = null;
     },
+
+    /* #3141 step 5 — set (or, with modelId null, clear) one phase's per-run
+       pick for a manuscript. Dropping the last pick for a manuscript removes
+       its entry entirely rather than leaving an empty object behind. */
+    setPhaseModelPick: (
+      s,
+      a: PayloadAction<{ manuscriptId: string; phaseId: 0 | 1; modelId: string | null }>,
+    ) => {
+      const { manuscriptId, phaseId, modelId } = a.payload;
+      const key = phaseId === 0 ? 'phase0' : 'phase1';
+      const entry = { ...s.analyzerPhasePicks[manuscriptId] };
+      if (modelId) entry[key] = modelId;
+      else delete entry[key];
+      if (entry.phase0 || entry.phase1) s.analyzerPhasePicks[manuscriptId] = entry;
+      else delete s.analyzerPhasePicks[manuscriptId];
+    },
+    /* Clears both phases' picks for a manuscript — fired once its picks have
+       been sent on a start request, so a later run starts from settings. */
+    clearPhaseModelPicks: (s, a: PayloadAction<{ manuscriptId: string }>) => {
+      delete s.analyzerPhasePicks[a.payload.manuscriptId];
+    },
   },
   extraReducers: (builder) => {
     /* Seed-on-new-book: when the account settings hydrate (boot or save),
@@ -492,6 +519,19 @@ export const uiSlice = createSlice({
 });
 
 export const uiActions = uiSlice.actions;
+
+/** #3141 step 5 — the per-run pick for one phase of a manuscript, or
+    undefined when none is set (no manuscript id, or the user hasn't picked
+    one for this run). */
+export function selectPhaseModelPick(
+  ui: UiState,
+  manuscriptId: string | null | undefined,
+  phaseId: 0 | 1,
+): string | undefined {
+  if (!manuscriptId) return undefined;
+  const entry = ui.analyzerPhasePicks[manuscriptId];
+  return phaseId === 0 ? entry?.phase0 : entry?.phase1;
+}
 
 export const uiSelectors = {
   stageKind: (s: RootState) => s.ui.stage.kind,

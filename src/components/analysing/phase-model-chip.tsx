@@ -1,6 +1,7 @@
 import { MODEL_OPTIONS } from '../../lib/models';
 import { useAppSelector } from '../../store';
 import { selectAnalyzerSplitIsActive, selectAnalyzerPhase1MinLag } from '../../store/account-slice';
+import { selectPhaseModelPick } from '../../store/ui-slice';
 
 export type PhaseChipState = 'pending' | 'warming' | 'streaming' | 'done';
 
@@ -15,6 +16,10 @@ interface PhaseModelChipProps {
       chip shows what the server actually ran on rather than the UI default.
       Absent pre-stream (no SSE events yet) → existing Redux fallback applies. */
   serverModel?: string;
+  /** #3141 step 5 — the manuscript this run belongs to, used to read this
+      phase's per-run pick (if any) from PhaseModelSwap. Absent outside the
+      analysing view (e.g. sticky bar with no live manuscript). */
+  manuscriptId?: string | null;
 }
 
 /* Pill displaying the model that ACTUALLY owns a phase, with a state-coloured
@@ -29,14 +34,26 @@ interface PhaseModelChipProps {
        see (it depends on server env) — show an honest "Server default" rather
        than guessing.
    Phase 2 (library match) has no model and is intentionally not surfaced. */
-export function PhaseModelChip({ phaseId, state, prefix, serverModel }: PhaseModelChipProps) {
+export function PhaseModelChip({
+  phaseId,
+  state,
+  prefix,
+  serverModel,
+  manuscriptId,
+}: PhaseModelChipProps) {
   const splitActive = useAppSelector((s) => selectAnalyzerSplitIsActive(s.account));
   const minLag = useAppSelector((s) => selectAnalyzerPhase1MinLag(s.account));
+  /* A per-run pick (PhaseModelSwap, for the next run started from this view)
+     wins over the saved per-phase model, mirroring PhaseModelSwap's own
+     display and the fact that the pick is what the next request will send. */
+  const phasePick = useAppSelector((s) =>
+    phaseId === 0 || phaseId === 1 ? selectPhaseModelPick(s.ui, manuscriptId, phaseId) : undefined,
+  );
   const phaseModel = useAppSelector((s) =>
     phaseId === 0
-      ? s.account.analyzerPhase0Model
+      ? (phasePick ?? s.account.analyzerPhase0Model)
       : phaseId === 1
-        ? s.account.analyzerPhase1Model
+        ? (phasePick ?? s.account.analyzerPhase1Model)
         : null,
   );
   /* The model that a single-model run uses for BOTH phases: the per-run pick
@@ -60,7 +77,11 @@ export function PhaseModelChip({ phaseId, state, prefix, serverModel }: PhaseMod
   );
   if (phaseId === 2) return null;
 
-  const useSingle = overrideActive || !splitActive;
+  /* A per-run pick for this phase counts as split mode for display purposes
+     too — it names a model just for this phase's next run, same as a saved
+     per-phase split does, and must show it instead of the single effective
+     model. */
+  const useSingle = overrideActive || (!splitActive && phasePick === undefined);
   const serverDefault = !useSingle && !phaseModel;
   const modelId = useSingle ? effectiveSingleModel : phaseModel;
   /* Prefer the server-reported model id when one has arrived over SSE —

@@ -19,8 +19,6 @@ vi.mock('../../lib/api', async () => {
       ...actual.api,
       putUserSettings: (patch: unknown) => {
         putUserSettingsMock(patch);
-        /* Return the patch as the new settings — mirrors the mock-api
-           behaviour without depending on the in-memory mock store. */
         return Promise.resolve({
           ...accountSlice.getInitialState(),
           ...(patch as Record<string, unknown>),
@@ -38,19 +36,23 @@ beforeEach(() => {
 });
 
 function mountStore(
-  initial: Partial<{
+  account: Partial<{
     analyzerPhase0Model: string | null;
     analyzerPhase1Model: string | null;
     localAnalyzerModels: Array<{ name: string }>;
   }>,
-  ui?: Partial<{ selectedModel: string; selectedModelExplicit: boolean }>,
+  ui?: Partial<{
+    selectedModel: string;
+    selectedModelExplicit: boolean;
+    analyzerPhasePicks: Record<string, { phase0?: string; phase1?: string }>;
+  }>,
 ) {
   return configureStore({
     reducer: { account: accountSlice.reducer, ui: uiSlice.reducer },
     preloadedState: {
       account: {
         ...accountSlice.getInitialState(),
-        ...initial,
+        ...account,
       } as ReturnType<typeof accountSlice.getInitialState>,
       ui: {
         ...uiSlice.getInitialState(),
@@ -61,52 +63,100 @@ function mountStore(
 }
 
 describe('PhaseModelSwap', () => {
-  it('dispatches saveAccountSettings with the phase-0 patch when the user picks a model', async () => {
+  it('dispatches a per-run phase-0 pick and never touches saved settings', async () => {
     const store = mountStore({ analyzerPhase0Model: null });
     render(
       <Provider store={store}>
-        <PhaseModelSwap phaseId={0} isActive={true} />
+        <PhaseModelSwap manuscriptId="m1" phaseId={0} isRunLive={false} />
       </Provider>,
     );
     const select = screen.getByTestId('phase-model-swap-0') as HTMLSelectElement;
     fireEvent.change(select, { target: { value: 'gemini-3.1-flash-lite' } });
     await waitFor(() => {
-      expect(putUserSettingsMock).toHaveBeenCalledWith({ analyzerPhase0Model: 'gemini-3.1-flash-lite' });
+      expect(store.getState().ui.analyzerPhasePicks.m1?.phase0).toBe('gemini-3.1-flash-lite');
     });
-    /* Toast appears after the dispatch. The active-run wording mentions
-       the current chapter finishes on the previous model. */
-    const toast = await screen.findByTestId('phase-model-swap-0-toast');
-    expect(toast.textContent).toContain('Applies from the next chapter');
+    expect(putUserSettingsMock).not.toHaveBeenCalled();
   });
 
-  it('dispatches saveAccountSettings with the phase-1 patch and the inactive-run toast wording', async () => {
+  it('dispatches a per-run phase-1 pick', async () => {
     const store = mountStore({ analyzerPhase1Model: null });
     render(
       <Provider store={store}>
-        <PhaseModelSwap phaseId={1} isActive={false} />
+        <PhaseModelSwap manuscriptId="m1" phaseId={1} isRunLive={false} />
       </Provider>,
     );
     const select = screen.getByTestId('phase-model-swap-1') as HTMLSelectElement;
     fireEvent.change(select, { target: { value: 'gemma-4-31b-it' } });
     await waitFor(() => {
-      expect(putUserSettingsMock).toHaveBeenCalledWith({ analyzerPhase1Model: 'gemma-4-31b-it' });
+      expect(store.getState().ui.analyzerPhasePicks.m1?.phase1).toBe('gemma-4-31b-it');
     });
-    const toast = await screen.findByTestId('phase-model-swap-1-toast');
-    expect(toast.textContent).toBe('Applies from next chapter');
+    expect(putUserSettingsMock).not.toHaveBeenCalled();
   });
 
-  it('mapping the "(use server default)" sentinel persists null', async () => {
-    const store = mountStore({ analyzerPhase0Model: 'gemma-4-31b-it' });
+  it('mapping the "(use saved default)" sentinel clears the pick', async () => {
+    const store = mountStore(
+      { analyzerPhase0Model: 'gemma-4-31b-it' },
+      { analyzerPhasePicks: { m1: { phase0: 'gemini-3.1-flash-lite' } } },
+    );
     render(
       <Provider store={store}>
-        <PhaseModelSwap phaseId={0} isActive={false} />
+        <PhaseModelSwap manuscriptId="m1" phaseId={0} isRunLive={false} />
       </Provider>,
     );
     const select = screen.getByTestId('phase-model-swap-0') as HTMLSelectElement;
     fireEvent.change(select, { target: { value: '' } });
     await waitFor(() => {
-      expect(putUserSettingsMock).toHaveBeenCalledWith({ analyzerPhase0Model: null });
+      expect(store.getState().ui.analyzerPhasePicks.m1).toBeUndefined();
     });
+  });
+
+  it('shows the per-run pick in preference to the saved account default', () => {
+    const store = mountStore(
+      { analyzerPhase0Model: 'gemma-4-31b-it' },
+      { analyzerPhasePicks: { m1: { phase0: 'gemini-3.1-flash-lite' } } },
+    );
+    render(
+      <Provider store={store}>
+        <PhaseModelSwap manuscriptId="m1" phaseId={0} isRunLive={false} />
+      </Provider>,
+    );
+    const select = screen.getByTestId('phase-model-swap-0') as HTMLSelectElement;
+    expect(select.value).toBe('gemini-3.1-flash-lite');
+  });
+
+  it('is disabled (read-only) while a run is live for this manuscript', () => {
+    const store = mountStore({ analyzerPhase0Model: null });
+    render(
+      <Provider store={store}>
+        <PhaseModelSwap manuscriptId="m1" phaseId={0} isRunLive={true} />
+      </Provider>,
+    );
+    const select = screen.getByTestId('phase-model-swap-0') as HTMLSelectElement;
+    expect(select.disabled).toBe(true);
+  });
+
+  it('does not dispatch a pick while disabled by a live run (control cannot fire onChange, but assert the guard anyway)', async () => {
+    const store = mountStore({ analyzerPhase0Model: null });
+    render(
+      <Provider store={store}>
+        <PhaseModelSwap manuscriptId="m1" phaseId={0} isRunLive={true} />
+      </Provider>,
+    );
+    const select = screen.getByTestId('phase-model-swap-0') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'gemini-3.1-flash-lite' } });
+    await act(async () => {});
+    expect(store.getState().ui.analyzerPhasePicks.m1).toBeUndefined();
+  });
+
+  it('is disabled when there is no manuscript id to key the pick on', () => {
+    const store = mountStore({ analyzerPhase0Model: null });
+    render(
+      <Provider store={store}>
+        <PhaseModelSwap manuscriptId={null} phaseId={0} isRunLive={false} />
+      </Provider>,
+    );
+    const select = screen.getByTestId('phase-model-swap-0') as HTMLSelectElement;
+    expect(select.disabled).toBe(true);
   });
 
   describe('per-run override active — the per-phase swap is shadowed', () => {
@@ -122,7 +172,7 @@ describe('PhaseModelSwap', () => {
       );
       render(
         <Provider store={store}>
-          <PhaseModelSwap phaseId={1} isActive={true} />
+          <PhaseModelSwap manuscriptId="m1" phaseId={1} isRunLive={true} />
         </Provider>,
       );
       const el = screen.getByTestId('phase-model-swap-1') as HTMLSelectElement;
@@ -131,31 +181,14 @@ describe('PhaseModelSwap', () => {
       expect(el.getAttribute('title')).toContain('Per-run override');
     });
 
-    it('does not persist a per-phase change while the override shadows it', async () => {
-      const store = mountStore(
-        { analyzerPhase1Model: 'gemini-3.1-flash-lite' },
-        { selectedModel: 'qwen3.5:4b', selectedModelExplicit: true },
-      );
-      render(
-        <Provider store={store}>
-          <PhaseModelSwap phaseId={1} isActive={true} />
-        </Provider>,
-      );
-      const el = screen.getByTestId('phase-model-swap-1') as HTMLSelectElement;
-      /* Disabled selects don't fire onChange, but assert the guard anyway. */
-      fireEvent.change(el, { target: { value: 'gemma-4-31b-it' } });
-      await act(async () => {});
-      expect(putUserSettingsMock).not.toHaveBeenCalled();
-    });
-
-    it('stays an editable picker when the pick is not explicit (seeded default)', () => {
+    it('stays an editable picker when the override pick is not explicit (seeded default)', () => {
       const store = mountStore(
         { analyzerPhase1Model: 'gemini-3.1-flash-lite' },
         { selectedModel: 'qwen3.5:4b', selectedModelExplicit: false },
       );
       render(
         <Provider store={store}>
-          <PhaseModelSwap phaseId={1} isActive={false} />
+          <PhaseModelSwap manuscriptId="m1" phaseId={1} isRunLive={false} />
         </Provider>,
       );
       const el = screen.getByTestId('phase-model-swap-1') as HTMLSelectElement;
@@ -170,7 +203,7 @@ describe('PhaseModelSwap', () => {
     const store = mountStore({ analyzerPhase0Model: null, localAnalyzerModels: [] });
     render(
       <Provider store={store}>
-        <PhaseModelSwap phaseId={0} isActive={false} />
+        <PhaseModelSwap manuscriptId="m1" phaseId={0} isRunLive={false} />
       </Provider>,
     );
     const select = screen.getByTestId('phase-model-swap-0') as HTMLSelectElement;
@@ -192,7 +225,7 @@ describe('PhaseModelSwap', () => {
     });
     render(
       <Provider store={store}>
-        <PhaseModelSwap phaseId={0} isActive={false} />
+        <PhaseModelSwap manuscriptId="m1" phaseId={0} isRunLive={false} />
       </Provider>,
     );
     const option = screen.getByRole('option', { name: uncurated });
@@ -203,21 +236,19 @@ describe('PhaseModelSwap', () => {
     expect(optgroup?.getAttribute('label')).toMatch(/local/i);
   });
 
-  it('no-ops when the chosen value matches the current persisted value', async () => {
+  it('no-ops when the chosen value matches the currently-shown value', async () => {
     const store = mountStore({ analyzerPhase0Model: 'gemma-4-31b-it' });
     render(
       <Provider store={store}>
-        <PhaseModelSwap phaseId={0} isActive={false} />
+        <PhaseModelSwap manuscriptId="m1" phaseId={0} isRunLive={false} />
       </Provider>,
     );
     const select = screen.getByTestId('phase-model-swap-0') as HTMLSelectElement;
-    /* Re-pick the same value — must NOT fire a save. The change event still
+    /* Re-pick the same value — must NOT dispatch a pick. The change event still
        fires (React fires onChange on each interaction); the component
        guards inside. */
     fireEvent.change(select, { target: { value: 'gemma-4-31b-it' } });
-    /* Settle any microtasks; without this the assertion might race a
-       not-yet-fired save dispatch. */
     await act(async () => {});
-    expect(putUserSettingsMock).not.toHaveBeenCalled();
+    expect(store.getState().ui.analyzerPhasePicks.m1).toBeUndefined();
   });
 });

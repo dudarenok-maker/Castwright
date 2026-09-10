@@ -1,7 +1,7 @@
 // Pairs with docs/features/archive/00-stage-machine.md, docs/features/archive/01-hash-router.md
 
 import { describe, expect, it } from 'vitest';
-import { uiSlice, uiActions, type UiState } from './ui-slice';
+import { uiSlice, uiActions, selectPhaseModelPick, type UiState } from './ui-slice';
 import { stageToHash } from '../lib/router';
 import type { Stage } from '../lib/types';
 
@@ -36,6 +36,7 @@ const baseState = (stage: Stage): UiState => ({
   voiceReadinessGate: null,
   cloneReadinessGate: null,
   startGenerationPending: false,
+  analyzerPhasePicks: {},
 });
 
 describe('uiSlice — openBook status→stage routing', () => {
@@ -428,5 +429,76 @@ describe('uiSlice — driftReportScope (drift modal book/series toggle)', () => 
     );
     const closed = uiSlice.reducer(opened, uiActions.setShowDriftReport(false));
     expect(closed.driftReportScope).toBe('book');
+  });
+});
+
+describe('uiSlice — #3141 step 5: per-run phase-model picks', () => {
+  it('setPhaseModelPick records a phase-0 pick for a manuscript', () => {
+    const s = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.setPhaseModelPick({ manuscriptId: 'm1', phaseId: 0, modelId: 'gemini-2.5-flash' }),
+    );
+    expect(s.analyzerPhasePicks.m1).toEqual({ phase0: 'gemini-2.5-flash' });
+    expect(selectPhaseModelPick(s, 'm1', 0)).toBe('gemini-2.5-flash');
+    expect(selectPhaseModelPick(s, 'm1', 1)).toBeUndefined();
+  });
+
+  it('tracks phase 0 and phase 1 picks independently for the same manuscript', () => {
+    let s = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.setPhaseModelPick({ manuscriptId: 'm1', phaseId: 0, modelId: 'gemma-4-31b-it' }),
+    );
+    s = uiSlice.reducer(
+      s,
+      uiActions.setPhaseModelPick({ manuscriptId: 'm1', phaseId: 1, modelId: 'gemini-3.1-flash-lite' }),
+    );
+    expect(s.analyzerPhasePicks.m1).toEqual({
+      phase0: 'gemma-4-31b-it',
+      phase1: 'gemini-3.1-flash-lite',
+    });
+  });
+
+  it('keeps picks for different manuscripts separate', () => {
+    let s = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.setPhaseModelPick({ manuscriptId: 'm1', phaseId: 0, modelId: 'gemma-4-31b-it' }),
+    );
+    s = uiSlice.reducer(
+      s,
+      uiActions.setPhaseModelPick({ manuscriptId: 'm2', phaseId: 0, modelId: 'qwen3.5:9b' }),
+    );
+    expect(selectPhaseModelPick(s, 'm1', 0)).toBe('gemma-4-31b-it');
+    expect(selectPhaseModelPick(s, 'm2', 0)).toBe('qwen3.5:9b');
+  });
+
+  it('setPhaseModelPick with modelId null clears that phase, dropping the manuscript entry once both phases are empty', () => {
+    let s = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.setPhaseModelPick({ manuscriptId: 'm1', phaseId: 0, modelId: 'gemma-4-31b-it' }),
+    );
+    s = uiSlice.reducer(
+      s,
+      uiActions.setPhaseModelPick({ manuscriptId: 'm1', phaseId: 0, modelId: null }),
+    );
+    expect(s.analyzerPhasePicks.m1).toBeUndefined();
+  });
+
+  it('clearPhaseModelPicks drops both phases for a manuscript', () => {
+    let s = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.setPhaseModelPick({ manuscriptId: 'm1', phaseId: 0, modelId: 'gemma-4-31b-it' }),
+    );
+    s = uiSlice.reducer(
+      s,
+      uiActions.setPhaseModelPick({ manuscriptId: 'm1', phaseId: 1, modelId: 'gemini-3.1-flash-lite' }),
+    );
+    s = uiSlice.reducer(s, uiActions.clearPhaseModelPicks({ manuscriptId: 'm1' }));
+    expect(s.analyzerPhasePicks.m1).toBeUndefined();
+  });
+
+  it('selectPhaseModelPick returns undefined for a null/undefined manuscript id', () => {
+    const s = baseState({ kind: 'books' });
+    expect(selectPhaseModelPick(s, null, 0)).toBeUndefined();
+    expect(selectPhaseModelPick(s, undefined, 1)).toBeUndefined();
   });
 });
