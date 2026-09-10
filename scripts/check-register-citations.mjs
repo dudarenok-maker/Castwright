@@ -23,14 +23,15 @@
 // including docs-only diffs, because citations can live in any file and
 // diff-scope cannot reliably predict whether one broke.
 //
-// LOCAL WIRING (open, tracked at #3140): The checker IS reachable locally as
-// part of `npm run test:hooks` (which `npm run verify` and `npm run test:all`
-// both run), via the test suite `scripts/tests/check-register-citations.test.mjs`
-// that spawns the checker CLI against the real tree. However, `test:hooks`'s own
-// input globs don't span the whole tree, so on a diff outside those globs, the
-// step can be marked `[cached]`/skipped rather than actually re-scanning. A
-// dedicated local step that runs unconditionally (independent of scope) is
-// tracked separately at #3140.
+// LOCAL WIRING (open, tracked at #3140): The checker IS reachable locally via
+// two paths: (1) `npm run verify` reaches it via `test:hooks` (which is scope-gated
+// in verify-cache.mjs, so it can be marked `[cached]`/skipped on out-of-scope diffs);
+// and (2) `npm run test:all` and `npm run verify:quick` invoke test:hooks directly
+// with NO caching, so the checker runs unconditionally as part of every local
+// `test:all`/`verify:quick` invocation. The actual decision at #3140 is narrower:
+// whether `npm run verify` itself (beyond test:all) should also have an
+// unconditional/uncached local leg (independent of scope-gating), and whether
+// a git hook should wire it.
 //
 // Four checks, ordered by precision (least to most likely to need
 // judgment):
