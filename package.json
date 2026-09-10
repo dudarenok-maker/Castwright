@@ -151,6 +151,7 @@
     "globals": "^17",
     "husky": "^9.1.7",
     "jest-axe": "^11.0.0",
+    "js-yaml": "^4.3.2",
     "jsdom": "^29",
     "openapi-typescript": "^7.0.0",
     "picomatch": "^4.0.7",
@@ -166,7 +167,7 @@
     "vitest": "^4.1.11"
   },
   "overrides": {
-    "js-yaml": "^4.2.0",
+    "js-yaml": "^4.3.2",
     "openapi-typescript": {
       "typescript": "$typescript"
     },
