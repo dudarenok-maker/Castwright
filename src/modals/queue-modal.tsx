@@ -47,14 +47,15 @@ import { PrimaryButton, Checkbox } from '../components/primitives';
 import { ConfirmDialog } from './confirm-dialog';
 
 /* #3106 — threshold before an unanswered awaiting_confirm entry fires a
-   blocked-state signal (toast + persistent banner in the Queue modal).
+   "needs your input" signal (toast + persistent banner in the Queue modal).
    60 seconds: long enough that a user actively deciding doesn't get nagged,
-   short enough that a walked-away session surfaces the block before the next
+   short enough that a walked-away session surfaces the wait before the next
    natural check-in. The dispatcher independently continues to claim any
    later `queued` entries regardless of an awaiting_confirm entry sitting
    earlier in the array (STEP 2 fill loop `continue`s past non-queued), so
-   this signal is purely a UI-legibility fix — it tells the user WHY a
-   chapter looks stuck and points at the existing resolution controls. */
+   this signal is purely a UI-legibility fix — it tells the user a chapter
+   is waiting on them and points at the existing resolution controls; it is
+   not a claim that the parked entry itself is blocking anything else. */
 export const STALE_AWAITING_CONFIRM_MS = 60_000;
 
 /** Polling interval for the stale-awaiting_confirm check. 5 s is frequent
@@ -148,16 +149,28 @@ function useStaleAwaitingConfirm(
       if (hasQueuedEntry) {
         for (const entry of awaitingEntries) {
           const serverStampMs = Date.parse(entry.parkedAt ?? entry.addedAt);
-          let stampMs = serverStampMs;
+          const observedAt = staleObservedAtRef.current.get(entry.id);
+          let stampMs: number;
           if (Number.isNaN(serverStampMs) || serverStampMs > now) {
             /* N2 clamp — server timestamp is unusable (unparseable) or reads
                as future relative to this client's clock. Fall back to the
                first client-clock instant this component observed the entry. */
-            const observedAt = staleObservedAtRef.current.get(entry.id) ?? now;
-            staleObservedAtRef.current.set(entry.id, observedAt);
-            stampMs = observedAt;
+            stampMs = observedAt ?? now;
+            staleObservedAtRef.current.set(entry.id, stampMs);
+          } else if (observedAt !== undefined) {
+            /* P1 — once a client-clock observation has been recorded for
+               this entry (because the server stamp read as future at some
+               earlier tick), keep using it as a floor even after the server
+               stamp catches up to the client's clock. Reverting straight to
+               serverStampMs here would let elapsed staleness collapse back
+               toward 0 at the exact moment the skew crosses zero, making an
+               already-stale entry read as fresh again for a full threshold
+               window (PR #3143 pass-3 P1). Staleness must be monotonic —
+               never un-stale once flagged stale — so take whichever stamp
+               is earlier. */
+            stampMs = Math.min(serverStampMs, observedAt);
           } else {
-            staleObservedAtRef.current.delete(entry.id);
+            stampMs = serverStampMs;
           }
           if (now - stampMs < STALE_AWAITING_CONFIRM_MS) continue;
 

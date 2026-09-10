@@ -286,5 +286,44 @@ describe('#3106 stale awaiting_confirm blocked-state signal', () => {
         store.getState().notifications.toasts.find((t) => t.dedupeKey === 'fallback-confirm:e80'),
       ).toBeUndefined();
     });
+
+    it('stays visible across the clock-skew crossover point instead of flickering off (pass-3 P1)', () => {
+      /* Same 2-minute-behind skew as above (S = 120s), but this test drives
+         the fake clock all the way past t = S — the point at which the
+         server stamp stops reading as "in the client's future" and the N2
+         clamp's `else` branch used to discard the recorded client-clock
+         observation, reverting to `now - serverStampMs`. That collapses to
+         ~0 right at the crossover, so pre-fix the banner (correctly shown at
+         t=65s below) would vanish for about a minute before reappearing at
+         t=185s (PR #3143 pass-3 P1). Staleness must be monotonic — once
+         flagged stale, an entry must not read as fresh again — so this
+         drives the clock through t=65s, t=125s (the crossover), and t=185s
+         and asserts the banner never disappears once shown. */
+      const skewedParkedAt = new Date(Date.parse(NOW_ISO) + 2 * 60_000).toISOString();
+      const awaiting = entry({
+        id: 'e90', status: 'awaiting_confirm', parkedAt: skewedParkedAt,
+        fallbackCharacters: [{ id: 'c9', name: 'CrossoverSkewed' }],
+      });
+      const queued = entry({ id: 'e91', chapterId: 11, status: 'queued', order: 1 });
+      const store = makeStore([awaiting, queued]);
+
+      render(<Provider store={store}><QueueModal open={true} onClose={() => {}} /></Provider>);
+      expect(screen.queryByTestId('queue-stale-awaiting-banner')).toBeNull();
+
+      /* t=65s — correctly stale via the clamp (mirrors the existing test above). */
+      act(() => { vi.advanceTimersByTime(65_000); });
+      expect(screen.getByTestId('queue-stale-awaiting-banner')).toBeTruthy();
+
+      /* t=125s — just past the crossover (S=120s). Pre-fix, the banner
+         would have disappeared here. */
+      act(() => { vi.advanceTimersByTime(60_000); });
+      expect(screen.getByTestId('queue-stale-awaiting-banner')).toBeTruthy();
+
+      /* t=185s — well past the crossover, and the point where the pre-fix
+         behaviour would have made the banner reappear. It should never have
+         left, so this just confirms it's still there. */
+      act(() => { vi.advanceTimersByTime(60_000); });
+      expect(screen.getByTestId('queue-stale-awaiting-banner')).toBeTruthy();
+    });
   });
 });
