@@ -5044,6 +5044,22 @@ class PlacementController:
         devices = self.probe()
         candidates = self._gpu_candidates(devices, constraint)
 
+        # #3097 — when pinned (not resident), the hinted device wins only if
+        # its free headroom is at least 75 % of the unconstrained winner's.
+        # A stale device-list cache or an operator pin pointing at the card
+        # Qwen is already generating on would otherwise defeat the
+        # Coqui-derive self-heal (#3058) entirely: the hint restricts
+        # try_hold to that one device and it fits, so no comparison ever
+        # happens.  With the tolerance check, a materially freer alternative
+        # wins; the hint is honored when the gap is immaterial.
+        if pinned is not None and resident is None and candidates:
+            all_gpus = self._gpu_candidates(devices, None)
+            if len(all_gpus) > 1:
+                hinted_free = candidates[0][1]
+                winner_free = max(c[1] for c in all_gpus)
+                if hinted_free < 0.75 * winner_free:
+                    candidates = all_gpus
+
         held = self.ledger.try_hold(candidates, peak, reserve_cap, engine)
         if held is None and not (cpu_capable and not heavy):
             worst = self._worst_device_key(devices)
