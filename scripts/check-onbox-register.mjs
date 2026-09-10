@@ -1524,10 +1524,11 @@ export function resolveBaselineTexts(
 // it must not be folded into the same bucket as "the ref itself is garbage."
 //
 // #3116 review finding 5: correctness depends on the working tree being
-// `merge(base, head)` — the merged state of the base ref into the current
+// `merge(base, head)` — the merged state of the current base tip into the current
 // branch. In CI this is guaranteed: `actions/checkout@v7` on a
 // pull_request event checks out `refs/pull/N/merge`, which is exactly that
-// virtual commit. On hand-run invocations from an un-rebased branch that has
+// virtual commit merged onto the base's current tip. The base ref itself is
+// available as HEAD^1. On hand-run invocations from an un-rebased branch that has
 // diverged from the base ref (not recommended, but possible), comparing
 // un-merged trees might report OK when they genuinely differ — the comparison
 // is only meaningful when the working tree contains the base ref's content.
@@ -1638,10 +1639,12 @@ function runCheckOnboxRegisterCli() {
   // responsible for making `ref` resolvable locally first.
   //
   // Correctness assumes the working tree is merge(base, head): the result of
-  // merging `ref` into the current branch. CI: actions/checkout@v7 guarantees
-  // this with refs/pull/N/merge. Hand-run: only meaningful from a rebased
-  // branch; comparing un-merged trees from an un-rebased branch may report
-  // OK when they genuinely differ.
+  // merging `ref` into the current branch. In CI, actions/checkout@v7 with
+  // fetch-depth: 2 checks out refs/pull/N/merge (the merge onto the current
+  // base tip), and the base ref is available as HEAD^1. Hand-run: the check is
+  // only meaningful when comparing the base ref against the merged state;
+  // comparing un-merged trees from an un-rebased branch may report OK when they
+  // genuinely differ.
   const stampedSinceIdx = process.argv.indexOf('--stamped-since');
   if (stampedSinceIdx !== -1) {
     // #3116 review finding 2: --stamped-since is incompatible with

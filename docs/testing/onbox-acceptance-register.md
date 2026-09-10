@@ -80,12 +80,12 @@ The token is now LIVE: `npm run check:onbox-register -- --stamped-since <ref>`
 counter moving — catching cases where a branch reverts the live view to an
 older revision, or where a conflict was resolved by taking one side wholesale
 over the other. The check reads the base ref's copy and the working tree's,
-which on a PR is `merge(base, head)`, and **reports** an unstamped change in
+which CI makes `merge(base, head)`, and **reports** an unstamped change in
 content (see #3138 for the decision whether to enforce it as a merge gate).
 **Any PR that changes the live view's RENDERED content must re-stamp it** — this
-includes any markdown-only edit that moves a count (even though only the
-markdown changed, the live view's `<!-- BEGIN GENERATED -->` section regenerates
-with the new count, so `--stamped-since` sees rendered content that moved).
+includes any markdown-only edit that moves a count. The `register:build` rebuild
+that CI's `--check` step requires moves the generated section, so `--stamped-since`
+then sees rendered content that moved.
 
 The live view carries derived figures — owed count, per-group counts, oldest
 debt — that are **generated** on every build. Rows can be right while the
@@ -97,7 +97,6 @@ floor — the floor gates the NEXT id a group may mint, not the ids already in
 use), and that each group's glance-table count matches the rows in its body
 section. Both fail CI when rows are added, removed, or miscounted, so
 **adding or removing a row here and missing the live view build fails CI**.
-
 Know its edges, because three of them are wide:
 
 - **A wording-only edit to a numbered Group row does not fail — but the same

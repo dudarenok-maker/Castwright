@@ -35,6 +35,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
 
       - name: Set up Node
         uses: actions/setup-node@v7
@@ -45,18 +47,15 @@ jobs:
         run: node scripts/check-onbox-register.mjs
 
       - name: Check the generated live-view surfaces are up to date
+        if: ${{ !cancelled() }}
         run: node scripts/build-register-live-view.mjs --check
 
       # #3116: mandatory-but-unenforced until now. The register's own
       # procedure says every publish must bump the live view's publish
-      # token; nothing checked it. A shallow `actions/checkout@v7` has no
-      # base ref available, so fetch just the PR's base commit (not
-      # `fetch-depth: 0` — that would pull the whole history for a single
-      # commit) before invoking the check.
-      - name: Fetch PR base for the publish-token check
-        if: github.event_name == 'pull_request'
-        run: git fetch --depth=1 origin ${{ github.event.pull_request.base.sha }}
-
+      # token; nothing checked it. With fetch-depth: 2, the merge
+      # commit's first parent (the base ref at merge time) is available
+      # as HEAD^1. This check verifies that any change to the live view's
+      # RENDERED content is accompanied by a stamp bump.
       - name: Check the live view was re-stamped if its content changed
-        if: github.event_name == 'pull_request'
-        run: node scripts/check-onbox-register.mjs --stamped-since ${{ github.event.pull_request.base.sha }}
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: node scripts/check-onbox-register.mjs -- --stamped-since HEAD^1
