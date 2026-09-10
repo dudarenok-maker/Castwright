@@ -157,6 +157,11 @@ const MAIN_COVERED = [
      trap as the entries above, since the guard scans the file's source text
      rather than importing it. */
   { rel: 'src/routes/generation.ts', file: 'the generation route (resolveEligibleEngines call site)', base: SERVER_ROOT },
+  /* #3139/#3146: registry-knob-read.guard.test.ts reads these two files' source
+     text at RUNTIME to verify its DECLARED_DYNAMIC_READERS claims — the same
+     #1847 runtime-read trap as the entries above. */
+  { rel: 'src/analyzer/rate-limit.ts', file: 'the rate-limit dynamic-reader lookup', base: SERVER_ROOT },
+  { rel: 'src/tts/segment-asr-qa.ts', file: 'the per-language maxWer dynamic-reader lookup', base: SERVER_ROOT },
 ];
 
 const SLOW_COVERED = [
