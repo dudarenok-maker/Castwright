@@ -250,10 +250,14 @@ const SLOW_NOT_COVERED = [
 /* #3085: state-language.guard.test.ts's new trigger deliberately covers the
    whole server/src/** tree, so "an ordinary server source file" is no longer
    a valid not-covered case for the MAIN config — matching it is the point.
-   Swap in a file outside every guard's declared scope instead. */
+   Swap in files outside every guard's declared scope instead — one for each
+   major extension type (non-source, source-extension) so widening a trigger
+   to a broad glob (e.g. ** + any-extension) is caught rather than only the
+   crudest widening. */
 const MAIN_NOT_COVERED = [
   ...NOT_COVERED,
   { rel: 'CONTRIBUTING.md', file: 'an ordinary repo file outside every guard scope', base: REPO_ROOT },
+  { rel: 'src/lib/account-defaults.ts', file: 'a frontend source file outside every guard scope', base: REPO_ROOT },
 ];
 
 const crossProduct = (covered: typeof MAIN_COVERED) =>
@@ -307,6 +311,22 @@ describe('server/vitest.config.ts forceRerunTriggers', () => {
       `{**/${ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB},` +
       `**/.*/**/${ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB}}`;
     expect(mainTriggers).toContain(expected);
+  });
+
+  /* coqui-residency-policy.guard.test.ts (#1932, side-18) reads
+     server/src/tts/synthesise-chapter.ts at RUNTIME — the file is importable
+     but the guard doesn't import it, it scans its source text for eviction
+     policy cross-references, so there is no module-graph edge from the guard
+     to this file. The new broad server/src/** trigger added in #3085 now
+     covers this file, making the specific entry able to be deleted without
+     failing this test suite — but the guard still declares
+     synthesise-chapter.ts as its own scope. This exact-entry pin guards against
+     the entry being silently deleted on the assumption that the broader trigger
+     handles it (it does, today, but the guard's scope is still the specific
+     file). */
+  it('main forceRerunTriggers has the exact entry for coqui-residency-policy.guard.test.ts synthesise-chapter.ts (#3085)', () => {
+    const coquiSynthesiseEntry = '{**/server/src/tts/synthesise-chapter.ts,**/.*/**/server/src/tts/synthesise-chapter.ts}';
+    expect(mainTriggers).toContain(coquiSynthesiseEntry);
   });
 
   /* Only entries 1, 4 and 6 have their OWN literal brace-glob trigger to pin

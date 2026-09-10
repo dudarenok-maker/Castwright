@@ -152,6 +152,16 @@ const INDIRECT_RE = /\bspawnFn\s*\(/g;
 
 const REPO_ROOT = join(SRC_ROOT, '..', '..');
 
+/* The three external scan roots used by externalFilesFloor() — declared at
+   module scope (not as local consts inside the function) so the scan target and
+   the test's assertion of the scan target both read the same binding.
+   This pins the two independently so an edit that adds a fourth root to
+   externalFilesFloor() fails the test rather than silently agreeing with a
+   stale constant. */
+const EXTERNAL_SCRIPTS_DIR = join(REPO_ROOT, 'scripts');
+const EXTERNAL_TTS_DIR = join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts');
+const EXTERNAL_PINOKIO_DIR = join(REPO_ROOT, 'pinokio-scripts', 'lib');
+
 /* Helper: recursively list files matching given extensions under a directory.
    Skips node_modules, dist, and .git subtrees. */
 function listFilesRecursive(dir: string, extensions: string[]): string[] {
@@ -260,16 +270,13 @@ function externalFilesFloor(): string[] {
   // which spawns `node --test scripts/tests/*.test.mjs` WITH windowsHide) —
   // see cross-os-ffmpeg-install.test.mjs's module-load-time pwsh probe, the
   // worst offender this exclusion let slip through).
-  const scriptsDir = join(REPO_ROOT, 'scripts');
-  const scriptsFiles = listFilesRecursive(scriptsDir, ['.mjs', '.cjs', '.js']);
+  const scriptsFiles = listFilesRecursive(EXTERNAL_SCRIPTS_DIR, ['.mjs', '.cjs', '.js']);
 
   // server/tts-sidecar/scripts/ recursive, .mjs
-  const ttsDir = join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts');
-  const ttsFiles = listFilesRecursive(ttsDir, ['.mjs']);
+  const ttsFiles = listFilesRecursive(EXTERNAL_TTS_DIR, ['.mjs']);
 
   // pinokio-scripts/lib/ recursive, .js/.mjs
-  const pinokioDir = join(REPO_ROOT, 'pinokio-scripts', 'lib');
-  const pinokioFiles = listFilesRecursive(pinokioDir, ['.js', '.mjs']);
+  const pinokioFiles = listFilesRecursive(EXTERNAL_PINOKIO_DIR, ['.js', '.mjs']);
 
   // Combine all candidates
   const candidates = [...rootFiles, ...scriptsFiles, ...ttsFiles, ...pinokioFiles];
@@ -499,20 +506,27 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
     // sibling module — the same constant force-rerun-triggers.test.ts checks
     // its forceRerunTriggers entries against — so the two statements of this
     // guard's scope can never independently drift.
-    const scriptsDir = join(REPO_ROOT, 'scripts');
-    const ttsDir = join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts');
-    const pinokioDir = join(REPO_ROOT, 'pinokio-scripts', 'lib');
     const toRepoRel = (p: string) => relative(REPO_ROOT, p).split(sep).join('/');
+
+    // Check that the external directory roots match the declared globs.
+    // These are hoisted to module scope so externalFilesFloor() and this test
+    // both read the same binding — an added fourth root fails this exhaustive
+    // toEqual check rather than being silently ignored.
+    const externalRoots = [
+      EXTERNAL_SCRIPTS_DIR,
+      EXTERNAL_TTS_DIR,
+      EXTERNAL_PINOKIO_DIR,
+    ];
+    const externalRootsRel = externalRoots.map(toRepoRel);
+    const expectedExternalRootsRel = [
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[1].replace(/\/\*\*$/, ''),
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[2].replace(/\/\*\*$/, ''),
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[3].replace(/\/\*\*$/, ''),
+    ];
+    expect(externalRootsRel).toEqual(expectedExternalRootsRel);
 
     expect(toRepoRel(SRC_ROOT)).toBe(
       SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[0].replace(/\/\*\*$/, ''),
-    );
-    expect(toRepoRel(scriptsDir)).toBe(
-      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[1].replace(/\/\*\*$/, ''),
-    );
-    expect(toRepoRel(ttsDir)).toBe(SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[2].replace(/\/\*\*$/, ''));
-    expect(toRepoRel(pinokioDir)).toBe(
-      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[3].replace(/\/\*\*$/, ''),
     );
     expect(EXTERNAL_FILES_MANUAL.map(toRepoRel)).toEqual([SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[4]]);
 
