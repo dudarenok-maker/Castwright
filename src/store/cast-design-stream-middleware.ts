@@ -332,7 +332,16 @@ export function createCastDesignMiddleware(): Middleware {
       if (a.type === REQUESTED_TYPE) {
         const { bookId, characterIds, modelKey, scope, variantTasks } =
           a.payload as DesignAllRequestedPayload;
-        if (handle) return result; // a run is already streaming
+        if (handle) {
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message: 'A design job is already running for this session — the new request was not started.',
+              dedupeKey: `cast-design:busy:${bookId}`,
+            }),
+          );
+          return result;
+        }
         const variantCount = (variantTasks ?? []).reduce((n, t) => n + t.emotions.length, 0);
         const baseCount = scope === 'variants' ? 0 : characterIds.length;
         const total = baseCount + (scope === 'bases' ? 0 : variantCount);
@@ -382,7 +391,16 @@ export function createCastDesignMiddleware(): Middleware {
           modelKey: string;
           mode: 'first' | 'redesign';
         };
-        if (handle) return result; // one design op per book
+        if (handle) {
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message: 'A design job is already running for this session — the new request was not started.',
+              dedupeKey: `cast-design:busy:${p.bookId}`,
+            }),
+          );
+          return result;
+        }
         const controller = new AbortController();
         /* Seed the single snapshot instantly (before the first SSE event). */
         dispatch(

@@ -534,4 +534,79 @@ describe('castDesignMiddleware', () => {
     const toasts = (store.getState() as { notifications: { toasts: { message: string }[] } }).notifications.toasts;
     expect(toasts.at(-1)?.message).toMatch(/1 via fallback/);
   });
+
+  it('dispatches an error toast when a single design request arrives while a bulk job is running', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria' } as never]),
+    );
+
+    // Start a bulk design that never resolves — handle stays occupied.
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b1',
+        characterIds: ['c1'],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'bases',
+      }),
+    );
+    expect(startCalls).toHaveLength(1);
+
+    // Fire a single design request while handle is busy.
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'first',
+      }),
+    );
+
+    // No second API call should have been made.
+    expect(singleStartCalls).toHaveLength(0);
+
+    // An error toast should have been dispatched.
+    const toastActions = recorded.filter((a) => a.type === 'notifications/pushToast');
+    expect(toastActions.length).toBeGreaterThan(0);
+  });
+
+  it('dispatches an error toast when a bulk design request arrives while another job is running', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria' } as never]),
+    );
+
+    // Start a bulk design that never resolves — handle stays occupied.
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b1',
+        characterIds: ['c1'],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'bases',
+      }),
+    );
+    expect(startCalls).toHaveLength(1);
+
+    // Fire a second bulk design request while handle is busy.
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b1',
+        characterIds: ['c1'],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'bases',
+      }),
+    );
+
+    // Only one API call should have been made.
+    expect(startCalls).toHaveLength(1);
+
+    // An error toast should have been dispatched.
+    const toastActions = recorded.filter((a) => a.type === 'notifications/pushToast');
+    expect(toastActions.length).toBeGreaterThan(0);
+  });
 });
