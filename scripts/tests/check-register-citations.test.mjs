@@ -2381,6 +2381,52 @@ Other body.
   assert.equal(result.annotatedFindings.length, 0);
 });
 
+// Regression test for PR #3124 finding F1 — register title code spans must
+// always be blanked regardless of scanned file type.
+test('checkCitationTitleDrift: register row title code spans are always blanked, not affected by scanned file type', () => {
+  // When scanning a non-markdown file (e.g., .mjs), the register row's title
+  // (which comes from docs/testing/onbox-acceptance-register.md, always
+  // markdown) should still have its backticks blanked. Before the fix,
+  // titleDriftTokens(row.title, isMarkdown) was passed the scanned file's
+  // isMarkdown flag, so non-markdown files caused the register title's
+  // backticks to NOT be blanked, leaking backtick-wrapped words into the
+  // token comparison and falsely suppressing drift detection.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### E3 · Pair from \`castwright.local\` (#256)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+
+  // Heading that echoes only the backticked part, not "Pair from".
+  // When register title backticks are correctly blanked:
+  //   - Register tokens: {"pair", "from"}
+  //   - Heading tokens: {"castwright", "local"}
+  //   - Shared: {} = 0 tokens
+  //   - Should trigger drift detection
+  //
+  // When register title backticks are NOT blanked (the bug):
+  //   - Register tokens: {"pair", "from", "castwright", "local"}
+  //   - Heading tokens: {"castwright", "local"}
+  //   - Shared: {"castwright", "local"} = 2 tokens >= minimum
+  //   - Would suppress drift detection (false negative)
+  const text = '### E3 · castwright local\n\nBody.\n';
+
+  // Both .md and .mjs should detect the same drift.
+  // Before fix: .md detects drift, .mjs does not (bug).
+  // After fix: both detect drift (correct).
+  const mdResult = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const mjsResult = checkCitationTitleDrift(text, 'docs/foo.mjs', rows);
+
+  assert.equal(mdResult.findings.length, 1, 'drift detected when scanning .md file');
+  assert.equal(mjsResult.findings.length, 1, 'drift detected when scanning .mjs file (same as .md, not file-dependent)');
+  assert.match(mdResult.findings[0], /E3/);
+  assert.match(mjsResult.findings[0], /E3/);
+});
+
 // --- frozen-path exclusion ---
 
 test('isFrozenPath: excludes the documented frozen globs', () => {

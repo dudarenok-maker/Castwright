@@ -2115,7 +2115,7 @@ function stripMarkdownLinkUrls(text) {
   return text.replace(MARKDOWN_LINK_REGEX, '$1');
 }
 
-function titleDriftTokens(text, isMarkdown) {
+function titleDriftTokens(text, isMarkdown = true) {
   const withoutLinks = stripMarkdownLinkUrls(text);
   const withoutCodeSpans = stripInlineCodeSpans(withoutLinks, { isMarkdown });
   const raw = withoutCodeSpans.toLowerCase().match(TITLE_DRIFT_TOKEN_REGEX) ?? [];
@@ -2267,7 +2267,7 @@ export function checkCitationTitleDrift(text, filePath, registerRows) {
     for (const id of ids) {
       const row = registerRows.get(id);
       if (!row) continue;
-      const titleTokens = titleDriftTokens(row.title, isMarkdown);
+      const titleTokens = titleDriftTokens(row.title);
       const { ratio, shared } = titleDriftScore(titleTokens, proseTokens);
       if (ratio > TITLE_DRIFT_RATIO_THRESHOLD || shared >= TITLE_DRIFT_MIN_SHARED_TOKENS) continue;
       const message =
