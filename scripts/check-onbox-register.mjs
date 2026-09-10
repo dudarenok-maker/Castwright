@@ -1528,11 +1528,12 @@ export function resolveBaselineTexts(
 // In CI this is guaranteed: `actions/checkout@v7` on a pull_request event
 // checks out `refs/pull/N/merge`, GitHub's `Merge <head> into <base>` commit,
 // rebuilt on the base's current tip. Its first parent is that tip, available
-// as HEAD^1 (the tip, not the merge-base). On hand-run invocations from a branch that has not been
-// merged or rebased onto the base ref (the opposite of recommended practice),
-// both failure modes occur: comparing un-merged trees might report OK when they
-// genuinely differ (false accept), or might report a difference that exists only
-// because the base ref has advanced (false refuse). The comparison is only
+// as HEAD^1 (the tip, not the merge-base). On hand-run invocations from a branch,
+// use origin/main (or your target ref) explicitly — if you pass HEAD^1 after a
+// local merge, it is your branch's pre-merge tip, not CI's merge-base, so the
+// check compares the live view against itself and passes unstamped edits. The
+// un-merged case against the real base gives a false refuse if main has published
+// since your branch opened, with a misleading remedy. The comparison is only
 // meaningful when the working tree contains the base ref's content.
 //
 // `git show <ref>:<path>` exits 128 for BOTH "path missing at that ref" and
@@ -1629,13 +1630,13 @@ function runCheckOnboxRegisterCli() {
     return true;
   };
 
-  // --stamped-since <ref> (#3116): opt-in, invoked by CI with the PR's base
-  // sha. Answers ONE question — did the live view's rendered content change
-  // since <ref> without the publish counter moving — and stays independent
-  // of the register-vs-live-view comparison below: it reads neither REGISTER
-  // (no `read(REGISTER)` above this block, deliberately) nor does it require
-  // LIVE_VIEW to exist (a newly-added file has nothing to compare against;
-  // see the ENOENT handling below). No network fetch here — that would make
+  // --stamped-since <ref> (#3116): opt-in, invoked by CI with HEAD^1 (the
+  // merge commit's first parent, the base tip at merge time). Answers ONE
+  // question — did the live view's rendered content change since <ref> without
+  // the publish counter moving — and stays independent of the register-vs-live-view
+  // comparison below: it reads neither REGISTER (no `read(REGISTER)` above this
+  // block, deliberately) nor does it require LIVE_VIEW to exist (a newly-added
+  // file has nothing to compare against; see the ENOENT handling below). No network fetch here — that would make
   // the no-flag run's offline guarantee a lie if this block ever grew a
   // dependency on it; the caller (the workflow, or an operator by hand) is
   // responsible for making `ref` resolvable locally first.
@@ -1644,10 +1645,10 @@ function runCheckOnboxRegisterCli() {
   // merged onto the base branch's tip. In CI, actions/checkout@v7 with
   // fetch-depth: 2 checks out refs/pull/N/merge (`Merge <head> into <base>`,
   // rebuilt on the base's current tip), whose first parent HEAD^1 is that tip.
-  // Hand-run: bring the branch up to date with `ref` first (fetch, then merge
-  // or rebase `ref` into the branch), or the check will give both false accepts
-  // (un-merged content reads as unchanged) and false refuses (the base ref has
-  // advanced and is detected as a difference).
+  // Hand-run: pass the target ref explicitly (e.g. origin/main), never HEAD^1.
+  // After a local merge, HEAD^1 is your branch's pre-merge tip, so the check
+  // compares the live view against itself and passes unstamped edits. If you
+  // don't merge locally, you get a false refuse with a misleading remedy.
   const stampedSinceIdx = process.argv.indexOf('--stamped-since');
   if (stampedSinceIdx !== -1) {
     // #3116 review finding 2: --stamped-since is incompatible with
