@@ -1491,3 +1491,98 @@ test('leg-result check: cancelled/failed/skipped bucketing is present and all th
     'exit condition does not check all three arrays (CANCELLED, FAILED, SKIPPED)',
   );
 });
+
+test('register citation check: must be unconditional (no if: guard) — issue #3122', () => {
+  // The register-citation checker scans the WHOLE tree for citations, so no
+  // diff-scope reliably predicts whether one broke. The step MUST run on every
+  // PR (including docs-only), unconditionally. A future PR that "helpfully"
+  // adds `if: fromJSON(needs.detect.outputs.scopes).something || ...` to this
+  // step would silently reopen #3122 (broken register citation outside test:hooks'
+  // scope never caught by CI). This test goes RED if that happens.
+  //
+  // Mutation-robust guard: extracts the step's YAML block by indentation
+  // (not by a literal substring search), then asserts:
+  // 1. The step exists and its name is found
+  // 2. The step contains NO `if:` line at any indentation > the step's own
+  // 3. The step contains the EXACT `run: npm run check:register-citations` command
+  //
+  // Scenarios caught: script rename (step not found → throws), `if:` added
+  // before or after `run:`, folded block scalar `if: >-`, reindentation,
+  // `run: "true"` (command neutered).
+
+  const yamlLines = source.split('\n');
+  let stepStartIdx = -1;
+  let stepIndent = -1;
+
+  // Find the step by its "- name: Register citation check" line
+  for (let i = 0; i < yamlLines.length; i += 1) {
+    if (/^\s*- name: Register citation check\s*$/.test(yamlLines[i])) {
+      stepStartIdx = i;
+      const m = /^(\s*)/.exec(yamlLines[i]);
+      stepIndent = m[1].length;
+      break;
+    }
+  }
+
+  assert.ok(
+    stepStartIdx >= 0,
+    'Register citation check step (- name: Register citation check) not found in workflow',
+  );
+
+  // Extract the step's YAML block: all lines from stepStartIdx until we hit
+  // a line at equal or lesser indentation (next sibling step or job).
+  const stepLines = [yamlLines[stepStartIdx]];
+  for (let i = stepStartIdx + 1; i < yamlLines.length; i += 1) {
+    const line = yamlLines[i];
+    const lineIndent = /^(\s*)/.exec(line)[1].length;
+
+    // Empty lines belong to the step
+    if (line.trim() === '') {
+      stepLines.push(line);
+      continue;
+    }
+
+    // Stop when indentation returns to the step's level or less
+    if (lineIndent <= stepIndent) {
+      break;
+    }
+
+    // More indented: part of this step
+    stepLines.push(line);
+  }
+
+  const stepBlock = stepLines.join('\n');
+
+  // Assertion 1: Step must NOT contain any `if:` at any indentation.
+  // Standalone regex check (not using the shared ifConditions helper, which handles
+  // block scalars; this step is simple enough that a direct regex suffices).
+  const ifMatches = stepBlock.match(/^\s*if:/m);
+  assert.ok(
+    !ifMatches,
+    'Register citation check step must be unconditional (must have no `if:` guard). ' +
+      'This step scans the whole tree for citations (#3122), so no diff-scope can ' +
+      'reliably predict coverage. It must run on every PR, including docs-only.',
+  );
+
+  // Assertion 1b: Step must NOT contain `continue-on-error:` either.
+  // If a future PR adds `continue-on-error: true`, the step will run but if it exits
+  // 1 on a broken citation, the job continues anyway and reports success — silently
+  // reopening #3122. This assertion catches that regression.
+  const continueOnErrorMatches = stepBlock.match(/^\s*continue-on-error:\s*/mi);
+  assert.ok(
+    !continueOnErrorMatches,
+    'Register citation check step must not have `continue-on-error:` set. ' +
+      'If this step fails on a broken citation, the job must fail so it is caught by CI. ' +
+      'Adding `continue-on-error: true` would silently reopen #3122.',
+  );
+
+  // Assertion 2: Step MUST contain the exact run command (as a complete value).
+  // This ensures the step still executes the checker, not something like `run: "true"`
+  // or a renamed script like `run: npm run check:register-citations-renamed`.
+  const runMatch = /^\s*run:\s*npm run check:register-citations\s*$/m.test(stepBlock);
+  assert.ok(
+    runMatch,
+    'Register citation check step must execute `npm run check:register-citations`, ' +
+      'not a neutered or renamed command.',
+  );
+});
