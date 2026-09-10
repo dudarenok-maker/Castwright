@@ -83,10 +83,11 @@ over the other. The check reads the base ref's copy and the working tree's,
 which CI makes `merge(base, head)`, and **reports** an unstamped change in
 content (see #3138 for the decision whether to enforce it as a merge gate).
 In CI, `<ref>` is `HEAD^1` (the base branch's tip at merge time). By hand, pass
-the target ref explicitly (e.g. `origin/main`), never `HEAD^1`: after a local
-`git merge origin/main`, `HEAD^1` is your branch's own pre-merge tip, so main's
-newer stamp is credited to your branch and an unstamped edit passes. To get the
-same comparison as CI, merge the target first
+the target ref explicitly (e.g. `origin/main`), never `HEAD^1`: outside CI's
+merge commit, `HEAD^1` is a commit on your own branch — your previous commit, or
+after a local `git merge origin/main` your own pre-merge tip — and whenever it
+already contains your unstamped edit, that edit is on both sides of the
+comparison and passes. To get the same comparison as CI, merge the target first
 (e.g. `git fetch origin && git merge origin/main`), then pass that ref.
 **Any PR that changes the live view's RENDERED content must re-stamp it** — this
 includes any markdown-only edit that moves a count. After a markdown edit that

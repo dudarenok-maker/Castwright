@@ -1529,12 +1529,17 @@ export function resolveBaselineTexts(
 // checks out `refs/pull/N/merge`, GitHub's `Merge <head> into <base>` commit,
 // rebuilt on the base's current tip. Its first parent is that tip, available
 // as HEAD^1 (the tip, not the merge-base). On hand-run invocations from a branch,
-// pass origin/main (or your target ref) explicitly, never HEAD^1: after a local
-// `git merge origin/main`, HEAD^1 is your branch's own pre-merge tip, not the base
-// tip, so main's newer stamp is credited to your branch and an unstamped edit
-// passes. Un-merged against the real base, if main has published since your
-// branch opened, you get a false refuse with a misleading remedy instead. The
-// comparison is only meaningful when the working tree contains the ref's content.
+// pass origin/main (or your target ref) explicitly, never HEAD^1: outside CI's merge
+// commit, HEAD^1 is a commit on your own branch -- your previous commit, or after a
+// local `git merge origin/main` your own pre-merge tip -- and whenever it already
+// contains your unstamped edit, that edit is on both sides of the comparison and
+// passes. Un-merged against the real base, an unstamped edit is still refused,
+// correctly, but if main has stamped a higher counter since your branch opened the
+// message reads BEHIND and says rebase instead of stamp; and a branch that never
+// touched the live view is falsely refused whenever main's rendered content
+// changed. Merge the target in first. The comparison is only meaningful when the
+// working tree is merge(base, head) and `ref` is that base -- what CI's merge
+// commit is, and what merging the target in first gives you by hand.
 //
 // `git show <ref>:<path>` exits 128 for BOTH "path missing at that ref" and
 // "ref doesn't resolve at all"; the only way to tell them apart is the
@@ -1646,9 +1651,12 @@ function runCheckOnboxRegisterCli() {
   // fetch-depth: 2 checks out refs/pull/N/merge (`Merge <head> into <base>`,
   // rebuilt on the base's current tip), whose first parent HEAD^1 is that tip.
   // Hand-run: pass the target ref explicitly (e.g. origin/main), never HEAD^1.
-  // After a local merge, HEAD^1 is your branch's pre-merge tip, so main's newer
-  // stamp is credited to your branch and an unstamped edit passes. Un-merged, if
-  // main has published since your branch opened, you get a false refuse instead.
+  // Outside CI's merge commit, HEAD^1 is a commit on your own branch (your previous
+  // commit, or after a local merge your pre-merge tip); whenever it already contains
+  // your unstamped edit, that edit is on both sides and passes. Un-merged, your
+  // unstamped edit is still refused, correctly (BEHIND if main stamped a higher
+  // counter); a branch that never touched the live view is falsely refused if
+  // main's rendered content changed. Merge the target in first.
   const stampedSinceIdx = process.argv.indexOf('--stamped-since');
   if (stampedSinceIdx !== -1) {
     // #3116 review finding 2: --stamped-since is incompatible with
