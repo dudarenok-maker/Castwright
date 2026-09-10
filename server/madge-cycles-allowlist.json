@@ -13,5 +13,6 @@
   ["workspace/scan.ts", "workspace/chapter-uuid.ts"],
   ["workspace/scan.ts", "workspace/state-migrate.ts"],
   ["routes/models-status.ts", "routes/setup-diagnosis.ts", "routes/setup-readiness.ts"],
-  ["routes/setup-diagnosis.ts", "routes/setup-readiness.ts"]
+  ["routes/setup-diagnosis.ts", "routes/setup-readiness.ts"],
+  ["config/resolver.ts", "workspace/user-settings.ts"]
 ]

@@ -1296,9 +1296,10 @@ export function AnalysingView({
               {/* Per-phase model chips + swap dropdowns live inside each
                   PhaseCard (plan 95). The legacy single-`<select>` picker
                   that used to live here wrote to ui.selectedModel and bumped
-                  the retry nonce on every change; per-phase pickers persist
-                  to UserSettings and take effect from the next chapter, no
-                  in-flight abort. */}
+                  the retry nonce on every change; per-phase pickers are a
+                  per-run-only pick (#3141 step 5, ui.analyzerPhasePicks),
+                  never persisted to UserSettings, sent on the next start
+                  request, no in-flight abort. */}
               <button
                 onClick={() => dispatch(uiActions.goHome())}
                 className="text-ink/60 hover:text-ink underline-offset-2 hover:underline"

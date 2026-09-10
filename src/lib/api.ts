@@ -10589,6 +10589,9 @@ const mock = {
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
    record type from the same `../lib/api` surface as the other admin types. */
 export type { ResourceTelemetryRecord, AnalyzerEvalRecord } from './types';
+/* #3141 step 5 — re-export so tests can type analyseManuscript's mock return
+   from the same `../lib/api` surface instead of reaching into `./types`. */
+export type { AnalyseResponse } from './types';
 /* Device-auth — re-export so consumers import from one surface. */
 export type { PublicDevice } from './types';
 /* Re-export config types so the config slice + view import from a single source. */
