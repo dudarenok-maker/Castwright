@@ -102,6 +102,78 @@ function migrateLegacyEagerLoadFields(raw: unknown): unknown {
   return next;
 }
 
+/* #3141 step 2 — the four legacy Account-settings analyzer knobs
+   (ollamaUrl, analyzerPhase0Model, analyzerPhase1Model,
+   analyzerPhase1MinLagChapters) are no longer read at runtime — step 1
+   moved every reader onto the config resolver (configValue) against the
+   matching registry key. This migration translates any value a user
+   already saved in one of the four fields into the equivalent
+   configOverrides entry (Advanced Settings) so an upgrade can't silently
+   change effective analyzer behaviour, then strips the legacy fields.
+   Mirrors migrateLegacyEagerLoadFields above: pure raw-in/raw-out, only
+   fires while the legacy fields are still present on disk, and never
+   clobbers an override the user already set explicitly through Advanced
+   Settings. */
+const OLLAMA_URL_REGISTRY_DEFAULT = 'http://localhost:11434';
+
+function migrateLegacyAnalyzerModelFields(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object') return raw;
+  const obj = raw as Record<string, unknown>;
+  const hasLegacy =
+    'ollamaUrl' in obj ||
+    'analyzerPhase0Model' in obj ||
+    'analyzerPhase1Model' in obj ||
+    'analyzerPhase1MinLagChapters' in obj;
+  if (!hasLegacy) return raw;
+
+  const overrides = { ...(obj.configOverrides as Record<string, unknown> | undefined) };
+
+  const ollamaUrl = obj.ollamaUrl;
+  if (
+    typeof ollamaUrl === 'string' &&
+    ollamaUrl.trim().length > 0 &&
+    ollamaUrl !== OLLAMA_URL_REGISTRY_DEFAULT &&
+    !('analyzer.ollama.url' in overrides)
+  ) {
+    overrides['analyzer.ollama.url'] = ollamaUrl;
+  }
+
+  const phase0Model = obj.analyzerPhase0Model;
+  if (
+    typeof phase0Model === 'string' &&
+    phase0Model.trim().length > 0 &&
+    !('analyzer.phase0.model' in overrides)
+  ) {
+    overrides['analyzer.phase0.model'] = phase0Model;
+  }
+
+  const phase1Model = obj.analyzerPhase1Model;
+  if (
+    typeof phase1Model === 'string' &&
+    phase1Model.trim().length > 0 &&
+    !('analyzer.phase1.model' in overrides)
+  ) {
+    overrides['analyzer.phase1.model'] = phase1Model;
+  }
+
+  const minLagChapters = obj.analyzerPhase1MinLagChapters;
+  if (
+    typeof minLagChapters === 'number' &&
+    Number.isFinite(minLagChapters) &&
+    minLagChapters >= 0 &&
+    !('analyzer.phase1.minLagChapters' in overrides)
+  ) {
+    overrides['analyzer.phase1.minLagChapters'] = minLagChapters;
+  }
+
+  const next: Record<string, unknown> = { ...obj, configOverrides: overrides };
+  delete next.ollamaUrl;
+  delete next.analyzerPhase0Model;
+  delete next.analyzerPhase1Model;
+  delete next.analyzerPhase1MinLagChapters;
+  return next;
+}
+
 export const TTS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const TTS_MODEL_KEY_VALUES = [
@@ -154,9 +226,6 @@ export const userSettingsSchema = z.object({
      strictly local — no silent (or announced) cloud fall-through. See
      selectAnalyzer + getResolvedAllowCloudFallback. */
   allowCloudFallback: z.boolean().default(true),
-  /* Base URL of the local Ollama daemon. Falls through to OLLAMA_URL env
-     and then http://localhost:11434 in getResolvedOllamaUrl. */
-  ollamaUrl: z.string().min(1).max(2000),
   workspaceDirOverride: z.string().max(2000).nullable(),
   /* Optional folder the export pipeline copies finished audiobooks into,
      e.g. a OneDrive / Syncthing watch path so the file lands on the user's
@@ -193,15 +262,6 @@ export const userSettingsSchema = z.object({
      Optional with a `true` default so legacy user-settings.json
      files load unchanged and a fresh install gets TTS-on-boot. */
   autoStartSidecar: z.boolean().optional(),
-  /* Plan 88 phase-2 — Account-tab surface for the per-phase analyzer
-     model knobs. Each `null`/`undefined` means "fall through to env /
-     hardcoded default" per the precedence chain enforced in
-     server/src/analyzer/select-analyzer.ts: explicit env >
-     per-request opts.model > user-settings JSON > hardcoded default.
-     Optional so legacy user-settings.json files load unchanged. */
-  analyzerPhase0Model: z.string().nullable().optional(),
-  analyzerPhase1Model: z.string().nullable().optional(),
-  analyzerPhase1MinLagChapters: z.number().int().min(0).max(50).nullable().optional(),
   /* When true, the TTS sidecar may keep two TTS engines (e.g. Kokoro +
      Qwen) resident in GPU memory at once so a mixed-engine book generates
      without an inter-chapter engine swap. Off by default — dual-residency
@@ -298,7 +358,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      today's Ollama→Gemini fallback; strict-local users turn it off in analyzer
      settings. Flip in lockstep with src/lib/account-defaults.ts. */
   allowCloudFallback: true,
-  ollamaUrl: 'http://localhost:11434',
   workspaceDirOverride: null,
   exportSyncFolder: null,
   minorCastMinLines: 3,
@@ -316,13 +375,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      defaultTtsModelKey. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   autoStartSidecar: true,
-  /* Plan 88 phase-2 — Account-tab surface for the per-phase analyzer
-     knobs. `null` means "fall through to env / hardcoded default" so
-     a fresh user-settings.json doesn't pin a value the deployer may
-     not have intended. */
-  analyzerPhase0Model: null,
-  analyzerPhase1Model: null,
-  analyzerPhase1MinLagChapters: null,
   /* Off by default — loading two TTS engines into GPU memory at once is a
      deliberate user choice (~8 GB headroom). Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
@@ -374,10 +426,11 @@ export async function readUserSettings(): Promise<UserSettings> {
   // Track which keys were explicitly in the file before merging with defaults (#2632 N2)
   explicitlySetKeys = new Set(Object.keys(raw as Record<string, unknown>));
 
-  const migrated = migrateLegacyEagerLoadFields(raw);
+  const eagerLoadMigrated = migrateLegacyEagerLoadFields(raw);
+  const migrated = migrateLegacyAnalyzerModelFields(eagerLoadMigrated);
   if (migrated !== raw) {
     await writeJsonAtomic(USER_SETTINGS_PATH, migrated).catch((err) => {
-      console.warn('[user-settings] eager-load migration write failed (non-fatal):', err);
+      console.warn('[user-settings] legacy-field migration write failed (non-fatal):', err);
     });
   }
   const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(migrated as object) });

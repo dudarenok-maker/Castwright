@@ -507,6 +507,116 @@ describe('userSettingsSchema — retired eagerLoadKokoro/eagerLoadQwen (preload-
   });
 });
 
+describe('userSettingsSchema — retired analyzer model-override Account fields (#3141 step 2)', () => {
+  it('no longer appears on DEFAULT_USER_SETTINGS or a fresh parse', () => {
+    expect(DEFAULT_USER_SETTINGS).not.toHaveProperty('ollamaUrl');
+    expect(DEFAULT_USER_SETTINGS).not.toHaveProperty('analyzerPhase0Model');
+    expect(DEFAULT_USER_SETTINGS).not.toHaveProperty('analyzerPhase1Model');
+    expect(DEFAULT_USER_SETTINGS).not.toHaveProperty('analyzerPhase1MinLagChapters');
+    const parsed = userSettingsSchema.parse({
+      ...DEFAULT_USER_SETTINGS,
+      ollamaUrl: 'http://localhost:11434',
+      analyzerPhase0Model: 'foo',
+      analyzerPhase1Model: 'bar',
+      analyzerPhase1MinLagChapters: 5,
+    });
+    expect(parsed).not.toHaveProperty('ollamaUrl');
+    expect(parsed).not.toHaveProperty('analyzerPhase0Model');
+    expect(parsed).not.toHaveProperty('analyzerPhase1Model');
+    expect(parsed).not.toHaveProperty('analyzerPhase1MinLagChapters');
+  });
+
+  it('migrates a legacy settings file with all four fields into configOverrides on read, and strips the legacy fields from disk', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({
+        ...DEFAULT_USER_SETTINGS,
+        ollamaUrl: 'http://192.168.1.20:11434',
+        analyzerPhase0Model: 'gemma-4-31b-it',
+        analyzerPhase1Model: 'gemini-3.1-flash-lite',
+        analyzerPhase1MinLagChapters: 6,
+      }),
+    );
+    try {
+      const settings = await mod.readUserSettings();
+      expect(settings.configOverrides['analyzer.ollama.url']).toBe('http://192.168.1.20:11434');
+      expect(settings.configOverrides['analyzer.phase0.model']).toBe('gemma-4-31b-it');
+      expect(settings.configOverrides['analyzer.phase1.model']).toBe('gemini-3.1-flash-lite');
+      expect(settings.configOverrides['analyzer.phase1.minLagChapters']).toBe(6);
+      expect(settings).not.toHaveProperty('ollamaUrl');
+      expect(settings).not.toHaveProperty('analyzerPhase0Model');
+      expect(settings).not.toHaveProperty('analyzerPhase1Model');
+      expect(settings).not.toHaveProperty('analyzerPhase1MinLagChapters');
+
+      const onDisk = JSON.parse(readFileSync(mod.USER_SETTINGS_PATH, 'utf8'));
+      expect(onDisk).not.toHaveProperty('ollamaUrl');
+      expect(onDisk).not.toHaveProperty('analyzerPhase0Model');
+      expect(onDisk).not.toHaveProperty('analyzerPhase1Model');
+      expect(onDisk).not.toHaveProperty('analyzerPhase1MinLagChapters');
+    } finally {
+      writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+      mod._resetUserSettingsCache();
+    }
+  });
+
+  it('does not clobber an override that already exists for one of the four target keys', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({
+        ...DEFAULT_USER_SETTINGS,
+        ollamaUrl: 'http://192.168.1.20:11434', // legacy value says one thing
+        configOverrides: { 'analyzer.ollama.url': 'http://10.0.0.9:11434' }, // real Advanced Settings choice says another
+      }),
+    );
+    try {
+      const settings = await mod.readUserSettings();
+      expect(settings.configOverrides['analyzer.ollama.url']).toBe('http://10.0.0.9:11434');
+    } finally {
+      writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+      mod._resetUserSettingsCache();
+    }
+  });
+
+  it('an ollamaUrl equal to the registry default creates no override', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({
+        ...DEFAULT_USER_SETTINGS,
+        ollamaUrl: 'http://localhost:11434',
+      }),
+    );
+    try {
+      const settings = await mod.readUserSettings();
+      expect(settings.configOverrides).not.toHaveProperty('analyzer.ollama.url');
+    } finally {
+      writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+      mod._resetUserSettingsCache();
+    }
+  });
+
+  it('a settings file without any of the four fields is left unchanged (no spurious overrides, no crash)', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    try {
+      const settings = await mod.readUserSettings();
+      expect(settings.configOverrides).not.toHaveProperty('analyzer.ollama.url');
+      expect(settings.configOverrides).not.toHaveProperty('analyzer.phase0.model');
+      expect(settings.configOverrides).not.toHaveProperty('analyzer.phase1.model');
+      expect(settings.configOverrides).not.toHaveProperty('analyzer.phase1.minLagChapters');
+    } finally {
+      writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+      mod._resetUserSettingsCache();
+    }
+  });
+});
+
 describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
   it("defaults to 'search' on a fresh user-settings document", () => {
     expect(DEFAULT_USER_SETTINGS.coverPickerDefaultTab).toBe('search');
@@ -884,19 +994,19 @@ describe('analyzerKeepAliveByModel', () => {
         analyzerKeepAliveByModel: { 'qwen36-cw-iq4-32k:latest': 90 },
       });
       // 2. Save an UNRELATED field with NO keep-alive key — mirrors the
-      //    analysing-screen phase-model dropdown (saves just analyzerPhase0Model).
-      //    Before the fix, patchSchema (userSettingsSchema.partial()) applied
-      //    analyzerKeepAliveByModel's `.default({})` and the wholesale merge
-      //    wiped the saved 90 back to {}.
-      const after = await mod.writeUserSettings({ analyzerPhase0Model: 'qwen3.5:4b' });
+      //    analysing-screen phase-model dropdown saving just one targeted
+      //    field. Before the fix, patchSchema (userSettingsSchema.partial())
+      //    applied analyzerKeepAliveByModel's `.default({})` and the
+      //    wholesale merge wiped the saved 90 back to {}.
+      const after = await mod.writeUserSettings({ displayName: 'Targeted Save' });
       expect(after.analyzerKeepAliveByModel).toEqual({ 'qwen36-cw-iq4-32k:latest': 90 });
-      expect(after.analyzerPhase0Model).toBe('qwen3.5:4b');
+      expect(after.displayName).toBe('Targeted Save');
       // 3. And it survives a reload from disk (not just the in-memory cache).
       mod._resetUserSettingsCache();
       const reread = await mod.readUserSettings();
       expect(reread.analyzerKeepAliveByModel).toEqual({ 'qwen36-cw-iq4-32k:latest': 90 });
     } finally {
-      await mod.writeUserSettings({ analyzerKeepAliveByModel: {}, analyzerPhase0Model: null });
+      await mod.writeUserSettings({ analyzerKeepAliveByModel: {}, displayName: 'Castwright' });
       mod._resetUserSettingsCache();
     }
   });

@@ -23,11 +23,27 @@ import {
   getResolvedGeminiApiKey,
   getResolvedGenerationWorkers,
   getResolvedTtsModelKey,
+  getResolvedOllamaUrl,
   type UserSettings,
 } from '../workspace/user-settings.js';
+import { configValue } from '../config/resolver.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
 
 export const userSettingsRouter = Router();
+
+/* #3141 step 2 — these four fields are no longer stored on the settings
+   document (step 1 moved every server reader onto the config resolver
+   against the matching registry key). The Account UI still needs to show
+   them, so GET populates them from the resolver's effective value
+   (env > saved Advanced Settings override > registry default) instead of a
+   stored field, and the PUT handler below rejects the keys outright rather
+   than silently stripping them (see REJECTED_LEGACY_ANALYZER_FIELDS). */
+const RETIRED_ANALYZER_FIELDS = [
+  'ollamaUrl',
+  'analyzerPhase0Model',
+  'analyzerPhase1Model',
+  'analyzerPhase1MinLagChapters',
+] as const;
 
 interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
   apiKeyStatus: 'set' | 'unset';
@@ -39,12 +55,19 @@ interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
      session engine from this so a fresh box with Qwen installed defaults to
      Qwen, while the stored key stays Kokoro until the user explicitly picks. */
   resolvedTtsModelKey: UserSettings['defaultTtsModelKey'];
+  /* Read-only, resolver-derived (#3141 step 2) — see RETIRED_ANALYZER_FIELDS. */
+  ollamaUrl: string;
+  analyzerPhase0Model: string | null;
+  analyzerPhase1Model: string | null;
+  analyzerPhase1MinLagChapters: number;
 }
 
 function envDerived(settings: UserSettings): UserSettingsResponse {
   /* Drop the plaintext key — frontend only ever sees apiKeyStatus. */
   const rest = { ...settings } as Partial<UserSettings>;
   delete rest.geminiApiKey;
+  const phase0Model = configValue<string>('analyzer.phase0.model');
+  const phase1Model = configValue<string>('analyzer.phase1.model');
   return {
     ...(rest as Omit<UserSettings, 'geminiApiKey'>),
     apiKeyStatus: getResolvedGeminiApiKey() ? 'set' : 'unset',
@@ -60,6 +83,13 @@ function envDerived(settings: UserSettings): UserSettingsResponse {
        stored `defaultTtsModelKey` above is left untouched so the Account
        picker shows what's saved and a no-op round-trip can't pollute it. */
     resolvedTtsModelKey: getResolvedTtsModelKey(),
+    /* #3141 step 2 — resolver-derived, read-only (env > Advanced Settings
+       override > registry default). Empty phase-model strings surface as
+       null to match the pre-step-2 response shape. */
+    ollamaUrl: getResolvedOllamaUrl(),
+    analyzerPhase0Model: phase0Model.trim().length > 0 ? phase0Model : null,
+    analyzerPhase1Model: phase1Model.trim().length > 0 ? phase1Model : null,
+    analyzerPhase1MinLagChapters: configValue<number>('analyzer.phase1.minLagChapters'),
     workspaceRoot: WORKSPACE_ROOT,
     workspaceSource: WORKSPACE_SOURCE,
   };
@@ -77,6 +107,21 @@ userSettingsRouter.get('/', async (_req: Request, res: Response) => {
 
 userSettingsRouter.put('/', async (req: Request, res: Response) => {
   try {
+    /* #3141 step 2 — reject outright, before any other stripping/validation,
+       so the caller is never told the save succeeded when these fields are
+       actually managed in Advanced Settings (configOverrides). Runs first
+       because writeUserSettings' own FORBIDDEN_KEYS mechanism silently
+       strips fields, which would swallow the offending keys before we ever
+       got a chance to name them. */
+    const body = req.body as Record<string, unknown> | null | undefined;
+    const offending = body && typeof body === 'object'
+      ? RETIRED_ANALYZER_FIELDS.filter((field) => field in body)
+      : [];
+    if (offending.length > 0) {
+      return res.status(400).json({
+        error: `${offending.join(', ')} ${offending.length > 1 ? 'are' : 'is'} managed in Advanced Settings and cannot be set here.`,
+      });
+    }
     const updated = await writeUserSettings(req.body);
     res.json(envDerived(updated));
   } catch (err) {

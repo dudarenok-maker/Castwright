@@ -209,6 +209,86 @@ describe('user-settings router', () => {
     expect(res.body.error).toMatch(/invalid/i);
   });
 
+  /* #3141 step 2 — ollamaUrl / analyzerPhase0Model / analyzerPhase1Model /
+     analyzerPhase1MinLagChapters are no longer stored fields. GET still
+     surfaces them, but sourced from the config resolver's effective value
+     (env > saved Advanced Settings override > registry default) rather than
+     a dedicated stored field, so the Account UI keeps displaying them
+     read-only. */
+  describe('GET surfaces the four retired fields from the config resolver (#3141 step 2)', () => {
+    it('reflects a configOverrides entry for analyzer.ollama.url as ollamaUrl', async () => {
+      await request(app)
+        .put('/api/user/settings')
+        .send({ configOverrides: { 'analyzer.ollama.url': 'http://192.168.1.20:11434' } });
+      const res = await request(app).get('/api/user/settings');
+      expect(res.body.ollamaUrl).toBe('http://192.168.1.20:11434');
+    });
+
+    it('reflects a configOverrides entry for analyzer.phase0.model as analyzerPhase0Model', async () => {
+      await request(app)
+        .put('/api/user/settings')
+        .send({ configOverrides: { 'analyzer.phase0.model': 'gemma-4-31b-it' } });
+      const res = await request(app).get('/api/user/settings');
+      expect(res.body.analyzerPhase0Model).toBe('gemma-4-31b-it');
+    });
+
+    it('reflects a configOverrides entry for analyzer.phase1.minLagChapters as analyzerPhase1MinLagChapters', async () => {
+      await request(app)
+        .put('/api/user/settings')
+        .send({ configOverrides: { 'analyzer.phase1.minLagChapters': 6 } });
+      const res = await request(app).get('/api/user/settings');
+      expect(res.body.analyzerPhase1MinLagChapters).toBe(6);
+    });
+
+    it('returns null (not empty string) for an unset phase model', async () => {
+      const res = await request(app).get('/api/user/settings');
+      expect(res.body.analyzerPhase0Model).toBeNull();
+      expect(res.body.analyzerPhase1Model).toBeNull();
+    });
+  });
+
+  /* #3141 step 2 — these four fields are now read-only, resolver-derived
+     values. Accepting them silently on PUT (even to strip them) would tell
+     the caller "saved" while the value is actually managed in Advanced
+     Settings — reject outright instead. */
+  describe('PUT rejects the four retired analyzer fields with 400 (#3141 step 2)', () => {
+    const REJECTED_PAYLOADS: Array<[string, Record<string, unknown>]> = [
+      ['ollamaUrl', { ollamaUrl: 'http://10.0.0.9:11434' }],
+      ['analyzerPhase0Model', { analyzerPhase0Model: 'gemma-4-31b-it' }],
+      ['analyzerPhase1Model', { analyzerPhase1Model: 'gemini-3.1-flash-lite' }],
+      ['analyzerPhase1MinLagChapters', { analyzerPhase1MinLagChapters: 5 }],
+    ];
+
+    for (const [field, payload] of REJECTED_PAYLOADS) {
+      it(`rejects a payload containing ${field}, and leaves the on-disk file unchanged`, async () => {
+        // Seed the file so we can assert it is untouched afterward.
+        await request(app).put('/api/user/settings').send({ displayName: 'Before Attempt' });
+        const before = readFileSync(userSettingsPath, 'utf8');
+
+        const res = await request(app).put('/api/user/settings').send(payload);
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(new RegExp(field));
+
+        const after = readFileSync(userSettingsPath, 'utf8');
+        expect(after).toBe(before);
+      });
+    }
+
+    it('rejects a payload containing all four fields at once, naming them', async () => {
+      const res = await request(app).put('/api/user/settings').send({
+        ollamaUrl: 'http://10.0.0.9:11434',
+        analyzerPhase0Model: 'gemma-4-31b-it',
+        analyzerPhase1Model: 'gemini-3.1-flash-lite',
+        analyzerPhase1MinLagChapters: 5,
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/ollamaUrl/);
+      expect(res.body.error).toMatch(/analyzerPhase0Model/);
+      expect(res.body.error).toMatch(/analyzerPhase1Model/);
+      expect(res.body.error).toMatch(/analyzerPhase1MinLagChapters/);
+    });
+  });
+
   /* Regression — Qwen3-TTS (plan 108) is a valid default TTS model key. The
      PUT allow-list (TTS_MODEL_KEY_VALUES) was the one model-key surface that
      wasn't updated when the engine landed, so selecting it in Account
@@ -254,16 +334,12 @@ describe('user-settings router', () => {
       analysisEngine: 'local',
       /* non-default (false) so the round-trip proves the opt-out persists. */
       allowCloudFallback: false,
-      ollamaUrl: 'http://localhost:11500',
       workspaceDirOverride: 'D:/audiobooks-ws',
       exportSyncFolder: '/tmp/export-sync',
       minorCastMinLines: 7,
       coverPickerDefaultTab: 'upload',
       defaultThemePreference: 'dark',
       autoStartSidecar: false,
-      analyzerPhase0Model: 'gemma-4-31b-it',
-      analyzerPhase1Model: 'gemini-3.1-flash-lite',
-      analyzerPhase1MinLagChapters: 5,
       dualModelEnabled: true,
       generationWorkers: 4,
       backupEnabled: false,
