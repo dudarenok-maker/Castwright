@@ -75,23 +75,28 @@ Bumping the counter without minting a new id is that same failure with an extra
 step. Two of the eight designs considered for this token died on precisely that,
 which is why the stamper does both halves or neither.
 
-The token is inert today: nothing reads it yet. The check that does — a
-comparison against the live page's own token, to catch a lane publishing over
-work it never saw — lands separately (#2599). It is seeded first and on its own
-because a guard cannot ship in the same change as the data it requires: the
-checker validates `origin/main`'s copy, so the data has to be on `main` already
-or the guard's first run fails on its own delivery. That is the same
-data-then-guard split the stable row IDs needed (#2629).
-
-**One more thing has to happen before that check can pass, and it is easy to
-miss because it is not a code change: the live view must be PUBLISHED at least
-once with a token on it.** The comparator reads three copies — the tracked file,
-`origin/main`'s, and the *saved live page* — and the live page only acquires a
-token when someone publishes after this change merged. Until then the check
-reports that the published page carries none while `origin/main` does, and
-names the transition explicitly rather than guessing. So the first publish after
-this merges clears it, and the wording of that error is written for exactly that
-window.
+The token is now LIVE: `npm run check:onbox-register -- --stamped-since <ref>`
+(#3116) checks in CI that the live view's content did not change without the
+counter moving — catching cases where a branch reverts the live view to an
+older revision, or where a conflict was resolved by taking one side wholesale
+over the other. The check reads the base ref's copy and the working tree's,
+which CI makes `merge(base, head)`, and **reports** an unstamped change in
+content (see #3138 for the decision whether to enforce it as a merge gate).
+In CI, `<ref>` is `HEAD^1` (the base branch's tip at merge time). **By hand,
+never pass `HEAD^1`**: outside CI's merge commit it is not the base your branch
+will merge onto, so the check can fail to catch an unstamped edit — for example
+when `HEAD^1` already contains the edit, or when a stamp main landed in between
+is credited to your branch. Instead, merge the target in and pass it explicitly
+(`git fetch origin && git merge origin/main`, then
+`npm run check:onbox-register -- --stamped-since origin/main`); that reproduces
+CI's comparison.
+**Any PR that changes the live view's RENDERED content must re-stamp it** — this
+includes any markdown-only edit that moves a count. After a markdown edit that
+changes any generated figures, run `npm run register:build` locally (it regenerates
+the summary strip and derived counts), then `npm run stamp:publish-token` to bump
+the live view's publish counter. Skip the rebuild and CI's `register:build --check`
+will fail (generated figures stale); skip the stamp and `--stamped-since` will fail
+(content changed without re-stamping).
 
 The live view carries derived figures — owed count, per-group counts, oldest
 debt — that are **generated** on every build. Rows can be right while the
@@ -361,9 +366,10 @@ comparison, see the edge list above). The merge step that closes this, run
        Observed 2026-09-07: live at 11 against a tracked 9 located PR #3073 in
        one command, before any row-by-row comparison. The row-content report
        named A1/A16/A21 — true, but it reads identically in both directions,
-       which is the whole reason to check the counter first. Note this works
-       even though nothing yet *enforces* the token (#2599): reading it by eye
-       costs nothing and does not wait on that check landing.
+       which is the whole reason to check the counter first. Note that nothing
+       yet enforces the token *at publish time* (#2599 — `comparePublishTokens`
+       still has no production consumer), so reading it by eye costs nothing and
+       does not wait on that enforcement landing.
      - **The published page matches the baseline, but your local copy doesn't**
        — you have a local edit not yet merged to `origin/main`, and the
        published page is simply unchanged (still at baseline) because nothing
