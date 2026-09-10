@@ -15,7 +15,7 @@
  * touch-equivalence rule for desktop AND mobile in one path, keeping the
  * shipped modal small. Touch targets are ≥44×44 px per WCAG 2.5.5. */
 
-import { useMemo, useEffect, useState, type JSX } from 'react';
+import { useMemo, useEffect, useRef, useState, type JSX } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
   selectActiveGenerationView,
@@ -41,9 +41,100 @@ import {
 import { selectFallbackEngineName } from '../store/voice-readiness-selectors';
 import { chaptersActions } from '../store/chapters-slice';
 import { uiActions } from '../store/ui-slice';
-import { IconClose, IconDrag, IconPause, IconPlay, IconRefresh, IconTrash } from '../lib/icons';
+import { notificationsActions } from '../store/notifications-slice';
+import { IconClose, IconDrag, IconPause, IconPlay, IconRefresh, IconTrash, IconWarning } from '../lib/icons';
 import { PrimaryButton, Checkbox } from '../components/primitives';
 import { ConfirmDialog } from './confirm-dialog';
+
+/* #3106 — threshold before an unanswered awaiting_confirm entry fires a
+   blocked-state signal (toast + persistent banner in the Queue modal).
+   60 seconds: long enough that a user actively deciding doesn't get nagged,
+   short enough that a walked-away session surfaces the block before the next
+   natural check-in. The dispatcher independently continues to claim any
+   later `queued` entries regardless of an awaiting_confirm entry sitting
+   earlier in the array (STEP 2 fill loop `continue`s past non-queued), so
+   this signal is purely a UI-legibility fix — it tells the user WHY a
+   chapter looks stuck and points at the existing resolution controls. */
+export const STALE_AWAITING_CONFIRM_MS = 60_000;
+
+/** Polling interval for the stale-awaiting_confirm check. 5 s is frequent
+    enough to fire within one interval of the threshold without being a
+    busy-wait — each tick is a Map scan over the (small) entry list. */
+const STALE_CHECK_INTERVAL_MS = 5_000;
+
+/** Track awaiting_confirm entries and return those unanswered past the
+    threshold. Fires a one-shot warn toast per entry when the threshold is
+    first crossed; clears tracking when the entry leaves the queue (confirmed,
+    skipped, or cleared). */
+function useStaleAwaitingConfirm(
+  groupedByBook: ReturnType<typeof selectQueueByBook>,
+): QueueEntry[] {
+  const dispatch = useAppDispatch();
+  const firstSeenRef = useRef<Map<string, number>>(new Map());
+  const toastFiredRef = useRef<Set<string>>(new Set());
+  const [staleEntries, setStaleEntries] = useState<QueueEntry[]>([]);
+
+  useEffect(() => {
+    const check = (): void => {
+      const now = Date.now();
+      const currentAwaiting = new Map<string, QueueEntry>();
+
+      for (const group of groupedByBook) {
+        for (const entry of group.entries) {
+          if (entry.status === 'awaiting_confirm') {
+            currentAwaiting.set(entry.id, entry);
+            if (!firstSeenRef.current.has(entry.id)) {
+              firstSeenRef.current.set(entry.id, now);
+            }
+          }
+        }
+      }
+
+      /* Evict tracking for entries that left awaiting_confirm (confirmed,
+         skipped, cleared, or status otherwise changed). */
+      for (const id of Array.from(firstSeenRef.current.keys())) {
+        if (!currentAwaiting.has(id)) {
+          firstSeenRef.current.delete(id);
+          toastFiredRef.current.delete(id);
+        }
+      }
+
+      /* Collect entries past the threshold. */
+      const stale: QueueEntry[] = [];
+      for (const [id, entry] of currentAwaiting) {
+        const firstSeen = firstSeenRef.current.get(id);
+        if (firstSeen != null && now - firstSeen >= STALE_AWAITING_CONFIRM_MS) {
+          stale.push(entry);
+          /* One-shot toast per entry — dedupeKey guards against double-push
+             within the same render cycle; the ref guards across cycles. */
+          if (!toastFiredRef.current.has(id)) {
+            toastFiredRef.current.add(id);
+            const charNames =
+              entry.fallbackCharacters
+                ?.map((c) => c.name)
+                .filter((n): n is string => !!n)
+                .join(', ') || 'unknown character(s)';
+            dispatch(
+              notificationsActions.pushToast({
+                kind: 'warn',
+                message: `Queue blocked: a chapter is waiting for voice confirmation (${charNames}). Open the Queue to confirm or skip, or use "Clear queue".`,
+                dedupeKey: `stale-awaiting-confirm-${id}`,
+              }),
+            );
+          }
+        }
+      }
+
+      setStaleEntries(stale);
+    };
+
+    check();
+    const interval = setInterval(check, STALE_CHECK_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [groupedByBook, dispatch]);
+
+  return staleEntries;
+}
 
 interface QueueModalProps {
   open: boolean;
@@ -84,6 +175,11 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
      the generation flow emits (enable dual-model mode in Account settings to
      avoid engine-swap latency). */
   const dualModelEnabled = useAppSelector((s) => s.account?.dualModelEnabled ?? false);
+
+  /* #3106 — track awaiting_confirm entries that have been unanswered past the
+     stale threshold. The hook fires a toast once per entry when crossed; the
+     returned list drives the persistent banner below. */
+  const staleAwaitingEntries = useStaleAwaitingConfirm(groupedByBook);
 
   /* "Clear queue" confirm-dialog state. `alsoStop` mirrors the dialog's
      "Also stop generation in progress" checkbox. */
@@ -221,6 +317,37 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
               </div>
             ) : (
               <div className="space-y-6">
+                {/* #3106 — persistent banner when an awaiting_confirm entry has been
+                    unanswered past the stale threshold. Names the blocked chapters'
+                    characters and points at existing resolution (per-row confirm/skip
+                    or "Clear queue" above). Hidden when no stale entries exist. */}
+                {staleAwaitingEntries.length > 0 && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                    data-testid="queue-stale-awaiting-banner"
+                  >
+                    <IconWarning className="w-4 h-4 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold">
+                        {staleAwaitingEntries.length === 1
+                          ? '1 chapter blocked'
+                          : `${staleAwaitingEntries.length} chapters blocked`}
+                      </p>
+                      <p className="mt-0.5 text-amber-800">
+                        Waiting for voice confirmation (
+                        {staleAwaitingEntries
+                          .flatMap((e) =>
+                            e.fallbackCharacters
+                              ?.map((c) => c.name)
+                              .filter((n): n is string => !!n) ?? [],
+                          )
+                          .join(', ') || 'unknown character(s)'}
+                        ). Confirm or skip the row below, or use "Clear queue" above.
+                      </p>
+                    </div>
+                  </div>
+                )}
                 {groupedByBook.map(({ bookId, entries }) => (
                   <BookGroup
                     key={bookId}
