@@ -63,33 +63,66 @@ export const STALE_AWAITING_CONFIRM_MS = 60_000;
 const STALE_CHECK_INTERVAL_MS = 5_000;
 
 /** Track awaiting_confirm entries and return those unanswered past the
-    threshold. Fires a one-shot warn toast per entry when the threshold is
-    first crossed; clears tracking when the entry leaves the queue (confirmed,
-    skipped, or cleared).
+    threshold. Fires a one-shot warn toast per entry, per component mount,
+    when the threshold is first crossed; clears tracking when the entry
+    leaves the queue (confirmed, skipped, or cleared). N5 — `toastFiredRef`
+    is per component instance, so a page reload re-arms it: a still-stale
+    entry re-fires its toast once after the remount rather than staying
+    silent forever. Accepted as-is (the underlying "still unanswered"
+    condition is genuinely still true at that point) rather than persisted
+    across reloads.
 
-    pr-review-gate pass on #3106 (S1/S3/S4/S5):
-      - S1: only fires when something is actually queued behind the stale
-        entry — a lone awaiting_confirm entry with nothing else in the queue
-        isn't "blocking" anything.
+    pr-review-gate pass on #3106 (S1/S3/S4/S5), pass 2 (N1/N2):
+      - S1/N1: fires when there's another `queued` entry anywhere in the
+        workspace queue — a "there's more work waiting" signal, not a claim
+        that THIS entry is blocking that other one. The dispatcher's fill
+        loop (`queue-dispatcher-middleware.ts` STEP 2) `continue`s past any
+        non-`queued` entry regardless of position, so a parked entry never
+        technically blocks anything under any ordering/book/pause combination
+        — pass 2 ran this cross-book, ordered-ahead, and paused-queue and
+        confirmed the banner fired in all three with nothing actually
+        blocked. The copy below says "needs your input", never "blocked",
+        so it stays true under all three.
       - S3: `toastFiredRef` is a one-shot guard, not decoration — without it
         every 5s poll while the condition still holds would re-push the toast,
         and notifications-slice bumps `createdAt` on every push, which resets
         ToastStack's auto-dismiss timer forever.
-      - S4: staleness is derived from the entry's OWN `parkedAt` (stamped
+      - S4/N2: staleness is derived from the entry's OWN `parkedAt` (stamped
         server-side when the worker parks it — queue-io.ts markAwaitingConfirm)
         rather than from when this component first observed the entry, so the
         signal survives a page reload and correctly reflects an entry that was
         already stale before mount. `addedAt` (enqueue time, always present)
         is the fallback for a legacy entry parked before `parkedAt` existed.
+        `parkedAt`/`addedAt` are SERVER-stamped while the staleness check runs
+        against the BROWSER's `Date.now()` — on a device whose clock reads
+        BEHIND the server's (realistic on LAN HTTPS per CLAUDE.md's mobile
+        protocol: a tablet that's been off, or never reached NTP), the server
+        timestamp reads as being in the client's future, which would suppress
+        the signal well past the threshold. `staleObservedAtRef` below is the
+        skew-defensive clamp: whenever the server timestamp reads as future
+        relative to the client, fall back to this component's own
+        first-observation time (the pre-#3106 mechanism, skew-immune because
+        it never mixes clocks) instead of trusting it. This does not fully
+        close the symmetric case (a client clock AHEAD of the server's can
+        still under-report the delay on first observation of an
+        already-parked entry) — closing that needs the server's own "now"
+        alongside the snapshot, out of scope for this fix; see PR #3143 N2.
       - S5: the toast reuses the park-time toast's dedupe key
-        (`fallback-confirm:${id}` — generation-stream-runner.ts) so this more
-        specific "still unanswered" message REPLACES it in place instead of
-        stacking a second, less-specific toast. */
+        (`fallback-confirm:${id}` — generation-stream-runner.ts). `ToastStack`
+        auto-dismisses the park-time toast well before this can fire (6s vs.
+        the 60s threshold), so in practice this doesn't "update" a still-live
+        toast — it replaces any lingering park notification with a fresh one
+        carrying the shared key, which is what stops a second, less-specific
+        toast from stacking alongside it. */
 function useStaleAwaitingConfirm(
   groupedByBook: ReturnType<typeof selectQueueByBook>,
 ): QueueEntry[] {
   const dispatch = useAppDispatch();
   const toastFiredRef = useRef<Set<string>>(new Set());
+  /* N2 — per-entry client-clock fallback timestamp, populated only when the
+     server-stamped `parkedAt`/`addedAt` reads as being in the client's
+     future (clock skew). See the docstring above. */
+  const staleObservedAtRef = useRef<Map<string, number>>(new Map());
   const [staleEntries, setStaleEntries] = useState<QueueEntry[]>([]);
 
   useEffect(() => {
@@ -97,21 +130,36 @@ function useStaleAwaitingConfirm(
       const now = Date.now();
       const allEntries = groupedByBook.flatMap((g) => g.entries);
       const awaitingEntries = allEntries.filter((e) => e.status === 'awaiting_confirm');
-      /* S1 — nothing else queued behind it → nothing is blocked. */
+      /* S1/N1 — a soft "there's more queued work" signal; see docstring. */
       const hasQueuedEntry = allEntries.some((e) => e.status === 'queued');
 
-      /* Evict the one-shot toast guard for entries that left awaiting_confirm
-         (confirmed, skipped, cleared, or status otherwise changed). */
+      /* Evict the one-shot toast guard and the N2 clock-skew fallback for
+         entries that left awaiting_confirm (confirmed, skipped, cleared, or
+         status otherwise changed). */
       const currentAwaitingIds = new Set(awaitingEntries.map((e) => e.id));
       for (const id of Array.from(toastFiredRef.current)) {
         if (!currentAwaitingIds.has(id)) toastFiredRef.current.delete(id);
+      }
+      for (const id of Array.from(staleObservedAtRef.current.keys())) {
+        if (!currentAwaitingIds.has(id)) staleObservedAtRef.current.delete(id);
       }
 
       const stale: QueueEntry[] = [];
       if (hasQueuedEntry) {
         for (const entry of awaitingEntries) {
-          const stampMs = Date.parse(entry.parkedAt ?? entry.addedAt);
-          if (Number.isNaN(stampMs) || now - stampMs < STALE_AWAITING_CONFIRM_MS) continue;
+          const serverStampMs = Date.parse(entry.parkedAt ?? entry.addedAt);
+          let stampMs = serverStampMs;
+          if (Number.isNaN(serverStampMs) || serverStampMs > now) {
+            /* N2 clamp — server timestamp is unusable (unparseable) or reads
+               as future relative to this client's clock. Fall back to the
+               first client-clock instant this component observed the entry. */
+            const observedAt = staleObservedAtRef.current.get(entry.id) ?? now;
+            staleObservedAtRef.current.set(entry.id, observedAt);
+            stampMs = observedAt;
+          } else {
+            staleObservedAtRef.current.delete(entry.id);
+          }
+          if (now - stampMs < STALE_AWAITING_CONFIRM_MS) continue;
 
           stale.push(entry);
           /* One-shot toast per entry — dedupeKey guards against double-push
@@ -126,10 +174,10 @@ function useStaleAwaitingConfirm(
             dispatch(
               notificationsActions.pushToast({
                 kind: 'warn',
-                message: `Queue blocked: a chapter is waiting for voice confirmation (${charNames}). Open the Queue to confirm or skip, or use "Clear queue".`,
-                /* S5 — same key the park-time toast uses, so this fires as an
-                   update (message + createdAt bump) on that existing toast
-                   rather than stacking a second one. */
+                message: `Still waiting: a chapter needs voice confirmation (${charNames}). Open the Queue to confirm or skip, or use "Clear queue".`,
+                /* S5 — same key the park-time toast uses; replaces any
+                   lingering park-time toast rather than stacking a second
+                   one (see docstring — it's a fresh push, not an update). */
                 dedupeKey: `fallback-confirm:${entry.id}`,
               }),
             );
@@ -330,9 +378,14 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
             ) : (
               <div className="space-y-6">
                 {/* #3106 — persistent banner when an awaiting_confirm entry has been
-                    unanswered past the stale threshold. Names the blocked chapters'
+                    unanswered past the stale threshold. Names the waiting chapters'
                     characters and points at existing resolution (per-row confirm/skip
-                    or "Clear queue" above). Hidden when no stale entries exist. */}
+                    or "Clear queue" above). Hidden when no stale entries exist.
+                    N1 (pass-2 review) — copy says "needs your input", never
+                    "blocked": the gate this banner fires on (another `queued`
+                    entry existing anywhere in the workspace) doesn't establish
+                    that THIS entry is blocking that one — see the docstring on
+                    useStaleAwaitingConfirm above. */}
                 {staleAwaitingEntries.length > 0 && (
                   <div
                     role="alert"
@@ -343,8 +396,8 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                     <div className="flex-1 min-w-0">
                       <p className="font-semibold">
                         {staleAwaitingEntries.length === 1
-                          ? '1 chapter blocked'
-                          : `${staleAwaitingEntries.length} chapters blocked`}
+                          ? '1 chapter needs your input'
+                          : `${staleAwaitingEntries.length} chapters need your input`}
                       </p>
                       <p className="mt-0.5 text-amber-800">
                         Waiting for voice confirmation (

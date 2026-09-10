@@ -1,22 +1,27 @@
-/* Regression test for #3106 — stale awaiting_confirm blocked-state signal.
+/* Regression test for #3106 — stale awaiting_confirm signal.
  *
  * Verifies that when an awaiting_confirm entry sits unanswered past the
- * STALE_AWAITING_CONFIRM_MS threshold while a queued entry exists behind
- * it, the Queue modal surfaces a persistent banner naming the blocked
- * characters and dispatches a warn toast.
+ * STALE_AWAITING_CONFIRM_MS threshold while another entry is queued
+ * elsewhere in the workspace, the Queue modal surfaces a persistent banner
+ * naming the waiting characters and dispatches a warn toast.
  *
  * FAILS pre-fix (no banner, no toast); PASSES post-fix.
  *
  * pr-review-gate pass on #3106 additionally pins:
- *   - S1: a lone awaiting_confirm entry with nothing queued behind it never
- *     fires, even past the threshold.
+ *   - S1/N1: a lone awaiting_confirm entry with nothing else queued in the
+ *     workspace never fires, even past the threshold. (Pass 2 renamed the
+ *     signal's copy from "blocked" to "needs your input" — the gate is
+ *     "is there other queued work", not "is this entry blocking it".)
  *   - S3: repeated polls while still awaiting_confirm don't repeatedly
  *     re-push the toast and reset its auto-dismiss window.
  *   - S4: staleness is read from the entry's own `parkedAt`, not from when
  *     the component first observed it — an entry already stale before mount
  *     fires immediately, and a reload can't reset the clock.
  *   - S5: the stale toast reuses the park-time toast's dedupe key
- *     (`fallback-confirm:<id>`) instead of stacking a second toast. */
+ *     (`fallback-confirm:<id>`) instead of stacking a second toast.
+ *   - N2 (pass 2): a `parkedAt` that reads as being in the CLIENT's future
+ *     (the device clock is behind the server's) doesn't permanently
+ *     suppress the signal — see the "clock skew" describe block below. */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
@@ -102,7 +107,7 @@ describe('#3106 stale awaiting_confirm blocked-state signal', () => {
     act(() => { vi.advanceTimersByTime(STALE_AWAITING_CONFIRM_MS + 6_000); });
 
     const banner = screen.getByTestId('queue-stale-awaiting-banner');
-    expect(banner.textContent).toMatch(/1 chapter blocked/);
+    expect(banner.textContent).toMatch(/1 chapter needs your input/);
     expect(banner.textContent).toMatch(/Narrator/);
 
     const toasts = store.getState().notifications.toasts;
@@ -128,9 +133,11 @@ describe('#3106 stale awaiting_confirm blocked-state signal', () => {
     ).toBeUndefined();
   });
 
-  /* S1 — the fixture's `queued` sibling above is load-bearing: without it,
-     even a stale awaiting_confirm entry isn't "blocking" anything. */
-  it('does NOT fire when nothing is queued behind it, even past the threshold', () => {
+  /* S1/N1 — the fixture's `queued` sibling above is load-bearing: without
+     ANY other `queued` entry in the workspace queue, the signal doesn't
+     fire (it's gated on "is there other queued work", not on ordering or
+     book — see N1 in PR #3143's pass-2 review). */
+  it('does NOT fire when nothing else is queued in the workspace, even past the threshold', () => {
     const awaiting = entry({
       id: 'e60', status: 'awaiting_confirm',
       fallbackCharacters: [{ id: 'c6', name: 'Loner' }],
@@ -219,5 +226,65 @@ describe('#3106 stale awaiting_confirm blocked-state signal', () => {
     expect(
       store.getState().notifications.toasts.find((t) => t.dedupeKey === 'fallback-confirm:e50'),
     ).toBeTruthy();
+  });
+
+  /* N2 (pass-2 review) — clock skew. `parkedAt` is SERVER-stamped
+     (queue-io.ts markAwaitingConfirm) but the staleness check runs against
+     the BROWSER's Date.now(). These two entries build `parkedAt` from a
+     DIFFERENT time source than the fake clock the component reads (`NOW_ISO`
+     + a fixed offset), rather than deriving it from `Date.now()` the way
+     every other test in this file does — that's what lets this test see a
+     bug the rest of the suite can't. */
+  describe('clock skew (N2)', () => {
+    it('does not permanently suppress the signal when the device clock reads BEHIND the server', () => {
+      /* The server stamped `parkedAt` 2 minutes ahead of this client's fake
+         "now" — i.e. this client's clock is 2 minutes behind the server's.
+         A naive `Date.now() - Date.parse(parkedAt)` stays negative forever
+         here (the gap only widens as the skew persists), so pre-fix this
+         entry would never cross STALE_AWAITING_CONFIRM_MS. */
+      const skewedParkedAt = new Date(Date.parse(NOW_ISO) + 2 * 60_000).toISOString();
+      const awaiting = entry({
+        id: 'e70', status: 'awaiting_confirm', parkedAt: skewedParkedAt,
+        fallbackCharacters: [{ id: 'c7', name: 'Skewed' }],
+      });
+      const queued = entry({ id: 'e71', chapterId: 9, status: 'queued', order: 1 });
+      const store = makeStore([awaiting, queued]);
+
+      render(<Provider store={store}><QueueModal open={true} onClose={() => {}} /></Provider>);
+      expect(screen.queryByTestId('queue-stale-awaiting-banner')).toBeNull();
+
+      /* Just past the threshold measured from MOUNT (first client
+         observation) — the skew-defensive fallback should fire here. A
+         naive `now - Date.parse(parkedAt)` would still read NEGATIVE at
+         this point (it needs threshold + the 2-minute skew, i.e. 3 minutes,
+         to cross zero), so this window is exactly what distinguishes the
+         fix from the bug. */
+      act(() => { vi.advanceTimersByTime(STALE_AWAITING_CONFIRM_MS + 6_000); });
+
+      expect(screen.getByTestId('queue-stale-awaiting-banner')).toBeTruthy();
+      expect(
+        store.getState().notifications.toasts.find((t) => t.dedupeKey === 'fallback-confirm:e70'),
+      ).toBeTruthy();
+    });
+
+    it('does not fire instantly on mount for a skewed-behind clock, even though the entry just parked', () => {
+      const skewedParkedAt = new Date(Date.parse(NOW_ISO) + 2 * 60_000).toISOString();
+      const awaiting = entry({
+        id: 'e80', status: 'awaiting_confirm', parkedAt: skewedParkedAt,
+        fallbackCharacters: [{ id: 'c8', name: 'FreshSkewed' }],
+      });
+      const queued = entry({ id: 'e81', chapterId: 10, status: 'queued', order: 1 });
+      const store = makeStore([awaiting, queued]);
+
+      render(<Provider store={store}><QueueModal open={true} onClose={() => {}} /></Provider>);
+
+      /* Immediately on mount — the fallback starts its own client-clock
+         count from first observation, so this behaves like a freshly-parked
+         entry (not stale yet), rather than firing on the very first check(). */
+      expect(screen.queryByTestId('queue-stale-awaiting-banner')).toBeNull();
+      expect(
+        store.getState().notifications.toasts.find((t) => t.dedupeKey === 'fallback-confirm:e80'),
+      ).toBeUndefined();
+    });
   });
 });

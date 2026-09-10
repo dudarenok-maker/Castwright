@@ -64,8 +64,8 @@ export interface QueueEntry {
   /* Per-chapter loud-fallback gate. The characters in THIS chapter that resolve
      to Qwen but have no designed voice, so would render in Kokoro. Stamped when
      the worker transitions the entry to `awaiting_confirm`; the modal lists
-     them in the confirmation prompt. SERVER queue shape only (NOT in
-     openapi.yaml's QueueEntry — like `requiredEngines`). */
+     them in the confirmation prompt. Mirrored in openapi.yaml's QueueEntry
+     (unlike `requiredEngines`, which is SERVER queue shape only). */
   fallbackCharacters?: Array<{ id: string; name?: string }>;
   /* Set true once the user CONFIRMs the fallback for this entry. The worker
      reads it (threaded through the generation request) so a confirmed entry
@@ -77,9 +77,10 @@ export interface QueueEntry {
      frontend's stale-awaiting-confirm signal (queue-modal.tsx) derives its
      staleness threshold from THIS rather than from when the component
      observed the entry, so the signal survives a page reload and correctly
-     reflects an entry that was already stale before mount. SERVER queue
-     shape only (NOT in openapi.yaml's QueueEntry — like fallbackCharacters/
-     requiredEngines above). */
+     reflects an entry that was already stale before mount. Mirrored in
+     openapi.yaml's QueueEntry (N3, pass-2 review — was mistakenly documented
+     here as server-only, on a false precedent copied from the equally-stale
+     fallbackCharacters comment above). */
   parkedAt?: string;
 }
 
