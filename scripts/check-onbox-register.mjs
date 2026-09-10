@@ -1529,12 +1529,12 @@ export function resolveBaselineTexts(
 // checks out `refs/pull/N/merge`, GitHub's `Merge <head> into <base>` commit,
 // rebuilt on the base's current tip. Its first parent is that tip, available
 // as HEAD^1 (the tip, not the merge-base). On hand-run invocations from a branch,
-// use origin/main (or your target ref) explicitly — if you pass HEAD^1 after a
-// local merge, it is your branch's pre-merge tip, not CI's merge-base, so the
-// check compares the live view against itself and passes unstamped edits. The
-// un-merged case against the real base gives a false refuse if main has published
-// since your branch opened, with a misleading remedy. The comparison is only
-// meaningful when the working tree contains the base ref's content.
+// pass origin/main (or your target ref) explicitly, never HEAD^1: after a local
+// `git merge origin/main`, HEAD^1 is your branch's own pre-merge tip, not the base
+// tip, so main's newer stamp is credited to your branch and an unstamped edit
+// passes. Un-merged against the real base, if main has published since your
+// branch opened, you get a false refuse with a misleading remedy instead. The
+// comparison is only meaningful when the working tree contains the ref's content.
 //
 // `git show <ref>:<path>` exits 128 for BOTH "path missing at that ref" and
 // "ref doesn't resolve at all"; the only way to tell them apart is the
@@ -1646,9 +1646,9 @@ function runCheckOnboxRegisterCli() {
   // fetch-depth: 2 checks out refs/pull/N/merge (`Merge <head> into <base>`,
   // rebuilt on the base's current tip), whose first parent HEAD^1 is that tip.
   // Hand-run: pass the target ref explicitly (e.g. origin/main), never HEAD^1.
-  // After a local merge, HEAD^1 is your branch's pre-merge tip, so the check
-  // compares the live view against itself and passes unstamped edits. If you
-  // don't merge locally, you get a false refuse with a misleading remedy.
+  // After a local merge, HEAD^1 is your branch's pre-merge tip, so main's newer
+  // stamp is credited to your branch and an unstamped edit passes. Un-merged, if
+  // main has published since your branch opened, you get a false refuse instead.
   const stampedSinceIdx = process.argv.indexOf('--stamped-since');
   if (stampedSinceIdx !== -1) {
     // #3116 review finding 2: --stamped-since is incompatible with
