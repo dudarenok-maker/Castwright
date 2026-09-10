@@ -728,6 +728,51 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
       expect(openedChapterIds().filter((ids) => ids[0] === 1)).toHaveLength(2);
     });
 
+    it('re-claims a parked chapter after confirm even when idle has not yet arrived (#3029)', async () => {
+      /* Regression: the server's `chapter_awaiting_fallback_confirm` tick was
+         recorded but the stream stayed open until the subsequent `idle` tick
+         arrived. If the user confirmed before `idle` landed,
+         `hasOpenStreamForChapter` returned true and STEP 2 skipped the
+         freshly-queued entry — nothing re-triggered tick() until an unrelated
+         action fired or the delayed `idle` finally arrived (could be minutes).
+         Fix: close the stream immediately on the park tick so the handle is
+         gone before any confirm can race it. */
+      const store = makeStore(2);
+      seed(store, [entry({ id: 'a1', bookId: 'book-A', chapterId: 1 })]);
+      await flushMicro();
+      expect(openedChapterIds().filter((ids) => ids[0] === 1)).toHaveLength(1);
+
+      /* Park ONLY — no idle. In production the server sends both on the same
+         SSE response, but network buffering or a stalled connection can delay
+         the idle past the user's confirm click. */
+      const onTick = findOnTick('book-A', 1);
+      onTick({
+        type: 'chapter_awaiting_fallback_confirm',
+        chapterId: 1,
+        fallbackCharacters: [{ id: 'wren', name: 'Wren' }],
+      } as GenerationTick);
+      await flushMicro();
+
+      /* The park must not be mistaken for a completion. */
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]) === '/api/queue/a1/complete'),
+      ).toBe(false);
+
+      /* The user confirms: server flips awaiting_confirm -> queued
+         (fallbackConfirmed) and the thunk dispatches the fresh snapshot. */
+      seed(store, [
+        entry({ id: 'a1', bookId: 'book-A', chapterId: 1, status: 'queued', fallbackConfirmed: true }),
+      ]);
+      await flushMicro();
+
+      /* Must be re-claimed — a second stream opens for chapter 1, even though
+         no `idle` tick ever arrived for the first stream. Before the fix,
+         hasOpenStreamForChapter still returned true and STEP 2 skipped the
+         entry, leaving it stalled until an unrelated event woke the
+         dispatcher. */
+      expect(openedChapterIds().filter((ids) => ids[0] === 1)).toHaveLength(2);
+    });
+
     it('threads fallbackConfirmed into the stream open for a confirmed entry', async () => {
       const store = makeStore(2);
       seed(store, [

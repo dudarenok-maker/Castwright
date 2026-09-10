@@ -528,6 +528,14 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
          reconcile (which runs off the `idle` tick that follows) knows this
          stream close was a park, not a completion — see takeChapterAwaitingConfirm. */
       chapterAwaitingConfirm.add(streamKey(bookId, ev.chapterId));
+      /* Close the stream immediately on park — the server is done with this
+         chapter until the user confirms or skips. Leaving the handle in
+         `handles` until the server's `idle` tick arrives creates a window
+         where `hasOpenStreamForChapter` returns true for a parked chapter,
+         blocking the dispatcher's STEP 2 from re-claiming it after confirm.
+         A subsequent `idle` tick (if it arrives) is a no-op: close() early-
+         returns on a missing handle. (#3029) */
+      close(key);
       /* Surface a warn toast naming the chapter + characters so the run doesn't
          look silently stalled. Deduped per entry so a reconnect replay can't
          stack duplicates. */
