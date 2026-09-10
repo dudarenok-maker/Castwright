@@ -58,6 +58,7 @@
     "test:sidecar": "node scripts/run-sidecar-tests.mjs",
     "test:hooks": "node scripts/run-hooks-tests.mjs",
     "check:budget-poll": "node scripts/check-no-budget-poll.mjs",
+    "doctor": "node scripts/reap-stale-batteries.mjs",
     "test:e2e": "playwright test --project=chromium --grep-invert=\"visual baselines|@quarantine\"",
     "test:e2e:mobile": "playwright test --project=mobile-chrome --project=tablet-chrome --workers=2 --grep-invert=\"visual baselines\"",
     "test:e2e:all": "playwright test",
@@ -150,6 +151,7 @@
     "globals": "^17",
     "husky": "^9.1.7",
     "jest-axe": "^11.0.0",
+    "js-yaml": "^4.3.2",
     "jsdom": "^29",
     "openapi-typescript": "^7.0.0",
     "picomatch": "^4.0.7",
@@ -165,7 +167,7 @@
     "vitest": "^4.1.11"
   },
   "overrides": {
-    "js-yaml": "^4.2.0",
+    "js-yaml": "^4.3.2",
     "openapi-typescript": {
       "typescript": "$typescript"
     },

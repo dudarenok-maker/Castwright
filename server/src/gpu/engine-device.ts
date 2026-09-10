@@ -10,7 +10,11 @@
 import { configValue } from '../config/resolver.js';
 import { getLastKnownEngineDevice } from './engine-device-state.js';
 
-const ENGINE_DEVICE_KEY: Record<string, string> = {
+/** The single source of truth for engine -> device-knob key. Exported so
+    auto-revert.ts doesn't carry its own second copy of this map (found
+    2026-09-09, PR #3113 review — the two had already drifted in shape,
+    though not in content, before the code ever ran). */
+export const ENGINE_DEVICE_KEY: Record<string, string> = {
   qwen: 'tts.qwen.device',
   coqui: 'tts.coqui.device',
   kokoro: 'tts.kokoro.device',

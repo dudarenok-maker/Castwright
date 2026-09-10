@@ -8,6 +8,8 @@
 import type { VoiceLibraryEntry, VoiceLibraryEngineStatus } from '../workspace/voice-library.js';
 import type { deriveEngineArtifact } from './derive-engine-artifact.js';
 import { currentQwenBaseModel } from './model-paths.js';
+import { getLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
+import { ensureGpuDeviceListWarm } from '../gpu/ensure-gpu-device-list-warm.js';
 // Review C-1 — type-only: this module's whole design is injected deps for
 // testability, so the REAL purgeCloneArtifacts is wired in by the caller
 // (synthesise-chapter.ts's buildDefaultCloneResolverDeps), never imported
@@ -874,6 +876,64 @@ export interface ResolveDesignedVoiceDeps {
  *  `UnresolvableClonedVoiceError` or any other error; that separation from
  *  `resolveClonedVoicesForChapter`'s fail-loud contract is the whole point
  *  of this being a different function. */
+/** #3058 — the lazy Coqui derive below (the designed-voice self-heal, run
+    mid-chapter while Qwen may already be resident and generating) should
+    avoid contending with Qwen for the same GPU, or it can trip a vram-spill
+    failure. `cuda:1` is the fixed target — this repo currently has no
+    per-box discovery of WHICH card Qwen is actually on, only whether a
+    second card exists at all — so this only fires the hint when the
+    last-known GPU list reports an index-1 card.
+
+    The hint is ADVISORY on the wire, not a hard pin: the sidecar threads
+    `X-Device-Hint` into `reservation(preferred=...)`, which restricts its
+    ONE try_hold to that card alone and falls back to ordinary unconstrained
+    placement only if the hinted card cannot fit the derive at all (see
+    `_parse_device_hint` and `PlacementController._resolve_admission` in
+    `main.py`). That degrade-on-can't-fit is real, but it does not make a
+    WRONG hint cheap in general — only in the case where the hinted card is
+    actually out of room. This one can be wrong in two ways it cannot
+    detect, and they cost differently:
+
+    - #3061 review N1 — a stale-POPULATED cache. The earlier version of this
+      comment claimed absent/stale lists "never hint at a card that doesn't
+      exist"; only a stale-EMPTY list degrades that way. Nothing resets the
+      cache when the sidecar respawns with fewer visible cards (an
+      accelerator-profile change, `CUDA_VISIBLE_DEVICES`), so a list that
+      still remembers an idx-1 card keeps emitting `cuda:1` after that card
+      is gone. If that card is genuinely absent, the fit-check fails and
+      placement falls through to the free card unconstrained placement
+      would have picked anyway — cheap, as designed.
+    - `cuda:1` may simply be the busier card on this box, or the operator's
+      own `tts.qwen.device` pin. Unlike the case above, this does NOT
+      degrade gracefully: `_resolve_admission`'s hinted-device try_hold only
+      checks whether `cuda:1` itself has room, never whether some other
+      card is materially freer, so a `cuda:1` that merely FITS wins
+      outright — even while `cuda:0` sits nearly empty. A hint can
+      therefore park this derive on the exact card Qwen is generating on
+      instead of the free one, silently, with no error and no retry: the
+      one contention outcome `#3058` exists to avoid. Whether "advisory"
+      should instead mean "wins only when competitive with the
+      alternative" is an open design question — see #3097.
+
+    Under a hard pin (not what this is) a wrong value costs a ~60 s
+    capacity-retry stall and a silent stock-catalogue-voice substitution,
+    which is strictly worse than either case above — which is why the
+    sidecar must keep treating this as a preference rather than a pin. But
+    "preference" here means "wins if it fits," not "wins only when nothing
+    better exists."
+
+    #3061 review C1 — `ensureGpuDeviceListWarm()` is not optional here. The
+    cache's only other writers are `GET /api/gpu/devices`, `PUT /api/config`
+    and `GET /api/config`, all three reachable only from the Advanced
+    Settings mount effect (`src/views/advanced.tsx`). On a server where
+    nobody has opened that screen — the ordinary "start the app, generate a
+    chapter" flow — the list is `[]`, and without this warm the whole
+    feature is a silent no-op. */
+async function lazyCoquiDeriveDeviceHint(): Promise<string | undefined> {
+  await ensureGpuDeviceListWarm();
+  return getLastKnownGpuDevices().some((d) => d.idx === 1) ? 'cuda:1' : undefined;
+}
+
 export async function resolveDesignedVoicesForChapter(
   requests: DesignedVoiceRequest[],
   deps: ResolveDesignedVoiceDeps,
@@ -1002,6 +1062,7 @@ export async function resolveDesignedVoicesForChapter(
             sampleRate: master.sampleRate,
             refText: master.refText,
             auditionText: REPAIR_AUDITION_TEXT,
+            deviceHint: await lazyCoquiDeriveDeviceHint(),
           },
           { signal: deps.signal },
         );

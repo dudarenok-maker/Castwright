@@ -59,6 +59,20 @@ recite:
     wrong shape and the suite is green. Checkable: is the fixture traceable
     to real output? Red-before/green-after does not settle it — it measures
     conformance to the fixture (PR #2795 — `npm audit --json`'s `via[]`).
+12. **A brief that paraphrases the design of record drops the constraints an
+    earlier review added, and the implementation conforms to the
+    paraphrase.** A design doc hardened across multiple adversarial review
+    rounds (a boolean status widened to a state machine, a missing recovery
+    primitive added, a naive target-selection fixed) gets summarized into a
+    ticket/brief as its ORIGINAL one-paragraph scope, predating those
+    rounds' findings — the brief never names the doc it's summarizing, so
+    nothing points the implementer back at the hardened version. Tests
+    written against the paraphrase go green over the exact regressions the
+    earlier rounds already fixed once (PR #3113 — `auto-revert.ts`'s first
+    cut reintroduced a revert-to-'auto' infinite-loop bug and a
+    missing-try/catch status-corruption bug, both already found and fixed
+    in the design doc's own round-2/3 history). Checkable: does the brief
+    cite the design doc by path/commit, not just restate a summary of it?
 
 ### Keeping the catalogue current
 

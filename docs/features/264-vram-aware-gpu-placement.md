@@ -552,9 +552,11 @@ evict-under-contention walkthrough: cold-`/load` device steer, `design_voice`
 evicts Ollama, GPU-ASR 503→evict→retry) is **ruled not owed** — this plan's
 own closing sentence already frames them as "deferred by choice, not
 blocked," resting on automated coverage for now, runnable on demand. The
-repo owner confirmed this reading 2026-08-21. A2's remaining scope narrows
+repo owner confirmed this reading 2026-08-21. A2's remaining scope narrowed
 to walkthrough step 9 alone (the #1730 cross-card device-steer on-box
-confirmation) — see `docs/testing/onbox-acceptance-register.md`'s A2 row.
+confirmation), which itself ran for real and discharged the row in full
+2026-09-08 (2-card-boot + Pinokio batch chain, #2950) — A2 no longer exists
+in `docs/testing/onbox-acceptance-register.md`.
 Separately, Castwright#2559 fixed this plan's own self-contradiction (`S6`
 had been listed as both force-driven and not, in the same paragraph) by
 removing `S6` from the force-driven list, ahead of this outcome note.

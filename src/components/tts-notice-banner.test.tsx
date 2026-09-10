@@ -16,7 +16,7 @@ function makeReadyLifecycle(): EngineLifecycle {
 describe('TtsNoticeBanner', () => {
   it('renders nothing when both notices are clear', () => {
     const { container } = render(
-      <TtsNoticeBanner evictionNotice={null} loadErrorNotice={null} onDismiss={vi.fn()} />,
+      <TtsNoticeBanner evictionNotice={null} loadErrorNotice={null} tripNotice={null} onDismiss={vi.fn()} />,
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -26,6 +26,7 @@ describe('TtsNoticeBanner', () => {
       <TtsNoticeBanner
         evictionNotice="Analyzer unloaded to free VRAM for the voice engine."
         loadErrorNotice={null}
+        tripNotice={null}
         onDismiss={vi.fn()}
       />,
     );
@@ -40,6 +41,7 @@ describe('TtsNoticeBanner', () => {
       <TtsNoticeBanner
         evictionNotice={null}
         loadErrorNotice="[Errno 22] Invalid argument"
+        tripNotice={null}
         onDismiss={onDismiss}
       />,
     );
@@ -54,11 +56,43 @@ describe('TtsNoticeBanner', () => {
       <TtsNoticeBanner
         evictionNotice="Analyzer unloaded to free VRAM for the voice engine."
         loadErrorNotice="Voice engine failed to load. Check the voice engine logs."
+        tripNotice={null}
         onDismiss={vi.fn()}
       />,
     );
     expect(screen.getByText(/Analyzer unloaded/i)).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(/failed to load/i);
+  });
+
+  describe('trip notice (Task 16/16.5, #2974)', () => {
+    it('renders the trip notice as an alert, distinct from loadErrorNotice, and dismisses on click', () => {
+      const onDismiss = vi.fn();
+      render(
+        <TtsNoticeBanner
+          evictionNotice={null}
+          loadErrorNotice={null}
+          tripNotice="Auto-reverted: GPU pin for qwen looked structurally too small and was reset to auto."
+          onDismiss={onDismiss}
+        />,
+      );
+      const alert = screen.getByRole('alert');
+      expect(alert).toHaveTextContent('Auto-reverted');
+      fireEvent.click(screen.getByRole('button', { name: /dismiss gpu auto-revert notice/i }));
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders alongside a load error notice without clobbering it', () => {
+      render(
+        <TtsNoticeBanner
+          evictionNotice={null}
+          loadErrorNotice="Voice engine failed to load. Check the voice engine logs."
+          tripNotice="Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed."
+          onDismiss={vi.fn()}
+        />,
+      );
+      expect(screen.getByText(/not tied to a specific gpu card/i)).toBeInTheDocument();
+      expect(screen.getByText(/failed to load/i)).toBeInTheDocument();
+    });
   });
 
   describe('resident-model Stop row (Task 10 / #1839)', () => {
@@ -74,6 +108,7 @@ describe('TtsNoticeBanner', () => {
         <TtsNoticeBanner
           evictionNotice={null}
           loadErrorNotice={null}
+          tripNotice={null}
           onDismiss={vi.fn()}
           kokoro={makeReadyLifecycle()}
         />,
@@ -93,6 +128,7 @@ describe('TtsNoticeBanner', () => {
         <TtsNoticeBanner
           evictionNotice={null}
           loadErrorNotice={null}
+          tripNotice={null}
           onDismiss={vi.fn()}
           kokoro={makeReadyLifecycle()}
         />,
@@ -105,6 +141,7 @@ describe('TtsNoticeBanner', () => {
         <TtsNoticeBanner
           evictionNotice={null}
           loadErrorNotice={null}
+          tripNotice={null}
           onDismiss={vi.fn()}
           kokoro={makeReadyLifecycle()}
           coqui={makeReadyLifecycle()}
@@ -119,6 +156,7 @@ describe('TtsNoticeBanner', () => {
         <TtsNoticeBanner
           evictionNotice={null}
           loadErrorNotice={null}
+          tripNotice={null}
           onDismiss={vi.fn()}
           kokoro={{ state: 'idle', onLoad: vi.fn(), onStop: vi.fn() }}
         />,

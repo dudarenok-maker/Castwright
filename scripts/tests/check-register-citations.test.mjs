@@ -2925,3 +2925,28 @@ test('CLI mutation: removing check-onbox-register.test.mjs from SELF_REFERENTIAL
     assert.equal(readFileSync(CLI_PATH, 'utf8'), original, 'restore must be byte-identical');
   }
 });
+
+// build-register-live-view.mjs's own test fixtures use short synthetic IDs
+// (### A1/A2/A3, ...) as generic parser inputs, the same worked-example
+// shape as check-onbox-register.test.mjs's F1/F2 above — added to
+// SELF_REFERENTIAL_PATHS 2026-09-09 (PR #3113 review) after discharging the
+// REAL row A2 made these synthetic fixtures self-flag for the first time.
+// Same technique as the mutation test above: proves the exclusion is
+// load-bearing, not decorative, by actually removing it and observing the
+// real failure it prevents.
+test('CLI mutation: removing build-register-live-view.test.mjs from SELF_REFERENTIAL_PATHS makes it self-flag on its synthetic A2 fixtures', () => {
+  const original = readFileSync(CLI_PATH, 'utf8');
+  const needle = "  'scripts/tests/build-register-live-view.test.mjs',\n";
+  assert.ok(original.includes(needle), 'fixture assumption: the exclusion entry must exist verbatim');
+  const mutated = original.replace(needle, '');
+  assert.notEqual(mutated, original);
+  try {
+    writeFileSync(CLI_PATH, mutated);
+    const result = runCli([]);
+    assert.equal(result.status, 1, 'mutated CLI should now fail on its own self-referential fixtures');
+    assert.match(result.stderr, /build-register-live-view\.test\.mjs.*cited A2/);
+  } finally {
+    writeFileSync(CLI_PATH, original);
+    assert.equal(readFileSync(CLI_PATH, 'utf8'), original, 'restore must be byte-identical');
+  }
+});

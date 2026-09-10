@@ -19,6 +19,7 @@ const { mocks } = vi.hoisted(() => ({
   mocks: {
     getSidecarHealth: vi.fn(),
     getGpuQueueState: vi.fn(),
+    getGpuTripStatus: vi.fn(),
     getOllamaHealth: vi.fn(),
     unloadAnalyzer: vi.fn(),
     loadSidecar: vi.fn(),
@@ -45,6 +46,9 @@ beforeEach(() => {
      Default to an empty queue so the "GPU busy · N waiting ·" pill prefix
      stays hidden in tests that don't exercise contention. */
   mocks.getGpuQueueState.mockResolvedValue({ queueDepth: 0, devices: [] });
+  /* Task 16/16.5 trip-status probe — same 30 s tick. Default to "nothing has
+     tripped" so tests that don't exercise it never see a stray tripNotice. */
+  mocks.getGpuTripStatus.mockResolvedValue(null);
   mocks.getOllamaHealth.mockResolvedValue({
     status: 'reachable',
     modelResident: true,
@@ -56,6 +60,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  // Task 16/16.5's dismissed-trip-seq persistence (PR #3113 pass 2) writes
+  // to the real jsdom localStorage, which otherwise survives across tests.
+  localStorage.clear();
 });
 
 describe('useTtsLifecycle', () => {
@@ -556,6 +563,122 @@ describe('useTtsLifecycle', () => {
        its initial mount before we assert on the queue field. */
     await waitFor(() => expect(result.current.coqui.state).toBe('idle'));
     expect(result.current.gpuQueueDepth).toBeUndefined();
+  });
+
+  it('Task 16/16.5: surfaces the reverted trip toast from /api/gpu/trip-status on the same tick', async () => {
+    mocks.getGpuTripStatus.mockResolvedValueOnce({
+      status: 'reverted',
+      card: 1,
+      engines: ['qwen'],
+      toast: 'Auto-reverted: GPU pin for qwen looked structurally too small and was reset to auto.',
+      seq: 1,
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() =>
+      expect(result.current.tripNotice).toBe(
+        'Auto-reverted: GPU pin for qwen looked structurally too small and was reset to auto.',
+      ),
+    );
+  });
+
+  it('Task 16/16.5: surfaces the unrevertable trip toast, and dismissNotices clears it', async () => {
+    mocks.getGpuTripStatus.mockResolvedValue({
+      status: 'unrevertable',
+      toast: 'Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed.',
+      seq: 1,
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.tripNotice).not.toBeNull());
+
+    act(() => {
+      result.current.dismissNotices();
+    });
+    expect(result.current.tripNotice).toBeNull();
+  });
+
+  it('a SECOND trip with an identical toast string still re-surfaces after a dismiss, because dedup keys on seq not text (PR #3113 review finding)', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.getGpuTripStatus.mockResolvedValueOnce({
+        status: 'unrevertable',
+        toast: 'Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed.',
+        seq: 1,
+      });
+      const { result } = renderHook(() => useTtsLifecycle());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.tripNotice).not.toBeNull();
+
+      act(() => {
+        result.current.dismissNotices();
+      });
+      expect(result.current.tripNotice).toBeNull();
+
+      // A genuinely new trip (seq: 2) with the exact same toast text.
+      mocks.getGpuTripStatus.mockResolvedValueOnce({
+        status: 'unrevertable',
+        toast: 'Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed.',
+        seq: 2,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(result.current.tripNotice).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('dismissing a trip persists its seq to localStorage (PR #3113 pass 2 finding)', async () => {
+    mocks.getGpuTripStatus.mockResolvedValue({
+      status: 'unrevertable',
+      toast: 'Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed.',
+      seq: 7,
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.tripNotice).not.toBeNull());
+    expect(localStorage.getItem('castwright:dismissedTripSeq')).toBeNull();
+    act(() => {
+      result.current.dismissNotices();
+    });
+    expect(result.current.tripNotice).toBeNull();
+    expect(localStorage.getItem('castwright:dismissedTripSeq')).toBe('7');
+  });
+
+  it('a fresh mount with an already-dismissed seq persisted does NOT re-show that trip, but a genuinely new trip afterward still does (PR #3113 pass 2 finding)', async () => {
+    // Simulates the state left behind by the previous test's dismiss —
+    // "a page reload" after the operator already dismissed trip seq 7.
+    localStorage.setItem('castwright:dismissedTripSeq', '7');
+    vi.useFakeTimers();
+    try {
+      mocks.getGpuTripStatus.mockResolvedValue({
+        status: 'unrevertable',
+        toast: 'Voice engine kept crash-looping, but not tied to a specific GPU card — manual investigation needed.',
+        seq: 7,
+      });
+      const { result } = renderHook(() => useTtsLifecycle());
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // Without persistence, a fresh lastTripSeq ref starting at null would
+      // see 7 !== null on this very first poll and show it anyway.
+      expect(result.current.tripNotice).toBeNull();
+
+      // A genuinely NEW trip (seq 8) must still show — persistence must not
+      // black-hole every future trip forever, only the one already seen.
+      mocks.getGpuTripStatus.mockResolvedValue({
+        status: 'unrevertable',
+        toast: 'A different reason this time.',
+        seq: 8,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(result.current.tripNotice).toBe('A different reason this time.');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports qwen1_7bInstalled=true when /health (reachable) affirms the 1.7B weights are present', async () => {
