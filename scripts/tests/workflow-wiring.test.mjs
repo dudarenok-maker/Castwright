@@ -1553,14 +1553,26 @@ test('register citation check: must be unconditional (no if: guard) — issue #3
   const stepBlock = stepLines.join('\n');
 
   // Assertion 1: Step must NOT contain any `if:` at any indentation.
-  // Use the same ifConditions pattern as the rest of this file: extract all
-  // if: lines (including block scalars), and assert none are found.
+  // Standalone regex check (not using the shared ifConditions helper, which handles
+  // block scalars; this step is simple enough that a direct regex suffices).
   const ifMatches = stepBlock.match(/^\s*if:/m);
   assert.ok(
     !ifMatches,
     'Register citation check step must be unconditional (must have no `if:` guard). ' +
       'This step scans the whole tree for citations (#3122), so no diff-scope can ' +
       'reliably predict coverage. It must run on every PR, including docs-only.',
+  );
+
+  // Assertion 1b: Step must NOT contain `continue-on-error:` either.
+  // If a future PR adds `continue-on-error: true`, the step will run but if it exits
+  // 1 on a broken citation, the job continues anyway and reports success — silently
+  // reopening #3122. This assertion catches that regression.
+  const continueOnErrorMatches = stepBlock.match(/^\s*continue-on-error:\s*/mi);
+  assert.ok(
+    !continueOnErrorMatches,
+    'Register citation check step must not have `continue-on-error:` set. ' +
+      'If this step fails on a broken citation, the job must fail so it is caught by CI. ' +
+      'Adding `continue-on-error: true` would silently reopen #3122.',
   );
 
   // Assertion 2: Step MUST contain the exact run command (as a complete value).
