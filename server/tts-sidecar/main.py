@@ -10257,7 +10257,7 @@ async def _preload_default_engines() -> None:
         if isinstance(kokoro, KokoroEngine):
             try:
                 log.info("Preloading Kokoro at startup (PRELOAD_KOKORO=1)…")
-                await asyncio.to_thread(kokoro._ensure_loaded, "v1")
+                await asyncio.to_thread(_kokoro_ensure_loaded_guarded, kokoro, "v1")
                 log.info("Kokoro preload complete — /synthesize is hot.")
             except Exception as e:
                 log.warning(
@@ -11209,6 +11209,24 @@ def debug_reclaim() -> dict[str, Any]:
     return {"before": before, "reclaimed": reclaimed, "after": after}
 
 
+def _kokoro_ensure_loaded_guarded(
+    kokoro: "KokoroEngine", model: str, device: Optional[str] = None
+) -> None:
+    """Take `_VD_KOKORO.kokoro_synth()` around a cold Kokoro load (#3086/#3101).
+
+    `KokoroEngine.synthesize()` wraps its whole forward (load + create) in the
+    arbiter, but `/load` and the startup preload path call `_ensure_loaded`
+    directly, bypassing it entirely. A cold load isn't just bookkeeping: on
+    the DirectML profile it runs a real one-shot forward
+    (`_directml_selftest_or_fallback`'s `kokoro.create("ok", ...)`) to prove
+    the provider actually works — exactly the "raw Kokoro synth" that must
+    not co-reside with an active VoiceDesign forward. Routing every cold load
+    through the same gate `synthesize()` uses closes that bypass regardless
+    of which caller triggers the load."""
+    with _VD_KOKORO.kokoro_synth():
+        kokoro._ensure_loaded(model, device=device)
+
+
 @app.post("/load")
 async def load_model(req: Request) -> JSONResponse:
     """Load a TTS engine's model into memory. Idempotent — returns `ready`
@@ -11271,9 +11289,11 @@ async def load_model(req: Request) -> JSONResponse:
                     ) as adm:
                         if "noCapacity" in adm:
                             return _no_capacity(adm)
-                        await asyncio.to_thread(kokoro._ensure_loaded, "v1", device=adm["device"])
+                        await asyncio.to_thread(
+                            _kokoro_ensure_loaded_guarded, kokoro, "v1", adm["device"]
+                        )
                 else:
-                    await asyncio.to_thread(kokoro._ensure_loaded, "v1")
+                    await asyncio.to_thread(_kokoro_ensure_loaded_guarded, kokoro, "v1")
             except Exception as e:
                 return error_response(e, log, status=500)
             finally:
