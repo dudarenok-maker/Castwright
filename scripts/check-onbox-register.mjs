@@ -1517,21 +1517,23 @@ export function resolveBaselineTexts(
 // #3116: reads the live view AT an arbitrary ref (the PR base, in CI) for
 // `--stamped-since`. Deliberately narrower than `resolveBaselineTexts` above:
 // no fetch (the caller — the CLI layer, or the workflow before invoking it —
-// is responsible for making `ref` resolvable locally; see the workflow's own
-// `git fetch --depth=1` step), one file, and THREE outcomes rather than
+// is responsible for making `ref` resolvable locally; in CI, `actions/checkout@v7`
+// with `fetch-depth: 2` makes the merge base available as HEAD^1), one file, and THREE outcomes rather than
 // fetch-then-show's two, because "the file didn't exist yet at this ref" is
 // not a failure here (it's the newly-added-file case the issue calls out) —
 // it must not be folded into the same bucket as "the ref itself is garbage."
 //
 // #3116 review finding 5: correctness depends on the working tree being
-// `merge(base, head)` — the merged state of the current base tip into the current
-// branch. In CI this is guaranteed: `actions/checkout@v7` on a
-// pull_request event checks out `refs/pull/N/merge`, which is exactly that
-// virtual commit merged onto the base's current tip. The base ref itself is
-// available as HEAD^1. On hand-run invocations from an un-rebased branch that has
-// diverged from the base ref (not recommended, but possible), comparing
-// un-merged trees might report OK when they genuinely differ — the comparison
-// is only meaningful when the working tree contains the base ref's content.
+// `merge(base, head)` — the merged state of the base ref merged onto the current
+// branch's HEAD. In CI this is guaranteed: `actions/checkout@v7` on a
+// pull_request event checks out `refs/pull/N/merge`, which is exactly the base
+// ref merged onto the current HEAD at that moment. The base ref itself is
+// available as HEAD^1. On hand-run invocations from a branch that has not been
+// merged or rebased onto the base ref (the opposite of recommended practice),
+// both failure modes occur: comparing un-merged trees might report OK when they
+// genuinely differ (false accept), or might report a difference that exists only
+// because the base ref has advanced (false refuse). The comparison is only
+// meaningful when the working tree contains the base ref's content.
 //
 // `git show <ref>:<path>` exits 128 for BOTH "path missing at that ref" and
 // "ref doesn't resolve at all"; the only way to tell them apart is the
@@ -1638,13 +1640,14 @@ function runCheckOnboxRegisterCli() {
   // dependency on it; the caller (the workflow, or an operator by hand) is
   // responsible for making `ref` resolvable locally first.
   //
-  // Correctness assumes the working tree is merge(base, head): the result of
-  // merging `ref` into the current branch. In CI, actions/checkout@v7 with
-  // fetch-depth: 2 checks out refs/pull/N/merge (the merge onto the current
-  // base tip), and the base ref is available as HEAD^1. Hand-run: the check is
-  // only meaningful when comparing the base ref against the merged state;
-  // comparing un-merged trees from an un-rebased branch may report OK when they
-  // genuinely differ.
+  // Correctness assumes the working tree is merge(base, head): the base ref
+  // merged onto the current branch's HEAD. In CI, actions/checkout@v7 with
+  // fetch-depth: 2 checks out refs/pull/N/merge (the base ref merged onto the
+  // current HEAD at that moment), and the base ref is available as HEAD^1.
+  // Hand-run: bring the branch up to date with `ref` first (fetch, then merge
+  // or rebase `ref` into the branch), or the check will give both false accepts
+  // (un-merged content reads as unchanged) and false refuses (the base ref has
+  // advanced and is detected as a difference).
   const stampedSinceIdx = process.argv.indexOf('--stamped-since');
   if (stampedSinceIdx !== -1) {
     // #3116 review finding 2: --stamped-since is incompatible with

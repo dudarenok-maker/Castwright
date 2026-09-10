@@ -58,4 +58,4 @@ jobs:
       # RENDERED content is accompanied by a stamp bump.
       - name: Check the live view was re-stamped if its content changed
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        run: node scripts/check-onbox-register.mjs -- --stamped-since HEAD^1
+        run: node scripts/check-onbox-register.mjs --stamped-since HEAD^1

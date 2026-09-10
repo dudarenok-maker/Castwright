@@ -82,10 +82,16 @@ older revision, or where a conflict was resolved by taking one side wholesale
 over the other. The check reads the base ref's copy and the working tree's,
 which CI makes `merge(base, head)`, and **reports** an unstamped change in
 content (see #3138 for the decision whether to enforce it as a merge gate).
+In CI, `<ref>` is `HEAD^1` (the base ref at merge time). By hand, bring your
+branch up to date with the target ref first (e.g. `git fetch origin && git merge origin/main`),
+then pass that ref (e.g. `origin/main`) so the check compares the merged state.
 **Any PR that changes the live view's RENDERED content must re-stamp it** — this
-includes any markdown-only edit that moves a count. The `register:build` rebuild
-that CI's `--check` step requires moves the generated section, so `--stamped-since`
-then sees rendered content that moved.
+includes any markdown-only edit that moves a count. After a markdown edit that
+changes any generated figures, run `npm run register:build` locally (it regenerates
+the summary strip and derived counts), then `npm run stamp:publish-token` to bump
+the live view's publish counter — both changes must land together or CI's
+`register:build --check` will fail (generated figures stale) and `--stamped-since`
+will fail (content changed without re-stamping).
 
 The live view carries derived figures — owed count, per-group counts, oldest
 debt — that are **generated** on every build. Rows can be right while the
