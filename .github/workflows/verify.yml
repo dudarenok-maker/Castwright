@@ -63,12 +63,16 @@ name: Verify
 #
 # No `paths-ignore` here (deliberately removed — see design spec): keeping it
 # while this is a required status check would deadlock every docs-only PR,
-# since a required check that never fires blocks merge forever. Every leg's
+# since a required check that never fires blocks merge forever. Most legs'
 # own `if:` scope condition already evaluates false for a docs-only diff, so
-# every job still completes in roughly the time of "Setup Node + deps" alone
-# and the aggregator reports green — no deadlock, negligible added time. Same
-# reasoning is why no job gates on PR `draft` status either — a draft-gated
-# required check would deadlock every draft PR the same way.
+# most jobs still complete in roughly the time of "Setup Node + deps" alone
+# and the aggregator reports green — no deadlock, negligible added time.
+# ONE exception: `check:register-citations` (see #3122) runs unconditionally,
+# since citations can appear in any file and diff-scope cannot predict whether
+# one broke; this step still runs on docs-only diffs, but remains negligible
+# (a few seconds), so overall timing is unaffected. Same reasoning is why no
+# job gates on PR `draft` status either — a draft-gated required check would
+# deadlock every draft PR the same way.
 
 on:
   pull_request:
@@ -215,8 +219,8 @@ jobs:
         if: fromJSON(needs.detect.outputs.scopes).step_check_budget_poll || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run check:budget-poll
 
-      # Register-citation check (unconditional — see #3122: the checker
-      # scans the WHOLE tree for citations, so no diff-scope reliably
+      # Register-citation check (unconditional — see #3122 and #3140): the
+      # checker scans the WHOLE tree for citations, so no diff-scope reliably
       # predicts whether one broke; must run on every PR, docs-only included.
       # leg: check:register-citations
       - name: Register citation check
