@@ -83,7 +83,7 @@ over the other. The check reads the base ref's copy and the working tree's,
 which CI makes `merge(base, head)`, and **reports** an unstamped change in
 content (see #3138 for the decision whether to enforce it as a merge gate).
 In CI, `<ref>` is `HEAD^1` (the base branch's tip at merge time). **By hand,
-never pass `HEAD^1`**: outside CI's merge commit it is not the base your branch
+never pass `HEAD^1`**: outside CI's merge commit it need not be the base your branch
 will merge onto, so the check can fail to catch an unstamped edit — for example
 when `HEAD^1` already contains the edit, or when a stamp main landed in between
 is credited to your branch. Instead, merge the target in and pass it explicitly
