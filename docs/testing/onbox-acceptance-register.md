@@ -3723,7 +3723,6 @@ comment in `server/src/tts/segment-asr-qa.ts`; #2026's own repro recipe.
 *Cost:* short-to-medium — the collapse is intermittent, so budget a few
 repeated renders of the same short lines, not one pass.
 
-> **PARTIALLY run 2026-09-09 (batch 2 step 3, claude) — first bullet not
 > reproduced this session (accepted, per this row's own text); second bullet
 > surfaced a real false-positive, filed as
 > [#3118](https://github.com/dudarenok-maker/Castwright/issues/3118).** Real
@@ -3747,6 +3746,27 @@ repeated renders of the same short lines, not one pass.
 > change) — filed as #3118 rather than silently dropped or fixed. **Still
 > owed:** a genuine #2026-style collapse actually caught by the override
 > (bullet 1), and #3118's own false-positive-rate question.
+
+**Run note — 2026-09-10, Claude Code, isolated worktree
+`wt-3118-a26-wer-drift-sample` (#3118 → #3131 → #3132), real hardware
+(RTX 5070 Ti, `cuda:1`, real Coqui/XTTS + real Whisper, real production
+`classifyTranscript()`, no `nameAllowlist` entries).** Ran the second bullet's
+false-positive check at a larger sample than the prior 2-attempt finding: 20
+invented-name attempts (12 short 2–4-word, 8 longer 6+-word) and 10 control
+(no-invented-name) attempts. Drift rates: invented-name short 6/12 (50%),
+invented-name long 0/8 (0%), invented-name combined 6/20 (30%), control 2/10
+(20%). The 10-point combined gap is not material — a single verdict flip in
+either group's small sample would equalize the rates — and it does not survive
+controlling for line length: every invented-name drift came from the short
+subgroup, the longer invented-name subgroup (the more realistic case for real
+book content) had zero drift and was actually below the control rate, and one
+control line drifted on both attempts from a generic short-utterance
+ASR-hallucinated tail, the same failure signature as the invented-name drift.
+**No material false-positive-rate regression found; short-reference/
+named-entity fragility is a pre-existing, accepted limitation.** Full
+line-by-line table: `docs/testing/onbox-a26-wer-drift-sample-results.md`.
+Resolves the "Not yet observed" false-positive-rate bullet above; #3118
+closes outright on this finding.
 
 ### A27 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install (#2179, PR #2210) · **single 8 GB card is enough**
 
