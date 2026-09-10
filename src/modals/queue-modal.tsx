@@ -59,56 +59,65 @@ export const STALE_AWAITING_CONFIRM_MS = 60_000;
 
 /** Polling interval for the stale-awaiting_confirm check. 5 s is frequent
     enough to fire within one interval of the threshold without being a
-    busy-wait — each tick is a Map scan over the (small) entry list. */
+    busy-wait — each tick is a scan over the (small) entry list. */
 const STALE_CHECK_INTERVAL_MS = 5_000;
 
 /** Track awaiting_confirm entries and return those unanswered past the
     threshold. Fires a one-shot warn toast per entry when the threshold is
     first crossed; clears tracking when the entry leaves the queue (confirmed,
-    skipped, or cleared). */
+    skipped, or cleared).
+
+    pr-review-gate pass on #3106 (S1/S3/S4/S5):
+      - S1: only fires when something is actually queued behind the stale
+        entry — a lone awaiting_confirm entry with nothing else in the queue
+        isn't "blocking" anything.
+      - S3: `toastFiredRef` is a one-shot guard, not decoration — without it
+        every 5s poll while the condition still holds would re-push the toast,
+        and notifications-slice bumps `createdAt` on every push, which resets
+        ToastStack's auto-dismiss timer forever.
+      - S4: staleness is derived from the entry's OWN `parkedAt` (stamped
+        server-side when the worker parks it — queue-io.ts markAwaitingConfirm)
+        rather than from when this component first observed the entry, so the
+        signal survives a page reload and correctly reflects an entry that was
+        already stale before mount. `addedAt` (enqueue time, always present)
+        is the fallback for a legacy entry parked before `parkedAt` existed.
+      - S5: the toast reuses the park-time toast's dedupe key
+        (`fallback-confirm:${id}` — generation-stream-runner.ts) so this more
+        specific "still unanswered" message REPLACES it in place instead of
+        stacking a second, less-specific toast. */
 function useStaleAwaitingConfirm(
   groupedByBook: ReturnType<typeof selectQueueByBook>,
 ): QueueEntry[] {
   const dispatch = useAppDispatch();
-  const firstSeenRef = useRef<Map<string, number>>(new Map());
   const toastFiredRef = useRef<Set<string>>(new Set());
   const [staleEntries, setStaleEntries] = useState<QueueEntry[]>([]);
 
   useEffect(() => {
     const check = (): void => {
       const now = Date.now();
-      const currentAwaiting = new Map<string, QueueEntry>();
+      const allEntries = groupedByBook.flatMap((g) => g.entries);
+      const awaitingEntries = allEntries.filter((e) => e.status === 'awaiting_confirm');
+      /* S1 — nothing else queued behind it → nothing is blocked. */
+      const hasQueuedEntry = allEntries.some((e) => e.status === 'queued');
 
-      for (const group of groupedByBook) {
-        for (const entry of group.entries) {
-          if (entry.status === 'awaiting_confirm') {
-            currentAwaiting.set(entry.id, entry);
-            if (!firstSeenRef.current.has(entry.id)) {
-              firstSeenRef.current.set(entry.id, now);
-            }
-          }
-        }
+      /* Evict the one-shot toast guard for entries that left awaiting_confirm
+         (confirmed, skipped, cleared, or status otherwise changed). */
+      const currentAwaitingIds = new Set(awaitingEntries.map((e) => e.id));
+      for (const id of Array.from(toastFiredRef.current)) {
+        if (!currentAwaitingIds.has(id)) toastFiredRef.current.delete(id);
       }
 
-      /* Evict tracking for entries that left awaiting_confirm (confirmed,
-         skipped, cleared, or status otherwise changed). */
-      for (const id of Array.from(firstSeenRef.current.keys())) {
-        if (!currentAwaiting.has(id)) {
-          firstSeenRef.current.delete(id);
-          toastFiredRef.current.delete(id);
-        }
-      }
-
-      /* Collect entries past the threshold. */
       const stale: QueueEntry[] = [];
-      for (const [id, entry] of currentAwaiting) {
-        const firstSeen = firstSeenRef.current.get(id);
-        if (firstSeen != null && now - firstSeen >= STALE_AWAITING_CONFIRM_MS) {
+      if (hasQueuedEntry) {
+        for (const entry of awaitingEntries) {
+          const stampMs = Date.parse(entry.parkedAt ?? entry.addedAt);
+          if (Number.isNaN(stampMs) || now - stampMs < STALE_AWAITING_CONFIRM_MS) continue;
+
           stale.push(entry);
           /* One-shot toast per entry — dedupeKey guards against double-push
-             within the same render cycle; the ref guards across cycles. */
-          if (!toastFiredRef.current.has(id)) {
-            toastFiredRef.current.add(id);
+             within the same render cycle; the ref guards across cycles (S3). */
+          if (!toastFiredRef.current.has(entry.id)) {
+            toastFiredRef.current.add(entry.id);
             const charNames =
               entry.fallbackCharacters
                 ?.map((c) => c.name)
@@ -118,7 +127,10 @@ function useStaleAwaitingConfirm(
               notificationsActions.pushToast({
                 kind: 'warn',
                 message: `Queue blocked: a chapter is waiting for voice confirmation (${charNames}). Open the Queue to confirm or skip, or use "Clear queue".`,
-                dedupeKey: `stale-awaiting-confirm-${id}`,
+                /* S5 — same key the park-time toast uses, so this fires as an
+                   update (message + createdAt bump) on that existing toast
+                   rather than stacking a second one. */
+                dedupeKey: `fallback-confirm:${entry.id}`,
               }),
             );
           }

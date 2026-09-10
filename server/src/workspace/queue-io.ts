@@ -72,6 +72,15 @@ export interface QueueEntry {
      that re-enters (retry / reload / re-dispatch) renders straight through
      instead of re-prompting. */
   fallbackConfirmed?: boolean;
+  /* #3106 pr-review-gate S4 — ISO 8601 timestamp stamped by
+     `markAwaitingConfirm` below when the worker parks this entry. The
+     frontend's stale-awaiting-confirm signal (queue-modal.tsx) derives its
+     staleness threshold from THIS rather than from when the component
+     observed the entry, so the signal survives a page reload and correctly
+     reflects an entry that was already stale before mount. SERVER queue
+     shape only (NOT in openapi.yaml's QueueEntry — like fallbackCharacters/
+     requiredEngines above). */
+  parkedAt?: string;
 }
 
 export interface QueueFile {
@@ -300,7 +309,13 @@ export function markAwaitingConfirm(
     entries: file.entries.map(
       (e): QueueEntry =>
         e.id === entryId
-          ? { ...e, status: 'awaiting_confirm', fallbackCharacters, progress: undefined }
+          ? {
+              ...e,
+              status: 'awaiting_confirm',
+              fallbackCharacters,
+              progress: undefined,
+              parkedAt: new Date().toISOString(),
+            }
           : e,
     ),
   };

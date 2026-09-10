@@ -423,6 +423,22 @@ describe('queue-io loud-fallback gate', () => {
       expect(e.fallbackCharacters).toEqual(chars);
     });
 
+    /* #3106 pr-review-gate S4 — parkedAt is what the frontend's
+       stale-awaiting-confirm signal now derives its threshold from (instead
+       of component-mount time), so a reload can't reset it. */
+    it('stamps parkedAt with the current time', () => {
+      const before = Date.now();
+      let f = enqueue(emptyFile(), [sampleEntry('e1')]);
+      f = markInProgress(f, 'e1');
+      f = markAwaitingConfirm(f, 'e1', chars);
+      const e = f.entries.find((x) => x.id === 'e1')!;
+      expect(e.parkedAt).toBeTruthy();
+      const parkedAtMs = Date.parse(e.parkedAt!);
+      expect(Number.isNaN(parkedAtMs)).toBe(false);
+      expect(parkedAtMs).toBeGreaterThanOrEqual(before);
+      expect(parkedAtMs).toBeLessThanOrEqual(Date.now());
+    });
+
     it('is a no-op for a queued (not in_progress) entry', () => {
       const f = enqueue(emptyFile(), [sampleEntry('e1')]);
       expect(markAwaitingConfirm(f, 'e1', chars)).toEqual(f);
