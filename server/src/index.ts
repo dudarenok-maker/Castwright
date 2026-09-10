@@ -65,6 +65,7 @@ import {
   type SidecarSupervisor,
 } from './tts/sidecar-supervisor.js';
 import { enforceSingleSidecarOwner, releaseSidecarOwnership } from './tts/sidecar-owner.js';
+import { runAutoRevert } from './gpu/auto-revert.js';
 import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
 import { detectCoquiInstallStateOnDisk } from './tts/coqui-install-detect.js';
 import {
@@ -321,6 +322,25 @@ async function main(): Promise<void> {
           modelKey: getResolvedTtsModelKey(),
           repoRoot: bootRepoRoot,
         };
+      },
+      /* Task 16/16.5 (#1230 item 2, #2974) — fire-and-forget: onTrip itself
+         must stay synchronous (see sidecar-supervisor.ts's doc on the opt),
+         and resetAndRespawn() below re-enters the supervisor object this
+         closure is still constructing, which is fine — by the time onTrip
+         can actually fire (a live code-43 streak), createSidecarSupervisor
+         has long since returned and sidecarSupervisor is assigned. */
+      onTrip: (trip) => {
+        void runAutoRevert(
+          {
+            card: trip.card,
+            residentEngines: trip.residentEngines,
+            // Map the breadcrumb's raw snake_case device shape (main.py's
+            // _sample_card) to runAutoRevert's own RevertDevice — undefined
+            // stays undefined (an older breadcrumb), never coerced to [].
+            devices: trip.devices?.map((d) => ({ idx: d.idx, uuid: d.uuid, freeMb: d.free_mb })),
+          },
+          { resetAndRespawn: () => sidecarSupervisor!.resetAndRespawn() },
+        );
       },
     });
     void sidecarSupervisor.start();

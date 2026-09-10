@@ -167,3 +167,134 @@ def test_codec_device_pref_passes_through_plain_values(monkeypatch):
     for raw, expected in (("cpu", "cpu"), ("auto", "auto"), ("cuda:1", "cuda:1")):
         monkeypatch.setenv("QWEN_CODEC_DEVICE", raw)
         assert main._codec_device_pref() == expected
+
+
+# ── #3058 — _parse_device_hint (X-Device-Hint header validation) ───────────
+#
+# Reuses the exact same grammar `_engine_env_pin` applies to COQUI_DEVICE/
+# QWEN_DEVICE (`_resolve_uuid_to_index` + `_parse_device`), so these tests
+# mirror the _read_device_env / _engine_env_pin tests above rather than
+# inventing new coverage of the underlying grammar.
+
+
+def test_parse_device_hint_none_or_blank_is_no_hint():
+    assert main._parse_device_hint(None) is None
+    assert main._parse_device_hint("") is None
+    assert main._parse_device_hint("   ") is None
+
+
+def test_parse_device_hint_accepts_plain_indexed_cuda():
+    assert main._parse_device_hint("cuda:1") == "cuda:1"
+    assert main._parse_device_hint("CUDA:0") == "cuda:0"
+
+
+def test_parse_device_hint_resolves_uuid_form(monkeypatch):
+    monkeypatch.setattr(
+        main, "_enumerate_cuda_devices",
+        lambda tm=None: [{"uuid": "GPU-1", "idx": 1, "name": "x", "total_mb": 16000, "free_mb": 14000}],
+    )
+    assert main._parse_device_hint("cuda-uuid:GPU-1") == "cuda:1"
+
+
+def test_parse_device_hint_unresolved_uuid_is_ignored_not_fatal(monkeypatch, caplog):
+    monkeypatch.setattr(main, "_enumerate_cuda_devices", lambda tm=None: [])
+    with caplog.at_level("WARNING"):
+        assert main._parse_device_hint("cuda-uuid:GONE") is None
+    assert any("uuid_unresolved" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_device_hint_malformed_value_is_ignored_not_fatal(caplog):
+    """Mirrors how an invalid registry device value degrades today (see
+    `_engine_env_pin`/`_parse_device`): never raises, never crashes the
+    process -- just fails to produce a concrete pin."""
+    with caplog.at_level("WARNING"):
+        assert main._parse_device_hint("banana") is None
+        assert main._parse_device_hint("cuda:x") is None  # unindexed after malformed-index parse
+    assert any("not a valid device key" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_device_hint_auto_is_no_hint_without_warning(caplog):
+    with caplog.at_level("WARNING"):
+        assert main._parse_device_hint("auto") is None
+    assert not any("X-Device-Hint" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_device_hint_normalises_admitted_rocm(monkeypatch):
+    """#2813's vocabulary rule applies here too: the admission ledger's own
+    candidate keys are 'rocm:N' on a ROCm box, so a hint must be re-tagged
+    the same way _engine_env_pin already is, or it could never match."""
+    monkeypatch.setattr(main, "_cuda_is_rocm", lambda: True)
+    assert main._parse_device_hint("cuda:1") == "rocm:1"
+
+
+# ── #3061 review C4 — the device-index grammar is `_device_index`, not
+# bare `str.isdigit()`. `isdigit()` accepts three spellings a plain
+# `int(idx)` cannot survive or should never have honoured, and all three are
+# reachable through the X-Device-Hint header (Starlette decodes headers as
+# latin-1, so U+00B2 arrives intact from a raw socket).
+
+
+def test_device_index_rejects_non_ascii_digits():
+    """`'٣'` (Arabic-Indic) and `'１'` (fullwidth) are isdigit() AND int()
+    converts them, so `cuda:٣` used to be silently equivalent to `cuda:3` —
+    a device pin via a spelling no operator could type into the registry."""
+    assert main._device_index("٣") is None
+    assert main._device_index("１") is None
+    assert main._parse_device("cuda:٣") == ("cuda", None)
+    assert main._parse_device("cuda:１") == ("cuda", None)
+    assert main._parse_device_hint("cuda:٣") is None
+    assert main._parse_device_hint("cuda:１") is None
+
+
+def test_device_index_rejects_superscript_digit_without_raising():
+    """`'²'` is isdigit() but int() REJECTS it — an uncaught ValueError out
+    of a parse every caller treats as total."""
+    assert main._device_index("²") is None
+    assert main._parse_device("cuda:²") == ("cuda", None)
+    assert main._parse_device_hint("cuda:²") is None
+
+
+def test_device_index_rejects_digit_runs_past_the_int_conversion_limit():
+    """Plain ASCII, isdigit(), and int() raises anyway past CPython's 4300
+    digit ceiling. Reachable from any HTTP client."""
+    assert main._device_index("1" * 5000) is None
+    assert main._parse_device("cuda:" + "1" * 5000) == ("cuda", None)
+
+
+def test_device_index_still_accepts_ordinary_indexes():
+    assert main._device_index("0") == 0
+    assert main._device_index("7") == 7
+    assert main._device_index("13") == 13
+
+
+def test_parse_device_hint_rejects_an_over_long_value_before_parsing(caplog):
+    """The 5000-digit header returned HTTP 500 before #3061 review C4. A
+    device key is never this long; refuse it up front so nothing downstream
+    ever sees it."""
+    with caplog.at_level("WARNING"):
+        assert main._parse_device_hint("cuda:" + "1" * 5000) is None
+    assert any("exceeds the" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_device_hint_never_raises_even_if_the_grammar_does(monkeypatch, caplog):
+    """The docstring's 'never raises' is now enforced, not asserted: whatever
+    the underlying grammar does, this returns None and the caller falls back
+    to its un-hinted placement. Guards the fact that the call site sits ABOVE
+    its handler's own `try:`, so an escape answers 500."""
+    def _boom(_value):
+        raise ValueError("grammar exploded")
+
+    monkeypatch.setattr(main, "_parse_device", _boom)
+    with caplog.at_level("WARNING"):
+        assert main._parse_device_hint("cuda:1") is None
+    assert any("could not be parsed" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_device_hint_rejects_cpu_and_mps_explicitly(caplog):
+    """#3061 review N3 — documented, not accidental: the admission ledger's
+    candidates are GPUs only, so 'send this derive to the CPU' is not
+    something this header can express."""
+    with caplog.at_level("WARNING"):
+        assert main._parse_device_hint("cpu") is None
+        assert main._parse_device_hint("mps") is None
+    assert any("not a valid device key" in r.getMessage() for r in caplog.records)

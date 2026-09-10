@@ -3604,12 +3604,14 @@ test('#2599 review round 2: replaying real live-view.html history as ordinary pe
   }
 
   const falsePositives = [];
+  let replayedCommitsCount = 0;
   for (const commit of commits) {
     const oldLiveView = show(`${commit}~1`, lvRelPath);
     const newLiveView = show(commit, lvRelPath);
     const oldRegister = show(`${commit}~1`, regRelPath);
     const newRegister = show(commit, regRelPath);
     if (oldLiveView === null || newLiveView === null || oldRegister === null || newRegister === null) continue;
+    replayedCommitsCount += 1;
     // Replay as the ordinary pre-merge publish shape: tracked = the new
     // commit's content (just committed locally), baseline = the OLD content
     // (not yet merged to origin/main), published = the OLD content (the
@@ -3625,6 +3627,11 @@ test('#2599 review round 2: replaying real live-view.html history as ordinary pe
       falsePositives.push({ commit: commit.slice(0, 8), driftErrors });
     }
   }
+
+  assert.ok(
+    replayedCommitsCount > 0,
+    `test must replay at least one commit to be meaningful, but ${replayedCommitsCount} passed the all-contents-available guard`,
+  );
 
   assert.deepEqual(
     falsePositives,

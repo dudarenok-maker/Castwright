@@ -633,6 +633,54 @@ test('checkNonexistentIds: a backticked ID on a "Register rows:" label line is s
   assert.equal(annotated.length, 0);
 });
 
+test('checkNonexistentIds: a nonexistent-ID citation inside a template literal\'s backtick span in a NON-MARKDOWN scanned file is now caught, not silently blanked away (#3062/#3088)', () => {
+  // Before #3088, stripInlineCodeSpans blanked every single-backtick span
+  // unconditionally, including a JS template literal's backticks in a
+  // scanned .mjs/.ts/.py source — so a citation shaped like a worked example
+  // (more than just a bare ID token) inside one vanished before Check A ever
+  // saw it. Scoping blanking to markdown-only means a non-markdown scanned
+  // file is read raw: this exact span is no longer misread as a markdown
+  // code span at all, so the citation surfaces and A999 (not in the
+  // register) is now flagged.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'const s = `see row A999`;\n';
+  const { errors } = checkNonexistentIds(text, 'scripts/foo.mjs', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A999/);
+});
+
+test('checkNonexistentIds: paired control — the identical shape in a MARKDOWN file keeps its citation blanked/exempted, unchanged from before #3088', () => {
+  // Same worked-example shape as the test above, but scanned as a .md file:
+  // markdown blanking is untouched by #3088, so this span is still blanked
+  // (it is not a bare single-ID span) and the citation stays exempted.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'see `see row A999` for details.\n';
+  const { errors } = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(errors.length, 0);
+});
+
+test('checkNonexistentIds: a discharge annotation inside backticks does NOT excuse a nonexistent citation in EITHER markdown or non-markdown files (#3124 finding N1)', () => {
+  // Regression test: discharge-annotation blanking must apply unconditionally,
+  // not gated by isMarkdown. A discharge word inside backticks (e.g. `` `discharged` ``)
+  // in a code span is "an instruction to run a search, not an assertion" (PR #2630
+  // pass-8 finding O), so it must be blanked BEFORE discharge-annotation checking
+  // regardless of file type. Before the fix, this worked correctly in .md files
+  // but was silently excused in .mjs files due to the isMarkdown gate.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'See register row A999 — `discharged` in the 2026-08 sweep.\n';
+
+  // Both contexts should report the citation as fatal
+  const mdResult = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(mdResult.errors.length, 1, 'markdown should report A999 as fatal');
+  assert.match(mdResult.errors[0], /A999/);
+  assert.equal(mdResult.annotated.length, 0, 'markdown should not excuse via the backtick-wrapped discharge word');
+
+  const mjsResult = checkNonexistentIds(text, 'scripts/foo.mjs', rows);
+  assert.equal(mjsResult.errors.length, 1, 'non-markdown should also report A999 as fatal');
+  assert.match(mjsResult.errors[0], /A999/);
+  assert.equal(mjsResult.annotated.length, 0, 'non-markdown should not excuse via the backtick-wrapped discharge word');
+});
+
 test('checkConflictingSubjects: a "Criteria source:" phrase INSIDE an example command\'s code span does not fatally fire (finding AD)', () => {
   // Check C used to read the UNBLANKED text — the same class of bug finding
   // AB already fixed for Check A's citation scan, left armed one caller
@@ -1849,6 +1897,43 @@ test('measureWrongIdEligibleLines: a heading citing only a NONEXISTENT id is not
   assert.equal(criteriaFiles, 0);
 });
 
+// --- Check C / F4: markdown vs non-markdown distinction ---
+//
+// The `isMarkdown` flag threads through check functions to control backtick
+// blanking. Verify that it actually matters: a citation inside a backtick span
+// should be blanked in markdown files but NOT in non-markdown sources.
+
+test('checkConflictingSubjects: a "Criteria source:" phrase INSIDE a code span in a NON-MARKDOWN scanned file is NOT blanked and should fire (F4)', () => {
+  // Mirrors the existing markdown test (line 662) but with a non-markdown
+  // file path (.ts instead of .md). Non-markdown sources should NOT blank
+  // backticks, so the "Criteria source: A1 for #1001" pattern INSIDE the
+  // backtick span should still be visible and fire the check (A1 is wrong
+  // for #1001, which maps to A2/B1).
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['server/src/lib/foo.ts', 'Audit with `grep -n "Criteria source: A1 for #1001" docs/` before the sweep.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  // In non-markdown, the backticks are NOT blanked, so "Criteria source: A1"
+  // inside them is still visible and triggers wrongId (A1 is wrong for #1001).
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /cited A1 for #1001/);
+  assert.equal(unknownSubject.length, 0);
+});
+
+test('checkConflictingSubjects: paired control — the same "Criteria source:" in a MARKDOWN file is blanked and does not fire (unchanged)', () => {
+  // Verify the existing behavior for markdown files is unchanged: backticks
+  // ARE blanked, so "Criteria source: A1 for #1001" inside them is NOT visible.
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/foo.md', 'Audit with `grep -n "Criteria source: A1 for #1001" docs/` before the sweep.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  // In markdown, backticks are blanked, so the pattern inside them is invisible.
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+});
+
 // --- Check D: heading title drift (v2, #2871, tuning doc #2870) ---
 //
 // Per the tuning doc's own recommendation, only the anchored heading surface
@@ -2355,6 +2440,52 @@ Other body.
   assert.equal(result.annotatedFindings.length, 0);
 });
 
+// Regression test for PR #3124 finding F1 — register title code spans must
+// always be blanked regardless of scanned file type.
+test('checkCitationTitleDrift: register row title code spans are always blanked, not affected by scanned file type', () => {
+  // When scanning a non-markdown file (e.g., .mjs), the register row's title
+  // (which comes from docs/testing/onbox-acceptance-register.md, always
+  // markdown) should still have its backticks blanked. Before the fix,
+  // titleDriftTokens(row.title, isMarkdown) was passed the scanned file's
+  // isMarkdown flag, so non-markdown files caused the register title's
+  // backticks to NOT be blanked, leaking backtick-wrapped words into the
+  // token comparison and falsely suppressing drift detection.
+  const registerText = `# On-box acceptance register
+
+## Group A — test group
+
+### E3 · Pair from \`castwright.local\` (#256)
+
+Some body text.
+`;
+  const { rows } = parseRegisterRows(registerText);
+
+  // Heading that echoes only the backticked part, not "Pair from".
+  // When register title backticks are correctly blanked:
+  //   - Register tokens: {"pair", "from"}
+  //   - Heading tokens: {"castwright", "local"}
+  //   - Shared: {} = 0 tokens
+  //   - Should trigger drift detection
+  //
+  // When register title backticks are NOT blanked (the bug):
+  //   - Register tokens: {"pair", "from", "castwright", "local"}
+  //   - Heading tokens: {"castwright", "local"}
+  //   - Shared: {"castwright", "local"} = 2 tokens >= minimum
+  //   - Would suppress drift detection (false negative)
+  const text = '### E3 · castwright local\n\nBody.\n';
+
+  // Both .md and .mjs should detect the same drift.
+  // Before fix: .md detects drift, .mjs does not (bug).
+  // After fix: both detect drift (correct).
+  const mdResult = checkCitationTitleDrift(text, 'docs/foo.md', rows);
+  const mjsResult = checkCitationTitleDrift(text, 'docs/foo.mjs', rows);
+
+  assert.equal(mdResult.findings.length, 1, 'drift detected when scanning .md file');
+  assert.equal(mjsResult.findings.length, 1, 'drift detected when scanning .mjs file (same as .md, not file-dependent)');
+  assert.match(mdResult.findings[0], /E3/);
+  assert.match(mjsResult.findings[0], /E3/);
+});
+
 // --- frozen-path exclusion ---
 
 test('isFrozenPath: excludes the documented frozen globs', () => {
@@ -2519,6 +2650,35 @@ test('checkNonexistentIds: a citation inside a fenced code block is not scanned 
   const text = ['```', 'See register row A9 for details.', '```'].join('\n');
   const { errors, annotated } = checkNonexistentIds(text, 'docs/foo.md', rows);
   assert.equal(errors.length, 0);
+  assert.equal(annotated.length, 0);
+});
+
+test('checkNonexistentIds: a citation inside triple backticks in a NON-MARKDOWN file IS scanned (backticks are not fences in `.mjs`/`.ts`/etc)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // This is a `.mjs` file, so triple backticks are NOT markdown fence markers —
+  // they're just character sequences in the code (e.g., in a template literal).
+  // A citation inside them should NOT be blanked and SHOULD be found.
+  const text = ['```', 'See register row A9 for details.', '```'].join('\n');
+  const { errors, annotated } = checkNonexistentIds(text, 'scripts/some-script.mjs', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
+  assert.equal(annotated.length, 0);
+});
+
+test('checkNonexistentIds: an unpaired fence line in a NON-MARKDOWN file does not blank to EOF', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // In a markdown file, a single unpaired ``` would blank from there to EOF.
+  // In a non-markdown file, backticks are just characters, so the citation
+  // on the line after should still be found.
+  const lines = [
+    '// Some code with a backtick sequence',
+    '```',
+    'See register row A9 for details.',
+  ];
+  const text = lines.join('\n');
+  const { errors, annotated } = checkNonexistentIds(text, 'scripts/some-script.mjs', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
   assert.equal(annotated.length, 0);
 });
 
@@ -2920,6 +3080,31 @@ test('CLI mutation: removing check-onbox-register.test.mjs from SELF_REFERENTIAL
     assert.equal(result.status, 1, 'mutated CLI should now fail on its own self-referential fixtures');
     assert.match(result.stderr, /check-onbox-register\.test\.mjs.*cited F1/);
     assert.match(result.stderr, /check-onbox-register\.test\.mjs.*cited F2/);
+  } finally {
+    writeFileSync(CLI_PATH, original);
+    assert.equal(readFileSync(CLI_PATH, 'utf8'), original, 'restore must be byte-identical');
+  }
+});
+
+// build-register-live-view.mjs's own test fixtures use short synthetic IDs
+// (### A1/A2/A3, ...) as generic parser inputs, the same worked-example
+// shape as check-onbox-register.test.mjs's F1/F2 above — added to
+// SELF_REFERENTIAL_PATHS 2026-09-09 (PR #3113 review) after discharging the
+// REAL row A2 made these synthetic fixtures self-flag for the first time.
+// Same technique as the mutation test above: proves the exclusion is
+// load-bearing, not decorative, by actually removing it and observing the
+// real failure it prevents.
+test('CLI mutation: removing build-register-live-view.test.mjs from SELF_REFERENTIAL_PATHS makes it self-flag on its synthetic A2 fixtures', () => {
+  const original = readFileSync(CLI_PATH, 'utf8');
+  const needle = "  'scripts/tests/build-register-live-view.test.mjs',\n";
+  assert.ok(original.includes(needle), 'fixture assumption: the exclusion entry must exist verbatim');
+  const mutated = original.replace(needle, '');
+  assert.notEqual(mutated, original);
+  try {
+    writeFileSync(CLI_PATH, mutated);
+    const result = runCli([]);
+    assert.equal(result.status, 1, 'mutated CLI should now fail on its own self-referential fixtures');
+    assert.match(result.stderr, /build-register-live-view\.test\.mjs.*cited A2/);
   } finally {
     writeFileSync(CLI_PATH, original);
     assert.equal(readFileSync(CLI_PATH, 'utf8'), original, 'restore must be byte-identical');

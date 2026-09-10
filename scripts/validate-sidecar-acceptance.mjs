@@ -391,7 +391,7 @@ export function passesSidecarAcceptanceGate(files, body, rowIds = loadRegisterRo
 
 // The examples here are PLACEHOLDERS on purpose. This whole message used to
 // be a passing body: it carried a real ISO date, the outcome `passed`, and
-// `row A101` -- an id that has never existed in the register -- so the
+// `A101` -- an id that has never existed in the register -- so the
 // honest path was "check goes red -> author copies the example -> check goes
 // green", with nothing run and no row filed (#3053 review pass 2, N1). A
 // help text must not itself satisfy the gate it explains; the paired test

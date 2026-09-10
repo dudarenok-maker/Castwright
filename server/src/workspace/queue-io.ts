@@ -64,14 +64,24 @@ export interface QueueEntry {
   /* Per-chapter loud-fallback gate. The characters in THIS chapter that resolve
      to Qwen but have no designed voice, so would render in Kokoro. Stamped when
      the worker transitions the entry to `awaiting_confirm`; the modal lists
-     them in the confirmation prompt. SERVER queue shape only (NOT in
-     openapi.yaml's QueueEntry — like `requiredEngines`). */
+     them in the confirmation prompt. Mirrored in openapi.yaml's QueueEntry
+     (unlike `requiredEngines`, which is SERVER queue shape only). */
   fallbackCharacters?: Array<{ id: string; name?: string }>;
   /* Set true once the user CONFIRMs the fallback for this entry. The worker
      reads it (threaded through the generation request) so a confirmed entry
      that re-enters (retry / reload / re-dispatch) renders straight through
      instead of re-prompting. */
   fallbackConfirmed?: boolean;
+  /* #3106 pr-review-gate S4 — ISO 8601 timestamp stamped by
+     `markAwaitingConfirm` below when the worker parks this entry. The
+     frontend's stale-awaiting-confirm signal (queue-modal.tsx) derives its
+     staleness threshold from THIS rather than from when the component
+     observed the entry, so the signal survives a page reload and correctly
+     reflects an entry that was already stale before mount. Mirrored in
+     openapi.yaml's QueueEntry (N3, pass-2 review — was mistakenly documented
+     here as server-only, on a false precedent copied from the equally-stale
+     fallbackCharacters comment above). */
+  parkedAt?: string;
 }
 
 export interface QueueFile {
@@ -300,7 +310,13 @@ export function markAwaitingConfirm(
     entries: file.entries.map(
       (e): QueueEntry =>
         e.id === entryId
-          ? { ...e, status: 'awaiting_confirm', fallbackCharacters, progress: undefined }
+          ? {
+              ...e,
+              status: 'awaiting_confirm',
+              fallbackCharacters,
+              progress: undefined,
+              parkedAt: new Date().toISOString(),
+            }
           : e,
     ),
   };

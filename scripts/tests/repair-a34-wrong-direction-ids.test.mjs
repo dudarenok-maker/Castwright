@@ -1,5 +1,5 @@
-/* Tests for scripts/repair-a34-wrong-direction-ids.mjs (register row A34,
-   #2584/#2040, parent #2903, step 2).
+/* Tests for scripts/repair-a34-wrong-direction-ids.mjs (former register row
+   A34, discharged and removed 2026-09-09; #2584/#2040, parent #2903, step 2).
 
    Run via: node --test scripts/tests/repair-a34-wrong-direction-ids.test.mjs
 

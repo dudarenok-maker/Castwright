@@ -82,6 +82,10 @@ vi.mock('../lib/api', () => ({
        Stub to an empty queue so the "GPU busy · N waiting ·" pill prefix
        stays hidden in these tests. */
     getGpuQueueState: () => Promise.resolve({ queueDepth: 0, devices: [] }),
+    /* useTtsLifecycle also polls the code-43 auto-revert trip status on the
+       same tick (task 16/16.5, #2974) — resolve to null so no trip banner
+       state lands, same pattern as getGpuQueueState above. */
+    getGpuTripStatus: () => Promise.resolve(null),
     /* The Generate-screen Load TTS button checks analyzer health to decide
        whether to surface the auto-evict banner — wire a controllable stub
        so each test can simulate "analyzer loaded" vs "nothing to evict". */

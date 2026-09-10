@@ -19,7 +19,17 @@ import {
   probeSidecarHealth,
   adoptCommittedCeilingMb,
 } from './spawn-sidecar.js';
-import { readRestartBreadcrumb } from './restart-breadcrumb.js';
+import { readRestartBreadcrumb, type RestartBreadcrumbDevice } from './restart-breadcrumb.js';
+
+/** One code-43 streak trip, as handed to onTrip/tripEvent(). `devices` is the
+    sidecar's own pre-crash device enumeration (see restart-breadcrumb.ts) —
+    carried through unchanged so a downstream auto-revert can pick a
+    different card without needing to ask the (now-dead) sidecar itself. */
+export interface RestartTrip {
+  card: unknown;
+  residentEngines: string[];
+  devices?: RestartBreadcrumbDevice[];
+}
 
 async function defaultRecycleSidecar(host: string, port: number): Promise<boolean> {
   try {
@@ -104,6 +114,15 @@ export interface SidecarSupervisorOpts {
   /** Max ms withSidecarHeld() waits for the killed child's exit event after
       kill() resolves, before rolling the hold back. Default 30_000. */
   heldExitWaitMs?: number;
+  /** Fired synchronously, exactly once per trip, the instant a code-43 streak
+      trips (restart43Trip transitions from null to set) — i.e. right where
+      `tripEvent()` would first start returning non-null. Task 16/16.5's
+      auto-revert route (server/src/gpu/auto-revert.ts) is the real caller:
+      it decides whether the trip is card-specific (revert the offending
+      pin + resetAndRespawn()) or not (leave TTS held down, distinct
+      "unrevertable" toast). Not awaited — the caller fires-and-forgets its
+      own async work; this callback itself must not throw. */
+  onTrip?: (trip: RestartTrip) => void;
 }
 
 export interface SidecarSupervisor {
@@ -126,7 +145,7 @@ export interface SidecarSupervisor {
       stops respawning once this trips (TTS held down); Plan 2's auto-revert
       route (Task 16) reads this to rewrite the offending knob, then calls
       resetAndRespawn() to actually bring TTS back. */
-  tripEvent: () => { card: unknown; residentEngines: string[] } | null;
+  tripEvent: () => RestartTrip | null;
   /** True once consecutiveFailures has exceeded maxConsecutiveFailures and the
       supervisor gave up respawning (the plain, non-code-43 give-up path).
       Computed live from consecutiveFailures — clears the instant
@@ -256,6 +275,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     recycleSidecarFn = defaultRecycleSidecar,
     drainWaitMs = DEFAULT_DRAIN_WAIT_MS,
     heldExitWaitMs = DEFAULT_HELD_EXIT_WAIT_MS,
+    onTrip,
   } = opts;
 
   let stopped = false;
@@ -276,7 +296,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
   let lastSpawnAt = 0;
   /* code-43-specific streak state — see RESTART43_STREAK_WINDOW_MS above. */
   let restart43Timestamps: number[] = [];
-  let restart43Trip: { card: unknown; residentEngines: string[] } | null = null;
+  let restart43Trip: RestartTrip | null = null;
   /* True while a watchdog loop is polling an adopted sidecar's port. Guards
      against starting a second loop if the adopt callback fires again before
      the first loop has released. */
@@ -571,7 +591,11 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
       restart43Timestamps.push(now);
       if (restart43Timestamps.length >= RESTART43_STREAK_TRIP_COUNT) {
         const breadcrumb = readRestartBreadcrumb();
-        restart43Trip = { card: breadcrumb?.card ?? null, residentEngines: breadcrumb?.residentEngines ?? [] };
+        restart43Trip = {
+          card: breadcrumb?.card ?? null,
+          residentEngines: breadcrumb?.residentEngines ?? [],
+          devices: breadcrumb?.devices,
+        };
         handle = null;
         isRecycling = true;
         warn(
@@ -580,6 +604,11 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
             `this device assignment looks structurally too small. Holding TTS down (no further ` +
             `respawn attempts) until the assignment changes and the server restarts.`,
         );
+        try {
+          onTrip?.(restart43Trip);
+        } catch (e) {
+          warn('[sidecar] supervisor: onTrip callback threw', e);
+        }
         return; // hold TTS down — no respawn.
       }
     }

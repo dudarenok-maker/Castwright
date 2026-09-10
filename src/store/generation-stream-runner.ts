@@ -203,8 +203,8 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
   /* Per-chapter loud-fallback-gate parks, keyed `${bookId}::${chapterId}`,
      recorded on a `chapter_awaiting_fallback_confirm` tick and read+cleared
      by the dispatcher (`takeChapterAwaitingConfirm`) during the reconcile
-     that follows the park's `idle` close — see that method's doc comment
-     for why this can't be read off the queue slice instead. */
+     that follows the park's synchronous `close(key)` — see that method's
+     doc comment for why this can't be read off the queue slice instead. */
   const chapterAwaitingConfirm = new Set<string>();
   /* Per-book language-guard suppression, TTL-bounded. Maps bookId → the
      timestamp its guard was opened. N concurrent workers of the same
@@ -525,9 +525,18 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
          Qwen characters have no designed voice and would render in Kokoro. The
          chapter is held (queue entry → awaiting_confirm); the user confirms or
          skips it from the queue modal. Record the park so the dispatcher's
-         reconcile (which runs off the `idle` tick that follows) knows this
-         stream close was a park, not a completion — see takeChapterAwaitingConfirm. */
+         reconcile (woken by this tick's own `close(key)` below, not a
+         subsequent `idle` tick) knows this stream close was a park, not a
+         completion — see takeChapterAwaitingConfirm. */
       chapterAwaitingConfirm.add(streamKey(bookId, ev.chapterId));
+      /* Close the stream immediately on park — the server is done with this
+         chapter until the user confirms or skips. Leaving the handle in
+         `handles` until the server's `idle` tick arrives creates a window
+         where `hasOpenStreamForChapter` returns true for a parked chapter,
+         blocking the dispatcher's STEP 2 from re-claiming it after confirm.
+         A subsequent `idle` tick (if it arrives) is a no-op: close() early-
+         returns on a missing handle. (#3029) */
+      close(key);
       /* Surface a warn toast naming the chapter + characters so the run doesn't
          look silently stalled. Deduped per entry so a reconnect replay can't
          stack duplicates. */

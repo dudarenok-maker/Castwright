@@ -15,7 +15,7 @@
  * touch-equivalence rule for desktop AND mobile in one path, keeping the
  * shipped modal small. Touch targets are ≥44×44 px per WCAG 2.5.5. */
 
-import { useMemo, useEffect, useState, type JSX } from 'react';
+import { useMemo, useEffect, useRef, useState, type JSX } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
   selectActiveGenerationView,
@@ -41,9 +41,173 @@ import {
 import { selectFallbackEngineName } from '../store/voice-readiness-selectors';
 import { chaptersActions } from '../store/chapters-slice';
 import { uiActions } from '../store/ui-slice';
-import { IconClose, IconDrag, IconPause, IconPlay, IconRefresh, IconTrash } from '../lib/icons';
+import { notificationsActions } from '../store/notifications-slice';
+import { IconClose, IconDrag, IconPause, IconPlay, IconRefresh, IconTrash, IconWarning } from '../lib/icons';
 import { PrimaryButton, Checkbox } from '../components/primitives';
 import { ConfirmDialog } from './confirm-dialog';
+
+/* #3106 — threshold before an unanswered awaiting_confirm entry fires a
+   "needs your input" signal (toast + persistent banner in the Queue modal).
+   60 seconds: long enough that a user actively deciding doesn't get nagged,
+   short enough that a walked-away session surfaces the wait before the next
+   natural check-in. The dispatcher independently continues to claim any
+   later `queued` entries regardless of an awaiting_confirm entry sitting
+   earlier in the array (STEP 2 fill loop `continue`s past non-queued), so
+   this signal is purely a UI-legibility fix — it tells the user a chapter
+   is waiting on them and points at the existing resolution controls; it is
+   not a claim that the parked entry itself is blocking anything else. */
+export const STALE_AWAITING_CONFIRM_MS = 60_000;
+
+/** Polling interval for the stale-awaiting_confirm check. 5 s is frequent
+    enough to fire within one interval of the threshold without being a
+    busy-wait — each tick is a scan over the (small) entry list. */
+const STALE_CHECK_INTERVAL_MS = 5_000;
+
+/** Track awaiting_confirm entries and return those unanswered past the
+    threshold. Fires a one-shot warn toast per entry, per component mount,
+    when the threshold is first crossed; clears tracking when the entry
+    leaves the queue (confirmed, skipped, or cleared). N5 — `toastFiredRef`
+    is per component instance, so a page reload re-arms it: a still-stale
+    entry re-fires its toast once after the remount rather than staying
+    silent forever. Accepted as-is (the underlying "still unanswered"
+    condition is genuinely still true at that point) rather than persisted
+    across reloads.
+
+    pr-review-gate pass on #3106 (S1/S3/S4/S5), pass 2 (N1/N2):
+      - S1/N1: fires when there's another `queued` entry anywhere in the
+        workspace queue — a "there's more work waiting" signal, not a claim
+        that THIS entry is blocking that other one. The dispatcher's fill
+        loop (`queue-dispatcher-middleware.ts` STEP 2) `continue`s past any
+        non-`queued` entry regardless of position, so a parked entry never
+        technically blocks anything under any ordering/book/pause combination
+        — pass 2 ran this cross-book, ordered-ahead, and paused-queue and
+        confirmed the banner fired in all three with nothing actually
+        blocked. The copy below says "needs your input", never "blocked",
+        so it stays true under all three.
+      - S3: `toastFiredRef` is a one-shot guard, not decoration — without it
+        every 5s poll while the condition still holds would re-push the toast,
+        and notifications-slice bumps `createdAt` on every push, which resets
+        ToastStack's auto-dismiss timer forever.
+      - S4/N2: staleness is derived from the entry's OWN `parkedAt` (stamped
+        server-side when the worker parks it — queue-io.ts markAwaitingConfirm)
+        rather than from when this component first observed the entry, so the
+        signal survives a page reload and correctly reflects an entry that was
+        already stale before mount. `addedAt` (enqueue time, always present)
+        is the fallback for a legacy entry parked before `parkedAt` existed.
+        `parkedAt`/`addedAt` are SERVER-stamped while the staleness check runs
+        against the BROWSER's `Date.now()` — on a device whose clock reads
+        BEHIND the server's (realistic on LAN HTTPS per CLAUDE.md's mobile
+        protocol: a tablet that's been off, or never reached NTP), the server
+        timestamp reads as being in the client's future, which would suppress
+        the signal well past the threshold. `staleObservedAtRef` below is the
+        skew-defensive clamp: whenever the server timestamp reads as future
+        relative to the client, fall back to this component's own
+        first-observation time (the pre-#3106 mechanism, skew-immune because
+        it never mixes clocks) instead of trusting it. This does not fully
+        close the symmetric case (a client clock AHEAD of the server's can
+        still under-report the delay on first observation of an
+        already-parked entry) — closing that needs the server's own "now"
+        alongside the snapshot, out of scope for this fix; see PR #3143 N2.
+      - S5: the toast reuses the park-time toast's dedupe key
+        (`fallback-confirm:${id}` — generation-stream-runner.ts). `ToastStack`
+        auto-dismisses the park-time toast well before this can fire (6s vs.
+        the 60s threshold), so in practice this doesn't "update" a still-live
+        toast — it replaces any lingering park notification with a fresh one
+        carrying the shared key, which is what stops a second, less-specific
+        toast from stacking alongside it. */
+function useStaleAwaitingConfirm(
+  groupedByBook: ReturnType<typeof selectQueueByBook>,
+): QueueEntry[] {
+  const dispatch = useAppDispatch();
+  const toastFiredRef = useRef<Set<string>>(new Set());
+  /* N2 — per-entry client-clock fallback timestamp, populated only when the
+     server-stamped `parkedAt`/`addedAt` reads as being in the client's
+     future (clock skew). See the docstring above. */
+  const staleObservedAtRef = useRef<Map<string, number>>(new Map());
+  const [staleEntries, setStaleEntries] = useState<QueueEntry[]>([]);
+
+  useEffect(() => {
+    const check = (): void => {
+      const now = Date.now();
+      const allEntries = groupedByBook.flatMap((g) => g.entries);
+      const awaitingEntries = allEntries.filter((e) => e.status === 'awaiting_confirm');
+      /* S1/N1 — a soft "there's more queued work" signal; see docstring. */
+      const hasQueuedEntry = allEntries.some((e) => e.status === 'queued');
+
+      /* Evict the one-shot toast guard and the N2 clock-skew fallback for
+         entries that left awaiting_confirm (confirmed, skipped, cleared, or
+         status otherwise changed). */
+      const currentAwaitingIds = new Set(awaitingEntries.map((e) => e.id));
+      for (const id of Array.from(toastFiredRef.current)) {
+        if (!currentAwaitingIds.has(id)) toastFiredRef.current.delete(id);
+      }
+      for (const id of Array.from(staleObservedAtRef.current.keys())) {
+        if (!currentAwaitingIds.has(id)) staleObservedAtRef.current.delete(id);
+      }
+
+      const stale: QueueEntry[] = [];
+      if (hasQueuedEntry) {
+        for (const entry of awaitingEntries) {
+          const serverStampMs = Date.parse(entry.parkedAt ?? entry.addedAt);
+          const observedAt = staleObservedAtRef.current.get(entry.id);
+          let stampMs: number;
+          if (Number.isNaN(serverStampMs) || serverStampMs > now) {
+            /* N2 clamp — server timestamp is unusable (unparseable) or reads
+               as future relative to this client's clock. Fall back to the
+               first client-clock instant this component observed the entry. */
+            stampMs = observedAt ?? now;
+            staleObservedAtRef.current.set(entry.id, stampMs);
+          } else if (observedAt !== undefined) {
+            /* P1 — once a client-clock observation has been recorded for
+               this entry (because the server stamp read as future at some
+               earlier tick), keep using it as a floor even after the server
+               stamp catches up to the client's clock. Reverting straight to
+               serverStampMs here would let elapsed staleness collapse back
+               toward 0 at the exact moment the skew crosses zero, making an
+               already-stale entry read as fresh again for a full threshold
+               window (PR #3143 pass-3 P1). Staleness must be monotonic —
+               never un-stale once flagged stale — so take whichever stamp
+               is earlier. */
+            stampMs = Math.min(serverStampMs, observedAt);
+          } else {
+            stampMs = serverStampMs;
+          }
+          if (now - stampMs < STALE_AWAITING_CONFIRM_MS) continue;
+
+          stale.push(entry);
+          /* One-shot toast per entry — dedupeKey guards against double-push
+             within the same render cycle; the ref guards across cycles (S3). */
+          if (!toastFiredRef.current.has(entry.id)) {
+            toastFiredRef.current.add(entry.id);
+            const charNames =
+              entry.fallbackCharacters
+                ?.map((c) => c.name)
+                .filter((n): n is string => !!n)
+                .join(', ') || 'unknown character(s)';
+            dispatch(
+              notificationsActions.pushToast({
+                kind: 'warn',
+                message: `Still waiting: a chapter needs voice confirmation (${charNames}). Open the Queue to confirm or skip, or use "Clear queue".`,
+                /* S5 — same key the park-time toast uses; replaces any
+                   lingering park-time toast rather than stacking a second
+                   one (see docstring — it's a fresh push, not an update). */
+                dedupeKey: `fallback-confirm:${entry.id}`,
+              }),
+            );
+          }
+        }
+      }
+
+      setStaleEntries(stale);
+    };
+
+    check();
+    const interval = setInterval(check, STALE_CHECK_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [groupedByBook, dispatch]);
+
+  return staleEntries;
+}
 
 interface QueueModalProps {
   open: boolean;
@@ -84,6 +248,11 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
      the generation flow emits (enable dual-model mode in Account settings to
      avoid engine-swap latency). */
   const dualModelEnabled = useAppSelector((s) => s.account?.dualModelEnabled ?? false);
+
+  /* #3106 — track awaiting_confirm entries that have been unanswered past the
+     stale threshold. The hook fires a toast once per entry when crossed; the
+     returned list drives the persistent banner below. */
+  const staleAwaitingEntries = useStaleAwaitingConfirm(groupedByBook);
 
   /* "Clear queue" confirm-dialog state. `alsoStop` mirrors the dialog's
      "Also stop generation in progress" checkbox. */
@@ -221,6 +390,42 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
               </div>
             ) : (
               <div className="space-y-6">
+                {/* #3106 — persistent banner when an awaiting_confirm entry has been
+                    unanswered past the stale threshold. Names the waiting chapters'
+                    characters and points at existing resolution (per-row confirm/skip
+                    or "Clear queue" above). Hidden when no stale entries exist.
+                    N1 (pass-2 review) — copy says "needs your input", never
+                    "blocked": the gate this banner fires on (another `queued`
+                    entry existing anywhere in the workspace) doesn't establish
+                    that THIS entry is blocking that one — see the docstring on
+                    useStaleAwaitingConfirm above. */}
+                {staleAwaitingEntries.length > 0 && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                    data-testid="queue-stale-awaiting-banner"
+                  >
+                    <IconWarning className="w-4 h-4 mt-0.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold">
+                        {staleAwaitingEntries.length === 1
+                          ? '1 chapter needs your input'
+                          : `${staleAwaitingEntries.length} chapters need your input`}
+                      </p>
+                      <p className="mt-0.5 text-amber-800">
+                        Waiting for voice confirmation (
+                        {staleAwaitingEntries
+                          .flatMap((e) =>
+                            e.fallbackCharacters
+                              ?.map((c) => c.name)
+                              .filter((n): n is string => !!n) ?? [],
+                          )
+                          .join(', ') || 'unknown character(s)'}
+                        ). Confirm or skip the row below, or use "Clear queue" above.
+                      </p>
+                    </div>
+                  </div>
+                )}
                 {groupedByBook.map(({ bookId, entries }) => (
                   <BookGroup
                     key={bookId}

@@ -486,7 +486,7 @@ test('loadRegisterRowIds returns an empty set (fail closed) when the register is
 });
 
 // The gate's own help text must not be a passing body. It used to be: it
-// carried a real ISO date, `passed`, and `row A101` -- an id that has never
+// carried a real ISO date, `passed`, and `A101` -- an id that has never
 // existed -- so "check goes red -> copy the example -> check goes green" was
 // the honest path.
 test('helpMessage() fed whole as a PR body does NOT satisfy the gate', () => {

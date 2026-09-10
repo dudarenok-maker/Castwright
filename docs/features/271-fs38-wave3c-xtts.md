@@ -760,6 +760,18 @@ This plan is therefore **not** archived yet, following the same convention as
 plan 249. It moves to `docs/features/archive/` when that walkthrough runs and
 its result is recorded — not before.
 
+**Wave 12 update (2026-09-06/07) — still not `stable`.** Section E is now 8 of
+9 discharged (E-01 through E-05, E-07, E-08, E-09 — including the
+never-substitute proof even on the path that first failed to reach XTTS).
+Only **E-06** remains: judging a designed voice's Coqui derive against the
+stock catalogue voice it replaces, by ear (D-B's open question) — its kit is
+staged (#2919) but the Coqui-derive half is itself still blocked on GPU
+capacity, and no instrument substitutes for the ear judgment either way. Row
+A1 also still carries items shared with 267/268 (B-03, B-11, and others) that
+this plan does not own outright but that keep the row, and therefore this
+plan's archival, from closing. Moves to `docs/features/archive/` only once
+E-06 is run and recorded.
+
 ### Delta vs. the plan
 
 - **Tasks 10a, 14a and 27 all landed in this same PR**, not a follow-up, along
