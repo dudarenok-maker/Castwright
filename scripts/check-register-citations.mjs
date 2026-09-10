@@ -16,23 +16,21 @@
 // (1) `scripts/tests/check-register-citations.test.mjs`'s CLI-integration
 // tests, run as part of `npm run test:hooks`; and
 // (2) `.github/workflows/verify.yml`'s unconditional `check:register-citations`
-// step (wired in PR #3134, closing #3122).
+// step (PR #3134 closes the CI-wiring gap at #3122; other surfaces remain at #3140).
 //
-// CI WIRING (closed): The dedicated `.github/workflows/verify.yml` step now
-// exists (see `.github/workflows/verify.yml` lines ~218-223); it runs
-// unconditionally on every PR, including docs-only diffs, because citations
-// can live in any file and diff-scope cannot reliably predict whether one
-// broke.
+// CI WIRING (closed): The dedicated `.github/workflows/verify.yml` "Register
+// citation check" step now exists; it runs unconditionally on every PR,
+// including docs-only diffs, because citations can live in any file and
+// diff-scope cannot reliably predict whether one broke.
 //
-// LOCAL WIRING (open, tracked at #3140): The checker is still NOT invoked
-// from `npm run verify` or `npm run test:all` locally, or from any git hook.
-// Those remaining integration points are tracked separately at #3140.
-// The challenge: this checker's real-tree run scans essentially every tracked
-// file, so declaring it as a `test:hooks` input would make that step
-// un-cacheable for everyone, defeating the scope-gating `verify-cache.mjs`
-// exists for. The right fix is a design decision about whether to add a
-// dedicated local step, and if so, whether it belongs in `verify` or wrapped
-// elsewhere — not something to wire in blind here.
+// LOCAL WIRING (open, tracked at #3140): The checker IS reachable locally as
+// part of `npm run test:hooks` (which `npm run verify` and `npm run test:all`
+// both run), via the test suite `scripts/tests/check-register-citations.test.mjs`
+// that spawns the checker CLI against the real tree. However, `test:hooks`'s own
+// input globs don't span the whole tree, so on a diff outside those globs, the
+// step can be marked `[cached]`/skipped rather than actually re-scanning. A
+// dedicated local step that runs unconditionally (independent of scope) is
+// tracked separately at #3140.
 //
 // Four checks, ordered by precision (least to most likely to need
 // judgment):
