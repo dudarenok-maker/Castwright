@@ -6797,7 +6797,18 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Optional model id override, applied to both phases for this run. */
+                    model?: string;
+                    /** @description Optional Phase 0 (cast detection) model id, applied to this run only — never saved to settings. */
+                    phase0Model?: string;
+                    /** @description Optional Phase 1 (attribution) model id, applied to this run only — never saved to settings. */
+                    phase1Model?: string;
+                };
+            };
+        };
         responses: {
             /** @description Final analysis payload (also delivered as the terminal SSE event) */
             200: {
@@ -6841,6 +6852,10 @@ export interface operations {
                     chapterIds: number[];
                     /** @description Optional model id override (matches the full-book endpoint). */
                     model?: string;
+                    /** @description Optional Phase 0 (cast detection) model id, applied to this run only — never saved to settings. */
+                    phase0Model?: string;
+                    /** @description Optional Phase 1 (attribution) model id, applied to this run only — never saved to settings. */
+                    phase1Model?: string;
                 };
             };
         };

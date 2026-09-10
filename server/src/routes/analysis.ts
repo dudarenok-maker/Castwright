@@ -3293,6 +3293,17 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   }
 
   const requestedModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
+  /* #3141 step 4 — optional per-run phase model picks, carried on the
+     analysis request itself and never written to settings. Empty/absent
+     values are ignored, not rejected. */
+  const requestedPhase0Model =
+    typeof req.body?.phase0Model === 'string' && req.body.phase0Model.trim().length > 0
+      ? req.body.phase0Model
+      : undefined;
+  const requestedPhase1Model =
+    typeof req.body?.phase1Model === 'string' && req.body.phase1Model.trim().length > 0
+      ? req.body.phase1Model
+      : undefined;
   const requestedFresh = req.body?.fresh === true;
   /* `allowStage1Shrink` is the user's opt-in when the route refused a
      stage1 write because the new roster would replace a much larger
@@ -3307,7 +3318,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      GEMINI_MODEL default). */
   let selection: AnalyzerSelection;
   try {
-    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel });
+    selection = selectAnalyzerForPhase({
+      phase: 'phase0',
+      model: requestedModel,
+      phaseModel: requestedPhase0Model,
+    });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
     clearInterval(keepAlive);
@@ -3431,6 +3446,8 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     requestedFresh,
     allowStage1Shrink,
     requestedModel,
+    requestedPhase0Model,
+    requestedPhase1Model,
   });
 });
 
@@ -3438,11 +3455,19 @@ export interface MainAnalyzerJobOpts {
   requestedFresh: boolean;
   allowStage1Shrink: boolean;
   /* Plan 88 — when the route layer received an explicit `model` in the
-     request body, that per-request id wins (precedence priority 2). Both
+     request body, that per-request id wins (precedence priority 3). Both
      phases resolve through `selectAnalyzerForPhase`, so a present
      `requestedModel` collapses the split to a single model for this run;
-     when absent, the saved per-phase override (priority 3) applies. */
+     when absent, the saved per-phase override (priority 4) applies. */
   requestedModel: string | undefined;
+  /* #3141 step 4 — this request's own `phase0Model` / `phase1Model` picks
+     (priority 2, only losing to an explicit env pin). Phase 0's selection
+     already consumed `requestedPhase0Model` in the route handler before
+     `selection` was built; it still travels into the job body so
+     `pipelinedPerPhase` below can tell a per-run split from the legacy
+     single-model path. */
+  requestedPhase0Model?: string | undefined;
+  requestedPhase1Model?: string | undefined;
 }
 
 /* Detached analyzer loop body. Runs as a background promise spawned
@@ -3569,6 +3594,7 @@ export async function runMainAnalyzerJob(
   const phase1Selection: AnalyzerSelection = selectAnalyzerForPhase({
     phase: 'phase1',
     model: opts.requestedModel,
+    phaseModel: opts.requestedPhase1Model,
   });
   const phase1Analyzer = phase1Selection.analyzer;
   /* Mutable for the same reason as activeModelId — Phase 1's stage2Call.onFallback
@@ -3587,7 +3613,9 @@ export async function runMainAnalyzerJob(
      when it is. */
   const escalationAnalyzer =
     configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
-  const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive();
+  const hasPerRunPhasePick = Boolean(opts.requestedPhase0Model) || Boolean(opts.requestedPhase1Model);
+  const pipelinedPerPhase =
+    !opts.requestedModel && isPerPhaseModelSelectionActive(hasPerRunPhasePick);
   if (pipelinedPerPhase) {
     console.log(
       `[analysis] manuscript=${manuscriptId} pipelined ` +
@@ -6442,7 +6470,13 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     return res.end();
   }
 
-  const body = req.body as { chapterIds?: unknown; model?: unknown; allowStage1Shrink?: unknown };
+  const body = req.body as {
+    chapterIds?: unknown;
+    model?: unknown;
+    phase0Model?: unknown;
+    phase1Model?: unknown;
+    allowStage1Shrink?: unknown;
+  };
   const rawIds = Array.isArray(body?.chapterIds) ? body.chapterIds : [];
   /* See main route comment on allowStage1Shrink — same opt-in flag for
      the subset-retry path's stage1 finalisation. */
@@ -6516,6 +6550,16 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   }
 
   const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
+  /* #3141 step 4 — optional per-run phase model picks for the subset retry
+     too, never persisted. Empty/absent values are ignored, not rejected. */
+  const requestedPhase0Model =
+    typeof body?.phase0Model === 'string' && body.phase0Model.trim().length > 0
+      ? body.phase0Model
+      : undefined;
+  const requestedPhase1Model =
+    typeof body?.phase1Model === 'string' && body.phase1Model.trim().length > 0
+      ? body.phase1Model
+      : undefined;
   /* Plan 118 / #3141 step 1 — resolve cast (Phase 0) and attribution
      (Phase 1) analyzers via the per-phase selector so a saved Advanced
      Settings override applies to the subset retry too. This path is
@@ -6524,10 +6568,15 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   let selection: AnalyzerSelection;
   let phase1Selection: AnalyzerSelection;
   try {
-    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel });
+    selection = selectAnalyzerForPhase({
+      phase: 'phase0',
+      model: requestedModel,
+      phaseModel: requestedPhase0Model,
+    });
     phase1Selection = selectAnalyzerForPhase({
       phase: 'phase1',
       model: requestedModel,
+      phaseModel: requestedPhase1Model,
     });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });

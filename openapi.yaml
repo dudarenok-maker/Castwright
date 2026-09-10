@@ -551,6 +551,28 @@ paths:
         runs. The final SSE event carries the full `AnalyseResponse`.
       parameters:
         - { in: path, name: manuscriptId, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model:
+                  {
+                    type: string,
+                    description: 'Optional model id override, applied to both phases for this run.',
+                  }
+                phase0Model:
+                  {
+                    type: string,
+                    description: 'Optional Phase 0 (cast detection) model id, applied to this run only — never saved to settings.',
+                  }
+                phase1Model:
+                  {
+                    type: string,
+                    description: 'Optional Phase 1 (attribution) model id, applied to this run only — never saved to settings.',
+                  }
       responses:
         '200':
           description: Final analysis payload (also delivered as the terminal SSE event)
@@ -602,6 +624,16 @@ paths:
                   {
                     type: string,
                     description: 'Optional model id override (matches the full-book endpoint).',
+                  }
+                phase0Model:
+                  {
+                    type: string,
+                    description: 'Optional Phase 0 (cast detection) model id, applied to this run only — never saved to settings.',
+                  }
+                phase1Model:
+                  {
+                    type: string,
+                    description: 'Optional Phase 1 (attribution) model id, applied to this run only — never saved to settings.',
                   }
       responses:
         '200':

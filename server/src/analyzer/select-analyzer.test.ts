@@ -321,6 +321,35 @@ describe('selectAnalyzerForPhase — plan 88 per-phase selector', () => {
   });
 });
 
+/* #3141 step 4 — per-run phase model, carried on the analysis request
+   itself (`opts.phaseModel`) and never persisted. Sits between env and
+   `opts.model` in the precedence chain. */
+describe('selectAnalyzerForPhase — per-run phaseModel precedence (#3141 step 4)', () => {
+  it('phaseModel beats opts.model and a saved Advanced Settings override', () => {
+    process.env.GEMINI_API_KEY = 'test-key';
+    setConfigOverride('analyzer.phase0.model', 'gemma-4-31b-it');
+    const s = selectAnalyzerForPhase({
+      phase: 'phase0',
+      phaseModel: 'gemini-per-run-model',
+      model: 'gemini-2.5-flash',
+    });
+    expect(s.model).toBe('gemini-per-run-model');
+  });
+
+  it('env beats phaseModel (ops triage still wins)', () => {
+    process.env.ANALYZER_PHASE0_MODEL = 'gemma-4-31b-it';
+    process.env.GEMINI_API_KEY = 'test-key';
+    const s = selectAnalyzerForPhase({ phase: 'phase0', phaseModel: 'gemini-per-run-model' });
+    expect(s.model).toBe('gemma-4-31b-it');
+  });
+
+  it('isPerPhaseModelSelectionActive is true with a per-run phase pick and no knobs set', () => {
+    expect(isPerPhaseModelSelectionActive(true)).toBe(true);
+    expect(isPerPhaseModelSelectionActive(false)).toBe(false);
+    expect(isPerPhaseModelSelectionActive()).toBe(false);
+  });
+});
+
 describe('isPerPhaseModelSelectionActive', () => {
   it('returns false when neither env nor a saved Advanced Settings override is set', () => {
     expect(isPerPhaseModelSelectionActive()).toBe(false);
