@@ -574,13 +574,21 @@ jobs:
   # job-level `defaults: run: shell:`, so a bare `run:` on windows-latest
   # would default to pwsh, not bash.
   windows-tests:
-    name: Windows (test + test:server)
+    name: Windows (test + test:server + test:hooks)
     needs: detect
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Full history: `npm run test:hooks` runs the onbox-register replay
+          # test which needs 25 commits of git history via `git log -25 --`,
+          # and npm run skills:sync needs origin/main to resolve. A shallow
+          # (depth-1) clone wouldn't have either, causing test:hooks to fail
+          # (sync-agent-skills loudly) or silently iterate over nothing
+          # (register replay), appearing to pass while providing no coverage.
+          fetch-depth: 0
 
       - name: Setup Node + deps
         uses: ./.github/actions/setup
@@ -613,6 +621,23 @@ jobs:
         if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).shared
         shell: bash
         run: npm run test:server
+
+      # `scripts/tests/reap-stale-batteries.test.mjs` carries one win32-guarded
+      # case (`C3`) that drives the real `collectProcessSnapshot()` against a
+      # real `Get-CimInstance Win32_Process` query rather than an injected
+      # fixture -- the net that closes pass 2's C3 and guards against pass 1's
+      # date-parsing bug ever reappearing. `test:hooks` already runs on the
+      # `lint-and-checks` job above, but that job is `runs-on: ubuntu-latest`,
+      # where the case's own `{ skip: process.platform !== 'win32' ... }`
+      # unconditionally skips it -- so no CI leg has ever executed it. This
+      # job is the only Windows runner in the file. Gated identically to the
+      # Ubuntu `test:hooks` leg (same scope key, no `shared`-only widening),
+      # so a PR outside that scope pays nothing extra here either.
+      # leg: test:hooks:windows
+      - name: Hooks tests (win32 real-process case)
+        if: fromJSON(needs.detect.outputs.scopes).step_test_hooks || fromJSON(needs.detect.outputs.scopes).shared
+        shell: bash
+        run: npm run test:hooks
 
   # Thin aggregator — see the top-of-file comment. Keeps the "npm run verify"
   # status-check name (required on main's branch-protection ruleset) stable

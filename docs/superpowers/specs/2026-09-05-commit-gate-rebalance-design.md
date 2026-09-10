@@ -136,8 +136,10 @@ worktree GC · a Windows CI leg · a sidecar acceptance gate.
 1. **CI enforces; local informs — except where CI provably cannot.** The sidecar's ML stack is
    the one real exception (Part 6).
 2. **A hook may never spawn a process pool.** Enforced by an **allowlist** guard test. *(A
-   process *scan* is not a pool — Part 3's census is one `Win32_Process`/`ps` query, ~300 ms,
-   which the existing sibling probe already pays.)*
+   process *scan* is not a pool — Part 3's census is one `Win32_Process`/`ps` query, which the
+   existing sibling probe already pays. An earlier draft put this at "~300 ms"; measured on a
+   real box the query alone costs ~0.7s and a whole census ~0.8–3.5s on a 415-root box — wrong
+   by 2–12x. The invariant this principle rests on is "no pool", not the number.)*
 3. **No run may outlive a budget**, and the budget is on the *pipeline*, not only its steps.
 4. **Fail on findings; pass on a missing tool; FAIL on a budget breach.** An absent `eslint`
    must not block a commit — CI still enforces. A timeout is the opposite: a timeout that passes
@@ -296,12 +298,18 @@ automatically and must classify by dead-parent, not only by CPU.**
 An earlier draft left this as a manual, report-only CLI that nothing in the design ever called —
 while the risk table credited it with automatic cleanup. That gap is closed here:
 
-- **On every `pre-push`:** run the census (one `Win32_Process`/`ps` query, ~300 ms, no pool) and
-  **append it to a log** — including **each root's command line**, which the 2026-09-05 census
-  omitted. Kill **only provably-orphaned trees** (parent dead). Never blocks the push.
+- **On every `pre-push`:** run the census (one `Win32_Process`/`ps` query — no pool; an earlier
+  draft put this at ~300 ms, but measured on a real box the query alone costs ~0.7s and a whole
+  census ~0.8–3.5s on a 415-root box, wrong by 2–12x, and the invariant that actually matters is
+  "no pool", not the number) and **append it to a log** — including **each root's command line**,
+  which the 2026-09-05 census omitted. Kill **only provably-orphaned trees** (parent dead). Never
+  blocks the push.
 - **From Part 2's timeout path:** after `taskkill /T /F`, sweep for survivors the `/T` walk
   could not see.
-- **`npm run doctor --kill`:** the manual, wider-scoped path.
+- **`npm run doctor -- --kill`:** the manual, wider-scoped path. The `--`
+  separator is required — `npm run doctor --kill` (without it) forwards
+  nothing to the script and silently runs the report-only path instead,
+  verified against the real CLI (review pass 8, S3).
 
 `classify(snapshot, now, thresholds) → verdicts` is a pure function — the testable seam. Never
 touches `python.exe` (TTS sidecars, Ringer) or the caller's own ancestor chain.
