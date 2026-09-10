@@ -29,9 +29,10 @@
  *      module-load-time pwsh probe). */
 
 import { readdirSync, readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS } from './spawn-windows-hide.guard-targets.js';
 
 /* Characters after which a `/` is far more likely to be opening a regex
    literal than dividing two values — a narrow, deliberately incomplete
@@ -492,6 +493,37 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
   const serverFiles = listSourceFiles(SRC_ROOT).filter((f) =>
     readFileSync(f, 'utf8').includes('child_process'),
   );
+
+  it('scan scope matches the declared SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS (#3085)', () => {
+    // Ties this guard's ACTUAL scan roots to the scope it DECLARES via the
+    // sibling module — the same constant force-rerun-triggers.test.ts checks
+    // its forceRerunTriggers entries against — so the two statements of this
+    // guard's scope can never independently drift.
+    const scriptsDir = join(REPO_ROOT, 'scripts');
+    const ttsDir = join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts');
+    const pinokioDir = join(REPO_ROOT, 'pinokio-scripts', 'lib');
+    const toRepoRel = (p: string) => relative(REPO_ROOT, p).split(sep).join('/');
+
+    expect(toRepoRel(SRC_ROOT)).toBe(
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[0].replace(/\/\*\*$/, ''),
+    );
+    expect(toRepoRel(scriptsDir)).toBe(
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[1].replace(/\/\*\*$/, ''),
+    );
+    expect(toRepoRel(ttsDir)).toBe(SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[2].replace(/\/\*\*$/, ''));
+    expect(toRepoRel(pinokioDir)).toBe(
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[3].replace(/\/\*\*$/, ''),
+    );
+    expect(EXTERNAL_FILES_MANUAL.map(toRepoRel)).toEqual([SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[4]]);
+
+    // The two named root files are checked against the guard's own
+    // dynamically-discovered floor, not re-derived here, so a rename that
+    // drops either from the real scan is caught rather than silently
+    // agreeing with a stale constant.
+    const floorRel = EXTERNAL_FILES_FLOOR.map(toRepoRel);
+    expect(floorRel).toContain(SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[5]);
+    expect(floorRel).toContain(SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[6]);
+  });
 
   it('finds at least the known ffmpeg/sidecar spawners (scan is wired up)', () => {
     /* Guard against the scan silently matching nothing (e.g. a refactor that

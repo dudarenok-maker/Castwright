@@ -108,18 +108,30 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript';
 import { allLanguageEntries } from './language-registry.js';
 import { ENGINE_LANGUAGE_SUPPORT } from './voice-mapping.js';
 import { resolveEligibleEngines } from './language.js';
 import { ALL_TTS_ENGINES } from './model-keys.js';
+import { ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB } from './engine-language-coverage.guard-targets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GENERATION_ROUTE_PATH = join(__dirname, '..', 'routes', 'generation.ts');
+const REPO_ROOT = join(__dirname, '..', '..', '..');
 
 describe('engine/registry language coverage (#3059)', () => {
+  it('scan scope matches the declared ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB (#3085)', () => {
+    // Ties this guard's ACTUAL scan target (GENERATION_ROUTE_PATH, read by
+    // the third `it` below) to the scope it DECLARES via the sibling
+    // module — the same constant force-rerun-triggers.test.ts checks its
+    // forceRerunTriggers entry against — so the two statements of this
+    // guard's scope can never independently drift.
+    const actualRel = relative(REPO_ROOT, GENERATION_ROUTE_PATH).split(sep).join('/');
+    expect(actualRel).toBe(ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB);
+  });
+
   it('every validated non-English language is covered by ENGINE_LANGUAGE_SUPPORT.coqui', () => {
     const coquiLanguages = ENGINE_LANGUAGE_SUPPORT.coqui;
     if (coquiLanguages === '*') {
