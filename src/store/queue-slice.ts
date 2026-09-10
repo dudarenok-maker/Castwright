@@ -24,7 +24,10 @@ import type { TtsEngine } from '../lib/types';
 export type { TtsEngine };
 
 /* Generated base shape (openapi) widened with the additive Wave-3 fields.
-   Absent on a legacy entry / when the server couldn't resolve them. */
+   Absent on a legacy entry / when the server couldn't resolve them.
+   `parkedAt` no longer needs widening here — N3 (pass-2 review on #3143)
+   added it to openapi.yaml's QueueEntry, so it now arrives via
+   `components['schemas']['QueueEntry']` directly. */
 export type QueueEntry = components['schemas']['QueueEntry'] & {
   requiredEngines?: TtsEngine[];
   multiTts?: boolean;

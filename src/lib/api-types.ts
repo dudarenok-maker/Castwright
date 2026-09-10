@@ -4254,6 +4254,16 @@ export interface components {
              *     re-dispatch instead of re-parking it.
              */
             fallbackConfirmed?: boolean;
+            /**
+             * Format: date-time
+             * @description ISO 8601 timestamp stamped when the worker parks this entry on
+             *     `awaiting_confirm` (markAwaitingConfirm). Present only on an entry
+             *     that has been through the loud-fallback gate at least once. Drives
+             *     the frontend's stale-awaiting-confirm signal (queue-modal.tsx) —
+             *     absent on a legacy entry parked before this field existed, or on
+             *     an entry that has never been awaiting_confirm.
+             */
+            parkedAt?: string;
             /** @description Cross-book ordinal within the workspace queue. 0 = first to drain. Renumbered on every reorder. */
             order: number;
             /** @description Per-entry render progress (0..1), mirrored from the active GenerationTick. */
