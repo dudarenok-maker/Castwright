@@ -222,7 +222,7 @@ jobs:
       # Register-citation check (unconditional — see #3122 and #3140): the
       # checker scans the WHOLE tree for citations, so no diff-scope reliably
       # predicts whether one broke; must run on every PR, docs-only included.
-      # leg: check:register-citations
+      # (No scope gate: dedicated guard in workflow-wiring.test.mjs, not via parseLegs())
       - name: Register citation check
         run: npm run check:register-citations
 
