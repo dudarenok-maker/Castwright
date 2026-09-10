@@ -1490,3 +1490,44 @@ test('leg-result check: cancelled/failed/skipped bucketing is present and all th
     'exit condition does not check all three arrays (CANCELLED, FAILED, SKIPPED)',
   );
 });
+
+test('register citation check: must be unconditional (no if: guard) — issue #3122', () => {
+  // The register-citation checker scans the WHOLE tree for citations, so no
+  // diff-scope reliably predicts whether one broke. The step MUST run on every
+  // PR (including docs-only), unconditionally. A future PR that "helpfully"
+  // adds `if: fromJSON(needs.detect.outputs.scopes).something || ...` to this
+  // step would silently reopen #3122 (broken register citation outside test:hooks'
+  // scope never caught by CI). This test goes RED if that happens.
+  //
+  // Mutation proof: adding any `if:` condition to the step makes this test fail.
+
+  // Find the step by exact name, looking for the pattern:
+  // - name: Register citation check
+  //   run: (no if: line in between)
+  const stepMatch = source.match(
+    /- name: Register citation check\n(?:\s*[^\n]*\n)?(?:\s*if:|\s*run:)/m,
+  );
+
+  assert.ok(
+    stepMatch,
+    'Register citation check step not found in lint-and-checks job',
+  );
+
+  // The step must NOT have an `if:` condition between its name and run.
+  // Extract the section from "- name: Register citation check" through
+  // the next "run:" (which must be immediately next, with no if: between them).
+  const stepSection = source.slice(
+    source.indexOf('- name: Register citation check'),
+    source.indexOf('run: npm run check:register-citations') + 50,
+  );
+
+  // Assert the step has NO `if:` line anywhere in its definition.
+  // The section should contain "- name:" and "run:", but NOT "if:".
+  assert.doesNotMatch(
+    stepSection,
+    /^\s*if:/m,
+    'Register citation check step must be unconditional (must have no `if:` guard). ' +
+      'This step scans the whole tree for citations (#3122), so no diff-scope can ' +
+      'reliably predict coverage. It must run on every PR, including docs-only.',
+  );
+});
