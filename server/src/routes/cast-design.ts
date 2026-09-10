@@ -512,8 +512,34 @@ async function runDesignJob(
              VoiceDesign loads is the plan-108 OOM. */
           continue;
         }
-        persona = await generateVoiceStylePersona(character);
-        await writeVoiceStylePersona(job.bookDir, characterId, persona);
+        /* Gemini persona fallback — a throw here must be a PER-CHARACTER
+           failure, not a job halt. This call (and the persona write) sit in
+           the OUTER try with only a heartbeat-clear `finally`; the inner
+           ride-out loop's per-item catch (below) does not cover them, so a
+           throw used to escape the whole loop and land in the route handler's
+           backstop `endJob({type:'error'})` → client `halt` — a bare "Halted"
+           with no designed/failed/skipped summary (#3027 second half). The
+           LOCAL engine's persona failures are already handled per-character in
+           the pre-pass (runPersonaPrePass), so the non-local path here is the
+           only one that needs this wrapper. */
+        try {
+          persona = await generateVoiceStylePersona(character);
+          await writeVoiceStylePersona(job.bookDir, characterId, persona);
+        } catch (e) {
+          /* Route through the SAME per-character-failure shape the inner ride
+             loop uses (lines 688-696): record to job.failures, broadcast
+             character_failed, and continue to the NEXT character. Do not
+             rethrow — one persona failure must not fail the other N. */
+          const message = (e as Error).message || 'Persona generation failed.';
+          job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+          broadcast(job, {
+            type: 'character_failed',
+            characterId,
+            name: character.name ?? characterId,
+            errorReason: message,
+          });
+          continue;
+        }
       }
 
       /* bug #1411 code-review follow-up: must match sample-scope.ts's

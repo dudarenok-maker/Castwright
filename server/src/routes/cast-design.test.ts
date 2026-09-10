@@ -508,6 +508,47 @@ describe('POST /api/books/:bookId/cast/design', () => {
     expect(charById('brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_brann');
   });
 
+  /* #3027 second half — a per-character exception during the PERSONA step
+     (the Gemini `generateVoiceStylePersona` call at cast-design.ts:515) must
+     be a per-character failure, not a job-wide halt. The persona fallback sits
+     in the OUTER try (heartbeat-clear only, no catch) rather than the inner
+     ride-out loop's per-item catch, so a throw there used to escape the loop
+     entirely and land in the route handler's backstop `endJob({type:'error'})`
+     -> client `halt` (a bare "Halted" with no designed/failed/skipped
+     summary). This test simulates exactly that: two characters, the first
+     being persona-less (triggers Gemini fallback), generating a persona
+     throws, and asserts the job still moves on to the NEXT character and ends
+     in `idle` with a per-character failure recorded — never a bare error. */
+  it('#3027/2: a persona-generation failure is a per-character failure, not a bare Halted', async () => {
+    resolvePersonaEngineMock.mockReturnValue('gemini');
+    personaMock.mockReset();
+    personaMock.mockRejectedValueOnce(new Error('Gemini quota exceeded'));
+
+    /* aria (first) drives the design; hart still gets designed because the
+       persona failure only fails hart's own step. Both must hit the outer
+       loop. Order: [hart, aria] so the persona failure occurs first and, if
+       it wrongly halts, aria is never designed. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['hart', 'aria'], modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    /* The persona-failure character is reported, not the whole run. */
+    expect(events.some((e) => e.type === 'character_failed' && e.characterId === 'hart')).toBe(true);
+    /* the run continues to design the NEXT character */
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(true);
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle).toBeDefined();
+    expect(idle).toMatchObject({ done: 1, total: 2 });
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('hart');
+    /* there is NO terminal error event — the bare "Halted" shape */
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
+  });
+
   it('rides out a mid-bulk sidecar recycle: waits for respawn, retries the character, and completes', async () => {
     /* A recycle (committed/VRAM ceiling) mid-bulk makes ONE design fail with an
        "unreachable" error while the supervisor respawns. The job must wait for
