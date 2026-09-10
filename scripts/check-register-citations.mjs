@@ -1117,6 +1117,13 @@ const SINGLE_ID_SPAN_REGEX = new RegExp(`^${ROW_ID_TOKEN}$`);
  * `"..."` string is scanned and can be fatal. Every other tracked file is
  * therefore scanned raw, unblanked. (Decided 2026-09-08 per #3062.)
  */
+// Returns true for .md and .html files (the markdown-scanned set). Per the
+// operator's #3062 decision, .html is treated as fully markdown, including
+// embedded `<script>` and `<style>` block content — backtick-wrapped spans
+// inside those blocks are also blanked, which could theoretically hide a
+// citation there. This is an accepted trade-off of the current scope decision
+// (see real-tree example at docs/features/277-v115-bug-chore-sweep-board.html
+// around lines 1062 and 1085).
 function isMarkdownScanPath(relPath) {
   return /\.(md|html)$/i.test(relPath);
 }

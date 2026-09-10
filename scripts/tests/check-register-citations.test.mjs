@@ -1875,6 +1875,43 @@ test('measureWrongIdEligibleLines: a heading citing only a NONEXISTENT id is not
   assert.equal(criteriaFiles, 0);
 });
 
+// --- Check C / F4: markdown vs non-markdown distinction ---
+//
+// The `isMarkdown` flag threads through check functions to control backtick
+// blanking. Verify that it actually matters: a citation inside a backtick span
+// should be blanked in markdown files but NOT in non-markdown sources.
+
+test('checkConflictingSubjects: a "Criteria source:" phrase INSIDE a code span in a NON-MARKDOWN scanned file is NOT blanked and should fire (F4)', () => {
+  // Mirrors the existing markdown test (line 662) but with a non-markdown
+  // file path (.ts instead of .md). Non-markdown sources should NOT blank
+  // backticks, so the "Criteria source: A1 for #1001" pattern INSIDE the
+  // backtick span should still be visible and fire the check (A1 is wrong
+  // for #1001, which maps to A2/B1).
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['server/src/lib/foo.ts', 'Audit with `grep -n "Criteria source: A1 for #1001" docs/` before the sweep.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  // In non-markdown, the backticks are NOT blanked, so "Criteria source: A1"
+  // inside them is still visible and triggers wrongId (A1 is wrong for #1001).
+  assert.equal(wrongId.length, 1);
+  assert.match(wrongId[0], /cited A1 for #1001/);
+  assert.equal(unknownSubject.length, 0);
+});
+
+test('checkConflictingSubjects: paired control — the same "Criteria source:" in a MARKDOWN file is blanked and does not fire (unchanged)', () => {
+  // Verify the existing behavior for markdown files is unchanged: backticks
+  // ARE blanked, so "Criteria source: A1 for #1001" inside them is NOT visible.
+  const { rows } = parseRegisterRows(buildRegister());
+  const files = new Map([
+    ['docs/foo.md', 'Audit with `grep -n "Criteria source: A1 for #1001" docs/` before the sweep.\n'],
+  ]);
+  const { wrongId, unknownSubject } = checkConflictingSubjects(files, rows);
+  // In markdown, backticks are blanked, so the pattern inside them is invisible.
+  assert.equal(wrongId.length, 0);
+  assert.equal(unknownSubject.length, 0);
+});
+
 // --- Check D: heading title drift (v2, #2871, tuning doc #2870) ---
 //
 // Per the tuning doc's own recommendation, only the anchored heading surface
