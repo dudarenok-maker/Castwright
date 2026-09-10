@@ -576,12 +576,13 @@ A PR whose changed-file set lives entirely under `docs/**`, root-level
 deliberately removed — see
 [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
 for why: keeping it while the check is required would deadlock every
-docs-only PR forever). Every leg's own scope condition evaluates false for
-a docs-only diff, though, so the job completes in roughly the time of "Setup
-Node + deps" alone (~20-40s) and reports green — the gate stays "PR required
-+ title valid + no conflicts + a fast green required check", not the 10-15
-min full battery. Rationale and the exact glob list for the underlying
-scope-matching (unrelated to the removed `paths-ignore`):
+docs-only PR forever). Most legs' own scope conditions evaluate false for a
+docs-only diff, though; one step (`check:register-citations`, added via PR
+#3134) runs unconditionally. Either way, the job still completes in roughly
+the time of "Setup Node + deps" alone (~20-40s) and reports green — the gate
+stays "PR required + title valid + no conflicts + a fast green required check",
+not the 10-15 min full battery. Rationale and the exact glob list for the
+underlying scope-matching (unrelated to the removed `paths-ignore`):
 [docs/features/archive/101-docs-only-ci-skip.md](docs/features/archive/101-docs-only-ci-skip.md).
 
 The same file-set test also skips the **local** pre-push `test:sidecar`

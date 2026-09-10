@@ -11,30 +11,27 @@
 // claim living on several surfaces, with only some of them corrected. This
 // script exists to make that mechanical instead of eyeballed.
 //
-// WIRING GAP, stated explicitly rather than left implicit (pass-9 review of
-// PR #2630, finding AA): `package.json`'s `check:register-citations` script
-// is invoked from exactly one place today —
-// `scripts/tests/check-register-citations.test.mjs`'s own CLI-integration
-// tests, run as part of `npm run test:hooks`. That means this checker only
-// actually EXERCISES on a diff `verify-cache.mjs`'s `test:hooks` step
-// considers in-scope: `docs/testing/**`, the register itself, `CLAUDE.md`,
-// and `scripts/**` — NOT `docs/features/**`, `docs/superpowers/**`,
-// `src/**`, `server/**`, or `e2e/**`, even though a citation can live in any
-// of those and this checker's own real-tree run scans every one of them.
-// There is no dedicated `.github/workflows/*.yml` step for this checker the
-// way the sibling `check-onbox-register.mjs` has
-// (`onbox-register-check.yml`) — `#2629`'s option 3 ("catches rot at PR
-// time") is not fully true yet: rot in a file outside `test:hooks`' own
-// scope is caught only the NEXT time some in-scope file changes too, or on
-// a manual `npm run check:register-citations`. Widening `test:hooks`'
-// inputs to the whole tree isn't the fix — this checker's own real-tree run
-// reads essentially every tracked file, so declaring that as a `test:hooks`
-// input would make the step un-cacheable for everyone, defeating the
-// scope-gating `verify-cache.mjs` exists for. The right fix is a dedicated
-// CI step (mirroring `onbox-register-check.yml`) that always runs this
-// checker regardless of diff scope — a genuine design decision (schedule,
-// gating, whether it belongs in `verify.yml` or its own workflow), not
-// something to wire in blind here; tracked at `#2721`.
+// WIRING STATUS (updated 2026-09-10, PR #3134): `package.json`'s
+// `check:register-citations` script is now invoked from TWO places:
+// (1) `scripts/tests/check-register-citations.test.mjs`'s CLI-integration
+// tests, run as part of `npm run test:hooks`; and
+// (2) `.github/workflows/verify.yml`'s unconditional `check:register-citations`
+// step (PR #3134 closes the CI-wiring gap at #3122; other surfaces remain at #3140).
+//
+// CI WIRING (closed): The dedicated `.github/workflows/verify.yml` "Register
+// citation check" step now exists; it runs unconditionally on every PR,
+// including docs-only diffs, because citations can live in any file and
+// diff-scope cannot reliably predict whether one broke.
+//
+// LOCAL WIRING (open, tracked at #3140): The checker IS reachable locally via
+// two paths: (1) `npm run verify` reaches it via `test:hooks` (which is scope-gated
+// in verify-cache.mjs, so it can be marked `[cached]`/skipped on out-of-scope diffs);
+// and (2) `npm run test:all` and `npm run verify:quick` invoke test:hooks directly
+// with NO caching, so the checker runs unconditionally as part of every local
+// `test:all`/`verify:quick` invocation. The actual decision at #3140 is narrower:
+// whether `npm run verify` itself (beyond test:all) should also have an
+// unconditional/uncached local leg (independent of scope-gating), and whether
+// a git hook should wire it.
 //
 // Four checks, ordered by precision (least to most likely to need
 // judgment):
