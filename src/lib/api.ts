@@ -7305,8 +7305,30 @@ async function mockPutGeminiKey(key: string | null): Promise<UserSettings> {
   return { ...MOCK_USER_SETTINGS };
 }
 
+/* #3141 step 2 — ollamaUrl and the three analyzer-phase fields moved to
+   Advanced Settings (configOverrides); the real PUT rejects them with 400
+   (server/src/routes/user-settings.ts RETIRED_ANALYZER_FIELDS). Mirrored
+   here so a mis-migrated caller fails the same way under
+   VITE_USE_MOCKS=true as it would against the real server. */
+const RETIRED_ANALYZER_FIELDS = [
+  'ollamaUrl',
+  'analyzerPhase0Model',
+  'analyzerPhase1Model',
+  'analyzerPhase1MinLagChapters',
+] as const;
+
 async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
   await wait(50);
+  const offending = RETIRED_ANALYZER_FIELDS.filter(
+    (field) => field in (patch as Record<string, unknown>),
+  );
+  if (offending.length > 0) {
+    throw new Error(
+      `User settings save failed (400): ${offending.join(', ')} ${
+        offending.length > 1 ? 'are' : 'is'
+      } managed in Advanced Settings and cannot be set here.`,
+    );
+  }
   /* Strip read-only fields a misbehaving caller might submit so the mock
      path enforces the same invariant as the server. */
   const {
@@ -7317,9 +7339,6 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     sidecarUrl,
     workspaceDirOverride,
     exportSyncFolder,
-    analyzerPhase0Model,
-    analyzerPhase1Model,
-    analyzerPhase1MinLagChapters,
     dualModelEnabled,
     analyzerKeepAliveByModel,
   } = patch;
@@ -7334,9 +7353,6 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         sidecarUrl,
         workspaceDirOverride,
         exportSyncFolder,
-        analyzerPhase0Model,
-        analyzerPhase1Model,
-        analyzerPhase1MinLagChapters,
         dualModelEnabled,
         analyzerKeepAliveByModel,
       }).filter(([, v]) => v !== undefined),

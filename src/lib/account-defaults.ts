@@ -81,14 +81,15 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
      the analyzer can toggle off in the Account view. Flip in lockstep
      with server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   autoStartSidecar: true,
-  /* Plan 88 phase-2 — Account-tab Analyzer card knobs. `null` means
-     "fall through to env / hardcoded default" so an unhydrated render
-     doesn't pin a value the user hasn't actually saved. Flip in
-     lockstep with server/src/workspace/user-settings.ts
-     DEFAULT_USER_SETTINGS. */
+  /* #3141 step 2 — these three are now READ-ONLY, resolver-derived
+     effective values (env > Advanced Settings override > registry
+     default), not stored account fields; edited via Advanced Settings.
+     `null` phase models mean "fall through to the server default" (no
+     per-phase override); the lag always resolves to a number — mirrors
+     server/src/analyzer/select-analyzer.ts DEFAULT_PHASE1_MIN_LAG_CHAPTERS. */
   analyzerPhase0Model: null,
   analyzerPhase1Model: null,
-  analyzerPhase1MinLagChapters: null,
+  analyzerPhase1MinLagChapters: 10,
   /* Off by default — keeping two TTS engines resident in GPU memory at
      once is a deliberate VRAM commitment the user opts into in the
      Account view. Flip in lockstep with
