@@ -659,6 +659,28 @@ test('checkNonexistentIds: paired control — the identical shape in a MARKDOWN 
   assert.equal(errors.length, 0);
 });
 
+test('checkNonexistentIds: a discharge annotation inside backticks does NOT excuse a nonexistent citation in EITHER markdown or non-markdown files (#3124 finding N1)', () => {
+  // Regression test: discharge-annotation blanking must apply unconditionally,
+  // not gated by isMarkdown. A discharge word inside backticks (e.g. `` `discharged` ``)
+  // in a code span is "an instruction to run a search, not an assertion" (PR #2630
+  // pass-8 finding O), so it must be blanked BEFORE discharge-annotation checking
+  // regardless of file type. Before the fix, this worked correctly in .md files
+  // but was silently excused in .mjs files due to the isMarkdown gate.
+  const { rows } = parseRegisterRows(buildRegister());
+  const text = 'See register row A999 — `discharged` in the 2026-08 sweep.\n';
+
+  // Both contexts should report the citation as fatal
+  const mdResult = checkNonexistentIds(text, 'docs/foo.md', rows);
+  assert.equal(mdResult.errors.length, 1, 'markdown should report A999 as fatal');
+  assert.match(mdResult.errors[0], /A999/);
+  assert.equal(mdResult.annotated.length, 0, 'markdown should not excuse via the backtick-wrapped discharge word');
+
+  const mjsResult = checkNonexistentIds(text, 'scripts/foo.mjs', rows);
+  assert.equal(mjsResult.errors.length, 1, 'non-markdown should also report A999 as fatal');
+  assert.match(mjsResult.errors[0], /A999/);
+  assert.equal(mjsResult.annotated.length, 0, 'non-markdown should not excuse via the backtick-wrapped discharge word');
+});
+
 test('checkConflictingSubjects: a "Criteria source:" phrase INSIDE an example command\'s code span does not fatally fire (finding AD)', () => {
   // Check C used to read the UNBLANKED text — the same class of bug finding
   // AB already fixed for Check A's citation scan, left armed one caller

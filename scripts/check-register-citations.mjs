@@ -1027,8 +1027,8 @@ function isDischargeAssertionNegated(scanText, dm, clauseStart) {
  * this flips zero of today's citations — see #2858 for the false-positive
  * analysis of the 4 citations a looser, unshared polarity scan misflagged.
  */
-function idSpecificAnnotationPresent(sectionText, id, isMarkdown) {
-  const dischargeScanText = stripInlineCodeSpans(sectionText, { isMarkdown });
+function idSpecificAnnotationPresent(sectionText, id, _isMarkdown) {
+  const dischargeScanText = stripInlineCodeSpans(sectionText);
   const dischargeMatches = [
     ...dischargeScanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
   ];
@@ -1119,11 +1119,13 @@ const SINGLE_ID_SPAN_REGEX = new RegExp(`^${ROW_ID_TOKEN}$`);
  */
 // Returns true for .md and .html files (the markdown-scanned set). Per the
 // operator's #3062 decision, .html is treated as fully markdown, including
-// embedded `<script>` and `<style>` block content — backtick-wrapped spans
-// inside those blocks are also blanked, which could theoretically hide a
-// citation there. This is an accepted trade-off of the current scope decision
-// (see real-tree example at docs/features/277-v115-bug-chore-sweep-board.html
-// around lines 1062 and 1085).
+// embedded `<script>` and `<style>` block content — both triple-backtick
+// `stripFences` and single-backtick `stripInlineCodeSpans` blanking apply
+// (the latter unconditionally for discharge-annotation false-positive prevention,
+// the former gated by isMarkdown), and backtick-wrapped spans inside those blocks
+// are blanked, which could theoretically hide a citation there. This is an
+// accepted trade-off of the current scope decision (see real-tree example at
+// docs/features/277-v115-bug-chore-sweep-board.html around lines 1062 and 1085).
 function isMarkdownScanPath(relPath) {
   return /\.(md|html)$/i.test(relPath);
 }
@@ -2205,13 +2207,13 @@ function extractHeadingTitleEchoes(text, isMarkdown) {
  * A31, etc., which do). This relaxation moves A8 from `findings` to
  * `annotatedFindings` by treating a single-id case more generously.
  */
-function dischargeAnnotationPresentAnywhere(sectionText, id, isMarkdown) {
+function dischargeAnnotationPresentAnywhere(sectionText, id, _isMarkdown) {
   // For single-ID headings, look for discharge in the header section only
   // (first ~300 chars) to avoid false positives from body text mentioning
   // other IDs. This covers the criteria-source blockquote region.
   const HEADER_CHARS = 300;
   const headerText = sectionText.slice(0, HEADER_CHARS);
-  const headerScanText = stripInlineCodeSpans(headerText, { isMarkdown });
+  const headerScanText = stripInlineCodeSpans(headerText);
 
   const dischargeMatches = [
     ...headerScanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
