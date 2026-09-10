@@ -1027,7 +1027,7 @@ function isDischargeAssertionNegated(scanText, dm, clauseStart) {
  * this flips zero of today's citations — see #2858 for the false-positive
  * analysis of the 4 citations a looser, unshared polarity scan misflagged.
  */
-function idSpecificAnnotationPresent(sectionText, id, _isMarkdown) {
+function idSpecificAnnotationPresent(sectionText, id) {
   const dischargeScanText = stripInlineCodeSpans(sectionText);
   const dischargeMatches = [
     ...dischargeScanText.matchAll(new RegExp(DISCHARGE_ANNOTATION_REGEX.source, 'gi')),
@@ -1109,23 +1109,34 @@ const SINGLE_ID_SPAN_REGEX = new RegExp(`^${ROW_ID_TOKEN}$`);
 /**
  * Whether a repo-relative scanned-file path (e.g. `docs/foo.md`,
  * `scripts/foo.mjs`) should have its single-backtick inline code spans
- * blanked as markdown. Blanking is scoped to markdown sources only (`.md`,
- * `.html`): in a source file (`.mjs`/`.ts`/`.py`/...) a template literal's
- * backticks would be misread as markdown delimiters and a register citation
- * inside one (e.g. `` `row A101` `` in a template string) would be silently
- * blanked and never checked — while the identical text inside a `'...'` or
- * `"..."` string is scanned and can be fatal. Every other tracked file is
- * therefore scanned raw, unblanked. (Decided 2026-09-08 per #3062.)
+ * blanked as markdown. Returns true for `.md` and `.html` files (the
+ * markdown-scanned set); all other tracked files are scanned raw, unblanked.
+ *
+ * Per the operator's #3062 decision, `.html` is treated as fully markdown,
+ * including embedded `<script>` and `<style>` block content — both
+ * `stripFences` (triple-backtick blocks) and `stripInlineCodeSpans`
+ * (single-backtick spans) apply within .html files, so backtick-wrapped
+ * citations inside embedded code blocks are also blanked. This is an
+ * accepted trade-off of the current scope decision (see real-tree example
+ * at docs/features/277-v115-bug-chore-sweep-board.html around lines 1062
+ * and 1085).
+ *
+ * BLANKING SCOPE: `stripFences` is markdown-conditional (gated by `isMarkdown`
+ * at every call site). `stripInlineCodeSpans` is markdown-conditional for
+ * citation-scanning purposes (gated at most call sites: lines 1229, 1859,
+ * 2037, 2135, 2173) but unconditional for discharge-annotation checks
+ * (lines 1031, 2216), where the blanking prevents false positives from
+ * backtick-wrapped example citations. In non-markdown sources
+ * (`.mjs`/`.ts`/`.py`/...), a template literal's backticks would otherwise
+ * be misread as markdown delimiters — a citation inside one (e.g. `` `row
+ * A101` `` in a template string) would be silently blanked by a
+ * markdown-gated scan while remaining visible to downstream checks, creating
+ * inconsistency. Unconditional discharge-annotation blanking trades that
+ * inconsistency for false-positive immunity (the register-owned text and
+ * discharge annotations are not markdown-syntax-specific; a row ID is either
+ * cited for history or it isn't, regardless of whether the document is
+ * markdown).
  */
-// Returns true for .md and .html files (the markdown-scanned set). Per the
-// operator's #3062 decision, .html is treated as fully markdown, including
-// embedded `<script>` and `<style>` block content — both triple-backtick
-// `stripFences` and single-backtick `stripInlineCodeSpans` blanking apply
-// (the latter unconditionally for discharge-annotation false-positive prevention,
-// the former gated by isMarkdown), and backtick-wrapped spans inside those blocks
-// are blanked, which could theoretically hide a citation there. This is an
-// accepted trade-off of the current scope decision (see real-tree example at
-// docs/features/277-v115-bug-chore-sweep-board.html around lines 1062 and 1085).
 function isMarkdownScanPath(relPath) {
   return /\.(md|html)$/i.test(relPath);
 }
@@ -1265,7 +1276,7 @@ export function checkNonexistentIds(text, filePath, registerRows) {
     for (const id of [...byLine.get(i)].sort()) {
       if (registerRows.has(id)) continue;
       const message = `${filePath}:${i + 1} — cited ${id} — no such row in ${REGISTER_PATH} (nonexistent ID)`;
-      if (idSpecificAnnotationPresent(enclosingSectionText(lines, i), id, isMarkdown)) {
+      if (idSpecificAnnotationPresent(enclosingSectionText(lines, i), id)) {
         annotated.push(`${message} — annotated as discharged/removed, not failing`);
       } else {
         errors.push(message);
@@ -1788,7 +1799,7 @@ function recordSubjectConflict(
     }
     if (currentSubjects && currentSubjects.size > 0) {
       const currentSubjectsText = [...currentSubjects].sort((a, b) => a - b).join('/');
-      if (idSpecificAnnotationPresent(enclosingSectionText(lines, lineIndex), id, isMarkdownScanPath(filePath))) {
+      if (idSpecificAnnotationPresent(enclosingSectionText(lines, lineIndex), id)) {
         annotatedDischarge.push(
           `${filePath}:${lineIndex + 1} — cited ${id} for #${subject}, but ${id} now tracks ` +
             `#${currentSubjectsText} (#${subject}'s row has discharged and ${id} was re-minted) — ` +
@@ -2207,7 +2218,7 @@ function extractHeadingTitleEchoes(text, isMarkdown) {
  * A31, etc., which do). This relaxation moves A8 from `findings` to
  * `annotatedFindings` by treating a single-id case more generously.
  */
-function dischargeAnnotationPresentAnywhere(sectionText, id, _isMarkdown) {
+function dischargeAnnotationPresentAnywhere(sectionText, id) {
   // For single-ID headings, look for discharge in the header section only
   // (first ~300 chars) to avoid false positives from body text mentioning
   // other IDs. This covers the criteria-source blockquote region.
@@ -2296,8 +2307,8 @@ export function checkCitationTitleDrift(text, filePath, registerRows) {
       // anywhere in section, or next to this heading's ID). For multi-ID headings,
       // require ID-proximity to avoid one ID's discharge excusing another's drift.
       const isAnnotated = ids.length === 1
-        ? dischargeAnnotationPresentAnywhere(sectionText, id, isMarkdown)
-        : idSpecificAnnotationPresent(sectionText, id, isMarkdown);
+        ? dischargeAnnotationPresentAnywhere(sectionText, id)
+        : idSpecificAnnotationPresent(sectionText, id);
 
       if (isAnnotated) {
         annotatedFindings.push(`${message} — annotated as discharged/removed, not flagged as drift`);
