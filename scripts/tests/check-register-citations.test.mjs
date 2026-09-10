@@ -2594,6 +2594,35 @@ test('checkNonexistentIds: a citation inside a fenced code block is not scanned 
   assert.equal(annotated.length, 0);
 });
 
+test('checkNonexistentIds: a citation inside triple backticks in a NON-MARKDOWN file IS scanned (backticks are not fences in `.mjs`/`.ts`/etc)', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // This is a `.mjs` file, so triple backticks are NOT markdown fence markers —
+  // they're just character sequences in the code (e.g., in a template literal).
+  // A citation inside them should NOT be blanked and SHOULD be found.
+  const text = ['```', 'See register row A9 for details.', '```'].join('\n');
+  const { errors, annotated } = checkNonexistentIds(text, 'scripts/some-script.mjs', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
+  assert.equal(annotated.length, 0);
+});
+
+test('checkNonexistentIds: an unpaired fence line in a NON-MARKDOWN file does not blank to EOF', () => {
+  const { rows } = parseRegisterRows(buildRegister());
+  // In a markdown file, a single unpaired ``` would blank from there to EOF.
+  // In a non-markdown file, backticks are just characters, so the citation
+  // on the line after should still be found.
+  const lines = [
+    '// Some code with a backtick sequence',
+    '```',
+    'See register row A9 for details.',
+  ];
+  const text = lines.join('\n');
+  const { errors, annotated } = checkNonexistentIds(text, 'scripts/some-script.mjs', rows);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /A9/);
+  assert.equal(annotated.length, 0);
+});
+
 // --- Check A / general citation-surface coverage (widened net) ---
 
 test('checkNonexistentIds: a "Register row:" label line with no whitespace before the colon is now matched ("Register rows:" idiom)', () => {

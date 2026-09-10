@@ -511,7 +511,11 @@ export function isFrozenPath(relPath) {
 
 // Blanks fenced code blocks so an example heading inside a fence can't be
 // mistaken for a real one — mirrors check-onbox-register.mjs's stripFences.
-function stripFences(text) {
+// Only applies to markdown files (`.md`, `.html`); non-markdown scanned
+// sources are read raw, unblanked, so triple-backtick sequences can never
+// silently hide a citation (they are not fence markers in those files).
+function stripFences(text, { isMarkdown = true } = {}) {
+  if (!isMarkdown) return text;
   const lines = text.split('\n');
   let openFence = null;
   return lines
@@ -1212,7 +1216,7 @@ function deBold(text) {
  * @returns {Map<number, Set<string>>}
  */
 function extractCitationsByLine(text, isMarkdown) {
-  const stripped = deBold(stripFences(text));
+  const stripped = deBold(stripFences(text, { isMarkdown }));
   const scanLines = stripInlineCodeSpans(stripped, { isMarkdown }).split('\n');
   const byLine = new Map();
   const add = (i, ids) => {
@@ -1245,7 +1249,7 @@ export function checkNonexistentIds(text, filePath, registerRows) {
   const errors = [];
   const annotated = [];
   const isMarkdown = isMarkdownScanPath(filePath);
-  const lines = deBold(stripFences(text)).split('\n');
+  const lines = deBold(stripFences(text, { isMarkdown })).split('\n');
   const byLine = extractCitationsByLine(text, isMarkdown);
   const sortedLineIndexes = [...byLine.keys()].sort((a, b) => a - b);
   for (const i of sortedLineIndexes) {
@@ -1842,7 +1846,8 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
     // citation (see `stripInlineCodeSpans`'s own comment) — anchored
     // headings can't appear inside a code span at all (`^#{2,6}`), so this
     // only ever changes behaviour on the `Criteria source:` surface.
-    const text = stripInlineCodeSpans(deBold(stripFences(rawText)), { isMarkdown: isMarkdownScanPath(filePath) });
+    const isMarkdown = isMarkdownScanPath(filePath);
+    const text = stripInlineCodeSpans(deBold(stripFences(rawText, { isMarkdown })), { isMarkdown });
     const lines = text.split('\n');
     lines.forEach((line, i) => {
       const citedIds = citationShapedLineIds(line);
@@ -2019,7 +2024,8 @@ export function measureWrongIdEligibleLines(fileTexts, registerRows) {
     // an unblanked copy here would silently disagree with Check C again the
     // moment a `Criteria source:`-shaped example command inside a code span
     // is counted as eligible here but is (correctly) blanked away there.
-    const text = stripInlineCodeSpans(deBold(stripFences(rawText)), { isMarkdown: isMarkdownScanPath(filePath) });
+    const isMarkdown = isMarkdownScanPath(filePath);
+    const text = stripInlineCodeSpans(deBold(stripFences(rawText, { isMarkdown })), { isMarkdown });
     for (const line of text.split('\n')) {
       if (extractSubjectNumbers(line).size === 0) continue;
       const shapedIds = citationShapedLineIds(line);
@@ -2154,7 +2160,7 @@ function titleDriftScore(titleTokens, proseTokens) {
  * @returns {{ lineIndex: number, ids: string[], titleEcho: string }[]}
  */
 function extractHeadingTitleEchoes(text, isMarkdown) {
-  const stripped = deBold(stripFences(text));
+  const stripped = deBold(stripFences(text, { isMarkdown }));
   const lines = stripInlineCodeSpans(stripped, { isMarkdown }).split('\n');
   const citations = [];
   lines.forEach((line, i) => {
@@ -2261,7 +2267,7 @@ export function checkCitationTitleDrift(text, filePath, registerRows) {
   const findings = [];
   const annotatedFindings = [];
   const isMarkdown = isMarkdownScanPath(filePath);
-  const lines = deBold(stripFences(text)).split('\n');
+  const lines = deBold(stripFences(text, { isMarkdown })).split('\n');
   for (const { lineIndex, ids, titleEcho } of extractHeadingTitleEchoes(text, isMarkdown)) {
     const proseTokens = titleDriftTokens(titleEcho, isMarkdown);
     for (const id of ids) {
