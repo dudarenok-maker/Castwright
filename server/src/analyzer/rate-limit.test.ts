@@ -4,6 +4,9 @@
    doesn't actually take 60 s. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { GeminiRateLimiter, DailyQuotaExhaustedError, computeTpmWait } from './rate-limit.js';
 import { AnalysisAbortedError } from './ollama.js';
 
@@ -247,6 +250,89 @@ describe('GeminiRateLimiter', () => {
       code: 'REQUEST_EXCEEDS_TPM',
     });
     expect(Date.now() - start).toBeLessThan(1000); // did NOT wait 60s
+  });
+});
+
+describe('saved rate-limit overrides in user settings', () => {
+  /* Fresh module registry + temp {} store, exactly like
+     config-overrides.test.ts does, so a saved override can be injected and
+     never bleeds into sibling tests. */
+  async function limiterWithOverrides(overrides: Record<string, number>): Promise<GeminiRateLimiter> {
+    vi.resetModules();
+    const dir = mkdtempSync(join(tmpdir(), 'cw-ratelimit-'));
+    process.env.USER_SETTINGS_FILE = join(dir, 'user-settings.json');
+    writeFileSync(process.env.USER_SETTINGS_FILE, '{}');
+    const ws = await import('../workspace/user-settings.js');
+    for (const [key, value] of Object.entries(overrides)) {
+      await ws.writeConfigOverride(key, value);
+    }
+    const m = await import('./rate-limit.js');
+    /* Re-assert fake timers after the module reload: the resolver/gpu module
+       graph registers its own timers on import, which a bare vi.resetModules()
+       can leave in real-timer state and hang a blocking acquire on a real 60-s
+       wait. Pin system time so the sliding-window math is deterministic. */
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-16T12:00:00.000Z'));
+    return new m.GeminiRateLimiter();
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-16T12:00:00.000Z'));
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    delete process.env.USER_SETTINGS_FILE;
+    delete process.env.GEMINI_RPM_GEMMA_4_31B_IT;
+    delete process.env.GEMINI_TPM_GEMMA_4_31B_IT;
+    delete process.env.GEMINI_RPD_GEMMA_4_31B_IT;
+  });
+
+  it('enforces a saved rate.rpm.gemma override below the builtin RPM', async () => {
+    /* Built-in gemma-4-31b-it RPM is 30; a saved override of 2 must cap the
+       sliding window at 2 — the third acquire within a minute blocks on RPM. */
+    const limiter = await limiterWithOverrides({ 'rate.rpm.gemma': 2 });
+    const onWait = vi.fn();
+    await limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    await limiter.acquire('gemma-4-31b-it', 900, { onWait });
+
+    const pending = limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    await vi.advanceTimersByTimeAsync(10);
+    let settled = false;
+    pending.then(() => {
+      settled = true;
+    });
+    expect(settled).toBe(false);
+    expect(onWait).toHaveBeenCalled();
+    const [waitMs, reason] = onWait.mock.calls[0];
+    expect(reason).toBe('rpm');
+    expect(waitMs).toBeGreaterThanOrEqual(60_000);
+    await vi.advanceTimersByTimeAsync(waitMs + 1);
+    await pending;
+  });
+
+  it('env still beats a saved override for the same knob', async () => {
+    /* GEMINI_RPM_GEMMA_4_31B_IT=30 sits in the environment; the saved
+       rate.rpm.gemma=2 must NOT win, so five acquires within the minute all
+       clear (no RPM wait). If the override shadowed env, the third would block. */
+    process.env.GEMINI_RPM_GEMMA_4_31B_IT = '30';
+    const limiter = await limiterWithOverrides({ 'rate.rpm.gemma': 2 });
+    const onWait = vi.fn();
+    for (let i = 0; i < 5; i += 1) {
+      await limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    }
+    expect(onWait).not.toHaveBeenCalled();
+  });
+
+  it('a saved rate.tpm.gemma override of 0 removes the TPM gate', async () => {
+    /* Built-in gemma-4-31b-it TPM is a finite 16000; a saved override of 0
+       ("unlimited") must admit a request that would otherwise trip
+       Request ExceedsTpmError. */
+    const limiter = await limiterWithOverrides({ 'rate.tpm.gemma': 0 });
+    await expect(limiter.acquire('gemma-4-31b-it', 50_000)).resolves.toBeUndefined();
   });
 });
 
