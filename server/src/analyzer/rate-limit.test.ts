@@ -4,6 +4,9 @@
    doesn't actually take 60 s. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { GeminiRateLimiter, DailyQuotaExhaustedError, computeTpmWait } from './rate-limit.js';
 import { AnalysisAbortedError } from './ollama.js';
 
@@ -247,6 +250,149 @@ describe('GeminiRateLimiter', () => {
       code: 'REQUEST_EXCEEDS_TPM',
     });
     expect(Date.now() - start).toBeLessThan(1000); // did NOT wait 60s
+  });
+});
+
+describe('saved rate-limit overrides in user settings', () => {
+  /* Fresh module registry + temp {} store, exactly like
+     config-overrides.test.ts does, so a saved override can be injected and
+     never bleeds into sibling tests. */
+  async function limiterWithOverrides(overrides: Record<string, number>): Promise<GeminiRateLimiter> {
+    vi.resetModules();
+    const dir = mkdtempSync(join(tmpdir(), 'cw-ratelimit-'));
+    process.env.USER_SETTINGS_FILE = join(dir, 'user-settings.json');
+    writeFileSync(process.env.USER_SETTINGS_FILE, '{}');
+    const ws = await import('../workspace/user-settings.js');
+    for (const [key, value] of Object.entries(overrides)) {
+      await ws.writeConfigOverride(key, value);
+    }
+    const m = await import('./rate-limit.js');
+    /* Re-assert fake timers after the module reload: the resolver/gpu module
+       graph registers its own timers on import, which a bare vi.resetModules()
+       can leave in real-timer state and hang a blocking acquire on a real 60-s
+       wait. Pin system time so the sliding-window math is deterministic. */
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-16T12:00:00.000Z'));
+    return new m.GeminiRateLimiter();
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-16T12:00:00.000Z'));
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    delete process.env.USER_SETTINGS_FILE;
+    delete process.env.GEMINI_RPM_GEMMA_4_31B_IT;
+    delete process.env.GEMINI_TPM_GEMMA_4_31B_IT;
+    delete process.env.GEMINI_RPD_GEMMA_4_31B_IT;
+  });
+
+  it('enforces a saved rate.rpm.gemma override below the builtin RPM', async () => {
+    /* Built-in gemma-4-31b-it RPM is 30; a saved override of 2 must cap the
+       sliding window at 2 — the third acquire within a minute blocks on RPM. */
+    const limiter = await limiterWithOverrides({ 'rate.rpm.gemma': 2 });
+    const onWait = vi.fn();
+    await limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    await limiter.acquire('gemma-4-31b-it', 900, { onWait });
+
+    const pending = limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    await vi.advanceTimersByTimeAsync(10);
+    /* Prove `pending` is genuinely still unsettled rather than merely
+       checking a `.then()` flag before the microtask queue has had a chance
+       to flip it (that boolean reads false either way, so it can never fail).
+       Promise.race calls .then() on each entry in array order, so if `pending`
+       were ALREADY resolved its callback would be queued first and this would
+       race to 'resolved' instead of the sentinel. */
+    const STILL_PENDING = Symbol('still-pending');
+    const raceResult = await Promise.race([
+      pending.then(() => 'resolved' as const),
+      Promise.resolve(STILL_PENDING),
+    ]);
+    expect(raceResult).toBe(STILL_PENDING);
+    expect(onWait).toHaveBeenCalled();
+    const [waitMs, reason] = onWait.mock.calls[0];
+    expect(reason).toBe('rpm');
+    expect(waitMs).toBeGreaterThanOrEqual(60_000);
+    await vi.advanceTimersByTimeAsync(waitMs + 1);
+    await pending;
+  });
+
+  it('env still beats a saved override for the same knob', async () => {
+    /* Env=7 is chosen to differ from BOTH the builtin default (30) and the
+       saved override (2) — with env=30 (the prior value), removing the
+       `readEnvNumber(...) ??` precedence term from resolveLimits still left
+       this test green, because the override lookup falls through to the
+       builtin default (30) whenever the resolver reports the value came from
+       env rather than override, so "30" was indistinguishable from "correct".
+       Firing exactly 7 acquires and expecting the 8th to block on RPM proves
+       the effective cap is precisely 7 — not 2 (which would already have
+       blocked by the 3rd) and not 30 (which would not block until the 31st). */
+    process.env.GEMINI_RPM_GEMMA_4_31B_IT = '7';
+    const limiter = await limiterWithOverrides({ 'rate.rpm.gemma': 2 });
+    const onWait = vi.fn();
+    for (let i = 0; i < 7; i += 1) {
+      await limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    }
+    expect(onWait).not.toHaveBeenCalled();
+
+    const pending = limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(onWait).toHaveBeenCalled();
+    expect(onWait.mock.calls[0][1]).toBe('rpm');
+    await vi.advanceTimersByTimeAsync(60_500);
+    await pending;
+  });
+
+  it('a saved rate.tpm.gemma override of 0 removes the TPM gate', async () => {
+    /* Built-in gemma-4-31b-it TPM is a finite 16000; a saved override of 0
+       ("unlimited") must admit a request that would otherwise trip
+       RequestExceedsTpmError. */
+    const limiter = await limiterWithOverrides({ 'rate.tpm.gemma': 0 });
+    await expect(limiter.acquire('gemma-4-31b-it', 50_000)).resolves.toBeUndefined();
+  });
+
+  it('applies a saved override live, to an already-constructed limiter, without reconstruction', async () => {
+    /* This is the "live" half of `apply: 'live'` (server/src/config/registry.ts)
+       and the release note's "takes effect right away, with no restart
+       needed": the SAME limiter instance must pick up an override written
+       AFTER it was constructed and already used, on its very next acquire() —
+       not just at construction time. Built-in gemma-4-31b-it RPM is 30, so
+       the first two acquires below clear with no override in play at all. */
+    vi.resetModules();
+    const dir = mkdtempSync(join(tmpdir(), 'cw-ratelimit-'));
+    process.env.USER_SETTINGS_FILE = join(dir, 'user-settings.json');
+    writeFileSync(process.env.USER_SETTINGS_FILE, '{}');
+    const ws = await import('../workspace/user-settings.js');
+    const m = await import('./rate-limit.js');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-16T12:00:00.000Z'));
+    const limiter = new m.GeminiRateLimiter();
+
+    await limiter.acquire('gemma-4-31b-it', 900);
+    await limiter.acquire('gemma-4-31b-it', 900);
+
+    /* Save the override only now — after the limiter already exists and has
+       already resolved limits twice above with no override present. */
+    await ws.writeConfigOverride('rate.rpm.gemma', 2);
+
+    const onWait = vi.fn();
+    const pending = limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    await vi.advanceTimersByTimeAsync(10);
+    let settled = false;
+    pending.then(() => {
+      settled = true;
+    });
+    expect(settled).toBe(false);
+    expect(onWait).toHaveBeenCalled();
+    const [waitMs, reason] = onWait.mock.calls[0];
+    expect(reason).toBe('rpm');
+    expect(waitMs).toBeGreaterThanOrEqual(60_000);
+    await vi.advanceTimersByTimeAsync(waitMs + 1);
+    await pending;
   });
 });
 

@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="17" data-publish-id="00e4ce4cce1b"></div>
+  <div hidden data-published-as="18" data-publish-id="ffc00c300f36"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -311,6 +311,7 @@
       <div class="body">
         <p>Shipped direct-to-<code>main</code> 2026-06-10. Ship notes: “<b>Live-GPU acceptance … is the only remaining check.</b>”</p>
         <div class="flag"><b>2026-09-06 — PARTIAL.</b> The forced-<code>/recycle</code> ride-out itself is a clean <b>PASS</b>, confirmed twice: the design job's pill held steady through a ~45 s sidecar outage and resumed with no manual intervention. “Completes end to end” is a <b>FAIL</b>: the job halts (no error toast) after exactly 2 of 12 characters, reproduced twice, once as a clean isolated control. A same-day follow-up found a plausible but unconfirmed cause — a missing <code>GEMINI_API_KEY</code> silently breaking per-character persona generation; switching to a local persona engine let the same cast finish in one run. Filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/3027">#3027</a>.</div>
+        <div class="flag"><b>2026-09-11 — #3027 fixed (PR #3161), on-box re-run still owed.</b> The halt itself is fixed: a Gemini persona-write failure during a bulk design now reports per-character (<code>onCharacterFailed</code>/<code>failures[]</code>) instead of aborting the job, and the terminal summary toast names the actual failure reason. This is a code fix only, not a live-hardware confirmation — the “completes end to end” bullet above is still owed a fresh on-box run against the same multi-voice cast (with or without a <code>GEMINI_API_KEY</code> set) to confirm the run now reaches 12/12 instead of halting at 2/12.</div>
         <p class="src">The flow gets exercised informally — bugs #1156, #1532, #1557, #1570 were found through real use — but never this forced-recycle walkthrough</p>
       </div>
     </details>
@@ -318,6 +319,7 @@
       <summary><span class="num">A7</span><span class="iname">Design full cast — bulk Qwen design (plan 195)</span><span class="risk hot">2 of 5 bullets discharged</span><span class="chev">›</span></summary>
       <div class="body">
         <div class="flag"><b>2026-09-06 — PARTIAL.</b> <b>PASS:</b> pill survives a hard reload mid-run; VRAM headroom holds (8.4–18.8 GB vs a 47.58 GB ceiling) for as long as the run got. <b>Not reached:</b> terminal summary counts, series propagation, and the 2nd-tab bullet — capped both runs at 2/12 by the same halt A6 hits. The 2nd-tab harness itself is real: a concurrent single-design request showed correct GPU-fairness serialization but then spun forever with no toast or error, itself a second instance of A6's silent-failure class. Filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/3027">#3027</a>.</div>
+        <div class="flag"><b>2026-09-11 — #3027 fixed (PR #3161), on-box re-run still owed.</b> Same fix as A6 above: the bulk job no longer halts on a single Gemini persona-design failure. The three bullets this row's PARTIAL run never reached (terminal summary counts, series propagation, 2nd-tab serialization) are still owed a fresh on-box run that gets past the 2/12 point the A6 halt previously capped both runs at — this fix is not itself that run.</div>
         <p class="src">Shipped 2026-06-07 (PR #637); PR #638 filled the Ship-notes SHA but left the acceptance bullet open · <code>plan 195:78-82</code></p>
       </div>
     </details>

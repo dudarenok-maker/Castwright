@@ -50,8 +50,10 @@ export function VoiceReadinessGateModal() {
   const { bookId } = gate;
   const designRunningHere = designActive?.state === 'running' && designActive.bookId === bookId;
   /* Mirrors cast.tsx's own guard: only one book's bulk design can run at a
-     time (cast-design-stream-middleware.ts ignores a second start), so
-     dispatching here while another book owns the run would silently no-op. */
+     time — cast-design-stream-middleware.ts surfaces its own error toast
+     naming the busy state on a second start, rather than silently no-oping —
+     so dispatching here while another book owns the run would just duplicate
+     that toast. */
   const designRunningElsewhere = designActive?.state === 'running' && designActive.bookId !== bookId;
 
   const onClose = () => dispatch(uiActions.closeVoiceReadinessGate());

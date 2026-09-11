@@ -70,6 +70,18 @@ const COVERED = [
   { rel: 'vite.config.ts', file: 'the vite build config' },
   { rel: 'src/test/setup.ts', file: 'the injected test-setup file' },
   { rel: 'openapi.yaml', file: 'the API contract' },
+  /* #2051 — src/lib/api.ts and api-types.ts are near-universal transitive
+     imports; without the triggers, a diff to either selects 330 of 332 files
+     anyway, so forcing the full run adds only ~2 files of marginal cost. */
+  { rel: 'src/lib/api.ts', file: 'the API utils' },
+  { rel: 'src/lib/api-types.ts', file: 'the generated OpenAPI types' },
+  /* #2889 — src/index-html-fonts.test.ts readFile()s index.html at runtime
+     with no module-graph edge, and src/test/dark-mode-css.test.ts +
+     src/styles-neutrals.test.ts readFileSync() src/styles.css directly.
+     Without these triggers, vitest --changed selects zero tests for index.html
+     and only src/main.test.tsx (missing both guards) for src/styles.css. */
+  { rel: 'index.html', file: 'the app shell' },
+  { rel: 'src/styles.css', file: 'the design tokens' },
 ];
 
 /* Real files that must NOT match. More than one shape, so widening a dead
@@ -79,6 +91,8 @@ const NOT_COVERED = [
   { rel: 'src/main.tsx', file: 'an ordinary source file' },
   { rel: 'tsconfig.json', file: 'a JSON file that is not a manifest' },
   { rel: 'apps/android/pubspec.yaml', file: 'a YAML file that is not the contract' },
+  { rel: 'public/fonts/fonts.css', file: 'a different CSS file' },
+  { rel: 'docs/testing/onbox-acceptance-register-live-view.html', file: 'a different HTML file' },
 ];
 
 const crossProduct = (files: typeof COVERED) =>
