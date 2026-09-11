@@ -1087,11 +1087,13 @@ _CUDA_POISON_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Exit code used to signal "the supervisor (start.ps1's while-loop) should
-# restart me — my CUDA context is poisoned and only a fresh process can
-# clear it." Picked outside the conventional 0/1/2 range so a normal Ctrl+C
-# or syntax error doesn't trigger a respawn. start.ps1 explicitly checks
-# for this value; any other exit code breaks the loop and stays down.
+# Exit code used to signal "my CUDA context is poisoned and only a fresh
+# process can clear it." Picked outside the conventional 0/1/2 range so a
+# normal Ctrl+C or syntax error doesn't trigger a respawn. start.ps1/start.sh
+# are single-shot and always propagate this code straight through — Node's
+# sidecar-supervisor.ts (the Node-supervised path) is what actually watches
+# for it and restarts; the standalone launch path does not restart on 42
+# (#3206).
 _POISON_EXIT_CODE = 42
 
 # Exit code for the host-memory process-recycle (the RSS-ceiling self-restart).
@@ -1296,12 +1298,18 @@ def _schedule_poison_exit() -> None:
     sequence — that path attempts to close socket connections cleanly,
     which on a poisoned CUDA context risks blocking forever on a
     background thread waiting on a corrupted GPU op. Hard-exit is the
-    right call: the supervisor in start.ps1 brings us straight back up."""
+    right call: on the Node-supervised path (npm run dev / npm start),
+    sidecar-supervisor.ts brings us straight back up. On the standalone
+    launch path (npm run tts:sidecar), this code (42) gets no restart at
+    all — see #3206 — so the process simply exits."""
     def _do_exit() -> None:
         log.error(
-            "Exiting with code %d so the start.ps1 supervisor restarts a "
-            "fresh Python process with an uncorrupted CUDA context. "
-            "Click Retry on the failed chapter once /health responds again.",
+            "Exiting with code %d for an uncorrupted CUDA context on "
+            "restart. On the Node-supervised path this restarts "
+            "automatically — click Retry on the failed chapter once "
+            "/health responds again. On the standalone launch path "
+            "(npm run tts:sidecar) this process does not currently "
+            "restart on its own (#3206) — restart it manually.",
             _POISON_EXIT_CODE,
         )
         # os._exit skips atexit handlers and Python finalisers — exactly
@@ -1317,8 +1325,9 @@ def _schedule_poison_exit() -> None:
 # context-fatal "CUDA error: unknown error" — see _CUDA_POISON_RE) all
 # subsequent CUDA calls re-raise regardless of which engine made them. We
 # therefore track poison per-PROCESS, not per-engine: any engine's CUDA failure
-# fast-fails every engine AND schedules ONE supervised self-exit so start.ps1
-# respawns a fresh process. (This was previously gated to CoquiEngine, which
+# fast-fails every engine AND schedules ONE self-exit. On the Node-supervised
+# path this respawns a fresh process automatically; on the standalone launch
+# path it does not (#3206). (This was previously gated to CoquiEngine, which
 # left the Qwen default — the common case — wedged: a Qwen CUDA error returned a
 # plain 500, never self-exited, and every retry re-hit the dead context.)
 _process_poisoned: bool = False
