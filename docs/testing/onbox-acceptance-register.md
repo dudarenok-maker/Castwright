@@ -1956,19 +1956,12 @@ guard) each redden the fixtures they own, reverts clean
 `docs/testing/onbox-2card-pinokio-batch-results/step-3-a3-build.md` for the
 original build's own mutation record).
 
-**What remains owed:** the real-hardware trigger. A forced card-specific
-three-exits-in-ten-minutes streak was run for real against this worktree's own
-sidecar and did **not** reach `runAutoRevert` in production — `/api/gpu/trip-status`
-stayed `null` throughout and no toast fired
-(`docs/testing/onbox-2card-pinokio-batch-results/step-4-a3-hardware.md`). Node's
-`onChildExit` never observes the streak because `start.ps1` absorbs and restarts
-the code-43 child internally on Windows before Node's own supervisor sees three
-distinct exits — the same root cause step 2's checklist items 5/6 already
-surfaced. The row narrows to this one item: **wire the streak-trip signal through
-`start.ps1`'s own restart loop (or an equivalent path) so `runAutoRevert` actually
-fires on real hardware**, then re-run the hardware trigger to confirm. Tracked as
-[#3121](https://github.com/dudarenok-maker/Castwright/issues/3121) — a design
-decision (where the exit-visibility boundary moves to), not a one-line fix.
+**What remains owed:** **re-run the real-hardware trigger** after PR #3148 fixes the exit-code visibility gap.
+The prior blockers were:
+1. `start.ps1` absorbed code-43 exits internally in its restart loop, preventing Node's supervisor from observing individual exits — **FIXED** by PR #3148, which removes the restart loop from both `start.ps1` and `start.sh` and leaves Node's `sidecar-supervisor.ts` to own all restart decisions.
+2. The standalone `npm run tts:sidecar` path (used when `autoStartSidecar` is off) had no supervisor behind it — **FIXED** by PR #3148, which adds a minimal code-43 restart safeguard in `scripts/launch-sidecar.mjs` that mirrors the supervisor's 3-in-10-minute streak cap.
+
+A forced card-specific three-exits-in-ten-minutes streak was run for real before this fix and did not reach `runAutoRevert` — but now both paths (supervised and standalone) should propagate individual code-43 exits to Node's supervisor, allowing the streak guard and auto-revert to fire. **Owed:** re-run the hardware trigger on real 2-card hardware to confirm the auto-revert trip now fires and resolves the cascade, then record the outcome. Tracked as [#3121](https://github.com/dudarenok-maker/Castwright/issues/3121).
 
 ### A4 · Audition engine + tier fidelity ([#1849](https://github.com/dudarenok-maker/Castwright/pull/1849))
 

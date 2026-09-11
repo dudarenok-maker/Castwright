@@ -44,26 +44,14 @@ port="${LOCAL_TTS_PORT:-9000}"
 bind_host="${LOCAL_TTS_HOST:-127.0.0.1}"
 restart_backoff=2
 
-# Supervisor loop. main.py self-exits with one of two recoverable codes:
+# Launch uvicorn and propagate its exit code. main.py self-exits with one of
+# two documented codes:
 #   42 = CUDA device-side assert (context corrupted for the process lifetime;
 #        only a fresh interpreter recovers).
 #   43 = planned recycle (the memory watchdog self-exits when committed RAM or
-#        reserved VRAM crosses the configured ceiling -- a fresh process resets
-#        the leaked/spilled pool). This is REQUESTED recycling, not a crash, so
-#        it must relaunch too.
-# On either, we relaunch uvicorn so the next request hits a clean process.
-# Any other exit code (0 normal shutdown, 1 syntax/import error, 130 Ctrl+C,
-# etc.) breaks the loop so a real bug doesn't trap the supervisor in a tight
-# crash-respawn cycle. Mirrors start.ps1 / sidecar-restart-policy.ps1.
+#        reserved VRAM crosses the configured ceiling).
+# Node's sidecar-supervisor owns the restart logic for both — this launcher is
+# single-shot and always propagates the real exit code. See issue #3121.
 cd "$here"
-while true; do
-  "$venv_python" -m uvicorn main:app --host "$bind_host" --port "$port"
-  code=$?
-  if [ "$code" -eq 42 ] || [ "$code" -eq 43 ]; then
-    echo "[supervisor] sidecar exited with code $code - restarting in ${restart_backoff}s."
-    sleep "$restart_backoff"
-    continue
-  fi
-  echo "[supervisor] sidecar exited with code $code - not restarting."
-  break
-done
+"$venv_python" -m uvicorn main:app --host "$bind_host" --port "$port"
+exit $?
