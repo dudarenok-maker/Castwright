@@ -23,35 +23,6 @@ import {
 } from './user-settings-path.js';
 import type { CloneEngine } from '../tts/clone-engines.js';
 
-/* config/resolver.ts already imports readConfigOverrides FROM this module.
-   getResolvedOllamaUrl/getResolvedOllamaModel below need the full
-   env→override→default precedence, which only the resolver computes — but a
-   second, reverse static import (this module -> resolver.ts) would close an
-   import cycle. A closed cycle here is not merely stylistic: it broke
-   vi.mock('../workspace/user-settings.js', ...importOriginal...) for every
-   OTHER module that mocks this one (embed-client.test.ts,
-   transcribe-client.test.ts) — importOriginal() re-evaluating this module
-   transitively re-entered resolver.ts, which re-entered this
-   (being-mocked) module, and the override-store mock never took effect.
-   Same leaf-gate shape as server/src/gpu/*-gate.ts: resolver.ts registers
-   its `configValue` here via `registerConfigValueReader` at its own
-   module-eval time (it already imports FROM this module, so the edge stays
-   one-directional), and this module calls the registered reader instead of
-   importing resolver.ts directly. */
-type ConfigValueReader = <T extends number | boolean | string>(key: string) => T;
-let configValueReader: ConfigValueReader | null = null;
-export function registerConfigValueReader(fn: ConfigValueReader): void {
-  configValueReader = fn;
-}
-function configValue<T extends number | boolean | string>(key: string): T {
-  if (!configValueReader) {
-    throw new Error(
-      'configValue reader not registered — import config/resolver.js somewhere in this module graph first',
-    );
-  }
-  return configValueReader<T>(key);
-}
-
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that
    module's header comment for why it needs to stay leaf-only) — re-exported
@@ -472,6 +443,16 @@ export function getCachedUserSettings(): UserSettings {
   return cached ?? { ...DEFAULT_USER_SETTINGS };
 }
 
+/** Raw `cached?.defaultAnalysisModel` — `undefined` when the cache hasn't
+    warmed, unlike getCachedUserSettings() which substitutes
+    DEFAULT_USER_SETTINGS (whose defaultAnalysisModel, 'qwen3.5:4b', has a
+    colon). Used by config/ollama-resolved.ts's getResolvedOllamaModel,
+    which must treat "no saved settings yet" as "nothing to prefer" so an
+    OLLAMA_MODEL env var / resolver override isn't shadowed by that default. */
+export function getCachedDefaultAnalysisModelIfSet(): string | undefined {
+  return cached?.defaultAnalysisModel;
+}
+
 /** Check whether a key was explicitly present in the persisted settings file.
     Used by getResolvedSidecarUrl() to distinguish "user set this to the default value"
     from "this field was never in the file" (#2632 N2). Returns false if readUserSettings()
@@ -678,14 +659,6 @@ let lastWarnedSidecarUrl: string | null = null;
    which names a different source in its log line. */
 let lastWarnedEnvSidecarUrl: string | null = null;
 
-/** Resolved through the config resolver (#3141 step 1): OLLAMA_URL env →
-    saved Advanced Settings override (`analyzer.ollama.url`) → registry
-    default. The Account `ollamaUrl` field is no longer read here. */
-export function getResolvedOllamaUrl(): string {
-  const raw = configValue<string>('analyzer.ollama.url');
-  return raw.replace(/\/+$/, '');
-}
-
 /** Plan 43 — controls whether server/src/index.ts spawns the TTS sidecar
     at app.listen time. Resolution chain:
       1. process.env.DISABLE_AUTOSTART_SIDECAR === '1' → false (CI / tests
@@ -829,31 +802,6 @@ export function getResolvedTtsModelKey(): UserSettings['defaultTtsModelKey'] {
     return 'qwen3-tts-0.6b';
   }
   return 'kokoro-v1';
-}
-
-/** Hardcoded Ollama tag used as the terminal fallback in
-    getResolvedOllamaModel. Cannot be derived from
-    DEFAULT_USER_SETTINGS.defaultAnalysisModel any more — that default
-    is now a Gemini id (no colon, see DEFAULT_USER_SETTINGS above), and
-    Ollama's /api/chat would 404 on it. Keep this in sync with
-    src/lib/models.ts MODEL_OPTIONS local entries (qwen3.5:4b is still
-    the smallest local option). */
-export const DEFAULT_OLLAMA_MODEL = 'qwen3.5:4b';
-
-/** Ollama model tag passed to /api/chat. Resolution chain:
-      1. cached `defaultAnalysisModel` if it has Ollama tag shape (':')
-      2. config resolver (#3141 step 1): OLLAMA_MODEL env → saved Advanced
-         Settings override (`analyzer.ollama.model`) → registry default
-         (DEFAULT_OLLAMA_MODEL, `qwen3.5:4b`)
-    The per-request `model` override (see selectAnalyzer) trumps both.
-    Only a `:`-tagged saved model is honoured for step 1 — a Gemini id
-    saved as defaultAnalysisModel (engine=gemini) must not be handed to
-    Ollama, so it falls through to step 2. */
-export function getResolvedOllamaModel(): string {
-  const c = cached;
-  const fromSettings = c?.defaultAnalysisModel;
-  if (fromSettings && fromSettings.includes(':')) return fromSettings;
-  return configValue<string>('analyzer.ollama.model');
 }
 
 /** Analyzer engine selector — reads the saved user-settings value only.

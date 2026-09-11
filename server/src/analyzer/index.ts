@@ -24,11 +24,10 @@ import { OllamaAnalyzer, LocalUnreachableError, AnalysisAbortedError } from './o
 import type { RawEvalTiming } from './analyzer-eval-stats.js';
 import {
   getResolvedAnalysisEngine,
-  getResolvedOllamaUrl,
-  getResolvedOllamaModel,
   getResolvedGeminiApiKey,
   getResolvedAllowCloudFallback,
 } from '../workspace/user-settings.js';
+import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { configValue } from '../config/resolver.js';
 
 export interface StageChunkInfo {

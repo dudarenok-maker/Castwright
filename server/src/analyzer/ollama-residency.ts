@@ -5,7 +5,7 @@
    VRAM, and if so, evict it. This module is that read + evict action only —
    it is not wired into the retry/placement decision yet (a follow-up task). */
 
-import { getResolvedOllamaUrl } from '../workspace/user-settings.js';
+import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 
 /** Same 2s probe ceiling as the other Ollama health probes
     (routes/ollama-health.ts) — a hung daemon must not pin a capacity check. */

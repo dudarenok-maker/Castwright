@@ -23,10 +23,10 @@ import {
   getResolvedGeminiApiKey,
   getResolvedGenerationWorkers,
   getResolvedTtsModelKey,
-  getResolvedOllamaUrl,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import { configValue } from '../config/resolver.js';
+import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
 
 export const userSettingsRouter = Router();

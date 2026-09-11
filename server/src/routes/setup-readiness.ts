@@ -9,9 +9,9 @@ import {
   getResolvedAnalysisEngine,
   getResolvedGeminiApiKey,
   getResolvedSetupCompletedAt,
-  getResolvedOllamaModel,
   writeSetupCompletedAt,
 } from '../workspace/user-settings.js';
+import { getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { selectTtsProvider } from '../tts/index.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
 import {
