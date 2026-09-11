@@ -15,31 +15,36 @@ const live = (n: number): AnalysisLiveInfo => ({
 describe('derivePhaseState', () => {
   it('is active when it is the frontier even with no progress/live yet (initial phase 0)', () => {
     expect(
-      derivePhaseState(0, { progressByPhase: {}, liveByPhase: {}, maxPhase: 0 }),
+      derivePhaseState(0, { progressByPhase: {}, liveByPhase: {}, maxPhase: 0, runState: 'running' }),
     ).toBe('active');
   });
 
   it('is pending for a phase beyond the frontier', () => {
     expect(
-      derivePhaseState(2, { progressByPhase: { 0: 0.3 }, liveByPhase: {}, maxPhase: 0 }),
+      derivePhaseState(2, { progressByPhase: { 0: 0.3 }, liveByPhase: {}, maxPhase: 0, runState: 'running' }),
     ).toBe('pending');
   });
 
   it('is active when the phase has live chapters', () => {
     expect(
-      derivePhaseState(0, { progressByPhase: { 0: 0.3 }, liveByPhase: { 0: live(1) }, maxPhase: 0 }),
+      derivePhaseState(0, {
+        progressByPhase: { 0: 0.3 },
+        liveByPhase: { 0: live(1) },
+        maxPhase: 0,
+        runState: 'running',
+      }),
     ).toBe('active');
   });
 
   it('is active when the phase has started (progress) but no live yet (e.g. library match)', () => {
     expect(
-      derivePhaseState(2, { progressByPhase: { 2: 0.1 }, liveByPhase: {}, maxPhase: 2 }),
+      derivePhaseState(2, { progressByPhase: { 2: 0.1 }, liveByPhase: {}, maxPhase: 2, runState: 'running' }),
     ).toBe('active');
   });
 
   it('is done when its progress has reached completion', () => {
     expect(
-      derivePhaseState(0, { progressByPhase: { 0: 1 }, liveByPhase: {}, maxPhase: 1 }),
+      derivePhaseState(0, { progressByPhase: { 0: 1 }, liveByPhase: {}, maxPhase: 1, runState: 'running' }),
     ).toBe('done');
   });
 
@@ -48,13 +53,23 @@ describe('derivePhaseState', () => {
      1) must win over that stale live → done, so its ticker stops rendering. */
   it('is done at completion even if a stale live payload lingers', () => {
     expect(
-      derivePhaseState(0, { progressByPhase: { 0: 1 }, liveByPhase: { 0: live(1) }, maxPhase: 1 }),
+      derivePhaseState(0, {
+        progressByPhase: { 0: 1 },
+        liveByPhase: { 0: live(1) },
+        maxPhase: 1,
+        runState: 'running',
+      }),
     ).toBe('done');
   });
 
   it('is done when a later phase has advanced past it and it has no live left', () => {
     expect(
-      derivePhaseState(0, { progressByPhase: { 0: 0.4, 1: 0.2 }, liveByPhase: {}, maxPhase: 1 }),
+      derivePhaseState(0, {
+        progressByPhase: { 0: 0.4, 1: 0.2 },
+        liveByPhase: {},
+        maxPhase: 1,
+        runState: 'running',
+      }),
     ).toBe('done');
   });
 
@@ -66,6 +81,7 @@ describe('derivePhaseState', () => {
       progressByPhase: { 0: 0.6, 1: 0.1 },
       liveByPhase: { 0: live(1), 1: live(1) },
       maxPhase: 1,
+      runState: 'running' as const,
     };
     expect(derivePhaseState(0, opts)).toBe('active');
     expect(derivePhaseState(1, opts)).toBe('active');
@@ -79,13 +95,62 @@ describe('derivePhaseState', () => {
         progressByPhase: { 0: 0.5, 1: 0.05 },
         liveByPhase: { 0: live(1) },
         maxPhase: 1,
+        runState: 'running',
       }),
     ).toBe('active');
   });
 
   it('treats an empty live payload as no live (not active on that basis alone)', () => {
     expect(
-      derivePhaseState(2, { progressByPhase: {}, liveByPhase: { 2: live(0) }, maxPhase: 1 }),
+      derivePhaseState(2, { progressByPhase: {}, liveByPhase: { 2: live(0) }, maxPhase: 1, runState: 'running' }),
     ).toBe('pending');
+  });
+
+  describe('runState paused/halted', () => {
+    it('renders the frontier phase as paused when runState is paused', () => {
+      expect(
+        derivePhaseState(0, { progressByPhase: {}, liveByPhase: {}, maxPhase: 0, runState: 'paused' }),
+      ).toBe('paused');
+    });
+
+    it('renders the frontier phase as halted when runState is halted', () => {
+      expect(
+        derivePhaseState(0, { progressByPhase: {}, liveByPhase: {}, maxPhase: 0, runState: 'halted' }),
+      ).toBe('halted');
+    });
+
+    it('a non-frontier, non-done phase still reads pending regardless of runState', () => {
+      expect(
+        derivePhaseState(2, { progressByPhase: { 0: 0.3 }, liveByPhase: {}, maxPhase: 0, runState: 'halted' }),
+      ).toBe('pending');
+    });
+
+    it('a phase at completion still reads done even when runState is not running', () => {
+      expect(
+        derivePhaseState(0, { progressByPhase: { 0: 1 }, liveByPhase: {}, maxPhase: 1, runState: 'halted' }),
+      ).toBe('done');
+    });
+
+    it('a stale sticky live payload does not make a paused frontier phase read active', () => {
+      expect(
+        derivePhaseState(0, {
+          progressByPhase: { 0: 0.6 },
+          liveByPhase: { 0: live(1) },
+          maxPhase: 0,
+          runState: 'paused',
+        }),
+      ).toBe('paused');
+    });
+
+    it('a stale sticky live payload does not make a halted frontier phase read active', () => {
+      expect(
+        derivePhaseState(0, {
+          progressByPhase: { 0: 0.6 },
+          liveByPhase: { 0: live(1) },
+          maxPhase: 0,
+          runState: 'halted',
+        }),
+      ).toBe('halted');
+    });
   });
 });
