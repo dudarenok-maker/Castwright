@@ -506,6 +506,7 @@ const FORBIDDEN_KEYS = new Set([
   'apiKeyStatus',
   'workspaceRoot',
   'workspaceSource',
+  'corruptSettingsFile',
   'geminiApiKey',
   'apiKey',
   'gemini_api_key',

@@ -3427,6 +3427,14 @@ export interface components {
              * @enum {string}
              */
             readonly workspaceSource: "env" | "default" | "override";
+            /**
+             * @description True when the last readUserSettings() had to fall all the way
+             *     back to in-memory defaults because neither user-settings.json
+             *     nor any `.bak.N` snapshot parsed. Computed fresh per request
+             *     (not persisted); clears the next time a read/recovery or a
+             *     write succeeds. Server-computed — ignored if sent on a PUT.
+             */
+            readonly corruptSettingsFile?: boolean;
         };
         /**
          * @description Partial update payload. Read-only fields (apiKeyStatus,

@@ -4805,6 +4805,15 @@ components:
             user-settings.json's workspaceDirOverride was used at boot,
             `env` when WORKSPACE_DIR was, `default` when the built-in
             `../audiobook-workspace` fallback applied.
+        corruptSettingsFile:
+          type: boolean
+          readOnly: true
+          description: |
+            True when the last readUserSettings() had to fall all the way
+            back to in-memory defaults because neither user-settings.json
+            nor any `.bak.N` snapshot parsed. Computed fresh per request
+            (not persisted); clears the next time a read/recovery or a
+            write succeeds. Server-computed — ignored if sent on a PUT.
 
     UserSettingsPatch:
       type: object
