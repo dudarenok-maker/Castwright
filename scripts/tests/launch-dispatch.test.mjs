@@ -130,15 +130,17 @@ test('sidecar restart: code-43 does NOT trip on second exit', async () => {
   }
 });
 
-test.skip('sidecar restart: code-43 DOES trip on third exit (C1a regression)', async () => {
+test('sidecar restart: code-43 DOES trip on third exit (C2 regression)', async () => {
   // Provide extra exit codes in case restart attempts continue
   const env = setupTestEnvironment([1000, 1000, 1000, 1000]);
   try {
     // Provide 4 exit codes: three code-43s that trigger restarts, and a 4th that shouldn't be reached
     const spawn = createMockSpawn([43, 43, 43, 0]);
-    launchSidecarWithRestart('linux', '/tmp', spawn);
-    // Give it significant time for all three exits and the trip to be processed
-    await new Promise((r) => setTimeout(r, 500));
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
     assert.equal(
       env.getExitCode(),
       43,

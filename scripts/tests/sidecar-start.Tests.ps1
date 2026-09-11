@@ -69,21 +69,22 @@ Describe 'start.ps1 exit-code propagation' {
         $content | Should -Not -Match 'Test-SidecarShouldRestart'
         $content | Should -Not -Match 'sidecar-restart-policy\.ps1'
 
-        # Verify the uvicorn invocation is not wrapped in a restart loop.
-        # Strip comments to avoid false matches, then check structural properties:
-        # 1. No loop keywords in the executable code (comments stripped)
-        # 2. Uvicorn command invocation appears exactly once
+        # Narrowly-scoped check per owner decision (PR #3148 pass 5): catch the
+        # original bug shapes (while/do-while loops wrapping the uvicorn call)
+        # rather than attempt exhaustive coverage of all loop constructs.
+        # This guard does NOT catch foreach, ForEach-Object pipelines, recursive
+        # functions, or re-invoked scriptblocks — see PR #3148 review history for
+        # why exhaustive static checks were abandoned. The scope is: does the
+        # start.ps1 source code contain the specific while/do-while loop patterns
+        # that were the original #3121 regression?
 
-        $codeOnly = $content -replace '#.*$', '' -join "`n"  # Remove inline comments
-        $codeOnly = $codeOnly -replace '(?s)<#.*?#>', ''      # Remove block comments
+        $hasWhileLoop = $content -match '(?i)while\s*\(\s*\$true\s*\)|while\s*\(\s*1\s*\)'
+        $hasDoWhile = $content -match '(?i)}\s*while\s*\('
+        $hasDoUntil = $content -match '(?i)}\s*until\s*\('
 
-        # Check for loop keywords in code only (while, do, for, until, goto as keywords)
-        $hasLoops = $codeOnly -match '(?i)\b(while|do|for|until|goto)\s*[\(\[]'
-        $hasLoops | Should -Be $false -Because "start.ps1 code should not contain loop keywords"
-
-        # Check that uvicorn command is invoked exactly once
-        $uvicornMatches = ([regex]::Matches($codeOnly, '&.*?-m\s+uvicorn')).Count
-        $uvicornMatches | Should -Be 1 -Because "uvicorn should be invoked exactly once, found $uvicornMatches"
+        $hasWhileLoop | Should -Be $false -Because "start.ps1 should not have 'while (`$true)' or 'while (1)' restart loops"
+        $hasDoWhile | Should -Be $false -Because "start.ps1 should not have 'do { ... } while' restart loops"
+        $hasDoUntil | Should -Be $false -Because "start.ps1 should not have 'do { ... } until' restart loops"
 
         # Verify exit code propagation is present.
         $content | Should -Match 'exit \$code'

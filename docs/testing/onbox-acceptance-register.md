@@ -1957,11 +1957,9 @@ guard) each redden the fixtures they own, reverts clean
 original build's own mutation record).
 
 **What remains owed:** **re-run the real-hardware trigger** after PR #3148 fixes the exit-code visibility gap.
-The prior blockers were:
-1. `start.ps1` absorbed code-43 exits internally in its restart loop, preventing Node's supervisor from observing individual exits — **FIXED** by PR #3148, which removes the restart loop from both `start.ps1` and `start.sh` and leaves Node's `sidecar-supervisor.ts` to own all restart decisions.
-2. The standalone `npm run tts:sidecar` path (used when `autoStartSidecar` is off) had no supervisor behind it — **FIXED** by PR #3148, which adds a minimal code-43 restart safeguard in `scripts/launch-sidecar.mjs` that mirrors the supervisor's 3-in-10-minute streak cap.
+The original blocker: `start.ps1` absorbed code-43 exits internally in its restart loop, preventing Node's supervisor from observing individual exits so the streak guard and `runAutoRevert` never fired. **FIXED** by PR #3148, which removes the restart loop from both `start.ps1` and `start.sh` and leaves Node's `sidecar-supervisor.ts` to own all restart decisions and observe individual code-43 exits.
 
-A forced card-specific three-exits-in-ten-minutes streak was run for real before this fix and did not reach `runAutoRevert` — but now both paths (supervised and standalone) should propagate individual code-43 exits to Node's supervisor, allowing the streak guard and auto-revert to fire. **Owed:** re-run the hardware trigger on real 2-card hardware to confirm the auto-revert trip now fires and resolves the cascade, then record the outcome. Tracked as [#3121](https://github.com/dudarenok-maker/Castwright/issues/3121).
+A forced card-specific three-exits-in-ten-minutes streak was run for real before this fix and did not reach `runAutoRevert` — but now the supervised path should observe and respond to individual code-43 exits. **Owed:** re-run the hardware trigger on real 2-card hardware to confirm the auto-revert trip now fires and resolves the cascade, then record the outcome. Tracked as [#3121](https://github.com/dudarenok-maker/Castwright/issues/3121).
 
 ### A4 · Audition engine + tier fidelity ([#1849](https://github.com/dudarenok-maker/Castwright/pull/1849))
 

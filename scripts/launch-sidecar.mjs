@@ -55,6 +55,7 @@ export async function launchSidecarWithRestart(platform, repoRoot, spawn = realS
             } catch (err) {
               // In tests, process.exit may throw; reject the promise so await completes
               reject(err);
+              return;
             }
           }
 
