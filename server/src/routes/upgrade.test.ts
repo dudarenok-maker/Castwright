@@ -245,4 +245,60 @@ describe('POST /api/upgrade/apply — background failure containment (#3174 G3)'
       errorSpy.mockRestore();
     }
   });
+
+  /* Only the catch-block branch above had a test. This covers the OTHER
+     tryWriteState call inside the IIFE: the success branch's 'restarting'
+     write. Same shape — if that write fails, the failure must be logged
+     loudly, must not reject the IIFE, and must not stop the restart from
+     being scheduled (the SIGTERM that lets the detached restarter take
+     over is unrelated to whether the state file could record it). */
+  it('when applyUpgrade succeeds but the restarting-state write fails, no unhandled rejection reaches the process, the failure is logged loudly, and the restart SIGTERM still fires', async () => {
+    writeFileSync(
+      join(stagingDir, 'state.json'),
+      JSON.stringify({ phase: 'staged', candidateVersion: '1.6.0', topDir: 'castwright-v1.6.0', reqHash: 'h' }),
+    );
+    h.applyResult = { ok: true, version: '1.7.0', releaseDir: '/r' };
+    // Armed AFTER the fixture write above: call #1 is the route's own
+    // synchronous 'applying' write (must succeed so the 202 response is
+    // sent); only call #2+ — the detached IIFE's own success-branch write —
+    // is made to fail.
+    h.writeFileSyncFailPath = (h.paths as Record<string, unknown>).stateFile as string;
+    h.writeFileSyncFailAfterCalls = 1;
+
+    let unhandledRejection: unknown = null;
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejection = reason;
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Never let the test really signal the test process.
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true as never);
+
+    try {
+      const res = await request(app).post('/api/upgrade/apply');
+      expect(res.status).toBe(202); // the pre-response write succeeded
+
+      await vi.waitFor(() =>
+        expect(errorSpy).toHaveBeenCalledWith(
+          '[upgrade] could not record upgrade state',
+          expect.any(Error),
+        ),
+      );
+
+      // The state file is stuck at 'applying' — the 'restarting' write
+      // failed, so the successful apply was never recorded either.
+      expect(readState().phase).toBe('applying');
+
+      // The restart is still scheduled despite the failed write — a lost
+      // state-file record must not also lose the restart itself.
+      await vi.waitFor(() => expect(killSpy).toHaveBeenCalledWith(process.pid, 'SIGTERM'));
+
+      await new Promise((r) => setTimeout(r, 0));
+      expect(unhandledRejection).toBeNull();
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+      errorSpy.mockRestore();
+      killSpy.mockRestore();
+    }
+  });
 });
