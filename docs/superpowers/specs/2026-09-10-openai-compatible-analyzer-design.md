@@ -42,7 +42,7 @@ What the code does today:
 - **Two separate stage runners.** `OllamaAnalyzer` and `GeminiAnalyzer` each implement prompt building, `parseAndValidate` and a validation retry (`ollama.ts` ~470-614; `gemini.ts:441-521`). They differ in their retry policy:
   - **On invalid JSON:** Ollama drops the assistant turn and raises the temperature (`ollama.ts:559-571`). Gemini replays the model turn at the same temperature (`gemini.ts:484-493`).
   - **Forensics:** Ollama writes `rawAttemptPath` files (`ollama.ts:539`, `:593`); Gemini does not.
-  - **Escalation:** Gemini swallows `DailyQuotaExhaustedError` (`gemini.ts:420-430`); Ollama rethrows unreachable errors (`ollama.ts:455-456`).
+  - **Escalation:** Gemini returns `null` for every error except an abort, `DailyQuotaExhaustedError` included (`gemini.ts:403-439`); Ollama rethrows abort and unreachable errors (`ollama.ts:455-456`).
 
   Persona generation adds two more direct LLM calls: `generatePersonaViaOllama` (`ollama.ts:938`) and a Gemini `generateContent` call (`server/src/analyzer/voice-style.ts:197-219`).
 - **The engine is inferred from the model id's shape.** `:` means Ollama; anything else means Gemini.
@@ -121,7 +121,7 @@ Two defects in this area were split out as prerequisites and are queued as Open 
 | 6 | Chunk sizing | **Capacity model for all engines, byte-identical today.** A capacity descriptor carries today's formula family: **context-governed** (Ollama's fraction × context at 2 chars/token) or **request-cap-governed** (Gemini's `cloudBodyCharBudget` with its reservations). Endpoints are context-governed, additionally capped by their optional max-input-per-request and TPM limit. Each pass keeps the resolver and ceiling it uses today. A pinning test locks today's budgets; defaults change only after on-box measurement. | Large-context local models make local defaults stale, but nothing changes before it is measured. |
 | 7 | Max output tokens | **Setting:** per engine/endpoint, **Auto** or an integer; Auto is `0` in the existing integer knobs. **Gemini's default becomes Auto (model limit)**, and Gemini requests thought summaries so thinking streams as activity (§7); Ollama's −1 is already its Auto. **Clamp:** a manual value is clamped to the model's limit. **At the limit:** a `length` finish with answer text splits the chunk, as today. A `length` finish with no answer text **and evidence of reasoning** fails as `analyzer-reasoning-overflow` instead of splitting; without that evidence it splits, as today. | Thinking tokens count against Gemini's 8192 cap on the reporter's model, and splitting never shrinks reasoning. An empty non-thinking response (Gemma) is a size problem that splitting does fix. |
 | 8 | Reasoning | **Levels per engine family and per endpoint control style,** so only choices that can take effect are offered. **Endpoint styles:** `reasoning_effort`, `enable_thinking` (llama.cpp `chat_template_kwargs`) or `not controllable`. **Gemini and Ollama:** levels follow the model family. **Defaults preserve today:** Ollama `off`, Gemini and endpoints `model default`. The Test action records what each model accepts. Every parse strips an inline `<think>` block. | Servers disagree: llama.cpp passes any `reasoning_effort` string to the chat template unvalidated (`none` turns thinking off), vLLM validates `none` to `max`, and some templates key only on `enable_thinking`. Gemini levels differ per model: 3.x cannot turn thinking off, 3.7/3.8 Flash reject `minimal`, Gemma 4 is on/off. Ollama returns 400 for `think` on a model that does not think. |
-| 9 | Custom payload | Per engine/endpoint JSON object, **merged last** into the native request: top-level keys, plus the transport's one owned container (Ollama `options`, Gemini `config`) key by key; `null` removes a key but never an owned container. Keys the pipeline owns, or that change capacity, VRAM, parsing or reasoning control, are refused at save with a message naming them. A payload temperature sets the first attempt only; the transport's retry policy still applies on retry. The label shows "+ custom params". The payload is never logged, and its longer string values are redacted from upstream error text. | Provider-specific options (the reporter's `top_k`, `min_p`, `presence_penalty`) without letting a payload break parsing, capacity, the retry contract or the model. |
+| 9 | Custom payload | Per engine/endpoint JSON object, **merged last** into the native request: top-level keys, plus the transport's owned containers (Ollama `options`, Gemini `config`, endpoint `chat_template_kwargs`) key by key; `null` removes a key but never an owned container. Keys the pipeline owns, or that change capacity, VRAM, parsing or reasoning control, are refused at save with a message naming them. A payload temperature sets the first attempt only; the transport's retry policy still applies on retry. The label shows "+ custom params". The payload is never logged, and its longer string values are redacted from upstream error text. | Provider-specific options (the reporter's `top_k`, `min_p`, `presence_penalty`) without letting a payload break parsing, capacity, the retry contract or the model. |
 | 10 | Persona generation | Its engine choice becomes **any engine or endpoint**, running through the same transports, limiter, reasoning setting and custom payload. Structured output does not apply, because personas are free text. | A user with only an OpenAI-compatible endpoint can still design voices. |
 
 ## Design
@@ -140,7 +140,7 @@ Two defects in this area were split out as prerequisites and are queued as Open 
 
     The retry's temperature is applied after the custom payload merge.
   - persistence (`persistResponse`, `rawAttemptPath`, `errorPath`) and failure mapping;
-  - escalation (`runAttributionEscalation`: no retry, `null` on unusable output) and non-story classification, through the runner's single-attempt path. Each transport keeps its escalation error policy: Gemini swallows `DailyQuotaExhaustedError` (`gemini.ts:420-430`); Ollama rethrows unreachable (`ollama.ts:455-456`).
+  - escalation (`runAttributionEscalation`: no validation retry, `null` on unusable output) and non-story classification, through the runner's single-attempt path. Each transport keeps its escalation error policy: Gemini returns `null` for every error except an abort (`gemini.ts:403-439`); Ollama rethrows abort and unreachable (`ollama.ts:455-456`). Transport-level retries (Gemini's 429 / 5xx / idle-stream retries) still apply inside an escalation call, as today.
 - **Characterisation first.** Before extraction, tests pin each difference above and the taxonomy outcomes. `gemini.test.ts` has no assertion on the retry request shape today, so it gets one for the replayed turn and temperature. Extraction is accepted only with these green.
 - **The Ollama transport.** `OllamaTransport` is today's `OllamaAnalyzer.chat()` body (`ollama.ts:623-927`), including:
   - `keep_alive`, `num_ctx`, `num_gpu`;
@@ -196,7 +196,7 @@ Two defects in this area were split out as prerequisites and are queued as Open 
   - Gemini's default flips to `schema` only after the on-box row records attribution quality, not just conformance.
 - **The Test action** (`POST /api/analyzer/models/test`, body `{ modelId, scope: 'configured' | 'all' }`).
   - **Requests.**
-    - **Control:** `json` mode with the engine's current reasoning default, a trivial prompt, and the smallest output cap that fits.
+    - **Control:** no structured output (`off` mode), with the engine's current reasoning default, a trivial prompt, and the smallest output cap that fits. `json` mode is not used for the control, because some servers reject it (LM Studio returns 400), which would make every test there fail; `json` is probed like any other mode.
     - **Configured check:** the configured structured-output mode at the configured reasoning level (reasoning levels from wave 5). In `schema` mode it uses the largest real stage schema plus one required marker key with a single-value enum the prompt never mentions.
     - **`scope: 'all'`:** adds every mode and every offered level.
     - **Order and limiter:** requests run sequentially through the model's limiter. The UI shows the request count first, and for Gemini notes that the requests count against today's quota.
@@ -238,16 +238,13 @@ Two defects in this area were split out as prerequisites and are queued as Open 
   - **Shape:** `openai:<endpointId>::<model>`.
   - **Inference, in order:** matches `^openai:[a-z0-9-]+::` → `openai`; contains `:` → `local`; else → `gemini`. An Ollama tag such as `openai:latest` cannot match, because it has no `::`. Ollama allows `::` only inside a host segment, which is followed by `/` (`types/model/name.go`); the analyzer never selects host-qualified Ollama names, and the case table records that shape.
   - **One table:** one shared test table drives both `engineForModelId` (frontend) and `inferEngineFromModelId` (server).
-  - **Every `:` site applies the same inference,** so an `openai:` id never reaches Ollama:
+  - **Every site that handles a selected model id applies the same inference,** so an `openai:` id never reaches Ollama. Examples:
     - `getResolvedOllamaModel` (`user-settings.ts:766-771`), and through it persona generation's local model (`voice-style.ts:67-70`);
     - `ollama-health.ts:199,205,218`;
-    - `setup-diagnosis.ts:300,302`;
-    - `src/lib/models.ts:120,127`;
-    - `model-vram-stats.ts:34,179`;
-    - `analyzer-eval-stats.ts:55`;
-    - `models-inventory.ts:132`.
-
-    The planning task re-greps for any site this list misses.
+    - `POST /api/ollama/load` (`ollama-health.ts:491-492`), which passes a requested model straight to Ollama;
+    - `src/lib/models.ts:120,127`.
+  - **Sites that handle Ollama's own tag lists stay unchanged.** These include pull status, setup pull checks, VRAM statistics and evaluation statistics (`model-pull-status.tsx:294`, `setup/step-analysis.tsx:21,75-76`, `setup-diagnosis.ts:300,302`, `model-vram-stats.ts`, `analyzer-eval-stats.ts`). An id inference there would misread a colonless Ollama tag such as `llama2` as Gemini.
+  - **Classification:** the plan's `'local'` classification table records every site's category and its reason, re-grepped during planning.
 - **Catalogs.** `GET /api/analyzer/models` returns grouped catalogs with a short server-side cache and an explicit refresh.
   - **Sources:**
     - **Ollama:** `/api/tags`.
@@ -255,7 +252,11 @@ Two defects in this area were split out as prerequisites and are queued as Open 
     - **Each endpoint:** `/v1/models` via the SDK, plus free-text entry.
   - **Entries:** each carries the model's served context and output limits when known, plus its Test record.
   - **Curated overlay:** curated entries (`MODEL_OPTIONS`, `src/lib/models.ts:19-95`) overlay labels and hints, extending `buildLocalModelOptions(liveTags, curated)` (`models.ts:156`).
-  - **Failure:** a failed listing falls back to the curated list for that group. Endpoints stay listed from saved settings, with free-text entry.
+  - **Failure:** each group fails independently and shows its error.
+    - **Gemini:** a failed listing falls back to the curated list.
+    - **Ollama:** keeps plan 221's installed-only rule (`src/lib/models.ts:144-155`), so a failed `/api/tags` lists no local models rather than offering ones that are not installed.
+    - **Endpoints:** stay listed from saved settings, with free-text entry.
+  - **Preview:** the add-endpoint form lists an unsaved server's models through a separate preview call, `POST /api/analyzer/models/preview`, with the base URL and key from the form, to prefill the context size. The catalog lists saved endpoints only.
 - **Labels.** `modelLabel(id)` replaces the ~9 `MODEL_OPTIONS.find((m) => m.id === id)?.label ?? id` sites. It resolves the curated label, then the live `displayName`, then the model part of the id prefixed with the endpoint name.
 - **Contract and mocks.** Every new settings field, the catalog response, endpoint CRUD, the per-endpoint key write, the Test action, `analyzerCapabilitiesByModel`, `analyzerRateLimitsByModel` and `analyzerExtraParamsByEngine` get:
   - an `openapi.yaml` schema, with `src/lib/api-types.ts` regenerated;
@@ -370,8 +371,11 @@ Two defects in this area were split out as prerequisites and are queued as Open 
 - **Storage.** Stored per engine (`analyzerExtraParamsByEngine.ollama` / `.gemini`) and per endpoint (`extraParams`), edited in Advanced Settings' analyzer section, validated on save as a JSON object.
 - **Merge.**
   - **Order:** merged last into the native request.
-  - **Scope:** top-level keys replace. The transport's owned container is merged key by key: Ollama `options`, Gemini `config`.
-  - **Removal:** `null` removes a key. It is refused on an owned container itself (`options: null`, `config: null`).
+  - **Scope:** top-level keys replace. The transport's owned containers are merged key by key: Ollama `options`, Gemini `config`, and endpoint `chat_template_kwargs`. The last is merged so a payload key cannot delete the `enable_thinking` value the reasoning setting sends.
+  - **Gemini:** a payload is scoped to `config`. Top-level `model` and `contents` are protected, and any other top-level key is refused.
+  - **Removal:** `null` removes a key. It is refused on an owned container itself (`options: null`, `config: null`, `chat_template_kwargs: null`).
+  - **Output cap keys:** a payload `max_completion_tokens` makes the endpoint transport drop its own `max_tokens`, so the request never carries both.
+  - **Validation:** reasoning levels and protected keys are validated when settings are written, never when they are read. `readUserSettings` falls back to defaults for the whole file when it fails to parse (`user-settings.ts:375-376`), so validating on read could wipe every setting.
   - **Temperature:** a payload `temperature` / `options.temperature` sets the first attempt's temperature only; the retry policy's temperature applies after the merge (§1).
 - **Protected keys,** refused at save:
   - **Endpoints:** `model`, `messages`, `stream`, `stream_options`, `n`, `stop`, `tools`, `tool_choice`, `response_format`, `reasoning_effort`, `grammar`, `json_schema`, and `chat_template_kwargs.enable_thinking` when `reasoningStyle` is `enable_thinking`.
@@ -387,6 +391,8 @@ Two defects in this area were split out as prerequisites and are queued as Open 
 
 - **Engine setting.** `analyzer.personaGeneration.engine` becomes a model-id-style selection: `local` / `gemini` / any `openai:<endpointId>::<model>`.
 - **Transport.** `generatePersonaViaOllama` and the Gemini persona call become transport calls through the runner's free-text path (no structured output), with the limiter, reasoning setting and custom payload applied.
+  - **Request shape:** a free-text request sends only what today's persona calls send. The Gemini call has no temperature, system instruction, output cap or JSON mode (`voice-style.ts:215-219`). The Ollama call stays non-streaming, keeps its keep-alive, CPU placement and 600 s bound, and keeps its slot-leak guarantee (`ollama-timeout.test.ts:149-215`).
+  - **One behaviour change:** Gemini persona calls gain the shared transport retry (429, 5xx, idle stream), which today's single `generateContent` call lacks. The release notes announce it.
 - **Unchanged.** The "no silent cross-provider fallback" rule in its help text (`registry.ts:1185`) is unchanged.
 
 ## Data flow (one analyzer call)
