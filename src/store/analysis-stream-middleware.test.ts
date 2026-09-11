@@ -451,6 +451,34 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     expect(store.getState().analysis.activeStream?.state).toBe('paused');
   });
 
+  it('does NOT halt the analysis when the middleware SSE fails with a transient error (stream ended without result)', async () => {
+    /* Regression test for Fix B: when the middleware's secondary SSE
+       connection ends without a result (transient network failure, 409
+       conflict, dropped socket), it should NOT dispatch setHalted. The
+       view's primary SSE may still be healthy, and dispatching setHalted
+       would incorrectly freeze the phase cards mid-run. Transient
+       connection failures are closed silently without poisoning state. */
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseProgress: 0.1,
+      }),
+    );
+    /* Middleware's SSE rejects with a plain Error (not AnalysisError),
+       simulating a transient failure: stream ended without result, network
+       error, or dropped socket. The middleware must swallow this without
+       dispatching any state change. */
+    lastCall().reject(new Error('Analysis stream ended without a result event.'));
+    await Promise.resolve();
+    await Promise.resolve();
+    const snap = store.getState().analysis.activeStream;
+    /* State should remain 'running' (not changed to 'halted'). */
+    expect(snap?.state).toBe('running');
+  });
+
   it('handles cross-manuscript displacement (close old handle, open new on first tick)', () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));

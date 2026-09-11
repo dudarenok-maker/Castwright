@@ -225,25 +225,12 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           );
           return;
         }
-        const fallbackMessage = (e as Error)?.message ?? 'Analysis failed.';
-        dispatch(
-          analysisActions.setHalted({
-            manuscriptId,
-            code: 'unknown',
-            message: fallbackMessage,
-          }),
-        );
-        /* Surface the same fallback to the user via toast — closes
-           the "did anything happen?" gap when the analysing view
-           isn't on-screen at the moment the stream dies. Dedupe so a
-           reconnect-and-fail loop doesn't stack. */
-        dispatch(
-          notificationsActions.pushToast({
-            kind: 'error',
-            message: fallbackMessage,
-            dedupeKey: 'analysis-stream',
-          }),
-        );
+        /* Transient connection failures (stream ends without result, 409,
+           dropped socket, network errors) are not analyzed failures — the
+           view's primary SSE handle may still be healthy. Close silently
+           without declaring halted, so transient network blips don't
+           incorrectly pause the UI's rendering of an active run. The view
+           will handle any genuine analysis failure on its own connection. */
       }
     })();
   };
