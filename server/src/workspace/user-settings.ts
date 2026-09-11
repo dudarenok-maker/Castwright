@@ -441,6 +441,24 @@ export function wasKeyExplicitlySet(key: string): boolean {
 
 const patchSchema = userSettingsSchema.partial();
 
+/** Helper to snapshot corrupt settings bytes before they're overwritten.
+    Called before each write to ensure a corruption episode doesn't get
+    clobbered by a routine save. Creates a `.corrupt-<timestamp>` diagnostic
+    snapshot containing the last-known corrupt bytes (if any) so a user can
+    hand-inspect/recover them later. Must be called BEFORE writeJsonAtomic
+    so the snapshot captures the corrupt bytes, not the freshly-written data. */
+async function snapshotCorruptBytesBeforeWrite(): Promise<void> {
+  if (settingsFileCorrupt && existsSync(USER_SETTINGS_PATH)) {
+    await copyFile(USER_SETTINGS_PATH, `${USER_SETTINGS_PATH}.corrupt-${Date.now()}`);
+  }
+}
+
+/** Helper to clear the corruption flag after a successful write.
+    Called after writeJsonAtomic succeeds so the banner goes away. */
+function clearCorruptFlagAfterWrite(): void {
+  settingsFileCorrupt = false;
+}
+
 /** Merges `patch` into the on-disk file, validating each field. Returns the
     new merged settings. Concurrent PUTs are serialised through `writeChain`
     so two near-simultaneous saves can't race the temp-file-then-rename. */
@@ -477,18 +495,10 @@ export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
     ) {
       merged.defaultTtsModelKeyExplicit = true;
     }
-    /* Don't let a routine save clobber the only evidence of a corruption
-       episode: while the file is flagged corrupt, the bytes currently on
-       disk (or a fresh recovery write that already replaced them) are the
-       last artifact of what went wrong. Copy them aside once, before this
-       write lands, so a user can hand-inspect/recover them later — a
-       diagnostic snapshot, not part of the `.bak.N` rotation chain. */
-    if (settingsFileCorrupt && existsSync(USER_SETTINGS_PATH)) {
-      await copyFile(USER_SETTINGS_PATH, `${USER_SETTINGS_PATH}.corrupt-${Date.now()}`);
-    }
+    await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
     cached = merged;
-    settingsFileCorrupt = false;
     // Track that sentKeys are now explicitly set in the file (#2632 N2)
     for (const key of sentKeys) {
       explicitlySetKeys.add(key);
@@ -867,7 +877,9 @@ export async function writeGeminiApiKey(key: string | null): Promise<UserSetting
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, geminiApiKey: normalised };
+    await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
     cached = merged;
     return merged;
   });
@@ -903,7 +915,9 @@ export async function writeUpgradeMeta(patch: {
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, ...patch };
+    await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
     cached = merged;
     return merged;
   });
@@ -926,7 +940,9 @@ export async function writeSetupCompletedAt(ts: string | null): Promise<UserSett
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, setupCompletedAt: ts };
+    await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
     cached = merged;
     return merged;
   });
@@ -946,7 +962,9 @@ export async function writeTourCompletedAt(ts: string | null): Promise<UserSetti
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, tourCompletedAt: ts };
+    await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
     cached = merged;
     return merged;
   });
@@ -987,6 +1005,7 @@ export function _resetUserSettingsCache(): void {
   writeChain = Promise.resolve();
   lastKnownEngineInstallState.qwen = 'not-installed';
   lastKnownEngineInstallState.coqui = 'not-installed';
+  settingsFileCorrupt = false;
   // #2632 N26: clear both srv-21 warn-dedup latches too, or a later test that
   // reuses a rejected value a prior test already latched gets ZERO warnings —
   // and would misread as a passing dedupe test rather than a suppressed one.

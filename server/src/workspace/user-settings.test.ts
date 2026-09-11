@@ -1258,4 +1258,36 @@ describe('readUserSettings — corruption recovery (#3175 layer 1)', () => {
       warnSpy.mockRestore();
     }
   });
+
+  it('MUTATION CHECK: corruption flag clears when writeUpgradeMeta succeeds after file corruption (#3175)', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+
+    // Step 1: Corrupt the file (write gibberish so even backups won't parse).
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ this is invalid json and wont parse }');
+
+    // Step 2: Read it — should flag as corrupt and return defaults.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const reread = await mod.readUserSettings();
+    expect(reread).toEqual(DEFAULT_USER_SETTINGS);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+    warnSpy.mockRestore();
+
+    // Step 3: Call writeUpgradeMeta (simulating What's New banner dismiss).
+    // This should clear the corruption flag.
+    await mod.writeUpgradeMeta({ showWhatsNew: false });
+
+    // Step 4: Verify corruption flag is now false.
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+
+    // Step 5: Verify a .corrupt-<timestamp> file was created.
+    const files = readdirSync(dirname(mod.USER_SETTINGS_PATH));
+    const corruptFiles = files.filter((f) => f.includes('.corrupt-'));
+    expect(corruptFiles.length).toBe(1);
+
+    // Step 6: Verify the .corrupt-* file contains the gibberish (the corrupt bytes).
+    const corruptPath = join(dirname(mod.USER_SETTINGS_PATH), corruptFiles[0]);
+    const corruptContent = readFileSync(corruptPath, 'utf-8');
+    expect(corruptContent).toBe('{ this is invalid json and wont parse }');
+  });
 });

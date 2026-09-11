@@ -485,3 +485,4 @@ incident** is the reason this rule exists and is named here.
 
 **Grand reconciliation:** 48 operator + 16 wave-3 + 3 blocked = **67 rows**, the
 register's full owed count, each exactly once.
+### A1 · Synthetic finding-N/W pin (#1849)

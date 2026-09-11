@@ -4564,6 +4564,7 @@ components:
         - apiKeyStatus
         - workspaceRoot
         - workspaceSource
+        - corruptSettingsFile
       properties:
         displayName:
           type: string
@@ -4819,8 +4820,9 @@ components:
       type: object
       description: |
         Partial update payload. Read-only fields (apiKeyStatus,
-        workspaceRoot, workspaceSource) are ignored. Any `geminiApiKey`-
-        shaped field is dropped — the API key only lives in server/.env.
+        workspaceRoot, workspaceSource, corruptSettingsFile) are ignored.
+        Any `geminiApiKey`-shaped field is dropped — the API key only lives
+        in server/.env.
       properties:
         displayName: { type: string }
         defaultAnalysisModel: { type: string }

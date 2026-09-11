@@ -39,6 +39,7 @@ const initialState: AccountState = {
   apiKeyStatus: 'unset',
   workspaceRoot: '',
   workspaceSource: 'default',
+  corruptSettingsFile: false,
   status: 'idle',
   error: null,
   hydrated: false,

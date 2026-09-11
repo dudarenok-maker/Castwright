@@ -3434,7 +3434,7 @@ export interface components {
              *     (not persisted); clears the next time a read/recovery or a
              *     write succeeds. Server-computed — ignored if sent on a PUT.
              */
-            readonly corruptSettingsFile?: boolean;
+            readonly corruptSettingsFile: boolean;
         };
         /**
          * @description Partial update payload. Read-only fields (apiKeyStatus,

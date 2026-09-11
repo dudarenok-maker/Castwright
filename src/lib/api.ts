@@ -6936,6 +6936,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   apiKeyStatus: 'unset',
   workspaceRoot: '(mock)/audiobook-workspace',
   workspaceSource: 'default',
+  corruptSettingsFile: false,
   analyzerKeepAliveByModel: {},
 };
 

@@ -21,9 +21,8 @@ export function SettingsCorruptBanner() {
         <span className="w-1.5 h-1.5 mt-1 rounded-full bg-rose-500 shrink-0" />
         <span>
           Your settings file was unreadable and has been reset to defaults. Your
-          previous settings may be recoverable — check for a
-          user-settings.json.corrupt-&lt;timestamp&gt; file in your Castwright
-          data folder.
+          previous settings may be recoverable — check for .bak.1, .bak.2, or .bak.3
+          files alongside user-settings.json in your Castwright data folder.
         </span>
       </p>
     </div>
