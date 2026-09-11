@@ -135,19 +135,48 @@ function buildLiveJobStub(manuscriptId: string, kind: 'main' | 'subset') {
 /* The subscribe/attach branch never calls res.end() (sticky semantics — the
    response stays open for the lifetime of the job), so supertest's
    promise-based API would hang forever waiting for the response to finish.
-   Drive a raw request instead and destroy the socket the moment the first
-   chunk of data arrives — flushHeaders() + the ':ok\n\n' comment write both
-   happen AFTER this route's console.log calls, so by the time any data
-   reaches us the log lines we're asserting on have already fired. */
-function postAndCaptureFirstChunk(
+   Drive a raw request instead and destroy the socket once the specific
+   outcome line we're asserting on has actually been logged — NOT on the
+   first response chunk. res.flushHeaders() / res.write(':ok\n\n') (~3272
+   main, ~6497 subset) both run BEFORE the awaited getOrHydrateManuscript /
+   readUserSettings calls that precede the `subscribe`/`start` outcome line
+   (~3374 main, ~6599 subset), so the first chunk can win that race and
+   arrive before the outcome line has printed — only the earlier `request
+   received` line is guaranteed to have fired by then. Hooking the spy's own
+   implementation removes the race: we resolve exactly when the matching
+   console.log call happens, never earlier. If the expected line never
+   prints, this deliberately does not resolve — the caller's test then fails
+   on vitest's own test timeout rather than hanging forever, and the request
+   is left to be cleaned up when the process tears down. */
+function postAndWaitForLogLine(
   app: import('express').Express,
   path: string,
   body: unknown,
+  consoleLogSpy: ReturnType<typeof vi.spyOn>,
+  matchesTargetLine: (line: string) => boolean,
 ): Promise<void> {
   return new Promise((resolvePromise, reject) => {
-    const server = app.listen(0, () => {
-      const port = (server.address() as { port: number }).port;
-      const req = http.request(
+    const state: {
+      settled: boolean;
+      req: http.ClientRequest | undefined;
+      server: ReturnType<typeof app.listen> | undefined;
+    } = { settled: false, req: undefined, server: undefined };
+
+    const finish = () => {
+      if (state.settled) return;
+      state.settled = true;
+      state.req?.destroy();
+      state.server?.close();
+      resolvePromise();
+    };
+
+    consoleLogSpy.mockImplementation((line: unknown) => {
+      if (typeof line === 'string' && matchesTargetLine(line)) finish();
+    });
+
+    state.server = app.listen(0, () => {
+      const port = (state.server!.address() as { port: number }).port;
+      state.req = http.request(
         {
           host: '127.0.0.1',
           port,
@@ -156,24 +185,19 @@ function postAndCaptureFirstChunk(
           headers: { 'Content-Type': 'application/json' },
         },
         (res) => {
-          res.once('data', () => {
-            req.destroy();
-            server.close();
-            resolvePromise();
-          });
           res.on('error', () => {
             /* expected once we destroy() the socket mid-stream */
           });
         },
       );
-      req.on('error', () => {
-        /* expected once we destroy() the socket mid-stream */
-        server.close();
-        resolvePromise();
+      state.req.on('error', () => {
+        /* expected once we destroy() the socket mid-stream, or (if the
+           target line never prints) once the test's own timeout tears the
+           process down first */
       });
-      req.end(JSON.stringify(body));
+      state.req.end(JSON.stringify(body));
     });
-    server.on('error', reject);
+    state.server.on('error', reject);
   });
 }
 
@@ -331,7 +355,13 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
     );
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      await postAndCaptureFirstChunk(app, `/api/manuscripts/${manuscriptId}/analysis`, {});
+      await postAndWaitForLogLine(
+        app,
+        `/api/manuscripts/${manuscriptId}/analysis`,
+        {},
+        consoleLogSpy,
+        (line) => line.startsWith('[analysis] subscribe'),
+      );
 
       const lines = consoleLogSpy.mock.calls
         .map((call) => call[0])
@@ -344,6 +374,11 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
       expect(subscribeLine, 'expected a subscribe outcome line').toBeDefined();
       expect(subscribeLine).toContain(`manuscript=${manuscriptId}`);
 
+      /* Safe to assert absence here: we waited for the subscribe line, and
+         the route's subscribe/start dispatch is a mutually-exclusive
+         if/return — whichever branch runs, the other's log call can never
+         also fire on the same request. So observing `subscribe` already
+         rules out `start` having printed or ever printing for this POST. */
       const startLine = lines.find((line) => line.startsWith('[analysis] start manuscript='));
       expect(startLine, 'a subscribe POST must not log a start line').toBeUndefined();
 
@@ -386,9 +421,13 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
     );
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      await postAndCaptureFirstChunk(app, `/api/manuscripts/${manuscriptId}/analysis/chapters`, {
-        chapterIds: [1],
-      });
+      await postAndWaitForLogLine(
+        app,
+        `/api/manuscripts/${manuscriptId}/analysis/chapters`,
+        { chapterIds: [1] },
+        consoleLogSpy,
+        (line) => line.startsWith('[analysis-subset] subscribe'),
+      );
 
       const lines = consoleLogSpy.mock.calls
         .map((call) => call[0])
@@ -401,6 +440,9 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
       expect(subscribeLine, 'expected a subscribe outcome line').toBeDefined();
       expect(subscribeLine).toContain(`manuscript=${manuscriptId}`);
 
+      /* Safe to assert absence here — see the analogous comment in test (d):
+         subscribe and start sit on a mutually-exclusive if/return, so
+         observing `subscribe` already rules out `start` for this POST. */
       const startLine = lines.find((line) => line.startsWith('[analysis-subset] start manuscript='));
       expect(startLine, 'a subscribe POST must not log a start line').toBeUndefined();
       expect(subscribeLine).not.toContain('model=');

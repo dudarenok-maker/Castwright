@@ -402,9 +402,9 @@ export function AnalysingView({
        leaked the previous fetch's TCP connection — the cleanup only set
        `cancelled = true` to drop incoming results, but the underlying
        request kept the server's analysis loop busy. At concurrency=1
-       the server's log filled with `[analysis] manuscript=...` ↔
-       `[analysis] aborted (client disconnected)` pairs as the browser
-       eventually pruned the orphaned fetches, breaking every retry. */
+       the server's log filled with per-request start ↔ `[analysis]
+       aborted` pairs as the browser eventually pruned the orphaned
+       fetches, breaking every retry. */
     const controller = new AbortController();
     analysisControllerRef.current = controller;
     hasStartedOnceRef.current = true;
