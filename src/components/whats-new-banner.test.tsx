@@ -4,11 +4,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
+import { accountSlice } from '../store/account-slice';
 
 const h = vi.hoisted(() => ({
   info: null as null | Record<string, unknown>,
   refresh: vi.fn(async () => {}),
-  dismissWhatsNew: vi.fn(async () => {}),
+  dismissWhatsNew: vi.fn(async () => ({ ok: true, corruptSettingsFile: false })),
 }));
 
 vi.mock('../lib/use-app-info', () => ({
@@ -16,9 +19,30 @@ vi.mock('../lib/use-app-info', () => ({
 }));
 vi.mock('../lib/api', () => ({ api: { dismissWhatsNew: h.dismissWhatsNew } }));
 
+vi.mock('../store', async () => {
+  const actual = await vi.importActual<typeof import('../store')>('../store');
+  return {
+    ...actual,
+    useAppDispatch: () => sharedStore.dispatch,
+    useAppSelector: <T,>(sel: (s: ReturnType<typeof sharedStore.getState>) => T): T =>
+      sel(sharedStore.getState()),
+  };
+});
+
 import { WhatsNewBanner } from './whats-new-banner';
 
+let sharedStore: ReturnType<typeof makeStore>;
+
+function makeStore() {
+  return configureStore({
+    reducer: {
+      account: accountSlice.reducer,
+    },
+  });
+}
+
 beforeEach(() => {
+  sharedStore = makeStore();
   h.info = null;
   // Clear (not reassign) so the references captured by the vi.mock factories
   // stay valid across tests.
@@ -30,9 +54,11 @@ describe('WhatsNewBanner', () => {
   it('renders nothing when showWhatsNew is false', () => {
     h.info = { appVersion: '1.6.0', showWhatsNew: false, releaseNotes: '' };
     const { container } = render(
-      <MemoryRouter>
-        <WhatsNewBanner />
-      </MemoryRouter>,
+      <Provider store={sharedStore}>
+        <MemoryRouter>
+          <WhatsNewBanner />
+        </MemoryRouter>
+      </Provider>,
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -40,9 +66,11 @@ describe('WhatsNewBanner', () => {
   it('renders the version + release notes when showWhatsNew is true', () => {
     h.info = { appVersion: '1.6.0', showWhatsNew: true, releaseNotes: '# v1.6.0\n- In-app upgrades' };
     render(
-      <MemoryRouter>
-        <WhatsNewBanner />
-      </MemoryRouter>,
+      <Provider store={sharedStore}>
+        <MemoryRouter>
+          <WhatsNewBanner />
+        </MemoryRouter>
+      </Provider>,
     );
     expect(screen.getByTestId('whats-new-banner')).toBeInTheDocument();
     expect(screen.getByText(/What's new in v1\.6\.0/)).toBeInTheDocument();
@@ -52,12 +80,39 @@ describe('WhatsNewBanner', () => {
   it('dismiss calls the API and refreshes', async () => {
     h.info = { appVersion: '1.6.0', showWhatsNew: true, releaseNotes: '' };
     render(
-      <MemoryRouter>
-        <WhatsNewBanner />
-      </MemoryRouter>,
+      <Provider store={sharedStore}>
+        <MemoryRouter>
+          <WhatsNewBanner />
+        </MemoryRouter>
+      </Provider>,
     );
     fireEvent.click(screen.getByText('Dismiss'));
     await waitFor(() => expect(h.dismissWhatsNew).toHaveBeenCalledOnce());
     expect(h.refresh).toHaveBeenCalled();
+  });
+
+  it('P2 — dismiss with corruptSettingsFile: true updates the Redux store', async () => {
+    // When dismissWhatsNew returns corruptSettingsFile: true, the Redux store
+    // must be updated to reflect the corruption state.
+    h.info = { appVersion: '1.6.0', showWhatsNew: true, releaseNotes: '' };
+    h.dismissWhatsNew.mockResolvedValueOnce({ ok: true, corruptSettingsFile: true });
+
+    render(
+      <Provider store={sharedStore}>
+        <MemoryRouter>
+          <WhatsNewBanner />
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    // Initial state should be false
+    expect(sharedStore.getState().account.corruptSettingsFile).toBe(false);
+
+    fireEvent.click(screen.getByText('Dismiss'));
+    await waitFor(() => expect(h.dismissWhatsNew).toHaveBeenCalledOnce());
+
+    // After dismissWhatsNew succeeds with corruptSettingsFile: true,
+    // the store must be updated
+    expect(sharedStore.getState().account.corruptSettingsFile).toBe(true);
   });
 });

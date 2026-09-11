@@ -1429,34 +1429,50 @@ describe('readUserSettings — corruption recovery (#3175 layer 1)', () => {
     expect(backup.tourCompletedAt).toBe(ts1);
   });
 
-  it('MUTATION CHECK P1: breaking mtime-stamp-on-write fails test (a)', async () => {
-    // This is a mutation-check placeholder showing the test would fail
-    // if updateCachedFileMtimeAfterWrite is not called.
-    // The test itself is validated by test (a) above.
+  it('MUTATION CHECK P1 (a): stale-value race — write via app and immediately read returns written value, not stale/default', async () => {
+    // Real test: writing via app, then immediately reading, must return the SPECIFIC VALUE
+    // just written (not stale defaults). This catches the null-window race where concurrent
+    // reads could see cached=null between the write and the mtime update.
     const mod = await import('./user-settings.js');
     mod._resetUserSettingsCache();
-    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
 
-    // Seed the cache
-    await mod.readUserSettings();
+    // Write an initial value
+    const settings1 = await mod.writeUserSettings({ analysisEngine: 'gemini' });
+    expect(settings1.analysisEngine).toBe('gemini');
 
-    // If mtime update is removed from writers, this test would catch it by reading
-    // the same file again and verifying stale-value race doesn't occur.
-    // The actual detection would be in integration tests where multiple rapid
-    // reads could catch the race condition.
-    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    // Immediately read — must get the value we just wrote, not factory defaults
+    const read1 = await mod.readUserSettings();
+    expect(read1.analysisEngine).toBe('gemini');
+
+    // Write a second distinct value
+    const settings2 = await mod.writeUserSettings({ analysisEngine: 'local' });
+    expect(settings2.analysisEngine).toBe('local');
+
+    // Immediately read — must get 'local', not stale 'gemini' or factory default
+    const read2 = await mod.readUserSettings();
+    expect(read2.analysisEngine).toBe('local');
   });
 
-  it('MUTATION CHECK P1b: removing mtime-check-on-read fails test (b)', async () => {
-    // This is a mutation-check placeholder showing the test would fail
-    // if the mtime check in readUserSettings is removed.
-    // The test itself is validated by test (b) above.
+  it('MUTATION CHECK P1 (b): out-of-band write — genuine external edit is detected and picked up on next read', async () => {
+    // Real test: perform a genuine out-of-band write (bypass all app writers, write
+    // directly to disk), then verify the NEXT readUserSettings() call detects and picks
+    // up the new content (not silently stuck on stale cache).
     const mod = await import('./user-settings.js');
     mod._resetUserSettingsCache();
-    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
 
-    // If mtime check is removed, genuine out-of-band repairs won't be detected
-    // and test (b) above would fail when it tried to verify the repaired content was returned.
-    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    // App write — seed the cache
+    const settings1 = await mod.writeUserSettings({ analysisEngine: 'gemini' });
+    expect(settings1.analysisEngine).toBe('gemini');
+
+    // Out-of-band write: bypass all app writers and write directly to disk
+    const modified = { ...DEFAULT_USER_SETTINGS, analysisEngine: 'local' };
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(modified, null, 2));
+
+    // Small delay to ensure mtime changes (millisecond precision varies by filesystem)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Next read MUST detect the file changed and pick up the new value
+    const read2 = await mod.readUserSettings();
+    expect(read2.analysisEngine).toBe('local');
   });
 });

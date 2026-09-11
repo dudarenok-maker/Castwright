@@ -367,6 +367,13 @@ let settingsFileCorrupt = false;
     update this; genuine out-of-band repairs leave it stale and trigger a re-read. */
 let cachedFileMtime: number | null = null;
 
+/** In-flight read promise: when readUserSettings() is executing, concurrent
+    callers await this same promise instead of each independently racing to
+    read from disk. Prevents the null-window race where cached is set to null
+    but the read hasn't completed yet. Resolves to the populated cache once
+    the read finishes. */
+let inFlightRead: Promise<UserSettings> | null = null;
+
 export function isUserSettingsFileCorrupt(): boolean {
   return settingsFileCorrupt;
 }
@@ -386,6 +393,9 @@ export function isUserSettingsFileCorrupt(): boolean {
     the mtime recorded when the cache was populated; if the file's mtime has
     changed, the cache is invalidated and the file is re-read. */
 export async function readUserSettings(): Promise<UserSettings> {
+  // If another read is already in flight, await it instead of racing
+  if (inFlightRead) return inFlightRead;
+
   // Check if the cache is still valid by comparing the file's current mtime
   // against when we cached it. If the file was modified out-of-band (e.g., user
   // hand-repaired it), we need to re-read instead of returning stale defaults.
@@ -405,6 +415,23 @@ export async function readUserSettings(): Promise<UserSettings> {
     }
   }
   if (cached) return cached;
+
+  // Start the in-flight read before any awaits below, so concurrent callers
+  // see it and await the same promise instead of each racing independently
+  const readPromise = performUserSettingsRead();
+  inFlightRead = readPromise;
+  try {
+    const result = await readPromise;
+    return result;
+  } finally {
+    inFlightRead = null;
+  }
+}
+
+/** Performs the actual async read logic. Separated so we can wrap the entire
+    operation in inFlightRead caching and guarantee all async boundaries are
+    protected. */
+async function performUserSettingsRead(): Promise<UserSettings> {
   await migrateLegacyUserSettings({
     from: LEGACY_USER_SETTINGS_PATH,
     to: USER_SETTINGS_PATH,
@@ -439,6 +466,14 @@ export async function readUserSettings(): Promise<UserSettings> {
     settingsFileCorrupt = false;
     cached = { ...DEFAULT_USER_SETTINGS };
     explicitlySetKeys = new Set();
+    // Track the file's current mtime even though the file is being created as defaults,
+    // so we can detect out-of-band repairs later (#3175 Q4)
+    try {
+      cachedFileMtime = statSync(USER_SETTINGS_PATH).mtimeMs;
+    } catch {
+      // File doesn't exist or can't be stat'd, don't track mtime
+      cachedFileMtime = null;
+    }
     return cached;
   }
   // A successful read or backup recovery means the corruption episode, if any, is over.
@@ -1066,6 +1101,7 @@ export async function clearAllConfigOverrides(): Promise<void> {
 export function _resetUserSettingsCache(): void {
   cached = null;
   cachedFileMtime = null;
+  inFlightRead = null;
   explicitlySetKeys = new Set(); // Reset tracked keys alongside cached settings
   writeChain = Promise.resolve();
   lastKnownEngineInstallState.qwen = 'not-installed';
