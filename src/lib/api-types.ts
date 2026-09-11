@@ -3438,8 +3438,9 @@ export interface components {
         };
         /**
          * @description Partial update payload. Read-only fields (apiKeyStatus,
-         *     workspaceRoot, workspaceSource) are ignored. Any `geminiApiKey`-
-         *     shaped field is dropped — the API key only lives in server/.env.
+         *     workspaceRoot, workspaceSource, corruptSettingsFile) are ignored.
+         *     Any `geminiApiKey`-shaped field is dropped — the API key only lives
+         *     in server/.env.
          */
         UserSettingsPatch: {
             displayName?: string;

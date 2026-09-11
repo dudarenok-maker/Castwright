@@ -1207,18 +1207,30 @@ describe('readUserSettings — corruption recovery (#3175 layer 1)', () => {
     expect(onDisk.displayName).toBe('Post-Recovery Save');
   });
 
-  it('a successful re-read after recovery also clears the flag (not just a write)', async () => {
+  it('a successful re-read after recovery detects out-of-band repair via mtime change', async () => {
     const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+
+    // Step 1: Write a corrupt file
     writeFileSync(mod.USER_SETTINGS_PATH, '{ this is not valid json');
+
+    // Step 2: Read it — should flag as corrupt and cache the mtime
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await mod.readUserSettings();
     expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+    warnSpy.mockRestore();
 
-    // Fix the file by hand (as if the user or a future write repaired it),
-    // then force a fresh read.
+    // Step 3: Fix the file by hand (simulating user repair or system restore).
+    // The key point: we DON'T call _resetUserSettingsCache(), we rely on the
+    // mtime check to detect that the file changed.
+    // Add a small delay to ensure mtime actually changes
+    await new Promise((r) => setTimeout(r, 10));
     writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
-    mod._resetUserSettingsCache();
+
+    // Step 4: Read again — mtime check should detect the change and re-read
     await mod.readUserSettings();
 
+    // Step 5: Flag should now be false because the file parses successfully
     expect(mod.isUserSettingsFileCorrupt()).toBe(false);
   });
 
@@ -1289,5 +1301,33 @@ describe('readUserSettings — corruption recovery (#3175 layer 1)', () => {
     const corruptPath = join(dirname(mod.USER_SETTINGS_PATH), corruptFiles[0]);
     const corruptContent = readFileSync(corruptPath, 'utf-8');
     expect(corruptContent).toBe('{ this is invalid json and wont parse }');
+  });
+
+  it('REGRESSION: out-of-band file repair is detected via mtime check, not silently clobbered by cache', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+
+    // Step 1: Corrupt the file at boot.
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ broken json');
+
+    // Step 2: Read it — caches defaults and sets the corruption flag.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let result = await mod.readUserSettings();
+    expect(result).toEqual(DEFAULT_USER_SETTINGS);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+    warnSpy.mockRestore();
+
+    // Step 3: Simulate user hand-repair by writing a valid JSON file directly to disk
+    // (bypassing all the app's write functions, simulating an out-of-band edit).
+    const repaired = { ...DEFAULT_USER_SETTINGS, displayName: 'Hand-Repaired User' };
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(repaired));
+
+    // Step 4: Call readUserSettings() again — should detect the file's mtime changed
+    // and re-read instead of returning stale cached defaults.
+    result = await mod.readUserSettings();
+
+    // Step 5: Assert the flag is now clear AND the repaired content is what's returned.
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    expect(result.displayName).toBe('Hand-Repaired User');
   });
 });

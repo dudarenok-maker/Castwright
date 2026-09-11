@@ -11,7 +11,7 @@
 
 import { z } from 'zod';
 import { dirname } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { readJsonWithRecovery, writeJsonAtomic } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
@@ -355,9 +355,16 @@ export const USER_SETTINGS_BACKUP_KEEP = 3;
 
 /** True when the last readUserSettings() had to fall all the way back to
     in-memory defaults because neither the main file nor any `.bak.N` parsed.
-    Cleared the next time a read/recovery succeeds, or a write completes
-    (see writeUserSettings). Drives the corruption banner (task 3 of #3175). */
+    Cleared when a read/recovery succeeds, or when a write completes via one
+    of the clearCorruptFlagAfterWrite() sites. Drives the corruption banner
+    (task 3 of #3175). */
 let settingsFileCorrupt = false;
+
+/** Track the mtime of the settings file when the cache was created, so we can
+    detect out-of-band repairs (e.g., a user hand-editing the JSON). If the file
+    is modified after the cache was populated, we re-read it instead of trusting
+    the stale cached value. */
+let cachedFileMtime: number | null = null;
 
 export function isUserSettingsFileCorrupt(): boolean {
   return settingsFileCorrupt;
@@ -375,6 +382,23 @@ export function isUserSettingsFileCorrupt(): boolean {
     subsequent call — boot warm-up, the sidecar supervisor, every route —
     would re-attempt and re-fail the same parse until the process restarts). */
 export async function readUserSettings(): Promise<UserSettings> {
+  // Check if the cache is still valid by comparing the file's current mtime
+  // against when we cached it. If the file was modified out-of-band (e.g., user
+  // hand-repaired it), we need to re-read instead of returning stale defaults.
+  if (cached && cachedFileMtime !== null) {
+    try {
+      const stat = statSync(USER_SETTINGS_PATH);
+      if (stat.mtimeMs <= cachedFileMtime) {
+        // File hasn't changed since we cached it, return the cached value
+        return cached;
+      }
+      // File was modified after caching — invalidate cache and re-read
+      cached = null;
+      cachedFileMtime = null;
+    } catch {
+      // File might not exist yet, or stat failed — proceed to read/create
+    }
+  }
   if (cached) return cached;
   await migrateLegacyUserSettings({
     from: LEGACY_USER_SETTINGS_PATH,
@@ -396,6 +420,14 @@ export async function readUserSettings(): Promise<UserSettings> {
     settingsFileCorrupt = true;
     cached = { ...DEFAULT_USER_SETTINGS };
     explicitlySetKeys = new Set();
+    // Track the current mtime of the corrupt file, so we can detect if it gets
+    // hand-repaired by the user out-of-band
+    try {
+      cachedFileMtime = statSync(USER_SETTINGS_PATH).mtimeMs;
+    } catch {
+      // File doesn't exist yet, can't track mtime
+      cachedFileMtime = null;
+    }
     return cached;
   }
   if (!raw) {
@@ -419,6 +451,13 @@ export async function readUserSettings(): Promise<UserSettings> {
   }
   const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(migrated as object) });
   cached = parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS };
+  // Track the file's current mtime so we can detect out-of-band modifications
+  try {
+    cachedFileMtime = statSync(USER_SETTINGS_PATH).mtimeMs;
+  } catch {
+    // File doesn't exist or can't be stat'd, don't track mtime
+    cachedFileMtime = null;
+  }
   return cached;
 }
 
@@ -1001,6 +1040,7 @@ export async function clearAllConfigOverrides(): Promise<void> {
 /** Test-only: drop the in-process cache so the next read re-parses disk. */
 export function _resetUserSettingsCache(): void {
   cached = null;
+  cachedFileMtime = null;
   explicitlySetKeys = new Set(); // Reset tracked keys alongside cached settings
   writeChain = Promise.resolve();
   lastKnownEngineInstallState.qwen = 'not-installed';
