@@ -3,7 +3,7 @@
 // doesn't pay the ~1.8 GB download tax on the first synth call.
 //
 // Cross-platform Node ESM (Windows + macOS + Linux) per the deployer-spread
-// convention -- the in-app installer (Account -> Models) spawns THIS, and the
+// convention -- the in-app installer (Admin -> Model Manager) spawns THIS, and the
 // .ps1/.sh siblings remain for scripted/offline setups.
 //
 // What it does:

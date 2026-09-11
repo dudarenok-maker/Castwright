@@ -2,7 +2,7 @@
  *
  * Background:
  *   `feat(frontend,server,sidecar,scripts): in-app multi-model management UX`
- *   adds an "Install Ollama" affordance to the Account → Models pane so a
+ *   adds an "Install Ollama" affordance to the Admin → Model Manager pane so a
  *   fresh deployer who shipped via the plan-49 release zip can go from
  *   Kokoro-only → local-Ollama analyzer without touching a terminal.
  *

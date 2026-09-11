@@ -211,7 +211,7 @@ export const userSettingsSchema = z.object({
   /* Plan 49 — UI-managed Gemini API key. Stored plaintext (same trust
      model as server/.env, which is gitignored and single-user). The
      env var GEMINI_API_KEY still wins when present (for CI / power
-     users); this field is the "I set it from the Account view" slot.
+     users); this field is the "I set it from the Model Manager" slot.
      The general PUT /api/user/settings still strips this field (see
      FORBIDDEN_KEYS) — the only sanctioned write path is
      `writeGeminiApiKey()` invoked from the dedicated

@@ -556,7 +556,7 @@ export function MiniPlayer({
   }, [chapter, startMarkerDraft]);
 
   /* fe-2 — play/pause shortcut (default Space, rebindable in Account →
-     Advanced). Toggles the same local `playing` state as the on-screen button;
+     Device-local). Toggles the same local `playing` state as the on-screen button;
      gated on a loaded chapter so it's inert when the player is closed. */
   const togglePlay = useCallback(() => setPlaying((v) => !v), []);
   useKeyBinding(playPauseKey, togglePlay, Boolean(chapter));

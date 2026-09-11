@@ -1,4 +1,4 @@
-/* Plan 61 — Account → Models card e2e.
+/* Plan 61 — Admin → Model Manager → Installed models card e2e.
  *
  * Asserts the install → pull → analyze loop end-to-end from the browser,
  * with the actual network calls intercepted and replayed via Playwright's

@@ -198,8 +198,8 @@ this session will write.
 
 ### 2.2 Settings
 
-Account → analyzer settings: engine **local**, model **`qwen36-cw-iq4-32k`**, structure
-engine **on**, `analyzer.structure.escalation` = **`local`**.
+Admin → Model Manager: engine **local**, model **`qwen36-cw-iq4-32k`**. Admin → Advanced
+configuration: structure engine **on**, `analyzer.structure.escalation` = **`local`**.
 
 Two more, both load-bearing for a *local* measurement (see the 2026-08-11
 attempt-2 log for why each was missing):
