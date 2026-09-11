@@ -14,21 +14,37 @@ export function sidecarCommand(platform, repoRoot) {
     : { file: 'bash', args: [join(dir, 'start.sh')] };
 }
 
-/* Minimal code-43 restart safeguard for the standalone-launch path.
+/* Restart safeguards for the standalone-launch path.
    Issue #3121 notes that `npm run tts:sidecar` (used when autoStartSidecar is off)
    spawns start.ps1/start.sh directly with no Node supervisor behind it. When
    start.ps1/start.sh exits with code 43 (planned memory recycle), this handler
    re-launches to match the supervised path's behavior until the streak cap is reached.
    After 3 code-43 exits within a 10-minute window, this launcher exits with code 43
    to stop the retry loop — the process is then up to the user's own supervisor.
-   Any other exit code (including 42, 0, or an error) is propagated immediately without restart.
+   Any other unexpected non-zero exit (including 42, the CUDA poison exit — see
+   #3206) gets its own generic crash-loop retry, below. Code 0 (and a null/
+   signal-terminated exit) still propagates immediately with no retry.
 
    The streak tracking mirrors sidecar-supervisor.ts exactly. */
 const RESTART43_STREAK_WINDOW_MS = 600_000; // 10 min
 const RESTART43_STREAK_TRIP_COUNT = 3;
 
+/* Generic crash-loop retry for any unexpected non-zero, non-43 exit (#3206).
+   Code 42 (CUDA device-side assert / "poison") is the driving case — before
+   PR #3148 both start.ps1/start.sh retried it unconditionally, and the
+   supervised path (sidecar-supervisor.ts) still does. This path is
+   deliberately code-agnostic and kept SEPARATE from the code-43 streak above:
+   43 is a planned memory-recycle event with its own fixed-2s/3-in-10-minutes
+   shape, and folding a poison exit into that cap/message would misdiagnose
+   it. Values duplicated (not imported) from sidecar-supervisor.ts's
+   DEFAULT_BACKOFFS_MS/DEFAULT_MAX_CONSECUTIVE_FAILURES — that file is TS
+   compiled separately from this .mjs script and does not export them. */
+const CRASH_LOOP_BACKOFFS_MS = [2_000, 5_000, 15_000];
+const CRASH_LOOP_MAX_CONSECUTIVE_FAILURES = 5;
+
 export async function launchSidecarWithRestart(platform, repoRoot, spawn = realSpawn) {
   let restart43Timestamps = [];
+  let crashLoopFailures = 0;
 
   const launch = () => {
     return new Promise((resolve, reject) => {
@@ -64,13 +80,39 @@ export async function launchSidecarWithRestart(platform, repoRoot, spawn = realS
           setTimeout(() => {
             resolve(launch());
           }, 2000);
-        } else {
-          // Any other exit code: propagate and exit.
+        } else if (code === 0 || code == null) {
+          // Clean shutdown (or signal-terminated with no code): propagate immediately, no retry.
           try {
             process.exit(code ?? 0);
           } catch (err) {
             // In tests, process.exit may throw; reject the promise so await completes
             reject(err);
+          }
+        } else {
+          // Any other unexpected non-zero exit (including 42): generic crash-loop retry,
+          // separate from the code-43 streak above.
+          crashLoopFailures += 1;
+
+          if (crashLoopFailures > CRASH_LOOP_MAX_CONSECUTIVE_FAILURES) {
+            console.log(
+              `[tts:sidecar] ${crashLoopFailures} rapid unexpected exits (code ${code}) in a row — giving up.`,
+            );
+            try {
+              process.exit(code);
+            } catch (err) {
+              reject(err);
+              return;
+            }
+          } else {
+            const delayMs =
+              CRASH_LOOP_BACKOFFS_MS[Math.min(crashLoopFailures - 1, CRASH_LOOP_BACKOFFS_MS.length - 1)];
+            console.log(
+              `[tts:sidecar] exited with code ${code} (unexpected) — restarting in ${delayMs}ms ` +
+                `(attempt ${crashLoopFailures}/${CRASH_LOOP_MAX_CONSECUTIVE_FAILURES}).`,
+            );
+            setTimeout(() => {
+              resolve(launch());
+            }, delayMs);
           }
         }
       });
