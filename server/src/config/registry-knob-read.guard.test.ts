@@ -127,11 +127,12 @@ function collectFiles(dir: string, exts: string[], out: string[] = []): string[]
 
 /** Blank out `//` and `/* *\/` comments only — string/template-literal
     CONTENTS are deliberately left intact, because the knob key this guard
-    looks for IS a string/template-literal argument. A docblock that merely
-    quotes `configValue('foo.bar')` as prose is the one false-positive this
-    guard accepts in exchange for that: narrower than direct-env-reader-
-    guard's stripOpaque (no regex-literal handling needed — nothing here
-    scans for a bare `/`). */
+    looks for IS a string/template-literal argument. That means a plain
+    string literal that merely CONTAINS text shaped like a real read call —
+    e.g. a help string mentioning `configValue('zzz.instring')` — passes
+    through unchanged and reads as a real occurrence; that accepted false
+    positive is narrower than direct-env-reader-guard's stripOpaque (no
+    regex-literal handling needed — nothing here scans for a bare `/`). */
 function stripComments(src: string): string {
   const n = src.length;
   const out: string[] = new Array(n);
@@ -225,7 +226,7 @@ const KNOWN_UNREAD = new Set<string>([
   'analyzer.phase0.model', // tracked by #3141
   'analyzer.phase1.model', // tracked by #3141
   'analyzer.phase1.minLagChapters', // tracked by #3141
-  'analyzer.engine', // UNTRIAGED — reported on #3146
+  'analyzer.engine', // UNTRIAGED — reported on #3141
 ]);
 
 function collectReadKeys(files: string[]): Set<string> {
@@ -256,8 +257,8 @@ describe('registry knobs the server never reads (#3139/#3146 guard)', () => {
 
       const dynamic = DECLARED_DYNAMIC_READERS.find((d) => d.pattern.test(knob.key));
       if (dynamic) {
-        const raw = readFileSync(join(REPO_ROOT, dynamic.file), 'utf8');
-        if (raw.includes(dynamic.contains)) continue;
+        const stripped = stripComments(readFileSync(join(REPO_ROOT, dynamic.file), 'utf8'));
+        if (stripped.includes(dynamic.contains)) continue;
         // The declared dynamic reader no longer matches reality — treat the
         // knob as unread rather than silently trusting a stale declaration.
         unread.push(knob.key);

@@ -301,11 +301,18 @@ describe('saved rate-limit overrides in user settings', () => {
 
     const pending = limiter.acquire('gemma-4-31b-it', 900, { onWait });
     await vi.advanceTimersByTimeAsync(10);
-    let settled = false;
-    pending.then(() => {
-      settled = true;
-    });
-    expect(settled).toBe(false);
+    /* Prove `pending` is genuinely still unsettled rather than merely
+       checking a `.then()` flag before the microtask queue has had a chance
+       to flip it (that boolean reads false either way, so it can never fail).
+       Promise.race calls .then() on each entry in array order, so if `pending`
+       were ALREADY resolved its callback would be queued first and this would
+       race to 'resolved' instead of the sentinel. */
+    const STILL_PENDING = Symbol('still-pending');
+    const raceResult = await Promise.race([
+      pending.then(() => 'resolved' as const),
+      Promise.resolve(STILL_PENDING),
+    ]);
+    expect(raceResult).toBe(STILL_PENDING);
     expect(onWait).toHaveBeenCalled();
     const [waitMs, reason] = onWait.mock.calls[0];
     expect(reason).toBe('rpm');
@@ -315,22 +322,35 @@ describe('saved rate-limit overrides in user settings', () => {
   });
 
   it('env still beats a saved override for the same knob', async () => {
-    /* GEMINI_RPM_GEMMA_4_31B_IT=30 sits in the environment; the saved
-       rate.rpm.gemma=2 must NOT win, so five acquires within the minute all
-       clear (no RPM wait). If the override shadowed env, the third would block. */
-    process.env.GEMINI_RPM_GEMMA_4_31B_IT = '30';
+    /* Env=7 is chosen to differ from BOTH the builtin default (30) and the
+       saved override (2) — with env=30 (the prior value), removing the
+       `readEnvNumber(...) ??` precedence term from resolveLimits still left
+       this test green, because the override lookup falls through to the
+       builtin default (30) whenever the resolver reports the value came from
+       env rather than override, so "30" was indistinguishable from "correct".
+       Firing exactly 7 acquires and expecting the 8th to block on RPM proves
+       the effective cap is precisely 7 — not 2 (which would already have
+       blocked by the 3rd) and not 30 (which would not block until the 31st). */
+    process.env.GEMINI_RPM_GEMMA_4_31B_IT = '7';
     const limiter = await limiterWithOverrides({ 'rate.rpm.gemma': 2 });
     const onWait = vi.fn();
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 7; i += 1) {
       await limiter.acquire('gemma-4-31b-it', 900, { onWait });
     }
     expect(onWait).not.toHaveBeenCalled();
+
+    const pending = limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(onWait).toHaveBeenCalled();
+    expect(onWait.mock.calls[0][1]).toBe('rpm');
+    await vi.advanceTimersByTimeAsync(60_500);
+    await pending;
   });
 
   it('a saved rate.tpm.gemma override of 0 removes the TPM gate', async () => {
     /* Built-in gemma-4-31b-it TPM is a finite 16000; a saved override of 0
        ("unlimited") must admit a request that would otherwise trip
-       Request ExceedsTpmError. */
+       RequestExceedsTpmError. */
     const limiter = await limiterWithOverrides({ 'rate.tpm.gemma': 0 });
     await expect(limiter.acquire('gemma-4-31b-it', 50_000)).resolves.toBeUndefined();
   });
