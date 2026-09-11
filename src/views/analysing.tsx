@@ -1438,6 +1438,14 @@ export function AnalysingView({
               progressByPhase,
               liveByPhase,
               maxPhase: phase,
+              /* An idle page (never started, no rehydrated snapshot) must not
+                 render phase 0 as active just because it's the pipeline
+                 frontier (#3169) — analysisStarted covers the explicit-click/
+                 retry/demo-capture/cold-boot-running paths, resuming covers
+                 the #865 reload bridge, and hasStartedOnceRef covers a
+                 cold-boot rehydrate of a paused/halted snapshot so those
+                 still render exactly as they do today. */
+              started: analysisStarted || resuming || hasStartedOnceRef.current,
             });
             return (
               <PhaseCard

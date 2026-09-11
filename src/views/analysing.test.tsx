@@ -150,6 +150,43 @@ async function renderViewWaitingForAnalysis() {
   return result;
 }
 
+/* The StickyAnalysisBar mirrors the active PhaseCard's model chip while a
+   run is in flight, so `phase-model-chip-${phaseId}` can match twice once
+   isAnalysisRunning flips on. Resolve to the PhaseCard's own copy (the one
+   NOT inside the sticky bar) so assertions target the card the bug is
+   about, not its sticky-bar echo. */
+function getPhaseCardChip(phaseId: number) {
+  const chip = screen
+    .getAllByTestId(`phase-model-chip-${phaseId}`)
+    .find((el) => !el.closest('[data-testid="sticky-analysis-bar"]'));
+  if (!chip) throw new Error(`no non-sticky-bar phase-model-chip-${phaseId} found`);
+  return chip;
+}
+
+/* Bug #3169: derivePhaseState's frontier rule used to fire for phase 0 even
+   before any run started (maxPhase defaults to 0, which IS phase 0's id),
+   so a freshly-mounted idle view rendered phase 0 with a spinner and the
+   "· streaming" chip — a real user waited 30+ minutes on this page without
+   ever clicking Start. */
+describe('AnalysingView — idle phase 0 is not rendered as active before start (#3169)', () => {
+  it('renders phase 0 as pending (no streaming) on a freshly mounted view with no snapshot and no click', async () => {
+    renderView();
+    /* Wait for the analyzer probe to resolve so the button is fully
+       settled — the view is idle either way (no click, no snapshot). */
+    await screen.findByRole('button', { name: /start analysis/i });
+    const chip = getPhaseCardChip(0);
+    expect(chip).toHaveAttribute('data-phase-state', 'pending');
+    expect(chip).not.toHaveTextContent('streaming');
+  });
+
+  it('renders phase 0 as streaming once "Start analysis" is clicked', async () => {
+    await renderViewWaitingForAnalysis();
+    const chip = getPhaseCardChip(0);
+    expect(chip).toHaveAttribute('data-phase-state', 'streaming');
+    expect(chip).toHaveTextContent('streaming');
+  });
+});
+
 describe('AnalysingView — live ticker (regression for stuck-chapter screenshot bug)', () => {
   it('renders one row per in-flight chapter so a slow chapter does not hide concurrent progress', async () => {
     await renderViewWaitingForAnalysis();
@@ -2014,6 +2051,10 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     /* And the button now reads Pause (running), not Start. */
     expect(await screen.findByRole('button', { name: /pause analysis/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /start analysis/i })).not.toBeInTheDocument();
+    /* #3169: a cold-boot running snapshot must render phase 0 as active/
+       streaming (no click involved) — proving `started` picks up
+       analysisStarted from the rehydrate path, not just an explicit click. */
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
   });
 
   it('does NOT auto-subscribe when state=paused but labels the button "Resume analysis"', async () => {
