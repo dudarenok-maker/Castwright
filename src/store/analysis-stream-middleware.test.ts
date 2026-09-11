@@ -35,15 +35,15 @@ vi.mock('../lib/api', () => {
   /* Re-derive AnalysisError inside the factory so `e instanceof AnalysisError`
      in the middleware lines up with what tests throw. Vitest hoists vi.mock
      to the top of the file, so the class must be defined here (referencing
-     a top-level class would hit a TDZ error). Shape mirrors
-     src/lib/api.ts:664-680. */
+     a top-level class would hit a TDZ error). Shape mirrors the
+     `AnalysisError` class in src/lib/api.ts — same positional constructor
+     (message, code, detail?, prevCharCount?, nextCharCount?, remediation?). */
   class AnalysisError extends Error {
     code: string;
     detail?: string;
     prevCharCount?: number;
     nextCharCount?: number;
     remediation?: string;
-    status?: number;
     constructor(
       message: string,
       code: string,
@@ -51,7 +51,6 @@ vi.mock('../lib/api', () => {
       prev?: number,
       next?: number,
       remediation?: string,
-      status?: number,
     ) {
       super(message);
       this.name = 'AnalysisError';
@@ -60,7 +59,6 @@ vi.mock('../lib/api', () => {
       this.prevCharCount = prev;
       this.nextCharCount = next;
       this.remediation = remediation;
-      this.status = status;
     }
   }
   return {
@@ -77,6 +75,7 @@ vi.mock('../lib/api', () => {
 
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
 import { AnalysisError } from '../lib/api';
+import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 
 interface CapturedAnalysisCall {
   manuscriptId: string;
@@ -423,6 +422,9 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(store.getState().analysis.activeStream?.state).toBe('paused');
+    /* The setPaused dispatch closes the handle via the PAUSE_TYPE hook —
+       the catch branch has no explicit closeHandle() of its own. */
+    expect(captured[0]?.signal.aborted).toBe(true);
   });
 
   it('flips state to halted when the SSE rejects with AnalysisError code=attribution_drift', async () => {
@@ -441,6 +443,8 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     const snap = store.getState().analysis.activeStream;
     expect(snap?.state).toBe('halted');
     expect(snap?.haltCode).toBe('attribution_drift');
+    /* The setHalted dispatch closes the handle via the HALTED_TYPE hook. */
+    expect(captured[0]?.signal.aborted).toBe(true);
   });
 
   it('does NOT poison the snapshot when an AbortError surfaces from the SSE (clean cancel)', async () => {
@@ -464,101 +468,151 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     expect(store.getState().analysis.activeStream?.state).toBe('paused');
   });
 
-  describe('Regression tests for Fix C (middleware transient vs terminal error handling)', () => {
-    it('treats 409 conflict as transient: closes handle without halting, allows reconnection', async () => {
-      /* Regression test for Fix C: the middleware's secondary SSE handles 409
-         (conflict — another tab holds the subscription) as a transient failure.
-         It must closeHandle to allow reconnection on the next tick, but NOT
-         dispatch setHalted, so the view's primary SSE (which is healthy) can
-         keep the analysis running. Before the fix, all stream failures were
-         treated the same way: some halted incorrectly (500s), some didn't halt
-         but couldn't reconnect (missing closeHandle). Now 409 triggers
-         reconnection without halting. */
-      const store = buildStore();
-      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-      store.dispatch(
-        analysisActions.applyAnalysisSnapshotTick({
-          manuscriptId: 'm1',
-          phaseId: 0,
-          phaseProgress: 0.1,
-        }),
-      );
-      const firstCall = captured[0]!;
-      /* Reject with a 409 AnalysisError (conflict from another tab). */
-      firstCall.reject(new AnalysisError('Analysis stream failed (409).', 'stream_failed', undefined, undefined, undefined, undefined, 409));
-      await Promise.resolve();
-      await Promise.resolve();
-      /* The handle must be closed (aborted) to allow reconnection. */
-      expect(firstCall.signal.aborted).toBe(true);
-      /* State should NOT flip to halted — it stays 'running'. */
-      const snap = store.getState().analysis.activeStream;
-      expect(snap?.state).toBe('running');
-      /* Verify no error toast was dispatched. */
-      expect(store.getState().notifications.toasts).toHaveLength(0);
-      /* On the next tick, the middleware should be able to reopen. */
-      store.dispatch(
-        analysisActions.applyAnalysisSnapshotTick({
-          manuscriptId: 'm1',
-          phaseId: 0,
-          phaseProgress: 0.2,
-        }),
-      );
-      expect(captured).toHaveLength(2);
-    });
+  describe('connection-level failures on the middleware\'s own SSE (#3198)', () => {
+    /* The middleware's subscribe stream is a SECOND connection alongside
+       the view's. What its failure means depends on the code api.ts
+       attached (src/lib/analysis-stream-codes.ts):
 
-    it('treats non-409 stream failures as terminal: halts, shows toast, closes handle', async () => {
-      /* Regression test for Fix C: non-409 stream failures (5xx, malformed
-         frames, network drops, missing result) are terminal. The middleware
-         must dispatch setHalted, show an error toast, and close the handle.
-         This prevents the phase cards from rendering stale 'running' state
-         when the actual analysis is dead. Before the fix, 500 errors were
-         treated as transient (no halt), leaving the UI spinning even though
-         the backend had failed. */
+       - `stream_no_result` — a clean 200 that ended with no `result`
+         frame. Says nothing about the run (the subset route ends this way
+         by design; the main route broadcasts every final frame to every
+         subscriber), so it must be a QUIET close: no halt, no toast, and
+         the next tick re-subscribes. Round 5 stamped a fabricated 500 on
+         this case and halted — permanently, since ticks never rewrote
+         `state` — painting a live run as dead (pass 5, 🔴 17).
+       - `stream_failed` (non-2xx on the subscribe POST) and any plain
+         Error (fetch rejection, truncated frame) — terminal for THIS
+         connection: halt + toast, because when the view is unmounted this
+         is the only connection there is (pass 4, 🔴 10). If the view's
+         connection is in fact alive, its next tick lifts the halt (slice
+         heal, tested below).
+
+       Each test names the mutation that reddens it; a test that stays
+       green under its own mutation is the defect this file has shipped
+       before (pass 5, 🟠 19). */
+
+    async function openAndReject(
+      kind: 'main' | 'subset',
+      err: unknown,
+    ): Promise<{ store: ReturnType<typeof buildStore>; first: CapturedAnalysisCall }> {
       const store = buildStore();
-      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
       store.dispatch(
-        analysisActions.applyAnalysisSnapshotTick({
-          manuscriptId: 'm1',
-          phaseId: 0,
-          phaseProgress: 0.1,
-        }),
+        analysisActions.setActiveStream(
+          kind === 'subset' ? { ...baseSnapshot, kind: 'subset', subsetChapterIds: [4] } : baseSnapshot,
+        ),
       );
-      const firstCall = captured[0]!;
-      /* Reject with a 500 AnalysisError (server error). */
-      firstCall.reject(new AnalysisError('Analysis stream failed (500).', 'stream_failed', undefined, undefined, undefined, undefined, 500));
+      store.dispatch(
+        analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+      );
+      const first = captured[0]!;
+      first.reject(err);
       await Promise.resolve();
       await Promise.resolve();
-      /* The handle must be closed. */
-      expect(firstCall.signal.aborted).toBe(true);
-      /* State SHOULD flip to halted. */
+      return { store, first };
+    }
+
+    it.each(['main', 'subset'] as const)(
+      '%s route: a clean end without a result (stream_no_result) is a quiet close — no halt, no toast, re-subscribes on the next tick',
+      async (kind) => {
+        /* Mutation: delete the `ANALYSIS_STREAM_NO_RESULT` branch in the
+           middleware's catch → falls into the generic AnalysisError branch →
+           `state` reads 'halted' and a toast lands → red. */
+        const { store, first } = await openAndReject(
+          kind,
+          new AnalysisError('Analysis stream ended without a result event.', ANALYSIS_STREAM_NO_RESULT),
+        );
+        expect(first.signal.aborted).toBe(true);
+        const snap = store.getState().analysis.activeStream;
+        expect(snap?.state).toBe('running');
+        expect(snap?.haltCode).toBeUndefined();
+        expect(store.getState().notifications.toasts).toHaveLength(0);
+        /* Reconnect path intact: the next tick re-opens because the handle
+           was closed (pass 3, 🟠 3 — a silent branch that forgets
+           closeHandle() never re-subscribes again). */
+        store.dispatch(
+          analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.2 }),
+        );
+        expect(captured).toHaveLength(2);
+        expect(captured[1]?.kind).toBe(kind);
+      },
+    );
+
+    it('a non-2xx subscribe POST (stream_failed) is terminal: halted with the real reason + one toast', async () => {
+      /* Mutation: widen the quiet-close branch to `e.code === ANALYSIS_STREAM_FAILED`
+         as well → state stays 'running', no toast → red. This is the
+         classification boundary: a clean no-result end is quiet, a refused
+         POST is not. */
+      const { store, first } = await openAndReject(
+        'main',
+        new AnalysisError('Analysis stream failed (500).', ANALYSIS_STREAM_FAILED),
+      );
+      expect(first.signal.aborted).toBe(true);
       const snap = store.getState().analysis.activeStream;
       expect(snap?.state).toBe('halted');
-      expect(snap?.haltReason).toBeDefined();
-      /* Verify error toast was dispatched. */
+      expect(snap?.haltCode).toBe(ANALYSIS_STREAM_FAILED);
+      expect(snap?.haltReason).toBe('Analysis stream failed (500).');
       expect(store.getState().notifications.toasts).toHaveLength(1);
     });
 
-    it('calls closeHandle for all stream failures to allow reconnection attempts', async () => {
-      /* Pin that closeHandle is called for both transient and terminal
-         failures. Before the fix, closeHandle was not called for plain Errors,
-         leaving handle non-null and blocking all future reconnection attempts
-         via the first-tick-opens contract. Both 409 and 5xx must close the
-         handle. */
-      const store = buildStore();
-      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    it('a plain Error (fetch rejection / truncated frame) is terminal: halted as stream_failed + one toast, handle closed', async () => {
+      /* Mutation: delete the plain-Error fallthrough at the end of the
+         middleware's catch (restore a bare `closeHandle()`) → `state` stays
+         'running', `haltCode` undefined, 0 toasts → red. This is the branch
+         pass 5 measured as uncovered (🟠 19 item 2), and the behaviour
+         pass 4 found silenced (🔴 10). */
+      const { store, first } = await openAndReject('main', new TypeError('Failed to fetch'));
+      expect(first.signal.aborted).toBe(true);
+      const snap = store.getState().analysis.activeStream;
+      expect(snap?.state).toBe('halted');
+      expect(snap?.haltCode).toBe(ANALYSIS_STREAM_FAILED);
+      expect(snap?.haltReason).toBe('Failed to fetch');
+      const toasts = store.getState().notifications.toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0]).toMatchObject({ kind: 'error', message: 'Failed to fetch' });
+    });
+
+    it('a live tick after a connection-level halt lifts it and re-subscribes (the halt is not permanent)', async () => {
+      /* PROBE_K from pass 5, as a test: fail the middleware's socket, then
+         deliver the ticks the view's own healthy SSE would. The run is
+         provably alive, so the snapshot must read 'running' again — with the
+         stale haltReason gone — and the middleware must have re-opened.
+         Mutation: delete the `ANALYSIS_STREAM_FAILED` heal in
+         applyAnalysisSnapshotTick → `state` stays 'halted' after four
+         advancing ticks → red. */
+      const { store } = await openAndReject('main', new TypeError('Failed to fetch'));
+      expect(store.getState().analysis.activeStream?.state).toBe('halted');
+      for (let i = 1; i <= 4; i++) {
+        store.dispatch(
+          analysisActions.applyAnalysisSnapshotTick({
+            manuscriptId: 'm1',
+            phaseId: 1,
+            phaseProgress: i * 0.2,
+            lastTickAt: 1000 + i,
+          }),
+        );
+      }
+      const snap = store.getState().analysis.activeStream;
+      expect(snap?.state).toBe('running');
+      expect(snap?.haltCode).toBeUndefined();
+      expect(snap?.haltReason).toBeUndefined();
+      expect(snap?.phaseId).toBe(1);
+      expect(snap?.phaseProgress).toBeCloseTo(0.8);
+      /* Re-subscribed on the first of those ticks (handle was closed by the
+         HALTED_TYPE hook), and only once. */
+      expect(captured).toHaveLength(2);
+    });
+
+    it('a tick does NOT lift an analyzer-level halt (attribution_drift is a verdict on the run, not on a socket)', async () => {
+      /* Control for the heal above: only ANALYSIS_STREAM_FAILED is lifted.
+         Mutation: drop the `haltCode === ANALYSIS_STREAM_FAILED` term from the
+         heal → this reads 'running' → red. */
+      const { store } = await openAndReject('main', new AnalysisError('drift', 'attribution_drift'));
       store.dispatch(
-        analysisActions.applyAnalysisSnapshotTick({
-          manuscriptId: 'm1',
-          phaseId: 0,
-          phaseProgress: 0.1,
-        }),
+        analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, phaseProgress: 0.5 }),
       );
-      const signal = captured[0]!.signal;
-      expect(signal.aborted).toBe(false);
-      lastCall().reject(new AnalysisError('Analysis stream failed (500).', 'stream_failed', undefined, undefined, undefined, undefined, 500));
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(signal.aborted).toBe(true);
+      const snap = store.getState().analysis.activeStream;
+      expect(snap?.state).toBe('halted');
+      expect(snap?.haltCode).toBe('attribution_drift');
     });
   });
 

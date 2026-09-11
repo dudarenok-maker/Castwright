@@ -13,6 +13,7 @@
    doesn't match the current snapshot is ignored. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
 
 /* Snapshot of the in-flight analyzer run. Set by the analysing view (or
    the analysis-stream middleware) on start; updated on every Phase/ETA/
@@ -113,7 +114,19 @@ export const analysisSlice = createSlice({
     /* Apply a phase / log / eta / cast-update tick to the snapshot.
        Cross-book guard: if the snapshot is for a different
        manuscriptId, the tick is ignored (another tab's analysis can't
-       clobber this tab's snapshot). */
+       clobber this tab's snapshot).
+
+       A tick is proof the run is alive — it only ever comes from a live
+       SSE connection for this manuscript (the view's or the middleware's).
+       So a tick contradicts a CONNECTION-level halt: the middleware
+       declares `stream_failed` when ITS socket dies, and if the view's
+       socket is still delivering ticks the run is fine and the halt was
+       about the wrong thing. Lift it. Analyzer-level halts
+       (attribution_drift, cast_incomplete, …) are a verdict on the run
+       and end the stream, so no tick can follow them; paused is untouched
+       (a late buffered tick after Pause must not un-pause). Without this,
+       a halt set by one dead socket stayed on a run that was visibly
+       progressing (#3198 pass 5, PROBE_K). */
     applyAnalysisSnapshotTick(
       state,
       action: PayloadAction<{
@@ -130,6 +143,11 @@ export const analysisSlice = createSlice({
       const snap = state.activeStream;
       if (!snap) return;
       if (snap.manuscriptId !== action.payload.manuscriptId) return;
+      if (snap.state === 'halted' && snap.haltCode === ANALYSIS_STREAM_FAILED) {
+        snap.state = 'running';
+        delete snap.haltCode;
+        delete snap.haltReason;
+      }
       if (typeof action.payload.model === 'string') snap.model = action.payload.model;
       const phaseChanged =
         typeof action.payload.phaseId === 'number' && action.payload.phaseId !== snap.phaseId;

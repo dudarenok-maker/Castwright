@@ -65,6 +65,7 @@ import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
+import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -2832,10 +2833,6 @@ export class AnalysisError extends Error {
       classification — mirrors the `remediation` field on `kind:'error'`
       SSE events and surfaces in the run-error panel. */
   remediation?: string;
-  /** HTTP status code for stream failures. When set, allows middleware to
-      distinguish transient (409 conflict, already held by another tab) from
-      terminal failures (5xx errors, malformed responses, network drops). */
-  status?: number;
   constructor(
     message: string,
     code: string,
@@ -2843,7 +2840,6 @@ export class AnalysisError extends Error {
     prevCharCount?: number,
     nextCharCount?: number,
     remediation?: string,
-    status?: number,
   ) {
     super(message);
     this.name = 'AnalysisError';
@@ -2852,9 +2848,9 @@ export class AnalysisError extends Error {
     this.prevCharCount = prevCharCount;
     this.nextCharCount = nextCharCount;
     this.remediation = remediation;
-    this.status = status;
   }
 }
+
 
 async function realAnalyseManuscript(
   manuscriptId: string,
@@ -2900,14 +2896,14 @@ async function realAnalyseManuscript(
           selector: { manuscriptId },
           shape: '409',
           onRetry: () => realAnalyseManuscript(manuscriptId, opts).then(resolve, reject),
-          onDismiss: () => reject(new AnalysisError(msg, 'stream_failed', undefined, undefined, undefined, undefined, res.status)),
+          onDismiss: () => reject(new AnalysisError(msg, ANALYSIS_STREAM_FAILED)),
         });
-        if (!accepted) reject(new AnalysisError(msg, 'stream_failed', undefined, undefined, undefined, undefined, res.status));
+        if (!accepted) reject(new AnalysisError(msg, ANALYSIS_STREAM_FAILED));
       });
     }
-    throw new AnalysisError(msg, 'stream_failed', undefined, undefined, undefined, undefined, res.status);
+    throw new AnalysisError(msg, ANALYSIS_STREAM_FAILED);
   }
-  if (!res.body) throw new AnalysisError(`Analysis stream failed (${res.status}).`, 'stream_failed', undefined, undefined, undefined, undefined, res.status);
+  if (!res.body) throw new AnalysisError(`Analysis stream failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -3028,7 +3024,7 @@ async function realAnalyseManuscript(
     }
   }
 
-  if (!result) throw new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result', undefined, undefined, undefined, undefined, 500);
+  if (!result) throw new AnalysisError('Analysis stream ended without a result event.', ANALYSIS_STREAM_NO_RESULT);
   return result;
 }
 
@@ -5616,7 +5612,12 @@ async function realRunAnalysisForChapters(
       signal,
     },
   );
-  if (!res.ok || !res.body) throw new Error(`Subset analysis failed (${res.status}).`);
+  /* Same two connection-level codes as realAnalyseManuscript — the stream
+     middleware subscribes through this reader too (kind: 'subset') and
+     classifies on `code`, so a plain Error here would land in its generic
+     terminal branch and paint a designed no-result exit as a dead run. */
+  if (!res.ok || !res.body)
+    throw new AnalysisError(`Subset analysis failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -5739,7 +5740,11 @@ async function realRunAnalysisForChapters(
     }
   }
 
-  if (!result) throw new Error('Subset analysis stream ended without a result event.');
+  if (!result)
+    throw new AnalysisError(
+      'Subset analysis stream ended without a result event.',
+      ANALYSIS_STREAM_NO_RESULT,
+    );
   return result;
 }
 

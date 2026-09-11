@@ -41,6 +41,7 @@
 
 import type { Dispatch, Middleware } from '@reduxjs/toolkit';
 import { api, AnalysisError } from '../lib/api';
+import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { notificationsActions } from './notifications-slice';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
@@ -178,6 +179,11 @@ export const analysisStreamMiddleware: Middleware = (store) => {
            manuscript), don't poison the new snapshot with the old
            run's terminal state. */
         if (handle !== localHandle) return;
+        /* Every branch below that dispatches setPaused / setHalted closes
+           this handle as a side effect: the PAUSE_TYPE / HALTED_TYPE hooks
+           in the action handler at the bottom of this file call
+           closeHandle() when the slice flips. Only the branch that
+           dispatches NOTHING (stream_no_result) has to close explicitly. */
         /* Task 9d (#2407) — streaming shape. An unset book language is not a
            generic stream failure: route it to the language-guard host instead of
            the error toast, and re-run this SAME openHandle call (which re-issues
@@ -211,19 +217,25 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           )
             return;
           fail();
-          closeHandle();
           return;
         }
         if (e instanceof AnalysisError && e.code === 'aborted') {
           dispatch(analysisActions.setPaused({ manuscriptId }));
-          closeHandle();
           return;
         }
-        /* Transient 409 conflict (another tab holds the subscription) —
-           close silently without declaring halted. The view's primary SSE
-           may still be healthy, and the middleware will reconnect on the
-           next tick. */
-        if (e instanceof AnalysisError && e.status === 409) {
+        /* A clean 200 that ended without a `result` frame says nothing
+           about the RUN — only that this socket closed. On the subset route
+           it is a designed exit (analysis.ts ends the job with no final
+           event when other chapters still need retry, and the view's own
+           subset catch already treats it as "not a real failure"); on the
+           main route every job exit broadcasts its final frame to every
+           subscriber, so a result-less end can only be a per-connection
+           close. Either way the view's primary SSE stays the authority:
+           close our handle and let the next tick's first-tick-opens
+           contract re-subscribe. Declaring halted here painted a live,
+           progressing run as dead — and permanently, because ticks never
+           rewrite `state` (#3198 pass 5). */
+        if (e instanceof AnalysisError && e.code === ANALYSIS_STREAM_NO_RESULT) {
           closeHandle();
           return;
         }
@@ -236,16 +248,23 @@ export const analysisStreamMiddleware: Middleware = (store) => {
               dedupeKey: 'analysis-stream',
             }),
           );
-          closeHandle();
           return;
         }
-        /* Terminal failures not caught by the AnalysisError branches above:
-           5xx server errors, malformed SSE frames, network drops, or other
-           stream protocol errors. The view's primary SSE may also fail on
-           these, so dispatch halted with a generic error message. Always
-           call closeHandle() so the next tick's first-tick-opens contract
-           can retry if needed. */
-        dispatch(analysisActions.setHalted({ manuscriptId, code: 'stream_failed', message: (e as Error).message }));
+        /* Anything else is a transport failure on this connection — a
+           `fetch` rejection when the box goes offline, a JSON.parse throw
+           on a truncated frame. Halt loudly: when the analysing view is
+           unmounted this is the only connection there is, and a silent
+           close would leave the pill reading an ambiguous `stalled` 30s
+           later (pass 4, 🔴 10). If the view's own connection is in fact
+           still healthy, its next tick contradicts the halt and the slice
+           lifts it (applyAnalysisSnapshotTick heals ANALYSIS_STREAM_FAILED). */
+        dispatch(
+          analysisActions.setHalted({
+            manuscriptId,
+            code: ANALYSIS_STREAM_FAILED,
+            message: (e as Error).message,
+          }),
+        );
         dispatch(
           notificationsActions.pushToast({
             kind: 'error',
@@ -253,7 +272,6 @@ export const analysisStreamMiddleware: Middleware = (store) => {
             dedupeKey: 'analysis-stream',
           }),
         );
-        closeHandle();
       }
     })();
   };

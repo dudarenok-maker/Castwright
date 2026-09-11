@@ -1894,36 +1894,37 @@ describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
     });
   });
 
-  it('server-side pause (aborted code) pauses the analysis via SSE callback', async () => {
-    /* Test that when the server sends an AnalysisError with code='aborted'
-       (indicating a server-side pause), the view's catch block correctly
-       dispatches setPaused to reflect the paused state in Redux.
-       This ensures the snapshot persists for navigation back to the analysing
-       view. The conn state update (setConn('idle')) is tested separately
-       in unit tests for the view's SSE callback chain. */
+  it('server-side pause (aborted code) drops conn to idle: sticky bar unmounts, inline button reads Resume, snapshot is paused', async () => {
+    /* #3198 pass 1 finding 2 / pass 5 🟠 20. A pause issued from another
+       surface or device reaches this view as the SSE rejecting with
+       `AnalysisError('aborted')`. The view's catch must call setConn('idle')
+       BEFORE setPaused, or `conn` lingers at 'connecting'/'streaming',
+       `isAnalysisRunning` stays true, and the sticky bar stays pinned with a
+       pulsing dot and a "Pause analysis" button over cards that say paused.
+       This drives the REAL rejection through the real catch — it does not
+       dispatch anything itself — and asserts the consequences of the conn
+       flip, which are the only observable the fix has.
+       Mutation: remove `setConn('idle')` from the aborted branch in
+       analysing.tsx → conn stays 'connecting' → the sticky bar is still
+       mounted, the inline Resume button never appears → red. */
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError(
+      'Analysis aborted (paused or displaced by a new run).',
+      'aborted',
+    );
     const { store } = await renderViewWaitingForAnalysis();
-    await waitFor(() => expect(store.getState().analysis.activeStream).not.toBeNull());
 
-    /* Simulate the streaming state by firing a phase tick. */
-    await act(async () => {
-      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.1 });
-    });
-
-    /* Simulate a server-side pause by calling the error callback with
-       an AnalysisError with code='aborted'. The view's catch block in
-       analysing.tsx line ~610 would handle this and dispatch setPaused. */
-    const manuscriptId = store.getState().analysis.activeStream?.manuscriptId;
-    expect(manuscriptId).toBe('m1');
-
-    /* Since we're testing the Redux state, we can directly dispatch setPaused
-       as the view's catch block does when it receives the aborted error. */
-    await act(async () => {
-      store.dispatch(analysisActions.setPaused({ manuscriptId: manuscriptId! }));
-    });
-
-    /* Verify the snapshot state changed to paused. */
-    await waitFor(() => {
-      expect(store.getState().analysis.activeStream?.state).toBe('paused');
+    /* Inline Start/Resume button is hidden while isAnalysisRunning; its
+       reappearance labelled Resume is exactly "conn is idle again, and
+       the run has started once". */
+    expect(await screen.findByRole('button', { name: /resume analysis/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('sticky-analysis-bar')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pause analysis/i })).not.toBeInTheDocument();
+    /* And the snapshot is paused, not cleared — the pill keeps the Resume
+       affordance for the user to navigate back to. */
+    expect(store.getState().analysis.activeStream).toMatchObject({
+      manuscriptId: 'm1',
+      state: 'paused',
     });
   });
 });
@@ -2148,69 +2149,57 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     expect(capturedOpts).toBeUndefined();
   });
 
-  /* Regression test for #3169 bug class: a stale paused/halted snapshot from a
-     DIFFERENT manuscript should not make this view render as paused/halted.
-     The manuscriptId guard in analysing.tsx:1476 (computing `started`) and
-     1478 (computing `runState`) both check that the snapshot's manuscriptId
-     matches the view's before allowing the snapshot to influence render state.
-     This test verifies the `runState` guard specifically: when the snapshot is
-     for a DIFFERENT manuscript, the view must not render the stale state.
-     The key scenario: a stale paused snapshot from manuscript m2 lingers while
-     rendering manuscript m1, and the guard prevents it from affecting m1's
-     render state (which should default to 'running'). */
-  it('does NOT render paused/halted state when snapshot is for a different manuscript', async () => {
-    const store = configureStore({
-      reducer: {
-        ui: uiSlice.reducer,
-        cast: castSlice.reducer,
-        analysis: analysisSlice.reducer,
-        account: accountSlice.reducer,
-        bookMeta: bookMetaSlice.reducer,
-        notifications: notificationsSlice.reducer,
-      },
-      preloadedState: {
-        analysis: {
-          activeStream: {
-            bookId: 'book-2',
-            manuscriptId: 'm2', // DIFFERENT manuscript
-            bookTitle: 'Different Book',
-            engine: 'gemini' as const,
-            phaseId: 0,
-            phaseLabel: 'Cast building',
-            phaseProgress: 0.0,
-            remainingMs: 0,
-            lastTickAt: Date.now(),
-            state: 'paused' as const, // stale paused state from m2
-          },
-        },
-      },
+  /* #3198 pass 1 🔴 (B) / pass 4 🔴 11 / pass 5 🔴 18 — the `runState`
+     manuscript guard at the derivePhaseState call site in analysing.tsx.
+     `analysis.activeStream` is ONE global slot, and a sibling tab's
+     broadcast replaces it wholesale with no bookId filter
+     (broadcast-middleware.ts, applyExternalAnalysisSnapshot). So: this tab
+     is streaming Book A; another tab pauses Book B; the slot now holds a
+     PAUSED snapshot for m2 while m1's run is live and ticking.
+
+     The earlier version of this test preloaded the foreign snapshot into a
+     never-started view, where `started` is false by its own independent
+     route and derivePhaseState returns 'pending' whether or not the
+     runState guard exists — removing the guard left the whole suite green.
+     Here `started` is true by a route the snapshot has no part in (the
+     user clicked Start: analysisStarted), so the ONLY thing between the
+     foreign paused snapshot and a paused card is the guard.
+     Mutation: replace the guarded read with the unguarded
+     `runState: activeStreamSnapshot?.state ?? 'running'` → derivePhaseState
+     gets runState 'paused' with started true → chip reads 'paused' → red. */
+  it('keeps a LIVE run rendering active when a sibling tab\'s broadcast drops a paused snapshot for a DIFFERENT manuscript into the slot', async () => {
+    const { store } = await renderViewWaitingForAnalysis();
+    /* The view seeded its own m1 running snapshot on Start; one tick makes
+       conn 'streaming' so the chip's active form is 'streaming'. */
+    await act(async () => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.3 });
     });
+    expect(store.getState().analysis.activeStream?.manuscriptId).toBe('m1');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
 
-    /* Render the view for manuscript m1, but with a stale paused snapshot
-       for m2 in the store. The manuscriptId guard should prevent the paused
-       state from being applied — the phase should render as if there's no
-       relevant snapshot (pending or active depending on other state). */
-    render(
-      <Provider store={store}>
-        <AnalysingView
-          manuscriptId="m1" /* Rendering m1, but snapshot is for m2 */
-          title="the Coalfall Commission"
-          wordCount={2440}
-          onComplete={() => {}}
-        />
-      </Provider>,
-    );
+    /* Sibling tab pauses Book B → inbound broadcast replaces the slot. */
+    await act(async () => {
+      store.dispatch(
+        analysisActions.applyExternalAnalysisSnapshot({
+          bookId: 'book-2',
+          manuscriptId: 'm2',
+          bookTitle: 'Different Book',
+          engine: 'gemini',
+          phaseId: 0,
+          phaseLabel: 'Detecting characters',
+          phaseProgress: 0.1,
+          remainingMs: 0,
+          lastTickAt: Date.now(),
+          state: 'paused',
+        }),
+      );
+    });
+    expect(store.getState().analysis.activeStream?.manuscriptId).toBe('m2');
+    expect(store.getState().analysis.activeStream?.state).toBe('paused');
 
-    /* Phase 0 is the frontier. With a stale snapshot for a DIFFERENT
-       manuscript, the derivePhaseState function receives runState='running'
-       (because the manuscriptId check at analysing.tsx:1478 blocks the
-       snapshot and returns the default), so the phase renders as 'pending'
-       (frontier, but no evidence of start), not 'paused'. */
-    const chips = await screen.findAllByTestId('phase-model-chip-0');
-    expect(chips.length).toBeGreaterThan(0);
-    /* The key assertion: phase does not render with the stale paused state. */
-    expect(chips[0]).not.toHaveAttribute('data-phase-state', 'paused');
-    expect(chips[0]).not.toHaveAttribute('data-phase-state', 'halted');
+    /* m1 is still streaming on its own connection: the card must stay
+       active, not adopt m2's paused state. */
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
   });
 
   /* Fix round 1 (#3169 review finding 1): the rehydrate effect only writes

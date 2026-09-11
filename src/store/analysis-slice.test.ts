@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
+import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
 
 const baseSnapshot: AnalysisStreamSnapshot = {
   bookId: 'b1',
@@ -333,6 +334,63 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
       const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
       const s2 = analysisSlice.reducer(s1, analysisActions.applyExternalAnalysisSnapshot(null));
       expect(s2.activeStream).toBeNull();
+    });
+  });
+
+  /* #3198 — a tick is proof of life. The stream middleware halts the
+     snapshot with `stream_failed` when ITS socket dies; if the view's own
+     socket is still delivering ticks, the run is alive and the halt was
+     about the wrong thing. Only that one code is lifted: analyzer-level
+     halts are a verdict on the run (no tick can follow them anyway), and
+     paused must survive a late buffered tick. */
+  describe('applyAnalysisSnapshotTick — lifts a connection-level halt', () => {
+    const halted = (code: string) =>
+      analysisSlice.reducer(
+        analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot)),
+        analysisActions.setHalted({ manuscriptId: 'm1', code, message: 'socket died' }),
+      );
+    const tick = analysisActions.applyAnalysisSnapshotTick({
+      manuscriptId: 'm1',
+      phaseId: 1,
+      phaseProgress: 0.4,
+      lastTickAt: 2000,
+    });
+
+    it('a same-manuscript tick flips a stream_failed halt back to running and drops the stale reason', () => {
+      /* Mutation: delete the heal block → state stays 'halted' → red. */
+      const s = analysisSlice.reducer(halted(ANALYSIS_STREAM_FAILED), tick);
+      expect(s.activeStream).toMatchObject({ state: 'running', phaseId: 1, phaseProgress: 0.4 });
+      expect(s.activeStream?.haltCode).toBeUndefined();
+      expect(s.activeStream?.haltReason).toBeUndefined();
+    });
+
+    it('a tick for a DIFFERENT manuscript does not lift it (cross-book guard runs first)', () => {
+      const s = analysisSlice.reducer(
+        halted(ANALYSIS_STREAM_FAILED),
+        analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm_OTHER', phaseId: 1, phaseProgress: 0.4 }),
+      );
+      expect(s.activeStream?.state).toBe('halted');
+      expect(s.activeStream?.haltCode).toBe(ANALYSIS_STREAM_FAILED);
+    });
+
+    it.each(['attribution_drift', 'cast_incomplete', 'stage1_shrink_refused', 'unknown'])(
+      'an analyzer-level halt (%s) is NOT lifted by a tick',
+      (code) => {
+        /* Mutation: drop the `haltCode === ANALYSIS_STREAM_FAILED` term → red. */
+        const s = analysisSlice.reducer(halted(code), tick);
+        expect(s.activeStream?.state).toBe('halted');
+        expect(s.activeStream?.haltCode).toBe(code);
+        expect(s.activeStream?.haltReason).toBe('socket died');
+      },
+    );
+
+    it('a paused snapshot stays paused through a late tick', () => {
+      const paused = analysisSlice.reducer(
+        analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot)),
+        analysisActions.setPaused({ manuscriptId: 'm1' }),
+      );
+      const s = analysisSlice.reducer(paused, tick);
+      expect(s.activeStream?.state).toBe('paused');
     });
   });
 });
