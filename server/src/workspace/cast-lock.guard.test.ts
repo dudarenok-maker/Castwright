@@ -246,9 +246,11 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript';
+import { CAST_LOCK_GUARD_SCAN_GLOB } from './cast-lock.guard-targets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..'); // server/src
+const REPO_ROOT = join(SRC_ROOT, '..', '..');
 
 /** Every non-test `.ts` file under `server/src`, recursively. */
 function collectSourceFiles(dir: string, out: string[] = []): string[] {
@@ -592,6 +594,17 @@ const ALLOWED_UNLOCKED = new Map<string, { writes: number; rms: number; why: str
 ]);
 
 describe('cast.json write lock — static guard (#1981 Task 12)', () => {
+  it('scan scope matches the declared CAST_LOCK_GUARD_SCAN_GLOB (#3085)', () => {
+    // Ties this guard's ACTUAL scan target (SRC_ROOT, walked by
+    // collectSourceFiles) to the scope it DECLARES via the sibling module —
+    // the same constant force-rerun-triggers.test.ts checks its
+    // forceRerunTriggers entry against — so the two statements of this
+    // guard's scope can never independently drift.
+    const declaredRoot = CAST_LOCK_GUARD_SCAN_GLOB.replace(/\/\*\*$/, '');
+    const actualRoot = relative(REPO_ROOT, SRC_ROOT).split(sep).join('/');
+    expect(actualRoot).toBe(declaredRoot);
+  });
+
   it('every writeJsonAtomic(castJsonPath(...)) / rm(castJsonPath(...)) site sits inside withCastLock/withCastLocks, except the pinned allowlist', () => {
     const files = collectSourceFiles(SRC_ROOT);
     const problems: string[] = [];
