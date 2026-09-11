@@ -231,8 +231,9 @@ export function AnalysingView({
      flips, analysis useEffect re-runs… and at any link in the chain a
      leaked fetch or a stale render could pile up against Ollama. With
      an explicit click the user controls when the analysis kicks off,
-     and the server log shows one `[analysis] start requested` line per
-     click that reaches the server. */
+     and the server log shows one `[analysis] start` line per run actually
+     started (plus a `request received` line for every POST, including the
+     stream middleware's subscribe and any rejoin). */
   const [analysisStarted, setAnalysisStarted] = useState(false);
   /* True only while re-attaching to an already-running job after a page
      reload — set when the cold-boot rehydrate finds a `running` snapshot,
@@ -1458,12 +1459,19 @@ export function AnalysingView({
                  this manuscript is always running/paused/halted — a
                  completed run's snapshot is torn down via
                  clearActiveStream, so this can't wrongly mark a
-                 never-started view as started. */
+                 never-started view as started.
+                 F3 (#3169 fix wave) — `!!manuscriptId &&` guards against
+                 both sides being `undefined`: with no `manuscriptId` prop
+                 and no snapshot, the bare `===` read `undefined ===
+                 undefined` as true, rendering an idle view as active. The
+                 rehydrate effect this comment says it mirrors already
+                 returns early on `!manuscriptId` (~line 282) — this term
+                 needs the same guard to actually mirror it. */
               started:
                 analysisStarted ||
                 resuming ||
                 hasStartedOnceRef.current ||
-                activeStreamSnapshot?.manuscriptId === manuscriptId,
+                (!!manuscriptId && activeStreamSnapshot?.manuscriptId === manuscriptId),
             });
             return (
               <PhaseCard

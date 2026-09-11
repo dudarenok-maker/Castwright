@@ -1,7 +1,8 @@
 /* Bug #3169 — an idle analysing view (mounted, never started) rendered
  * phase 0 as active: spinner, progress bar, and the model chip's "· streaming"
- * label + pulsing dot, even though no run had ever begun. A real user waited
- * 30+ minutes on this page without ever clicking Start.
+ * label + pulsing dot, even though no run had ever begun. A reader reported a
+ * long wait on a screen that looked busy; an idle page that looks busy
+ * invites exactly that.
  *
  * bootFreshBookIntoAnalysing lands the page on /analysing with the "Start
  * analysis" button visible and WITHOUT clicking it — mock mode does not

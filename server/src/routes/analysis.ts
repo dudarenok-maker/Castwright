@@ -3219,12 +3219,18 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      handler runs) but lets this one unconditional log line cover the whole
      span: a stall anywhere before the job's first milestone is now
      distinguishable from "the click never reached the server", which is
-     exactly the ambiguity that made #3084 undiagnosable. */
+     exactly the ambiguity that made #3084 undiagnosable.
+     F2 (#3169 fix wave) — this is now a per-POST line, not a per-click one:
+     the stream middleware's own subscribe POST (fired on the first tick of
+     every run, and on every reload/rejoin) reaches this same handler with no
+     body, so one Start click can log this line more than once. `model` is
+     request-supplied text and is stringified (F2/F6) so a LAN client can't
+     inject a forged `[analysis]` line via a newline in it. */
   const requestedModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
   const requestedFresh = req.body?.fresh === true;
   console.log(
-    `[analysis] start requested manuscript=${manuscriptId} ` +
-      `model=${requestedModel ?? '(saved/default)'} fresh=${requestedFresh}`,
+    `[analysis] request received manuscript=${manuscriptId} ` +
+      `model=${JSON.stringify(requestedModel ?? '(saved/default)')} fresh=${requestedFresh}`,
   );
 
   /* Task 6c (#2246) pre-flight gate — resolve the book's language BEFORE the
@@ -3336,15 +3342,6 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     clearInterval(keepAlive);
     return res.end();
   }
-  /* D2 (#3169) — unconditional (was `if (requestedModel)`): the per-click
-     line naming the RESOLVED engine/model must print even when the client
-     omitted `model` (the per-phase-split-saved / no-explicit-pick case),
-     otherwise the whole run logs nothing under `[analysis]` until the first
-     phase milestone. */
-  console.log(
-    `[analysis] manuscript=${manuscriptId} engine=${selection.engine} model=${selection.model}`,
-  );
-
   /* Read the prior outcome FILE OUTSIDE the critical section (before the
      existing-job check). The .await below would otherwise insert a gap into
      what must be an atomic "check existing, then set new job" window (#3004
@@ -3368,6 +3365,13 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      any prior job and start a new one detached in the background. */
   const existing = inFlightAnalysisByManuscript.get(manuscriptId);
   if (existing && !existing.controller.signal.aborted && !requestedFresh) {
+    /* F2 (#3169 fix wave) — the one outcome line for the attach path. The
+       job object doesn't store the model it's running (only `engine`), so
+       this deliberately omits `model` rather than printing the requesting
+       POST's own `requestedModel` (or the saved default), which would be
+       the WRONG model whenever the running job was started with an
+       explicitly picked one. */
+    console.log(`[analysis] subscribe manuscript=${manuscriptId}`);
     const subscriber: AnalysisSubscriber = { send, res, keepAlive };
     existing.subscribers.add(subscriber);
     replayCatchUp(existing, send);
@@ -3448,6 +3452,21 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
        fresh: true displacement aborts. */
   });
   res.on('finish', () => clearInterval(keepAlive));
+
+  /* F2 (#3169 fix wave) — the one outcome line for the new-job path, naming
+     the RESOLVED engine/model (not the raw `requestedModel`, which may be
+     undefined when the saved per-phase default applies). Replaces the old
+     unconditional-but-mid-handler `[analysis] manuscript=… engine=…
+     model=…` line above — this is the same information, logged once the
+     dispatch decision (new job vs. subscribe) has actually been made.
+     `selection.model` is stringified (F6): `selectAnalyzerForPhase`'s
+     priority 2 (per-request override) passes the request body's `model`
+     straight through to `selectAnalyzer`, which returns it verbatim as
+     `selection.model` — so this can carry request text just like
+     `requestedModel` above, and needs the same log-injection guard. */
+  console.log(
+    `[analysis] start manuscript=${manuscriptId} engine=${selection.engine} model=${JSON.stringify(selection.model)}`,
+  );
 
   /* Run the analyzer in the background. Express won't end this
      response until res.end() is called explicitly (by endJob() inside
@@ -6452,12 +6471,19 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      (moved up from their old spot further down, where `body` was also
      redeclared) so this one unconditional log covers a Start-click that
      reaches the server before any of that — same rationale as the parent
-     route's `start requested` line. No behaviour change: req.body is
-     already fully parsed by the time this handler runs. */
+     route's `request received` line. No behaviour change: req.body is
+     already fully parsed by the time this handler runs.
+     F2 (#3169 fix wave) — this is a per-POST line, same reasoning as the
+     parent route: the stream middleware's own subscribe POST reaches this
+     handler too, with no body, so a single Start click can log it more
+     than once. `model` is request-supplied text, stringified (F2/F6) as a
+     log-injection guard, same as the parent route. */
   const body = req.body as { chapterIds?: unknown; model?: unknown; allowStage1Shrink?: unknown };
   const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
+  const requestedChapterCount = Array.isArray(body?.chapterIds) ? body.chapterIds.length : 0;
   console.log(
-    `[analysis-subset] start requested manuscript=${manuscriptId} model=${requestedModel ?? '(saved/default)'}`,
+    `[analysis-subset] request received manuscript=${manuscriptId} ` +
+      `model=${JSON.stringify(requestedModel ?? '(saved/default)')} chapters=${requestedChapterCount}`,
   );
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -6566,6 +6592,11 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      away without aborting the retry. */
   const existing = inFlightSubsetByManuscript.get(manuscriptId);
   if (existing && !existing.controller.signal.aborted) {
+    /* F2 (#3169 fix wave) — same rationale as the parent route: the job
+       doesn't store the model it's running, so this omits `model` rather
+       than printing this POST's own (possibly wrong) requested/default
+       one. */
+    console.log(`[analysis-subset] subscribe manuscript=${manuscriptId}`);
     const subscriber: AnalysisSubscriber = { send, res, keepAlive };
     existing.subscribers.add(subscriber);
     replayCatchUp(existing, send);
@@ -6641,6 +6672,16 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   });
   res.on('finish', () => clearInterval(keepAlive));
 
+  /* F2 (#3169 fix wave) — the one outcome line for the new-job path,
+     naming the RESOLVED phase-0 engine/model (mirrors `job.engine` above,
+     which is also `selection.engine`). `selection.model` is stringified
+     (F6) for the same reason as the parent route — it can carry the
+     request body's `model` verbatim via `selectAnalyzerForPhase`'s
+     per-request-override priority. */
+  console.log(
+    `[analysis-subset] start manuscript=${manuscriptId} engine=${selection.engine} model=${JSON.stringify(selection.model)}`,
+  );
+
   /* Run the subset analyzer in the background. The route response is
      held open by the detached promise's broadcast loop until endJob
      fires res.end() on every subscriber. */
@@ -6673,7 +6714,14 @@ export async function runSubsetAnalyzerJob(
      end of this function reads them, and the try now wraps this job's own
      ~135-line setup span (fs-2 language resolution through isAborted),
      not just the body that follows it. Neither's initial value changes by
-     moving the declaration up. */
+     moving the declaration up.
+     F7 (#3169 fix wave) — restoring context the hoist dropped: `lastStep`
+     is a breadcrumb of the most recent phase milestone — mirrored to the
+     server log (so a stall's last server-log line names where it wedged)
+     and folded into the fatal-error log below (so a failure names the
+     phase it died in, not a bare stack). The 2026-06-06 ch12 incident
+     surfaced only as "sentences.map is not a function" with no
+     phase/chapter context. */
   const analyzerLabel = engineLabel(selection.engine, selection.model);
   let lastStep = 'init';
 
@@ -6810,12 +6858,13 @@ export async function runSubsetAnalyzerJob(
     /* §4.4 / Task 8 fix round 1 (items 1 + 2) — the DEDUP call above computes
        `dedupRetirements` synchronously (can't throw), but recording them is
        async I/O — wrapped in its own try/catch so a throwing history write
-       is swallowed as a warning here rather than escaping to this job's
-       top-level catch (which, since D1 (#3169) widened that try to cover
-       this whole function, would otherwise end the job — via `endJob` — over
-       what should be a non-fatal history-write failure). Mirrors
-       writeFoldJournal/writeDedupJournal, which swallow the same way for the
-       same reason. */
+       is swallowed as a warning here (except a lock-acquisition timeout,
+       which is rethrown into the job's top-level catch — see #2260) rather
+       than escaping to this job's top-level catch (which, since D1 (#3169)
+       widened that try to cover this whole function, would otherwise end the
+       job — via `endJob` — over what should be a non-fatal history-write
+       failure). Mirrors writeFoldJournal/writeDedupJournal, which swallow
+       the same way for the same reason. */
     /* `liveIds: null` — same reasoning as the main route's dedup site: no
        roster is final here. See that call site's comment. */
     try {
