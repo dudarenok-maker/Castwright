@@ -145,8 +145,8 @@ export const analysisSlice = createSlice({
       if (snap.manuscriptId !== action.payload.manuscriptId) return;
       if (snap.state === 'halted' && snap.haltCode === ANALYSIS_STREAM_FAILED) {
         snap.state = 'running';
-        delete snap.haltCode;
-        delete snap.haltReason;
+        snap.haltCode = undefined;
+        snap.haltReason = undefined;
       }
       if (typeof action.payload.model === 'string') snap.model = action.payload.model;
       const phaseChanged =

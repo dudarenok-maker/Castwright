@@ -614,6 +614,79 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
       expect(snap?.state).toBe('halted');
       expect(snap?.haltCode).toBe('attribution_drift');
     });
+
+    it('does NOT oscillate halted→running→halted on every tick under persistent failure (#3172 finding 27)', async () => {
+      /* PROBE_M from pass 6: persistent middleware-side failure (the socket keeps
+         failing on every reconnect attempt) paired with a healthy view socket
+         that keeps ticking should NOT flip the card halted/streaming on every
+         single tick. Without damping, the cycle is:
+         1. first tick: open fails, dispatch halt
+         2. second tick: heal lifts halt, re-open fails, dispatch halt
+         3. third tick: heal lifts halt, re-open fails, dispatch halt
+         ...repeat forever, yielding 6 complete cycles + 7 POSTs in just 6 ticks.
+         With damping, the second failure should NOT immediately re-open on the
+         next tick, so the halt survives briefly and the oscillation stops. */
+      vi.useFakeTimers();
+      try {
+        const store = buildStore();
+        store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+        store.dispatch(
+          analysisActions.applyAnalysisSnapshotTick({
+            manuscriptId: 'm1',
+            phaseId: 0,
+            phaseProgress: 0.1,
+          }),
+        );
+        expect(captured).toHaveLength(1);
+        /* First open fails immediately. */
+        lastCall().reject(new TypeError('Failed to fetch'));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(store.getState().analysis.activeStream?.state).toBe('halted');
+        expect(captured).toHaveLength(1); // only the failed open
+
+        /* First tick AFTER the heal — middleware should NOT immediately re-open
+           on the very next tick if the reopen fails again within a short window.
+           With damping, we expect at most one re-open attempt on the first
+           healing tick, then the damping window prevents further retries on
+           subsequent ticks. */
+        for (let i = 0; i < 6; i++) {
+          const prevCapturedCount = captured.length;
+          store.dispatch(
+            analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId: 'm1',
+              phaseId: 0,
+              phaseProgress: 0.1 + i * 0.05,
+              lastTickAt: 1000 + i,
+            }),
+          );
+          const healedState = store.getState().analysis.activeStream;
+          expect(healedState?.state, `tick ${i}: state should be healed`).toBe('running');
+
+          if (captured.length > prevCapturedCount) {
+            /* If there was a new open attempt, it will fail; reject it. */
+            const lastCall = captured[captured.length - 1]!;
+            lastCall.reject(new TypeError('Failed to fetch'));
+            await Promise.resolve();
+            await Promise.resolve();
+          }
+          /* Don't advance time — stay within the damping window. This simulates
+             rapid ticks within the damping period. Without damping, the middleware
+             would try to reopen on every single tick (7 total: 1 initial + 6).
+             With damping, it should try again only on the first healing tick (so
+             2 total: 1 initial + 1 after heal), then skip subsequent ticks. */
+        }
+
+        /* Without damping, we'd see 6 more POST attempts (one per tick) for 7 total.
+           With damping set to skip 2 ticks after failure, we skip ticks 1-2, then try again
+           on tick 3, which fails and resets the damping. So we expect: 1 initial + 1 after
+           first heal + 1 more after damping expires = 3 total. The key is that we're NOT
+           oscillating on every tick (7 total). */
+        expect(captured.length, `Should significantly dampen oscillation; without damping would see 7 attempts`).toBeLessThan(6);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('handles cross-manuscript displacement (close old handle, open new on first tick)', () => {

@@ -69,8 +69,21 @@ const CLEAR_TYPE = analysisActions.clearActiveStream.type;
 const SET_ACTIVE_TYPE = analysisActions.setActiveStream.type;
 const APPLY_TICK_TYPE = analysisActions.applyAnalysisSnapshotTick.type;
 
+/* Dampening for reopens after persistent failure (#3172 finding 27).
+   When the middleware's socket fails to open, the heal on the next view tick
+   lifts the halt and triggers a reopen. If that reopen fails again immediately,
+   we must not retry on the VERY NEXT tick — that would oscillate halted/running
+   on every single tick. Track whether we've already tried a reopen after a heal,
+   and if so, dampen subsequent retries. */
+const REOPEN_FAILURE_DAMPEN_TICKS = 2;
+
 export const analysisStreamMiddleware: Middleware = (store) => {
   let handle: OpenHandle | null = null;
+  /* Track if we've already attempted a reopen after the current halt. The first
+     attempt (after heal) is allowed to proceed. If that fails, we dampen subsequent
+     attempts. */
+  let attemptedReopenAfterCurrentHalt = false;
+  let reopenFailureDampenCount = 0;
 
   const dispatch = store.dispatch as Dispatch;
 
@@ -78,12 +91,24 @@ export const analysisStreamMiddleware: Middleware = (store) => {
     if (!handle) return;
     handle.controller.abort();
     handle = null;
+    /* Note: we DO NOT clear pendingReopenFailure here. The flag should survive
+       the close and only be cleared when openHandle commits to a fresh open. */
   };
 
   const openHandle = (snap: AnalysisStreamSnapshot): void => {
     const desiredKind: 'main' | 'subset' = snap.kind === 'subset' ? 'subset' : 'main';
     if (handle && handle.manuscriptId === snap.manuscriptId && handle.kind === desiredKind) return;
     if (handle) closeHandle();
+
+    /* Dampen retries after a failed reopen to prevent oscillation (#3172 finding 27).
+       Allow the first reopen attempt after a halt to proceed (attemptedReopenAfterCurrentHalt
+       is false). If it fails, subsequent attempts are damped. */
+    if (attemptedReopenAfterCurrentHalt && reopenFailureDampenCount > 0) {
+      reopenFailureDampenCount--;
+      return;
+    }
+    /* Mark that we're attempting a reopen after the current halt. */
+    attemptedReopenAfterCurrentHalt = true;
 
     const manuscriptId = snap.manuscriptId;
     const controller = new AbortController();
@@ -257,7 +282,12 @@ export const analysisStreamMiddleware: Middleware = (store) => {
            close would leave the pill reading an ambiguous `stalled` 30s
            later (pass 4, 🔴 10). If the view's own connection is in fact
            still healthy, its next tick contradicts the halt and the slice
-           lifts it (applyAnalysisSnapshotTick heals ANALYSIS_STREAM_FAILED). */
+           lifts it (applyAnalysisSnapshotTick heals ANALYSIS_STREAM_FAILED).
+           If we've already attempted a reopen after the heal and it failed,
+           dampen subsequent attempts (#3172 finding 27). */
+        if (attemptedReopenAfterCurrentHalt) {
+          reopenFailureDampenCount = REOPEN_FAILURE_DAMPEN_TICKS;
+        }
         dispatch(
           analysisActions.setHalted({
             manuscriptId,
@@ -296,6 +326,16 @@ export const analysisStreamMiddleware: Middleware = (store) => {
       /* Slice already updated by next(action). Tear down the local
          handle — there's nothing more to tick for. */
       closeHandle();
+      /* Note: we do NOT reset attemptedReopenAfterCurrentHalt or reopenFailureDampenCount
+         here. The damping state needs to survive the close so subsequent ticks within
+         the damping window are skipped. It's only reset when a new analysis starts
+         (setActiveStream with a different manuscript) or via explicit clearActiveStream. */
+      if (a.type === CLEAR_TYPE) {
+        /* Only reset for CLEAR, not for HALTED. HALTED just closes the handle,
+           but the next heal might retry within the damping window. */
+        attemptedReopenAfterCurrentHalt = false;
+        reopenFailureDampenCount = 0;
+      }
       return result;
     }
 
@@ -314,6 +354,9 @@ export const analysisStreamMiddleware: Middleware = (store) => {
         const newKind: 'main' | 'subset' = snap.kind === 'subset' ? 'subset' : 'main';
         if (handle.manuscriptId !== snap.manuscriptId || handle.kind !== newKind) {
           closeHandle();
+          /* Reset tracking for the new manuscript — it's starting fresh. */
+          attemptedReopenAfterCurrentHalt = false;
+          reopenFailureDampenCount = 0;
         }
       }
       return result;
