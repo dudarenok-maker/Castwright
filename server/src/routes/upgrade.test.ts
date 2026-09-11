@@ -18,7 +18,19 @@ const h = vi.hoisted(() => ({
   busy: { busy: false, generationBooks: [] as string[], analysisManuscripts: [] as string[] },
   applyResult: { ok: false, version: '1.6.0', releaseDir: '/r', phase: 'extract', error: 'stub' } as Record<string, unknown>,
   applyCalls: [] as unknown[],
+  /* #3174 G3 — an applyUpgrade rejection, forced by a test rather than by the
+     stubbed applyResult shape above. */
+  applyThrows: null as null | Error,
+  /* #3174 G3 — writeFileSync failure injection, targeted at the upgrade
+     state file only and gated on call count (not time), same idiom as
+     single-design.test.ts's readJsonFailAfter: `writeFileSyncFailAfterCalls`
+     lets a fixture write and the route's own pre-response 'applying' write
+     pass through untouched, and only the detached IIFE's OWN writeState
+     call(s) — which start after that count — fail. */
+  writeFileSyncFailPath: null as null | string,
+  writeFileSyncFailAfterCalls: null as null | number,
 }));
+let stateWriteCallCount = 0;
 
 vi.mock('../upgrade/paths.js', () => ({ resolveUpgradePaths: () => h.paths }));
 vi.mock('../upgrade/busy-probe.js', () => ({ anyJobInFlight: () => h.busy }));
@@ -26,11 +38,36 @@ vi.mock('../upgrade/zip-validate.js', () => ({ validateUpgradeZip: (...a: unknow
 vi.mock('../upgrade/apply.js', () => ({
   applyUpgrade: async (ctx: unknown) => {
     h.applyCalls.push(ctx);
+    if (h.applyThrows) throw h.applyThrows;
     return h.applyResult;
   },
   createApplySteps: () => ({ readReqHash: () => 'old-hash' }),
 }));
 vi.mock('../app-version.js', () => ({ getAppVersion: () => '1.6.0' }));
+/* #3174 G3 — node:fs's writeFileSync export isn't configurable under
+   Vitest's ESM module namespace (`vi.spyOn(fs, 'writeFileSync')` throws
+   "Cannot redefine property"), so mock the whole module through a
+   pass-through delegate, same convention as
+   server/src/tts/restart-breadcrumb.test.ts / state-io.test.ts. */
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  return {
+    ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const [target] = args;
+      if (h.writeFileSyncFailPath && target === h.writeFileSyncFailPath) {
+        stateWriteCallCount++;
+        if (
+          h.writeFileSyncFailAfterCalls !== null &&
+          stateWriteCallCount > h.writeFileSyncFailAfterCalls
+        ) {
+          throw new Error('simulated disk-full writing upgrade state.json');
+        }
+      }
+      return actual.writeFileSync(...args);
+    },
+  };
+});
 
 let app: Express;
 let stagingDir: string;
@@ -58,6 +95,10 @@ beforeEach(async () => {
   h.validate = null;
   h.applyResult = { ok: false, version: '1.6.0', releaseDir: '/r', phase: 'extract', error: 'stub' };
   h.applyCalls = [];
+  h.applyThrows = null;
+  h.writeFileSyncFailPath = null;
+  h.writeFileSyncFailAfterCalls = null;
+  stateWriteCallCount = 0;
 
   const { upgradeRouter } = await import('./upgrade.js');
   app = express();
@@ -146,5 +187,62 @@ describe('POST /api/upgrade/apply', () => {
     await vi.waitFor(() => expect(h.applyCalls.length).toBe(1));
     expect((h.applyCalls[0] as { candidateVersion: string }).candidateVersion).toBe('1.6.0');
     await vi.waitFor(() => expect(readState().phase).toBe('error')); // ok:false → error state
+  });
+});
+
+describe('POST /api/upgrade/apply — background failure containment (#3174 G3)', () => {
+  /* Before the fix, the detached apply IIFE's catch block called the
+     unguarded writeState() to record the failure — and writeState() itself
+     can throw (mkdirSync/writeFileSync, both unguarded). When it did, the
+     IIFE (void'd, nothing awaits it) rejected uncaught: an unhandledRejection
+     at the process level, AND the state file was left wherever it last
+     landed successfully ('applying', from the synchronous pre-response
+     write) with no error ever recorded — GET /state would report 'applying'
+     forever with no way to tell the user or retry. */
+  it('when applyUpgrade throws AND the catch block\'s own writeState also fails, no unhandled rejection reaches the process and the failure is logged loudly', async () => {
+    writeFileSync(
+      join(stagingDir, 'state.json'),
+      JSON.stringify({ phase: 'staged', candidateVersion: '1.6.0', topDir: 'castwright-v1.6.0', reqHash: 'h' }),
+    );
+    h.applyThrows = new Error('simulated apply crash');
+    // Armed AFTER the fixture write above: call #1 is the route's own
+    // synchronous 'applying' write (must succeed so the 202 response is
+    // sent); only call #2+ — the detached IIFE's own catch-block write —
+    // is made to fail.
+    h.writeFileSyncFailPath = (h.paths as Record<string, unknown>).stateFile as string;
+    h.writeFileSyncFailAfterCalls = 1;
+
+    let unhandledRejection: unknown = null;
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejection = reason;
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const res = await request(app).post('/api/upgrade/apply');
+      expect(res.status).toBe(202); // the pre-response write succeeded
+
+      await vi.waitFor(() =>
+        expect(errorSpy).toHaveBeenCalledWith(
+          '[upgrade] could not record upgrade state',
+          expect.any(Error),
+        ),
+      );
+      // The apply failure itself was also logged (pre-existing behaviour,
+      // unchanged by this fix).
+      expect(errorSpy).toHaveBeenCalledWith('[upgrade] apply threw:', h.applyThrows);
+
+      // The state file is stuck at 'applying' — the error write failed, so
+      // nothing recorded why. This is the in-memory/on-disk status GET
+      // /state reads; there is no separate in-memory status surface.
+      expect(readState().phase).toBe('applying');
+
+      await new Promise((r) => setTimeout(r, 0));
+      expect(unhandledRejection).toBeNull();
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+      errorSpy.mockRestore();
+    }
   });
 });
