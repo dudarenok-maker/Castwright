@@ -113,6 +113,18 @@ export default defineConfig({
          files. */
       '{**/src/lib/api.ts,**/.*/**/src/lib/api.ts}',
       '{**/src/lib/api-types.ts,**/.*/**/src/lib/api-types.ts}',
+      /* #2889 — src/index-html-fonts.test.ts (the #698 self-hosted-fonts
+         guard) readFile()s index.html at RUNTIME and neither imports it nor
+         has any module-graph edge to it, so `vitest --changed` would never
+         select it for an index.html-only diff. Same story for styles.css:
+         src/test/dark-mode-css.test.ts and src/styles-neutrals.test.ts both
+         readFileSync() it directly. Both files are also in
+         scripts/verify-cache.mjs's `test` step `extraFiles`, which is what
+         forces the whole-suite CI cache to invalidate on either — this
+         entry closes the matching gap in vitest's own --changed selection
+         so a local/targeted run doesn't silently skip the guards. */
+      '{**/index.html,**/.*/**/index.html}',
+      '{**/styles.css,**/.*/**/styles.css}',
     ],
     /* One retry to absorb transient jsdom/timer flakes inside a single
        verify run instead of forcing a full pre-push re-execution. See
