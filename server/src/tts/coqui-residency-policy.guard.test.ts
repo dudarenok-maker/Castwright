@@ -9,7 +9,10 @@
    and one heading.
 
    Line numbers are asserted NOWHERE here on purpose: they rot (this repo's
-   register row IDs already did, tree-wide), so this guard keys on the
+   register row IDs already did, tree-wide) — stale line references are useless
+   (this file's own archival NOTE, coqui-residency-policy.guard-targets.ts lines,
+   and the force-rerun-triggers.test.ts scope spec all hardcoded line numbers
+   before — line numbers are never a suitable guard. This guard keys on the
    `COQUI-RESIDENCY-POLICY` token and the doc heading text only. */
 
 import { describe, it, expect } from 'vitest';
@@ -21,28 +24,29 @@ const TOKEN = 'COQUI-RESIDENCY-POLICY';
 const REPO_ROOT = join(process.cwd(), '..');
 
 /* These three paths are the ACTUAL scan targets of this guard (what it reads
-   at runtime). They are hardcoded independently so the test at lines 49-60
-   can compare them against the DECLARED scan scope (COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS)
-   and have a second independent side — the two statements of this guard's
-   scope must never independently drift from each other.
+   at runtime). They are hardcoded independently so the test "scan scope matches
+   the declared COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS" (the first spec in this
+   describe block) can compare them against the DECLARED scan scope
+   (COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS) and have a second independent side —
+   the two statements of this guard's scope must never independently drift from
+   each other.
 
    When plan 264 is archived (status → stable), this path will move to
    docs/features/archive/264-vram-aware-gpu-placement.md. Keep all three
    hardcoded so the guard fails-closed if archival forgets to update it.
-   On archival, update all FIVE of these in the same commit. ITEMS 1-5 all fail
+   On archival, update all FIVE of these in the same commit. ITEMS 1-3 fail
    SILENTLY when archival forgets them (stale comments stay stale, CI entries
-   stay stale, the guard just keeps checking the old path). The ONE exception
-   that fails LOUDLY is this file's own POLICY_DOC_PATH constant below — if
-   this path is wrong or missing, the readFileSync call in this test's "keeps
-   the policy section" spec will throw immediately.
+   stay stale, the guard just keeps checking the old path). ITEMS 4-5 fail LOUDLY:
+   this file's own POLICY_DOC_PATH constant throws on readFileSync if wrong or
+   missing, and the force-rerun-triggers.test.ts it.each drift check now fails
+   if COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS changes.
    1. The cross-reference comment in synthesise-chapter.ts (search for the TOKEN)
    2. The cross-reference comments in main.py (search for the TOKEN)
    3. server/vitest.config.ts forceRerunTriggers entry (will miss config-only diffs)
    4. server/src/force-rerun-triggers.test.ts drift check via it.each (will fail if GLOBS changes)
-   5. scripts/verify-cache.mjs test:server extraFiles entry (fails SILENTLY if
-      forgotten — hashFile returns a sentinel for a missing path rather than
-      throwing, so a docs-only PR would just silently stop invalidating the
-      verify cache, reopen the bug this PR #2715 fixed, and never error) */
+   5. scripts/verify-cache.mjs test:server extraFiles entry (the two non-inert entries only:
+      main.py and policy doc; synthesise-chapter.ts is covered by server/src/** glob so
+      fails SILENTLY if forgotten, same as items 1-3) */
 const SYNTHESISE_CHAPTER_PATH = join(REPO_ROOT, 'server/src/tts/synthesise-chapter.ts');
 const SIDECAR_MAIN_PATH = join(REPO_ROOT, 'server/tts-sidecar/main.py');
 const POLICY_DOC_PATH = join(REPO_ROOT, 'docs/features/264-vram-aware-gpu-placement.md');
