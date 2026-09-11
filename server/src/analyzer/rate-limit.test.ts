@@ -334,6 +334,46 @@ describe('saved rate-limit overrides in user settings', () => {
     const limiter = await limiterWithOverrides({ 'rate.tpm.gemma': 0 });
     await expect(limiter.acquire('gemma-4-31b-it', 50_000)).resolves.toBeUndefined();
   });
+
+  it('applies a saved override live, to an already-constructed limiter, without reconstruction', async () => {
+    /* This is the "live" half of `apply: 'live'` (server/src/config/registry.ts)
+       and the release note's "takes effect right away, with no restart
+       needed": the SAME limiter instance must pick up an override written
+       AFTER it was constructed and already used, on its very next acquire() —
+       not just at construction time. Built-in gemma-4-31b-it RPM is 30, so
+       the first two acquires below clear with no override in play at all. */
+    vi.resetModules();
+    const dir = mkdtempSync(join(tmpdir(), 'cw-ratelimit-'));
+    process.env.USER_SETTINGS_FILE = join(dir, 'user-settings.json');
+    writeFileSync(process.env.USER_SETTINGS_FILE, '{}');
+    const ws = await import('../workspace/user-settings.js');
+    const m = await import('./rate-limit.js');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-16T12:00:00.000Z'));
+    const limiter = new m.GeminiRateLimiter();
+
+    await limiter.acquire('gemma-4-31b-it', 900);
+    await limiter.acquire('gemma-4-31b-it', 900);
+
+    /* Save the override only now — after the limiter already exists and has
+       already resolved limits twice above with no override present. */
+    await ws.writeConfigOverride('rate.rpm.gemma', 2);
+
+    const onWait = vi.fn();
+    const pending = limiter.acquire('gemma-4-31b-it', 900, { onWait });
+    await vi.advanceTimersByTimeAsync(10);
+    let settled = false;
+    pending.then(() => {
+      settled = true;
+    });
+    expect(settled).toBe(false);
+    expect(onWait).toHaveBeenCalled();
+    const [waitMs, reason] = onWait.mock.calls[0];
+    expect(reason).toBe('rpm');
+    expect(waitMs).toBeGreaterThanOrEqual(60_000);
+    await vi.advanceTimersByTimeAsync(waitMs + 1);
+    await pending;
+  });
 });
 
 describe('computeTpmWait', () => {
