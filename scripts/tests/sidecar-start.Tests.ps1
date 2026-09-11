@@ -68,10 +68,18 @@ Describe 'start.ps1 exit-code propagation' {
         # every restart decision.
         $content | Should -Not -Match 'Test-SidecarShouldRestart'
         $content | Should -Not -Match 'sidecar-restart-policy\.ps1'
+
         # Verify the uvicorn invocation is not wrapped in a restart loop.
-        # A `while ($true)` loop wrapping the uvicorn call and catching exit
-        # codes 42/43 would re-absorb those exits and defeat the propagation.
+        # Multiple checks to prevent evasion by different loop spellings:
+        # 1. `while ($true)` followed eventually by uvicorn
         $content | Should -Not -Match '(?ms)while\s*\(\s*\$true\s*\)[^}]*uvicorn'
+        # 2. `do { ... uvicorn ... } while` pattern (uvicorn before the while keyword)
+        $content | Should -Not -Match '(?ms)do\s*\{[^}]*uvicorn[^}]*\}\s*while'
+        # 3. `for` loop followed by uvicorn (for (;;) or other for spellings)
+        $content | Should -Not -Match '(?ms)for\s*\([^)]*\)[^}]*uvicorn'
+        # 4. Assert uvicorn appears exactly once — if someone inlines a retry it would appear twice
+        @($content | Select-String -Pattern 'uvicorn' -AllMatches).Count | Should -Be 1
+
         # Verify exit code propagation is present.
         $content | Should -Match 'exit \$code'
     }

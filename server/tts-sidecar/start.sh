@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # POSIX (macOS/Linux) counterpart of start.ps1 — launch the TTS sidecar via the
-# venv python with a supervisor loop that restarts on the recoverable exit codes
-# 42 (CUDA poison) and 43 (planned memory recycle). See start.ps1 for the Windows
-# version and the rationale behind each block. Kept bash 3.2-friendly.
+# venv python. Single-shot launcher; Node's sidecar-supervisor owns restart logic.
+# See start.ps1 for the Windows version and the rationale behind each block.
+# Kept bash 3.2-friendly.
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"
 
@@ -42,7 +42,6 @@ fi
 
 port="${LOCAL_TTS_PORT:-9000}"
 bind_host="${LOCAL_TTS_HOST:-127.0.0.1}"
-restart_backoff=2
 
 # Launch uvicorn and propagate its exit code. main.py self-exits with one of
 # two documented codes:
