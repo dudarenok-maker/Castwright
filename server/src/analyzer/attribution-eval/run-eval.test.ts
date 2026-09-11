@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { evalFixture, rosterToStage1, familyBreakdown, aggStage, aggregateFixture, rosterAliasMap, scoreStage, type StageScore, type ReviewScore, type FixtureResult } from './run-eval.js';
 import type { LabelledChapter } from './schema.js';
 import type { RosterSnapshot } from './roster-schema.js';
 import type { SentenceOutput } from '../../handoff/schemas.js';
+import * as analysisModule from '../../routes/analysis.js';
 
 const roster: RosterSnapshot = { characters: [
   { id: 'narrator', name: 'Narrator' },
@@ -171,6 +172,45 @@ describe('evalFixture', () => {
     expect('reviewed' in res).toBe(false);
     expect(res.final.recall).toBeCloseTo(1);
   });
+
+  describe('engine parameter mapping to attributeChapterStage2', () => {
+    let attributeChapterStage2Spy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      attributeChapterStage2Spy = vi.spyOn(analysisModule, 'attributeChapterStage2');
+    });
+
+    afterEach(() => {
+      attributeChapterStage2Spy.mockRestore();
+    });
+
+    it('passes qwen engine as "local" to attributeChapterStage2', async () => {
+      // Call with engine: 'qwen', which should be mapped to 'local' when passed to attributeChapterStage2
+      await evalFixture({
+        analyzer: fakeAnalyzer,
+        manuscriptId: 'm', title: 'T', truth, roster, chapterId: 44,
+        stageCall: { language: 'en' } as never,
+        engine: 'qwen',
+      });
+
+      // Verify that attributeChapterStage2 was called with engine: 'local'
+      expect(attributeChapterStage2Spy).toHaveBeenCalledWith(expect.objectContaining({ engine: 'local' }));
+    });
+
+    it('passes gemma engine as "gemini" to attributeChapterStage2', async () => {
+      // Call with engine: 'gemma', which should be mapped to 'gemini' when passed to attributeChapterStage2
+      await evalFixture({
+        analyzer: fakeAnalyzer,
+        manuscriptId: 'm', title: 'T', truth, roster, chapterId: 44,
+        stageCall: { language: 'en' } as never,
+        engine: 'gemma',
+      });
+
+      // Verify that attributeChapterStage2 was called with engine: 'gemini'
+      expect(attributeChapterStage2Spy).toHaveBeenCalledWith(expect.objectContaining({ engine: 'gemini' }));
+    });
+  });
+
 });
 
 describe('evalFixture — reviewed char-stage (opt-in)', () => {
