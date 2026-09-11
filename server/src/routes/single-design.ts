@@ -203,6 +203,15 @@ async function runSingleDesign(
        message here could be the absolute path of the book's cast.json, sent
        over SSE. Curated like every other whole-request site; a non-timeout
        failure keeps its own message. */
+    /* #3171 — the raw error, unlike the curated client-facing message below,
+       is safe to log in full (workspace paths and all): this is a server
+       log, never sent over SSE. */
+    console.error('[single-design] failed', {
+      bookId: job.bookId,
+      characterId: job.characterId,
+      name: (e as Error)?.name,
+      message: (e as Error)?.message,
+    });
     const message = requestFailureMessage(e, (e as Error).message || 'Voice design failed.');
     /* #2260 FINAL ROUND (B2) nit — 'design_failed' left this event unable to
        reach the Help entry `helpHrefForFailureCode` (src/lib/router.ts) links

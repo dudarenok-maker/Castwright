@@ -28,6 +28,38 @@ vi.mock('./qwen-voice.js', async (orig) => ({
   }),
 }));
 
+// Targeted mock of readJson so a test can corrupt cast.json on disk between
+// the route handler's own upfront read (single-design.ts ~261, before the SSE
+// stream even opens) and the SECOND read inside runSingleDesign (~116 — the
+// pre-#3171-fix pre-try read). Both reads hit the exact same path, so a
+// static corrupt fixture alone can't isolate the failure to just the second
+// call. `readJsonFailAfter` names the path to target and how many real calls
+// to let pass through before corrupting it; the factory runs lazily (on the
+// first dynamic import in beforeAll), so it picks up these module-scope
+// `let`s once a test sets them, matching the capturedDesignArgs pattern above.
+let readJsonFailAfter: { path: string; passThroughCalls: number } | null = null;
+const readJsonCallCounts = new Map<string, number>();
+vi.mock('../workspace/state-io.js', async (orig) => {
+  const real = await orig<typeof import('../workspace/state-io.js')>();
+  return {
+    ...real,
+    readJson: vi.fn(async <T>(path: string) => {
+      if (readJsonFailAfter && path === readJsonFailAfter.path) {
+        const n = (readJsonCallCounts.get(path) ?? 0) + 1;
+        readJsonCallCounts.set(path, n);
+        if (n > readJsonFailAfter.passThroughCalls) {
+          /* Corrupt the file right before THIS read, so it hits a genuine
+             JSON.parse failure from a real file on disk — the actual defect
+             shape, not a synthetic throw — while the earlier pass-through
+             call(s) above already saw valid JSON. */
+          writeFileSync(path, '{ this is not valid json');
+        }
+      }
+      return real.readJson<T>(path);
+    }),
+  };
+});
+
 const applyOverrideStub = vi.fn(
   async (): Promise<{ updated: number; skipped: Array<{ bookDir: string; characterId: string; reason: string }> }> => ({
     updated: 1,
@@ -52,6 +84,7 @@ let app: Express;
 let BOOK_ID: string;
 let bookDir: string;
 let designLock: typeof import('../tts/design-lock.js');
+let castJsonPath: (bookDir: string) => string;
 
 function writeBookOnDisk(dir: string, id: string) {
   mkdirSync(join(dir, '.audiobook'), { recursive: true });
@@ -118,7 +151,8 @@ beforeAll(async () => {
   // ~2-in-5 rate, which belongs to voices.test.ts, a different file already
   // fixed under #2046.
   const { singleDesignRouter } = await import('./single-design.js');
-  const { makeBookId } = await import('../workspace/paths.js');
+  const { makeBookId, castJsonPath: castJsonPathFn } = await import('../workspace/paths.js');
+  castJsonPath = castJsonPathFn;
   const lock = await import('../tts/design-lock.js');
   designLock = lock;
 
@@ -443,19 +477,19 @@ describe('single-design job — unset book language (Task 6 #2246)', () => {
   });
 });
 
-describe('single-design job — error handling for setup and runtime exceptions (#3171)', () => {
-  /* #3171 — when the cast read throws before the try (a setup exception),
-     the job must end cleanly with a curated error event, not leak an
-     unhandledRejection. This suite tests that error handling for setup-phase
-     and runtime exceptions works correctly, without trying to mock the
-     pre-try read (which is complex due to the route handler's own readJson
-     call). The fix moves the cast read into the try block, ensuring all
-     throws are caught by the same handler. */
+describe('single-design job — runtime exception during persist (post-setup failure)', () => {
+  /* NOT a #3171 regression test: applyOverrideToCastFiles is called from
+     inside the existing try/catch on BOTH sides of the #3171 fix (it was
+     never the pre-try leak), so this doesn't reproduce that bug and can't
+     detect its absence. Kept because it covers something the rest of the
+     suite didn't: a throw from the PERSIST step specifically still ends the
+     job cleanly (curated error, design-busy cleared, no unhandled
+     rejection) rather than only a resolved-with-skips persist failure
+     (covered separately by the "write-time" test above) or a genuinely
+     pre-try failure (covered by the #3171 regression test below). */
   it('emits a curated error event when applyOverrideToCastFiles throws, and clears the design-busy flag', async () => {
-    // Make the persist helper throw (simulates an error that might happen
-    // if the cast read threw before the try — the error handling is the same).
     applyOverrideStub.mockRejectedValueOnce(
-      new Error('Simulated cast.json read error'),
+      new Error('Simulated persist failure'),
     );
     let unhandledRejection: unknown = null;
     const handler = (reason: unknown) => {
@@ -469,9 +503,6 @@ describe('single-design job — error handling for setup and runtime exceptions 
         .send({ persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
 
       expect(res.status).toBe(200);
-
-      // Wait for the background job to emit events.
-      await new Promise((resolve) => setTimeout(resolve, 50));
 
       const events = collectSse(res);
       const errorEvent = events.find((e) => e.type === 'error');
@@ -489,6 +520,96 @@ describe('single-design job — error handling for setup and runtime exceptions 
       applyOverrideStub.mockReset();
       applyOverrideStub.mockResolvedValue({ updated: 1, skipped: [] });
     }
+  });
+});
+
+describe('single-design job — pre-try cast-read leak (#3171)', () => {
+  /* The actual #3171 regression test. Before the fix, `runSingleDesign`
+     awaited `readJson(castJsonPath(job.bookDir))` BEFORE its try/finally —
+     a throw there (corrupt cast.json, EBUSY, ...) became an unhandled
+     rejection: endJob never ran, the heartbeat interval and SSE subscriber
+     leaked, the job stayed in inFlightByBook, and the design-busy flag
+     stayed set until server restart. The fix moved that read inside the
+     try. This test corrupts cast.json on disk between the route handler's
+     OWN upfront read (single-design.ts ~261 — needed so the SSE stream
+     opens at all) and the read inside runSingleDesign (~116), so only the
+     second, in-job read fails — the exact shape of the original bug. */
+  afterEach(() => {
+    readJsonFailAfter = null;
+    readJsonCallCounts.clear();
+  });
+
+  it('ends the job terminally, clears design-busy, logs, and leaks nothing when the pre-try cast read fails', async () => {
+    const castPath = castJsonPath(bookDir);
+    /* passThroughCalls: 1 — call #1 is the route handler's own upfront read;
+       call #2 is the read inside runSingleDesign. preview:true skips the
+       (!preview) clone-check branch, which would otherwise interpose a
+       THIRD readJson(castJsonPath(bookDir)) call (via
+       hasClonedSlotAmongMatches) between the two calls this test cares
+       about. */
+    readJsonFailAfter = { path: castPath, passThroughCalls: 1 };
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let unhandledRejection: unknown = null;
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejection = reason;
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    try {
+      const res = await request(app)
+        .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+        .send({
+          persona: 'a warm voice',
+          sampleVoiceId: 'char-c1',
+          modelKey: 'qwen3-tts-0.6b',
+          preview: true,
+        });
+
+      // The SSE stream itself opens fine — the route's OWN read (call #1)
+      // still saw valid JSON; only the in-job read (call #2) is corrupted.
+      expect(res.status).toBe(200);
+      const events = collectSse(res);
+      const err = events.find((e) => e.type === 'error');
+      expect(err).toBeTruthy();
+      expect(err?.code).toBe('design_failed');
+      // Curated: a real JSON.parse error, never a raw filesystem path.
+      expect(String(err?.message ?? '')).toBeTruthy();
+      expect(String(err?.message ?? '')).not.toMatch(/[A-Za-z]:\\|\/(Users|home|AudiobookWorkspace)/);
+      expect(events.some((e) => e.type === 'preview_ready' || e.type === 'designed')).toBe(false);
+
+      // The design-busy flag and in-flight job registration must both clear.
+      expect(designLock.isDesignBusy(bookDir)).toBe(false);
+
+      // The raw error was logged server-side.
+      expect(consoleErrorSpy).toHaveBeenCalled();
+
+      // No unhandled rejection reached the process.
+      expect(unhandledRejection).toBeNull();
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+      consoleErrorSpy.mockRestore();
+      readJsonFailAfter = null;
+      // Our mock corrupted the real cast.json on disk — restore it before
+      // the follow-up request below (and before the next test's beforeEach,
+      // which would otherwise be racing this cleanup).
+      writeBookOnDisk(bookDir, BOOK_ID);
+    }
+
+    // A second single-design POST for the same book must NOT be rejected
+    // with 409 — proof the job/design-busy leak did not survive the failure.
+    const res2 = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({
+        persona: 'a warm voice',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts-0.6b',
+        preview: true,
+      });
+    expect(res2.status).not.toBe(409);
+    expect(res2.status).toBe(200);
+    const events2 = collectSse(res2);
+    expect(events2.some((e) => e.type === 'preview_ready')).toBe(true);
   });
 });
 
