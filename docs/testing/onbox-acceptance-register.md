@@ -4555,7 +4555,7 @@ log instrumentation, a VRAM-fill scenario to construct the discriminating placem
 `GPU_RESERVE_MB`, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the
 run sheet's pin/stale-cache scenarios.
 
-### A107 · `/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter ([#3086](https://github.com/dudarenok-maker/Castwright/issues/3086), [#3101](https://github.com/dudarenok-maker/Castwright/issues/3101), PR TBD) · **single 8 GB GPU card, DirectML profile, real Kokoro weights**
+### A107 · `/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter ([#3086](https://github.com/dudarenok-maker/Castwright/issues/3086), [#3101](https://github.com/dudarenok-maker/Castwright/issues/3101), PR [#3142](https://github.com/dudarenok-maker/Castwright/pull/3142)) · **single 8 GB GPU card, DirectML profile, real Kokoro weights**
 
 #3086 observed a raw Kokoro `/synthesize` call completing while a VoiceDesign forward was
 still resident. Tracing (#3101) found `KokoroEngine.synthesize()` and `design_voice()`

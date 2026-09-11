@@ -44,17 +44,26 @@ class _FakeLoadKokoro(main.KokoroEngine):
 
 @pytest.fixture
 def load_client(monkeypatch):
+    # B3 fix: Neutralize PRELOAD_KOKORO so the startup hook doesn't eagerly
+    # warm a fake Kokoro before the test's own /load call, which would cause
+    # /load to hit the fast-path short-circuit and skip the arbiter gate.
+    monkeypatch.setenv("PRELOAD_KOKORO", "0")
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "0")
     fake = _FakeLoadKokoro()
     monkeypatch.setitem(main.ENGINES, "kokoro", fake)
-    # Pin the single-card-box default regardless of what the real startup
-    # coupling hook resolves on this test box (mirrors
-    # test_design_kokoro_exclusion.py's autouse fixture).
-    main._VD_KOKORO._shares_device = True
     main._reset_poison_for_test()
     with TestClient(main.app) as c:
+        # B2 fix: Pin shares_device AFTER entering the lifespan (which runs
+        # _configure_vd_kokoro_coupling and would otherwise reset it based on
+        # the box's QWEN_DEVICE/KOKORO_DEVICE env). Save and restore the prior
+        # value to avoid bleeding into other tests in the session.
+        prior = main._VD_KOKORO._shares_device
+        main._VD_KOKORO._shares_device = True
         c.fake_kokoro = fake  # type: ignore[attr-defined]
-        yield c
+        try:
+            yield c
+        finally:
+            main._VD_KOKORO._shares_device = prior
     main._reset_poison_for_test()
 
 
@@ -101,3 +110,33 @@ def test_load_kokoro_blocks_while_design_active(load_client):
     assert response.status_code == 200
     assert response.json() == {"status": "ready"}
     assert load_client.fake_kokoro.load_calls == [None]
+
+
+def test_startup_preload_kokoro_uses_guarded_path(monkeypatch):
+    """B1 fix: Verify that startup preload of Kokoro (when PRELOAD_KOKORO=1)
+    routes through _kokoro_ensure_loaded_guarded and is pinned to that call
+    site. This test fails if someone removes ONLY the guard from the startup
+    preload path (line 10260) while leaving the /load path's guard intact,
+    catching a partial revert of the fix."""
+    # Capture calls to verify the guard path was used
+    ensure_loaded_guarded_calls: list[tuple[str, Optional[str]]] = []
+
+    def fake_guarded(kokoro, model, device=None):
+        ensure_loaded_guarded_calls.append((model, device))
+
+    monkeypatch.setenv("PRELOAD_KOKORO", "1")
+    fake = _FakeLoadKokoro()
+    monkeypatch.setitem(main.ENGINES, "kokoro", fake)
+    monkeypatch.setattr(main, "_kokoro_ensure_loaded_guarded", fake_guarded)
+
+    main._reset_poison_for_test()
+    with TestClient(main.app):
+        pass  # lifespan startup/shutdown
+    main._reset_poison_for_test()
+
+    # Verify that _kokoro_ensure_loaded_guarded was called exactly once
+    # during startup with ("v1", None) — the startup preload path args.
+    assert ensure_loaded_guarded_calls == [("v1", None)], (
+        f"startup preload didn't use _kokoro_ensure_loaded_guarded correctly; "
+        f"calls = {ensure_loaded_guarded_calls}"
+    )
