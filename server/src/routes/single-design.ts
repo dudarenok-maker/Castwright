@@ -108,18 +108,17 @@ async function runSingleDesign(
   language: string,
   seriesFilter: { author: string; series: string } | undefined,
 ): Promise<void> {
-  const cast = await readJson<CastFile>(castJsonPath(job.bookDir));
-  const character = cast?.characters?.find((c) => c.id === job.characterId);
-  if (!character) {
-    endJob(job, { type: 'error', code: 'not_found', message: 'Character no longer exists.' });
-    return;
-  }
-
   const heartbeat = setInterval(
     () => broadcast(job, { type: 'heartbeat', characterId: job.characterId }),
     HEARTBEAT_MS,
   );
   try {
+    const cast = await readJson<CastFile>(castJsonPath(job.bookDir));
+    const character = cast?.characters?.find((c) => c.id === job.characterId);
+    if (!character) {
+      endJob(job, { type: 'error', code: 'not_found', message: 'Character no longer exists.' });
+      return;
+    }
     /* srv-43 — mint/persist voiceUuid before the core names the .pt, matching
        the bulk-job and REST-endpoint paths so every design entry point produces
        the same uuid-keyed cache key. */

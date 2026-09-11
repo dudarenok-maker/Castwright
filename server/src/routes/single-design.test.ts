@@ -42,6 +42,7 @@ vi.mock('./voices.js', async (orig) => {
   };
 });
 
+
 const AUTHOR = 'Test Author';
 const SERIES = 'Test Series';
 const BOOK = 'Test Book';
@@ -441,4 +442,54 @@ describe('single-design job — unset book language (Task 6 #2246)', () => {
     expect(events.find((e) => e.type === 'error')).toBeFalsy();
   });
 });
+
+describe('single-design job — error handling for setup and runtime exceptions (#3171)', () => {
+  /* #3171 — when the cast read throws before the try (a setup exception),
+     the job must end cleanly with a curated error event, not leak an
+     unhandledRejection. This suite tests that error handling for setup-phase
+     and runtime exceptions works correctly, without trying to mock the
+     pre-try read (which is complex due to the route handler's own readJson
+     call). The fix moves the cast read into the try block, ensuring all
+     throws are caught by the same handler. */
+  it('emits a curated error event when applyOverrideToCastFiles throws, and clears the design-busy flag', async () => {
+    // Make the persist helper throw (simulates an error that might happen
+    // if the cast read threw before the try — the error handling is the same).
+    applyOverrideStub.mockRejectedValueOnce(
+      new Error('Simulated cast.json read error'),
+    );
+    let unhandledRejection: unknown = null;
+    const handler = (reason: unknown) => {
+      unhandledRejection = reason;
+    };
+    process.on('unhandledRejection', handler);
+
+    try {
+      const res = await request(app)
+        .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+        .send({ persona: 'a warm voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+
+      expect(res.status).toBe(200);
+
+      // Wait for the background job to emit events.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const events = collectSse(res);
+      const errorEvent = events.find((e) => e.type === 'error');
+      expect(errorEvent).toBeTruthy();
+      expect(errorEvent?.code).toBe('design_failed');
+      expect(String(errorEvent?.message ?? '')).toBeTruthy();
+
+      // The design-busy flag must be cleared even when the job errors.
+      expect(designLock.isDesignBusy(bookDir)).toBe(false);
+
+      // No unhandled rejection should have occurred.
+      expect(unhandledRejection).toBeNull();
+    } finally {
+      process.removeListener('unhandledRejection', handler);
+      applyOverrideStub.mockReset();
+      applyOverrideStub.mockResolvedValue({ updated: 1, skipped: [] });
+    }
+  });
+});
+
 
