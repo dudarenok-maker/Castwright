@@ -152,15 +152,17 @@ const INDIRECT_RE = /\bspawnFn\s*\(/g;
 
 const REPO_ROOT = join(SRC_ROOT, '..', '..');
 
-/* The three external scan roots used by externalFilesFloor() — declared at
-   module scope (not as local consts inside the function) so the scan target and
-   the test's assertion of the scan target both read the same binding.
-   This pins the two independently so an edit that adds a fourth root to
-   externalFilesFloor() fails the test rather than silently agreeing with a
-   stale constant. */
-const EXTERNAL_SCRIPTS_DIR = join(REPO_ROOT, 'scripts');
-const EXTERNAL_TTS_DIR = join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts');
-const EXTERNAL_PINOKIO_DIR = join(REPO_ROOT, 'pinokio-scripts', 'lib');
+/* The external scan roots used by externalFilesFloor() — declared at
+   module scope as a single array that both externalFilesFloor() and the test
+   read from. This ensures that adding a fourth root to the function makes the
+   test fail (proving the root is genuinely scanned), rather than silently
+   agreeing with a stale test array. The test asserts exhaustiveness via toEqual,
+   so any added root is immediately caught. */
+const EXTERNAL_SCAN_ROOTS = [
+  { dir: join(REPO_ROOT, 'scripts'), extensions: ['.mjs', '.cjs', '.js'] },
+  { dir: join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts'), extensions: ['.mjs'] },
+  { dir: join(REPO_ROOT, 'pinokio-scripts', 'lib'), extensions: ['.js', '.mjs'] },
+] as const;
 
 /* Helper: recursively list files matching given extensions under a directory.
    Skips node_modules, dist, and .git subtrees. */
@@ -262,24 +264,14 @@ function externalFilesFloor(): string[] {
     }
   }
 
-  // scripts/ recursive, .mjs/.cjs/.js, INCLUDING scripts/tests/ (the old
-  // exclusion of scripts/tests/ was itself the bug: those test files spawn
-  // real child processes as part of their own test logic, and a spawn there
-  // missing windowsHide pops its own visible console/PowerShell window when
-  // run under a parent with no console of its own (e.g. `npm run test:hooks`,
-  // which spawns `node --test scripts/tests/*.test.mjs` WITH windowsHide) —
-  // see cross-os-ffmpeg-install.test.mjs's module-load-time pwsh probe, the
-  // worst offender this exclusion let slip through).
-  const scriptsFiles = listFilesRecursive(EXTERNAL_SCRIPTS_DIR, ['.mjs', '.cjs', '.js']);
-
-  // server/tts-sidecar/scripts/ recursive, .mjs
-  const ttsFiles = listFilesRecursive(EXTERNAL_TTS_DIR, ['.mjs']);
-
-  // pinokio-scripts/lib/ recursive, .js/.mjs
-  const pinokioFiles = listFilesRecursive(EXTERNAL_PINOKIO_DIR, ['.js', '.mjs']);
+  // Scan the configured external roots using the module-level EXTERNAL_SCAN_ROOTS array.
+  // This ensures the test can verify exhaustively that all configured roots are scanned.
+  const externalCandidates = EXTERNAL_SCAN_ROOTS.flatMap((root) =>
+    listFilesRecursive(root.dir, [...root.extensions]),
+  );
 
   // Combine all candidates
-  const candidates = [...rootFiles, ...scriptsFiles, ...ttsFiles, ...pinokioFiles];
+  const candidates = [...rootFiles, ...externalCandidates];
   const filtered = filterSpawningFiles(candidates);
 
   // Concatenate manual entries
@@ -508,16 +500,11 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
     // guard's scope can never independently drift.
     const toRepoRel = (p: string) => relative(REPO_ROOT, p).split(sep).join('/');
 
-    // Check that the external directory roots match the declared globs.
-    // These are hoisted to module scope so externalFilesFloor() and this test
-    // both read the same binding — an added fourth root fails this exhaustive
+    // Check that the external directory roots (from EXTERNAL_SCAN_ROOTS) match
+    // the declared globs. externalFilesFloor() and this test both read the same
+    // EXTERNAL_SCAN_ROOTS binding — an added fourth root fails this exhaustive
     // toEqual check rather than being silently ignored.
-    const externalRoots = [
-      EXTERNAL_SCRIPTS_DIR,
-      EXTERNAL_TTS_DIR,
-      EXTERNAL_PINOKIO_DIR,
-    ];
-    const externalRootsRel = externalRoots.map(toRepoRel);
+    const externalRootsRel = EXTERNAL_SCAN_ROOTS.map((r) => toRepoRel(r.dir));
     const expectedExternalRootsRel = [
       SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[1].replace(/\/\*\*$/, ''),
       SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[2].replace(/\/\*\*$/, ''),
