@@ -712,9 +712,9 @@ async function runDesignJob(
           }
           /* Per-character synthesis failure — record it and move on.
              #2292 (owner decision) — a `LockAcquisitionTimeoutError` out of
-             the persist steps in this try (`applyOverrideToCastFiles`,
-             `persistEmotionVariant`, `ensureCharacterVoiceUuid`,
-             `writeVoiceStylePersona`) keeps this per-character shape — one
+             the persist steps in this try (`ensureCharacterVoiceUuid`,
+             `designQwenVoiceForCharacter`, `applyOverrideToCastFiles`,
+             `persistEmotionVariant`) keeps this per-character shape — one
              contended character must not fail the other N — but reports
              contention rather than implying the character itself is at fault.
              The same string on both surfaces so the live toast and the
