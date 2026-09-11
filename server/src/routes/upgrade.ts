@@ -57,6 +57,25 @@ function writeState(p: UpgradePaths, state: UpgradeState): void {
   writeFileSync(p.stateFile, JSON.stringify(state), 'utf8');
 }
 
+/* #3174 (G3) — writeState() itself throws on a disk failure (mkdirSync /
+   writeFileSync, both unguarded). Inside the detached apply IIFE below that
+   matters twice over: the catch block's OWN writeState call can throw, and
+   the result.ok / else branches' calls run inside the try whose catch would
+   just call writeState again and hit the same failure. Either way an
+   uncaught throw there rejects the whole (void'd) IIFE — an unhandled
+   rejection that also leaves the state file wherever it last landed (still
+   'applying' from the synchronous write above), wedging the upgrade with no
+   error ever recorded. Scoped to the apply IIFE only — writeState's other
+   callers (stage/abort, the synchronous 'applying' write above) are
+   synchronous Express handlers/statements outside this task. */
+function tryWriteState(p: UpgradePaths, state: UpgradeState): void {
+  try {
+    writeState(p, state);
+  } catch (writeErr) {
+    console.error('[upgrade] could not record upgrade state', writeErr);
+  }
+}
+
 const uploadMw = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => {
@@ -161,15 +180,15 @@ upgradeRouter.post('/apply', async (_req: Request, res: Response) => {
         createApplySteps({ venvDir: p.venvDir, log: (m) => console.log(m) }),
       );
       if (result.ok) {
-        writeState(p, { phase: 'restarting', candidateVersion: result.version });
+        tryWriteState(p, { phase: 'restarting', candidateVersion: result.version });
         console.log(`[upgrade] applied v${result.version}; restarting.`);
         setTimeout(() => process.kill(process.pid, 'SIGTERM'), 250);
       } else {
-        writeState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: `${result.phase}: ${result.error}` });
+        tryWriteState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: `${result.phase}: ${result.error}` });
         console.error(`[upgrade] apply failed at ${result.phase}: ${result.error}`);
       }
     } catch (e) {
-      writeState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: (e as Error).message });
+      tryWriteState(p, { phase: 'error', candidateVersion: state.candidateVersion, error: (e as Error).message });
       console.error('[upgrade] apply threw:', e);
     }
   })();

@@ -175,13 +175,17 @@ function failStream(
   onTick({ type: 'idle' } as GenerationTick);
 }
 
-/* Drive a stream to a loud-fallback-gate PARK, mirroring the server's real
-   ordering (server/src/routes/generation.ts): a `chapter_awaiting_fallback_confirm`
-   tick, then `idle` — both on the SAME response, with no queue-snapshot update
-   dispatched in between (nothing in generation-stream-runner.ts's handling of
-   that tick touches the queue slice). #1284's regression test relies on this
-   NOT seeding the store with `status: 'awaiting_confirm'` first, unlike the
-   older "does NOT /complete" test above — that's the real race. */
+/* Drive a stream to a loud-fallback-gate PARK: a `chapter_awaiting_fallback_confirm`
+   tick, with no queue-snapshot update dispatched in between (nothing in
+   generation-stream-runner.ts's handling of that tick touches the queue
+   slice). #1284's regression test relies on this NOT seeding the store with
+   `status: 'awaiting_confirm'` first, unlike the older "does NOT /complete"
+   test above — that's the real race.
+   No trailing `idle` tick here (#3029): the runner now closes the stream
+   handle synchronously off the park tick itself (see generation-stream-
+   runner.ts), so a subsequent `idle` — which the real server still sends on
+   the same response — early-returns on the already-missing handle and would
+   assert nothing. */
 function parkStream(
   bookId: string,
   chapterId: number,
@@ -189,7 +193,6 @@ function parkStream(
 ): void {
   const onTick = findOnTick(bookId, chapterId);
   onTick({ type: 'chapter_awaiting_fallback_confirm', chapterId, fallbackCharacters } as GenerationTick);
-  onTick({ type: 'idle' } as GenerationTick);
 }
 
 const openedBookIds = () =>
@@ -725,6 +728,51 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
          `completed` set, and since the entry never actually left the live
          queue (server no-ops /complete on an awaiting_confirm entry), nothing
          ever pruned it back out — the entry stayed blacklisted forever. */
+      expect(openedChapterIds().filter((ids) => ids[0] === 1)).toHaveLength(2);
+    });
+
+    it('re-claims a parked chapter after confirm even when idle has not yet arrived (#3029)', async () => {
+      /* Regression: the server's `chapter_awaiting_fallback_confirm` tick was
+         recorded but the stream stayed open until the subsequent `idle` tick
+         arrived. If the user confirmed before `idle` landed,
+         `hasOpenStreamForChapter` returned true and STEP 2 skipped the
+         freshly-queued entry — nothing re-triggered tick() until an unrelated
+         action fired or the delayed `idle` finally arrived (could be minutes).
+         Fix: close the stream immediately on the park tick so the handle is
+         gone before any confirm can race it. */
+      const store = makeStore(2);
+      seed(store, [entry({ id: 'a1', bookId: 'book-A', chapterId: 1 })]);
+      await flushMicro();
+      expect(openedChapterIds().filter((ids) => ids[0] === 1)).toHaveLength(1);
+
+      /* Park ONLY — no idle. In production the server sends both on the same
+         SSE response, but network buffering or a stalled connection can delay
+         the idle past the user's confirm click. */
+      const onTick = findOnTick('book-A', 1);
+      onTick({
+        type: 'chapter_awaiting_fallback_confirm',
+        chapterId: 1,
+        fallbackCharacters: [{ id: 'wren', name: 'Wren' }],
+      } as GenerationTick);
+      await flushMicro();
+
+      /* The park must not be mistaken for a completion. */
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]) === '/api/queue/a1/complete'),
+      ).toBe(false);
+
+      /* The user confirms: server flips awaiting_confirm -> queued
+         (fallbackConfirmed) and the thunk dispatches the fresh snapshot. */
+      seed(store, [
+        entry({ id: 'a1', bookId: 'book-A', chapterId: 1, status: 'queued', fallbackConfirmed: true }),
+      ]);
+      await flushMicro();
+
+      /* Must be re-claimed — a second stream opens for chapter 1, even though
+         no `idle` tick ever arrived for the first stream. Before the fix,
+         hasOpenStreamForChapter still returned true and STEP 2 skipped the
+         entry, leaving it stalled until an unrelated event woke the
+         dispatcher. */
       expect(openedChapterIds().filter((ids) => ids[0] === 1)).toHaveLength(2);
     });
 

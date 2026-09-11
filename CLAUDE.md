@@ -627,9 +627,9 @@ Design rationale:
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
   and leaves every other body verbatim — `git grep requestFailureMessage`
-  enumerates all twelve sites (`book-state` ×4, `voice-library` ×3, `voices`,
-  `qwen-voice`, `voice-style`, `single-design`, `cast-design`'s defensive
-  outer), alongside the two merge routes' own explicit
+  enumerates all thirteen sites (`book-state` ×4, `voice-library` ×3, `voices`,
+  `qwen-voice`, `voice-style`, `single-design`, `script-review`, `cast-design`'s
+  defensive outer), alongside the two merge routes' own explicit
   `LOCK_CONTENTION_REQUEST_ERROR` branch; and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
@@ -1013,8 +1013,9 @@ OS blocks the public-beta release, so you no longer fire cross-OS by hand
 before a release. `cross-os.yml` (`workflow_dispatch` + twice-weekly cron on
 `main`) stays as the between-releases pulse + ad-hoc cross-OS/mobile run.
 Docs-only PRs still complete `verify.yml` in seconds rather than deadlocking
-the required check — every leg's own scope condition is false for a
-docs-only diff, so the job just does env setup and reports green (see
+the required check — most legs' scope conditions evaluate false for a
+docs-only diff; one step (`check:register-citations`, PR #3134) runs
+unconditionally. Either way, the job completes in seconds and reports green (see
 [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
 for why `paths-ignore` was deliberately removed rather than kept).
 See [docs/features/215-ci-label-gated-verify.md](docs/features/215-ci-label-gated-verify.md)

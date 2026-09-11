@@ -74,9 +74,11 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { STATE_LANGUAGE_GUARD_SCAN_GLOB } from './state-language.guard-targets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..'); // server/src
+const REPO_ROOT = join(SRC_ROOT, '..', '..');
 const SEAM_FILE = 'workspace/state-migrate.ts';
 
 /** Every non-test `.ts` file under `server/src`, recursively. */
@@ -303,6 +305,17 @@ const G3_FLOOR_SITES = 35;
 const G3_FLOOR_FILES = 19;
 
 describe('state.json write seam — static guard (#2246 Task 7)', () => {
+  it('scan scope matches the declared STATE_LANGUAGE_GUARD_SCAN_GLOB (#3085)', () => {
+    // Ties this guard's ACTUAL scan target (SRC_ROOT, walked by
+    // collectSourceFiles) to the scope it DECLARES via the sibling module —
+    // the same constant force-rerun-triggers.test.ts checks its
+    // forceRerunTriggers entry against — so the two statements of this
+    // guard's scope can never independently drift.
+    const declaredRoot = STATE_LANGUAGE_GUARD_SCAN_GLOB.replace(/\/\*\*$/, '');
+    const actualRoot = relative(REPO_ROOT, SRC_ROOT).split(sep).join('/');
+    expect(actualRoot).toBe(declaredRoot);
+  });
+
   it('G1: no writeJsonAtomic in a stateJsonPath-mentioning file, except the seam and the pinned other-JSON allowlist', () => {
     const files = collectSourceFiles(SRC_ROOT);
     const problems: string[] = [];

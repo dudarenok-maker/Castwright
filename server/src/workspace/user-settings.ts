@@ -407,9 +407,13 @@ let cached: UserSettings | null = null;
 let explicitlySetKeys: Set<string> = new Set();
 let writeChain: Promise<unknown> = Promise.resolve();
 
-/** Reads from disk; falls back to defaults when the file is missing or
-    malformed. Cached in-process so the hot paths (selectAnalyzer, sidecar
-    URL resolution) don't re-parse JSON on every request. */
+/** Reads from disk; falls back to defaults when the file is missing, or when
+    its content parses but fails the settings schema. Does NOT fall back for
+    unparseable JSON — `readJson` (state-io.ts) throws on that, and nothing
+    here catches it, so a malformed file rejects the call instead; that is a
+    separate design decision tracked in #3175. Cached in-process so the hot
+    paths (selectAnalyzer, sidecar URL resolution) don't re-parse JSON on
+    every request. */
 export async function readUserSettings(): Promise<UserSettings> {
   if (cached) return cached;
   await migrateLegacyUserSettings({

@@ -203,18 +203,47 @@ describe('castDesignMiddleware', () => {
     const snap = store.getState().castDesign.active;
     expect(snap?.done).toBe(1);
     expect(snap?.failures).toHaveLength(1);
-    expect(store.getState().notifications.toasts.at(-1)?.message).toContain('1 failed');
+    const message = store.getState().notifications.toasts.at(-1)?.message;
+    expect(message).toContain('1 failed');
+    /* #3027 review finding #2 — a bare count regressed the original
+       acceptance criteria (a config problem like a missing GEMINI_API_KEY
+       used to produce one clear, actionable toast). The actual error reason
+       must reach the summary toast, not just feed the count. */
+    expect(message).toContain('no gemini key');
   });
 
-  it('re-entrancy: a second designAllRequested while one runs is ignored', () => {
+  it('multiple DIFFERENT failure reasons: toast uses the FIRST failure, not the last', () => {
+    /* N4 (PR #3161 review pass 2) — with only one failure, or several sharing
+       the same reason, the two branches of the sameReason ternary produce
+       output that overlaps: swapping "First failure: X" for "X" is invisible
+       when every failure's error is identical. This test forces at least two
+       DIFFERENT reasons across characters so only the "first failure" branch
+       can pass, and pins WHICH failure's error the toast surfaces. */
     const store = makeStore();
     store.dispatch(
-      castDesignActions.designAllRequested({ bookId: 'b1', characterIds: ['c1'], modelKey: 'k' }),
+      castDesignActions.designAllRequested({
+        bookId: 'b1',
+        characterIds: ['c1', 'c2', 'c3'],
+        modelKey: 'k',
+      }),
     );
-    store.dispatch(
-      castDesignActions.designAllRequested({ bookId: 'b1', characterIds: ['c1'], modelKey: 'k' }),
-    );
-    expect(startCalls).toHaveLength(1);
+    const { cb } = startCalls[0];
+    cb.onCharacterFailed?.({ characterId: 'c1', name: 'Wren', errorReason: 'no gemini key' });
+    cb.onCharacterFailed?.({ characterId: 'c2', name: 'Marlow', errorReason: 'rate limited' });
+    cb.onIdle?.({
+      done: 0,
+      total: 3,
+      skipped: 0,
+      clonedSkips: [],
+      failures: [
+        { characterId: 'c1', name: 'Wren', error: 'no gemini key' },
+        { characterId: 'c2', name: 'Marlow', error: 'rate limited' },
+      ],
+    });
+
+    const message = store.getState().notifications.toasts.at(-1)?.message;
+    expect(message).toContain('First failure: no gemini key');
+    expect(message).not.toContain('rate limited');
   });
 
   it('skipped: charSkipped bumps skipped, surfaced in the summary', () => {
@@ -533,5 +562,90 @@ describe('castDesignMiddleware', () => {
 
     const toasts = (store.getState() as { notifications: { toasts: { message: string }[] } }).notifications.toasts;
     expect(toasts.at(-1)?.message).toMatch(/1 via fallback/);
+  });
+
+  it('dispatches an error toast when a single design request arrives while a bulk job is running', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria' } as never]),
+    );
+
+    // Start a bulk design that never resolves — handle stays occupied.
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b1',
+        characterIds: ['c1'],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'bases',
+      }),
+    );
+    expect(startCalls).toHaveLength(1);
+
+    // Fire a single design request while handle is busy.
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'first',
+      }),
+    );
+
+    // No second API call should have been made.
+    expect(singleStartCalls).toHaveLength(0);
+
+    // An error toast naming the busy state should have been dispatched.
+    const toastActions = recorded.filter(
+      (a): a is { type: string; payload: { kind: string; message: string } } =>
+        a.type === 'notifications/pushToast',
+    );
+    expect(toastActions).toHaveLength(1);
+    expect(toastActions[0].payload.kind).toBe('error');
+    expect(toastActions[0].payload.message).toMatch(/already running/);
+  });
+
+  it('dispatches an error toast when a bulk design request arrives while another job is running', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria' } as never]),
+    );
+
+    // Start a bulk design that never resolves — handle stays occupied.
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b1',
+        characterIds: ['c1'],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'bases',
+      }),
+    );
+    expect(startCalls).toHaveLength(1);
+
+    // Fire a second bulk design request while handle is busy.
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b1',
+        characterIds: ['c1'],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'bases',
+      }),
+    );
+
+    // Only one API call should have been made.
+    expect(startCalls).toHaveLength(1);
+
+    // An error toast naming the busy state should have been dispatched.
+    const toastActions = recorded.filter(
+      (a): a is { type: string; payload: { kind: string; message: string } } =>
+        a.type === 'notifications/pushToast',
+    );
+    expect(toastActions).toHaveLength(1);
+    expect(toastActions[0].payload.kind).toBe('error');
+    expect(toastActions[0].payload.message).toMatch(/already running/);
   });
 });

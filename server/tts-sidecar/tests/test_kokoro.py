@@ -2251,7 +2251,11 @@ def _run_preload_capturing_kokoro(monkeypatch) -> list[str]:
     block under test does any work."""
     engine = main.KokoroEngine()
     calls: list[str] = []
-    monkeypatch.setattr(engine, "_ensure_loaded", lambda model: calls.append(model))
+    monkeypatch.setattr(
+        engine,
+        "_ensure_loaded",
+        lambda model, device=None: calls.append(model),
+    )
     monkeypatch.setitem(main.ENGINES, "kokoro", engine)
     asyncio.run(main._preload_default_engines())
     return calls

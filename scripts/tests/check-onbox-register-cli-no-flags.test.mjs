@@ -68,6 +68,10 @@ function buildFixture({ registerText, liveViewHtml }) {
   mkdirSync(join(root, 'docs', 'testing'), { recursive: true });
   cpSync(join(SCRIPTS_DIR, 'check-onbox-register.mjs'), join(root, 'scripts', 'check-onbox-register.mjs'));
   cpSync(join(SCRIPTS_DIR, 'git-env.mjs'), join(root, 'scripts', 'git-env.mjs'));
+  // #3116: check-onbox-register.mjs now imports parsePublishToken/publishTokenRegex
+  // from publish-token.mjs (for --stamped-since) — a local dep this fixture's
+  // relative layout has to mirror, same as git-env.mjs and is-main-module.mjs.
+  cpSync(join(SCRIPTS_DIR, 'publish-token.mjs'), join(root, 'scripts', 'publish-token.mjs'));
   cpSync(join(SCRIPTS_DIR, 'lib', 'is-main-module.mjs'), join(root, 'scripts', 'lib', 'is-main-module.mjs'));
   writeFileSync(join(root, 'docs', 'testing', 'onbox-acceptance-register.md'), registerText, 'utf8');
   writeFileSync(

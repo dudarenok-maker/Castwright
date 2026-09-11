@@ -133,6 +133,35 @@ function renderView() {
   };
 }
 
+/* F3 (#3169 fix wave) — same store shape as renderView, but with no
+   manuscriptId prop at all (the "browser tab lost its in-progress upload"
+   case the view's own "No manuscript loaded" banner already handles). */
+function renderViewWithoutManuscript() {
+  const store = configureStore({
+    reducer: {
+      ui: uiSlice.reducer,
+      cast: castSlice.reducer,
+      analysis: analysisSlice.reducer,
+      account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
+      notifications: notificationsSlice.reducer,
+    },
+  });
+  return {
+    store,
+    ...render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId={undefined}
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    ),
+  };
+}
+
 /* The analysis effect is gated on (a) the probe useEffect having
    resolved getOllamaHealth at least once with modelResident=true so
    isAnalyzerReady flips on, AND (b) the user clicking the "Start
@@ -149,6 +178,59 @@ async function renderViewWaitingForAnalysis() {
   await waitFor(() => expect(capturedOpts).toBeDefined());
   return result;
 }
+
+/* The StickyAnalysisBar mirrors the active PhaseCard's model chip while a
+   run is in flight, so `phase-model-chip-${phaseId}` can match twice once
+   isAnalysisRunning flips on. Resolve to the PhaseCard's own copy (the one
+   NOT inside the sticky bar) so assertions target the card the bug is
+   about, not its sticky-bar echo. */
+function getPhaseCardChip(phaseId: number) {
+  const chip = screen
+    .getAllByTestId(`phase-model-chip-${phaseId}`)
+    .find((el) => !el.closest('[data-testid="sticky-analysis-bar"]'));
+  if (!chip) throw new Error(`no non-sticky-bar phase-model-chip-${phaseId} found`);
+  return chip;
+}
+
+/* Bug #3169: derivePhaseState's frontier rule used to fire for phase 0 even
+   before any run started (maxPhase defaults to 0, which IS phase 0's id),
+   so a freshly-mounted idle view rendered phase 0 with a spinner and the
+   "· streaming" chip — a reader reported a long wait on a screen that looked
+   busy; an idle page that looks busy invites exactly that. */
+describe('AnalysingView — idle phase 0 is not rendered as active before start (#3169)', () => {
+  it('renders phase 0 as pending (no streaming) on a freshly mounted view with no snapshot and no click', async () => {
+    renderView();
+    /* Wait for the analyzer probe to resolve so the button is fully
+       settled — the view is idle either way (no click, no snapshot). */
+    await screen.findByRole('button', { name: /start analysis/i });
+    const chip = getPhaseCardChip(0);
+    expect(chip).toHaveAttribute('data-phase-state', 'pending');
+    expect(chip).not.toHaveTextContent('streaming');
+  });
+
+  it('renders phase 0 as streaming once "Start analysis" is clicked', async () => {
+    await renderViewWaitingForAnalysis();
+    const chip = getPhaseCardChip(0);
+    expect(chip).toHaveAttribute('data-phase-state', 'streaming');
+    expect(chip).toHaveTextContent('streaming');
+  });
+
+  /* F3 (#3169 fix wave) — `activeStreamSnapshot?.manuscriptId ===
+     manuscriptId` reads `undefined === undefined` as true when BOTH sides
+     are absent (no manuscriptId prop, no snapshot), which used to render an
+     idle view as active. Must go red without the `!!manuscriptId` guard. */
+  it('renders phase 0 as pending (no streaming) with no manuscriptId and no snapshot', async () => {
+    renderViewWithoutManuscript();
+    /* No manuscriptId means no "Start analysis" button (gated on
+       `manuscriptId &&`) — wait on the view's own "no manuscript" banner
+       to settle instead, so the phase-card assertion below isn't racing a
+       still-mounting tree. */
+    await screen.findByText('No manuscript loaded');
+    const chip = getPhaseCardChip(0);
+    expect(chip).toHaveAttribute('data-phase-state', 'pending');
+    expect(chip).not.toHaveTextContent('streaming');
+  });
+});
 
 describe('AnalysingView — live ticker (regression for stuck-chapter screenshot bug)', () => {
   it('renders one row per in-flight chapter so a slow chapter does not hide concurrent progress', async () => {
@@ -2014,6 +2096,10 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     /* And the button now reads Pause (running), not Start. */
     expect(await screen.findByRole('button', { name: /pause analysis/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /start analysis/i })).not.toBeInTheDocument();
+    /* #3169: a cold-boot running snapshot must render phase 0 as active/
+       streaming (no click involved) — proving `started` picks up
+       analysisStarted from the rehydrate path, not just an explicit click. */
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
   });
 
   it('does NOT auto-subscribe when state=paused but labels the button "Resume analysis"', async () => {
@@ -2027,6 +2113,31 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     expect(await screen.findByRole('button', { name: /resume analysis/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /start analysis/i })).not.toBeInTheDocument();
     expect(capturedOpts).toBeUndefined();
+  });
+
+  /* Fix round 1 (#3169 review finding 1): the rehydrate effect only writes
+     hasStartedOnceRef.current = true for a paused/halted snapshot — a ref
+     write, which triggers no re-render on its own. Reading
+     activeStreamSnapshot directly in the `started` expression (rather than
+     relying solely on that ref) means phase 0 reads correctly on the very
+     FIRST render, before the effect has had any chance to run. Assert
+     synchronously with getBy… (no findBy/waitFor) so a regression back to
+     the ref-only expression — correct only once some unrelated effect
+     happens to force a re-render — shows up as a hard failure here rather
+     than as a timing-dependent flash a test could accidentally paper over.
+
+     F5 (#3169 fix wave) — these two only need to prove `started` is true on
+     first render (not `pending`); which non-pending state the chip actually
+     displays for a paused/halted cold boot is an open design question, not
+     settled here — see #3172. */
+  it('renders phase 0 as NOT pending SYNCHRONOUSLY (first render, no awaited re-render) for a cold-boot paused snapshot', () => {
+    renderViewWithActiveStream('paused');
+    expect(getPhaseCardChip(0)).not.toHaveAttribute('data-phase-state', 'pending');
+  });
+
+  it('renders phase 0 as NOT pending SYNCHRONOUSLY (first render, no awaited re-render) for a cold-boot halted snapshot', () => {
+    renderViewWithActiveStream('halted');
+    expect(getPhaseCardChip(0)).not.toHaveAttribute('data-phase-state', 'pending');
   });
 });
 

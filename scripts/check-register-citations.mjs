@@ -11,30 +11,35 @@
 // claim living on several surfaces, with only some of them corrected. This
 // script exists to make that mechanical instead of eyeballed.
 //
-// WIRING GAP, stated explicitly rather than left implicit (pass-9 review of
-// PR #2630, finding AA): `package.json`'s `check:register-citations` script
-// is invoked from exactly one place today —
-// `scripts/tests/check-register-citations.test.mjs`'s own CLI-integration
-// tests, run as part of `npm run test:hooks`. That means this checker only
-// actually EXERCISES on a diff `verify-cache.mjs`'s `test:hooks` step
-// considers in-scope: `docs/testing/**`, the register itself, `CLAUDE.md`,
-// and `scripts/**` — NOT `docs/features/**`, `docs/superpowers/**`,
-// `src/**`, `server/**`, or `e2e/**`, even though a citation can live in any
-// of those and this checker's own real-tree run scans every one of them.
-// There is no dedicated `.github/workflows/*.yml` step for this checker the
-// way the sibling `check-onbox-register.mjs` has
-// (`onbox-register-check.yml`) — `#2629`'s option 3 ("catches rot at PR
-// time") is not fully true yet: rot in a file outside `test:hooks`' own
-// scope is caught only the NEXT time some in-scope file changes too, or on
-// a manual `npm run check:register-citations`. Widening `test:hooks`'
-// inputs to the whole tree isn't the fix — this checker's own real-tree run
-// reads essentially every tracked file, so declaring that as a `test:hooks`
-// input would make the step un-cacheable for everyone, defeating the
-// scope-gating `verify-cache.mjs` exists for. The right fix is a dedicated
-// CI step (mirroring `onbox-register-check.yml`) that always runs this
-// checker regardless of diff scope — a genuine design decision (schedule,
-// gating, whether it belongs in `verify.yml` or its own workflow), not
-// something to wire in blind here; tracked at `#2721`.
+// WIRING STATUS (updated 2026-09-10, PR #3134): `package.json`'s
+// `check:register-citations` script is now invoked from TWO places:
+// (1) `scripts/tests/check-register-citations.test.mjs`'s CLI-integration
+// tests, run as part of `npm run test:hooks`; and
+// (2) `.github/workflows/verify.yml`'s unconditional `check:register-citations`
+// step (PR #3134 closes the CI-wiring gap at #3122; other surfaces remain at #3140).
+//
+// CI WIRING (closed): The dedicated `.github/workflows/verify.yml` "Register
+// citation check" step now exists; it runs unconditionally on every PR,
+// including docs-only diffs, because citations can live in any file and
+// diff-scope cannot reliably predict whether one broke.
+//
+// LOCAL WIRING (open, tracked at #3140): The checker IS reachable locally via
+// two paths: (1) `npm run verify` reaches it via `test:hooks` (which is scope-gated
+// in verify-cache.mjs, so it can be marked `[cached]`/skipped on out-of-scope diffs);
+// and (2) `npm run test:all` and `npm run verify:quick` invoke test:hooks directly
+// with NO caching, so the checker runs unconditionally as part of every local
+// `test:all`/`verify:quick` invocation. The actual decision at #3140 is narrower:
+// whether `npm run verify` itself (beyond test:all) should also have an
+// unconditional/uncached local leg (independent of scope-gating), and whether
+// a git hook should wire it.
+//
+// Scanned file set, and how it is read: the checker reads every non-frozen,
+// non-self-referential git-tracked file (see `gitLsFiles` /
+// `runCheckRegisterCitationsCli`). The single-backtick inline code-span
+// blanking (`stripInlineCodeSpans`) applies to MARKDOWN files only (`.md`,
+// `.html`): non-markdown sources are read raw, unblanked, so a template
+// literal's backticks can never silently hide a citation. See
+// `isMarkdownScanPath` and `stripInlineCodeSpans`'s own comments.
 //
 // Four checks, ordered by precision (least to most likely to need
 // judgment):
@@ -506,7 +511,11 @@ export function isFrozenPath(relPath) {
 
 // Blanks fenced code blocks so an example heading inside a fence can't be
 // mistaken for a real one — mirrors check-onbox-register.mjs's stripFences.
-function stripFences(text) {
+// Only applies to markdown files (`.md`, `.html`); non-markdown scanned
+// sources are read raw, unblanked, so triple-backtick sequences can never
+// silently hide a citation (they are not fence markers in those files).
+function stripFences(text, { isMarkdown = true } = {}) {
+  if (!isMarkdown) return text;
   const lines = text.split('\n');
   let openFence = null;
   return lines
@@ -1086,10 +1095,56 @@ function idSpecificAnnotationPresent(sectionText, id) {
 // DOES occur, as a composite-key separator, in two real tracked files) — so
 // `\s+`-based regexes can no longer bridge across a blanked span the way a
 // plain-space blank did.
+//
+// SCOPE (per #3062): blanking applies to MARKDOWN scanned files only (`.md`,
+// `.html`). In a non-markdown source file a template literal's backticks are
+// read by this transform as the same markdown delimiter and would silently
+// blank a citation inside one (e.g. `` `row A101` `` in a template string),
+// so `stripInlineCodeSpans(text, { isMarkdown: false })` returns `text`
+// unchanged. Every call site threads `isMarkdown` (from the scanned path)
+// through — see `isMarkdownScanPath`.
 const CODE_SPAN_BLANK_CHAR = '';
 const SINGLE_ID_SPAN_REGEX = new RegExp(`^${ROW_ID_TOKEN}$`);
 
-function stripInlineCodeSpans(text) {
+/**
+ * Whether a repo-relative scanned-file path (e.g. `docs/foo.md`,
+ * `scripts/foo.mjs`) should have its single-backtick inline code spans
+ * blanked as markdown. Returns true for `.md` and `.html` files (the
+ * markdown-scanned set); all other tracked files are scanned raw, unblanked.
+ *
+ * Per the operator's #3062 decision, `.html` is treated as fully markdown,
+ * including embedded `<script>` and `<style>` block content — both
+ * `stripFences` (triple-backtick blocks) and `stripInlineCodeSpans`
+ * (single-backtick spans) apply within .html files, so backtick-wrapped
+ * citations inside embedded code blocks are also blanked. This is an
+ * accepted trade-off of the current scope decision (see real-tree example
+ * at docs/features/277-v115-bug-chore-sweep-board.html around lines 1062
+ * and 1085).
+ *
+ * BLANKING SCOPE: `stripFences` is markdown-conditional (gated by `isMarkdown`
+ * at every call site). `stripInlineCodeSpans` is markdown-conditional for
+ * citation-scanning purposes (gated at most call sites: lines 1229, 1859,
+ * 2037, 2135, 2173) but unconditional for discharge-annotation checks
+ * (lines 1031, 2216), where the blanking prevents false positives from
+ * backtick-wrapped example citations. In non-markdown sources
+ * (`.mjs`/`.ts`/`.py`/...), a template literal's backticks would otherwise
+ * be misread as markdown delimiters — a citation inside one (e.g. `` `row
+ * A101` `` in a template string) would be silently blanked by a
+ * markdown-gated scan while remaining visible to downstream checks, creating
+ * inconsistency. Unconditional discharge-annotation blanking trades that
+ * inconsistency for false-positive immunity (the register-owned text and
+ * discharge annotations are not markdown-syntax-specific; a row ID is either
+ * cited for history or it isn't, regardless of whether the document is
+ * markdown).
+ */
+function isMarkdownScanPath(relPath) {
+  return /\.(md|html)$/i.test(relPath);
+}
+
+// `stripInlineCodeSpans` takes an explicit `{ isMarkdown }` flag: when false
+// (a non-markdown scanned source), it returns `text` unchanged.
+function stripInlineCodeSpans(text, { isMarkdown = true } = {}) {
+  if (!isMarkdown) return text;
   return text.replace(/\u0060([^\u0060\n]*)\u0060/g, (m, inner) => {
     const trimmed = inner.trim();
     if (SINGLE_ID_SPAN_REGEX.test(trimmed)) {
@@ -1180,9 +1235,9 @@ function deBold(text) {
  * span, so this costs nothing on a real citation today.
  * @returns {Map<number, Set<string>>}
  */
-function extractCitationsByLine(text) {
-  const stripped = deBold(stripFences(text));
-  const scanLines = stripInlineCodeSpans(stripped).split('\n');
+function extractCitationsByLine(text, isMarkdown) {
+  const stripped = deBold(stripFences(text, { isMarkdown }));
+  const scanLines = stripInlineCodeSpans(stripped, { isMarkdown }).split('\n');
   const byLine = new Map();
   const add = (i, ids) => {
     if (!ids.length) return;
@@ -1213,8 +1268,9 @@ function extractCitationsByLine(text) {
 export function checkNonexistentIds(text, filePath, registerRows) {
   const errors = [];
   const annotated = [];
-  const lines = deBold(stripFences(text)).split('\n');
-  const byLine = extractCitationsByLine(text);
+  const isMarkdown = isMarkdownScanPath(filePath);
+  const lines = deBold(stripFences(text, { isMarkdown })).split('\n');
+  const byLine = extractCitationsByLine(text, isMarkdown);
   const sortedLineIndexes = [...byLine.keys()].sort((a, b) => a - b);
   for (const i of sortedLineIndexes) {
     for (const id of [...byLine.get(i)].sort()) {
@@ -1810,7 +1866,8 @@ export function checkConflictingSubjects(fileTexts, registerRows) {
     // citation (see `stripInlineCodeSpans`'s own comment) — anchored
     // headings can't appear inside a code span at all (`^#{2,6}`), so this
     // only ever changes behaviour on the `Criteria source:` surface.
-    const text = stripInlineCodeSpans(deBold(stripFences(rawText)));
+    const isMarkdown = isMarkdownScanPath(filePath);
+    const text = stripInlineCodeSpans(deBold(stripFences(rawText, { isMarkdown })), { isMarkdown });
     const lines = text.split('\n');
     lines.forEach((line, i) => {
       const citedIds = citationShapedLineIds(line);
@@ -1987,7 +2044,8 @@ export function measureWrongIdEligibleLines(fileTexts, registerRows) {
     // an unblanked copy here would silently disagree with Check C again the
     // moment a `Criteria source:`-shaped example command inside a code span
     // is counted as eligible here but is (correctly) blanked away there.
-    const text = stripInlineCodeSpans(deBold(stripFences(rawText)));
+    const isMarkdown = isMarkdownScanPath(filePath);
+    const text = stripInlineCodeSpans(deBold(stripFences(rawText, { isMarkdown })), { isMarkdown });
     for (const line of text.split('\n')) {
       if (extractSubjectNumbers(line).size === 0) continue;
       const shapedIds = citationShapedLineIds(line);
@@ -2083,9 +2141,9 @@ function stripMarkdownLinkUrls(text) {
   return text.replace(MARKDOWN_LINK_REGEX, '$1');
 }
 
-function titleDriftTokens(text) {
+function titleDriftTokens(text, isMarkdown = true) {
   const withoutLinks = stripMarkdownLinkUrls(text);
-  const withoutCodeSpans = stripInlineCodeSpans(withoutLinks);
+  const withoutCodeSpans = stripInlineCodeSpans(withoutLinks, { isMarkdown });
   const raw = withoutCodeSpans.toLowerCase().match(TITLE_DRIFT_TOKEN_REGEX) ?? [];
   const tokens = new Set();
   for (const t of raw) {
@@ -2121,9 +2179,9 @@ function titleDriftScore(titleTokens, proseTokens) {
  * surface is invented here.
  * @returns {{ lineIndex: number, ids: string[], titleEcho: string }[]}
  */
-function extractHeadingTitleEchoes(text) {
-  const stripped = deBold(stripFences(text));
-  const lines = stripInlineCodeSpans(stripped).split('\n');
+function extractHeadingTitleEchoes(text, isMarkdown) {
+  const stripped = deBold(stripFences(text, { isMarkdown }));
+  const lines = stripInlineCodeSpans(stripped, { isMarkdown }).split('\n');
   const citations = [];
   lines.forEach((line, i) => {
     const m = line.match(HEADING_ID_REGEX);
@@ -2228,9 +2286,10 @@ function dischargeAnnotationPresentAnywhere(sectionText, id) {
 export function checkCitationTitleDrift(text, filePath, registerRows) {
   const findings = [];
   const annotatedFindings = [];
-  const lines = deBold(stripFences(text)).split('\n');
-  for (const { lineIndex, ids, titleEcho } of extractHeadingTitleEchoes(text)) {
-    const proseTokens = titleDriftTokens(titleEcho);
+  const isMarkdown = isMarkdownScanPath(filePath);
+  const lines = deBold(stripFences(text, { isMarkdown })).split('\n');
+  for (const { lineIndex, ids, titleEcho } of extractHeadingTitleEchoes(text, isMarkdown)) {
+    const proseTokens = titleDriftTokens(titleEcho, isMarkdown);
     for (const id of ids) {
       const row = registerRows.get(id);
       if (!row) continue;

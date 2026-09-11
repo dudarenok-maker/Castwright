@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { scrubGitEnv } from './git-env.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { parsePublishToken, publishTokenRegex } from './publish-token.mjs';
 
 // Deliberately out of scope: the "Blocked" and "Unconfirmed" sections. They
 // use a different structure (one uses `###` headings, the other a bullet
@@ -542,6 +543,83 @@ export function stripHtmlComments(html) {
     if (next === out) return out;
     out = next;
   }
+}
+
+// #3116: "did the live view's RENDERED content change since <ref> without the
+// publish counter moving." A stamp commit sitting somewhere in a branch's
+// history proves nothing about its LATEST content — only comparing the tip
+// against a base ref catches an unstamped edit landed after that stamp. This
+// is deliberately weaker than publish-token.mjs's `comparePublishTokens` (no
+// nonce-in-history search, no rebase/behind-main diagnosis): it answers one
+// question — "did content drift while the counter sat still" — for a check
+// that must also stay `git`-free at its core so it is unit-testable without a
+// scratch repo (the CLI layer supplies the two HTML strings; see
+// `resolveStampedSinceBaseline` for how the `<ref>` side is read).
+//
+// Content comparison ignores HTML comments (the header comment and the
+// `<!-- BEGIN GENERATED:... -->` markers are not rendered) and ignores the
+// token itself (`stripHtmlComments` already strips comments elsewhere in this
+// file; reused here rather than reimplemented, same reasoning as sharing
+// `parsePublishToken` with the stamper). Blanking the token's two attribute
+// values — not stripping the whole marker — keeps the rest of the diff
+// positional, though nothing here depends on that.
+//
+// A missing or malformed token on EITHER side fails closed: a missing token
+// is not "no change", it's "cannot tell whether there was a change".
+export function checkStampedSince({ workingHtml, baselineHtml }) {
+  const blankToken = (html) =>
+    stripHtmlComments(html).replace(publishTokenRegex(), 'data-published-as="" data-publish-id=""');
+
+  if (blankToken(workingHtml) === blankToken(baselineHtml)) return [];
+
+  const w = parsePublishToken(workingHtml);
+  const b = parsePublishToken(baselineHtml);
+
+  if (w === null) {
+    return [
+      "Publish token: the live view's content changed, but the tracked copy has no publish " +
+        'token at all. Run `npm run stamp:publish-token` — never hand-edit the counter.',
+    ];
+  }
+  if (w.malformed) {
+    return [`Publish token (tracked): ${w.malformed}. Fix it, then run \`npm run stamp:publish-token\`.`];
+  }
+  if (b === null) {
+    return [
+      "Publish token: the live view's content changed since the base ref, but the base ref's " +
+        'copy has no publish token at all — investigate before trusting this comparison.',
+    ];
+  }
+  if (b.malformed) {
+    return [`Publish token (base ref): ${b.malformed}. Investigate before trusting this comparison.`];
+  }
+
+  if (w.n < b.n) {
+    return [
+      `Publish token: the live view's rendered content changed since the base ref, but the ` +
+        `publish counter is BEHIND (${w.n} vs ${b.n}). This is the "undo a bad fold" shape: ` +
+        `rebase or re-derive from the base ref; do not just bump the number.`,
+    ];
+  }
+  if (w.n === b.n) {
+    return [
+      `Publish token: the live view's rendered content changed since the base ref, but the ` +
+        `publish counter (data-published-as) stayed at ${w.n} on both sides. Run ` +
+        '`npm run stamp:publish-token` — never hand-edit the number — then commit the result.',
+    ];
+  }
+  // w.n > b.n is unconditionally true here (both earlier branches returned), but stating
+  // it documents the predicate: when counter is higher AND nonce is unchanged, that's a
+  // hand-edit. Keeping it guards against future branch reordering.
+  if (w.n > b.n && w.nonce === b.nonce) {
+    return [
+      `Publish token: the counter moved (${b.n} → ${w.n}), but the nonce stayed the same. ` +
+        `This is a hand-edited counter, bypassing the stamp command. Run ` +
+        '`npm run stamp:publish-token` — never hand-edit the number.',
+    ];
+  }
+
+  return [];
 }
 
 // Strips tags and collapses whitespace, so a cell's text can be compared
@@ -1319,7 +1397,16 @@ export function checkLiveView(
 // of erroring. See scripts/git-env.mjs's header for the full account.
 const GIT_TIMEOUT_MS = 15_000;
 function runGitCommand(args, cwd) {
-  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, env: scrubGitEnv() });
+  // #3116 review finding 4: locale-pin git's stderr messages. Missing-path
+  // detection depends on specific English substrings from `git show`, and
+  // those strings are translated depending on the ambient LANG/LC_ALL. Setting
+  // LC_ALL: 'C' ensures consistent English messages regardless of the system's
+  // locale, so the check is deterministic rather than silently failing in
+  // non-English environments.
+  const env = scrubGitEnv();
+  env.LC_ALL = 'C';
+  env.LANG = 'C';
+  return spawnSync('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true, env });
 }
 
 // #2199 review round 2: fetches `origin/main` FRESH before reading it,
@@ -1427,6 +1514,75 @@ export function resolveBaselineTexts(
   };
 }
 
+// #3116: reads the live view AT an arbitrary ref (the PR base, in CI) for
+// `--stamped-since`. Deliberately narrower than `resolveBaselineTexts` above:
+// no fetch (the caller — the CLI layer, or the workflow before invoking it —
+// is responsible for making `ref` resolvable locally; in CI, `actions/checkout@v7`
+// with `fetch-depth: 2` makes the base branch's tip -- the merge commit's first parent, NOT the merge-base -- available as HEAD^1), one file, and THREE outcomes rather than
+// fetch-then-show's two, because "the file didn't exist yet at this ref" is
+// not a failure here (it's the newly-added-file case the issue calls out) —
+// it must not be folded into the same bucket as "the ref itself is garbage."
+//
+// #3116 review finding 5: correctness depends on the working tree being
+// `merge(base, head)` -- the PR head merged ONTO the base branch's current tip.
+// In CI this is guaranteed: `actions/checkout@v7` on a pull_request event
+// checks out `refs/pull/N/merge`, GitHub's `Merge <head> into <base>` commit,
+// rebuilt on the base's current tip. Its first parent is that tip, available
+// as HEAD^1 (the tip, not the merge-base). By hand, never pass HEAD^1: outside
+// CI's merge commit it need not be the base your branch will merge onto (it may
+// be, for example, your previous commit, your own pre-merge tip, or after a
+// fast-forward main's previous tip), so the comparison can run against the wrong
+// tree. That can fail to catch an unstamped edit -- for example when HEAD^1
+// already contains the edit, or when a stamp main landed in between is credited
+// to your branch. Pass the target ref explicitly after merging it in
+// (`git fetch origin && git merge origin/main`, then `--stamped-since
+// origin/main`): that is CI's comparison. Un-merged against the target, the
+// result mixes main's changes with yours: an unstamped edit is still refused
+// unless main's counter is now lower than your branch's, the message can read
+// BEHIND when main's counter is higher than your branch's, and a branch that
+// never touched the live view can be refused because of main's change. The
+// comparison is only meaningful when the working tree is merge(base, head) and
+// `ref` is that base.
+//
+// `git show <ref>:<path>` exits 128 for BOTH "path missing at that ref" and
+// "ref doesn't resolve at all"; the only way to tell them apart is the
+// stderr text. Git's own C code uses TWO distinct messages for "missing at
+// that ref", not one: `fatal: path '%s' does not exist in '%s'` when the
+// path is absent everywhere the working tree can see, and `fatal: path '%s'
+// exists on disk, but not in '%s'` when it exists on disk in the CURRENT
+// working tree but wasn't tracked yet at <ref> — exactly the newly-added-file
+// shape this flag has to pass. Both are "missing"; anything else (an invalid
+// ref, a corrupt object, a timeout) falls through to 'error' and fails
+// closed, per the issue's explicit instruction that an unresolvable ref must
+// never read as "no change".
+export function resolveStampedSinceBaseline(repoRoot, liveViewPath, ref, gitRunner = runGitCommand) {
+  const result = gitRunner(['show', `${ref}:${liveViewPath}`], repoRoot);
+  if (result.error) {
+    return { status: 'error', text: null, message: `\`git show ${ref}:${liveViewPath}\` failed to run: ${result.error.message}` };
+  }
+  if (result.status !== 0) {
+    const stderr = typeof result.stderr === 'string' ? result.stderr : '';
+    if (stderr.includes('does not exist in') || stderr.includes('exists on disk, but not in')) {
+      return { status: 'missing', text: null, message: null };
+    }
+    return {
+      status: 'error',
+      text: null,
+      message:
+        `\`git show ${ref}:${liveViewPath}\` failed (exit ${result.status}): ` +
+        `${stderr.trim() || '(no stderr output)'}`,
+    };
+  }
+  if (typeof result.stdout !== 'string') {
+    return {
+      status: 'error',
+      text: null,
+      message: `\`git show ${ref}:${liveViewPath}\` produced no readable output.`,
+    };
+  }
+  return { status: 'ok', text: result.stdout, message: null };
+}
+
 // process.exit() terminates before Node flushes pending async stdout/stderr
 // writes (synchronous on Windows, ASYNCHRONOUS on Linux/macOS — see
 // scripts/build-release-zip.mjs's own die()/CliError comment for the fuller
@@ -1481,6 +1637,105 @@ function runCheckOnboxRegisterCli() {
     console.error('');
     return true;
   };
+
+  // --stamped-since <ref> (#3116): opt-in, invoked by CI with HEAD^1 (the
+  // merge commit's first parent, the base tip at merge time). Answers ONE
+  // question — did the live view's rendered content change since <ref> without
+  // the publish counter moving — and stays independent of the register-vs-live-view
+  // comparison below: it reads neither REGISTER (no `read(REGISTER)` above this
+  // block, deliberately) nor does it require LIVE_VIEW to exist (a newly-added
+  // file has nothing to compare against; see the ENOENT handling below). No network fetch here — that would make
+  // the no-flag run's offline guarantee a lie if this block ever grew a
+  // dependency on it; the caller (the workflow, or an operator by hand) is
+  // responsible for making `ref` resolvable locally first.
+  //
+  // Correctness assumes the working tree is merge(base, head): the PR head
+  // merged onto the base branch's tip. In CI, actions/checkout@v7 with
+  // fetch-depth: 2 checks out refs/pull/N/merge (`Merge <head> into <base>`,
+  // rebuilt on the base's current tip), whose first parent HEAD^1 is that tip.
+  // Hand-run: never pass HEAD^1. Outside CI's merge commit it need not be the base
+  // your branch will merge onto, so the check can fail to catch an unstamped edit (for
+  // example when HEAD^1 already contains it, or when a stamp main landed in
+  // between is credited to your branch). Merge the target in, then pass it
+  // explicitly -- that is CI's comparison. Un-merged, the result mixes main's
+  // changes with yours; see the header comment on resolveStampedSinceBaseline.
+  const stampedSinceIdx = process.argv.indexOf('--stamped-since');
+  if (stampedSinceIdx !== -1) {
+    // #3116 review finding 2: --stamped-since is incompatible with
+    // --against-published and --discharging. Both are part of the
+    // pre-publish check, not the CI gate, so they cannot appear together.
+    // Refuse explicitly rather than silently ignoring them.
+    const againstPublishedIdx = process.argv.indexOf('--against-published');
+    const dischargingIdx = process.argv.indexOf('--discharging');
+    if (againstPublishedIdx !== -1 || dischargingIdx !== -1) {
+      const conflicting = [];
+      if (againstPublishedIdx !== -1) conflicting.push('--against-published');
+      if (dischargingIdx !== -1) conflicting.push('--discharging');
+      console.error(
+        `--stamped-since cannot be combined with ${conflicting.join(' and ')}. ` +
+          `--stamped-since is for CI (checks if content moved without a stamp); ` +
+          `${conflicting.join(' and ')} are for hand-run pre-publish checks. ` +
+          `Run them separately.`,
+      );
+      throw new CliExitError(1);
+    }
+    // Same "flag given twice" refusal as --against-published/--discharging
+    // above (well, below in file order, same convention): a second
+    // occurrence is silently dropped by `indexOf`, which would otherwise
+    // just run against the wrong ref with no warning.
+    if (process.argv.lastIndexOf('--stamped-since') !== stampedSinceIdx) {
+      console.error(
+        '--stamped-since was passed more than once — pass exactly one ref, e.g. ' +
+          '--stamped-since origin/main.',
+      );
+      throw new CliExitError(1);
+    }
+    const ref = process.argv[stampedSinceIdx + 1];
+    if (!ref) {
+      console.error('--stamped-since requires a value: a ref to compare against, e.g. a commit sha.');
+      throw new CliExitError(1);
+    }
+
+    let workingHtml;
+    try {
+      workingHtml = readFileSync(new URL(`../${LIVE_VIEW}`, import.meta.url), 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        // The file doesn't exist in the working tree. Deletion is not this
+        // check's business (per the issue) — pass.
+        console.log(`check:onbox-register --stamped-since: OK — ${LIVE_VIEW} does not exist.`);
+        return;
+      }
+      throw err;
+    }
+
+    const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+    const baseline = resolveStampedSinceBaseline(repoRoot, LIVE_VIEW, ref);
+    if (baseline.status === 'error') {
+      console.error(
+        `Publish token: could not read ${LIVE_VIEW} at ${ref} — ${baseline.message} An ` +
+          'unresolvable ref must never read as "no change"; fix the ref (or the fetch that ' +
+          'was meant to make it resolvable) and try again.',
+      );
+      throw new CliExitError(1);
+    }
+    if (baseline.status === 'missing') {
+      // Newly added at HEAD relative to `ref` — nothing to compare. Pass.
+      console.log(`check:onbox-register --stamped-since: OK — ${LIVE_VIEW} does not exist at ${ref}.`);
+      return;
+    }
+
+    const stampedSinceErrors = checkStampedSince({ workingHtml, baselineHtml: baseline.text });
+    const stampedSinceFailed = report(
+      `${LIVE_VIEW} changed since ${ref} without a fresh publish stamp`,
+      stampedSinceErrors,
+    );
+    if (!stampedSinceFailed) {
+      console.log(`check:onbox-register --stamped-since: OK — ${LIVE_VIEW} vs ${ref}.`);
+    }
+    if (stampedSinceFailed) throw new CliExitError(1);
+    return;
+  }
 
   const text = read(REGISTER);
 
