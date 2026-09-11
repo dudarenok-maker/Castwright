@@ -46,7 +46,7 @@ criterion below is driven from the app.
    policy normally pins it to `cuda:1` — see row **A1**'s environmental notes
    in [`onbox-acceptance-register.md`](onbox-acceptance-register.md)). Under
    that pin `_resolve_admission`'s `constraint` is set and the hint is skipped
-   outright (`main.py:5184`), so every criterion below is a no-op until it's
+   outright (`main.py:5194`), so every criterion below is a no-op until it's
    cleared. **`QWEN_DEVICE` must NOT stay pinned to `cuda:1` for Criteria 2
    and 3.** It is true that the knob does not gate Coqui's *admission check*
    directly — but each of those criteria triggers a full chapter render
@@ -163,15 +163,16 @@ unlike a resident engine nothing ever evicts it.
    (`main.py:4355`, `FootprintTable.peak_mb`, `main.py:4463-4470`) — call
    this value `peak`. A fresh box with no prior Coqui admissions uses the
    3584 MB seed unmodified.
-4. **The target band, in MB:** this criterion needs `headroom0 > peak + 400`
-   to have room to construct a discriminating band at all — if it doesn't,
-   record the measured `headroom0` and `peak` in the Result line rather than
-   forcing a pass — the exact headroom this box has needs on-box confirmation
-   either way. Otherwise the target is
-   `target_headroom1 = peak + 200` (comfortably inside the band's floor;
-   at the seed value that's **3784 MB**) — enough margin above `peak` to
-   survive nvidia-smi's own read noise, and (given the check above) still
-   short of `headroom0`. **The reserve subtracted per device is
+4. **The target band, in MB:** this criterion constructs a scenario where
+   `cuda:1`'s free headroom sits in a band high enough to pass #3097/#3165's
+   75%-tolerance check (so the hint is honored when active) but low enough to
+   still lose to `cuda:0`'s unconstrained best-fit (so the control derive
+   without the hint lands elsewhere). The target is `target_headroom1 = 6000`
+   (the 75%-tolerance threshold boundary; at the seed `peak` of 3584 this lies
+   comfortably above it and well within the band defined by
+   `0.75 × headroom0` and `peak`). At the seed value this is **6000 MB** — the
+   concrete boundary where the tolerance switches from rejecting to accepting
+   the hint. **The reserve subtracted per device is
    `reserve(total_mb) = min(round(0.05 * total_mb), GPU_RESERVE_MB)` —
    `GPU_RESERVE_MB` is the operator-configurable ceiling (`gpu.reserveMb`,
    `server/src/config/registry.ts:829-838`), not a hardcoded 500.** The value
@@ -191,7 +192,7 @@ unlike a resident engine nothing ever evicts it.
    default. `target_free1 = target_headroom1 + reserve(total1)`
    — at `total1 = 16376`, `round(0.05 * 16376) = 819`, so
    `reserve(16376) = min(819, GPU_RESERVE_MB)`, which is `min(819, 500) =
-   500` at the default, giving `target_free1 = 3784 + 500 = 4284` at the
+   500` at the default, giving `target_free1 = 6000 + 500 = 6500` at the
    seed `peak`. **Use `reserve(total1)` — the full formula, not the raw
    `GPU_RESERVE_MB` — on both sides of this criterion**: computing
    `target_free1` here, and reading `headroom1` back from the fill in step 5
@@ -211,9 +212,9 @@ unlike a resident engine nothing ever evicts it.
    ```python
    import torch, time
    torch.cuda.set_device(1)
-   TARGET_FREE_MB = 4284  # target_free1 from step 4 at the seed peak and the DEFAULT
+   TARGET_FREE_MB = 6500  # target_free1 from step 4 at the seed peak and the DEFAULT
                           # GPU_RESERVE_MB=500 -- this box's own server/.env sets
-                          # GPU_RESERVE_MB=768, which recomputes to 4552; always
+                          # GPU_RESERVE_MB=768, which recomputes to 6768; always
                           # recompute from your box's actual peak/GPU_RESERVE_MB
                           # rather than pasting either literal.
    _free0_b, total0_b = torch.cuda.mem_get_info(0)
@@ -272,7 +273,7 @@ unlike a resident engine nothing ever evicts it.
    `POST /api/sidecar/unload`) — leave it non-resident, don't reload it.
    Reloading it here would re-admit it and pin `_resolve_admission`'s
    `constraint` to wherever it just landed, which skips the `preferred`/hint
-   check entirely regardless of what the header says next (`main.py:5184`).
+   check entirely regardless of what the header says next (`main.py:5194`).
    Then re-delete the `.pt` artifact for the same character (Setup step 4) —
    step 6's derive already wrote a fresh one, and without deleting it again
    the next call finds `ptExists && !stale` and skips the derive outright
@@ -322,9 +323,9 @@ hard pin that PR #3061's review rejected. Under a hard pin this scenario cost a
 catalogue voice**.
 
 **There is no log line that says "the preference was offered and not
-taken."** `_resolve_admission` (`main.py:5126-5253`) is the same function
-Criterion 1 already audited: the `preferred` try_hold at `main.py:5184-5187`
-and its unconstrained fallback at `main.py:5188-5189` are both silent — no
+taken."** `_resolve_admission` (`main.py:5134-5287`) is the same function
+Criterion 1 already audited: the `preferred` try_hold at `main.py:5219-5221`
+and its unconstrained fallback at `main.py:5222-5223` are both silent — no
 `log.` call anywhere in that path records whether the preferred device was
 tried, or whether it was tried and rejected before falling through. A
 `noCapacity` refusal naming `cuda:1` isn't a log line either; it would surface
@@ -344,9 +345,9 @@ To observe the fallback directly anyway, add two temporary log lines in
 `_resolve_admission` and revert them after the run — they are not part of the
 shipped code:
 
-- right after the `preferred` try at `main.py:5187`:
+- right after the `preferred` try at `main.py:5221`:
   `log.info("preferred=%s held=%s", preferred, held)`
-- right after the fallback try at `main.py:5189`:
+- right after the fallback try at `main.py:5223`:
   `log.info("fallback held=%s", held)`
 
 1. Fill `cuda:1` so the derive cannot fit there — using the same scratch-CUDA
@@ -384,7 +385,7 @@ shipped code:
    `main.py:4335`) over the 1.7B (~3915 MB, `main.py:4344`) — on a
    `cuda:0` actually holding the just-landed Coqui derive rather than its
    pristine reading, a 1.7B book's own admission can trigger `_evict_until`
-   (`main.py:5199`) and evict the very Coqui this criterion exists to
+   (`main.py:5233`) and evict the very Coqui this criterion exists to
    observe, which a green render can silently absorb (a substituted stock
    voice is not visible in the render's status — see the fourth Pass bullet
    below). Leave the scratch fill running across it, and kill it once this
@@ -394,9 +395,11 @@ shipped code:
 
 - the derive **succeeds on GPU0**, in its normal time;
 - (diagnostic only, with the temporary log lines above) the first log line
-  shows `held=None` for `preferred="cuda:1"`, and the second shows a non-`None`
-  fallback `held` on `cuda:0` — i.e. the preference was tried, rejected, and
-  fallen through, rather than a `noCapacity` refusal ever reaching Node;
+  shows `preferred=None` (the hint was rejected by the 75%-tolerance check
+  before the try_hold, so there is no "preferred try rejected" — the fallback
+  is the unconstrained winner), and the second shows `held` on `cuda:0` — this
+  proves the tolerance dropped the hint and fell through to the winner, rather
+  than a `noCapacity` refusal ever reaching Node;
 - there is **no ~60 s stall** before it proceeds;
 - the character renders in **its own designed voice**.
 
