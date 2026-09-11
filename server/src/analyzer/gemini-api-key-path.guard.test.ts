@@ -69,20 +69,33 @@ describe('Gemini API key path guard', () => {
     // All names the guard searches for (section labels + aliases)
     const allMovedNames = [...actualSectionLabels, ...movedSettingNames];
 
-    // Simple approach: look for lines containing "Account" paired with any moved setting name.
-    // This catches: "Account → Name", "Account -> Name", "Account settings... Name", etc.
+    // Detect stale Account-based navigation paths. Only flag lines that actually
+    // describe a path (contain arrows, "tab", or "settings" keywords), not just any
+    // mention of "account" and a setting name together (e.g. "Google account required").
     function lineHasStaleAccountRef(line: string, settingNames: string[]): string | null {
       const lowerLine = line.toLowerCase();
 
-      // Check if line mentions Account (any context)
-      if (!lowerLine.includes('account')) {
+      // Skip lines that mention "account" in other contexts (not paths)
+      if (lowerLine.includes('google account') || lowerLine.includes('user account')) {
+        return null;
+      }
+
+      // Only consider lines that describe a navigation path:
+      // Must have Account AND one of: →, ->, "tab", "settings" (path indicators)
+      const hasPathIndicator =
+        lowerLine.includes('→') ||
+        lowerLine.includes('->') ||
+        /\baccount\s+(tab|settings)/i.test(line) ||
+        /\bin\s+(the\s+)?account\s+(tab|settings)/i.test(line);
+
+      if (!lowerLine.includes('account') || !hasPathIndicator) {
         return null;
       }
 
       // Check if it also mentions any of the moved setting names
       for (const name of settingNames) {
         if (lowerLine.includes(name.toLowerCase())) {
-          return name; // Found a stale reference
+          return name; // Found a stale path reference
         }
       }
 
