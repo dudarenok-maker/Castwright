@@ -31,7 +31,7 @@ export async function launchSidecarWithRestart(platform, repoRoot, spawn = realS
   let restart43Timestamps = [];
 
   const launch = () => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const { file, args } = sidecarCommand(platform, repoRoot);
       const child = spawn(file, args, { stdio: 'inherit', windowsHide: true });
 
@@ -50,7 +50,12 @@ export async function launchSidecarWithRestart(platform, repoRoot, spawn = realS
               `[tts:sidecar] ${restart43Timestamps.length} code-43 exits in ` +
                 `${RESTART43_STREAK_WINDOW_MS / 60_000} minutes — streak cap reached. Exiting.`,
             );
-            process.exit(43);
+            try {
+              process.exit(43);
+            } catch (err) {
+              // In tests, process.exit may throw; reject the promise so await completes
+              reject(err);
+            }
           }
 
           // Restart once with a brief backoff.
@@ -60,13 +65,23 @@ export async function launchSidecarWithRestart(platform, repoRoot, spawn = realS
           }, 2000);
         } else {
           // Any other exit code: propagate and exit.
-          process.exit(code ?? 0);
+          try {
+            process.exit(code ?? 0);
+          } catch (err) {
+            // In tests, process.exit may throw; reject the promise so await completes
+            reject(err);
+          }
         }
       });
 
       child.on('error', (err) => {
         console.error('[tts:sidecar] failed to launch:', err.message);
-        process.exit(1);
+        try {
+          process.exit(1);
+        } catch (exitErr) {
+          // In tests, process.exit may throw; reject the promise so await completes
+          reject(exitErr);
+        }
       });
     });
   };

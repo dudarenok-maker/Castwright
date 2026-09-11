@@ -54,7 +54,7 @@ function createMockSpawn(exitSequence) {
   };
 }
 
-// Capture process.exit calls without throwing
+// Capture process.exit calls and throw so the launcher promise rejects
 function setupTestEnvironment(timeSequence = null) {
   let actualExitCode = null;
   let exitCalled = false;
@@ -75,6 +75,8 @@ function setupTestEnvironment(timeSequence = null) {
   process.exit = (code) => {
     actualExitCode = code;
     exitCalled = true;
+    // Throw so the launcher's promise rejects and await completes
+    throw new Error(`process.exit(${code})`);
   };
 
   // Mock setTimeout to execute immediately (no delay) but track callbacks
@@ -98,11 +100,15 @@ function setupTestEnvironment(timeSequence = null) {
 test('sidecar restart: code-43 does NOT trip on first exit', async () => {
   const env = setupTestEnvironment([1000]); // Fixed time
   try {
-    const spawn = createMockSpawn([43]); // Single code-43
-    launchSidecarWithRestart('linux', '/tmp', spawn);
-    // Give it time to process the exit
-    await new Promise((r) => setTimeout(r, 100));
-    assert.equal(env.wasExitCalled(), false, 'should not call process.exit on first code-43');
+    // First spawn exits 43 → triggers restart. Second spawn exits 0 (non-43) → calls process.exit(0).
+    // We verify code 43 was not the exit code (i.e., did NOT trip the streak).
+    const spawn = createMockSpawn([43, 0]);
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+    assert.notEqual(env.getExitCode(), 43, 'should not exit with code 43 on first code-43 (no streak trip)');
   } finally {
     env.cleanup();
   }
@@ -111,11 +117,14 @@ test('sidecar restart: code-43 does NOT trip on first exit', async () => {
 test('sidecar restart: code-43 does NOT trip on second exit', async () => {
   const env = setupTestEnvironment([1000, 1000]); // Same time for both
   try {
-    const spawn = createMockSpawn([43, 43]); // Two code-43 exits
-    launchSidecarWithRestart('linux', '/tmp', spawn);
-    // Give it time to process both exits
-    await new Promise((r) => setTimeout(r, 150));
-    assert.equal(env.wasExitCalled(), false, 'should not call process.exit on second code-43');
+    // First spawn exits 43 → restart. Second spawn exits 43 → restart. Third spawn exits 0 → process.exit(0).
+    const spawn = createMockSpawn([43, 43, 0]);
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+    assert.notEqual(env.getExitCode(), 43, 'should not exit with code 43 on second code-43 (streak is 2, not 3)');
   } finally {
     env.cleanup();
   }
@@ -148,11 +157,16 @@ test('sidecar restart: old code-43 exit is pruned when outside window', async ()
   const times = [0, WINDOW_MS + 1, WINDOW_MS + 2];
   const env = setupTestEnvironment(times);
   try {
-    const spawn = createMockSpawn([43, 43, 43]); // Three code-43 exits at different times
-    launchSidecarWithRestart('linux', '/tmp', spawn);
-    await new Promise((r) => setTimeout(r, 200));
-    // Should NOT trip because first exit is pruned (outside window); only 2 recent ones count
-    assert.equal(env.wasExitCalled(), false, 'should not trip when old exit is pruned (only 2 recent)');
+    // Spawn 1 exits 43 → restart. Spawn 2 exits 43 → restart. Spawn 3 exits 43 → restart.
+    // Spawn 4 exits 0 → process.exit(0).
+    // The first timestamp is pruned, so streak is 2, not 3, so code 43 was not the trip.
+    const spawn = createMockSpawn([43, 43, 43, 0]);
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+    assert.notEqual(env.getExitCode(), 43, 'should not exit with code 43 when old exit is pruned (only 2 recent in streak)');
   } finally {
     env.cleanup();
   }
@@ -162,8 +176,11 @@ test('sidecar restart: non-43 exit codes propagate immediately without restart',
   const env = setupTestEnvironment([1000]);
   try {
     const spawn = createMockSpawn([0]); // Exit code 0
-    launchSidecarWithRestart('linux', '/tmp', spawn);
-    await new Promise((r) => setTimeout(r, 100));
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
     assert.equal(env.getExitCode(), 0, 'should propagate exit code 0 immediately');
     assert.equal(env.wasExitCalled(), true, 'should have called process.exit(0)');
   } finally {
@@ -175,8 +192,11 @@ test('sidecar restart: code-42 (CUDA poison) propagates immediately without retr
   const env = setupTestEnvironment([1000]);
   try {
     const spawn = createMockSpawn([42]); // Exit code 42
-    launchSidecarWithRestart('linux', '/tmp', spawn);
-    await new Promise((r) => setTimeout(r, 100));
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
     assert.equal(
       env.getExitCode(),
       42,
