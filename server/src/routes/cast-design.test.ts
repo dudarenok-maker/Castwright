@@ -1628,3 +1628,62 @@ describe('cast-design — per-character reason on a lock timeout (#2292)', () =>
     expect(idle?.failures?.[0].error).toBe('model exploded');
   });
 });
+
+/* PR #3161 review finding #1 — the Gemini persona-fallback catch (cast-design.ts
+   ~line 528-541, the same site the #3027/2 test above exercises) used to ship
+   `(e as Error).message` verbatim to the client. A `LockAcquisitionTimeoutError`
+   out of `writeVoiceStylePersona`'s `withCastLock` embeds the absolute
+   filesystem path to cast.json in its message — a disclosure bug over LAN
+   HTTPS. Must route through `itemFailureReason` like the sibling ride-out-loop
+   site (#2292, asserted at line ~1615 above) already does. */
+describe('cast-design — persona-write lock timeout is curated, not leaked (PR #3161)', () => {
+  it('reports the curated contention reason, not the raw lock-timeout message, on a persona-write lock timeout', async () => {
+    resolvePersonaEngineMock.mockReturnValue('gemini');
+    personaMock.mockReset();
+    personaMock.mockResolvedValueOnce('A brand new persona for hart.');
+
+    const castLockMod = await import('../workspace/cast-lock.js');
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    /* Only the FIRST withCastLock call in this run is hart's persona write —
+       hart (no voiceStyle) hits it before any design/apply step; aria (has a
+       voiceStyle already) skips straight to design, whose own withCastLock
+       call (via voices.ts's applyOverrideToCastFiles) must go through
+       unmocked so aria still lands normally. */
+    const spy = vi
+      .spyOn(castLockMod, 'withCastLock')
+      .mockImplementationOnce(async () => {
+        throw new LockAcquisitionTimeoutError('cast:/w/hollow-tide', 10_000);
+      });
+
+    let res;
+    try {
+      res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['hart', 'aria'], modelKey: QWEN_KEY });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    const failedEvent = events.find((e) => e.type === 'character_failed' && e.characterId === 'hart');
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent?.errorReason).toBe(LOCK_CONTENTION_ITEM_REASON);
+    expect(failedEvent?.errorReason).not.toContain('withKeyLock');
+    expect(failedEvent?.errorReason).not.toContain('cast:/w/hollow-tide');
+
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('hart');
+    expect(idle?.failures?.[0].error).toBe(LOCK_CONTENTION_ITEM_REASON);
+    expect(idle?.failures?.[0].error).not.toContain('withKeyLock');
+    expect(idle?.failures?.[0].error).not.toContain('cast:/w/hollow-tide');
+
+    /* Not escalated: the loop carried on and designed the other character. */
+    expect(idle?.done).toBe(1);
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
+  });
+});
