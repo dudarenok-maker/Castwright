@@ -526,12 +526,9 @@ export function GenerationView({
       await rollbackInclude(chapterId).catch((rollbackErr) => {
         console.warn('[generation] include rollback failed', rollbackErr);
       });
-      /* Drop the snapshot on either abort or terminal failure — the
-         server-side job already ended (abort) or surfaced an error,
-         and the row's own error state inside subsetByChapter carries
-         the message for the user. */
-      dispatch(analysisActions.clearActiveStream());
       if (isAbort) {
+        /* Drop the snapshot on abort — the server-side job already ended. */
+        dispatch(analysisActions.clearActiveStream());
         setSubsetByChapter((prev) => {
           const { [chapterId]: _, ...rest } = prev;
           return rest;
@@ -539,9 +536,16 @@ export function GenerationView({
         return;
       }
       if (isSubsetInProgress) {
+        /* A different subset request is already running; this request never
+           started a job, so do NOT touch the active stream — it belongs to
+           the other job. Surface the server's message instead. */
         patchSubset(chapterId, { error: e.message });
         return;
       }
+      /* Drop the snapshot on terminal failure — the server-side job
+         surfaced an error, and the row's own error state inside subsetByChapter
+         carries the message for the user. */
+      dispatch(analysisActions.clearActiveStream());
       const message = (e as Error).message || 'Subset analysis failed.';
       patchSubset(chapterId, { error: message });
     }
@@ -671,8 +675,9 @@ export function GenerationView({
     } catch (e) {
       const isAbort =
         (e as Error)?.name === 'AbortError' || (e instanceof AnalysisError && e.code === 'aborted');
-      dispatch(analysisActions.clearActiveStream());
       if (isAbort) {
+        /* Drop the snapshot on abort — the server-side job already ended. */
+        dispatch(analysisActions.clearActiveStream());
         setSubsetByChapter((prev) => {
           const { [chapterId]: _, ...rest } = prev;
           return rest;
@@ -680,12 +685,17 @@ export function GenerationView({
         return;
       }
       /* subset_in_progress (#3202) — a different subset retry is already
-         running for this manuscript; surface the server's message
-         instead of the generic fallback text. */
+         running for this manuscript; this request never started a job, so
+         do NOT touch the active stream — it belongs to the other job.
+         Surface the server's message instead of the generic fallback text. */
       if (e instanceof AnalysisError && e.code === 'subset_in_progress') {
         patchSubset(chapterId, { error: e.message });
         return;
       }
+      /* Drop the snapshot on terminal failure — the server-side job surfaced
+         an error, and the row's own error state inside subsetByChapter carries
+         the message for the user. */
+      dispatch(analysisActions.clearActiveStream());
       patchSubset(chapterId, { error: (e as Error).message || 'Re-analysis failed.' });
     }
   }

@@ -193,6 +193,11 @@ export function AnalysingView({
      button — after a pause the cache holds completed chapters, so
      "Resume" is the truthful word. */
   const hasStartedOnceRef = useRef(false);
+  /* Tracks whether the current retry attempt was rejected with
+     subset_in_progress (#3202). Used in the finally block to avoid
+     touching the active stream or re-arming the main run when this error
+     occurs — the rejection means another subset job is live. */
+  const subsetInProgressRef = useRef(false);
   /* Per-chapter cast-detection failures that survive across reload. Seeded
      from /api/books/:bookId/state on mount; appended to from the SSE's
      chapter-failed event; cleared per id when a Retry succeeds. */
@@ -764,6 +769,8 @@ export function AnalysingView({
     if (!manuscriptId) return;
     if (retryingChapterId !== null) return;
     setRetryingChapterId(chapterId);
+    /* Reset the subset_in_progress flag for this attempt. */
+    subsetInProgressRef.current = false;
     const markEvent = () => {
       setLastEventAt(Date.now());
       /* First event of any run means we're re-attached — drop the
@@ -905,8 +912,12 @@ export function AnalysingView({
            outright because a different subset is already running; it
            never reaches onChapterFailed, so retryReFailed stays false and
            the generic branch below would wrongly drop the row as if it
-           had succeeded. Surface the server's message instead. */
+           had succeeded. Surface the server's message instead. This request
+           never started a job, so the active stream belongs to the other
+           subset — mark this in the ref so the finally block knows not to
+           touch it or re-arm the main run. */
         if (err instanceof AnalysisError && err.code === 'subset_in_progress') {
+          subsetInProgressRef.current = true;
           setFailedChapters((prev) => {
             const filtered = prev.filter((f) => f.chapterId !== chapterId);
             return [...filtered, { chapterId, message: err.message, code: err.code }];
@@ -928,6 +939,15 @@ export function AnalysingView({
       .finally(() => {
         setRetryingChapterId(null);
         setDroppedQuotesRefreshKey((k) => k + 1);
+        /* If the subset request was rejected with subset_in_progress (#3202),
+           do NOT touch the active stream or re-arm the main run. The rejection
+           means another subset job is live, and resuming the main run while
+           that's active would trigger the cache-write race that the PAUSE-AND-RETRY
+           contract exists to prevent (see the comment at line 751). Leave the
+           main run paused and let the user wait for the other subset to finish. */
+        if (subsetInProgressRef.current) {
+          return;
+        }
         /* Resume the main run if Retry paused it. The analysis effect
            is keyed off (analysisStarted, retry.nonce, …) so we flip
            analysisStarted back on and bump the nonce to re-enter — the
