@@ -283,7 +283,7 @@ export default defineConfig({
          independently drift. Deliberately broad: this guard's real scan
          target is the whole tree, so almost any server source change forces
          a full --changed rerun — that is the cost of the tree-wide scan, not
-         a defect (#3085's chosen design, option 2).
+         a defect (#3085's chosen design).
 
          cast-lock.guard.test.ts (also #3085) is the SAME shape of scanner
          over the SAME tree — its own declared scope,

@@ -248,7 +248,7 @@ function applyExclusions(files: string[], exclusions: string[]): string[] {
    - scripts/ recursive, .mjs/.cjs/.js, INCLUDING scripts/tests/ (previously
      excluded — that exclusion let an unguarded module-load-time pwsh spawn
      in cross-os-ffmpeg-install.test.mjs pop a visible window on every
-     `npm run test:hooks` run; see externalFilesFloor()'s scripts/ comment)
+     `npm run test:hooks` run)
    - server/tts-sidecar/scripts/ recursive, .mjs
    - pinokio-scripts/lib/ recursive, .js/.mjs
 
