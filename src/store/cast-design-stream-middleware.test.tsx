@@ -203,7 +203,13 @@ describe('castDesignMiddleware', () => {
     const snap = store.getState().castDesign.active;
     expect(snap?.done).toBe(1);
     expect(snap?.failures).toHaveLength(1);
-    expect(store.getState().notifications.toasts.at(-1)?.message).toContain('1 failed');
+    const message = store.getState().notifications.toasts.at(-1)?.message;
+    expect(message).toContain('1 failed');
+    /* #3027 review finding #2 — a bare count regressed the original
+       acceptance criteria (a config problem like a missing GEMINI_API_KEY
+       used to produce one clear, actionable toast). The actual error reason
+       must reach the summary toast, not just feed the count. */
+    expect(message).toContain('no gemini key');
   });
 
   it('re-entrancy: a second designAllRequested while one runs is ignored', () => {

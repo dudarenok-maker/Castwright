@@ -124,10 +124,23 @@ export function createCastDesignMiddleware(): Middleware {
           if (clonedSkips.length > 0) {
             parts.push(`already cloned: ${clonedSkips.map((c) => c.name).join(', ')}`);
           }
+          let message = `${parts.join(' · ')}.`;
+          /* #3027 follow-up (review finding #2) — a count alone regressed
+             #3027's own acceptance criteria: a config problem like a missing
+             GEMINI_API_KEY used to surface as one clear, actionable toast;
+             continuing past per-character failures collapsed that into a
+             bare "M failed". Surface the first failure's reason too — and
+             say once when every failure shares it, the likely case for a
+             single root cause, rather than implying per-character variety. */
+          if (failed > 0) {
+            const firstError = failures[0].error;
+            const sameReason = failures.every((f) => f.error === firstError);
+            message += sameReason ? ` ${firstError}` : ` First failure: ${firstError}`;
+          }
           dispatch(
             notificationsActions.pushToast({
               kind: failed > 0 ? 'error' : 'info',
-              message: `${parts.join(' · ')}.`,
+              message,
               dedupeKey: `cast-design-done:${bookId}`,
             }),
           );
