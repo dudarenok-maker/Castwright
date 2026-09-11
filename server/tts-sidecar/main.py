@@ -1580,13 +1580,27 @@ class _VdKokoroArbiter:
             yield
             return
         with self._cv:
-            # B5 ruling: the wait is unbounded and starvable if designs queue
-            # continuously (design() does not wait on other designs, only drains
-            # in-flight Kokoro). This is accepted as a known limitation bounded in
-            # practice by the Node-side 90s client timeout on /load requests. If a
-            # client times out, the sidecar thread remains in this wait until
-            # design_active_count drops, then completes the load and clears the
-            # _loading flag. This is suboptimal fairness but not a correctness bug.
+            # B5 ruling (B9 amended): the wait is unbounded and starvable if designs
+            # queue continuously (design() does not wait on other designs, only drains
+            # in-flight Kokoro). This happens in TWO callers with DIFFERENT timeout
+            # scopes:
+            #
+            # 1. KokoroEngine.synthesize() — the COMMON case (ordinary TTS generation
+            #    requests). Has NO external timeout. A starved synthesize() call will
+            #    wait indefinitely here.
+            #
+            # 2. _kokoro_ensure_loaded_guarded() (called from /load endpoint) — the
+            #    RARE case. The Node-side 90s HTTP request timeout provides a ceiling,
+            #    but only bounds what the CLIENT observes. The sidecar thread remains
+            #    in this wait even after the client gives up, until design_active_count
+            #    drops, then completes the load and clears the _loading flag.
+            #
+            # For the synthesize() path, this is a known limitation accepted as a
+            # tradeoff: suboptimal fairness under continuous design activity, but
+            # not a correctness bug since designs are expected to be infrequent.
+            # If this becomes a production concern (e.g. user reports starved TTS
+            # during bulk design), adding a timeout= parameter to cv.wait() below
+            # would limit the wait, raising/logging a clear error on timeout.
             while self._design_active_count > 0:
                 self._cv.wait()
             self._kokoro_in_flight += 1

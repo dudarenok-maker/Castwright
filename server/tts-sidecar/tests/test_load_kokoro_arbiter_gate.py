@@ -140,3 +140,92 @@ def test_startup_preload_kokoro_uses_guarded_path(monkeypatch):
         f"startup preload didn't use _kokoro_ensure_loaded_guarded correctly; "
         f"calls = {ensure_loaded_guarded_calls}"
     )
+
+
+@pytest.fixture
+def load_client_with_admission(monkeypatch):
+    """Fixture for testing the admission-ON code path (SEG_CAPACITY_ADMISSION=1).
+
+    This exercises the PRODUCTION-DEFAULT path that goes through line ~11306
+    in main.py, as opposed to the admission-OFF path (line ~11309) tested by
+    the main `load_client` fixture."""
+    monkeypatch.setenv("PRELOAD_KOKORO", "0")
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    fake = _FakeLoadKokoro()
+    monkeypatch.setitem(main.ENGINES, "kokoro", fake)
+    # Mock the _placement.probe to return a device list so admission doesn't
+    # block on real hardware detection
+    monkeypatch.setattr(
+        main._placement,
+        "probe",
+        lambda: [
+            {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 8192, "freeMb": 5000},
+        ],
+    )
+    main._reset_poison_for_test()
+    with TestClient(main.app) as c:
+        prior = main._VD_KOKORO._shares_device
+        main._VD_KOKORO._shares_device = True
+        c.fake_kokoro = fake  # type: ignore[attr-defined]
+        try:
+            yield c
+        finally:
+            main._VD_KOKORO._shares_device = prior
+    main._reset_poison_for_test()
+
+
+def test_load_kokoro_admission_on_blocks_while_design_active(load_client_with_admission):
+    """B8 fix: Verify that /load {"engine":"kokoro"} blocks during an active
+    VoiceDesign when capacity admission is ENABLED (SEG_CAPACITY_ADMISSION=1).
+
+    This is the PRODUCTION-DEFAULT code path (~main.py:11306), which the
+    original admission-OFF test (SEG_CAPACITY_ADMISSION=0, ~main.py:11309) does
+    NOT exercise. Pre-fix, this production-default path would bypass the
+    arbiter gate entirely. The test mutation-verifies this: if you revert
+    line 11306's `_kokoro_ensure_loaded_guarded` call back to a raw
+    `kokoro._ensure_loaded(...)`, this test must fail (the load will complete
+    immediately instead of blocking)."""
+    design_holding = threading.Event()
+    release_design = threading.Event()
+
+    def hold_design():
+        with main._VD_KOKORO.design():
+            design_holding.set()
+            release_design.wait(timeout=5)
+
+    design_thread = threading.Thread(target=hold_design)
+    design_thread.start()
+    assert design_holding.wait(timeout=2), "design never entered the arbiter — test bug"
+
+    response_holder: dict[str, object] = {}
+
+    def do_load():
+        response_holder["response"] = load_client_with_admission.post(
+            "/load", json={"engine": "kokoro"}
+        )
+
+    load_thread = threading.Thread(target=do_load)
+    load_thread.start()
+
+    # Give the /load call every chance to run to completion; it must NOT,
+    # because the design above is still holding the arbiter. This verifies
+    # the admission-ON path goes through the same arbiter gate as the
+    # admission-OFF path.
+    load_thread.join(timeout=0.5)
+    assert load_thread.is_alive(), (
+        "/load completed while a VoiceDesign was still active (admission ON) — "
+        "the arbiter gate was bypassed in the admission-enabled code path (#3086/#3101)"
+    )
+    assert load_client_with_admission.fake_kokoro.load_calls == []
+
+    release_design.set()
+    design_thread.join(timeout=5)
+    load_thread.join(timeout=5)
+    assert not load_thread.is_alive(), "/load never completed after the design released"
+
+    response = response_holder["response"]
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+    # Device should be "cuda:0" because admission steers to the probed device
+    # (The fake records only the device, not the model.)
+    assert load_client_with_admission.fake_kokoro.load_calls == ["cuda:0"]
