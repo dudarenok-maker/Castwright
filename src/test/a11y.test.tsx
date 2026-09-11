@@ -125,13 +125,6 @@ vi.mock('../lib/api', () => {
               locked: false,
               overridden: false,
             },
-            'analyzer.engine': {
-              key: 'analyzer.engine',
-              effective: 'local',
-              source: 'default',
-              locked: false,
-              overridden: false,
-            },
           },
           restartPending: false,
           cudaEnvShadow: false,

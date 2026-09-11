@@ -215,7 +215,7 @@ If a chapter (often **chapter 1**) fails the instant analysis starts with `Gemin
 Two ways around it:
 
 - **Stay on the cloud, switch model.** Set `GEMINI_MODEL=gemma-4-31b-it` in `server/.env` and restart — the `gemma-*` family isn't subject to the recitation filter. Trade-off: gemma is weaker and can grind on very long chapters.
-- **Go fully local (most robust for copyrighted manuscripts).** Set `ANALYZER=local` in `server/.env`, run Ollama with `ollama pull qwen3.5:4b`, and restart. Local models apply no content filter at all. See [Setting up the analyzer](#setting-up-the-analyzer).
+- **Go fully local (most robust for copyrighted manuscripts).** Open **Admin → Model Manager → Analyzer engine** and choose **Local Ollama**, run Ollama with `ollama pull qwen3.5:4b`, and restart Ollama. Local models apply no content filter at all. See [Setting up the analyzer](#setting-up-the-analyzer).
 
 After editing `server/.env`, click **Try again** in the app — it resumes from the first uncached chapter.
 
@@ -228,9 +228,9 @@ steps above). All knobs have safe defaults — set only what you need.
 
 **Analyzer**
 
-- `ANALYZER` — `local` (default, Ollama) or `gemini`.
-- `GEMINI_API_KEY` — required when `ANALYZER=gemini` (or as the automatic
-  fallback when Ollama is unreachable).
+- **Analyzer engine** — choose **Local Ollama** or **Gemini API** in Admin → Model Manager
+  (defaults to `Local Ollama`). `GEMINI_API_KEY` is required when Gemini API is chosen (or
+  when the analyzer falls back to Gemini because Ollama is unreachable, a Gemini API key is set, and Cloud fallback is on).
 - `GEMINI_MODEL` — the Gemini model id; plus per-model `GEMINI_RPM_*` /
   `GEMINI_TPM_*` / `GEMINI_RPD_*` rate caps (see `server/.env.example`).
 - `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` /
@@ -262,7 +262,7 @@ steps above). All knobs have safe defaults — set only what you need.
 
 ## Setting up the analyzer
 
-The install bundle ships Kokoro weights for TTS only — the analyzer needs either a local Ollama daemon or a Gemini API key. The server-side default is `ANALYZER=local` (Ollama); if no Ollama daemon is reachable, the analyzer auto-falls back to the Gemini free tier when a key is configured.
+The install bundle ships Kokoro weights for TTS only — the analyzer needs either a local Ollama daemon or a Gemini API key. The default analyzer engine is Local Ollama (set in Admin → Model Manager); if no Ollama daemon is reachable, the analyzer falls back to Gemini when a Gemini API key is set and Cloud fallback is on.
 
 **Option A — Ollama (private, fully on-device).** The Account → Models card in the running app installs Ollama and pulls models without leaving the UI:
 

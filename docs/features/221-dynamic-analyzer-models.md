@@ -32,7 +32,7 @@ This is **Part A** of the original "dynamic analyzer models" work. The measured-
 - **Invariants preserved:**
   - `keepAliveFor(model, accelerator)` keeps main's `RESIDENT_MODELS` + accelerator logic (9B unloads on CPU). The knob only parameterises the `'5m'` literal; cross-engine eviction stays owned by `withGpuLoad` (plan 222).
   - Cloud-no-probe: the analysing-view retry picker fetches the local tag list only after a failure (`error`-gated), so a healthy cloud run never *auto*-probes Ollama. The per-phase `PhaseModelSwap` picker additionally refreshes the live list **on `onFocus`** (explicit user interaction) — the invariant holds because the probe fires only when the user opens the dropdown, never on the passive healthy-run render.
-  - Gemini fallback (`selectAnalyzer`) unchanged: `ANALYZER=local` + Ollama down + key set → silent Gemini fallback.
+  - Gemini fallback (`selectAnalyzer`) unchanged: analyzer engine = local + Ollama down + key set → silent Gemini fallback.
 
 - **Deleted:** the frontend `PULLABLE_MODELS` mirror (now `account.pullableModels` from the server).
 
@@ -70,7 +70,7 @@ Run with `npm start` (or `cd server && npm run dev`) against a real Ollama daemo
 2. **Stop Ollama → curated options still render** (no blank picker); the health pill shows unreachable.
 3. **Uncurated local tag is guarded.** With a generation streaming, trigger a local analysis using the pulled e4b tag → the GPU-contention confirm dialog appears (proves `engineForModelId` classifies it local).
 4. **Keep-alive knob.** `ANALYZER_KEEP_ALIVE=0` → resident models unload immediately after each call; unset → `'5m'`. Cross-engine eviction before a TTS load is plan 222's `withGpuLoad` (unchanged).
-5. **Gemini-fallback caveat.** `ANALYZER=local` + Ollama down + `GEMINI_API_KEY` set → analysis completes via Gemini even though the picker showed local options (pre-existing `selectAnalyzer` behavior; see the new Help topic `picked-local-but-ran-on-gemini`).
+5. **Gemini-fallback caveat.** analyzer engine = local + Ollama down + `GEMINI_API_KEY` set → analysis completes via Gemini even though the picker showed local options (pre-existing `selectAnalyzer` behavior; see the new Help topic `picked-local-but-ran-on-gemini`).
 
 ## Out of scope
 

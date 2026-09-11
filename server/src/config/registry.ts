@@ -1118,16 +1118,6 @@ export const KNOBS: ConfigKnob[] = [
 
   // ── analyzer-models ───────────────────────────────────────────────────────
   {
-    key: 'analyzer.engine',
-    env: 'ANALYZER',
-    group: 'analyzer-models',
-    label: 'Analyzer engine',
-    help: '"local" routes through the Ollama daemon (auto-falls back to Gemini when Ollama is unreachable and GEMINI_API_KEY is set). "gemini" always goes direct to the Gemini API.',
-    type: 'enum', options: ['local', 'gemini'],
-    default: 'local', // ← ANALYZER default in server/.env.example (line 14)
-    apply: 'live', risk: 'medium',
-  },
-  {
     key: 'analyzer.ollama.url',
     env: 'OLLAMA_URL',
     group: 'analyzer-models',

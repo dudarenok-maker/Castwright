@@ -242,6 +242,7 @@ export function AdvancedView() {
     cudaEnvShadow,
     envCleanupCandidates,
   } = useAppSelector((s) => s.config);
+  const account = useAppSelector((s) => s.account);
   const restartPending = useAppSelector(selectRestartPending);
   const restartServerPending = useAppSelector(selectRestartServerPending);
   const [restarting, setRestarting] = useState(false);
@@ -286,11 +287,9 @@ export function AdvancedView() {
 
   /* Plan 2 §2.4 — the analyzer-device row is only meaningful when the
      analyzer is actually dispatching through the local Ollama daemon;
-     under ANALYZER=gemini there's no local device to report. Reuses the
-     `analyzer.engine` knob's live value already hydrated into `values` by
-     fetchConfig(), rather than adding a second endpoint/state slice for
-     the same fact. */
-  const analyzerEngine = values['analyzer.engine']?.effective;
+     under analysisEngine=gemini there's no local device to report. Reads
+     the saved account analysis engine rather than the stale registry knob. */
+  const analyzerEngine = account.analysisEngine;
 
   /* #2367 Task 4 — expectedDevice is a declared, advisory expectation (see
      the knob's help text: this app cannot pin the Ollama daemon's device).

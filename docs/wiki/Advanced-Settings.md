@@ -130,7 +130,6 @@ your own on-disk copy; nothing here changes until you explicitly edit.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
-| Analyzer engine | "local" routes through Ollama (auto-falls back to Gemini when Ollama is unreachable and a key is set); "gemini" always goes direct | `local` | local / gemini | live | medium |
 | Ollama URL | Base URL of the local Ollama daemon | `http://localhost:11434` | string | live | medium |
 | Ollama model | Model tag for the /api/chat fallback | `qwen3.5:4b` | string | live | medium |
 | Gemini analyzer model | Model used directly or as Ollama-unreachable fallback | `gemini-3.5-flash-lite` | string | live | medium |
