@@ -2832,6 +2832,10 @@ export class AnalysisError extends Error {
       classification — mirrors the `remediation` field on `kind:'error'`
       SSE events and surfaces in the run-error panel. */
   remediation?: string;
+  /** HTTP status code for stream failures. When set, allows middleware to
+      distinguish transient (409 conflict, already held by another tab) from
+      terminal failures (5xx errors, malformed responses, network drops). */
+  status?: number;
   constructor(
     message: string,
     code: string,
@@ -2839,6 +2843,7 @@ export class AnalysisError extends Error {
     prevCharCount?: number,
     nextCharCount?: number,
     remediation?: string,
+    status?: number,
   ) {
     super(message);
     this.name = 'AnalysisError';
@@ -2847,6 +2852,7 @@ export class AnalysisError extends Error {
     this.prevCharCount = prevCharCount;
     this.nextCharCount = nextCharCount;
     this.remediation = remediation;
+    this.status = status;
   }
 }
 
@@ -2894,14 +2900,14 @@ async function realAnalyseManuscript(
           selector: { manuscriptId },
           shape: '409',
           onRetry: () => realAnalyseManuscript(manuscriptId, opts).then(resolve, reject),
-          onDismiss: () => reject(new Error(msg)),
+          onDismiss: () => reject(new AnalysisError(msg, 'stream_failed', undefined, undefined, undefined, undefined, res.status)),
         });
-        if (!accepted) reject(new Error(msg));
+        if (!accepted) reject(new AnalysisError(msg, 'stream_failed', undefined, undefined, undefined, undefined, res.status));
       });
     }
-    throw new Error(msg);
+    throw new AnalysisError(msg, 'stream_failed', undefined, undefined, undefined, undefined, res.status);
   }
-  if (!res.body) throw new Error(`Analysis stream failed (${res.status}).`);
+  if (!res.body) throw new AnalysisError(`Analysis stream failed (${res.status}).`, 'stream_failed', undefined, undefined, undefined, undefined, res.status);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -3022,7 +3028,7 @@ async function realAnalyseManuscript(
     }
   }
 
-  if (!result) throw new Error('Analysis stream ended without a result event.');
+  if (!result) throw new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result', undefined, undefined, undefined, undefined, 500);
   return result;
 }
 

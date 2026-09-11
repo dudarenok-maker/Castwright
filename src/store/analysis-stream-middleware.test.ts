@@ -25,6 +25,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
+import { notificationsSlice } from './notifications-slice';
 
 const pauseAnalysisSpy = vi.fn().mockResolvedValue(undefined);
 const analyseManuscriptMock = vi.fn();
@@ -41,13 +42,25 @@ vi.mock('../lib/api', () => {
     detail?: string;
     prevCharCount?: number;
     nextCharCount?: number;
-    constructor(message: string, code: string, detail?: string, prev?: number, next?: number) {
+    remediation?: string;
+    status?: number;
+    constructor(
+      message: string,
+      code: string,
+      detail?: string,
+      prev?: number,
+      next?: number,
+      remediation?: string,
+      status?: number,
+    ) {
       super(message);
       this.name = 'AnalysisError';
       this.code = code;
       this.detail = detail;
       this.prevCharCount = prev;
       this.nextCharCount = next;
+      this.remediation = remediation;
+      this.status = status;
     }
   }
   return {
@@ -99,7 +112,7 @@ const baseSnapshot: AnalysisStreamSnapshot = {
 
 function buildStore() {
   return configureStore({
-    reducer: { analysis: analysisSlice.reducer },
+    reducer: { analysis: analysisSlice.reducer, notifications: notificationsSlice.reducer },
     middleware: (getDefault) => getDefault().concat(analysisStreamMiddleware),
   });
 }
@@ -451,17 +464,16 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     expect(store.getState().analysis.activeStream?.state).toBe('paused');
   });
 
-  describe('Regression tests for Fix B (middleware error handling)', () => {
-    it('closes handle on plain Error (transient failure) without halting', async () => {
-      /* Regression test for Fix B: the middleware's secondary SSE is a
-         best-effort connection. When it fails with a plain Error
-         (network drop, stream ended, 409 conflict, socket dropped), the
-         middleware must closeHandle (so the next tick can retry) but NOT
-         dispatch setHalted. The view's primary SSE is the ground truth;
-         if the primary connection also fails, the view will handle it.
-         The old bug: silently returned without closeHandle(), leaving
-         handle non-null forever and blocking all future reconnection
-         attempts via the first-tick-opens contract. */
+  describe('Regression tests for Fix C (middleware transient vs terminal error handling)', () => {
+    it('treats 409 conflict as transient: closes handle without halting, allows reconnection', async () => {
+      /* Regression test for Fix C: the middleware's secondary SSE handles 409
+         (conflict — another tab holds the subscription) as a transient failure.
+         It must closeHandle to allow reconnection on the next tick, but NOT
+         dispatch setHalted, so the view's primary SSE (which is healthy) can
+         keep the analysis running. Before the fix, all stream failures were
+         treated the same way: some halted incorrectly (500s), some didn't halt
+         but couldn't reconnect (missing closeHandle). Now 409 triggers
+         reconnection without halting. */
       const store = buildStore();
       store.dispatch(analysisActions.setActiveStream(baseSnapshot));
       store.dispatch(
@@ -472,17 +484,18 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
         }),
       );
       const firstCall = captured[0]!;
-      /* Reject with a plain Error (network failure, stream ended, etc). */
-      firstCall.reject(new Error('Analysis stream ended without a result event.'));
+      /* Reject with a 409 AnalysisError (conflict from another tab). */
+      firstCall.reject(new AnalysisError('Analysis stream failed (409).', 'stream_failed', undefined, undefined, undefined, undefined, 409));
       await Promise.resolve();
       await Promise.resolve();
       /* The handle must be closed (aborted) to allow reconnection. */
       expect(firstCall.signal.aborted).toBe(true);
-      /* But state should NOT flip to halted — it stays 'running'. */
+      /* State should NOT flip to halted — it stays 'running'. */
       const snap = store.getState().analysis.activeStream;
       expect(snap?.state).toBe('running');
-      /* On the next tick, the middleware should be able to reopen
-         (handle is null, so first-tick-opens fires). */
+      /* Verify no error toast was dispatched. */
+      expect(store.getState().notifications.toasts).toHaveLength(0);
+      /* On the next tick, the middleware should be able to reopen. */
       store.dispatch(
         analysisActions.applyAnalysisSnapshotTick({
           manuscriptId: 'm1',
@@ -493,13 +506,14 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
       expect(captured).toHaveLength(2);
     });
 
-    it('does NOT halt the analysis when the middleware SSE fails with a transient error (stream ended without result)', async () => {
-      /* Regression test for Fix B: when the middleware's secondary SSE
-         connection ends without a result (transient network failure,
-         dropped socket), it should NOT dispatch setHalted. The
-         view's primary SSE may still be healthy, and dispatching setHalted
-         would incorrectly freeze the phase cards mid-run. Transient
-         connection failures are closed silently without poisoning state. */
+    it('treats non-409 stream failures as terminal: halts, shows toast, closes handle', async () => {
+      /* Regression test for Fix C: non-409 stream failures (5xx, malformed
+         frames, network drops, missing result) are terminal. The middleware
+         must dispatch setHalted, show an error toast, and close the handle.
+         This prevents the phase cards from rendering stale 'running' state
+         when the actual analysis is dead. Before the fix, 500 errors were
+         treated as transient (no halt), leaving the UI spinning even though
+         the backend had failed. */
       const store = buildStore();
       store.dispatch(analysisActions.setActiveStream(baseSnapshot));
       store.dispatch(
@@ -509,24 +523,27 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
           phaseProgress: 0.1,
         }),
       );
-      /* Middleware's SSE rejects with a plain Error (not AnalysisError),
-         simulating a transient failure: stream ended without result, network
-         error, or dropped socket. The middleware must swallow this without
-         dispatching any state change. */
-      lastCall().reject(new Error('Analysis stream ended without a result event.'));
+      const firstCall = captured[0]!;
+      /* Reject with a 500 AnalysisError (server error). */
+      firstCall.reject(new AnalysisError('Analysis stream failed (500).', 'stream_failed', undefined, undefined, undefined, undefined, 500));
       await Promise.resolve();
       await Promise.resolve();
+      /* The handle must be closed. */
+      expect(firstCall.signal.aborted).toBe(true);
+      /* State SHOULD flip to halted. */
       const snap = store.getState().analysis.activeStream;
-      /* State should remain 'running' (not changed to 'halted'). */
-      expect(snap?.state).toBe('running');
+      expect(snap?.state).toBe('halted');
+      expect(snap?.haltReason).toBeDefined();
+      /* Verify error toast was dispatched. */
+      expect(store.getState().notifications.toasts).toHaveLength(1);
     });
 
-    it('calls closeHandle for plain Error failures to allow reconnection', async () => {
-      /* Pin that closeHandle is called for plain Errors. Before the fix,
-         closeHandle was not called at all, leaving handle non-null
-         and blocking all future reconnection attempts via the first-tick-opens
-         contract (handle would stay non-null, so the condition `snap && !handle`
-         at line 291 would be false and never open a new handle). */
+    it('calls closeHandle for all stream failures to allow reconnection attempts', async () => {
+      /* Pin that closeHandle is called for both transient and terminal
+         failures. Before the fix, closeHandle was not called for plain Errors,
+         leaving handle non-null and blocking all future reconnection attempts
+         via the first-tick-opens contract. Both 409 and 5xx must close the
+         handle. */
       const store = buildStore();
       store.dispatch(analysisActions.setActiveStream(baseSnapshot));
       store.dispatch(
@@ -538,7 +555,7 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
       );
       const signal = captured[0]!.signal;
       expect(signal.aborted).toBe(false);
-      lastCall().reject(new Error('Some network error'));
+      lastCall().reject(new AnalysisError('Analysis stream failed (500).', 'stream_failed', undefined, undefined, undefined, undefined, 500));
       await Promise.resolve();
       await Promise.resolve();
       expect(signal.aborted).toBe(true);

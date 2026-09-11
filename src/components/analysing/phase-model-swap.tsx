@@ -73,7 +73,8 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
     /* Toast contextualizes the swap timing based on run state: when actively
        streaming (isActive), the in-flight chapter finishes on the old model;
        when paused or halted (not isActive), the swap only affects future runs.
-       The select's title (line 111) describes the active case specifically. */
+       The select's title attribute describes the active case specifically,
+       explaining that the swap applies from the next chapter. */
     setToast(
       isActive
         ? 'Applies from the next chapter — current chapter finishes on the previous model'

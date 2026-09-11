@@ -219,6 +219,14 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           closeHandle();
           return;
         }
+        /* Transient 409 conflict (another tab holds the subscription) —
+           close silently without declaring halted. The view's primary SSE
+           may still be healthy, and the middleware will reconnect on the
+           next tick. */
+        if (e instanceof AnalysisError && e.status === 409) {
+          closeHandle();
+          return;
+        }
         if (e instanceof AnalysisError) {
           dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
           dispatch(
@@ -231,16 +239,20 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           closeHandle();
           return;
         }
-        /* Transient connection failures (stream ends without result, 409
-           conflict, dropped socket, network errors) are not analyzed failures —
-           the view's primary SSE handle may still be healthy. Close silently
-           without declaring halted, so transient network blips don't
-           incorrectly pause the UI's rendering of an active run. The view
-           will handle any genuine analysis failure on its own connection.
-           The critical fix from B: always call closeHandle() so the next
-           tick's first-tick-opens contract can retry. The old bug was
-           silently returning without closeHandle(), leaving handle non-null
-           and blocking all future reconnection attempts. */
+        /* Terminal failures not caught by the AnalysisError branches above:
+           5xx server errors, malformed SSE frames, network drops, or other
+           stream protocol errors. The view's primary SSE may also fail on
+           these, so dispatch halted with a generic error message. Always
+           call closeHandle() so the next tick's first-tick-opens contract
+           can retry if needed. */
+        dispatch(analysisActions.setHalted({ manuscriptId, code: 'stream_failed', message: (e as Error).message }));
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: (e as Error).message,
+            dedupeKey: 'analysis-stream',
+          }),
+        );
         closeHandle();
       }
     })();
