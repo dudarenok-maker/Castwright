@@ -420,6 +420,10 @@ export function GenerationView({
        Captured engine: ui.selectedModel — the analyzer that will
        handle this subset retry. */
     const engine = engineForModelId(selectedAnalyzerModelId);
+    /* Capture the prior snapshot in case the request fails with
+       subset_in_progress; restoration prevents a stale/clobbered state from
+       becoming permanent (B2 regression guard). */
+    const priorSnapshot = getState().analysis.activeStream;
     dispatch(
       analysisActions.setActiveStream({
         bookId,
@@ -537,8 +541,14 @@ export function GenerationView({
       }
       if (isSubsetInProgress) {
         /* A different subset request is already running; this request never
-           started a job, so do NOT touch the active stream — it belongs to
-           the other job. Surface the server's message instead. */
+           started a job, so restore the prior snapshot (B2 regression guard:
+           the pre-POST clobber must not persist on rejection) and surface the
+           server's message instead. */
+        if (priorSnapshot) {
+          dispatch(analysisActions.setActiveStream(priorSnapshot));
+        } else {
+          dispatch(analysisActions.clearActiveStream());
+        }
         patchSubset(chapterId, { error: e.message });
         return;
       }

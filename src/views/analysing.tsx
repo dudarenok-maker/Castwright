@@ -804,7 +804,12 @@ export function AnalysingView({
        map. Without this, a navigate-away mid-retry dropped the pill
        and the middleware would have tried to subscribe to the main
        map (which has no job) and either start a fresh main run or
-       fall through. */
+       fall through.
+
+       Capture the prior snapshot in case the request fails with
+       subset_in_progress; restoration prevents a stale/clobbered state
+       from becoming permanent (B2 regression guard). */
+    const priorSnapshot = getState().analysis.activeStream;
     dispatch(
       analysisActions.setActiveStream({
         bookId: bookId ?? null,
@@ -913,11 +918,17 @@ export function AnalysingView({
            never reaches onChapterFailed, so retryReFailed stays false and
            the generic branch below would wrongly drop the row as if it
            had succeeded. Surface the server's message instead. This request
-           never started a job, so the active stream belongs to the other
-           subset — mark this in the ref so the finally block knows not to
-           touch it or re-arm the main run. */
+           never started a job, so restore the prior snapshot (B2 regression
+           guard: the pre-POST clobber must not persist on rejection) and
+           mark this in the ref so the finally block knows not to touch it or
+           re-arm the main run. */
         if (err instanceof AnalysisError && err.code === 'subset_in_progress') {
           subsetInProgressRef.current = true;
+          if (priorSnapshot) {
+            dispatch(analysisActions.setActiveStream(priorSnapshot));
+          } else {
+            dispatch(analysisActions.clearActiveStream());
+          }
           setFailedChapters((prev) => {
             const filtered = prev.filter((f) => f.chapterId !== chapterId);
             return [...filtered, { chapterId, message: err.message, code: err.code }];

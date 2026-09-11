@@ -533,6 +533,7 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
     registerStubManuscript(manuscriptId, 7);
     const job = buildLiveJobStub(manuscriptId, 'subset', [3]);
     __testRegisterJobForTest(job as unknown as Parameters<typeof __testRegisterJobForTest>[0]);
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const res = await supertest(app)
         .post(`/api/manuscripts/${manuscriptId}/analysis/chapters`)
@@ -542,8 +543,52 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
       expect(res.text).toContain('subset_in_progress');
       // Names the chapters actually running (by title), not just a generic message.
       expect(res.text).toContain('Chapter 3');
+      // N4 assertion — the message format has no dangling colon when titles are present.
+      expect(res.text).toContain('for this manuscript: Chapter 3');
       // The mismatched request never attaches to the running job.
       expect((job as unknown as { subscribers: Set<unknown> }).subscribers.size).toBe(0);
+      // N3 assertion — the rejection logs an outcome line naming the outcome.
+      const lines = consoleLogSpy.mock.calls
+        .map((call) => call[0])
+        .filter((line): line is string => typeof line === 'string');
+      const outcomeLine = lines.find((line) => line.includes('[analysis-subset]'));
+      expect(outcomeLine, 'expected a [analysis-subset] outcome line on rejection').toBeDefined();
+      expect(outcomeLine).toContain('subset_in_progress');
+    } finally {
+      consoleLogSpy.mockRestore();
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  });
+
+  it('(i2) N4 — subset_in_progress error message format is correct regardless of title resolution', async () => {
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter, __testRegisterJobForTest } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const manuscriptId = `test-subset-unresolvable-titles-${Date.now()}-${Math.random()}`;
+    // Register a stub manuscript; hintsById may not have all chapters populated
+    // in some scenarios, testing the titlePart empty-fallback path.
+    registerStubManuscript(manuscriptId, 10);
+    const job = buildLiveJobStub(manuscriptId, 'subset', [3, 100]); // 100 is non-existent
+    __testRegisterJobForTest(job as unknown as Parameters<typeof __testRegisterJobForTest>[0]);
+    try {
+      const res = await supertest(app)
+        .post(`/api/manuscripts/${manuscriptId}/analysis/chapters`)
+        .send({ chapterIds: [5] })
+        .buffer(true);
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('subset_in_progress');
+      // N4 assertion — the message format is correct: either
+      // "…for this manuscript: Chapter 3, …" (titles resolved)
+      // or "…for this manuscript. Wait for it…" (titles not resolved / empty).
+      // No dangling colon or fragment in either case.
+      expect(res.text).toMatch(
+        /for this manuscript(: .+)?. Wait for it to finish/,
+      );
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
