@@ -22,14 +22,35 @@ import {
   LEGACY_USER_SETTINGS_PATH,
 } from './user-settings-path.js';
 import type { CloneEngine } from '../tts/clone-engines.js';
-/* configValue (config/resolver.ts) imports readConfigOverrides FROM this
-   module — a deliberate circular import. Safe here because both sides only
-   call into the other from inside function bodies, never at module-eval
-   time; getResolvedGenerationWorkers below avoids it anyway by reading
-   readConfigOverrides() directly (see its comment), but
-   getResolvedOllamaUrl/getResolvedOllamaModel need the full env→override→
-   default precedence, which only the resolver computes. */
-import { configValue } from '../config/resolver.js';
+
+/* config/resolver.ts already imports readConfigOverrides FROM this module.
+   getResolvedOllamaUrl/getResolvedOllamaModel below need the full
+   env→override→default precedence, which only the resolver computes — but a
+   second, reverse static import (this module -> resolver.ts) would close an
+   import cycle. A closed cycle here is not merely stylistic: it broke
+   vi.mock('../workspace/user-settings.js', ...importOriginal...) for every
+   OTHER module that mocks this one (embed-client.test.ts,
+   transcribe-client.test.ts) — importOriginal() re-evaluating this module
+   transitively re-entered resolver.ts, which re-entered this
+   (being-mocked) module, and the override-store mock never took effect.
+   Same leaf-gate shape as server/src/gpu/*-gate.ts: resolver.ts registers
+   its `configValue` here via `registerConfigValueReader` at its own
+   module-eval time (it already imports FROM this module, so the edge stays
+   one-directional), and this module calls the registered reader instead of
+   importing resolver.ts directly. */
+type ConfigValueReader = <T extends number | boolean | string>(key: string) => T;
+let configValueReader: ConfigValueReader | null = null;
+export function registerConfigValueReader(fn: ConfigValueReader): void {
+  configValueReader = fn;
+}
+function configValue<T extends number | boolean | string>(key: string): T {
+  if (!configValueReader) {
+    throw new Error(
+      'configValue reader not registered — import config/resolver.js somewhere in this module graph first',
+    );
+  }
+  return configValueReader<T>(key);
+}
 
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that

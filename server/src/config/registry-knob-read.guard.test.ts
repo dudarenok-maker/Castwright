@@ -221,11 +221,6 @@ const DECLARED_DYNAMIC_READERS: Array<{ pattern: RegExp; file: string; contains:
     unread knob (not on this list) fails, and a listed key that becomes read
     also fails, so the list can't go stale in either direction. */
 const KNOWN_UNREAD = new Set<string>([
-  'analyzer.ollama.url', // tracked by #3141
-  'analyzer.ollama.model', // tracked by #3141
-  'analyzer.phase0.model', // tracked by #3141
-  'analyzer.phase1.model', // tracked by #3141
-  'analyzer.phase1.minLagChapters', // tracked by #3141
   'analyzer.engine', // UNTRIAGED — reported on #3141
 ]);
 

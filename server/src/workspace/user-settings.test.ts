@@ -6,6 +6,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
+/* Side-effect only: config/resolver.ts registers its `configValue` into
+   user-settings.ts's leaf-gate (`registerConfigValueReader`) at its own
+   module-eval time — see that gate's comment in user-settings.ts.
+   getResolvedOllamaUrl/getResolvedOllamaModel below need it registered
+   before they're called, and nothing else in this file's import graph
+   pulls resolver.ts in on its own. */
+import '../config/resolver.js';
 import {
   DEFAULT_USER_SETTINGS,
   userSettingsSchema,

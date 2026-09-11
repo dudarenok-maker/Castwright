@@ -1,6 +1,6 @@
 import type { ConfigKnob, KnobValueState } from './types.js';
 import { allKnobs } from './registry.js';
-import { readConfigOverrides } from '../workspace/user-settings.js';
+import { readConfigOverrides, registerConfigValueReader } from '../workspace/user-settings.js';
 import { getLastKnownGpuDevices } from '../gpu/gpu-device-list-state.js';
 import { parseEnvFileLines } from './env-cleanup.js';
 
@@ -178,6 +178,12 @@ export function configValue<T extends number | boolean | string>(key: string): T
   if (!knob) throw new Error(`unknown config key ${key}`);
   return resolveKnob(knob).effective as T;
 }
+
+/* Leaf-gate registration (see workspace/user-settings.ts's own comment on
+   `registerConfigValueReader`) — fires at this module's own eval time,
+   which always runs after its `readConfigOverrides` import above resolves,
+   so user-settings.ts's export already exists. */
+registerConfigValueReader(configValue);
 
 export interface CoerceResult { ok: boolean; value?: number | boolean | string; error?: string; }
 export function coerceAndValidate(knob: ConfigKnob, raw: unknown): CoerceResult {
