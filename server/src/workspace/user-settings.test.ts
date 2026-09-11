@@ -3,9 +3,9 @@
    and legacy-file back-compat. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import {
   DEFAULT_USER_SETTINGS,
   userSettingsSchema,
@@ -1120,6 +1120,140 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
       const messages = warnSpy.mock.calls.map((call) => String(call[0]));
       expect(messages.some((m) => m.includes('from user settings'))).toBe(true);
       expect(messages.some((m) => m.includes('from LOCAL_TTS_URL'))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe('readUserSettings — corruption recovery (#3175 layer 1)', () => {
+  /* Sweep every artifact this suite can leave behind — main file, every
+     `.bak.N`, and any timestamped `.corrupt-*` diagnostic copy — so one
+     test's leftovers never leak into the next. */
+  function cleanArtifacts(mod: typeof import('./user-settings.js')): void {
+    const dir = dirname(mod.USER_SETTINGS_PATH);
+    const base = basename(mod.USER_SETTINGS_PATH);
+    if (!existsSync(dir)) return;
+    for (const name of readdirSync(dir)) {
+      if (name === base || name.startsWith(`${base}.bak.`) || name.startsWith(`${base}.corrupt-`)) {
+        rmSync(join(dir, name), { force: true });
+      }
+    }
+  }
+
+  beforeEach(async () => {
+    const mod = await import('./user-settings.js');
+    cleanArtifacts(mod);
+    mod._resetUserSettingsCache();
+  });
+
+  afterEach(async () => {
+    const mod = await import('./user-settings.js');
+    cleanArtifacts(mod);
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    mod._resetUserSettingsCache();
+  });
+
+  it('malformed main file + a valid .bak.1 recovers from the backup, corruption flag stays false', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(
+      `${mod.USER_SETTINGS_PATH}.bak.1`,
+      JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Recovered From Backup' }),
+    );
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ this is not valid json');
+
+    const settings = await mod.readUserSettings();
+
+    expect(settings.displayName).toBe('Recovered From Backup');
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+  });
+
+  it('malformed main file + no valid backup falls back to defaults, flags corrupt, and warns once', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ this is not valid json');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const settings = await mod.readUserSettings();
+
+      expect(settings).toEqual(DEFAULT_USER_SETTINGS);
+      expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+      const messages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('unreadable') && m.includes('using in-memory defaults'))).toBe(
+        true,
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('a subsequent successful writeUserSettings clears the flag and leaves a .corrupt-* copy of the bad bytes', async () => {
+    const mod = await import('./user-settings.js');
+    const badBytes = '{ this is not valid json';
+    writeFileSync(mod.USER_SETTINGS_PATH, badBytes);
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+
+    await mod.writeUserSettings({ displayName: 'Post-Recovery Save' });
+
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    const dir = dirname(mod.USER_SETTINGS_PATH);
+    const base = basename(mod.USER_SETTINGS_PATH);
+    const corruptCopies = readdirSync(dir).filter((name) => name.startsWith(`${base}.corrupt-`));
+    expect(corruptCopies.length).toBe(1);
+    expect(readFileSync(join(dir, corruptCopies[0]), 'utf8')).toBe(badBytes);
+    // The new write itself is valid and readable.
+    const onDisk = JSON.parse(readFileSync(mod.USER_SETTINGS_PATH, 'utf8'));
+    expect(onDisk.displayName).toBe('Post-Recovery Save');
+  });
+
+  it('a successful re-read after recovery also clears the flag (not just a write)', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ this is not valid json');
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+
+    // Fix the file by hand (as if the user or a future write repaired it),
+    // then force a fresh read.
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    mod._resetUserSettingsCache();
+    await mod.readUserSettings();
+
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+  });
+
+  it('every settings writer passes rotate — two successive writeUserSettings calls leave a .bak.1', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    mod._resetUserSettingsCache();
+
+    await mod.writeUserSettings({ displayName: 'First Save' });
+    await mod.writeUserSettings({ displayName: 'Second Save' });
+
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(true);
+    const backup = JSON.parse(readFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, 'utf8'));
+    expect(backup.displayName).toBe('First Save');
+  });
+
+  it('writeUpgradeMeta also rotates (dedicated writer, not just the general writeUserSettings path)', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    mod._resetUserSettingsCache();
+
+    await mod.writeUpgradeMeta({ lastSeenAppVersion: '1.0.0' });
+    await mod.writeUpgradeMeta({ lastSeenAppVersion: '1.0.1' });
+
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(true);
+    const backup = JSON.parse(readFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, 'utf8'));
+    expect(backup.lastSeenAppVersion).toBe('1.0.0');
+  });
+
+  it('MUTATION CHECK PRECEDENT: a total-failure read never throws — callers get defaults, not a rejection', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ this is not valid json');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(mod.readUserSettings()).resolves.toEqual(DEFAULT_USER_SETTINGS);
     } finally {
       warnSpy.mockRestore();
     }

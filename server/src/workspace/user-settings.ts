@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
-import { readJson, writeJsonAtomic } from './state-io.js';
+import { readJsonWithRecovery, writeJsonAtomic } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
 import { resolveSidecarPort } from '../tts/sidecar-owner.js';
 import {
@@ -347,9 +347,33 @@ let cached: UserSettings | null = null;
 let explicitlySetKeys: Set<string> = new Set();
 let writeChain: Promise<unknown> = Promise.resolve();
 
+/** How many prior `user-settings.json` snapshots to keep on disk, mirroring
+    state-migrate.ts's STATE_BACKUP_KEEP for the same recovery window (last
+    completed write, the one before it, one earlier). Own constant rather
+    than sharing state.json's — the two files rotate independently. */
+export const USER_SETTINGS_BACKUP_KEEP = 3;
+
+/** True when the last readUserSettings() had to fall all the way back to
+    in-memory defaults because neither the main file nor any `.bak.N` parsed.
+    Cleared the next time a read/recovery succeeds, or a write completes
+    (see writeUserSettings). Drives the corruption banner (task 3 of #3175). */
+let settingsFileCorrupt = false;
+
+export function isUserSettingsFileCorrupt(): boolean {
+  return settingsFileCorrupt;
+}
+
 /** Reads from disk; falls back to defaults when the file is missing or
     malformed. Cached in-process so the hot paths (selectAnalyzer, sidecar
-    URL resolution) don't re-parse JSON on every request. */
+    URL resolution) don't re-parse JSON on every request.
+
+    Malformed JSON on the main file recovers from the newest parseable
+    `.bak.N` snapshot (see readJsonWithRecovery); only when NOTHING parses —
+    main file and every backup — does this fall back to in-memory defaults,
+    flagging the corruption via isUserSettingsFileCorrupt() instead of
+    throwing (a throw here would leave `cached` unset forever, so every
+    subsequent call — boot warm-up, the sidecar supervisor, every route —
+    would re-attempt and re-fail the same parse until the process restarts). */
 export async function readUserSettings(): Promise<UserSettings> {
   if (cached) return cached;
   await migrateLegacyUserSettings({
@@ -357,20 +381,41 @@ export async function readUserSettings(): Promise<UserSettings> {
     to: USER_SETTINGS_PATH,
     overridden: SETTINGS_PATH_OVERRIDDEN,
   });
-  const raw = await readJson<unknown>(USER_SETTINGS_PATH);
-  if (!raw) {
+  let raw: unknown;
+  try {
+    raw = await readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, { keep: USER_SETTINGS_BACKUP_KEEP });
+  } catch (err) {
+    /* Main file AND every backup are unparseable (or no backup exists yet —
+       the first corruption ever seen). readJsonWithRecovery already tried
+       every candidate; only log here, once, for this terminal case — a
+       successful backup recovery below logs its own single warning instead. */
+    console.warn(
+      `[user-settings] ${USER_SETTINGS_PATH} and its backups are all unreadable (${(err as Error).message}); ` +
+        'using in-memory defaults.',
+    );
+    settingsFileCorrupt = true;
     cached = { ...DEFAULT_USER_SETTINGS };
     explicitlySetKeys = new Set();
     return cached;
   }
+  if (!raw) {
+    settingsFileCorrupt = false;
+    cached = { ...DEFAULT_USER_SETTINGS };
+    explicitlySetKeys = new Set();
+    return cached;
+  }
+  // A successful read or backup recovery means the corruption episode, if any, is over.
+  settingsFileCorrupt = false;
   // Track which keys were explicitly in the file before merging with defaults (#2632 N2)
   explicitlySetKeys = new Set(Object.keys(raw as Record<string, unknown>));
 
   const migrated = migrateLegacyEagerLoadFields(raw);
   if (migrated !== raw) {
-    await writeJsonAtomic(USER_SETTINGS_PATH, migrated).catch((err) => {
-      console.warn('[user-settings] eager-load migration write failed (non-fatal):', err);
-    });
+    await writeJsonAtomic(USER_SETTINGS_PATH, migrated, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } }).catch(
+      (err) => {
+        console.warn('[user-settings] eager-load migration write failed (non-fatal):', err);
+      },
+    );
   }
   const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(migrated as object) });
   cached = parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS };
@@ -432,8 +477,18 @@ export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
     ) {
       merged.defaultTtsModelKeyExplicit = true;
     }
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    /* Don't let a routine save clobber the only evidence of a corruption
+       episode: while the file is flagged corrupt, the bytes currently on
+       disk (or a fresh recovery write that already replaced them) are the
+       last artifact of what went wrong. Copy them aside once, before this
+       write lands, so a user can hand-inspect/recover them later — a
+       diagnostic snapshot, not part of the `.bak.N` rotation chain. */
+    if (settingsFileCorrupt && existsSync(USER_SETTINGS_PATH)) {
+      await copyFile(USER_SETTINGS_PATH, `${USER_SETTINGS_PATH}.corrupt-${Date.now()}`);
+    }
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     cached = merged;
+    settingsFileCorrupt = false;
     // Track that sentKeys are now explicitly set in the file (#2632 N2)
     for (const key of sentKeys) {
       explicitlySetKeys.add(key);
@@ -811,7 +866,7 @@ export async function writeGeminiApiKey(key: string | null): Promise<UserSetting
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, geminiApiKey: normalised };
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     cached = merged;
     return merged;
   });
@@ -847,7 +902,7 @@ export async function writeUpgradeMeta(patch: {
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, ...patch };
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     cached = merged;
     return merged;
   });
@@ -870,7 +925,7 @@ export async function writeSetupCompletedAt(ts: string | null): Promise<UserSett
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, setupCompletedAt: ts };
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     cached = merged;
     return merged;
   });
@@ -890,7 +945,7 @@ export async function writeTourCompletedAt(ts: string | null): Promise<UserSetti
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, tourCompletedAt: ts };
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     cached = merged;
     return merged;
   });
