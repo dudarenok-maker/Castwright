@@ -117,9 +117,9 @@ have to hunt for where Google issues one.
 > to your account and defaults to `local` (Ollama daemon) — or `gemini` to
 > run analysis directly through the free Gemini API. When the engine is
 > `gemini`, a Gemini API key is required; when it's `local`, the analyzer
-> falls back to Gemini if the local daemon becomes unreachable and Cloud
-> fallback is on. This is the only control that decides your engine — any
-> stray `ANALYZER` setting in `server/.env` is ignored.
+> falls back to Gemini if the local daemon becomes unreachable, a Gemini API key
+> is set, and Cloud fallback is on. This is the only control that decides your
+> engine — any stray `ANALYZER` setting in `server/.env` is ignored.
 
 ## Install / update analyzer (Ollama)
 

@@ -38,7 +38,7 @@ If a chapter (often **chapter 1**) fails the instant analysis starts with `Gemin
 Two ways around it:
 
 - **Stay on the cloud, switch model.** Set `GEMINI_MODEL=gemma-4-31b-it` in `server/.env` and restart — the `gemma-*` family isn't subject to the recitation filter. Trade-off: gemma is weaker and can grind on very long chapters.
-- **Go fully local (most robust for copyrighted manuscripts).** Switch to Local Ollama in Admin → Model Manager, run Ollama with `ollama pull qwen3.5:4b`, and restart. Local models apply no content filter at all. See [Installing Castwright](Installing-Castwright).
+- **Go fully local (most robust for copyrighted manuscripts).** Switch to Local Ollama in Admin → Model Manager, run Ollama with `ollama pull qwen3.5:4b`. Local models apply no content filter at all. See [Installing Castwright](Installing-Castwright).
 
 After editing `server/.env`, click **Try again** in the app — it resumes from the first uncached chapter.
 
@@ -370,4 +370,4 @@ The analysis-model menu lists the models you've already installed into Ollama �
 
 ### I chose a model on my machine, but the analysis ran on Gemini
 
-When your analyzer engine is set to Local and Ollama can't be reached, Castwright falls back to Gemini — if you've added a Gemini API key — so a stalled daemon doesn't stall your book. The on-machine models still show in the menu while Ollama is down, which is why a "Local" choice can land on Gemini. Want it to stop and tell you instead? Start Ollama before you analyse, or set the analyzer engine to Gemini outright.
+When your analyzer engine is set to Local and Ollama can't be reached, Castwright falls back to Gemini — if you've added a Gemini API key and Cloud fallback is on — so a stalled daemon doesn't stall your book. The on-machine models still show in the menu while Ollama is down, which is why a "Local" choice can land on Gemini. Want it to stop and tell you instead? Start Ollama before you analyse, turn off Cloud fallback in analyzer settings, or set the analyzer engine to Gemini outright.
