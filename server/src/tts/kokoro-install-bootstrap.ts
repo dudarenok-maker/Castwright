@@ -27,25 +27,15 @@
 import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { detectKokoroInstalledOnDisk } from './kokoro-install-detect.js';
-import { getActiveSupervisor } from './sidecar-supervisor.js';
 import { resolveVenvRuntimeProfile } from './spawn-sidecar.js';
 import { restoreOrtRuntime, type OrtRestoreOutcome } from './ort-restore.js';
 import { resolveSidecarVenvDir } from '../diagnostics/venv.js';
-
-/* #3039 — pull the actionable line(s) out of the installer's stderr tail.
-   pip prints its own routine "[notice] A new release of pip is available…"
-   line AFTER a real failure (including a WinError 5 traceback), so a naive
-   "last N lines" slice can surface only that notice and hide the actual
-   error the job.error field exists to report. Drop pip's own notice lines
-   first, then take the tail of what's left. Windows stderr is CRLF-terminated,
-   so split on both LF and CR to avoid empty strings in the lines array. */
-function extractInstallErrorDetail(stderrTail: string): string {
-  const lines = stderrTail
-    .trim()
-    .split(/[\r\n]+/)
-    .filter((line) => line.length > 0 && !/^\[notice\]/i.test(line.trim()));
-  return lines.slice(-5).join(' ').trim();
-}
+import { isAnyGenerationActive } from '../gpu/active-generation-gate.js';
+import {
+  defaultHoldSidecar,
+  runChild,
+  DEFAULT_CHILD_IDLE_TIMEOUT_MS,
+} from './install-bootstrap-shared.js';
 
 export type KokoroInstallState = 'installed' | 'not-installed';
 
@@ -84,6 +74,15 @@ export interface KokoroInstallOptions {
   /** Restores the venv's ONNX runtime after the installer. Defaults to
       ort-restore.ts against the sidecar venv, running pip through spawnFn. */
   restoreOrtFn?: () => Promise<OrtRestoreOutcome>;
+  /** "Is a render in flight" — holding the sidecar would kill it. Defaults
+      to the gpu leaf gate, which fails CLOSED when routes/generation.ts has
+      not registered its accessor (always registered in the real server). */
+  generationActiveFn?: () => boolean;
+  /** How long a child (the installer, or a pip step) may produce NO output at
+      all before it is killed and reported as stalled. Idle time, not wall
+      clock: the download runs for minutes but never goes quiet, whereas a
+      stalled download never settles (#3043 M2). */
+  childIdleTimeoutMs?: number;
 }
 
 export class KokoroInstallBootstrap {
@@ -97,6 +96,8 @@ export class KokoroInstallBootstrap {
   private readonly installArgs: readonly string[];
   private readonly holdSidecarFn: <T>(fn: () => Promise<T>) => Promise<T>;
   private readonly restoreOrtFn: () => Promise<OrtRestoreOutcome>;
+  private readonly generationActiveFn: () => boolean;
+  private readonly childIdleTimeoutMs: number;
 
   constructor(opts: KokoroInstallOptions) {
     this.repoRoot = opts.repoRoot;
@@ -105,6 +106,8 @@ export class KokoroInstallBootstrap {
     this.installArgs = opts.installArgs ?? [];
     this.holdSidecarFn = opts.holdSidecarFn ?? defaultHoldSidecar;
     this.restoreOrtFn = opts.restoreOrtFn ?? (() => this.restoreOrtInSidecarVenv());
+    this.generationActiveFn = opts.generationActiveFn ?? isAnyGenerationActive;
+    this.childIdleTimeoutMs = opts.childIdleTimeoutMs ?? DEFAULT_CHILD_IDLE_TIMEOUT_MS;
   }
 
   /** Probe install-state without kicking off a job. Used by GET /detect. */
@@ -156,6 +159,14 @@ export class KokoroInstallBootstrap {
     if (before) {
       this.transition(job, 'installed', { step: 'Already installed.' });
       return;
+    }
+
+    /* Holding the sidecar kills whatever it is rendering. Refuse up front
+       rather than let the hold silently abort a chapter. */
+    if (this.generationActiveFn()) {
+      throw new Error(
+        'Cannot install while a chapter is being generated. Wait for the generation to finish, then try again.',
+      );
     }
 
     this.transition(job, 'installing', { step: 'Stopping the voice engine so the installer can update its files…' });
@@ -272,49 +283,20 @@ export class KokoroInstallBootstrap {
       'scripts',
       'install-kokoro.mjs',
     );
-    return new Promise((resolve, reject) => {
-      let proc: ChildProcess;
-      try {
-        /* Piped stdio (NOT inherit) so we can read the script's
-           `[install-kokoro]` step lines and surface the latest to the UI. */
-        proc = this.spawnFn('node', [script, ...this.installArgs], {
-          cwd: this.repoRoot,
-          windowsHide: true,
-        });
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-        return;
-      }
-      let stderrTail = '';
-      const onStdout = (b: Buffer): void => {
-        for (const line of b.toString('utf8').split('\n')) {
+    return runChild(
+      this.spawnFn,
+      this.repoRoot,
+      'node',
+      [script, ...this.installArgs],
+      {
+        onStdoutLine: (line) => {
           const m = line.match(/\[install-kokoro\]\s*(.+)/);
           if (m) this.update(job, { step: m[1].trim() });
-        }
-      };
-      const onStderr = (b: Buffer): void => {
-        /* Keep only the tail — a download failure dump can be huge; the last
-           few lines carry the actionable error. #3039: widened to 4000 chars
-           so a real error isn't pushed entirely out of the window by pip's own
-           routine notice line(s) printed after it. */
-        stderrTail = (stderrTail + b.toString('utf8')).slice(-4000);
-      };
-      proc.stdout?.on('data', onStdout);
-      proc.stderr?.on('data', onStderr);
-      proc.on('error', (err) => reject(err));
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(
-            new Error(
-              `install-kokoro.mjs exited with code ${code}.` +
-                (stderrTail.trim() ? ` ${extractInstallErrorDetail(stderrTail)}` : ''),
-            ),
-          );
-        }
-      });
-    });
+        },
+        failure: (code, detail) => `install-kokoro.mjs exited with code ${code}.${detail ? ` ${detail}` : ''}`,
+      },
+      { engineLabel: 'install-kokoro', childIdleTimeoutMs: this.childIdleTimeoutMs },
+    );
   }
 
   private transition(
@@ -345,41 +327,17 @@ export class KokoroInstallBootstrap {
       profile: resolveVenvRuntimeProfile(venvDir),
       platform: process.platform,
       runPip: (args) =>
-        this.runChild(python, ['-m', 'pip', ...args], {
-          failure: (code, detail) => `pip ${args.join(' ')} exited with code ${code}.${detail ? ` ${detail}` : ''}`,
-        }),
+        runChild(
+          this.spawnFn,
+          this.repoRoot,
+          python,
+          ['-m', 'pip', ...args],
+          {
+            failure: (code, detail) => `pip ${args.join(' ')} exited with code ${code}.${detail ? ` ${detail}` : ''}`,
+          },
+          { engineLabel: 'pip-restore', childIdleTimeoutMs: this.childIdleTimeoutMs },
+        ),
       log: (m) => console.log(`[kokoro-install] ${m}`),
-    });
-  }
-
-  /** Spawn + await one child through spawnFn. Never blocks the event loop.
-      Resolves on exit 0; rejects with `failure(code, stderrDetail)` otherwise. */
-  private runChild(
-    cmd: string,
-    args: readonly string[],
-    hooks: { onStdoutLine?: (line: string) => void; failure: (code: number | null, detail: string) => string },
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      let proc: ChildProcess;
-      try {
-        proc = this.spawnFn(cmd, args, { cwd: this.repoRoot, windowsHide: true });
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-        return;
-      }
-      let stderrTail = '';
-      proc.stdout?.on('data', (b: Buffer): void => {
-        if (!hooks.onStdoutLine) return;
-        for (const line of b.toString('utf8').split('\n')) hooks.onStdoutLine(line);
-      });
-      proc.stderr?.on('data', (b: Buffer): void => {
-        stderrTail = (stderrTail + b.toString('utf8')).slice(-4000);
-      });
-      proc.on('error', (err) => reject(err));
-      proc.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(hooks.failure(code, extractInstallErrorDetail(stderrTail))));
-      });
     });
   }
 
@@ -389,10 +347,4 @@ export class KokoroInstallBootstrap {
     this.active = null;
     this.nextId = 1;
   }
-}
-
-/** Default holdSidecarFn — see KokoroInstallOptions.holdSidecarFn. */
-function defaultHoldSidecar<T>(fn: () => Promise<T>): Promise<T> {
-  const supervisor = getActiveSupervisor();
-  return supervisor ? supervisor.withSidecarHeld(fn) : fn();
 }

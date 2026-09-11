@@ -11,12 +11,22 @@ import {
   setCoquiInstallBootstrap,
   _resetCoquiInstallBootstrap,
 } from './coqui-install.js';
-import { CoquiInstallBootstrap } from '../tts/coqui-install-bootstrap.js';
+import { CoquiInstallBootstrap, type CoquiInstallOptions } from '../tts/coqui-install-bootstrap.js';
 import type { CoquiInstallState } from '../tts/coqui-install-detect.js';
 import {
   _resetUserSettingsCache,
   getLastKnownCoquiInstallState,
 } from '../workspace/user-settings.js';
+
+/* Offline seams for the install path (#2192 / #3039): no real sidecar hold,
+   no real pip swap into a venv, and no fail-closed generation gate
+   (routes/generation.ts is not loaded here, so the real gate reads "a render
+   may be running" and would refuse every install). */
+const OFFLINE: Pick<CoquiInstallOptions, 'holdSidecarFn' | 'restoreOrtFn' | 'generationActiveFn'> = {
+  holdSidecarFn: (fn) => fn(),
+  restoreOrtFn: async () => 'not-needed',
+  generationActiveFn: () => false,
+};
 
 function makeApp() {
   const app = express();
@@ -81,6 +91,7 @@ describe('POST /api/coqui/install + poll', () => {
         repoRoot: '/repo',
         detectFn: () => detectStates[Math.min(i++, detectStates.length - 1)],
         spawnFn: () => fakeChild(0) as never,
+        ...OFFLINE,
       }),
     );
     const app = makeApp();
