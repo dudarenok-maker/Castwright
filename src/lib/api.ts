@@ -630,6 +630,10 @@ export interface StreamArgs {
       Optional for back-compat — pre-plan-102 callers still work, ticks just
       don't carry the field. */
   queueEntryId?: string;
+  /** Loud-fallback gate (generation.ts park-gate) — re-dispatch after a
+      parked chapter's "Render anyway" confirmation so the server skips the
+      park instead of re-queuing it. */
+  fallbackConfirmed?: boolean;
 }
 /** fs-26 — one SSE frame from the per-character splice endpoint. */
 export type SpliceTick =
@@ -5824,6 +5828,7 @@ function realStreamGeneration({
   chapterIds,
   force,
   queueEntryId,
+  fallbackConfirmed,
   onTick: rawOnTick,
 }: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
@@ -5849,6 +5854,7 @@ function realStreamGeneration({
           chapterIds,
           force,
           ...(queueEntryId ? { queueEntryId } : {}),
+          ...(fallbackConfirmed ? { fallbackConfirmed: true } : {}),
         }),
         signal: controller.signal,
       });
