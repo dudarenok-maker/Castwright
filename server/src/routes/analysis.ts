@@ -3254,13 +3254,15 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      F2 (#3169 fix wave) — this is now a per-POST line, not a per-click one:
      the stream middleware's own subscribe POST (fired on the first tick of
      every run, and on every reload/rejoin) reaches this same handler with no
-     body, so one Start click can log this line more than once. `model` is
-     request-supplied text and is stringified (F2/F6) so a LAN client can't
-     inject a forged `[analysis]` line via a newline in it. */
+     body, so one Start click can log this line more than once. `model` and
+     `manuscriptId` are both request-supplied text (the latter is `req.params.id`,
+     which Express decodes from the URL before any validation runs) and both
+     are stringified (F2/F6, hardened post-review) so a LAN client can't
+     inject a forged `[analysis]` line via a newline in either. */
   const requestedModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
   const requestedFresh = req.body?.fresh === true;
   console.log(
-    `[analysis] request received manuscript=${manuscriptId} ` +
+    `[analysis] request received manuscript=${JSON.stringify(manuscriptId)} ` +
       `model=${JSON.stringify(requestedModel ?? '(saved/default)')} fresh=${requestedFresh}`,
   );
 
@@ -3402,7 +3404,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
        POST's own `requestedModel` (or the saved default), which would be
        the WRONG model whenever the running job was started with an
        explicitly picked one. */
-    console.log(`[analysis] subscribe manuscript=${manuscriptId}`);
+    console.log(`[analysis] subscribe manuscript=${JSON.stringify(manuscriptId)}`);
     const subscriber: AnalysisSubscriber = { send, res, keepAlive };
     existing.subscribers.add(subscriber);
     replayCatchUp(existing, send);
@@ -3494,9 +3496,11 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      priority 2 (per-request override) passes the request body's `model`
      straight through to `selectAnalyzer`, which returns it verbatim as
      `selection.model` — so this can carry request text just like
-     `requestedModel` above, and needs the same log-injection guard. */
+     `requestedModel` above, and needs the same log-injection guard.
+     `manuscriptId` is stringified too (post-review hardening) — see the
+     `request received` comment above for why it needs it just as much. */
   console.log(
-    `[analysis] start manuscript=${manuscriptId} engine=${selection.engine} model=${JSON.stringify(selection.model)}`,
+    `[analysis] start manuscript=${JSON.stringify(manuscriptId)} engine=${selection.engine} model=${JSON.stringify(selection.model)}`,
   );
 
   /* Run the analyzer in the background. Express won't end this
@@ -6507,13 +6511,14 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      F2 (#3169 fix wave) — this is a per-POST line, same reasoning as the
      parent route: the stream middleware's own subscribe POST reaches this
      handler too, with no body, so a single Start click can log it more
-     than once. `model` is request-supplied text, stringified (F2/F6) as a
-     log-injection guard, same as the parent route. */
+     than once. `model` and `manuscriptId` are both request-supplied text,
+     both stringified (F2/F6, hardened post-review) as a log-injection
+     guard, same as the parent route. */
   const body = req.body as { chapterIds?: unknown; model?: unknown; allowStage1Shrink?: unknown };
   const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
   const requestedChapterCount = Array.isArray(body?.chapterIds) ? body.chapterIds.length : 0;
   console.log(
-    `[analysis-subset] request received manuscript=${manuscriptId} ` +
+    `[analysis-subset] request received manuscript=${JSON.stringify(manuscriptId)} ` +
       `model=${JSON.stringify(requestedModel ?? '(saved/default)')} chapters=${requestedChapterCount}`,
   );
 
@@ -6627,7 +6632,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
        doesn't store the model it's running, so this omits `model` rather
        than printing this POST's own (possibly wrong) requested/default
        one. */
-    console.log(`[analysis-subset] subscribe manuscript=${manuscriptId}`);
+    console.log(`[analysis-subset] subscribe manuscript=${JSON.stringify(manuscriptId)}`);
     const subscriber: AnalysisSubscriber = { send, res, keepAlive };
     existing.subscribers.add(subscriber);
     replayCatchUp(existing, send);
@@ -6708,9 +6713,11 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      which is also `selection.engine`). `selection.model` is stringified
      (F6) for the same reason as the parent route — it can carry the
      request body's `model` verbatim via `selectAnalyzerForPhase`'s
-     per-request-override priority. */
+     per-request-override priority. `manuscriptId` is stringified too
+     (post-review hardening) — same reason as the `request received`
+     comment above. */
   console.log(
-    `[analysis-subset] start manuscript=${manuscriptId} engine=${selection.engine} model=${JSON.stringify(selection.model)}`,
+    `[analysis-subset] start manuscript=${JSON.stringify(manuscriptId)} engine=${selection.engine} model=${JSON.stringify(selection.model)}`,
   );
 
   /* Run the subset analyzer in the background. The route response is

@@ -227,7 +227,7 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
             typeof line === 'string' && line.startsWith('[analysis] request received'),
         );
       expect(requestReceivedLine, 'expected an unconditional [analysis] request received line').toBeDefined();
-      expect(requestReceivedLine).toContain(`manuscript=${manuscriptId}`);
+      expect(requestReceivedLine).toContain(`manuscript=${JSON.stringify(manuscriptId)}`);
       expect(requestReceivedLine).toContain('model="(saved/default)"');
       expect(requestReceivedLine).toContain('fresh=false');
 
@@ -278,7 +278,8 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
         .map((call) => call[0])
         .filter(
           (line): line is string =>
-            typeof line === 'string' && line.startsWith(`[analysis] start manuscript=${manuscriptId}`),
+            typeof line === 'string' &&
+            line.startsWith(`[analysis] start manuscript=${JSON.stringify(manuscriptId)}`),
         );
       expect(startLines, 'exactly one start outcome line').toHaveLength(1);
       expect(startLines[0]).toMatch(/engine=\S+ model=\S+/);
@@ -322,7 +323,7 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
         requestReceivedLine,
         'expected an unconditional [analysis-subset] request received line',
       ).toBeDefined();
-      expect(requestReceivedLine).toContain(`manuscript=${manuscriptId}`);
+      expect(requestReceivedLine).toContain(`manuscript=${JSON.stringify(manuscriptId)}`);
       expect(requestReceivedLine).toContain('model="(saved/default)"');
       expect(requestReceivedLine).toContain('chapters=1');
 
@@ -372,7 +373,7 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
 
       const subscribeLine = lines.find((line) => line.startsWith('[analysis] subscribe'));
       expect(subscribeLine, 'expected a subscribe outcome line').toBeDefined();
-      expect(subscribeLine).toContain(`manuscript=${manuscriptId}`);
+      expect(subscribeLine).toContain(`manuscript=${JSON.stringify(manuscriptId)}`);
 
       /* Safe to assert absence here: we waited for the subscribe line, and
          the route's subscribe/start dispatch is a mutually-exclusive
@@ -438,7 +439,7 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
 
       const subscribeLine = lines.find((line) => line.startsWith('[analysis-subset] subscribe'));
       expect(subscribeLine, 'expected a subscribe outcome line').toBeDefined();
-      expect(subscribeLine).toContain(`manuscript=${manuscriptId}`);
+      expect(subscribeLine).toContain(`manuscript=${JSON.stringify(manuscriptId)}`);
 
       /* Safe to assert absence here — see the analogous comment in test (d):
          subscribe and start sit on a mutually-exclusive if/return, so
@@ -491,6 +492,85 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
       // forged prefix survives only as inert text inside the quoted value,
       // not as the start of a second, fake `[analysis]` line.
       expect(requestReceivedLine).toContain('model="evil\\n[analysis] forged"');
+    } finally {
+      consoleLogSpy.mockRestore();
+    }
+  });
+
+  it('(g) a manuscript id containing a literal newline cannot forge a second log line on the main route', async () => {
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    // Express decodes %0A in the path into a real newline before req.params.id
+    // sees it — this is exactly what makes the id itself an injection vector,
+    // not just the request body's `model` field.
+    const manuscriptId = `test-id-injection-${Date.now()}-${Math.random()}\n[analysis] start manuscript=forged engine=gemini model="evil"`;
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await supertest(app)
+        .post(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`)
+        .send({})
+        .buffer(true);
+      expect(res.status).toBe(200);
+
+      const lines = consoleLogSpy.mock.calls.map((call) => call[0]);
+      // Every console.log call is one line — none contain a raw newline.
+      for (const line of lines) {
+        if (typeof line === 'string') expect(line).not.toMatch(/\n/);
+      }
+      // No captured line may start with the forged `[analysis] start` prefix
+      // carried inside the id — proof the id was escaped, not concatenated
+      // raw into the line ahead of the real content.
+      for (const line of lines) {
+        if (typeof line === 'string') expect(line).not.toMatch(/^\[analysis\] start manuscript=forged/);
+      }
+
+      const requestReceivedLine = lines.find(
+        (line): line is string =>
+          typeof line === 'string' && line.startsWith('[analysis] request received'),
+      );
+      expect(requestReceivedLine).toBeDefined();
+      expect(requestReceivedLine).toContain(`manuscript=${JSON.stringify(manuscriptId)}`);
+    } finally {
+      consoleLogSpy.mockRestore();
+    }
+  });
+
+  it('(h) a manuscript id containing a literal newline cannot forge a second log line on the subset route', async () => {
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const manuscriptId = `test-id-injection-subset-${Date.now()}-${Math.random()}\n[analysis-subset] start manuscript=forged engine=gemini model="evil"`;
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await supertest(app)
+        .post(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis/chapters`)
+        .send({ chapterIds: [1] })
+        .buffer(true);
+      expect(res.status).toBe(200);
+
+      const lines = consoleLogSpy.mock.calls.map((call) => call[0]);
+      for (const line of lines) {
+        if (typeof line === 'string') expect(line).not.toMatch(/\n/);
+      }
+      for (const line of lines) {
+        if (typeof line === 'string') expect(line).not.toMatch(/^\[analysis-subset\] start manuscript=forged/);
+      }
+
+      const requestReceivedLine = lines.find(
+        (line): line is string =>
+          typeof line === 'string' && line.startsWith('[analysis-subset] request received'),
+      );
+      expect(requestReceivedLine).toBeDefined();
+      expect(requestReceivedLine).toContain(`manuscript=${JSON.stringify(manuscriptId)}`);
     } finally {
       consoleLogSpy.mockRestore();
     }
