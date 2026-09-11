@@ -389,7 +389,7 @@ describe('a11y — advanced configuration view', () => {
     });
 
     const store = configureStore({
-      reducer: { config: configSlice.reducer, ui: uiSlice.reducer },
+      reducer: { config: configSlice.reducer, ui: uiSlice.reducer, account: accountSlice.reducer },
     });
     const { container } = render(
       <Provider store={store}>
