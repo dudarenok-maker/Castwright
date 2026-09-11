@@ -580,7 +580,12 @@ describe('single-design job — pre-try cast-read leak (#3171)', () => {
       const err = events.find((e) => e.type === 'error');
       expect(err).toBeTruthy();
       expect(err?.code).toBe('design_failed');
-      // Curated: a real JSON.parse error, never a raw filesystem path.
+      // Not curation proof by itself: this JSON.parse error never contains a
+      // path, so "not a path" can't fail here regardless of curation — see
+      // the LockAcquisitionTimeoutError case below (#3173 M1) for the shape
+      // whose own message DOES embed one, and whose curated replacement is
+      // what actually exercises `requestFailureMessage`. Kept because it
+      // still pins the error surfaces onto a non-empty, well-formed message.
       expect(String(err?.message ?? '')).toBeTruthy();
       expect(String(err?.message ?? '')).not.toMatch(/[A-Za-z]:\\|\/(Users|home|AudiobookWorkspace)/);
       expect(events.some((e) => e.type === 'preview_ready' || e.type === 'designed')).toBe(false);
