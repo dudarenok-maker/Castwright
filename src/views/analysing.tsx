@@ -231,7 +231,8 @@ export function AnalysingView({
      flips, analysis useEffect re-runs… and at any link in the chain a
      leaked fetch or a stale render could pile up against Ollama. With
      an explicit click the user controls when the analysis kicks off,
-     and the server log shows exactly one [analysis] entry per click. */
+     and the server log shows one `[analysis] start requested` line per
+     click that reaches the server. */
   const [analysisStarted, setAnalysisStarted] = useState(false);
   /* True only while re-attaching to an already-running job after a page
      reload — set when the cold-boot rehydrate finds a `running` snapshot,

@@ -3209,6 +3209,23 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
 
 analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   const manuscriptId = req.params.id;
+  /* D2 (#3169) — `requestedModel` / `requestedFresh` used to be parsed much
+     further down (right before the Phase 0 analyzer selection), so nothing
+     logged between a Start click reaching this handler and that point: the
+     language pre-flight below, getOrHydrateManuscript (a cold re-parse of
+     the book on a cache miss), and the design-busy / rejoin checks all ran
+     silent. Parsing here instead — before anything that can be slow —
+     changes no behaviour (req.body is already fully parsed by the time this
+     handler runs) but lets this one unconditional log line cover the whole
+     span: a stall anywhere before the job's first milestone is now
+     distinguishable from "the click never reached the server", which is
+     exactly the ambiguity that made #3084 undiagnosable. */
+  const requestedModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
+  const requestedFresh = req.body?.fresh === true;
+  console.log(
+    `[analysis] start requested manuscript=${manuscriptId} ` +
+      `model=${requestedModel ?? '(saved/default)'} fresh=${requestedFresh}`,
+  );
 
   /* Task 6c (#2246) pre-flight gate — resolve the book's language BEFORE the
      SSE headers open, so a *located* book that never declared a language
@@ -3297,8 +3314,6 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     return res.end();
   }
 
-  const requestedModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
-  const requestedFresh = req.body?.fresh === true;
   /* `allowStage1Shrink` is the user's opt-in when the route refused a
      stage1 write because the new roster would replace a much larger
      existing one (see stage1ShrinkRefused comment). The analysing
@@ -3321,11 +3336,14 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     clearInterval(keepAlive);
     return res.end();
   }
-  if (requestedModel) {
-    console.log(
-      `[analysis] manuscript=${manuscriptId} engine=${selection.engine} model=${selection.model}`,
-    );
-  }
+  /* D2 (#3169) — unconditional (was `if (requestedModel)`): the per-click
+     line naming the RESOLVED engine/model must print even when the client
+     omitted `model` (the per-phase-split-saved / no-explicit-pick case),
+     otherwise the whole run logs nothing under `[analysis]` until the first
+     phase milestone. */
+  console.log(
+    `[analysis] manuscript=${manuscriptId} engine=${selection.engine} model=${selection.model}`,
+  );
 
   /* Read the prior outcome FILE OUTSIDE the critical section (before the
      existing-job check). The .await below would otherwise insert a gap into
@@ -3523,156 +3541,170 @@ export async function runMainAnalyzerJob(
   opts: MainAnalyzerJobOpts,
 ): Promise<void> {
   const manuscriptId = job.manuscriptId;
-  /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
-     Resolved once per job; threaded into every runStage* call below.
-     Task 6c: `resolveBookLanguageForManuscript` now throws BookLanguageUnsetError
-     for a *located* book that never declared a language (instead of silently
-     reading 'en'), so the detached loop must surface it rather than analyse in
-     English. This job body runs with no `res` to answer with, so it emits an
-     SSE `error` with code `language_unset` through the same
-     `endJob`/broadcast mechanism `classifyAnalysisFailure` uses for
-     lock-contention. The subscribed `BookLanguageUnsetError` message is the
-     curated, client-facing sentence — it carries no filesystem path, so the
-     SSE `error` body leaks nothing over LAN HTTPS. */
-  let bookLanguage: string;
-  try {
-    bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
-  } catch (e) {
-    if (e instanceof BookLanguageUnsetError) {
-      endJob(job, { kind: 'error', code: 'language_unset', message: (e as Error).message });
-      return;
-    }
-    throw e;
-  }
-  /* #938 Layer A — resolve the byline author + strip title-page/e-library
-     boilerplate from each chapter body BEFORE the model sees it. In-memory only
-     (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
-  const bookAuthor = await resolveBookAuthorForManuscript(manuscriptId);
-  for (const ch of record.chapterHints) {
-    ch.body = stripFrontMatterBoilerplate(ch.body, { author: bookAuthor, title: record.title });
-  }
-  const requestedFresh = opts.requestedFresh;
-  const allowStage1Shrink = opts.allowStage1Shrink;
-  const abortController = job.controller;
-  const analyzer = selection.analyzer;
-  const recordRef = record;
-  /* Mutable — a local→Gemini fallback (announced via StageCall.onFallback below)
-     reassigns this to the effective Gemini model so subsequent phase events name
-     the model that's actually running, not the dead local primary. */
+  /* D1 (#3169) — hoisted ahead of the try below so a throw anywhere in the
+     ~150-line setup span (fs-2 language resolution through the GPU/CPU
+     probe) has the same values available to the catch's terminal-failure
+     handling as a throw inside the stage-1/stage-2 pipeline that follows.
+     activeModelId is mutable — a local→Gemini fallback (StageCall.onFallback,
+     below) reassigns it to the effective Gemini model so subsequent phase
+     events + a failure's log line name the model that's actually running,
+     not the dead local primary. lastStep mirrors the most recent phase
+     milestone (set by `log` below) so a failure's log line names where it
+     wedged, not just a stack. Neither's initial value changes by moving the
+     declaration up — both are still first set from the same expressions
+     they always were. */
   let activeModelId = selection.model;
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
-  /* Read-once user-settings snapshot — the handler passes one in; legacy
-     callers / tests fall back to the in-process cache. Drives both the
-     Phase 1 model resolution and the watermark / lag below so they agree
-     with the Phase 0 resolution done in the route handler. */
-  const userSettings = opts.userSettings ?? getCachedUserSettings();
-
-  /* Plan 88 / 118 — pipelined two-model analyzer.
-     Both phases resolve through `selectAnalyzerForPhase`, which applies
-     the documented precedence (env ANALYZER_PHASE{0,1}_MODEL > per-request
-     `model` > saved `analyzerPhase{0,1}Model` > default). So:
-       - No per-phase models + no per-request model → both phases run the
-         same default model (single-model path, unchanged).
-       - Per-phase models set + no per-request model → Phase 0 and Phase 1
-         run DIFFERENT models, splitting the load across two free-tier
-         rate-limit buckets.
-       - A per-request `model` (priority 2) collapses both phases to that
-         model for this run (env still trumps it).
-
-     The watermark decides the dispatch contract. When the per-phase split
-     is active, Phase 1 chapter K dispatches once Phase 0's
-     watermark reaches `K + LAG` — `runPhase0Pool` and `runPhase1Pool` run
-     concurrently, joined by the outer `Promise.all` below. Otherwise the
-     sequential stub makes Phase 1 wait for `markPhase0AllDone()` (today's
-     hard phase gate). */
-  const phase1Selection: AnalyzerSelection = selectAnalyzerForPhase({
-    phase: 'phase1',
-    model: opts.requestedModel,
-    userSettings,
-  });
-  const phase1Analyzer = phase1Selection.analyzer;
-  /* Mutable for the same reason as activeModelId — Phase 1's stage2Call.onFallback
-     reassigns it to the effective Gemini model on a local→Gemini switch. */
-  let phase1ModelId = phase1Selection.model;
-  const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
-  /* srv-59 Task 9b — ONE escalation-window budget shared across every
-     chapter's attributeChapterStage2 call below, so the cap is per-BOOK
-     (`analyzer.structure.maxWindowsPerBook`), not silently reset per chapter. */
-  const structureBudget = { remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook') };
-  /* srv-59 Task 9b (review follow-up) — build the 'cloud' escalation
-     analyzer ONCE per book (mirrors structureBudget above), not per chapter:
-     a per-chapter build constructed a throwaway GeminiAnalyzer (and re-warned
-     on a missing key) on every chapter in cloud mode. `undefined` when the
-     mode isn't 'cloud' — attributeChapterStage2 only consults this field
-     when it is. */
-  const escalationAnalyzer =
-    configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
-  const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive(userSettings);
-  if (pipelinedPerPhase) {
-    console.log(
-      `[analysis] manuscript=${manuscriptId} pipelined ` +
-        `phase0=${selection.engine}:${selection.model} ` +
-        `phase1=${phase1Selection.engine}:${phase1Selection.model} ` +
-        `lag=${resolvePhase1MinLagChapters(userSettings)}`,
-    );
-  }
-  const watermark: PhaseWatermark = createWatermarkForJob(userSettings);
-
-  /* Best-effort GPU/CPU detection for the first-chapter ETA rate (issue 3).
-     Only meaningful for local Ollama; cloud engines pass 'unknown' → the
-     Gemini rate. Failures degrade to 'unknown' → the CUDA rate (the app's
-     target box), and the estimate self-corrects from observed pace anyway. */
-  const usesLocalAnalyzer = selection.engine === 'local' || phase1Selection.engine === 'local';
-  const analyzerDevice: 'cuda' | 'cpu' | 'unknown' = usesLocalAnalyzer
-    ? await detectOllamaDevice()
-    : 'unknown';
-  /* Only a job that actually probed the local Ollama analyzer may update the
-     GLOBAL cross-charge cache (W2.6, analyzer-device-state.ts) — it's a
-     single process-wide value shared across every concurrent book. A
-     cloud-only job's 'unknown' here says nothing new about the local
-     analyzer's real placement and must not clobber a still-accurate 'cpu'/
-     'cuda' reading another concurrent/prior local job established. */
-  if (usesLocalAnalyzer) {
-    setLastKnownAnalyzerDevice(analyzerDevice);
-  }
-
-  const send = (payload: unknown) => {
-    broadcastToJob(job, payload);
-    trackForReplay(job, payload);
-  };
-  /* #2015 §4 — a genuine stale merge base stops being silent. The write still
-     proceeds with the same base it uses today, so NO data is lost that is not
-     already lost today; what changes is that it is now visible. */
-  const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
-    console.warn(
-      `[analysis] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
-        `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
-    );
-    send({
-      kind: 'warning',
-      code: CAST_MERGE_BASE_STALE_CODE,
-      message: CAST_MERGE_BASE_STALE_MESSAGE,
-    });
-  };
-  /* `lastStep` mirrors the most recent phase milestone to the server log (so a
-     stall's last log line names where it wedged) and feeds the fatal-error log
-     below (so a failure names its phase, not just a stack). */
   let lastStep = 'init';
-  const log = (phaseId: number, message: string) => {
-    send({ kind: 'log', phaseId, message });
-    lastStep = `phase=${phaseId} ${message}`;
-    console.log(`[analysis] mns=${manuscriptId} ${lastStep}`);
-  };
-
-  const startedAt = Date.now();
-  const phaseStarts: Record<number, number> = {};
-
-  const markPhase = (id: number) => {
-    phaseStarts[id] = Date.now();
-  };
-  const endPhase = (id: number) => Date.now() - (phaseStarts[id] ?? Date.now());
 
   try {
+    /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
+       Resolved once per job; threaded into every runStage* call below.
+       Task 6c: `resolveBookLanguageForManuscript` now throws BookLanguageUnsetError
+       for a *located* book that never declared a language (instead of silently
+       reading 'en'), so the detached loop must surface it rather than analyse in
+       English. This job body runs with no `res` to answer with, so it emits an
+       SSE `error` with code `language_unset` through the same
+       `endJob`/broadcast mechanism `classifyAnalysisFailure` uses for
+       lock-contention. The subscribed `BookLanguageUnsetError` message is the
+       curated, client-facing sentence — it carries no filesystem path, so the
+       SSE `error` body leaks nothing over LAN HTTPS. */
+    let bookLanguage: string;
+    try {
+      bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+    } catch (e) {
+      if (e instanceof BookLanguageUnsetError) {
+        endJob(job, { kind: 'error', code: 'language_unset', message: (e as Error).message });
+        return;
+      }
+      throw e;
+    }
+    /* #938 Layer A — resolve the byline author + strip title-page/e-library
+       boilerplate from each chapter body BEFORE the model sees it. In-memory only
+       (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
+    const bookAuthor = await resolveBookAuthorForManuscript(manuscriptId);
+    for (const ch of record.chapterHints) {
+      ch.body = stripFrontMatterBoilerplate(ch.body, { author: bookAuthor, title: record.title });
+    }
+    const requestedFresh = opts.requestedFresh;
+    const allowStage1Shrink = opts.allowStage1Shrink;
+    const abortController = job.controller;
+    const analyzer = selection.analyzer;
+    const recordRef = record;
+    /* Read-once user-settings snapshot — the handler passes one in; legacy
+       callers / tests fall back to the in-process cache. Drives both the
+       Phase 1 model resolution and the watermark / lag below so they agree
+       with the Phase 0 resolution done in the route handler. Named
+       `runUserSettings` (not `userSettings`) because D1 (#3169) widened
+       this function's try to start above this declaration, putting it in
+       the same block as the unrelated, later `const userSettings =
+       await readUserSettings()` fresh read the minor-cast fold pass makes
+       further down (a live re-read, not a duplicate of this snapshot) —
+       the two used to sit in different blocks (this one outside the old
+       try) and so could share a name; now they can't. */
+    const runUserSettings = opts.userSettings ?? getCachedUserSettings();
+
+    /* Plan 88 / 118 — pipelined two-model analyzer.
+       Both phases resolve through `selectAnalyzerForPhase`, which applies
+       the documented precedence (env ANALYZER_PHASE{0,1}_MODEL > per-request
+       `model` > saved `analyzerPhase{0,1}Model` > default). So:
+         - No per-phase models + no per-request model → both phases run the
+           same default model (single-model path, unchanged).
+         - Per-phase models set + no per-request model → Phase 0 and Phase 1
+           run DIFFERENT models, splitting the load across two free-tier
+           rate-limit buckets.
+         - A per-request `model` (priority 2) collapses both phases to that
+           model for this run (env still trumps it).
+
+       The watermark decides the dispatch contract. When the per-phase split
+       is active, Phase 1 chapter K dispatches once Phase 0's
+       watermark reaches `K + LAG` — `runPhase0Pool` and `runPhase1Pool` run
+       concurrently, joined by the outer `Promise.all` below. Otherwise the
+       sequential stub makes Phase 1 wait for `markPhase0AllDone()` (today's
+       hard phase gate). */
+    const phase1Selection: AnalyzerSelection = selectAnalyzerForPhase({
+      phase: 'phase1',
+      model: opts.requestedModel,
+      userSettings: runUserSettings,
+    });
+    const phase1Analyzer = phase1Selection.analyzer;
+    /* Mutable for the same reason as activeModelId — Phase 1's stage2Call.onFallback
+       reassigns it to the effective Gemini model on a local→Gemini switch. */
+    let phase1ModelId = phase1Selection.model;
+    const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
+    /* srv-59 Task 9b — ONE escalation-window budget shared across every
+       chapter's attributeChapterStage2 call below, so the cap is per-BOOK
+       (`analyzer.structure.maxWindowsPerBook`), not silently reset per chapter. */
+    const structureBudget = { remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook') };
+    /* srv-59 Task 9b (review follow-up) — build the 'cloud' escalation
+       analyzer ONCE per book (mirrors structureBudget above), not per chapter:
+       a per-chapter build constructed a throwaway GeminiAnalyzer (and re-warned
+       on a missing key) on every chapter in cloud mode. `undefined` when the
+       mode isn't 'cloud' — attributeChapterStage2 only consults this field
+       when it is. */
+    const escalationAnalyzer =
+      configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
+    const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive(runUserSettings);
+    if (pipelinedPerPhase) {
+      console.log(
+        `[analysis] manuscript=${manuscriptId} pipelined ` +
+          `phase0=${selection.engine}:${selection.model} ` +
+          `phase1=${phase1Selection.engine}:${phase1Selection.model} ` +
+          `lag=${resolvePhase1MinLagChapters(runUserSettings)}`,
+      );
+    }
+    const watermark: PhaseWatermark = createWatermarkForJob(runUserSettings);
+
+    /* Best-effort GPU/CPU detection for the first-chapter ETA rate (issue 3).
+       Only meaningful for local Ollama; cloud engines pass 'unknown' → the
+       Gemini rate. Failures degrade to 'unknown' → the CUDA rate (the app's
+       target box), and the estimate self-corrects from observed pace anyway. */
+    const usesLocalAnalyzer = selection.engine === 'local' || phase1Selection.engine === 'local';
+    const analyzerDevice: 'cuda' | 'cpu' | 'unknown' = usesLocalAnalyzer
+      ? await detectOllamaDevice()
+      : 'unknown';
+    /* Only a job that actually probed the local Ollama analyzer may update the
+       GLOBAL cross-charge cache (W2.6, analyzer-device-state.ts) — it's a
+       single process-wide value shared across every concurrent book. A
+       cloud-only job's 'unknown' here says nothing new about the local
+       analyzer's real placement and must not clobber a still-accurate 'cpu'/
+       'cuda' reading another concurrent/prior local job established. */
+    if (usesLocalAnalyzer) {
+      setLastKnownAnalyzerDevice(analyzerDevice);
+    }
+
+    const send = (payload: unknown) => {
+      broadcastToJob(job, payload);
+      trackForReplay(job, payload);
+    };
+    /* #2015 §4 — a genuine stale merge base stops being silent. The write still
+       proceeds with the same base it uses today, so NO data is lost that is not
+       already lost today; what changes is that it is now visible. */
+    const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
+      console.warn(
+        `[analysis] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
+          `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
+      );
+      send({
+        kind: 'warning',
+        code: CAST_MERGE_BASE_STALE_CODE,
+        message: CAST_MERGE_BASE_STALE_MESSAGE,
+      });
+    };
+    const log = (phaseId: number, message: string) => {
+      send({ kind: 'log', phaseId, message });
+      lastStep = `phase=${phaseId} ${message}`;
+      console.log(`[analysis] mns=${manuscriptId} ${lastStep}`);
+    };
+
+    const startedAt = Date.now();
+    const phaseStarts: Record<number, number> = {};
+
+    const markPhase = (id: number) => {
+      phaseStarts[id] = Date.now();
+    };
+    const endPhase = (id: number) => Date.now() - (phaseStarts[id] ?? Date.now());
+
     const sourceChars = record.sourceText.length;
     const wordCount = record.sourceText.split(/\s+/).filter(Boolean).length;
     /* Pre-flight estimate uses the static baseline for both stages. After
@@ -6413,6 +6445,20 @@ analysisRouter.post('/:id/analysis/pause', async (req: Request, res: Response) =
    stub (we don't redo voice matching for a subset). */
 analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response) => {
   const manuscriptId = req.params.id;
+  /* D2 (#3169) — this route had no per-click `[analysis]`-prefixed line at
+     all (worse than the parent route's old `if (requestedModel)`-guarded
+     one): getOrHydrateManuscript, the design-busy check, and chapter-id
+     validation all ran silent. `body`/`requestedModel` are parsed here
+     (moved up from their old spot further down, where `body` was also
+     redeclared) so this one unconditional log covers a Start-click that
+     reaches the server before any of that — same rationale as the parent
+     route's `start requested` line. No behaviour change: req.body is
+     already fully parsed by the time this handler runs. */
+  const body = req.body as { chapterIds?: unknown; model?: unknown; allowStage1Shrink?: unknown };
+  const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
+  console.log(
+    `[analysis-subset] start requested manuscript=${manuscriptId} model=${requestedModel ?? '(saved/default)'}`,
+  );
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -6462,7 +6508,6 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     return res.end();
   }
 
-  const body = req.body as { chapterIds?: unknown; model?: unknown; allowStage1Shrink?: unknown };
   const rawIds = Array.isArray(body?.chapterIds) ? body.chapterIds : [];
   /* See main route comment on allowStage1Shrink — same opt-in flag for
      the subset-retry path's stage1 finalisation. */
@@ -6535,7 +6580,6 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     return;
   }
 
-  const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
   /* Plan 118 — resolve cast (Phase 0) and attribution (Phase 1) analyzers
      via the per-phase selector so a saved split applies to the subset
      retry too. This path is sequential (no watermark); the split only
@@ -6624,143 +6668,145 @@ export async function runSubsetAnalyzerJob(
   allowStage1ShrinkSubset: boolean,
 ): Promise<void> {
   const manuscriptId = job.manuscriptId;
-  /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
-     Task 6c: same contract as the main job — a *located* book that never
-     declared a language throws BookLanguageUnsetError here (not a silent 'en'),
-     which this detached subset body surfaces as an SSE `error` with code
-     `language_unset` (no filesystem path in the body). */
-  let bookLanguage: string;
-  try {
-    bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
-  } catch (e) {
-    if (e instanceof BookLanguageUnsetError) {
-      endJob(job, { kind: 'error', code: 'language_unset', message: (e as Error).message });
-      return;
-    }
-    throw e;
-  }
-  /* #938 Layer A — resolve the byline author + strip title-page/e-library
-     boilerplate from each chapter body BEFORE the model sees it. In-memory only
-     (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
-  const bookAuthor = await resolveBookAuthorForManuscript(manuscriptId);
-  for (const ch of record.chapterHints) {
-    ch.body = stripFrontMatterBoilerplate(ch.body, { author: bookAuthor, title: record.title });
-  }
-  const abortController = job.controller;
-  const analyzer = selection.analyzer;
+  /* D1 (#3169) — analyzerLabel / lastStep hoisted ahead of the try below,
+     same rationale as the main job's runMainAnalyzerJob: the catch at the
+     end of this function reads them, and the try now wraps this job's own
+     ~135-line setup span (fs-2 language resolution through isAborted),
+     not just the body that follows it. Neither's initial value changes by
+     moving the declaration up. */
   const analyzerLabel = engineLabel(selection.engine, selection.model);
-  const subsetModelId = selection.model;
-  /* Plan 118 — Phase 1 (attribution) analyzer for the subset retry; equals
-     `selection` when no split is configured. */
-  const phase1Analyzer = phase1Selection.analyzer;
-  const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1Selection.model);
-  const phase1ModelId = phase1Selection.model;
-  /* srv-59 Task 9b — ONE escalation-window budget shared across every
-     chapter's attributeChapterStage2 call in this subset/retry job, mirroring
-     the main route's per-book budget above. */
-  const structureBudget = { remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook') };
-  /* srv-59 Task 9b (review follow-up) — build the 'cloud' escalation
-     analyzer ONCE for this subset/retry job, mirroring the main route. */
-  const escalationAnalyzer =
-    configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
-
-  const send = (payload: unknown) => {
-    broadcastToJob(job, payload);
-    trackForReplay(job, payload);
-  };
-  /* #2015 §4 — a genuine stale merge base stops being silent. The write still
-     proceeds with the same base it uses today, so NO data is lost that is not
-     already lost today; what changes is that it is now visible. */
-  const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
-    console.warn(
-      `[analysis-subset] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
-        `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
-    );
-    send({
-      kind: 'warning',
-      code: CAST_MERGE_BASE_STALE_CODE,
-      message: CAST_MERGE_BASE_STALE_MESSAGE,
-    });
-  };
-  /* `lastStep` is a breadcrumb of the most recent phase milestone — mirrored to
-     the server log (so a stall's last server-log line names where it wedged)
-     and folded into the fatal-error log below (so a failure names the phase it
-     died in, not a bare stack). The 2026-06-06 ch12 incident surfaced only as
-     "sentences.map is not a function" with no phase/chapter context. */
   let lastStep = 'init';
-  const log = (phaseId: number, message: string) => {
-    send({ kind: 'log', phaseId, message });
-    lastStep = `phase=${phaseId} ${message}`;
-    console.log(`[analysis-subset] mns=${manuscriptId} ${lastStep}`);
-  };
 
-  /* Throttled LLM heartbeat. The subset (per-chapter Re-analyse) path
-     previously wired only onThrottle on its analyzer calls — NO onWaiting /
-     onChunk — so during a 60-90s Gemini phase it emitted nothing, the global
-     pill's `activeStream.lastTickAt` aged past the 8s cloud stall threshold,
-     and a working re-analyse falsely read as "Stalled" (the main job emits
-     these; the subset job didn't). onWaiting (500ms wall-clock from gemini.ts)
-     keeps the pill fresh even between Gemini chunks; onChunk carries real
-     model-output progress. Both funnel through the shared throttled emitter
-     (analysis-heartbeat.ts), and the analysis-stream middleware bumps
-     lastTickAt off each. */
-  const emitHeartbeat = makeThrottledHeartbeat(send, HEARTBEAT_EVENT_THROTTLE_MS);
+  try {
+    /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
+       Task 6c: same contract as the main job — a *located* book that never
+       declared a language throws BookLanguageUnsetError here (not a silent 'en'),
+       which this detached subset body surfaces as an SSE `error` with code
+       `language_unset` (no filesystem path in the body). */
+    let bookLanguage: string;
+    try {
+      bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
+    } catch (e) {
+      if (e instanceof BookLanguageUnsetError) {
+        endJob(job, { kind: 'error', code: 'language_unset', message: (e as Error).message });
+        return;
+      }
+      throw e;
+    }
+    /* #938 Layer A — resolve the byline author + strip title-page/e-library
+       boilerplate from each chapter body BEFORE the model sees it. In-memory only
+       (the hydrated analysis copy), never persisted; idempotent so a re-run is safe. */
+    const bookAuthor = await resolveBookAuthorForManuscript(manuscriptId);
+    for (const ch of record.chapterHints) {
+      ch.body = stripFrontMatterBoilerplate(ch.body, { author: bookAuthor, title: record.title });
+    }
+    const abortController = job.controller;
+    const analyzer = selection.analyzer;
+    const subsetModelId = selection.model;
+    /* Plan 118 — Phase 1 (attribution) analyzer for the subset retry; equals
+       `selection` when no split is configured. */
+    const phase1Analyzer = phase1Selection.analyzer;
+    const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1Selection.model);
+    const phase1ModelId = phase1Selection.model;
+    /* srv-59 Task 9b — ONE escalation-window budget shared across every
+       chapter's attributeChapterStage2 call in this subset/retry job, mirroring
+       the main route's per-book budget above. */
+    const structureBudget = { remainingWindows: configValue<number>('analyzer.structure.maxWindowsPerBook') };
+    /* srv-59 Task 9b (review follow-up) — build the 'cloud' escalation
+       analyzer ONCE for this subset/retry job, mirroring the main route. */
+    const escalationAnalyzer =
+      configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
 
-  /* Preserve designed-voice links across a subset re-analysis (#518) — snapshot
-     the existing cast before any interim write clobbers cast.json. */
-  const priorSnapshot = record.bookDir
-    ? await readPriorCastForMerge(record.bookDir)
-    : { rows: [], fingerprint: null, source: 'none' as const };
-  let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = priorSnapshot.rows;
-  /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
-     every merge-base write. */
-  const castBase: CastMergeBase | null = record.bookDir
-    ? createCastMergeBase(
-        /* #2165 + #2196 — live, not pinned, AND identity-gated. See the
-           streaming-path resolver for the full rationale: resolves through
-           the guard (liveBookDir(job), full identity check) so a stale
-           captured-record path can never mkdir a dead folder back. */
-        () => resolveVerifiedBookDirForRun(job),
-        priorSnapshot.fingerprint,
-      )
-    : null;
+    const send = (payload: unknown) => {
+      broadcastToJob(job, payload);
+      trackForReplay(job, payload);
+    };
+    /* #2015 §4 — a genuine stale merge base stops being silent. The write still
+       proceeds with the same base it uses today, so NO data is lost that is not
+       already lost today; what changes is that it is now visible. */
+    const reportCastConflict = (site: string) => (c: { expected: string; observed: string }) => {
+      console.warn(
+        `[analysis-subset] cast_merge_base_stale mns=${manuscriptId} site=${site} ` +
+          `expected=${describeFingerprintForLog(c.expected)} observed=${describeFingerprintForLog(c.observed)}`,
+      );
+      send({
+        kind: 'warning',
+        code: CAST_MERGE_BASE_STALE_CODE,
+        message: CAST_MERGE_BASE_STALE_MESSAGE,
+      });
+    };
+    const log = (phaseId: number, message: string) => {
+      send({ kind: 'log', phaseId, message });
+      lastStep = `phase=${phaseId} ${message}`;
+      console.log(`[analysis-subset] mns=${manuscriptId} ${lastStep}`);
+    };
 
-  /* Heal cross-series/author reuse links in the prior cast before it feeds the
-     seed + cast.json merges (see the streaming path for the full rationale —
-     the merge re-overlays a stale `matchedFrom` the roster-side prune already
-     dropped). No-op for a clean / empty prior. */
-  if (record.bookId && priorCastForMerge.length) {
-    await pruneStaleReuseLinks(
-      record.bookId,
-      priorCastForMerge as unknown as Parameters<typeof pruneStaleReuseLinks>[1],
-    );
-  }
+    /* Throttled LLM heartbeat. The subset (per-chapter Re-analyse) path
+       previously wired only onThrottle on its analyzer calls — NO onWaiting /
+       onChunk — so during a 60-90s Gemini phase it emitted nothing, the global
+       pill's `activeStream.lastTickAt` aged past the 8s cloud stall threshold,
+       and a working re-analyse falsely read as "Stalled" (the main job emits
+       these; the subset job didn't). onWaiting (500ms wall-clock from gemini.ts)
+       keeps the pill fresh even between Gemini chunks; onChunk carries real
+       model-output progress. Both funnel through the shared throttled emitter
+       (analysis-heartbeat.ts), and the analysis-stream middleware bumps
+       lastTickAt off each. */
+    const emitHeartbeat = makeThrottledHeartbeat(send, HEARTBEAT_EVENT_THROTTLE_MS);
 
-  /* Fix 2 — same-name prior-cast collapse (see streaming path). Applied here so
-     the subset re-analysis path's writes + seed also see one prior row per name. */
-  let dedupRetirements: Retirement[] = [];
-  if (priorCastForMerge.length > 1) {
-    const reconciled = dedupePriorCastByName(priorCastForMerge);
-    priorCastForMerge = reconciled.cast;
-    if (reconciled.dropped.length) {
-      log(
-        1,
-        `Collapsed ${reconciled.dropped.length} duplicate prior-cast row(s) by name (${reconciled.dropped
-          .map((d) => d.name ?? d.id)
-          .join(', ')}).`,
+    /* Preserve designed-voice links across a subset re-analysis (#518) — snapshot
+       the existing cast before any interim write clobbers cast.json. */
+    const priorSnapshot = record.bookDir
+      ? await readPriorCastForMerge(record.bookDir)
+      : { rows: [], fingerprint: null, source: 'none' as const };
+    let priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = priorSnapshot.rows;
+    /* #2015 §3a — mutable run state, NOT a run-long constant. Advanced after
+       every merge-base write. */
+    const castBase: CastMergeBase | null = record.bookDir
+      ? createCastMergeBase(
+          /* #2165 + #2196 — live, not pinned, AND identity-gated. See the
+             streaming-path resolver for the full rationale: resolves through
+             the guard (liveBookDir(job), full identity check) so a stale
+             captured-record path can never mkdir a dead folder back. */
+          () => resolveVerifiedBookDirForRun(job),
+          priorSnapshot.fingerprint,
+        )
+      : null;
+
+    /* Heal cross-series/author reuse links in the prior cast before it feeds the
+       seed + cast.json merges (see the streaming path for the full rationale —
+       the merge re-overlays a stale `matchedFrom` the roster-side prune already
+       dropped). No-op for a clean / empty prior. */
+    if (record.bookId && priorCastForMerge.length) {
+      await pruneStaleReuseLinks(
+        record.bookId,
+        priorCastForMerge as unknown as Parameters<typeof pruneStaleReuseLinks>[1],
       );
     }
-    dedupRetirements = reconciled.retirements;
-  }
 
-  /* Used inside the persist guards below in place of the old `clientGone`
-     flag. The detached job survives the original requester disconnecting,
-     but it still respects an explicit /pause via abortController.signal —
-     a paused retry shouldn't keep writing cast.json out from under the
-     user's hands. */
-  const isAborted = (): boolean => abortController.signal.aborted;
+    /* Fix 2 — same-name prior-cast collapse (see streaming path). Applied here so
+       the subset re-analysis path's writes + seed also see one prior row per name. */
+    let dedupRetirements: Retirement[] = [];
+    if (priorCastForMerge.length > 1) {
+      const reconciled = dedupePriorCastByName(priorCastForMerge);
+      priorCastForMerge = reconciled.cast;
+      if (reconciled.dropped.length) {
+        log(
+          1,
+          `Collapsed ${reconciled.dropped.length} duplicate prior-cast row(s) by name (${reconciled.dropped
+            .map((d) => d.name ?? d.id)
+            .join(', ')}).`,
+        );
+      }
+      dedupRetirements = reconciled.retirements;
+    }
 
-  try {
+    /* Used inside the persist guards below in place of the old `clientGone`
+       flag. The detached job survives the original requester disconnecting,
+       but it still respects an explicit /pause via abortController.signal —
+       a paused retry shouldn't keep writing cast.json out from under the
+       user's hands. */
+    const isAborted = (): boolean => abortController.signal.aborted;
+
     /* §4.4 / Task 8 fix round 1 (items 1 + 2) — the DEDUP call above computes
        `dedupRetirements` synchronously (can't throw), but recording them is
        async I/O — moved inside this try so a throw can't reject before the
