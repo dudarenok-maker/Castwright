@@ -116,13 +116,16 @@ export default defineConfig({
       /* #2889 — src/index-html-fonts.test.ts (the #698 self-hosted-fonts
          guard) readFile()s index.html at RUNTIME and neither imports it nor
          has any module-graph edge to it, so `vitest --changed` would never
-         select it for an index.html-only diff. Same story for styles.css:
+         select it for an index.html-only diff. src/styles.css is different:
+         src/main.tsx imports it (so the module-graph edge exists), but
          src/test/dark-mode-css.test.ts and src/styles-neutrals.test.ts both
-         readFileSync() it directly. Both files are also in
-         scripts/verify-cache.mjs's `test` step `extraFiles`, which is what
-         forces the whole-suite CI cache to invalidate on either — this
-         entry closes the matching gap in vitest's own --changed selection
-         so a local/targeted run doesn't silently skip the guards. */
+         readFileSync() it directly with no module-graph path from the change
+         to the guard, creating a partial-selection gap that would miss both
+         guards. Both files are in scope for the `test` step — index.html via
+         its `extraFiles` entry, src/styles.css via globs: ['src/**'] — but
+         that only schedules the step; it is `--changed` inside the run that
+         then selects zero/one test file. These triggers are what force the
+         full run, closing the matching gap in vitest's own selection. */
       '{**/index.html,**/.*/**/index.html}',
       '{**/styles.css,**/.*/**/styles.css}',
     ],
