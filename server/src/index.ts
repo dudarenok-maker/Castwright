@@ -151,10 +151,12 @@ export async function bootWarmUserSettings(): Promise<void> {
     `spawnOnce()` → `buildOpts()` → `readUserSettings()` can reject the same
     way, and nothing on that direct path catches it (contrast
     `scheduleRespawnAttempt`'s own IIFE inside sidecar-supervisor.ts, which
-    already wraps its `spawnOnce()` call). Uncaught, the supervisor silently
-    never starts -- TTS stays permanently unavailable with no logged reason
-    beyond the generic FATAL unhandledRejection line, and no automatic
-    retry engages because `start()` itself never completed. */
+    already wraps its `spawnOnce()` call). Uncaught, the supervisor never
+    starts and TTS stays permanently unavailable. Before this wrapper that
+    failure was still fully logged -- the generic FATAL unhandledRejection
+    line carries the whole error -- but nothing named the sidecar
+    supervisor as the source, and no automatic retry engages because
+    `start()` itself never completed. */
 export async function bootStartSidecarSupervisor(
   supervisor: Pick<SidecarSupervisor, 'start'>,
 ): Promise<void> {
