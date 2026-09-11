@@ -2069,6 +2069,26 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     expect(screen.queryByRole('button', { name: /start analysis/i })).not.toBeInTheDocument();
     expect(capturedOpts).toBeUndefined();
   });
+
+  /* Fix round 1 (#3169 review finding 1): the rehydrate effect only writes
+     hasStartedOnceRef.current = true for a paused/halted snapshot — a ref
+     write, which triggers no re-render on its own. Reading
+     activeStreamSnapshot directly in the `started` expression (rather than
+     relying solely on that ref) means phase 0 reads correctly on the very
+     FIRST render, before the effect has had any chance to run. Assert
+     synchronously with getBy… (no findBy/waitFor) so a regression back to
+     the ref-only expression — correct only once some unrelated effect
+     happens to force a re-render — shows up as a hard failure here rather
+     than as a timing-dependent flash a test could accidentally paper over. */
+  it('renders phase 0 as streaming SYNCHRONOUSLY (first render, no awaited re-render) for a cold-boot paused snapshot', () => {
+    renderViewWithActiveStream('paused');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
+  });
+
+  it('renders phase 0 as streaming SYNCHRONOUSLY (first render, no awaited re-render) for a cold-boot halted snapshot', () => {
+    renderViewWithActiveStream('halted');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
+  });
 });
 
 /* Bug D regression — the "Overall" progress bar inside the analysing

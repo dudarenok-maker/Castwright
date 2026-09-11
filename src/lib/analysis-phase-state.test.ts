@@ -120,10 +120,22 @@ describe('derivePhaseState', () => {
     ).toBe('pending');
   });
 
-  it('is pending for a later phase when the run has not started', () => {
+  /* The frontier can be any phase, not just 0 — pin `started` gating the
+     rule generally, not just phase 0's own maxPhase-defaults-to-0 quirk.
+     (phaseId 1 with maxPhase 0 — the original case here — never reaches
+     the started branch at all: it's beyond the frontier and reads
+     'pending' regardless of `started`, so it couldn't have caught a
+     regression that dropped the `started` gate.) */
+  it('is pending for a non-zero frontier phase when the run has not started', () => {
     expect(
-      derivePhaseState(1, { progressByPhase: {}, liveByPhase: {}, maxPhase: 0, started: false }),
+      derivePhaseState(1, { progressByPhase: {}, liveByPhase: {}, maxPhase: 1, started: false }),
     ).toBe('pending');
+  });
+
+  it('is active for the same non-zero frontier phase once started', () => {
+    expect(
+      derivePhaseState(1, { progressByPhase: {}, liveByPhase: {}, maxPhase: 1, started: true }),
+    ).toBe('active');
   });
 
   it('is still active when not started but the phase has live chapters (real run data wins)', () => {

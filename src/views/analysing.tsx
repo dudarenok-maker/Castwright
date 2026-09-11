@@ -1444,8 +1444,25 @@ export function AnalysingView({
                  retry/demo-capture/cold-boot-running paths, resuming covers
                  the #865 reload bridge, and hasStartedOnceRef covers a
                  cold-boot rehydrate of a paused/halted snapshot so those
-                 still render exactly as they do today. */
-              started: analysisStarted || resuming || hasStartedOnceRef.current,
+                 still render exactly as they do today. activeStreamSnapshot
+                 (the same cross-navigation signal the rehydrate effect above
+                 acts on) is ALSO checked directly rather than relying solely
+                 on hasStartedOnceRef: that ref is written by the rehydrate
+                 effect with no setState, so on the very first render it
+                 hasn't re-rendered yet and `started` would read false —
+                 correcting only once some unrelated effect happens to
+                 re-render. Reading the selector value instead is present
+                 on the first render, so a cold-boot paused/halted snapshot
+                 never produces a pending flash. A lingering snapshot for
+                 this manuscript is always running/paused/halted — a
+                 completed run's snapshot is torn down via
+                 clearActiveStream, so this can't wrongly mark a
+                 never-started view as started. */
+              started:
+                analysisStarted ||
+                resuming ||
+                hasStartedOnceRef.current ||
+                activeStreamSnapshot?.manuscriptId === manuscriptId,
             });
             return (
               <PhaseCard
