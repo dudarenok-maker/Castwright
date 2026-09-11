@@ -261,4 +261,68 @@ describe('realStreamGeneration auto-reconnect', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(ticks.map((t) => t.type)).toEqual(['chapter_failed', 'idle']);
   });
+
+  /* #3026 step 3 — shape D: every reconnect attempt after the first real tick
+     fails, so RECONNECT_MAX_ATTEMPTS (5 fetches total: the initial open plus
+     four reconnects) is exhausted without ever seeing `idle`. The terminal
+     block still delivers exactly one chapter_failed + idle pair, same as
+     every other give-up shape. Fake timers stand in for the ~15.5s of real
+     backoff (500+1000+2000+4000+8000ms). */
+  it('delivers chapter_failed + idle once reconnect attempts are exhausted (shape D)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { api } = await import('./api');
+      fetchMock
+        .mockResolvedValueOnce(sseResponse([JSON.stringify({ type: 'progress', progress: 0.3 })]))
+        .mockRejectedValue(new TypeError('Failed to fetch'));
+      const ticks: { type: string; chapterId?: number }[] = [];
+      api.streamGeneration({
+        bookId: 'book-A',
+        modelKey: 'kokoro-v1',
+        chapterIds: [7],
+        onTick: (t) => ticks.push(t as { type: string; chapterId?: number }),
+      });
+      await vi.advanceTimersByTimeAsync(20000);
+      /* One initial fetch + four reconnects = five total. */
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(ticks.map((t) => t.type).slice(-2)).toEqual(['chapter_failed', 'idle']);
+      expect(ticks.filter((t) => t.type === 'idle')).toHaveLength(1);
+      const failedTicks = ticks.filter((t) => t.type === 'chapter_failed');
+      expect(failedTicks).toHaveLength(1);
+      expect(failedTicks[0].chapterId).toBe(7);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /* #3026 step 3 — cancelling while the client is waiting out a reconnect
+     backoff must emit nothing: the outer `cancelled` flag short-circuits the
+     terminal-handling block, so no chapter_failed/idle pair follows the
+     tick(s) already delivered. */
+  it('cancelling during a reconnect backoff emits nothing further', async () => {
+    vi.useFakeTimers();
+    try {
+      const { api } = await import('./api');
+      fetchMock
+        .mockResolvedValueOnce(sseResponse([JSON.stringify({ type: 'progress', progress: 0.3 })]))
+        .mockRejectedValue(new TypeError('Failed to fetch'));
+      const ticks: { type: string }[] = [];
+      const cancel = api.streamGeneration({
+        bookId: 'book-A',
+        modelKey: 'kokoro-v1',
+        chapterIds: [7],
+        onTick: (t) => ticks.push(t as { type: string }),
+      });
+      /* Flush microtasks so the first fetch resolves and the loop enters its
+         first backoff wait, without yet advancing real timer-bound delay. */
+      await vi.advanceTimersByTimeAsync(0);
+      cancel();
+      /* Advance well past the full backoff — nothing further should fire. */
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(ticks.map((t) => t.type)).toEqual(['progress']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
