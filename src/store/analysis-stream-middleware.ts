@@ -231,34 +231,16 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           closeHandle();
           return;
         }
-        /* Distinguishing transient vs terminal for plain Error:
-           - 409 (conflict): another subscriber already exists, genuinely transient
-             and expected (e.g., multiple browser tabs) — allow reconnection
-           - 404 (not found): server genuinely lost the job — terminal failure
-           - 5xx or network failure (stream cut mid-run, socket dropped, offline):
-             COULD be transient, but with no discriminator we treat as terminal.
-             The view is the primary witness; if it recovers, that matters.
-             If it doesn't, this middleware's silence lets a dead run look alive,
-             which is worse than letting the view's own error take over.
-           For now: only truly transient (409) gets the silent-close path;
-           everything else (plain Error, network) gets halted + toast. */
-        const error = e as Error;
-        const isTransient409 = error?.message?.includes('409') || error?.message?.includes('Conflict');
-        if (isTransient409) {
-          /* Transient conflict — another subscriber exists. Close silently
-             without halting, so the next tick can retry. Don't show a toast. */
-          closeHandle();
-          return;
-        }
-        /* Genuine terminal failure: network drop, 5xx, 404, etc. Halt and report. */
-        dispatch(analysisActions.setHalted({ manuscriptId, code: 'error', message: error?.message ?? 'Analysis stream failed' }));
-        dispatch(
-          notificationsActions.pushToast({
-            kind: 'error',
-            message: error?.message ?? 'Analysis stream failed',
-            dedupeKey: 'analysis-stream',
-          }),
-        );
+        /* Transient connection failures (stream ends without result, 409
+           conflict, dropped socket, network errors) are not analyzed failures —
+           the view's primary SSE handle may still be healthy. Close silently
+           without declaring halted, so transient network blips don't
+           incorrectly pause the UI's rendering of an active run. The view
+           will handle any genuine analysis failure on its own connection.
+           The critical fix from B: always call closeHandle() so the next
+           tick's first-tick-opens contract can retry. The old bug was
+           silently returning without closeHandle(), leaving handle non-null
+           and blocking all future reconnection attempts. */
         closeHandle();
       }
     })();

@@ -108,7 +108,11 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => void dispatch(fetchAnalyzerModels())}
         data-testid={`phase-model-swap-${phaseId}`}
-        title={`Swap the Phase ${phaseId} model. Applies from the next chapter; the in-flight chapter completes on the current model.`}
+        title={
+          isActive
+            ? `Swap the Phase ${phaseId} model. Applies from the next chapter; the in-flight chapter completes on the current model.`
+            : `Swap the Phase ${phaseId} model for future analyses.`
+        }
         className="px-2.5 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
         aria-label={`Phase ${phaseId} model swap`}
       >
