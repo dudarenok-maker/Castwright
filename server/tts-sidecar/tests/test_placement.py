@@ -1589,3 +1589,60 @@ def test_pinned_tolerance_single_gpu_unaffected():
         return _RAN
 
     run_case(body())
+
+
+def test_preferred_tolerance_issue_repro_overrides_hint():
+    """#3097 / #3165 repro, `preferred` (X-Device-Hint) branch: cuda:0
+    24 000 total / 18 000 free, cuda:1 16 000 total / 7 000 free.
+    preferred=cuda:1 must resolve to cuda:0 because
+    7 000 < 0.75 × 18 000 = 13 500."""
+
+    async def body():
+        devices = [
+            dev(index=0, free=18000, total=24000),
+            dev(index=1, free=7000, total=16000),
+        ]
+        pc = make(devices, peak=4000)
+        async with pc.reservation(
+            "coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, preferred="cuda:1"
+        ) as adm:
+            assert adm["device"] == "cuda:0"
+        return _RAN
+
+    run_case(body())
+
+
+def test_preferred_tolerance_near_tie_honours_hint():
+    """Hinted device free headroom just above the 75 % threshold — must
+    still resolve to the hint. cuda:0 24 000 / 18 000, cuda:1 16 000 /
+    13 600. 13 600 ≥ 0.75 × 18 000 = 13 500 → hint honored."""
+
+    async def body():
+        devices = [
+            dev(index=0, free=18000, total=24000),
+            dev(index=1, free=13600, total=16000),
+        ]
+        pc = make(devices, peak=4000)
+        async with pc.reservation(
+            "coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, preferred="cuda:1"
+        ) as adm:
+            assert adm["device"] == "cuda:1"
+        return _RAN
+
+    run_case(body())
+
+
+def test_preferred_tolerance_single_gpu_unaffected():
+    """No competing candidate: hint is the only GPU — tolerance check is
+    skipped, resolves to the hint as before."""
+
+    async def body():
+        devices = [dev(index=0, free=18000, total=24000)]
+        pc = make(devices, peak=4000)
+        async with pc.reservation(
+            "coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, preferred="cuda:0"
+        ) as adm:
+            assert adm["device"] == "cuda:0"
+        return _RAN
+
+    run_case(body())

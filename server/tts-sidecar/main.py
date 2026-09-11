@@ -5196,6 +5196,24 @@ class PlacementController:
         # `constraint` is set the engine either cannot migrate or the
         # operator has said where it goes, and a per-request hint must not
         # overrule either.
+        # #3097 / #3165 — same 75 % tolerance as the `pinned` block above,
+        # adapted for `preferred`: a materially freer alternative should win
+        # even when the hinted device technically fits. Unlike `pinned`,
+        # which restricts `candidates` for the whole admission, `preferred`
+        # must keep its "fall through to the unconstrained path" contract
+        # (#3061 review C3) — so on failing the tolerance check we null out
+        # `preferred` itself rather than rewriting `candidates`, letting the
+        # guard below skip straight to the unconstrained `try_hold`.
+        if preferred is not None and constraint is None and candidates:
+            all_gpus = self._gpu_candidates(devices, None)
+            if len(all_gpus) > 1:
+                preferred_candidates = [c for c in candidates if c[0] == preferred]
+                if preferred_candidates:
+                    preferred_free = preferred_candidates[0][1]
+                    winner_free = max(c[1] for c in all_gpus)
+                    if preferred_free < 0.75 * winner_free:
+                        preferred = None
+
         held: Optional[tuple] = None
         if preferred is not None and constraint is None:
             held = self.ledger.try_hold(
