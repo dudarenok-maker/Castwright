@@ -1,9 +1,11 @@
 /* fs-63 — off-roster "Design now" nudge. A sticky toast (no auto-dismiss)
    rendered by ToastStack when a Toast carries a `nudge`. It mirrors the Cast
    view's busy semantics: while a cast-design run is active (any book) the
-   action is disabled, so a tap can never silently no-op against the
-   single-stream middleware. Tapping enqueues bespoke Qwen design for exactly
-   the created characters via the existing designAllRequested pipeline. */
+   action is disabled, so a tap can't trigger the single-stream middleware's
+   own busy-toast (a second start surfaces its own error toast naming the
+   busy state, it does not silently no-op). Tapping enqueues bespoke Qwen
+   design for exactly the created characters via the existing
+   designAllRequested pipeline. */
 
 import { useAppDispatch, useAppSelector } from '../store';
 import { IconWarning, IconClose } from '../lib/icons';

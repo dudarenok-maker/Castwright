@@ -1021,7 +1021,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Requests-per-minute cap for gemma-4-31b-it. Override to adjust the free-tier limit (default 30 RPM from AI Studio 2026-05-16). The limiter waits proactively so no 429s are issued.',
     type: 'integer', min: 1,
     default: 30, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpm in analyzer/rate-limit.ts
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
   {
     key: 'rate.tpm.gemma',
@@ -1031,7 +1031,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Input-tokens/min for gemma-4-31b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
     type: 'integer', min: 0,
     default: 16000, // ← BUILTIN_LIMITS['gemma-4-31b-it'].tpm in analyzer/rate-limit.ts (line 41); 0/"unlimited" = Infinity sentinel
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
   {
     key: 'rate.rpd.gemma',
@@ -1041,7 +1041,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Requests-per-day cap for gemma-4-31b-it. Default 14400 (free-tier from AI Studio 2026-05-16). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
     type: 'integer', min: 1,
     default: 14400, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpd in analyzer/rate-limit.ts
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
   {
     key: 'rate.rpm.gemma26',
@@ -1051,7 +1051,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Requests-per-minute cap for gemma-4-26b-a4b-it (free tier 30). The limiter waits proactively so no 429s are issued.',
     type: 'integer', min: 1,
     default: 30,
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
   {
     key: 'rate.tpm.gemma26',
@@ -1061,7 +1061,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Input-tokens/min for gemma-4-26b-a4b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
     type: 'integer', min: 0,
     default: 16000,
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
   {
     key: 'rate.rpd.gemma26',
@@ -1071,7 +1071,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Requests-per-day cap for gemma-4-26b-a4b-it (free tier 14400). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
     type: 'integer', min: 1,
     default: 14400,
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
 
   // ── audio-loudness ────────────────────────────────────────────────────────

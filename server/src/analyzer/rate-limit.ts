@@ -20,6 +20,8 @@
    against outlier long chapters and burst-retry pathology. */
 
 import { AnalysisAbortedError } from './ollama.js';
+import { allKnobs } from '../config/registry.js';
+import { resolveKnob } from '../config/resolver.js';
 
 interface ModelLimits {
   rpm: number;
@@ -73,14 +75,40 @@ function readTpmEnv(name: string): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+/* Saved-override lookup for a rate field. Finds the registry knob whose env
+   var matches the computed name (`GEMINI_<RPM|TPM|RPD>_<slug>`) and returns
+   its effective value only when the resolver reports `source: 'override'` —
+   i.e. a value stored in user-settings configOverrides, not an env var and not
+   the registry default. Resolving through the resolver is what makes a future
+   registered model knob work here with zero changes to this file. Only ever
+   reached after the env path returns undefined, so `resolveKnob`'s env
+   coercion/warning (e.g. on "unlimited") is never triggered for a value the
+   actual env read already accepted. */
+function overrideValue(envName: string): number | undefined {
+  const knob = allKnobs().find((k) => k.env === envName);
+  if (!knob) return undefined;
+  const state = resolveKnob(knob);
+  if (state.source !== 'override') return undefined;
+  return typeof state.effective === 'number' ? state.effective : undefined;
+}
+
 function resolveLimits(model: string): ModelLimits {
   const base = BUILTIN_LIMITS[model] ?? FALLBACK_LIMITS;
   const slug = envSlug(model);
   return {
-    rpm: readEnvNumber(`GEMINI_RPM_${slug}`) ?? base.rpm,
-    tpm: readTpmEnv(`GEMINI_TPM_${slug}`) ?? base.tpm,
-    rpd: readEnvNumber(`GEMINI_RPD_${slug}`) ?? base.rpd,
+    rpm: readEnvNumber(`GEMINI_RPM_${slug}`) ?? overrideValue(`GEMINI_RPM_${slug}`) ?? base.rpm,
+    rpd: readEnvNumber(`GEMINI_RPD_${slug}`) ?? overrideValue(`GEMINI_RPD_${slug}`) ?? base.rpd,
+    tpm: tpmLimit(`GEMINI_TPM_${slug}`, base.tpm),
   };
+}
+
+/* TPM alone has a 0/"unlimited" sentinel (see readTpmEnv). A saved override of
+   0 likewise means "no per-minute gate" (Infinity), matching the TPM knob's
+   help text. The RPM/RPD knobs are min:1 in the registry, so a 0 override is
+   impossible there and needs no sentinel. */
+function tpmLimit(envName: string, fallback: number): number {
+  const t = readTpmEnv(envName) ?? overrideValue(envName);
+  return t === undefined ? fallback : t === 0 ? Infinity : t;
 }
 
 /** Daily-quota exhausted for the given model. The route layer catches

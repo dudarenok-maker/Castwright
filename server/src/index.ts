@@ -117,6 +117,56 @@ const runDir = resolveRunDir(repoRoot);
    `runShutdownSequence` export without booting a real server. See the
    isMainModule guard at the bottom of the file (mirrors the same pattern
    already used in scripts/bump-version.mjs). */
+/** #3174 (G4) — the boot-time `readUserSettings()` warm-up is detached
+    (`void bootWarmUserSettings()`); `readUserSettings()` itself does NOT
+    fall through to defaults when the read rejects instead of returning
+    (missing is fine — `readJson` returns `null` for that, and the caller
+    substitutes defaults). A reject can come from `JSON.parse` on a
+    genuinely malformed file, from `readFile` itself (a locked/unreadable
+    file — e.g. an antivirus or OneDrive hold at boot), or from the legacy-
+    settings migration's `copyFile` failing; nothing on that path catches
+    any of them. Before this wrapper existed that throw escaped as a
+    process-level unhandledRejection. This only makes the failure loud and
+    contained; it does NOT add recovery (`.bak` fallback, default
+    substitution, or a boot refusal) for a malformed file — that is a
+    separate design decision tracked in #3175. Extracted into its own
+    exported function (mirroring `runShutdownSequence` above) so the
+    containment is unit-testable without running the real boot sequence,
+    since `main()` itself only runs when this module is the directly
+    invoked entry point (see the `isDirectlyInvoked` guard at the bottom of
+    this file). */
+export async function bootWarmUserSettings(): Promise<void> {
+  try {
+    await readUserSettings();
+  } catch (err) {
+    console.error(
+      '[server] user-settings.json could not be read at boot (it may be malformed, locked, or unreadable -- not auto-recovered; if it is malformed, see #3175)',
+      err,
+    );
+  }
+}
+
+/** #3174 (G4) — same containment shape as {@link bootWarmUserSettings}, for
+    the detached `void sidecarSupervisor.start()` call: `start()` →
+    `spawnOnce()` → `buildOpts()` → `readUserSettings()` can reject the same
+    way, and nothing on that direct path catches it (contrast
+    `scheduleRespawnAttempt`'s own IIFE inside sidecar-supervisor.ts, which
+    already wraps its `spawnOnce()` call). Uncaught, the supervisor never
+    starts and TTS stays permanently unavailable. Before this wrapper that
+    failure was still fully logged -- the generic FATAL unhandledRejection
+    line carries the whole error -- but nothing named the sidecar
+    supervisor as the source, and no automatic retry engages because
+    `start()` itself never completed. */
+export async function bootStartSidecarSupervisor(
+  supervisor: Pick<SidecarSupervisor, 'start'>,
+): Promise<void> {
+  try {
+    await supervisor.start();
+  } catch (err) {
+    console.error('[sidecar] supervisor failed to start', err);
+  }
+}
+
 async function main(): Promise<void> {
   ensureWorkspace();
 
@@ -131,10 +181,12 @@ async function main(): Promise<void> {
   ensureOrtMarker(resolveSidecarVenvDir(repoRoot), (m: string) => console.log(m));
 
   /* Warm the user-settings cache so sync resolvers (getResolvedSidecarUrl)
-     see real values from disk before the first request lands. Fire-and-forget:
-     a missing or malformed file falls through to defaults inside
-     readUserSettings(). */
-  void readUserSettings();
+     see real values from disk before the first request lands.
+     Fire-and-forget: a MISSING file falls through to defaults inside
+     readUserSettings(); a MALFORMED one does not (`readJson` rethrows
+     JSON.parse's failure) -- bootWarmUserSettings (#3174) is what makes
+     that failure loud and contained. See its own doc comment / #3175. */
+  void bootWarmUserSettings();
 
   /* One-shot wipe-and-fresh for change-logs written before the
      generation_run_complete rollup landed. The pre-collapse middleware wrote
@@ -343,7 +395,7 @@ async function main(): Promise<void> {
         );
       },
     });
-    void sidecarSupervisor.start();
+    void bootStartSidecarSupervisor(sidecarSupervisor);
     registerActiveSupervisor(sidecarSupervisor);
 
     /* srv-2 — start the periodic per-book state.json backup sweep (no-op when
