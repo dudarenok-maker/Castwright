@@ -2777,6 +2777,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/info/dismiss-whats-new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss the what's-new banner */
+        post: operations["dismissWhatsNew"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tour/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark the guided tour complete */
+        post: operations["completeTour"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/setup/readiness": {
         parameters: {
             query?: never;
@@ -3427,11 +3461,24 @@ export interface components {
              * @enum {string}
              */
             readonly workspaceSource: "env" | "default" | "override";
+            /**
+             * @description True when the last readUserSettings() had to fall all the way
+             *     back to in-memory defaults because neither user-settings.json
+             *     nor any `.bak.N` snapshot parsed. Computed fresh per request
+             *     (not persisted); clears the next time a read succeeds (the
+             *     server re-reads the file whenever its mtime/size changes on
+             *     disk — a hand-repair, a restore, or another Castwright
+             *     checkout writing the shared file) or a write succeeds (any of
+             *     the five settings writers). Server-computed — ignored if sent
+             *     on a PUT.
+             */
+            readonly corruptSettingsFile: boolean;
         };
         /**
          * @description Partial update payload. Read-only fields (apiKeyStatus,
-         *     workspaceRoot, workspaceSource) are ignored. Any `geminiApiKey`-
-         *     shaped field is dropped — the API key only lives in server/.env.
+         *     workspaceRoot, workspaceSource, corruptSettingsFile) are ignored.
+         *     Any `geminiApiKey`-shaped field is dropped — the API key only lives
+         *     in server/.env.
          */
         UserSettingsPatch: {
             displayName?: string;
@@ -6125,6 +6172,20 @@ export interface components {
         SetupCompleteResponse: {
             /** @description ISO-8601 timestamp just written. */
             completedAt: string;
+            /** @description Whether the user-settings file is currently corrupted and recoverable. */
+            corruptSettingsFile: boolean;
+        };
+        TourCompleteResponse: {
+            /** @description ISO-8601 timestamp just written. */
+            completedAt: string;
+            /** @description Whether the user-settings file is currently corrupted and recoverable. */
+            corruptSettingsFile: boolean;
+        };
+        DismissWhatsNewResponse: {
+            /** @description Whether the dismiss operation succeeded. */
+            ok: boolean;
+            /** @description Whether the user-settings file is currently corrupted and recoverable. */
+            corruptSettingsFile: boolean;
         };
         /**
          * @description End-to-end synth check. Returns ok:false (never 5xx) on failure so the
@@ -10992,6 +11053,46 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    dismissWhatsNew: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dismiss successful. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DismissWhatsNewResponse"];
+                };
+            };
+        };
+    };
+    completeTour: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tour completion timestamp. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TourCompleteResponse"];
+                };
             };
         };
     };

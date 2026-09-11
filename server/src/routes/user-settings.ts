@@ -23,6 +23,7 @@ import {
   getResolvedGeminiApiKey,
   getResolvedGenerationWorkers,
   getResolvedTtsModelKey,
+  isUserSettingsFileCorrupt,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
@@ -39,6 +40,10 @@ interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
      session engine from this so a fresh box with Qwen installed defaults to
      Qwen, while the stored key stays Kokoro until the user explicitly picks. */
   resolvedTtsModelKey: UserSettings['defaultTtsModelKey'];
+  /* Server-computed, not part of the persisted UserSettings shape — see
+     isUserSettingsFileCorrupt() in workspace/user-settings.ts. Recomputed
+     fresh on every response, same as apiKeyStatus/workspaceRoot/workspaceSource. */
+  corruptSettingsFile: boolean;
 }
 
 function envDerived(settings: UserSettings): UserSettingsResponse {
@@ -62,6 +67,7 @@ function envDerived(settings: UserSettings): UserSettingsResponse {
     resolvedTtsModelKey: getResolvedTtsModelKey(),
     workspaceRoot: WORKSPACE_ROOT,
     workspaceSource: WORKSPACE_SOURCE,
+    corruptSettingsFile: isUserSettingsFileCorrupt(),
   };
 }
 

@@ -18,7 +18,7 @@ import { getAppVersion } from '../app-version.js';
 import { CURRENT_STATE_SCHEMA } from '../workspace/state-migrate.js';
 import { SCHEMA_SEAMS } from '../workspace/schema-migrate.js';
 import { SYNC_MANIFEST_SCHEMA } from '../workspace/sync-manifest.js';
-import { readUserSettings, writeUpgradeMeta, getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
+import { readUserSettings, writeUpgradeMeta, getResolvedSidecarUrl, getResolvedTtsModelKey, isUserSettingsFileCorrupt } from '../workspace/user-settings.js';
 import { engineForModelKey } from '../tts/model-keys.js';
 import type { SidecarDeviceMap, SidecarDevicesState } from './sidecar-health.js';
 import {
@@ -167,5 +167,5 @@ infoRouter.get('/', async (_req: Request, res: Response) => {
 
 infoRouter.post('/dismiss-whats-new', async (_req: Request, res: Response) => {
   await writeUpgradeMeta({ showWhatsNew: false });
-  res.json({ ok: true });
+  res.json({ ok: true, corruptSettingsFile: isUserSettingsFileCorrupt() });
 });

@@ -11,6 +11,7 @@ import {
   getResolvedSetupCompletedAt,
   getResolvedOllamaModel,
   writeSetupCompletedAt,
+  isUserSettingsFileCorrupt,
 } from '../workspace/user-settings.js';
 import { selectTtsProvider } from '../tts/index.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
@@ -105,7 +106,7 @@ export const setupReadinessRouter = Router();
 setupReadinessRouter.post('/complete', async (_req: Request, res: Response) => {
   const ts = new Date().toISOString();
   await writeSetupCompletedAt(ts);
-  res.json({ completedAt: ts });
+  res.json({ completedAt: ts, corruptSettingsFile: isUserSettingsFileCorrupt() });
 });
 
 setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
