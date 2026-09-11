@@ -1535,62 +1535,6 @@ def test_try_hold_records_the_admitting_engine():
 # failure mode that defeated the Coqui-derive self-heal (#3058).
 
 
-def test_pinned_tolerance_issue_repro_overrides_hint():
-    """#3097 repro: cuda:0 24 000 total / 18 000 free, cuda:1 16 000 total /
-    7 000 free.  pinned=cuda:1 must resolve to cuda:0 because
-    7 000 < 0.75 × 18 000 = 13 500."""
-
-    async def body():
-        devices = [
-            dev(index=0, free=18000, total=24000),
-            dev(index=1, free=7000, total=16000),
-        ]
-        pc = make(devices, peak=4000)
-        async with pc.reservation(
-            "coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, pinned="cuda:1"
-        ) as adm:
-            assert adm["device"] == "cuda:0"
-        return _RAN
-
-    run_case(body())
-
-
-def test_pinned_tolerance_near_tie_honours_hint():
-    """Hinted device free headroom just above the 75 % threshold — must
-    still resolve to the hint.  cuda:0 24 000 / 18 000, cuda:1 16 000 /
-    13 600.  13 600 ≥ 0.75 × 18 000 = 13 500 → hint honored."""
-
-    async def body():
-        devices = [
-            dev(index=0, free=18000, total=24000),
-            dev(index=1, free=13600, total=16000),
-        ]
-        pc = make(devices, peak=4000)
-        async with pc.reservation(
-            "coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, pinned="cuda:1"
-        ) as adm:
-            assert adm["device"] == "cuda:1"
-        return _RAN
-
-    run_case(body())
-
-
-def test_pinned_tolerance_single_gpu_unaffected():
-    """No competing candidate: hint is the only GPU — tolerance check is
-    skipped, resolves to the hint as before."""
-
-    async def body():
-        devices = [dev(index=0, free=18000, total=24000)]
-        pc = make(devices, peak=4000)
-        async with pc.reservation(
-            "coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, pinned="cuda:0"
-        ) as adm:
-            assert adm["device"] == "cuda:0"
-        return _RAN
-
-    run_case(body())
-
-
 def test_preferred_tolerance_issue_repro_overrides_hint():
     """#3097 / #3165 repro, `preferred` (X-Device-Hint) branch: cuda:0
     24 000 total / 18 000 free, cuda:1 16 000 total / 7 000 free.
@@ -1613,14 +1557,15 @@ def test_preferred_tolerance_issue_repro_overrides_hint():
 
 
 def test_preferred_tolerance_near_tie_honours_hint():
-    """Hinted device free headroom just above the 75 % threshold — must
-    still resolve to the hint. cuda:0 24 000 / 18 000, cuda:1 16 000 /
-    13 600. 13 600 ≥ 0.75 × 18 000 = 13 500 → hint honored."""
+    """Hinted device headroom just above the 75 % threshold — must still
+    resolve to the hint. cuda:0 24 000 / 18 000, cuda:1 16 000 / 13 692.
+    After per-device reserve (768 MB each): cuda:0 17232 MB headroom,
+    cuda:1 12924 MB headroom. 12924 ≥ 0.75 × 17232 → hint honored."""
 
     async def body():
         devices = [
             dev(index=0, free=18000, total=24000),
-            dev(index=1, free=13600, total=16000),
+            dev(index=1, free=13692, total=16000),
         ]
         pc = make(devices, peak=4000)
         async with pc.reservation(

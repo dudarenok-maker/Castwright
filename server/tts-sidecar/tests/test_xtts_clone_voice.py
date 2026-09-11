@@ -1359,11 +1359,10 @@ def test_clone_voice_route_x_device_hint_overrides_best_fit_placement(
     reaches `reservation()`'s `preferred` argument (NOT `pinned`, per #3061
     review C3 — see `test_clone_voice_route_hint_is_advisory_and_falls_back_
     when_hinted_card_is_full` for the other half of that distinction), not
-    just that the call succeeds. GPU1's free headroom (14000) is kept within
-    #3097/#3165's 75%-of-winner tolerance (>= 0.75 * 18000 = 13500) so this
-    plumbing check doesn't collide with the tolerance-override edge case,
-    which `test_preferred_tolerance_issue_repro_overrides_hint` in
-    `test_placement.py` covers directly."""
+    just that the call succeeds. GPU1's free headroom (14000-768=13232) stays
+    within #3097/#3165's 75%-of-winner tolerance (>= 0.75 * (18000-768) = 12924)
+    so the hint is honored, proving the plumbing without colliding with tolerance-
+    edge cases which test_placement.py covers."""
     eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.delenv("COQUI_DEVICE", raising=False)
@@ -1448,15 +1447,9 @@ def test_clone_voice_route_engine_env_pin_still_wins_when_header_absent(
     monkeypatch, tmp_path
 ) -> None:
     """Regression: an operator-configured COQUI_DEVICE pin must keep working
-    when no header is sent — the new `device_hint` variable must never
-    silently replace `_engine_env_pin("coqui")`'s prior role at this call
-    site. GPU1 is still the better unconstrained pick (6000 free > GPU0's
-    5000), so this still proves the pin overrides best-fit — but its
-    headroom is kept within #3097's 75%-of-winner tolerance (5000 >= 0.75 *
-    6000 = 4500) so this plumbing check doesn't collide with the
-    tolerance-override edge case, which
-    `test_pinned_tolerance_issue_repro_overrides_hint` in
-    `test_placement.py` covers directly."""
+    exactly as before when no header is sent — the new `device_hint`
+    variable must never silently replace `_engine_env_pin("coqui")`'s prior
+    role at this call site."""
     eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.setenv("COQUI_DEVICE", "cuda:0")
@@ -1465,7 +1458,7 @@ def test_clone_voice_route_engine_env_pin_still_wins_when_header_absent(
         "probe",
         lambda: [
             {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 8192, "freeMb": 5000},
-            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 24000, "freeMb": 6000},
+            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 24000, "freeMb": 20000},
         ],
     )
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
@@ -1496,10 +1489,7 @@ def test_clone_voice_route_invalid_hint_falls_back_to_engine_env_pin(
     """An unparsable X-Device-Hint must degrade exactly like an invalid
     registry device value — logged and ignored, never fatal, falling back to
     whatever this call would have used without a hint (here, the operator's
-    COQUI_DEVICE pin). Same #3097-tolerance-safe fixture as
-    `test_clone_voice_route_engine_env_pin_still_wins_when_header_absent`
-    (see its docstring) — GPU1's headroom is kept within tolerance so this
-    stays a plumbing check, not a tolerance-edge check."""
+    COQUI_DEVICE pin)."""
     eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.setenv("COQUI_DEVICE", "cuda:0")
@@ -1508,7 +1498,7 @@ def test_clone_voice_route_invalid_hint_falls_back_to_engine_env_pin(
         "probe",
         lambda: [
             {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 8192, "freeMb": 5000},
-            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 24000, "freeMb": 6000},
+            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 24000, "freeMb": 20000},
         ],
     )
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []

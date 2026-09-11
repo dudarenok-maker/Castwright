@@ -904,17 +904,15 @@ export interface ResolveDesignedVoiceDeps {
       placement falls through to the free card unconstrained placement
       would have picked anyway — cheap, as designed.
     - `cuda:1` may simply be the busier card on this box, or the operator's
-      own `tts.qwen.device` pin. #3097 (implemented by `b401d41f`) closed
-      this gap: `_resolve_admission`'s `preferred` handling now weighs the
-      hinted device's free headroom against the unconstrained winner's
-      before honoring it — the hint wins only when its free headroom is at
-      least 75% of the winner's; otherwise `preferred` is dropped and
+      own `tts.qwen.device` pin. #3097 (decided in #3107, implemented via
+      #3165) closed this gap: `_resolve_admission`'s `preferred` handling now
+      weighs the hinted device's free headroom against the unconstrained
+      winner's before honoring it — the hint wins only when its free headroom
+      is at least 75% of the winner's; otherwise `preferred` is dropped and
       placement falls through to the ordinary unconstrained candidates. A
       `cuda:1` that merely fits no longer wins outright while `cuda:0` sits
-      nearly empty — only a `cuda:1` that is competitive with the
-      alternative does. This is the same tolerance check `_resolve_admission`
-      already applies to `pinned` (#3165), adapted for `preferred`'s
-      fall-through contract instead of `pinned`'s hard restriction.
+      nearly empty — only a `cuda:1` that is competitive with the alternative
+      does.
 
     Under a hard pin (not what this is) a wrong value costs a ~60 s
     capacity-retry stall and a silent stock-catalogue-voice substitution,
