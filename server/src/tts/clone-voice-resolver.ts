@@ -904,22 +904,24 @@ export interface ResolveDesignedVoiceDeps {
       placement falls through to the free card unconstrained placement
       would have picked anyway — cheap, as designed.
     - `cuda:1` may simply be the busier card on this box, or the operator's
-      own `tts.qwen.device` pin. Unlike the case above, this does NOT
-      degrade gracefully: `_resolve_admission`'s hinted-device try_hold only
-      checks whether `cuda:1` itself has room, never whether some other
-      card is materially freer, so a `cuda:1` that merely FITS wins
-      outright — even while `cuda:0` sits nearly empty. A hint can
-      therefore park this derive on the exact card Qwen is generating on
-      instead of the free one, silently, with no error and no retry: the
-      one contention outcome `#3058` exists to avoid. Whether "advisory"
-      should instead mean "wins only when competitive with the
-      alternative" is an open design question — see #3097.
+      own `tts.qwen.device` pin. #3097 (implemented by `b401d41f`) closed
+      this gap: `_resolve_admission`'s `preferred` handling now weighs the
+      hinted device's free headroom against the unconstrained winner's
+      before honoring it — the hint wins only when its free headroom is at
+      least 75% of the winner's; otherwise `preferred` is dropped and
+      placement falls through to the ordinary unconstrained candidates. A
+      `cuda:1` that merely fits no longer wins outright while `cuda:0` sits
+      nearly empty — only a `cuda:1` that is competitive with the
+      alternative does. This is the same tolerance check `_resolve_admission`
+      already applies to `pinned` (#3165), adapted for `preferred`'s
+      fall-through contract instead of `pinned`'s hard restriction.
 
     Under a hard pin (not what this is) a wrong value costs a ~60 s
     capacity-retry stall and a silent stock-catalogue-voice substitution,
     which is strictly worse than either case above — which is why the
     sidecar must keep treating this as a preference rather than a pin. But
-    "preference" here means "wins if it fits," not "wins only when nothing
+    "preference" here means "wins if it fits AND is within 75% of the best
+    alternative," not "wins if it fits" and not "wins only when nothing
     better exists."
 
     #3061 review C1 — `ensureGpuDeviceListWarm()` is not optional here. The
