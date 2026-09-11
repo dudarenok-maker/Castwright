@@ -2836,29 +2836,40 @@ async function persistRunningSnapshot(job: AnalysisJob, force: boolean): Promise
      cast.json are the real source of truth, so on an unresolvable dir the
      snapshot is simply dropped and the run proceeds to the terminal
      persist, which halts loudly (Task 6). */
-  await withVerifiedBookDir(
-    { manuscriptId: job.manuscriptId, candidateBookDir: candidate, mode: 'drop' },
-    async (bookDir) => {
-      try {
-        await writeAnalysisState(bookDir, {
-          manuscriptId: job.manuscriptId,
-          phaseId: phase.phaseId,
-          phaseLabel: phase.label,
-          phaseProgress: phase.progress,
-          state: 'running',
-          engine: job.engine,
-          kind: job.kind,
-          subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
-          lastTickAt: now,
-        });
-      } catch (err) {
-        /* Non-fatal — the on-disk file only powers cold-boot pill
-           rehydration. The analyzer cache + cast.json are the real
-           source of truth. Log and continue. */
-        console.warn('[analysis-state] running snapshot write failed', err);
-      }
-    },
-  );
+  try {
+    await withVerifiedBookDir(
+      { manuscriptId: job.manuscriptId, candidateBookDir: candidate, mode: 'drop' },
+      async (bookDir) => {
+        try {
+          await writeAnalysisState(bookDir, {
+            manuscriptId: job.manuscriptId,
+            phaseId: phase.phaseId,
+            phaseLabel: phase.label,
+            phaseProgress: phase.progress,
+            state: 'running',
+            engine: job.engine,
+            kind: job.kind,
+            subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
+            lastTickAt: now,
+          });
+        } catch (err) {
+          /* Non-fatal — the on-disk file only powers cold-boot pill
+             rehydration. The analyzer cache + cast.json are the real
+             source of truth. Log and continue. */
+          console.warn('[analysis-state] running snapshot write failed', err);
+        }
+      },
+    );
+  } catch (err) {
+    /* #3174 — resolveVerifiedBookDir's own slow-path re-hydrate (inside
+       withVerifiedBookDir) can throw BEFORE the callback above ever runs
+       (e.g. an fs failure inside ensureWorkspace's mkdirSync). This
+       function is called detached (`void persistRunningSnapshot(...)`), so
+       an uncaught rejection here would otherwise reach the process only as
+       an unhandledRejection. Non-fatal for the same reason as the
+       write-failure catch above — log and continue. */
+    console.warn('[analysis-state] running snapshot resolve failed', err);
+  }
 }
 
 async function persistTerminalSnapshot(
@@ -2875,29 +2886,39 @@ async function persistTerminalSnapshot(
      dead folder (the bug). A `halted` snapshot therefore lands ONLY when a
      valid book dir exists; the pathless case is surfaced by the persist-block
      STALE_BOOK_DIR log + the terminal halt event (V7·1). */
-  await withVerifiedBookDir(
-    { manuscriptId: job.manuscriptId, candidateBookDir: candidate, mode: 'drop' },
-    async (bookDir) => {
-      try {
-        await writeAnalysisState(bookDir, {
-          manuscriptId: job.manuscriptId,
-          phaseId: phase?.phaseId ?? 0,
-          phaseLabel: phase?.label ?? PHASES[0].label,
-          phaseProgress: phase?.progress ?? 0,
-          state,
-          engine: job.engine,
-          kind: job.kind,
-          subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
-          haltCode: state === 'halted' ? finalEv?.code : undefined,
-          haltReason: state === 'halted' ? finalEv?.message : undefined,
-          lastTickAt: Date.now(),
-        });
-        job.lastDiskWriteAt = Date.now();
-      } catch (err) {
-        console.warn('[analysis-state] terminal snapshot write failed', err);
-      }
-    },
-  );
+  try {
+    await withVerifiedBookDir(
+      { manuscriptId: job.manuscriptId, candidateBookDir: candidate, mode: 'drop' },
+      async (bookDir) => {
+        try {
+          await writeAnalysisState(bookDir, {
+            manuscriptId: job.manuscriptId,
+            phaseId: phase?.phaseId ?? 0,
+            phaseLabel: phase?.label ?? PHASES[0].label,
+            phaseProgress: phase?.progress ?? 0,
+            state,
+            engine: job.engine,
+            kind: job.kind,
+            subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
+            haltCode: state === 'halted' ? finalEv?.code : undefined,
+            haltReason: state === 'halted' ? finalEv?.message : undefined,
+            lastTickAt: Date.now(),
+          });
+          job.lastDiskWriteAt = Date.now();
+        } catch (err) {
+          console.warn('[analysis-state] terminal snapshot write failed', err);
+        }
+      },
+    );
+  } catch (err) {
+    /* #3174 — same slow-path-resolve gap as persistRunningSnapshot above:
+       withVerifiedBookDir's re-hydrate can throw before the callback runs.
+       This function is called detached at every call site (`void
+       persistTerminalSnapshot(...)`) except the awaited /pause route,
+       which doesn't rely on a rejection either — it just proceeds either
+       way. Non-fatal — log and continue. */
+    console.warn('[analysis-state] terminal snapshot resolve failed', err);
+  }
 }
 
 function broadcastToJob(job: AnalysisJob, payload: unknown): void {
@@ -3122,12 +3143,22 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
         const dir = liveBookDir(job);
         if (dir) {
           void (async () => {
-            const verified = await tryResolveVerifiedBookDir({
-              manuscriptId: job.manuscriptId,
-              candidateBookDir: dir,
-              identityBearing: false,
-            });
-            if (verified) await deleteAnalysisState(verified);
+            try {
+              const verified = await tryResolveVerifiedBookDir({
+                manuscriptId: job.manuscriptId,
+                candidateBookDir: dir,
+                identityBearing: false,
+              });
+              if (verified) await deleteAnalysisState(verified);
+            } catch (err) {
+              /* #3174 — resolveVerifiedBookDir's slow-path re-hydrate can
+                 throw (e.g. an fs failure inside ensureWorkspace's
+                 mkdirSync) before this IIFE's own delete ever runs, and
+                 this call is detached. Non-fatal: worst case a finished
+                 book's stale analysis-state.json lingers and is offered
+                 as resumable (see the comment above) — log and continue. */
+              console.warn('[analysis-state] stale snapshot delete failed', err);
+            }
           })();
         }
       }
