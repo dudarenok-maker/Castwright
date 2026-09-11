@@ -34,6 +34,12 @@ import * as path from 'path';
 const repoRoot = path.resolve(__dirname, '../../../');
 const formPath = path.join(repoRoot, 'src', 'components', 'model-settings-form.tsx');
 
+/* Every file is read through this so a CRLF checkout (the Windows CI runner,
+   or any clone with autocrlf on) scans identically to an LF one: every
+   line-shaped pattern below — the paragraph break, the wrapped-path
+   continuation, the RELEASE_NOTES heading probe — is written against '\n'. */
+const readText = (p: string) => fs.readFileSync(p, 'utf-8').replace(/\r\n?/g, '\n');
+
 const decodeEntities = (s: string) => s.replace(/&amp;/g, '&');
 
 /* Read the labels MODEL_SETTINGS_SECTIONS is composed of, from the source of
@@ -46,7 +52,7 @@ const decodeEntities = (s: string) => s.replace(/&amp;/g, '&');
    a const with a literal `label:`. Every step throws rather than degrading to
    a shorter list, so a refactor of the form's shape fails this test loudly. */
 export function readModelSettingsSectionLabels(): string[] {
-  const src = fs.readFileSync(formPath, 'utf-8');
+  const src = readText(formPath);
   const exportBody = src.match(/export const MODEL_SETTINGS_SECTIONS\b[^=]*=\s*\[([\s\S]*?)\n\];/);
   if (!exportBody) {
     throw new Error(`MODEL_SETTINGS_SECTIONS export not found in ${formPath}`);
@@ -74,7 +80,7 @@ export function readModelSettingsSectionLabels(): string[] {
    test below asserts the exact resolved list, so a label that moves, renames
    or stops resolving fails loudly instead of silently narrowing the scan. */
 export function readModelSettingsFieldLabels(): string[] {
-  const src = fs.readFileSync(formPath, 'utf-8');
+  const src = readText(formPath);
   const strip = (s: string) => decodeEntities(s).replace(/\s*\([^)]*\)\s*$/, '').trim();
   const labels: string[] = [];
   for (const m of src.matchAll(/(?<![\w-])label="([^"]+)"/g)) labels.push(strip(m[1]));
@@ -84,7 +90,7 @@ export function readModelSettingsFieldLabels(): string[] {
   for (const [, names, file] of siblingImports) {
     const siblingPath = path.join(path.dirname(formPath), `${file}.tsx`);
     if (!fs.existsSync(siblingPath)) continue;
-    const siblingSrc = fs.readFileSync(siblingPath, 'utf-8');
+    const siblingSrc = readText(siblingPath);
     for (const raw of names.split(',')) {
       const name = raw.trim().replace(/^type\s+/, '');
       if (!name || !new RegExp(`<${name}\\b`).test(src)) continue; // imported but not rendered
@@ -105,14 +111,14 @@ export function readModelSettingsFieldLabels(): string[] {
    STILL lives in Account, and for what lives under Admin instead. */
 export function readViewSectionLabels(viewFile: string): string[] {
   const viewPath = path.join(repoRoot, 'src', 'views', viewFile);
-  const src = fs.readFileSync(viewPath, 'utf-8');
+  const src = readText(viewPath);
   const nav = [...src.matchAll(/\{\s*id:\s*'[\w-]+',\s*label:\s*'([^']+)'/g)].map((m) => m[1]);
   const headings = (text: string) =>
     [...text.matchAll(/<h[23]\b[^>]*>([^<{]+)<\/h[23]>/g)].map((m) => decodeEntities(m[1]).trim());
   const labels = [...nav, ...headings(src)];
   for (const m of src.matchAll(/from\s*'\.\.\/components\/([\w/-]+)'/g)) {
     const p = path.join(repoRoot, 'src', 'components', `${m[1]}.tsx`);
-    if (fs.existsSync(p)) labels.push(...headings(fs.readFileSync(p, 'utf-8')));
+    if (fs.existsSync(p)) labels.push(...headings(readText(p)));
   }
   if (labels.length === 0) throw new Error(`no section labels resolved from ${viewPath}`);
   return [...new Set(labels)];
@@ -241,12 +247,30 @@ export function findStaleAccountRefs(text: string, names: GuardNames): StaleRef[
   return hits;
 }
 
+/* Top-level RELEASE_NOTES.md: everything ABOVE the heading of the current
+   released version is the in-progress section — live text that ships next
+   cut. Everything from that heading down is history. Throws when the heading
+   is absent so a renamed heading fails the guard instead of emptying it. */
+export function unreleasedReleaseNotes(content: string, currentVersion: string): string {
+  const text = content.replace(/\r\n?/g, '\n');
+  const heading = `# Castwright ${currentVersion}\n`;
+  if (text.startsWith(heading)) return '';
+  const cutoff = text.indexOf(`\n${heading}`);
+  if (cutoff === -1) {
+    throw new Error(
+      `RELEASE_NOTES.md has no "# Castwright ${currentVersion}" heading (package.json version)`,
+    );
+  }
+  return text.slice(0, cutoff + 1);
+}
+
 /* Scan a whole file so a name before, after, or several lines away from the
    word is seen in one window; attribute each hit to the line it starts on. */
 export function findStaleAccountRefLines(
   content: string,
   names: GuardNames,
 ): { line: number; name: string; text: string }[] {
+  content = content.replace(/\r\n?/g, '\n');
   const lines = content.split('\n');
   const starts: number[] = [0];
   for (const l of lines) starts.push(starts[starts.length - 1] + l.length + 1);
@@ -390,6 +414,22 @@ describe('Gemini API key path guard', () => {
     }
   });
 
+  it('scans a CRLF checkout identically to an LF one (the Windows CI runner)', () => {
+    /* The first CI run of this guard threw `RELEASE_NOTES.md has no
+       "# Castwright x.y.z" heading` on ubuntu→windows because the heading
+       probe was written against '\n' and the runner's checkout is CRLF. */
+    const lf = '# Castwright 1.15.0\n\n- stale: Account → Models → Install.\n\n# Castwright 1.14.0\n\n- old\n';
+    const crlf = lf.replace(/\n/g, '\r\n');
+    expect(unreleasedReleaseNotes(crlf, '1.14.0')).toBe(unreleasedReleaseNotes(lf, '1.14.0'));
+    expect(unreleasedReleaseNotes(crlf, '1.14.0')).not.toContain('- old');
+    expect(() => unreleasedReleaseNotes(crlf, '9.9.9')).toThrow(/no "# Castwright 9.9.9" heading/);
+
+    const wrapped = 'set from Account → Server\r\nConfiguration (or in `server/.env`)';
+    expect(findStaleAccountRefLines(wrapped, names).map((h) => h.line)).toEqual([1]);
+    const paragraphs = '> voice engine, models, and theme.\r\n\r\n**Account** (`#/account`) is reached from the avatar.';
+    expect(findStaleAccountRefLines(paragraphs, names)).toHaveLength(0);
+  });
+
   it('scans the live tree for stale Account paths to settings moved to Model Manager', () => {
     const currentVersion: string = JSON.parse(
       fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf-8'),
@@ -446,23 +486,13 @@ describe('Gemini API key path guard', () => {
 
         let content: string;
         try {
-          content = fs.readFileSync(fullPath, 'utf-8');
+          content = readText(fullPath);
         } catch {
           continue; // unreadable file
         }
 
-        /* Top-level RELEASE_NOTES.md: everything ABOVE the heading of the
-           current released version is the in-progress section — live text
-           that ships next cut. Everything from that heading down is history. */
         if (fullPath === path.join(repoRoot, 'RELEASE_NOTES.md')) {
-          const cutoff = content.indexOf(`\n# Castwright ${currentVersion}\n`);
-          const atTop = content.startsWith(`# Castwright ${currentVersion}\n`);
-          if (cutoff === -1 && !atTop) {
-            throw new Error(
-              `RELEASE_NOTES.md has no "# Castwright ${currentVersion}" heading (package.json version)`,
-            );
-          }
-          content = atTop ? '' : content.slice(0, cutoff + 1);
+          content = unreleasedReleaseNotes(content, currentVersion);
         }
 
         for (const hit of findStaleAccountRefLines(content, names)) {
