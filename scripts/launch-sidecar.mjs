@@ -2,7 +2,7 @@
 // Cross-platform `npm run tts:sidecar`: Windows → powershell start.ps1,
 // POSIX → bash start.sh. The pure `sidecarCommand` is unit-tested; the CLI
 // tail spawns it with inherited stdio so it behaves like the old npm script.
-import { spawn } from 'node:child_process';
+import { spawn as realSpawn } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
@@ -27,13 +27,13 @@ export function sidecarCommand(platform, repoRoot) {
 const RESTART43_STREAK_WINDOW_MS = 600_000; // 10 min
 const RESTART43_STREAK_TRIP_COUNT = 3;
 
-export async function launchSidecarWithRestart(platform, repoRoot, spawnFn = spawn) {
+export async function launchSidecarWithRestart(platform, repoRoot, spawn = realSpawn) {
   let restart43Timestamps = [];
 
   const launch = () => {
     return new Promise((resolve) => {
       const { file, args } = sidecarCommand(platform, repoRoot);
-      const child = spawnFn(file, args, { stdio: 'inherit', windowsHide: true });
+      const child = spawn(file, args, { stdio: 'inherit', windowsHide: true });
 
       child.on('exit', (code) => {
         if (code === 43) {

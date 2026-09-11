@@ -39,6 +39,6 @@ test('sidecar restart: launchSidecarWithRestart is exported for testing', () => 
 test('sidecar restart: function signature supports custom spawn injection', () => {
   // Verify the function accepts a custom spawn function parameter
   const fn = launchSidecarWithRestart.toString();
-  assert.ok(fn.includes('spawnFn'), 'should accept spawnFn parameter');
-  assert.ok(fn.includes('spawnFn('), 'should call the custom spawn function');
+  assert.ok(fn.includes('spawn = realSpawn'), 'should accept spawn parameter with realSpawn default');
+  assert.ok(fn.includes('spawn('), 'should call the spawn function');
 });
