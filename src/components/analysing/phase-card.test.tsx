@@ -293,6 +293,81 @@ describe('PhaseCard per-phase active/done overrides (pipelined phases)', () => {
   });
 });
 
+describe('PhaseCard paused/halted rendering (#3172 layer 3/3)', () => {
+  /* Paused/halted are run-level states (a pause/halt applies to the whole
+     analysis, not one phase) surfaced per-card via isPhasePaused/isPhaseHalted,
+     mirroring how isPhaseActive/isPhaseDone are already threaded from the
+     parent's derivePhaseState result. */
+  it('renders IconClock in a neutral badge, no spinner, for a paused phase', () => {
+    const { container } = renderCard({ isPhasePaused: true, isPhaseActive: false });
+    const badge = container.querySelector('span.bg-ink\\/6.rounded-full.w-7');
+    expect(badge).not.toBeNull();
+    expect(badge!.querySelector('svg')).not.toBeNull();
+    // No spinner badge (peach/magenta) and no emerald done badge alongside it.
+    expect(container.querySelector('span.bg-peach\\/20')).toBeNull();
+    expect(container.querySelector('span.bg-emerald-100')).toBeNull();
+    // No spin animation on the paused icon.
+    expect(badge!.querySelector('svg')!.className.baseVal ?? '').not.toMatch(/animate-spin/);
+  });
+
+  it('renders IconWarning in a rose badge, no spinner, for a halted phase', () => {
+    const { container } = renderCard({ isPhaseHalted: true, isPhaseActive: false });
+    const badge = container.querySelector('span.bg-rose-100.rounded-full.w-7');
+    expect(badge).not.toBeNull();
+    expect(badge!.querySelector('svg')).not.toBeNull();
+    expect(container.querySelector('span.bg-peach\\/20')).toBeNull();
+    expect(container.querySelector('span.bg-emerald-100')).toBeNull();
+  });
+
+  it('freezes the progress bar at phaseProgress without the log-bridging text when paused', () => {
+    renderCard({
+      isPhasePaused: true,
+      isPhaseActive: false,
+      phaseProgress: 0.42,
+      phaseLogs: [],
+      phase: { id: 0, label: 'Detecting characters', detail: 'x', duration: 1000 },
+      analysisStarted: true,
+      conn: 'connecting',
+    });
+    const bar = document.querySelector('.bg-gradient-progress') as HTMLElement | null;
+    expect(bar).not.toBeNull();
+    expect(bar!.style.width).toBe('42%');
+    expect(screen.queryByText(/Reading the manuscript/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Reconnecting to the running analysis/)).not.toBeInTheDocument();
+  });
+
+  it('freezes the progress bar at phaseProgress without the log-bridging text when halted', () => {
+    renderCard({
+      isPhaseHalted: true,
+      isPhaseActive: false,
+      phaseProgress: 0.77,
+      isResuming: true,
+      live: null,
+    });
+    const bar = document.querySelector('.bg-gradient-progress') as HTMLElement | null;
+    expect(bar).not.toBeNull();
+    expect(bar!.style.width).toBe('77%');
+    expect(screen.queryByText(/Reconnecting to the running analysis/)).not.toBeInTheDocument();
+  });
+
+  it('passes chipState "paused" through to PhaseModelChip', () => {
+    renderCard({ isPhasePaused: true, isPhaseActive: false });
+    expect(screen.getByTestId('phase-model-chip-1')).toHaveAttribute('data-phase-state', 'paused');
+  });
+
+  it('passes chipState "halted" through to PhaseModelChip', () => {
+    renderCard({ isPhaseHalted: true, isPhaseActive: false });
+    expect(screen.getByTestId('phase-model-chip-1')).toHaveAttribute('data-phase-state', 'halted');
+  });
+
+  it('done still wins over paused/halted for chipState and the icon badge', () => {
+    renderCard({ isPhaseDone: true, isPhasePaused: true, isPhaseActive: false });
+    expect(screen.getByTestId('phase-model-chip-1')).toHaveAttribute('data-phase-state', 'done');
+    expect(document.querySelector('.bg-emerald-100')).not.toBeNull();
+    expect(document.querySelector('.bg-ink\\/6.rounded-full.w-7')).toBeNull();
+  });
+});
+
 describe('PhaseCard layout', () => {
   /* The detail copy must span the full card width rather than the narrow
      column beneath the label. The model chip + swap dropdown share the

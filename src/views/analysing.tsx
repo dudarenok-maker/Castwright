@@ -1438,6 +1438,7 @@ export function AnalysingView({
               progressByPhase,
               liveByPhase,
               maxPhase: phase,
+              runState: activeStreamSnapshot?.state ?? 'running',
             });
             return (
               <PhaseCard
@@ -1446,6 +1447,8 @@ export function AnalysingView({
                 activePhaseId={phase}
                 isPhaseActive={phaseState === 'active'}
                 isPhaseDone={phaseState === 'done'}
+                isPhasePaused={phaseState === 'paused'}
+                isPhaseHalted={phaseState === 'halted'}
                 phaseProgress={progressByPhase[p.id] ?? 0}
                 phaseLogs={logs[p.id] ?? []}
                 live={liveByPhase[p.id] ?? null}
