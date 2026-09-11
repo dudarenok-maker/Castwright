@@ -116,7 +116,7 @@ def test_startup_preload_kokoro_uses_guarded_path(monkeypatch):
     """B1 fix: Verify that startup preload of Kokoro (when PRELOAD_KOKORO=1)
     routes through _kokoro_ensure_loaded_guarded and is pinned to that call
     site. This test fails if someone removes ONLY the guard from the startup
-    preload path (line 10260) while leaving the /load path's guard intact,
+    preload path (line 10281) while leaving the /load path's guard intact,
     catching a partial revert of the fix."""
     # Capture calls to verify the guard path was used
     ensure_loaded_guarded_calls: list[tuple[str, Optional[str]]] = []
@@ -146,8 +146,8 @@ def test_startup_preload_kokoro_uses_guarded_path(monkeypatch):
 def load_client_with_admission(monkeypatch):
     """Fixture for testing the admission-ON code path (SEG_CAPACITY_ADMISSION=1).
 
-    This exercises the PRODUCTION-DEFAULT path that goes through line ~11306
-    in main.py, as opposed to the admission-OFF path (line ~11309) tested by
+    This exercises the PRODUCTION-DEFAULT path that goes through line ~11320
+    in main.py, as opposed to the admission-OFF path (line ~11323) tested by
     the main `load_client` fixture."""
     monkeypatch.setenv("PRELOAD_KOKORO", "0")
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
@@ -178,11 +178,11 @@ def test_load_kokoro_admission_on_blocks_while_design_active(load_client_with_ad
     """B8 fix: Verify that /load {"engine":"kokoro"} blocks during an active
     VoiceDesign when capacity admission is ENABLED (SEG_CAPACITY_ADMISSION=1).
 
-    This is the PRODUCTION-DEFAULT code path (~main.py:11306), which the
-    original admission-OFF test (SEG_CAPACITY_ADMISSION=0, ~main.py:11309) does
+    This is the PRODUCTION-DEFAULT code path (~main.py:11320), which the
+    original admission-OFF test (SEG_CAPACITY_ADMISSION=0, ~main.py:11323) does
     NOT exercise. Pre-fix, this production-default path would bypass the
     arbiter gate entirely. The test mutation-verifies this: if you revert
-    line 11306's `_kokoro_ensure_loaded_guarded` call back to a raw
+    line 11320's `_kokoro_ensure_loaded_guarded` call back to a raw
     `kokoro._ensure_loaded(...)`, this test must fail (the load will complete
     immediately instead of blocking)."""
     design_holding = threading.Event()
