@@ -11,8 +11,10 @@
    in-flight server job after a reload) run here.
 
    Re-entrancy: one open `handle` at a time (a single in-memory server job per
-   book is the contract). A second start while one runs is ignored — the Cast
-   view also disables the button, so this is belt-and-braces.
+   book is the contract). A second start while one runs is dropped and surfaces
+   an error toast ("A design job is already running…") rather than starting a
+   second stream — the Cast view also disables the button, so this is
+   belt-and-braces.
 
    Terminal summary: on `idle` the slice flips to `state:'done'` (the pill shows
    "Designed N · M failed · K skipped" briefly), a summary toast fires, and a

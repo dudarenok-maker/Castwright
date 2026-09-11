@@ -212,17 +212,6 @@ describe('castDesignMiddleware', () => {
     expect(message).toContain('no gemini key');
   });
 
-  it('re-entrancy: a second designAllRequested while one runs is ignored', () => {
-    const store = makeStore();
-    store.dispatch(
-      castDesignActions.designAllRequested({ bookId: 'b1', characterIds: ['c1'], modelKey: 'k' }),
-    );
-    store.dispatch(
-      castDesignActions.designAllRequested({ bookId: 'b1', characterIds: ['c1'], modelKey: 'k' }),
-    );
-    expect(startCalls).toHaveLength(1);
-  });
-
   it('skipped: charSkipped bumps skipped, surfaced in the summary', () => {
     const store = makeStore();
     store.dispatch(
@@ -575,9 +564,14 @@ describe('castDesignMiddleware', () => {
     // No second API call should have been made.
     expect(singleStartCalls).toHaveLength(0);
 
-    // An error toast should have been dispatched.
-    const toastActions = recorded.filter((a) => a.type === 'notifications/pushToast');
-    expect(toastActions.length).toBeGreaterThan(0);
+    // An error toast naming the busy state should have been dispatched.
+    const toastActions = recorded.filter(
+      (a): a is { type: string; payload: { kind: string; message: string } } =>
+        a.type === 'notifications/pushToast',
+    );
+    expect(toastActions).toHaveLength(1);
+    expect(toastActions[0].payload.kind).toBe('error');
+    expect(toastActions[0].payload.message).toMatch(/already running/);
   });
 
   it('dispatches an error toast when a bulk design request arrives while another job is running', () => {
@@ -611,8 +605,13 @@ describe('castDesignMiddleware', () => {
     // Only one API call should have been made.
     expect(startCalls).toHaveLength(1);
 
-    // An error toast should have been dispatched.
-    const toastActions = recorded.filter((a) => a.type === 'notifications/pushToast');
-    expect(toastActions.length).toBeGreaterThan(0);
+    // An error toast naming the busy state should have been dispatched.
+    const toastActions = recorded.filter(
+      (a): a is { type: string; payload: { kind: string; message: string } } =>
+        a.type === 'notifications/pushToast',
+    );
+    expect(toastActions).toHaveLength(1);
+    expect(toastActions[0].payload.kind).toBe('error');
+    expect(toastActions[0].payload.message).toMatch(/already running/);
   });
 });
