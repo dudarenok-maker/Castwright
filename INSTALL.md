@@ -264,18 +264,18 @@ steps above). All knobs have safe defaults — set only what you need.
 
 The install bundle ships Kokoro weights for TTS only — the analyzer needs either a local Ollama daemon or a Gemini API key. The default analyzer engine is Local Ollama (set in Admin → Model Manager); if no Ollama daemon is reachable, the analyzer falls back to Gemini when a Gemini API key is set and Cloud fallback is on.
 
-**Option A — Ollama (private, fully on-device).** The Account → Models card in the running app installs Ollama and pulls models without leaving the UI:
+**Option A — Ollama (private, fully on-device).** The Admin → Model Manager view in the running app installs Ollama and pulls models without leaving the UI:
 
-1. Start the app (`npm run start:prod`), open **Account → Models**.
+1. Start the app (`npm run start:prod`), open **Admin → Model Manager**.
 2. Click **Install Ollama** (platform-aware bootstrap; Windows / macOS / Linux all covered).
 3. Click **Pull model** and pick e.g. `qwen3.5:4b` (~2.5 GB).
-4. **Account → Defaults for new books → Analysis model** → pick the pulled model. Save.
+4. **Admin → Model Manager → Defaults for new books → Analysis model** → pick the pulled model. Save.
 
-Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3.5:4b`, then set the model in the Account tab. On macOS, also run `brew services start ollama` so the daemon starts on login and survives reboots (registers a launchd login item).
+Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3.5:4b`, then set the model in the Model Manager. On macOS, also run `brew services start ollama` so the daemon starts on login and survives reboots (registers a launchd login item).
 
-**Option B — Gemini (cloud, free tier).** Get a key from <https://aistudio.google.com>, paste it into **Admin → Model Manager → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Defaults for new books → Analysis model**. Save. The key persists to your per-user settings file `~/.castwright/user-settings.json` (plaintext, same trust model as `server/.env`).
+**Option B — Gemini (cloud, free tier).** Get a key from <https://aistudio.google.com>, paste it into **Admin → Model Manager → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Admin → Model Manager → Defaults for new books → Analysis model**. Save. The key persists to your per-user settings file `~/.castwright/user-settings.json` (plaintext, same trust model as `server/.env`).
 
-**Option C — Pipelined two-model split.** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Account → Defaults for new books → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`.
+**Option C — Pipelined two-model split.** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Admin → Model Manager → Two-model analyzer split (advanced) → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`.
 
 ## Voice engines: standard vs optional
 
@@ -313,7 +313,7 @@ node server/tts-sidecar/scripts/install-qwen3.mjs --flash-attn
 
 The pinned prebuilt wheel is `cp311 + torch-2.6 + cu124`-only, so the script **auto-skips on the current Python 3.12 (cp312) stack** (and on macOS / Linux) — a wheel that can't load doesn't get installed, and Qwen runs on SDPA. When a compatible wheel is installed, activate it via `QWEN_ATTN_IMPL=flash_attention_2` in `server/.env`.
 
-**Switch a book to Qwen3.** Start the app and go to **Account → Defaults for new books → Voice engine** → "Local (free)" → **Voice model** → pick the Qwen3 entry. Save. For an existing book opened under Kokoro / Coqui, use the cast view's "Rebaseline the series" modal to design Qwen voices for the principal cast before regenerating.
+**Switch a book to Qwen3.** Start the app and go to **Admin → Model Manager → Defaults for new books → Voice engine** → "Local (free)" → **Voice model** → pick the Qwen3 entry. Save. For an existing book opened under Kokoro / Coqui, use the cast view's "Rebaseline the series" modal to design Qwen voices for the principal cast before regenerating.
 
 **Disk + VRAM.** Qwen Base ~1 GB on disk, Base + VoiceDesign together ~2.5 GB. At runtime Base resides at ~2 GB VRAM during synth and VoiceDesign loads transiently during a design (~4–5 GB on top of Base, freed on idle or at the next synth). The GPU-arbitration semaphore (`GPU_VRAM_BUDGET` in `server/.env`, default 8 GiB) keeps an 8 GB GPU from double-booking against the analyzer.
 
@@ -323,14 +323,14 @@ Coqui XTTS v2 is not installed by default. To add it:
 
 1. Start the app, open **Admin → Model Manager → Optional add-ons**.
 2. Click **Install** on the Coqui card. The installer runs `pip install coqui-tts -c base.txt` (respects the shared `transformers<5.0` pin) and fetches the model weights (~2 GB) in the background.
-3. Once complete, go to **Account → Defaults for new books → Voice model** → pick "Coqui XTTS v2". Save.
+3. Once complete, go to **Admin → Model Manager → Defaults for new books → Voice model** → pick "Coqui XTTS v2". Save.
 
 ## Using Gemini for TTS (cloud, free tier)
 
 The same Gemini key configured for the analyzer (see Option B above) doubles as the TTS provider when picked.
 
 1. Get an API key from <https://aistudio.google.com> (Google account required), saved via **Admin → Model Manager → Server configuration → Gemini API key**.
-2. **Account → Defaults for new books → Voice engine** → "Gemini (cloud)".
+2. **Admin → Model Manager → Defaults for new books → Voice engine** → "Gemini (cloud)".
 3. **Voice model** → pick `gemini-3.1-flash-preview-tts` or `gemini-2.5-flash-preview-tts`. Save.
 
 The key is stored plaintext in `~/.castwright/user-settings.json` (per-user, same trust model as `server/.env` for a single-user workspace). The env var `GEMINI_API_KEY` in `server/.env` still wins if both are set — useful for CI / scripted setups.

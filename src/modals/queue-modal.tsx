@@ -754,7 +754,7 @@ function BookGroup({
                     className="mt-1 text-[10px] leading-tight text-ink/45"
                     data-testid={`queue-entry-${entry.id}-dual-model-warning`}
                   >
-                    Mixes voice engines. Turn on "Keep both voice engines loaded" in Account settings to
+                    Mixes voice engines. Turn on "Keep both voice engines loaded" in Admin → Model Manager → Voice engine to
                     avoid engine-swap latency.
                   </p>
                 )}

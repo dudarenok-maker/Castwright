@@ -46,13 +46,14 @@
    between the two modules (see that function's own comment) — a real,
    override-honouring read site in a different shape, not a gap.
 
-   No unread knobs: all registered knobs are either read by some live code
-   path (tracked in `src/config/registry.ts` by design), or moved to
-   `KNOWN_UNREAD` when they are retired. `KNOWN_UNREAD` is exact-set-equality
-   asserted, so a stale entry signals a rebase/merge defect (the knob was
-   deleted but the list was not updated), and a missing entry signals a knob
-   left unread by mistake (new code added to the registry before readers are
-   wired). See `KNOWN_UNREAD` below.
+   Unread knobs are tracked: all registered knobs are either read by some live
+   code path (via `configValue()`/`getKnob()`/`readConfigOverrides()` with a
+   literal key), or tracked in `KNOWN_UNREAD` when they have no read path yet
+   (temporarily, pending implementation of the reader — see #3141). `KNOWN_UNREAD`
+   is exact-set-equality asserted, so a stale entry signals a rebase/merge defect
+   (the knob was deleted or a reader was wired but the list was not updated),
+   and a missing entry signals a knob left unread by mistake (new code added to
+   the registry before readers are wired). See `KNOWN_UNREAD` below.
 
    BLIND SPOTS (documented, not silently accepted):
      - Textual, not data-flow: a resolver-backed helper reached through a

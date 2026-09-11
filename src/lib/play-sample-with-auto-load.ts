@@ -119,7 +119,7 @@ async function prepareSidecar(
        "this checkout" are repo/dev jargon a packaged-app user has never
        seen, so point at the Account settings field instead of the env var. */
     throw new Error(
-      `Voice engine is unreachable — restart the app to relaunch it (or, if you changed its connection details, check Account → Voice engine URL). [${reason}]`,
+      `Voice engine is unreachable — restart the app to relaunch it (or, if you changed its connection details, check Admin → Model Manager → Server configuration → Voice engine URL). [${reason}]`,
     );
   }
   if (health.modelLoaded) {
