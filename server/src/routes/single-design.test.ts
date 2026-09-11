@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 // Stub the shared design core so the job runs without a sidecar/GPU.
 // vi.mock is hoisted to the top of the file, so it runs before any imports —
@@ -37,7 +38,7 @@ vi.mock('./qwen-voice.js', async (orig) => ({
 // to let pass through before corrupting it; the factory runs lazily (on the
 // first dynamic import in beforeAll), so it picks up these module-scope
 // `let`s once a test sets them, matching the capturedDesignArgs pattern above.
-let readJsonFailAfter: { path: string; passThroughCalls: number } | null = null;
+let readJsonFailAfter: { path: string; passThroughCalls: number; error?: Error } | null = null;
 const readJsonCallCounts = new Map<string, number>();
 vi.mock('../workspace/state-io.js', async (orig) => {
   const real = await orig<typeof import('../workspace/state-io.js')>();
@@ -48,6 +49,12 @@ vi.mock('../workspace/state-io.js', async (orig) => {
         const n = (readJsonCallCounts.get(path) ?? 0) + 1;
         readJsonCallCounts.set(path, n);
         if (n > readJsonFailAfter.passThroughCalls) {
+          if (readJsonFailAfter.error) {
+            // A synthetic error (e.g. a real LockAcquisitionTimeoutError) for
+            // a case that cares about the error's own identity/message, not
+            // about reproducing a real on-disk failure.
+            throw readJsonFailAfter.error;
+          }
           /* Corrupt the file right before THIS read, so it hits a genuine
              JSON.parse failure from a real file on disk — the actual defect
              shape, not a synthetic throw — while the earlier pass-through
@@ -581,8 +588,12 @@ describe('single-design job — pre-try cast-read leak (#3171)', () => {
       // The design-busy flag and in-flight job registration must both clear.
       expect(designLock.isDesignBusy(bookDir)).toBe(false);
 
-      // The raw error was logged server-side.
-      expect(consoleErrorSpy).toHaveBeenCalled();
+      // The raw error was logged server-side, under the failure's own prefix
+      // (not just any console.error call during the request).
+      const loggedFailure = consoleErrorSpy.mock.calls.find(
+        (call) => typeof call[0] === 'string' && call[0].startsWith('[single-design] failed'),
+      );
+      expect(loggedFailure, 'expected a console.error("[single-design] failed", …) call').toBeDefined();
 
       // No unhandled rejection reached the process.
       expect(unhandledRejection).toBeNull();
@@ -610,6 +621,45 @@ describe('single-design job — pre-try cast-read leak (#3171)', () => {
     expect(res2.status).toBe(200);
     const events2 = collectSse(res2);
     expect(events2.some((e) => e.type === 'preview_ready')).toBe(true);
+  });
+
+  it('curates a LockAcquisitionTimeoutError from the pre-try cast read into the lock-contention message, and does not leak its embedded path', async () => {
+    const castPath = castJsonPath(bookDir);
+    // #3173 M1 — the JSON-parse case above never contains a path, so its
+    // "not a path" assertion can't fail regardless of curation. A real
+    // LockAcquisitionTimeoutError's message DOES embed an absolute path (see
+    // its constructor in workspace/file-lock.ts), so this is the shape that
+    // actually exercises `requestFailureMessage`.
+    readJsonFailAfter = {
+      path: castPath,
+      passThroughCalls: 1,
+      error: new LockAcquisitionTimeoutError(
+        'cast:C:\\Users\\real-name\\books\\Some Author\\Some Series\\Some Title\\.audiobook\\cast.json',
+        10_000,
+      ),
+    };
+
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({
+        persona: 'a warm voice',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts-0.6b',
+        preview: true,
+      });
+
+    expect(res.status).toBe(200);
+    const events = collectSse(res);
+    const err = events.find((e) => e.type === 'error');
+    expect(err).toBeTruthy();
+    expect(err?.code).toBe('lock-contention');
+    // The curated sentence, not the raw message (which embeds the lock key,
+    // including the absolute workspace path).
+    expect(String(err?.message ?? '')).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(String(err?.message ?? '')).not.toContain('real-name');
+    expect(String(err?.message ?? '')).not.toMatch(/[A-Za-z]:\\|\/(Users|home|AudiobookWorkspace)/);
+
+    expect(designLock.isDesignBusy(bookDir)).toBe(false);
   });
 });
 
