@@ -11,8 +11,10 @@
    in-flight server job after a reload) run here.
 
    Re-entrancy: one open `handle` at a time (a single in-memory server job per
-   book is the contract). A second start while one runs is ignored — the Cast
-   view also disables the button, so this is belt-and-braces.
+   book is the contract). A second start while one runs is dropped and surfaces
+   an error toast ("A design job is already running…") rather than starting a
+   second stream — the Cast view also disables the button, so this is
+   belt-and-braces.
 
    Terminal summary: on `idle` the slice flips to `state:'done'` (the pill shows
    "Designed N · M failed · K skipped" briefly), a summary toast fires, and a
@@ -36,6 +38,12 @@ const CLEAR_TYPE = castDesignActions.clear.type;
 
 /** ms the terminal "Designed N…" summary lingers before the pill clears. */
 const SUMMARY_LINGER_MS = 5000;
+
+/** Busy-toast text for a second design start while one is already running —
+    shared by both the bulk and single-character start paths so there is
+    exactly one place to edit it. */
+const DESIGN_ALREADY_RUNNING_MESSAGE =
+  'A design job is already running for this session — the new request was not started.';
 
 interface CastDesignRootState {
   castDesign: { active: { bookId: string; state: string; kind?: string; fallbacks?: { characterId: string; emotion: string }[] } | null };
@@ -124,10 +132,23 @@ export function createCastDesignMiddleware(): Middleware {
           if (clonedSkips.length > 0) {
             parts.push(`already cloned: ${clonedSkips.map((c) => c.name).join(', ')}`);
           }
+          let message = `${parts.join(' · ')}.`;
+          /* #3027 follow-up (review finding #2) — a count alone regressed
+             #3027's own acceptance criteria: a config problem like a missing
+             GEMINI_API_KEY used to surface as one clear, actionable toast;
+             continuing past per-character failures collapsed that into a
+             bare "M failed". Surface the first failure's reason too — and
+             say once when every failure shares it, the likely case for a
+             single root cause, rather than implying per-character variety. */
+          if (failed > 0) {
+            const firstError = failures[0].error;
+            const sameReason = failures.every((f) => f.error === firstError);
+            message += sameReason ? ` ${firstError}` : ` First failure: ${firstError}`;
+          }
           dispatch(
             notificationsActions.pushToast({
               kind: failed > 0 ? 'error' : 'info',
-              message: `${parts.join(' · ')}.`,
+              message,
               dedupeKey: `cast-design-done:${bookId}`,
             }),
           );
@@ -332,7 +353,16 @@ export function createCastDesignMiddleware(): Middleware {
       if (a.type === REQUESTED_TYPE) {
         const { bookId, characterIds, modelKey, scope, variantTasks } =
           a.payload as DesignAllRequestedPayload;
-        if (handle) return result; // a run is already streaming
+        if (handle) {
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message: DESIGN_ALREADY_RUNNING_MESSAGE,
+              dedupeKey: `cast-design:busy:${bookId}`,
+            }),
+          );
+          return result;
+        }
         const variantCount = (variantTasks ?? []).reduce((n, t) => n + t.emotions.length, 0);
         const baseCount = scope === 'variants' ? 0 : characterIds.length;
         const total = baseCount + (scope === 'bases' ? 0 : variantCount);
@@ -382,7 +412,16 @@ export function createCastDesignMiddleware(): Middleware {
           modelKey: string;
           mode: 'first' | 'redesign';
         };
-        if (handle) return result; // one design op per book
+        if (handle) {
+          dispatch(
+            notificationsActions.pushToast({
+              kind: 'error',
+              message: DESIGN_ALREADY_RUNNING_MESSAGE,
+              dedupeKey: `cast-design:busy:${p.bookId}`,
+            }),
+          );
+          return result;
+        }
         const controller = new AbortController();
         /* Seed the single snapshot instantly (before the first SSE event). */
         dispatch(
