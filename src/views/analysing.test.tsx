@@ -2033,7 +2033,9 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     /* A paused snapshot for ANOTHER book (m2) should not make THIS view
        (m1) render as paused — the snapshot is stale for this manuscript.
        Regression test for the manuscript guard on activeStreamSnapshot
-       read at analysing.tsx:1441. */
+       read at analysing.tsx:1444. The guard checks manuscriptId before
+       using the snapshot's state; without the guard, derivePhaseState
+       would use the stale paused state when phaseId === maxPhase. */
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -2041,6 +2043,7 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
         analysis: analysisSlice.reducer,
         account: accountSlice.reducer,
         bookMeta: bookMetaSlice.reducer,
+        notifications: notificationsSlice.reducer,
       },
       preloadedState: {
         analysis: {
@@ -2054,7 +2057,7 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
             phaseProgress: 0.0,
             remainingMs: 0,
             lastTickAt: Date.now(),
-            state: 'paused' as const, // paused state from wrong book
+            state: 'paused' as const, // stale paused state from wrong book
           },
         },
       },
@@ -2069,15 +2072,17 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
         />
       </Provider>,
     );
-    /* Phase 0 card should render with "Cast building" label, proving the
-       view mounted. The detail text only shows when the phase is not pending,
-       so finding it proves the phase rendered as active (the frontier), not
-       paused — because the snapshot is for a different manuscript and should
-       be ignored. */
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Named-entity extraction, dialogue attribution/),
-      ).toBeInTheDocument();
+
+    /* Phase 0 starts as the frontier phase (maxPhase=0 on mount). Per
+       derivePhaseState line 56, it renders as 'active' normally. But if
+       the manuscript guard didn't work, runState would be 'paused' (from
+       the stale m2 snapshot), and line 53 would return 'paused' instead.
+       The guard ensures runState='running' (the default), so the chip shows
+       data-phase-state="streaming", not "paused". */
+    const chips = await screen.findAllByTestId('phase-model-chip-0');
+    expect(chips.length).toBeGreaterThan(0);
+    chips.forEach((chip) => {
+      expect(chip).not.toHaveAttribute('data-phase-state', 'paused');
     });
   });
 });
