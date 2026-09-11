@@ -1580,6 +1580,27 @@ class _VdKokoroArbiter:
             yield
             return
         with self._cv:
+            # B5 ruling (B9 amended): the wait is unbounded and starvable if designs
+            # queue continuously (design() does not wait on other designs, only drains
+            # in-flight Kokoro). This happens in TWO callers with DIFFERENT timeout
+            # scopes:
+            #
+            # 1. KokoroEngine.synthesize() — the COMMON case (ordinary TTS generation
+            #    requests). Has NO external timeout. A starved synthesize() call will
+            #    wait indefinitely here.
+            #
+            # 2. _kokoro_ensure_loaded_guarded() (called from /load endpoint) — the
+            #    RARE case. The Node-side 90s HTTP request timeout provides a ceiling,
+            #    but only bounds what the CLIENT observes. The sidecar thread remains
+            #    in this wait even after the client gives up, until design_active_count
+            #    drops, then completes the load and clears the _loading flag.
+            #
+            # For the synthesize() path, this is a known limitation accepted as a
+            # tradeoff: suboptimal fairness under continuous design activity, but
+            # not a correctness bug since designs are expected to be infrequent.
+            # If this becomes a production concern (e.g. user reports starved TTS
+            # during bulk design), adding a timeout= parameter to cv.wait() below
+            # would limit the wait, raising/logging a clear error on timeout.
             while self._design_active_count > 0:
                 self._cv.wait()
             self._kokoro_in_flight += 1
@@ -10257,7 +10278,7 @@ async def _preload_default_engines() -> None:
         if isinstance(kokoro, KokoroEngine):
             try:
                 log.info("Preloading Kokoro at startup (PRELOAD_KOKORO=1)…")
-                await asyncio.to_thread(kokoro._ensure_loaded, "v1")
+                await asyncio.to_thread(_kokoro_ensure_loaded_guarded, kokoro, "v1")
                 log.info("Kokoro preload complete — /synthesize is hot.")
             except Exception as e:
                 log.warning(
@@ -11209,6 +11230,30 @@ def debug_reclaim() -> dict[str, Any]:
     return {"before": before, "reclaimed": reclaimed, "after": after}
 
 
+def _kokoro_ensure_loaded_guarded(
+    kokoro: "KokoroEngine", model: str, device: Optional[str] = None
+) -> None:
+    """Take `_VD_KOKORO.kokoro_synth()` around a cold Kokoro load (#3086/#3101).
+
+    `KokoroEngine.synthesize()` wraps its whole forward (load + create) in the
+    arbiter, but `/load` calls `_ensure_loaded` directly, bypassing it. A cold
+    load isn't just bookkeeping: on the DirectML profile it runs a real one-shot
+    forward (`_directml_selftest_or_fallback`'s `kokoro.create("ok", ...)`) to
+    prove the provider actually works — exactly the "raw Kokoro synth" that must
+    not co-reside with an active VoiceDesign forward. Routing the cold `/load`
+    through the same gate `synthesize()` uses closes that bypass. The startup
+    preload path also goes through this wrapper for consistency, though the
+    lifespan startup completes before uvicorn accepts requests, so no design
+    forward can be in flight at that point."""
+    # B4 ruling: this gate is unconditional on the device being GPU (even if a
+    # CPU-admitted load arrives via `device="cpu"` from capacity admission). The
+    # blanket exclusion is simpler than scoping to GPU devices only; CPU loads
+    # that wait for GPU designs are delayed but don't actually contend, and this
+    # rare path (capacity admission hitting the GPU limit) is acceptable.
+    with _VD_KOKORO.kokoro_synth():
+        kokoro._ensure_loaded(model, device=device)
+
+
 @app.post("/load")
 async def load_model(req: Request) -> JSONResponse:
     """Load a TTS engine's model into memory. Idempotent — returns `ready`
@@ -11271,9 +11316,11 @@ async def load_model(req: Request) -> JSONResponse:
                     ) as adm:
                         if "noCapacity" in adm:
                             return _no_capacity(adm)
-                        await asyncio.to_thread(kokoro._ensure_loaded, "v1", device=adm["device"])
+                        await asyncio.to_thread(
+                            _kokoro_ensure_loaded_guarded, kokoro, "v1", adm["device"]
+                        )
                 else:
-                    await asyncio.to_thread(kokoro._ensure_loaded, "v1")
+                    await asyncio.to_thread(_kokoro_ensure_loaded_guarded, kokoro, "v1")
             except Exception as e:
                 return error_response(e, log, status=500)
             finally:
