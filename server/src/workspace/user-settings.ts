@@ -400,7 +400,8 @@ export async function readUserSettings(): Promise<UserSettings> {
       cached = null;
       cachedFileMtime = null;
     } catch {
-      // File might not exist yet, or stat failed — proceed to read/create
+      // File might not exist yet, or stat failed — keep the cache valid and return it
+      // if it exists, or proceed to read/create if cache is empty
     }
   }
   if (cached) return cached;
@@ -502,6 +503,21 @@ function clearCorruptFlagAfterWrite(): void {
   settingsFileCorrupt = false;
 }
 
+/** Helper to update the cached mtime after a successful write. Called after
+    writeJsonAtomic succeeds so the cache's recorded mtime matches the file's
+    real current mtime. This prevents the next read from incorrectly thinking
+    the file was modified out-of-band when it was actually modified by this
+    writer. Only app writes through the five sanctioned writers update this;
+    genuine out-of-band repairs leave it stale and correctly trigger a re-read. */
+function updateCachedFileMtimeAfterWrite(): void {
+  try {
+    cachedFileMtime = statSync(USER_SETTINGS_PATH).mtimeMs;
+  } catch {
+    // File doesn't exist or can't be stat'd, clear the mtime tracking
+    cachedFileMtime = null;
+  }
+}
+
 /** Merges `patch` into the on-disk file, validating each field. Returns the
     new merged settings. Concurrent PUTs are serialised through `writeChain`
     so two near-simultaneous saves can't race the temp-file-then-rename. */
@@ -541,6 +557,7 @@ export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
     await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
+    updateCachedFileMtimeAfterWrite();
     cached = merged;
     // Track that sentKeys are now explicitly set in the file (#2632 N2)
     for (const key of sentKeys) {
@@ -923,6 +940,7 @@ export async function writeGeminiApiKey(key: string | null): Promise<UserSetting
     await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
+    updateCachedFileMtimeAfterWrite();
     cached = merged;
     return merged;
   });
@@ -961,6 +979,7 @@ export async function writeUpgradeMeta(patch: {
     await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
+    updateCachedFileMtimeAfterWrite();
     cached = merged;
     return merged;
   });
@@ -986,6 +1005,7 @@ export async function writeSetupCompletedAt(ts: string | null): Promise<UserSett
     await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
+    updateCachedFileMtimeAfterWrite();
     cached = merged;
     return merged;
   });
@@ -1008,6 +1028,7 @@ export async function writeTourCompletedAt(ts: string | null): Promise<UserSetti
     await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
+    updateCachedFileMtimeAfterWrite();
     cached = merged;
     return merged;
   });
