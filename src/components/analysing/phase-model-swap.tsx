@@ -70,6 +70,10 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
     const patch =
       phaseId === 0 ? { analyzerPhase0Model: next } : { analyzerPhase1Model: next };
     void dispatch(saveAccountSettings(patch));
+    /* Toast fires regardless of pause state: when paused, isActive is false
+       so the message correctly reads "Applies from next chapter" (resuming
+       the run will apply the swap). When halted, the run is done anyway so
+       the swap only affects future runs — same message applies. */
     setToast(
       isActive
         ? 'Applies from the next chapter — current chapter finishes on the previous model'

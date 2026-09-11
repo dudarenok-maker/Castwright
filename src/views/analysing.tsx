@@ -609,7 +609,9 @@ export function AnalysingView({
           /* Server-side pause / displacement. Reflect in the snapshot
              so the pill renders the paused variant, but DO NOT clear
              the snapshot — keep the pill visible so the user can
-             navigate back to the analysing view and resume. */
+             navigate back to the analysing view and resume. Update conn
+             state to keep the sticky bar in sync (paused → idle). */
+          setConn('idle');
           dispatch(analysisActions.setPaused({ manuscriptId }));
           return;
         }
@@ -1438,7 +1440,10 @@ export function AnalysingView({
               progressByPhase,
               liveByPhase,
               maxPhase: phase,
-              runState: activeStreamSnapshot?.state ?? 'running',
+              runState:
+                activeStreamSnapshot && activeStreamSnapshot.manuscriptId === manuscriptId
+                  ? (activeStreamSnapshot.state ?? 'running')
+                  : 'running',
             });
             return (
               <PhaseCard

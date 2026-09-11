@@ -2028,6 +2028,58 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     expect(screen.queryByRole('button', { name: /start analysis/i })).not.toBeInTheDocument();
     expect(capturedOpts).toBeUndefined();
   });
+
+  it('does NOT render paused state from a snapshot for a different manuscript', async () => {
+    /* A paused snapshot for ANOTHER book (m2) should not make THIS view
+       (m1) render as paused — the snapshot is stale for this manuscript.
+       Regression test for the manuscript guard on activeStreamSnapshot
+       read at analysing.tsx:1441. */
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        analysis: {
+          activeStream: {
+            bookId: 'book-2',
+            manuscriptId: 'm2', // DIFFERENT manuscript
+            bookTitle: 'Different Book',
+            engine: 'gemini' as const,
+            phaseId: 0,
+            phaseLabel: 'Cast building',
+            phaseProgress: 0.0,
+            remainingMs: 0,
+            lastTickAt: Date.now(),
+            state: 'paused' as const, // paused state from wrong book
+          },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1" /* Rendering m1, but snapshot is for m2 */
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    /* Phase 0 card should render with "Cast building" label, proving the
+       view mounted. The detail text only shows when the phase is not pending,
+       so finding it proves the phase rendered as active (the frontier), not
+       paused — because the snapshot is for a different manuscript and should
+       be ignored. */
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Named-entity extraction, dialogue attribution/),
+      ).toBeInTheDocument();
+    });
+  });
 });
 
 /* Bug D regression — the "Overall" progress bar inside the analysing
