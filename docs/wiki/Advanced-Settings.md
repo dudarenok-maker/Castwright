@@ -122,11 +122,7 @@ your own on-disk copy; nothing here changes until you explicitly edit.
   <img alt="Analyzer models & endpoints" src="images/advanced-settings/04-analyzer-models-endpoints.png">
 </picture>
 
-> **Not the same knob as [Model Manager](Model-Manager)'s "Analyzer
-> engine."** This one is the server/env-level config knob (defaults to
-> `local` — see `server/.env.example`); Model Manager's is your per-account
-> preference (defaults to `gemini`), which takes precedence when set. Same
-> English label, two different controls.
+> Your analyzer engine choice lives in **[Model Manager](Model-Manager)** and is saved per account.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|

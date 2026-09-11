@@ -1195,7 +1195,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_PHASE0_MODEL',
     group: 'analyzer-models',
     label: 'Phase-0 model override',
-    help: 'When set, drives Phase 0 (cast detection) with this specific model while Phase 1 uses ANALYZER_PHASE1_MODEL. Leave empty to use the legacy single-model ANALYZER path for both phases. The two analyzers hit independent rate-limit buckets, so quota is effectively doubled.',
+    help: 'When set, drives Phase 0 (cast detection) with this specific model while Phase 1 uses ANALYZER_PHASE1_MODEL. Leave empty to use the selected analyzer engine (chosen in Admin → Model Manager) for both phases. The two analyzers hit independent rate-limit buckets, so quota is effectively doubled.',
     type: 'string',
     default: '', // ← ANALYZER_PHASE0_MODEL unset by default in server/.env.example (line 60)
     apply: 'live', risk: 'medium',
@@ -1205,7 +1205,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_PHASE1_MODEL',
     group: 'analyzer-models',
     label: 'Phase-1 model override',
-    help: 'When set, drives Phase 1 (sentence attribution) with this specific model while Phase 0 uses ANALYZER_PHASE0_MODEL. Leave empty to use the legacy single-model ANALYZER path.',
+    help: 'When set, drives Phase 1 (sentence attribution) with this specific model while Phase 0 uses ANALYZER_PHASE0_MODEL. Leave empty to use the selected analyzer engine (chosen in Admin → Model Manager).',
     type: 'string',
     default: '', // ← ANALYZER_PHASE1_MODEL unset by default in server/.env.example (line 61)
     apply: 'live', risk: 'medium',

@@ -215,7 +215,7 @@ If a chapter (often **chapter 1**) fails the instant analysis starts with `Gemin
 Two ways around it:
 
 - **Stay on the cloud, switch model.** Set `GEMINI_MODEL=gemma-4-31b-it` in `server/.env` and restart — the `gemma-*` family isn't subject to the recitation filter. Trade-off: gemma is weaker and can grind on very long chapters.
-- **Go fully local (most robust for copyrighted manuscripts).** Open **Admin → Model Manager → Analyzer engine** and choose **Local Ollama**, run Ollama with `ollama pull qwen3.5:4b`, and restart Ollama. Local models apply no content filter at all. See [Setting up the analyzer](#setting-up-the-analyzer).
+- **Go fully local (most robust for copyrighted manuscripts).** Open **Admin → Model Manager → Analyzer engine** and choose **Local Ollama**, run Ollama with `ollama pull qwen3.5:4b`. Local models apply no content filter at all. See [Setting up the analyzer](#setting-up-the-analyzer).
 
 After editing `server/.env`, click **Try again** in the app — it resumes from the first uncached chapter.
 

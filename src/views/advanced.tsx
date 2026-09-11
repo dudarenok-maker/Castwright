@@ -552,7 +552,7 @@ export function AdvancedView() {
                       />
                     );
                   })}
-                  {group.id === 'analyzer-models' && analyzerEngine === 'local' && (
+                  {group.id === 'analyzer-models' && account.hydrated && analyzerEngine === 'local' && (
                     <div className="py-3 border-b border-ink/8">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="text-sm font-medium text-ink flex-1">

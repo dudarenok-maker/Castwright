@@ -68,8 +68,8 @@ export class GeminiContentBlockedError extends Error {
     const hint =
       reason && reason !== 'FINISH_REASON_UNSPECIFIED'
         ? ' A content filter blocked the text — gemini-* models block copyrighted' +
-          ' source via RECITATION. Switch GEMINI_MODEL to a gemma-* model or set' +
-          ' ANALYZER=local (Ollama).'
+          ' source via RECITATION. Switch GEMINI_MODEL to a gemma-* model or switch' +
+          ' to Local Ollama in Admin → Model Manager.'
         : '';
     super(`Gemini ${model} returned an empty response${named}.${hint}`);
     this.name = 'GeminiContentBlockedError';

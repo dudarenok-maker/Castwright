@@ -130,12 +130,11 @@ export const HELP_TOPICS: HelpTopic[] = [
     category: 'voices',
     title: 'Can I design voices without a Gemini API key?',
     body:
-      "Yes — voice design's description-writing step follows the same analyzer engine you've " +
-      'already chosen (Local or Gemini, in Advanced settings). Set the analyzer to Local and ' +
-      "Castwright drafts each character's voice from a model running entirely on your machine, so " +
-      'a fully offline setup, or one with no cloud key, can still design a full cast from scratch. ' +
-      'Gemini stays the default for the richest descriptions; Local is the road for a no-key or ' +
-      'offline setup.',
+      "Yes — voice design's description-writing step has its own engine, Persona generation engine " +
+      'in Advanced settings. Set it to Local and Castwright drafts each character\'s voice from a model ' +
+      'running entirely on your machine, so a fully offline setup, or one with no cloud key, can still ' +
+      'design a full cast from scratch. Gemini is its default for the richest descriptions; Local is ' +
+      'the road for a no-key or offline setup.',
   },
   {
     id: 'vocalizations',

@@ -559,6 +559,24 @@ describe('AdvancedView — analyzer read-only row (Plan 2 §2.4, issue #1225)', 
     await screen.findAllByText('Text-to-speech');
     expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
   });
+
+  it('hides the row when account settings are not yet loaded', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
+    mockGetAnalyzerDevice.mockResolvedValue({ device: 'cuda' });
+
+    // Create store and render without dispatching fetchAccountSettings.fulfilled
+    // so account stays hydrated=false
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <AdvancedView />
+      </Provider>,
+    );
+
+    // Even though the default engine is local, the row should be hidden until account hydrates
+    await screen.findAllByText('Text-to-speech');
+    expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
+  });
 });
 
 /* ── Analyzer GPU-split warning (#2367 Task 3) ───────────────────────────── */
