@@ -14,13 +14,14 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
+import { COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS } from './coqui-residency-policy.guard-targets.js';
 
 const TOKEN = 'COQUI-RESIDENCY-POLICY';
 const REPO_ROOT = join(process.cwd(), '..');
 
-const SYNTHESISE_CHAPTER_PATH = join(process.cwd(), 'src', 'tts', 'synthesise-chapter.ts');
-const SIDECAR_MAIN_PATH = join(process.cwd(), 'tts-sidecar', 'main.py');
+const SYNTHESISE_CHAPTER_PATH = join(REPO_ROOT, COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS[0]);
+const SIDECAR_MAIN_PATH = join(REPO_ROOT, COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS[1]);
 /* NOTE: When plan 264 is archived (status → stable), this path will move to
    docs/features/archive/264-vram-aware-gpu-placement.md. Keep the path
    hardcoded so the guard fails-closed if archival forgets to update it.
@@ -38,13 +39,26 @@ const SIDECAR_MAIN_PATH = join(process.cwd(), 'tts-sidecar', 'main.py');
       forgotten — hashFile returns a sentinel for a missing path rather than
       throwing, so a docs-only PR would just silently stop invalidating the
       verify cache, reopen the bug this PR #2715 fixed, and never error) */
-const POLICY_DOC_PATH = join(REPO_ROOT, 'docs', 'features', '264-vram-aware-gpu-placement.md');
+const POLICY_DOC_PATH = join(REPO_ROOT, COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS[2]);
 
 function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
 describe('Coqui residency policy cross-references (side-18, #1932)', () => {
+  it('scan scope matches the declared COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS (#3085, #3151 follow-up)', () => {
+    // Ties this guard's ACTUAL scan targets to the scope it DECLARES via the
+    // sibling module — the same constant force-rerun-triggers.test.ts checks
+    // its forceRerunTriggers entries against — so the two statements of this
+    // guard's scope can never independently drift.
+    const toRepoRel = (p: string) => relative(REPO_ROOT, p).split(sep).join('/');
+    expect([
+      toRepoRel(SYNTHESISE_CHAPTER_PATH),
+      toRepoRel(SIDECAR_MAIN_PATH),
+      toRepoRel(POLICY_DOC_PATH),
+    ]).toEqual([...COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS]);
+  });
+
   it('keeps the cross-reference in synthesise-chapter.ts (mechanism A)', () => {
     const source = readFileSync(SYNTHESISE_CHAPTER_PATH, 'utf8');
     expect(

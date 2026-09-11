@@ -231,7 +231,12 @@ export default defineConfig({
          and their policy doc. The sidecar main.py and docs file have no module-graph
          edges (same #1847 runtime-read trap); synthesise-chapter.ts IS importable
          but is included here for consistency with the guard's uniform readFileSync
-         approach rather than being split into two separate tracking mechanisms. */
+         approach rather than being split into two separate tracking mechanisms.
+         These three entries' literal text is checked against
+         server/src/tts/coqui-residency-policy.guard-targets.ts's
+         COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS (#3085, #3151 follow-up), the
+         same constant the guard itself imports, so the two can never
+         independently drift. */
       '{**/server/src/tts/synthesise-chapter.ts,**/.*/**/server/src/tts/synthesise-chapter.ts}',
       '{**/server/tts-sidecar/main.py,**/.*/**/server/tts-sidecar/main.py}',
       '{**/docs/features/264-vram-aware-gpu-placement.md,**/.*/**/docs/features/264-vram-aware-gpu-placement.md}',
