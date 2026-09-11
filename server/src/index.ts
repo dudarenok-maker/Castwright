@@ -119,13 +119,17 @@ const runDir = resolveRunDir(repoRoot);
    already used in scripts/bump-version.mjs). */
 /** #3174 (G4) — the boot-time `readUserSettings()` warm-up is detached
     (`void bootWarmUserSettings()`); `readUserSettings()` itself does NOT
-    fall through to defaults on a genuinely malformed (not merely missing)
-    `user-settings.json` — `readJson` rethrows `JSON.parse`'s failure and
-    nothing on that path catches it. Before this wrapper existed that throw
-    escaped as a process-level unhandledRejection. This only makes the
-    failure loud and contained; it does NOT add recovery (`.bak` fallback,
-    default substitution, or a boot refusal) for a malformed file — that is
-    a separate design decision tracked in #3175. Extracted into its own
+    fall through to defaults when the read rejects instead of returning
+    (missing is fine — `readJson` returns `null` for that, and the caller
+    substitutes defaults). A reject can come from `JSON.parse` on a
+    genuinely malformed file, from `readFile` itself (a locked/unreadable
+    file — e.g. an antivirus or OneDrive hold at boot), or from the legacy-
+    settings migration's `copyFile` failing; nothing on that path catches
+    any of them. Before this wrapper existed that throw escaped as a
+    process-level unhandledRejection. This only makes the failure loud and
+    contained; it does NOT add recovery (`.bak` fallback, default
+    substitution, or a boot refusal) for a malformed file — that is a
+    separate design decision tracked in #3175. Extracted into its own
     exported function (mirroring `runShutdownSequence` above) so the
     containment is unit-testable without running the real boot sequence,
     since `main()` itself only runs when this module is the directly
@@ -136,7 +140,7 @@ export async function bootWarmUserSettings(): Promise<void> {
     await readUserSettings();
   } catch (err) {
     console.error(
-      '[server] user-settings.json could not be read at boot (malformed, not merely missing -- not auto-recovered, see #3175)',
+      '[server] user-settings.json could not be read at boot (it may be malformed, locked, or unreadable -- not auto-recovered; if it is malformed, see #3175)',
       err,
     );
   }
