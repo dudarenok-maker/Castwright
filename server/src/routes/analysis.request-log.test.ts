@@ -462,7 +462,7 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
     }
   });
 
-  it('(e) a subscribe-shaped POST (no body) against a live subset job logs request received + subscribe, not start, and never names a model for the attach', async () => {
+  it('(e) a subscribe-shaped POST (chapterIds, no model) against a live subset job logs request received + subscribe, not start, and never names a model for the attach', async () => {
     const express = (await import('express')).default;
     const { analysisRouter, __testRegisterJobForTest } = await import('./analysis.js');
     const app = express();

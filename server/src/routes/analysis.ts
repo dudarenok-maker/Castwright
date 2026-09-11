@@ -6510,8 +6510,9 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      already fully parsed by the time this handler runs.
      F2 (#3169 fix wave) — this is a per-POST line, same reasoning as the
      parent route: the stream middleware's own subscribe POST reaches this
-     handler too, with no body, so a single Start click can log it more
-     than once. `model` and `manuscriptId` are both request-supplied text,
+     handler too — it sends `chapterIds` (needed to validate against the
+     job's subsetChapterIds) but no `model` — so a single Start click can
+     log it more than once. `model` and `manuscriptId` are both request-supplied text,
      both stringified (F2/F6, hardened post-review) as a log-injection
      guard, same as the parent route. */
   const body = req.body as { chapterIds?: unknown; model?: unknown; allowStage1Shrink?: unknown };

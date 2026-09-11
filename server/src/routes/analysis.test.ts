@@ -8722,11 +8722,11 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
     try {
       /* D1 (#3169) widened runMainAnalyzerJob's try to start above this
          function's language check, and analyzerLabel/activeModelId are now
-         computed from `selection` as the first statement inside it (so the
-         catch has them for ANY setup-span throw, this one included) — so
-         `selection` must be a real object here, not `undefined as never`
-         like `record` below. This test never reaches code that reads
-         `record` (the throw fires before then), so that one stays inert. */
+         computed from `selection` just before that try (so the catch has
+         them for ANY setup-span throw, this one included) — so `selection`
+         must be a real object here, not `undefined as never` like `record`
+         below. This test never reaches code that reads `record` (the throw
+         fires before then), so that one stays inert. */
       await runMainAnalyzerJob(
         job,
         undefined as never,
