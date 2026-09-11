@@ -39,6 +39,12 @@ const CLEAR_TYPE = castDesignActions.clear.type;
 /** ms the terminal "Designed N…" summary lingers before the pill clears. */
 const SUMMARY_LINGER_MS = 5000;
 
+/** Busy-toast text for a second design start while one is already running —
+    shared by both the bulk and single-character start paths so there is
+    exactly one place to edit it. */
+const DESIGN_ALREADY_RUNNING_MESSAGE =
+  'A design job is already running for this session — the new request was not started.';
+
 interface CastDesignRootState {
   castDesign: { active: { bookId: string; state: string; kind?: string; fallbacks?: { characterId: string; emotion: string }[] } | null };
 }
@@ -351,7 +357,7 @@ export function createCastDesignMiddleware(): Middleware {
           dispatch(
             notificationsActions.pushToast({
               kind: 'error',
-              message: 'A design job is already running for this session — the new request was not started.',
+              message: DESIGN_ALREADY_RUNNING_MESSAGE,
               dedupeKey: `cast-design:busy:${bookId}`,
             }),
           );
@@ -410,7 +416,7 @@ export function createCastDesignMiddleware(): Middleware {
           dispatch(
             notificationsActions.pushToast({
               kind: 'error',
-              message: 'A design job is already running for this session — the new request was not started.',
+              message: DESIGN_ALREADY_RUNNING_MESSAGE,
               dedupeKey: `cast-design:busy:${p.bookId}`,
             }),
           );
