@@ -885,14 +885,15 @@ export interface ResolveDesignedVoiceDeps {
     last-known GPU list reports an index-1 card.
 
     The hint is ADVISORY on the wire, not a hard pin: the sidecar threads
-    `X-Device-Hint` into `reservation(preferred=...)`, which restricts its
-    ONE try_hold to that card alone and falls back to ordinary unconstrained
-    placement only if the hinted card cannot fit the derive at all (see
-    `_parse_device_hint` and `PlacementController._resolve_admission` in
-    `main.py`). That degrade-on-can't-fit is real, but it does not make a
-    WRONG hint cheap in general — only in the case where the hinted card is
-    actually out of room. This one can be wrong in two ways it cannot
-    detect, and they cost differently:
+    `X-Device-Hint` into `reservation(preferred=...)`, which now applies a
+    75%-tolerance check before attempting the hinted card (see `_parse_device_hint`
+    and `PlacementController._resolve_admission` in `main.py`): the hint wins
+    only when its free headroom is at least 75% of the unconstrained winner's;
+    otherwise preferred is dropped and placement falls through to ordinary
+    unconstrained placement. This tolerance makes a WRONG hint cheaper than it
+    was before — not free, but no longer catastrophic in the case where the
+    hinted card is merely occupied rather than actually out of room. This one
+    can be wrong in two ways it cannot detect, and they cost differently:
 
     - #3061 review N1 — a stale-POPULATED cache. The earlier version of this
       comment claimed absent/stale lists "never hint at a card that doesn't
