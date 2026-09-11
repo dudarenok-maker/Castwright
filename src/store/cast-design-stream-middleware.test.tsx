@@ -212,6 +212,40 @@ describe('castDesignMiddleware', () => {
     expect(message).toContain('no gemini key');
   });
 
+  it('multiple DIFFERENT failure reasons: toast uses the FIRST failure, not the last', () => {
+    /* N4 (PR #3161 review pass 2) — with only one failure, or several sharing
+       the same reason, the two branches of the sameReason ternary produce
+       output that overlaps: swapping "First failure: X" for "X" is invisible
+       when every failure's error is identical. This test forces at least two
+       DIFFERENT reasons across characters so only the "first failure" branch
+       can pass, and pins WHICH failure's error the toast surfaces. */
+    const store = makeStore();
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b1',
+        characterIds: ['c1', 'c2', 'c3'],
+        modelKey: 'k',
+      }),
+    );
+    const { cb } = startCalls[0];
+    cb.onCharacterFailed?.({ characterId: 'c1', name: 'Wren', errorReason: 'no gemini key' });
+    cb.onCharacterFailed?.({ characterId: 'c2', name: 'Marlow', errorReason: 'rate limited' });
+    cb.onIdle?.({
+      done: 0,
+      total: 3,
+      skipped: 0,
+      clonedSkips: [],
+      failures: [
+        { characterId: 'c1', name: 'Wren', error: 'no gemini key' },
+        { characterId: 'c2', name: 'Marlow', error: 'rate limited' },
+      ],
+    });
+
+    const message = store.getState().notifications.toasts.at(-1)?.message;
+    expect(message).toContain('First failure: no gemini key');
+    expect(message).not.toContain('rate limited');
+  });
+
   it('skipped: charSkipped bumps skipped, surfaced in the summary', () => {
     const store = makeStore();
     store.dispatch(
