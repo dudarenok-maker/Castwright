@@ -1636,6 +1636,67 @@ describe('cast-design — per-character reason on a lock timeout (#2292)', () =>
    filesystem path to cast.json in its message — a disclosure bug over LAN
    HTTPS. Must route through `itemFailureReason` like the sibling ride-out-loop
    site (#2292, asserted at line ~1615 above) already does. */
+/* pr-review-gate re-review finding N1 (PR #3161) — `ensureCharacterVoiceUuid`
+   is called BEFORE the per-character ride-out loop's `try` block (cast-design.ts
+   ~line 573-575, pre-fix), so a throw out of it escaped the same per-character
+   catch that already covers `applyOverrideToCastFiles`/`persistEmotionVariant`/
+   `writeVoiceStylePersona` — despite the catch's own comment (~line 706-714)
+   claiming it was covered. One contended/failing character's
+   `ensureCharacterVoiceUuid` call used to halt the WHOLE bulk-design job with a
+   bare terminal `error` event instead of recording a per-character failure and
+   continuing — exactly the "one failure halts everything" shape #3027 exists to
+   fix, reachable through this second call site. */
+describe('cast-design — ensureCharacterVoiceUuid failure is per-character, not job-halting (PR #3161 N1)', () => {
+  it('records a curated character_failed for the first character and still designs the second', async () => {
+    const qwenVoiceMod = await import('./qwen-voice.js');
+    const original = qwenVoiceMod.ensureCharacterVoiceUuid;
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    const spy = vi
+      .spyOn(qwenVoiceMod, 'ensureCharacterVoiceUuid')
+      .mockImplementation(async (bookDir: string, characterId: string, seriesFilter) => {
+        if (characterId === 'aria') {
+          throw new LockAcquisitionTimeoutError('cast:/w/hollow-tide', 10_000);
+        }
+        return original(bookDir, characterId, seriesFilter);
+      });
+
+    let res;
+    try {
+      res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['aria', 'brann'], modelKey: QWEN_KEY });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    /* The live broadcast: aria fails with the curated reason, not the raw
+       lock-timeout message (which embeds an absolute workspace path). */
+    const failedEvent = events.find((e) => e.type === 'character_failed' && e.characterId === 'aria');
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent?.errorReason).toBe(LOCK_CONTENTION_ITEM_REASON);
+    expect(failedEvent?.errorReason).not.toContain('withKeyLock');
+
+    /* No bare job-halting terminal `error` event — the run reaches its normal
+       `idle` summary. */
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle).toBeDefined();
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('aria');
+    expect(idle?.failures?.[0].error).toBe(LOCK_CONTENTION_ITEM_REASON);
+
+    /* The second character was still attempted and completed normally — the
+       loop did not halt on aria's failure. */
+    expect(idle?.done).toBe(1);
+    expect(charById('brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_brann');
+  });
+});
+
 describe('cast-design — persona-write lock timeout is curated, not leaked (PR #3161)', () => {
   it('reports the curated contention reason, not the raw lock-timeout message, on a persona-write lock timeout', async () => {
     resolvePersonaEngineMock.mockReturnValue('gemini');

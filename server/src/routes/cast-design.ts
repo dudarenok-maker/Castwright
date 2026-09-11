@@ -570,14 +570,21 @@ async function runDesignJob(
          mint then can't load its base). #1057: this is exactly how a bulk
          "Emotion variants" run orphaned every base. A variant anchors on the
          base's CURRENT key, so it reuses the character's existing voiceUuid. */
-      const voiceUuid = emotion
-        ? character.voiceUuid
-        : await ensureCharacterVoiceUuid(job.bookDir, characterId, seriesFilter);
-      const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
-
       let rideouts = 0;
       for (;;) {
         try {
+          /* Moved inside the per-character try (was previously computed once,
+             above the loop): a `LockAcquisitionTimeoutError` (or any other
+             throw) out of ensureCharacterVoiceUuid must land in the SAME
+             per-character catch below that already covers
+             applyOverrideToCastFiles/persistEmotionVariant — not escape the
+             loop and halt the whole job on the first contended character
+             (#3027 follow-up, N1). */
+          const voiceUuid = emotion
+            ? character.voiceUuid
+            : await ensureCharacterVoiceUuid(job.bookDir, characterId, seriesFilter);
+          const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
+
           const { voiceId, fellBackToDesignVoice, fallbackReason } = await designQwenVoiceForCharacter({
             bookDir: job.bookDir,
             character: characterForDesign,
