@@ -193,13 +193,10 @@ describe('server/vitest.config.ts forceRerunTriggers', () => {
   );
 
   /* #3085/#3151 follow-up: the file-coverage case above only proves the
-     CURRENT scope is covered — narrowing one of
-     COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS's entries to a different path
-     would still pass it, because the (unchanged) trigger below matches a
-     superset. This assertion checks the trigger array contains the EXACT
-     brace-glob built from each imported constant, so narrowing OR widening
-     the constant without updating vitest.config.ts's literal entry to match
-     is caught either way. */
+     CURRENT scope is covered. This assertion checks the trigger array contains
+     the EXACT brace-glob built from each imported constant, so narrowing OR
+     widening the constant without updating vitest.config.ts's literal entry
+     to match is caught either way — a drift in either direction fails this test. */
   it.each(COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS)(
     'main forceRerunTriggers has the exact entry derived from COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS entry %s (#3085, #3151 follow-up)',
     (glob) => {

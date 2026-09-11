@@ -20,10 +20,14 @@ import { COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS } from './coqui-residency-polic
 const TOKEN = 'COQUI-RESIDENCY-POLICY';
 const REPO_ROOT = join(process.cwd(), '..');
 
-const SYNTHESISE_CHAPTER_PATH = join(REPO_ROOT, COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS[0]);
-const SIDECAR_MAIN_PATH = join(REPO_ROOT, COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS[1]);
-/* NOTE: When plan 264 is archived (status → stable), this path will move to
-   docs/features/archive/264-vram-aware-gpu-placement.md. Keep the path
+/* These three paths are the ACTUAL scan targets of this guard (what it reads
+   at runtime). They are hardcoded independently so the test at lines 49-60
+   can compare them against the DECLARED scan scope (COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS)
+   and have a second independent side — the two statements of this guard's
+   scope must never independently drift from each other.
+
+   When plan 264 is archived (status → stable), this path will move to
+   docs/features/archive/264-vram-aware-gpu-placement.md. Keep all three
    hardcoded so the guard fails-closed if archival forgets to update it.
    On archival, update all FIVE of these in the same commit. ITEMS 1-5 all fail
    SILENTLY when archival forgets them (stale comments stay stale, CI entries
@@ -34,12 +38,14 @@ const SIDECAR_MAIN_PATH = join(REPO_ROOT, COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOB
    1. The cross-reference comment in synthesise-chapter.ts (search for the TOKEN)
    2. The cross-reference comments in main.py (search for the TOKEN)
    3. server/vitest.config.ts forceRerunTriggers entry (will miss config-only diffs)
-   4. server/src/force-rerun-triggers.test.ts MAIN_COVERED row (guard goes stale)
+   4. server/src/force-rerun-triggers.test.ts drift check via it.each (will fail if GLOBS changes)
    5. scripts/verify-cache.mjs test:server extraFiles entry (fails SILENTLY if
       forgotten — hashFile returns a sentinel for a missing path rather than
       throwing, so a docs-only PR would just silently stop invalidating the
       verify cache, reopen the bug this PR #2715 fixed, and never error) */
-const POLICY_DOC_PATH = join(REPO_ROOT, COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS[2]);
+const SYNTHESISE_CHAPTER_PATH = join(REPO_ROOT, 'server/src/tts/synthesise-chapter.ts');
+const SIDECAR_MAIN_PATH = join(REPO_ROOT, 'server/tts-sidecar/main.py');
+const POLICY_DOC_PATH = join(REPO_ROOT, 'docs/features/264-vram-aware-gpu-placement.md');
 
 function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
