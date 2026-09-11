@@ -159,16 +159,23 @@ export class KokoroInstallBootstrap {
     }
 
     this.transition(job, 'installing', { step: 'Stopping the voice engine so the installer can update its files…' });
-    /* An installer failure propagates out of the hold (the hold still
-       releases and respawns) and lands as the job's error. An ORT-restore failure
-       is RETURNED, not thrown: the installer had succeeded by then and the job
-       must say so — thrown, it would read as a failed Kokoro install.
+    /* Two INDEPENDENT facts come back out of the hold, and neither may be
+       reported as the other (#3043 S1):
 
-       The ORT restore must run whenever the pip step has executed (which
-       clobbers the runtime) REGARDLESS of whether the rest of the installer
-       script goes on to succeed or fail. If the installer fails, we still need
-       to restore/verify the GPU runtime before the hold releases. */
-    const ort = await this.holdSidecarFn<{ outcome: OrtRestoreOutcome } | { failure: Error }>(async () => {
+       - whether the installer script succeeded, and
+       - what the ORT restore did.
+
+       The restore must run whenever the pip step has executed — which is what
+       clobbers the runtime — REGARDLESS of whether the rest of the installer
+       goes on to succeed or fail, and it runs inside the hold because that is
+       where the sidecar is down and the DLLs are replaceable. So neither
+       outcome can be thrown past the other: both are RETURNED, and the
+       reporting below picks the message for the pair. */
+    const ort = await this.holdSidecarFn<{
+      installerError?: Error;
+      restoreError?: Error;
+      restoreOutcome?: OrtRestoreOutcome;
+    }>(async () => {
       this.update(job, { step: 'Starting installer…' });
       let installerError: Error | null = null;
       try {
@@ -182,31 +189,54 @@ export class KokoroInstallBootstrap {
       this.update(job, { step: 'Checking the ONNX runtime the voice engine needs…' });
       try {
         const outcome = await this.restoreOrtFn();
-        if (installerError) {
-          return { failure: installerError };
-        }
-        return { outcome };
+        return { installerError: installerError ?? undefined, restoreOutcome: outcome };
       } catch (err) {
-        if (installerError) {
-          console.warn(`[kokoro-install] ORT restore also failed: ${err instanceof Error ? err.message : String(err)}`);
-          return { failure: installerError };
-        }
-        return { failure: err instanceof Error ? err : new Error(String(err)) };
+        const restoreError = err instanceof Error ? err : new Error(String(err));
+        return { installerError: installerError ?? undefined, restoreError };
       }
     });
     /* The hold has released here and the supervisor has already attempted
        its respawn (a failed respawn is the supervisor's to report — it is
-       not an install outcome). */
-    if ('failure' in ort) {
+       not an install outcome).
+
+       Log what the restore did on EVERY path, including the installer-failure
+       one — that path is the only reason the restore runs there at all, so a
+       silent record of it would be no record (#3043 N2). */
+    if (ort.restoreError) {
+      console.warn(`[kokoro-install] onnxruntime after install: restore FAILED — ${ort.restoreError.message}`);
+    } else {
+      console.log(`[kokoro-install] onnxruntime after install: ${ort.restoreOutcome}`);
+    }
+
+    /* The installer's own failure is the job's error, verbatim — the restore's
+       outcome is context appended to it, never a substitute for it. Reporting
+       an installer failure through the restore-failed sentence told the
+       operator the install had landed when it had not, blamed a step that had
+       often SUCCEEDED, and named the wrong repair (#3043 S1). */
+    if (ort.installerError) {
       this.transition(job, 'error', {
         error:
-          `Kokoro installed, but restoring the GPU ONNX runtime afterwards failed: ${ort.failure.message} ` +
+          `${ort.installerError.message} ` +
+          (ort.restoreError
+            ? `Restoring the GPU ONNX runtime afterwards also failed: ${ort.restoreError.message} ` +
+              'Kokoro may run on the CPU until it is repaired — with the app closed, run ' +
+              'server/tts-sidecar/scripts/install-ort.mjs against the sidecar venv python. ' +
+              'Then retry the install (downloads resume).'
+            : 'The GPU ONNX runtime was checked and is intact. Retry the install (downloads resume).'),
+      });
+      return;
+    }
+    if (ort.restoreError) {
+      /* The install DID land; only the runtime restore after it failed. Saying
+         so is the whole point of keeping the two facts apart. */
+      this.transition(job, 'error', {
+        error:
+          `Kokoro installed, but restoring the GPU ONNX runtime afterwards failed: ${ort.restoreError.message} ` +
           'Kokoro may run on the CPU until it is repaired — with the app closed, run ' +
           'server/tts-sidecar/scripts/install-ort.mjs against the sidecar venv python.',
       });
       return;
     }
-    console.log(`[kokoro-install] onnxruntime after install: ${ort.outcome}`);
 
     /* Re-probe: the script exited 0, confirm the weight files actually landed. A
        0-exit with weights still missing is surfaced as an error so the UI

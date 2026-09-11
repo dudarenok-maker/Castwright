@@ -197,13 +197,11 @@ describe('WhisperInstallBootstrap', () => {
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'error');
       expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']);
-      /* Current (buggy) behavior — see the "reported (current behavior)"
-         describe block below: because the restore succeeded, the installer
-         failure is rendered through the restore-failed template, which
-         misleadingly claims Whisper landed. The installer's own failure
-         text is still present, embedded in that sentence. */
+      /* The restore succeeded, so the installer's own failure is reported
+         verbatim — not through the restore-failed template (#3043 S1). */
       expect(b.getJob(job.id)?.error).toMatch(/exited with code 1.*pip failed/);
-      expect(b.getJob(job.id)?.error).toMatch(/^Whisper ASR installed, but restoring the GPU ONNX runtime afterwards failed/);
+      expect(b.getJob(job.id)?.error).not.toMatch(/^Whisper ASR installed, but restoring the GPU ONNX runtime afterwards failed/);
+      expect(b.getJob(job.id)?.error).toMatch(/runtime was checked and is intact/);
     });
 
     it('already installed: never enters the hold, never spawns', async () => {
@@ -416,23 +414,17 @@ describe('WhisperInstallBootstrap', () => {
     expect(b.getJob(job.id)?.error).not.toMatch(/A new release/);
   });
 
-  /* Unlike QwenInstallBootstrap (#3043 S1), WhisperInstallBootstrap's `run()`
-     does NOT distinguish an installer failure from a restore failure in the
-     reported message: whenever an installerError exists, `ort` resolves to
-     `{ failure: installerError }` regardless of whether restoreOrtFn itself
-     succeeded or failed, and the outer branch always renders it through the
-     single "Whisper ASR installed, but restoring the GPU ONNX runtime
-     afterwards failed: …" template — which misreports an installer failure
-     as an installed-but-runtime-broken state, and (when the restore ALSO
-     fails) drops the restore's own error entirely, only console.warn-ing it.
-     These tests pin the ACTUAL current behavior (a pre-existing bug, out of
-     this child's scope per the issue — see the AGENT DONE receipt) rather
-     than the Qwen-shaped behavior a naive port would assume. */
-  describe('the installer outcome and the restore outcome are reported (current behavior — not yet separated, see receipt)', () => {
+  /* Mirrors QwenInstallBootstrap (#3043 S1): an installer failure and a
+     restore failure are two INDEPENDENT facts, and neither is reported as
+     the other. The installer's own message is verbatim and first; a restore
+     failure is appended as context, never a substitute; and a restore
+     failure occurring alone still lands through its own "installed, but
+     restoring… failed" template. */
+  describe('the installer outcome and the restore outcome are reported separately', () => {
     const failingInstaller = (): unknown =>
       makeFakeChild(1, { stderr: 'ERROR: HuggingFace download failed: connection timeout\n' });
 
-    it('installer FAILS + restore SUCCEEDS: still runs the restore, but the error is misreported through the restore-failed template', async () => {
+    it('installer FAILS + restore SUCCEEDS: reports the installer failure, says the runtime is intact, points at a retry', async () => {
       let restoreCalled = false;
       const b = new WhisperInstallBootstrap({
         repoRoot: '/repo',
@@ -448,19 +440,20 @@ describe('WhisperInstallBootstrap', () => {
       await until(() => b.getJob(job.id)?.status === 'error');
       const error = b.getJob(job.id)?.error ?? '';
 
-      // The restore still runs on the installer-failure path.
+      // The restore still runs on the installer-failure path (that is the fix
+      // this path exists for) — but it SUCCEEDED here...
       expect(restoreCalled).toBe(true);
-      // The installer's own failure text is present (embedded in the
-      // installerError message)…
+      // ...so the message must not blame it, must not claim Whisper landed, and
+      // must not send the operator to install-ort.mjs.
       expect(error).toMatch(/HuggingFace download failed/);
-      // …but current code reports it through the restore-failed template,
-      // even though the restore itself succeeded — misleadingly claiming
-      // Whisper landed.
-      expect(error).toMatch(/^Whisper ASR installed, but restoring the GPU ONNX runtime afterwards failed/);
-      expect(error).toMatch(/install-ort\.mjs/);
+      expect(error).not.toMatch(/Whisper ASR installed/);
+      expect(error).not.toMatch(/restoring the GPU ONNX runtime afterwards failed/);
+      expect(error).not.toMatch(/install-ort\.mjs/);
+      expect(error).toMatch(/runtime was checked and is intact/);
+      expect(error).toMatch(/Retry the install/);
     });
 
-    it('installer FAILS + restore FAILS: reports the installer failure through the restore-failed template; the restore error itself is dropped from job.error', async () => {
+    it('installer FAILS + restore FAILS: reports the installer failure AND names the runtime repair', async () => {
       const b = new WhisperInstallBootstrap({
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
@@ -475,11 +468,11 @@ describe('WhisperInstallBootstrap', () => {
       const error = b.getJob(job.id)?.error ?? '';
 
       expect(error).toMatch(/HuggingFace download failed/);
-      expect(error).toMatch(/^Whisper ASR installed, but restoring the GPU ONNX runtime afterwards failed/);
+      expect(error).not.toMatch(/Whisper ASR installed/);
+      // Both facts present, in that order — the installer's first.
+      expect(error).toMatch(/pip uninstall onnxruntime exited with code 1/);
       expect(error).toMatch(/install-ort\.mjs/);
-      // The restore's own error text ("pip uninstall onnxruntime…") never
-      // reaches job.error on this path — only console.warn sees it.
-      expect(error).not.toMatch(/pip uninstall onnxruntime exited with code 1/);
+      expect(error.indexOf('HuggingFace')).toBeLessThan(error.indexOf('pip uninstall'));
     });
 
     it('installer SUCCEEDS + restore FAILS: reports that Whisper DID land and only the runtime needs repair', async () => {
