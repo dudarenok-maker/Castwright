@@ -4559,23 +4559,21 @@ run sheet's pin/stale-cache scenarios.
 
 #3086 observed a raw Kokoro `/synthesize` call completing while a VoiceDesign forward was
 still resident. Tracing (#3101) found `KokoroEngine.synthesize()` and `design_voice()`
-already drive `_VD_KOKORO` correctly; the actual bypass was `POST /load {"engine":"kokoro"}`
-and the `PRELOAD_KOKORO` startup path, which called `KokoroEngine._ensure_loaded()` directly
-and never went through `_VD_KOKORO.kokoro_synth()`. On the DirectML profile a cold Kokoro
-load is not just bookkeeping — `_directml_selftest_or_fallback` runs a real one-shot forward
-(`kokoro.create("ok", ...)`) to prove the provider works, which could land mid-design with no
-exclusion at all. The fix adds `_kokoro_ensure_loaded_guarded()` and routes both bypass call
-sites through it; a pure-Python threading test (`test_load_kokoro_arbiter_gate.py`) proves
-`/load` now blocks while a design holds the arbiter, using a fake Kokoro engine — no real
-model load. Unit tests cannot prove the ORIGINAL symptom on real hardware: a live Kokoro
-`/load` (or `PRELOAD_KOKORO=1` startup) racing a real, resident VoiceDesign forward on a
-shared-device box, with real DirectML self-test timing.
+already drive `_VD_KOKORO` correctly; the actual bypass was `POST /load {"engine":"kokoro"}`,
+which called `KokoroEngine._ensure_loaded()` directly without going through `_VD_KOKORO.kokoro_synth()`.
+On the DirectML profile a cold Kokoro load is not just bookkeeping — `_directml_selftest_or_fallback`
+runs a real one-shot forward (`kokoro.create("ok", ...)`) to prove the provider works, which could
+land mid-design with no exclusion at all. The fix adds `_kokoro_ensure_loaded_guarded()` and routes
+the `/load` bypass through it. A pure-Python threading test (`test_load_kokoro_arbiter_gate.py`) proves
+`/load` now blocks while a design holds the arbiter, using a fake Kokoro engine — no real model load.
+Unit tests cannot prove the ORIGINAL symptom on real hardware: a live Kokoro `/load` racing a real,
+resident VoiceDesign forward on a shared-device box, with real DirectML self-test timing.
 
 *Needs:* single 8 GB GPU card, DirectML profile, real Kokoro weights, Qwen VoiceDesign 1.7B
 resident.
-*Criteria:* re-run the #3086 repro — concurrent VoiceDesign forward + raw Kokoro `/load` (or
-startup preload) on a shared-device box — and confirm the Kokoro load now blocks until the
-design releases, matching the unit-level proof above.
+*Criteria:* re-run the #3086 repro — concurrent VoiceDesign forward + raw Kokoro `/load`
+on a shared-device box — and confirm the Kokoro load now blocks until the design releases,
+matching the unit-level proof above.
 *Cost:* short — one concurrent repro, same shape as the unit test but against real weights.
 
 ## Group B — local Ollama analyzer only

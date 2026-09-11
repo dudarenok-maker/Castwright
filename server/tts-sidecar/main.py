@@ -1580,6 +1580,13 @@ class _VdKokoroArbiter:
             yield
             return
         with self._cv:
+            # B5 ruling: the wait is unbounded and starvable if designs queue
+            # continuously (design() does not wait on other designs, only drains
+            # in-flight Kokoro). This is accepted as a known limitation bounded in
+            # practice by the Node-side 90s client timeout on /load requests. If a
+            # client times out, the sidecar thread remains in this wait until
+            # design_active_count drops, then completes the load and clears the
+            # _loading flag. This is suboptimal fairness but not a correctness bug.
             while self._design_active_count > 0:
                 self._cv.wait()
             self._kokoro_in_flight += 1
@@ -11215,14 +11222,20 @@ def _kokoro_ensure_loaded_guarded(
     """Take `_VD_KOKORO.kokoro_synth()` around a cold Kokoro load (#3086/#3101).
 
     `KokoroEngine.synthesize()` wraps its whole forward (load + create) in the
-    arbiter, but `/load` and the startup preload path call `_ensure_loaded`
-    directly, bypassing it entirely. A cold load isn't just bookkeeping: on
-    the DirectML profile it runs a real one-shot forward
-    (`_directml_selftest_or_fallback`'s `kokoro.create("ok", ...)`) to prove
-    the provider actually works — exactly the "raw Kokoro synth" that must
-    not co-reside with an active VoiceDesign forward. Routing every cold load
-    through the same gate `synthesize()` uses closes that bypass regardless
-    of which caller triggers the load."""
+    arbiter, but `/load` calls `_ensure_loaded` directly, bypassing it. A cold
+    load isn't just bookkeeping: on the DirectML profile it runs a real one-shot
+    forward (`_directml_selftest_or_fallback`'s `kokoro.create("ok", ...)`) to
+    prove the provider actually works — exactly the "raw Kokoro synth" that must
+    not co-reside with an active VoiceDesign forward. Routing the cold `/load`
+    through the same gate `synthesize()` uses closes that bypass. The startup
+    preload path also goes through this wrapper for consistency, though the
+    lifespan startup completes before uvicorn accepts requests, so no design
+    forward can be in flight at that point."""
+    # B4 ruling: this gate is unconditional on the device being GPU (even if a
+    # CPU-admitted load arrives via `device="cpu"` from capacity admission). The
+    # blanket exclusion is simpler than scoping to GPU devices only; CPU loads
+    # that wait for GPU designs are delayed but don't actually contend, and this
+    # rare path (capacity admission hitting the GPU limit) is acceptable.
     with _VD_KOKORO.kokoro_synth():
         kokoro._ensure_loaded(model, device=device)
 
