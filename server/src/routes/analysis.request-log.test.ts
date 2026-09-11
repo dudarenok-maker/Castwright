@@ -32,6 +32,32 @@ import type { ChapterHint } from '../store/manuscripts.js';
 import { putManuscript, removeManuscript } from '../store/manuscripts.js';
 import { clearAnalysisCache } from '../store/analysis-cache.js';
 
+/* M2 (#3169 gate1 P1 🟡2) — tests (a) and (c) below claim the `request
+   received` line prints before hydration, but asserting only that the line
+   exists (plus that no `start` line exists for an unregistered id) doesn't
+   prove that ordering: moving the log call to just after
+   getOrHydrateManuscript would still pass both, since the unknown-manuscript
+   early-out happens right after that call either way. This records, at the
+   exact moment getOrHydrateManuscript is invoked, whether the target
+   request-received line has already reached the console.log spy — mirroring
+   analysis.snapshot-detach.test.ts's `vi.mock('../store/manuscripts.js', …)`
+   idiom, but instrumenting rather than rejecting, and delegating to the real
+   implementation so every other test in this file (and putManuscript/
+   removeManuscript, re-exported unchanged via `...actual`) is unaffected. */
+const hydrationCallSawRequestReceived = new Map<string, boolean>();
+let requestReceivedProbe: ((manuscriptId: string) => boolean) | null = null;
+
+vi.mock('../store/manuscripts.js', async () => {
+  const actual = await vi.importActual<typeof import('../store/manuscripts.js')>('../store/manuscripts.js');
+  return {
+    ...actual,
+    getOrHydrateManuscript: async (id: string) => {
+      if (requestReceivedProbe) hydrationCallSawRequestReceived.set(id, requestReceivedProbe(id));
+      return actual.getOrHydrateManuscript(id);
+    },
+  };
+});
+
 /* select-analyzer is mocked so this route-level test never makes a real
    Ollama/Gemini call — the phase-0 analyzer throws immediately (a plain,
    deterministic error, not GeminiContentBlockedError — the specific failure
@@ -212,6 +238,13 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
 
     const manuscriptId = `test-request-received-unknown-${Date.now()}-${Math.random()}`;
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    requestReceivedProbe = (id) =>
+      consoleLogSpy.mock.calls.some(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].startsWith('[analysis] request received') &&
+          call[0].includes(`manuscript=${JSON.stringify(id)}`),
+      );
     try {
       const res = await supertest(app)
         .post(`/api/manuscripts/${manuscriptId}/analysis`)
@@ -231,16 +264,25 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
       expect(requestReceivedLine).toContain('model="(saved/default)"');
       expect(requestReceivedLine).toContain('fresh=false');
 
+      /* Direct proof of ordering: recorded by the mocked getOrHydrateManuscript
+         itself, at the moment it was invoked — not inferred from the absence
+         of a later line. */
+      expect(
+        hydrationCallSawRequestReceived.get(manuscriptId),
+        'request received must already be logged when getOrHydrateManuscript is called',
+      ).toBe(true);
+
       /* The `start` outcome line only fires once a new job is actually
-         created — proof the request-received line above is logged strictly
-         BEFORE hydration, not merely earlier in the same burst: for an id
-         that was never registered, hydration never succeeds, so this line
-         must be entirely absent. */
+         created — corroborating evidence: for an id that was never
+         registered, hydration never succeeds, so this line must be entirely
+         absent. */
       const startLine = consoleLogSpy.mock.calls
         .map((call) => call[0])
         .find((line): line is string => typeof line === 'string' && line.startsWith('[analysis] start manuscript='));
       expect(startLine, 'the start outcome line must not print for an unhydrated manuscript').toBeUndefined();
     } finally {
+      requestReceivedProbe = null;
+      hydrationCallSawRequestReceived.delete(manuscriptId);
       consoleLogSpy.mockRestore();
     }
   });
@@ -305,6 +347,13 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
 
     const manuscriptId = `test-request-received-subset-unknown-${Date.now()}-${Math.random()}`;
     const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    requestReceivedProbe = (id) =>
+      consoleLogSpy.mock.calls.some(
+        (call) =>
+          typeof call[0] === 'string' &&
+          call[0].startsWith('[analysis-subset] request received') &&
+          call[0].includes(`manuscript=${JSON.stringify(id)}`),
+      );
     try {
       const res = await supertest(app)
         .post(`/api/manuscripts/${manuscriptId}/analysis/chapters`)
@@ -327,6 +376,12 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
       expect(requestReceivedLine).toContain('model="(saved/default)"');
       expect(requestReceivedLine).toContain('chapters=1');
 
+      /* Direct proof of ordering — see the analogous check in test (a). */
+      expect(
+        hydrationCallSawRequestReceived.get(manuscriptId),
+        'request received must already be logged when getOrHydrateManuscript is called',
+      ).toBe(true);
+
       const startLine = consoleLogSpy.mock.calls
         .map((call) => call[0])
         .find(
@@ -335,6 +390,8 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
         );
       expect(startLine, 'the start outcome line must not print for an unhydrated manuscript').toBeUndefined();
     } finally {
+      requestReceivedProbe = null;
+      hydrationCallSawRequestReceived.delete(manuscriptId);
       consoleLogSpy.mockRestore();
     }
   });
