@@ -129,6 +129,81 @@ describe('realStreamGeneration auto-reconnect', () => {
     await new Promise((r) => setTimeout(r, 600));
     /* Only one fetch (no reconnect). */
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    /* #3026 step 2 — a zero-tick close is a stream-slot leak same as a 502 or
+       a rejected fetch: the client must still deliver chapter_failed + idle
+       so the dispatcher frees the queue worker slot. Deliberate behaviour
+       change for this shape — it used to deliver nothing at all. */
+    expect(ticks.map((t) => t.type)).toEqual(['chapter_failed', 'idle']);
+  });
+
+  /* #3026 step 2 — shape A: a non-OK response (e.g. the dev proxy's 502/504
+     while the server is down or restarting) must still end with exactly one
+     chapter_failed (carrying chapterId for a single-chapter request) then
+     idle, so the dispatcher frees the worker slot instead of wedging the
+     queue forever. */
+  it('delivers chapter_failed + idle for a non-OK response (single chapter)', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      body: null,
+      text: () => Promise.resolve(''),
+    } as unknown as Response);
+    const ticks: { type: string; chapterId?: number }[] = [];
+    api.streamGeneration({
+      bookId: 'book-A',
+      modelKey: 'kokoro-v1',
+      chapterIds: [7],
+      onTick: (t) => ticks.push(t as { type: string; chapterId?: number }),
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(ticks.map((t) => t.type)).toEqual(['chapter_failed', 'idle']);
+    expect(ticks[0].chapterId).toBe(7);
+  });
+
+  /* #3026 step 2 — shape C: the first fetch throwing before any tick (e.g.
+     connection refused) is the same leak as shape A and gets the same
+     terminal pair. */
+  it('delivers chapter_failed + idle when the first fetch throws (single chapter)', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const ticks: { type: string; chapterId?: number }[] = [];
+    api.streamGeneration({
+      bookId: 'book-A',
+      modelKey: 'kokoro-v1',
+      chapterIds: [7],
+      onTick: (t) => ticks.push(t as { type: string; chapterId?: number }),
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(ticks.map((t) => t.type)).toEqual(['chapter_failed', 'idle']);
+    expect(ticks[0].chapterId).toBe(7);
+  });
+
+  /* #3026 step 2 — a multi-chapter request has no single chapter to blame,
+     so the chapter_failed tick omits chapterId entirely rather than
+     guessing. */
+  it('omits chapterId on the terminal chapter_failed for a multi-chapter request', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      body: null,
+      text: () => Promise.resolve(''),
+    } as unknown as Response);
+    const ticks: { type: string; chapterId?: number }[] = [];
+    api.streamGeneration({
+      bookId: 'book-A',
+      modelKey: 'kokoro-v1',
+      chapterIds: [1, 2],
+      onTick: (t) => ticks.push(t as { type: string; chapterId?: number }),
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(ticks.map((t) => t.type)).toEqual(['chapter_failed', 'idle']);
+    expect(ticks[0].chapterId).toBeUndefined();
   });
 
   /* #2516/#2763 — a route-level precondition failure (cast not confirmed,
