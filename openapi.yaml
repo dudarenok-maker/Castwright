@@ -4107,6 +4107,28 @@ paths:
         '409': { description: Entry has no consent record to revoke }
         '502': { description: Revoke failed (write or artifact-purge error) }
 
+  /api/info/dismiss-whats-new:
+    post:
+      summary: Dismiss the what's-new banner
+      operationId: realDismissWhatsNew
+      responses:
+        '200':
+          description: Dismiss successful.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DismissWhatsNewResponse' }
+
+  /api/tour/complete:
+    post:
+      summary: Mark the guided tour complete
+      operationId: completeTour
+      responses:
+        '200':
+          description: Tour completion timestamp.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TourCompleteResponse' }
+
   /api/setup/readiness:
     get:
       summary: First-run readiness probe
@@ -8424,9 +8446,24 @@ components:
 
     SetupCompleteResponse:
       type: object
-      required: [completedAt]
+      required: [completedAt, corruptSettingsFile]
       properties:
         completedAt: { type: string, description: ISO-8601 timestamp just written. }
+        corruptSettingsFile: { type: boolean, description: Whether the user-settings file is currently corrupted and recoverable. }
+
+    TourCompleteResponse:
+      type: object
+      required: [completedAt, corruptSettingsFile]
+      properties:
+        completedAt: { type: string, description: ISO-8601 timestamp just written. }
+        corruptSettingsFile: { type: boolean, description: Whether the user-settings file is currently corrupted and recoverable. }
+
+    DismissWhatsNewResponse:
+      type: object
+      required: [ok, corruptSettingsFile]
+      properties:
+        ok: { type: boolean, description: Whether the dismiss operation succeeded. }
+        corruptSettingsFile: { type: boolean, description: Whether the user-settings file is currently corrupted and recoverable. }
 
     SetupSmokeResponse:
       type: object

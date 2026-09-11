@@ -14,6 +14,7 @@ import {
 } from 'react-router';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, store } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { accountActions } from '../store/account-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
 import { chaptersActions } from '../store/chapters-slice';
@@ -439,7 +440,9 @@ function SetupRoute() {
 
   const onFinish = async () => {
     try {
-      await api.completeSetup();
+      const result = await api.completeSetup();
+      // Update the corruption banner state from the response
+      dispatch(accountActions.setCorruptSettingsFile(result.corruptSettingsFile));
     } catch {
       /* non-fatal */
     }

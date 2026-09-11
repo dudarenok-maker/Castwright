@@ -8,10 +8,13 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { api } from '../lib/api';
 import { useAppInfo } from '../lib/use-app-info';
+import { useAppDispatch } from '../store';
+import { accountActions } from '../store/account-slice';
 import { latestReleaseNote } from '../lib/release-notes';
 
 export function WhatsNewBanner() {
   const { info, refresh } = useAppInfo();
+  const dispatch = useAppDispatch();
   const [dismissing, setDismissing] = useState(false);
 
   if (!info?.showWhatsNew) return null;
@@ -19,7 +22,9 @@ export function WhatsNewBanner() {
   const onDismiss = async () => {
     setDismissing(true);
     try {
-      await api.dismissWhatsNew();
+      const result = await api.dismissWhatsNew();
+      // Update the corruption banner state from the response
+      dispatch(accountActions.setCorruptSettingsFile(result.corruptSettingsFile));
       await refresh();
     } catch {
       /* leave the banner up if the dismiss call fails; the user can retry */

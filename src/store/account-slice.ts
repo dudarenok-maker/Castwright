@@ -146,6 +146,12 @@ export const accountSlice = createSlice({
     setBackupRetention: (s, a: PayloadAction<number>) => {
       s.backupRetention = a.payload;
     },
+    /* Update corruption flag when app writes complete successfully. The server
+       returns this flag alongside every write response, so the UI banner state
+       can stay in sync without re-fetching the whole account settings. */
+    setCorruptSettingsFile: (s, a: PayloadAction<boolean>) => {
+      s.corruptSettingsFile = a.payload;
+    },
   },
   extraReducers: (builder) => {
     builder

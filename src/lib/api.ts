@@ -7028,12 +7028,13 @@ async function realCheckCompanionApk(): Promise<CompanionApkAvailability> {
     return { available: false, sizeBytes: null };
   }
 }
-async function realDismissWhatsNew(): Promise<void> {
+async function realDismissWhatsNew(): Promise<{ ok: boolean; corruptSettingsFile: boolean }> {
   const res = await fetch('/api/info/dismiss-whats-new', { method: 'POST' });
   if (!res.ok)
     throw new Error(
       `Dismiss what's-new failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
+  return (await res.json()) as { ok: boolean; corruptSettingsFile: boolean };
 }
 async function realUpgradeStage(file: File): Promise<UpgradeStageResult> {
   const form = new FormData();
@@ -7222,11 +7223,12 @@ async function mockCheckCompanionApk(): Promise<CompanionApkAvailability> {
   await wait(20);
   return { available: false, sizeBytes: null };
 }
-export async function mockDismissWhatsNew(): Promise<void> {
+export async function mockDismissWhatsNew(): Promise<{ ok: boolean; corruptSettingsFile: boolean }> {
   await wait(20);
   /* The latch alone carries the dismiss: buildMockAppInfo hardcodes
      showWhatsNew:false, so there is no state write to make. */
   demoWhatsNewDismissed = true;
+  return { ok: true, corruptSettingsFile: false };
 }
 /* Next minor above the running version, so the staged mock candidate stays a
    genuine upgrade over the version-tracking chrome (was frozen at
@@ -8103,30 +8105,31 @@ async function realCompleteSetup(): Promise<SetupCompleteResponse> {
 }
 
 export async function mockCompleteSetup(): Promise<SetupCompleteResponse> {
-  return { completedAt: '2026-06-12T00:00:00.000Z' };
+  return { completedAt: '2026-06-12T00:00:00.000Z', corruptSettingsFile: false };
 }
 
 // --- tour status ---
 type TourStatus = { completedAt: string | null };
+type TourCompleteResponse = { completedAt: string; corruptSettingsFile: boolean };
 
 async function realGetTourStatus(): Promise<TourStatus> {
   const res = await fetch('/api/tour/status');
   if (!res.ok) throw new Error(`tour status ${res.status}`);
   return (await res.json()) as TourStatus;
 }
-async function realCompleteTour(): Promise<TourStatus> {
+async function realCompleteTour(): Promise<TourCompleteResponse> {
   const res = await fetch('/api/tour/complete', { method: 'POST' });
   if (!res.ok) throw new Error(`tour complete ${res.status}`);
-  return (await res.json()) as TourStatus;
+  return (await res.json()) as TourCompleteResponse;
 }
 
 let mockTourCompletedAt: string | null = null;
 export async function mockGetTourStatus(): Promise<TourStatus> {
   return { completedAt: mockTourCompletedAt };
 }
-export async function mockCompleteTour(): Promise<TourStatus> {
+export async function mockCompleteTour(): Promise<TourCompleteResponse> {
   mockTourCompletedAt = new Date().toISOString();
-  return { completedAt: mockTourCompletedAt };
+  return { completedAt: mockTourCompletedAt, corruptSettingsFile: false };
 }
 export function _resetMockTour(): void {
   mockTourCompletedAt = null;

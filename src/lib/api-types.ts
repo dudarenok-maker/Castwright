@@ -2777,6 +2777,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/info/dismiss-whats-new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss the what's-new banner */
+        post: operations["realDismissWhatsNew"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tour/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark the guided tour complete */
+        post: operations["completeTour"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/setup/readiness": {
         parameters: {
             query?: never;
@@ -6134,6 +6168,20 @@ export interface components {
         SetupCompleteResponse: {
             /** @description ISO-8601 timestamp just written. */
             completedAt: string;
+            /** @description Whether the user-settings file is currently corrupted and recoverable. */
+            corruptSettingsFile: boolean;
+        };
+        TourCompleteResponse: {
+            /** @description ISO-8601 timestamp just written. */
+            completedAt: string;
+            /** @description Whether the user-settings file is currently corrupted and recoverable. */
+            corruptSettingsFile: boolean;
+        };
+        DismissWhatsNewResponse: {
+            /** @description Whether the dismiss operation succeeded. */
+            ok: boolean;
+            /** @description Whether the user-settings file is currently corrupted and recoverable. */
+            corruptSettingsFile: boolean;
         };
         /**
          * @description End-to-end synth check. Returns ok:false (never 5xx) on failure so the
@@ -11001,6 +11049,46 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    realDismissWhatsNew: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dismiss successful. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DismissWhatsNewResponse"];
+                };
+            };
+        };
+    };
+    completeTour: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tour completion timestamp. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TourCompleteResponse"];
+                };
             };
         };
     };
