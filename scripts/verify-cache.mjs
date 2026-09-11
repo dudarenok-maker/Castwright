@@ -470,12 +470,17 @@ export const STEPS = [
         'server/package.json',
         'e2e/global-teardown.ts',
         '.gitattributes',
-        /* #1932 (side-18): coqui-residency-policy.guard.test.ts (server suite) reads both
-           of these at RUNTIME to guard cross-reference rot across Coqui eviction mechanisms
-           and their policy doc — no module-graph edge, same #1847 runtime-read trap as
-           openapi.yaml/scripts/** above. Without these entries, a diff confined to either
-           (exactly the shape that could break the Coqui eviction contract) reports [cached]
-           and the guard never re-runs. */
+        /* #1932 (side-18): coqui-residency-policy.guard.test.ts reads TWO of these at RUNTIME
+           to guard cross-reference rot across Coqui eviction mechanisms and their policy doc
+           — no module-graph edge, same #1847 runtime-read trap as openapi.yaml/scripts/** above.
+           This is item 5 of that guard's own NOTE at server/src/tts/coqui-residency-policy.guard.test.ts.
+           The three paths are DECLARED via COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS
+           (server/src/tts/coqui-residency-policy.guard-targets.ts), the single source of truth
+           for all three locations (server/vitest.config.ts, force-rerun-triggers.test.ts, and
+           this entry). synthesise-chapter.ts is inert here (covered by server/src/** glob already),
+           while main.py and the policy doc are not covered by any glob and would fail SILENTLY
+           (hashFile returns a sentinel for a missing path rather than throwing), unlike the
+           test's own POLICY_DOC_PATH which throws on readFileSync. */
         'server/tts-sidecar/main.py',
         'docs/features/264-vram-aware-gpu-placement.md',
       ],

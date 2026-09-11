@@ -29,6 +29,7 @@ import picomatch from 'picomatch';
 import { existsSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS } from './tts/coqui-residency-policy.guard-targets.js';
 
 const SERVER_ROOT = resolve(__dirname, '..');
 const REPO_ROOT = resolve(SERVER_ROOT, '..');
@@ -139,16 +140,23 @@ const MAIN_COVERED = [
      module-graph edges (same #1847 runtime-read trap); synthesise-chapter.ts
      IS importable but is included here for consistency with the guard's uniform
      readFileSync approach rather than being split into two separate tracking
-     mechanisms. */
-  { rel: 'src/tts/synthesise-chapter.ts', file: 'the Node Coqui eviction mechanism', base: SERVER_ROOT },
+     mechanisms. Each `rel` below is DERIVED from
+     COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS (#3085, #3151 follow-up), the
+     same constant the guard itself declares, not a second hand-typed literal
+     that happens to agree with it today. */
   {
-    rel: 'server/tts-sidecar/main.py',
-    file: 'the sidecar Coqui eviction mechanism (via the server/tts-sidecar/main.py trigger)',
+    rel: COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS[0],
+    file: 'the Node Coqui eviction mechanism (COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS)',
     base: REPO_ROOT,
   },
   {
-    rel: 'docs/features/264-vram-aware-gpu-placement.md',
-    file: 'the Coqui residency policy doc',
+    rel: COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS[1],
+    file: 'the sidecar Coqui eviction mechanism (COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS)',
+    base: REPO_ROOT,
+  },
+  {
+    rel: COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS[2],
+    file: 'the Coqui residency policy doc (COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS)',
     base: REPO_ROOT,
   },
   /* #3059 — engine-language-coverage.guard.test.ts's third assertion reads
@@ -186,6 +194,19 @@ describe('server/vitest.config.ts forceRerunTriggers', () => {
     'covers $file from $shape so a config-only diff still forces a full --changed run',
     ({ rel, base, root }) => {
       expect(matchesTrigger(mainTriggers, absPathUnder(root, base, rel))).toBe(true);
+    },
+  );
+
+  /* #3085/#3151 follow-up: the file-coverage case above only proves the
+     CURRENT scope is covered. This assertion checks the trigger array contains
+     the EXACT brace-glob built from each imported constant, so narrowing OR
+     widening the constant without updating vitest.config.ts's literal entry
+     to match is caught either way — a drift in either direction fails this test. */
+  it.each(COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS)(
+    'main forceRerunTriggers has the exact entry derived from COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS entry %s (#3085, #3151 follow-up)',
+    (glob) => {
+      const expected = `{**/${glob},**/.*/**/${glob}}`;
+      expect(mainTriggers).toContain(expected);
     },
   );
 
