@@ -21,7 +21,7 @@ import { waitForRouteReady, stubAccountModelProbes, bootFreshBookIntoAnalysing }
 /* Cold `goto`s into /#/models and the new-book upload flow both trigger
    route-level React.lazy chunk loads; run this file's tests on a single
    worker to avoid the contention flake several sibling specs already guard
-   against (model-manager-analyzer-knobs.spec.ts, advanced-settings.spec.ts). */
+   against (advanced-settings.spec.ts). */
 test.describe.configure({ mode: 'serial' });
 
 test.beforeEach(async ({ page }) => {
@@ -123,10 +123,10 @@ test.describe('#3141 step 6 — analyzer settings ownership', () => {
     await expect(chip0).toContainText('Gemini 3.5 Flash Lite');
 
     /* Navigate to the Model Manager (same JS context — a hash-only
-       navigation, so the mock store and the seeded split survive; see
-       model-manager-analyzer-knobs.spec.ts's own away-and-back test for the
-       same mock-mode quirk) and confirm the saved settings are unchanged:
-       still the original split, not the per-run pick. */
+       navigation, so the mock store and the seeded split survive; the mock
+       store resets on a full `page.reload()` but not on an in-context hash
+       navigation) and confirm the saved settings are unchanged: still the
+       original split, not the per-run pick. */
     await page.goto('/#/models');
     await waitForRouteReady(page);
     await expect(page.getByTestId('account-analyzer-phase0-model')).toContainText('Gemma 4 31B');
