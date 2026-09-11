@@ -6645,11 +6645,17 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       const runningChapters = (existing.subsetChapterIds ?? [])
         .map((id) => hintsById.get(id))
         .filter((h): h is NonNullable<typeof h> => !!h);
+      const runningTitles = runningChapters.map((c) => c.title).join(', ');
+      const titlePart = runningTitles ? `: ${runningTitles}` : '';
+      const message = `A different subset re-analysis is already in progress for this manuscript${titlePart}. Wait for it to finish (or cancel it) before starting a different subset.`;
       send({
         kind: 'error',
         code: 'subset_in_progress',
-        message: `A different subset re-analysis is already in progress for this manuscript: ${runningChapters.map((c) => c.title).join(', ')}. Wait for it to finish (or cancel it) before starting a different subset.`,
+        message,
       });
+      /* N3 (#3202) — log the rejection outcome to distinguish a colliding
+         re-POST from a wedged request that never got a response. */
+      console.log(`[analysis-subset] subset_in_progress manuscript=${JSON.stringify(manuscriptId)}`);
       clearInterval(keepAlive);
       return res.end();
     }
