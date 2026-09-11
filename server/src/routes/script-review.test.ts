@@ -431,6 +431,52 @@ describe('POST /api/books/:bookId/script-review', () => {
     expect(runReview).not.toHaveBeenCalled();
   });
 
+  /* #3174 (G2) — the same detached `.catch` handler above sent the rejected
+     error's RAW `.message` straight to the client. For a
+     LockAcquisitionTimeoutError that message embeds the lock KEY, which
+     embeds an absolute workspace path (see the class's own doc comment in
+     file-lock.ts) — exactly the class of leak CLAUDE.md's cast-lock section
+     forbids on any client-facing surface. This also proves the detached
+     rejection itself is fully contained: no unhandledRejection reaches the
+     process, and the SSE response still ends normally. */
+  it('when the job runner rejects with a lock-acquisition timeout, the client sees the curated sentence — never the raw key/path — and the response ends cleanly', async () => {
+    writeBook(SENTENCES);
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+      '../workspace/file-lock.js'
+    );
+    const fakeAbsolutePath = 'C:/Users/someone/AudiobookWorkspace/books/Author/Series/Title';
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => {
+      throw new LockAcquisitionTimeoutError(`cast:${fakeAbsolutePath}`, 10_000);
+    });
+
+    let unhandledRejection: unknown = null;
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejection = reason;
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+      expect(res.status).toBe(200);
+      const events = parseSse(res.text);
+      const err = events.find((e) => e.kind === 'error' && e.code === 'internal_error') as
+        | { message?: string }
+        | undefined;
+      expect(err).toBeDefined();
+      expect(err?.message).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+      expect(err?.message).not.toContain(fakeAbsolutePath);
+      expect(err?.message).not.toContain('withKeyLock');
+      // The response actually ended — supertest's own await above wouldn't
+      // resolve otherwise, but assert explicitly per the brief.
+      expect(res.text.length).toBeGreaterThan(0);
+
+      await new Promise((r) => setTimeout(r, 0));
+      expect(unhandledRejection).toBeNull();
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+    }
+  });
+
   it('a single chapter failure does not abort the rest of the pass', async () => {
     writeBook(SENTENCES);
     runReview.mockImplementation((_m, chapterId): Promise<ScriptReviewOutput> => {

@@ -150,9 +150,12 @@ export const analysisStreamMiddleware: Middleware = (store) => {
        view's POST owns the start decision; this one is guaranteed to
        take the server dispatcher's subscribe path because we wait for
        the first tick (proof the view's POST landed) before firing.
-       Subset branch passes chapterIds so the server route validates
-       against the existing job's subsetChapterIds — matching ids join
-       the existing subscriber set, mismatched would 409. */
+       Subset branch passes chapterIds because the route requires a
+       non-empty, valid array to pass its own validation — it does NOT
+       compare them against the existing job's subsetChapterIds. A request
+       that validates joins whatever subset job is already running for the
+       manuscript, regardless of which chapters it names (tracked as a
+       decision in #3202). */
     void (async () => {
       try {
         if (desiredKind === 'subset') {

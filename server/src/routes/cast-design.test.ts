@@ -508,6 +508,47 @@ describe('POST /api/books/:bookId/cast/design', () => {
     expect(charById('brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_brann');
   });
 
+  /* #3027 second half — a per-character exception during the PERSONA step
+     (the Gemini `generateVoiceStylePersona` call at cast-design.ts:515) must
+     be a per-character failure, not a job-wide halt. The persona fallback sits
+     in the OUTER try (heartbeat-clear only, no catch) rather than the inner
+     ride-out loop's per-item catch, so a throw there used to escape the loop
+     entirely and land in the route handler's backstop `endJob({type:'error'})`
+     -> client `halt` (a bare "Halted" with no designed/failed/skipped
+     summary). This test simulates exactly that: two characters, the first
+     being persona-less (triggers Gemini fallback), generating a persona
+     throws, and asserts the job still moves on to the NEXT character and ends
+     in `idle` with a per-character failure recorded — never a bare error. */
+  it('#3027/2: a persona-generation failure is a per-character failure, not a bare Halted', async () => {
+    resolvePersonaEngineMock.mockReturnValue('gemini');
+    personaMock.mockReset();
+    personaMock.mockRejectedValueOnce(new Error('Gemini quota exceeded'));
+
+    /* aria (first) drives the design; hart still gets designed because the
+       persona failure only fails hart's own step. Both must hit the outer
+       loop. Order: [hart, aria] so the persona failure occurs first and, if
+       it wrongly halts, aria is never designed. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['hart', 'aria'], modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    /* The persona-failure character is reported, not the whole run. */
+    expect(events.some((e) => e.type === 'character_failed' && e.characterId === 'hart')).toBe(true);
+    /* the run continues to design the NEXT character */
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(true);
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle).toBeDefined();
+    expect(idle).toMatchObject({ done: 1, total: 2 });
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('hart');
+    /* there is NO terminal error event — the bare "Halted" shape */
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
+  });
+
   it('rides out a mid-bulk sidecar recycle: waits for respawn, retries the character, and completes', async () => {
     /* A recycle (committed/VRAM ceiling) mid-bulk makes ONE design fail with an
        "unreachable" error while the supervisor respawns. The job must wait for
@@ -1585,5 +1626,125 @@ describe('cast-design — per-character reason on a lock timeout (#2292)', () =>
     const idle = events.find((e) => e.type === 'idle');
     expect(idle?.failures).toHaveLength(1);
     expect(idle?.failures?.[0].error).toBe('model exploded');
+  });
+});
+
+/* PR #3161 review finding #1 — the Gemini persona-fallback catch (cast-design.ts
+   ~line 528-541, the same site the #3027/2 test above exercises) used to ship
+   `(e as Error).message` verbatim to the client. A `LockAcquisitionTimeoutError`
+   out of `writeVoiceStylePersona`'s `withCastLock` embeds the absolute
+   filesystem path to cast.json in its message — a disclosure bug over LAN
+   HTTPS. Must route through `itemFailureReason` like the sibling ride-out-loop
+   site (#2292, asserted at line ~1615 above) already does. */
+/* pr-review-gate re-review finding N1 (PR #3161) — `ensureCharacterVoiceUuid`
+   is called BEFORE the per-character ride-out loop's `try` block (cast-design.ts
+   ~line 573-575, pre-fix), so a throw out of it escaped the same per-character
+   catch that already covers `applyOverrideToCastFiles`/`persistEmotionVariant`/
+   `writeVoiceStylePersona` — despite the catch's own comment (~line 706-714)
+   claiming it was covered. One contended/failing character's
+   `ensureCharacterVoiceUuid` call used to halt the WHOLE bulk-design job with a
+   bare terminal `error` event instead of recording a per-character failure and
+   continuing — exactly the "one failure halts everything" shape #3027 exists to
+   fix, reachable through this second call site. */
+describe('cast-design — ensureCharacterVoiceUuid failure is per-character, not job-halting (PR #3161 N1)', () => {
+  it('records a curated character_failed for the first character and still designs the second', async () => {
+    const qwenVoiceMod = await import('./qwen-voice.js');
+    const original = qwenVoiceMod.ensureCharacterVoiceUuid;
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    const spy = vi
+      .spyOn(qwenVoiceMod, 'ensureCharacterVoiceUuid')
+      .mockImplementation(async (bookDir: string, characterId: string, seriesFilter) => {
+        if (characterId === 'aria') {
+          throw new LockAcquisitionTimeoutError('cast:/w/hollow-tide', 10_000);
+        }
+        return original(bookDir, characterId, seriesFilter);
+      });
+
+    let res;
+    try {
+      res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['aria', 'brann'], modelKey: QWEN_KEY });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    /* The live broadcast: aria fails with the curated reason, not the raw
+       lock-timeout message (which embeds an absolute workspace path). */
+    const failedEvent = events.find((e) => e.type === 'character_failed' && e.characterId === 'aria');
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent?.errorReason).toBe(LOCK_CONTENTION_ITEM_REASON);
+    expect(failedEvent?.errorReason).not.toContain('withKeyLock');
+
+    /* No bare job-halting terminal `error` event — the run reaches its normal
+       `idle` summary. */
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle).toBeDefined();
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('aria');
+    expect(idle?.failures?.[0].error).toBe(LOCK_CONTENTION_ITEM_REASON);
+
+    /* The second character was still attempted and completed normally — the
+       loop did not halt on aria's failure. */
+    expect(idle?.done).toBe(1);
+    expect(charById('brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_brann');
+  });
+});
+
+describe('cast-design — persona-write lock timeout is curated, not leaked (PR #3161)', () => {
+  it('reports the curated contention reason, not the raw lock-timeout message, on a persona-write lock timeout', async () => {
+    resolvePersonaEngineMock.mockReturnValue('gemini');
+    personaMock.mockReset();
+    personaMock.mockResolvedValueOnce('A brand new persona for hart.');
+
+    const castLockMod = await import('../workspace/cast-lock.js');
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_ITEM_REASON } = await import(
+      '../workspace/file-lock.js'
+    );
+    /* Only the FIRST withCastLock call in this run is hart's persona write —
+       hart (no voiceStyle) hits it before any design/apply step; aria (has a
+       voiceStyle already) skips straight to design, whose own withCastLock
+       call (via voices.ts's applyOverrideToCastFiles) must go through
+       unmocked so aria still lands normally. */
+    const spy = vi
+      .spyOn(castLockMod, 'withCastLock')
+      .mockImplementationOnce(async () => {
+        throw new LockAcquisitionTimeoutError('cast:/w/hollow-tide', 10_000);
+      });
+
+    let res;
+    try {
+      res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['hart', 'aria'], modelKey: QWEN_KEY });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    const failedEvent = events.find((e) => e.type === 'character_failed' && e.characterId === 'hart');
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent?.errorReason).toBe(LOCK_CONTENTION_ITEM_REASON);
+    expect(failedEvent?.errorReason).not.toContain('withKeyLock');
+    expect(failedEvent?.errorReason).not.toContain('cast:/w/hollow-tide');
+
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('hart');
+    expect(idle?.failures?.[0].error).toBe(LOCK_CONTENTION_ITEM_REASON);
+    expect(idle?.failures?.[0].error).not.toContain('withKeyLock');
+    expect(idle?.failures?.[0].error).not.toContain('cast:/w/hollow-tide');
+
+    /* Not escalated: the loop carried on and designed the other character. */
+    expect(idle?.done).toBe(1);
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
   });
 });

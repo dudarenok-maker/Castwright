@@ -363,7 +363,8 @@ let settingsFileCorrupt = false;
 /** Track the mtime of the settings file when the cache was created, so we can
     detect out-of-band repairs (e.g., a user hand-editing the JSON). If the file
     is modified after the cache was populated, we re-read it instead of trusting
-    the stale cached value. */
+    the stale cached value. Only app writes through the five sanctioned writers
+    update this; genuine out-of-band repairs leave it stale and trigger a re-read. */
 let cachedFileMtime: number | null = null;
 
 export function isUserSettingsFileCorrupt(): boolean {
@@ -380,7 +381,10 @@ export function isUserSettingsFileCorrupt(): boolean {
     flagging the corruption via isUserSettingsFileCorrupt() instead of
     throwing (a throw here would leave `cached` unset forever, so every
     subsequent call — boot warm-up, the sidecar supervisor, every route —
-    would re-attempt and re-fail the same parse until the process restarts). */
+    would re-attempt and re-fail the same parse until the process restarts).
+    Detects out-of-band repairs by comparing the file's current mtime against
+    the mtime recorded when the cache was populated; if the file's mtime has
+    changed, the cache is invalidated and the file is re-read. */
 export async function readUserSettings(): Promise<UserSettings> {
   // Check if the cache is still valid by comparing the file's current mtime
   // against when we cached it. If the file was modified out-of-band (e.g., user

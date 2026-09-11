@@ -41,7 +41,7 @@ import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/e
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
-import { itemFailureReason } from '../workspace/file-lock.js';
+import { itemFailureReason, requestFailureMessage } from '../workspace/file-lock.js';
 import {
   chunkSentencesByBudget,
   ownsOp,
@@ -442,12 +442,30 @@ scriptReviewRouter.post(
           // misconfigured engine) previously became an unhandled rejection
           // — no error/SSE event was ever sent and res.end() was never
           // called, so the client's request hung forever.
+          console.error('[script-review] failed to start', err);
           broadcast(registeredJob, {
             kind: 'error',
             code: 'internal_error',
-            message: err instanceof Error ? err.message : 'Script review failed to start.',
+            // #3174 — curated: a LockAcquisitionTimeoutError's own message
+            // embeds the lock key, which embeds an absolute workspace path,
+            // and this app is served over LAN HTTPS. requestFailureMessage
+            // is the same whole-request seam cast-design.ts/single-design.ts
+            // use for their own endJob error paths.
+            message: requestFailureMessage(err, err instanceof Error ? err.message : 'Script review failed to start.'),
           });
-          for (const sub of registeredJob.subscribers) sub.res.end();
+          // #3174 — mirror the sibling endJob guards (cast-design.ts,
+          // single-design.ts): a throw from one subscriber's res.end()
+          // (dead socket) must not abort the loop and leave later
+          // subscribers' SSE connections hanging open, and each subscriber's
+          // keepalive interval must stop even when its own res.end() throws.
+          for (const sub of registeredJob.subscribers) {
+            clearInterval(sub.keepAlive);
+            try {
+              sub.res.end();
+            } catch {
+              /* socket already gone */
+            }
+          }
         })
         .finally(() => {
           if (targetMap.get(registeredKey) === registeredJob) targetMap.delete(registeredKey);
