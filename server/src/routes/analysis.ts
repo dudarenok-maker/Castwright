@@ -6510,9 +6510,13 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      already fully parsed by the time this handler runs.
      F2 (#3169 fix wave) — this is a per-POST line, same reasoning as the
      parent route: the stream middleware's own subscribe POST reaches this
-     handler too — it sends `chapterIds` (needed to validate against the
-     job's subsetChapterIds) but no `model` — so a single Start click can
-     log it more than once. `model` and `manuscriptId` are both request-supplied text,
+     handler too — it sends `chapterIds` because this route's own validation
+     below requires a non-empty, valid array, NOT because the join branch
+     further down compares it against the running job's subsetChapterIds
+     (it doesn't — a request that validates joins whatever subset job is
+     already running for the manuscript, regardless of which chapters it
+     names; tracked as a decision in #3202) — but no `model` — so a single
+     Start click can log it more than once. `model` and `manuscriptId` are both request-supplied text,
      both stringified (F2/F6, hardened post-review) as a log-injection
      guard, same as the parent route. */
   const body = req.body as { chapterIds?: unknown; model?: unknown; allowStage1Shrink?: unknown };
