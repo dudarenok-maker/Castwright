@@ -12,7 +12,7 @@ on:
       # change to either side has to fire it — a live-view-only edit is exactly
       # the shape that drifts the published page away from the markdown.
       - 'docs/testing/onbox-acceptance-register-live-view.html'
-      # Fire on any scripts/* change (and the workflow file itself) so editing
+      # Fire on any scripts/**/*.mjs change (and the workflow file itself) so editing
       # the checkers or their transitive dependencies exercises them against the
       # real register. The transitive local-import graph is under-listed on the
       # third attempt to enumerate it (#1847, #2216, #3055 hit this exact shape

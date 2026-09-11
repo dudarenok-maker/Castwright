@@ -246,6 +246,24 @@ export default defineConfig({
          guard never runs in the scoped CI leg — silent on exactly the
          call-site change it exists to catch. */
       '{**/server/src/routes/generation.ts,**/.*/**/server/src/routes/generation.ts}',
+      /* registry-knob-read.guard.test.ts (#3139/#3146): imports registry.ts
+         directly, so a new/changed knob there is already selected by the
+         normal module graph — no trigger needed for that. Its two
+         DECLARED_DYNAMIC_READERS target files are a different #1847
+         runtime-read trap: the guard verifies each declaration by reading
+         these files' source text (not importing it), so an edit that
+         invalidates a declared dynamic-reader claim (e.g. `rate.*`'s
+         `overrideValue` lookup in rate-limit.ts, or `qa.asr.maxWer.<lang>`'s
+         lookup in segment-asr-qa.ts) has no module-graph edge for
+         `vitest run --changed` to follow. The guard's remaining blind spot —
+         an ordinary read-site edit anywhere else under server/src with no
+         registry.ts change — is deliberately NOT closed here: a blanket
+         server/src/** trigger would violate this suite's own NOT_COVERED
+         pin (an ordinary source file must not force a full rerun) and is
+         exactly what #3136 (out of scope for #3146) exists to solve
+         properly, by having guards export their own scan targets. */
+      '{**/server/src/analyzer/rate-limit.ts,**/.*/**/server/src/analyzer/rate-limit.ts}',
+      '{**/server/src/tts/segment-asr-qa.ts,**/.*/**/server/src/tts/segment-asr-qa.ts}',
     ],
     pool: 'forks',
     /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the

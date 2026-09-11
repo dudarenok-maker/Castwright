@@ -185,6 +185,10 @@ export async function evalFixture(opts: {
     reasons: Array<{ index: number; reason: string; bucket: string }>;
   } | null = null;
 
+  // Map eval engine ('qwen'/'gemma') to the budget engine ('local'/'gemini').
+  // Used by both stage2 (chunk sizing) and review (if enabled).
+  const chunkEngine = opts.engine === 'qwen' ? 'local' : 'gemini';
+
   const result = await attributeChapterStage2({
     analyzer: opts.analyzer,
     manuscriptId: opts.manuscriptId,
@@ -193,6 +197,7 @@ export async function evalFixture(opts: {
     chapter: { id: opts.chapterId, title: `Chapter ${opts.chapterId}`, body: opts.truth.chapterText },
     stageCall: opts.stageCall,
     escalationAnalyzer: opts.escalationAnalyzer ?? null,
+    engine: chunkEngine,
     onStages: (s) => { stages = s; },
   }); // no `as never` — the opts object is fully typed, so `s` gets its proper type
 
@@ -211,7 +216,6 @@ export async function evalFixture(opts: {
   if (!opts.review) return base;
 
   const finalSentences = result.sentences;
-  const chunkEngine = opts.engine === 'qwen' ? 'local' : 'gemini';
 
   // Roster carrying gender/aliases (no `role` — RosterSnapshot has no such field,
   // and production's stringified cast has no per-character role either; see

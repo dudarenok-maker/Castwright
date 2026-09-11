@@ -512,8 +512,35 @@ async function runDesignJob(
              VoiceDesign loads is the plan-108 OOM. */
           continue;
         }
-        persona = await generateVoiceStylePersona(character);
-        await writeVoiceStylePersona(job.bookDir, characterId, persona);
+        /* Gemini persona fallback — a throw here must be a PER-CHARACTER
+           failure, not a job halt. This call (and the persona write) sit in
+           the OUTER try with only a heartbeat-clear `finally`; the inner
+           ride-out loop's per-item catch (below) does not cover them, so a
+           throw used to escape the whole loop and land in the route handler's
+           backstop `endJob({type:'error'})` → client `halt` — a bare "Halted"
+           with no designed/failed/skipped summary (#3027 second half). The
+           LOCAL engine's persona failures are already handled per-character in
+           the pre-pass (runPersonaPrePass), so the non-local path here is the
+           only one that needs this wrapper. */
+        try {
+          persona = await generateVoiceStylePersona(character);
+          await writeVoiceStylePersona(job.bookDir, characterId, persona);
+        } catch (e) {
+          /* Route through the SAME per-character-failure shape the inner ride
+             loop uses (lines 688-696): record to job.failures, broadcast
+             character_failed, and continue to the NEXT character. Do not
+             rethrow — one persona failure must not fail the other N. */
+          const message = (e as Error).message || 'Persona generation failed.';
+          const reason = itemFailureReason(e, message);
+          job.failures.push({ characterId, name: character.name ?? characterId, error: reason });
+          broadcast(job, {
+            type: 'character_failed',
+            characterId,
+            name: character.name ?? characterId,
+            errorReason: reason,
+          });
+          continue;
+        }
       }
 
       /* bug #1411 code-review follow-up: must match sample-scope.ts's
@@ -543,14 +570,21 @@ async function runDesignJob(
          mint then can't load its base). #1057: this is exactly how a bulk
          "Emotion variants" run orphaned every base. A variant anchors on the
          base's CURRENT key, so it reuses the character's existing voiceUuid. */
-      const voiceUuid = emotion
-        ? character.voiceUuid
-        : await ensureCharacterVoiceUuid(job.bookDir, characterId, seriesFilter);
-      const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
-
       let rideouts = 0;
       for (;;) {
         try {
+          /* Moved inside the per-character try (was previously computed once,
+             above the loop): a `LockAcquisitionTimeoutError` (or any other
+             throw) out of ensureCharacterVoiceUuid must land in the SAME
+             per-character catch below that already covers
+             applyOverrideToCastFiles/persistEmotionVariant — not escape the
+             loop and halt the whole job on the first contended character
+             (#3027 follow-up, N1). */
+          const voiceUuid = emotion
+            ? character.voiceUuid
+            : await ensureCharacterVoiceUuid(job.bookDir, characterId, seriesFilter);
+          const characterForDesign = { ...character, voiceUuid: voiceUuid ?? character.voiceUuid };
+
           const { voiceId, fellBackToDesignVoice, fallbackReason } = await designQwenVoiceForCharacter({
             bookDir: job.bookDir,
             character: characterForDesign,
@@ -678,9 +712,9 @@ async function runDesignJob(
           }
           /* Per-character synthesis failure — record it and move on.
              #2292 (owner decision) — a `LockAcquisitionTimeoutError` out of
-             the persist steps in this try (`applyOverrideToCastFiles`,
-             `persistEmotionVariant`, `ensureCharacterVoiceUuid`,
-             `writeVoiceStylePersona`) keeps this per-character shape — one
+             the persist steps in this try (`ensureCharacterVoiceUuid`,
+             `designQwenVoiceForCharacter`, `applyOverrideToCastFiles`,
+             `persistEmotionVariant`) keeps this per-character shape — one
              contended character must not fail the other N — but reports
              contention rather than implying the character itself is at fault.
              The same string on both surfaces so the live toast and the

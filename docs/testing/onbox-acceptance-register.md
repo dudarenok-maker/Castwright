@@ -83,7 +83,7 @@ over the other. The check reads the base ref's copy and the working tree's,
 which CI makes `merge(base, head)`, and **reports** an unstamped change in
 content (see #3138 for the decision whether to enforce it as a merge gate).
 In CI, `<ref>` is `HEAD^1` (the base branch's tip at merge time). **By hand,
-never pass `HEAD^1`**: outside CI's merge commit it is not the base your branch
+never pass `HEAD^1`**: outside CI's merge commit it need not be the base your branch
 will merge onto, so the check can fail to catch an unstamped edit — for example
 when `HEAD^1` already contains the edit, or when a stamp main landed in between
 is credited to your branch. Instead, merge the target in and pass it explicitly
@@ -2016,6 +2016,15 @@ all found through real use) — but never this specific forced-recycle walkthrou
 > [#3027](https://github.com/dudarenok-maker/Castwright/issues/3027). Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-2-a6-a7.md`.
 
+> **2026-09-11 — #3027 fixed (PR #3161), on-box re-run still owed.** The halt
+> itself is fixed: a Gemini persona-write failure during a bulk design now
+> reports per-character (`onCharacterFailed`/`failures[]`) instead of aborting
+> the job, and the terminal summary toast names the actual failure reason. This
+> is a code fix only, not a live-hardware confirmation — the "completes end to
+> end" bullet above is still owed a fresh on-box run against the same
+> multi-voice cast (with or without a `GEMINI_API_KEY` set) to confirm the run
+> now reaches 12/12 instead of halting at 2/12.
+
 ### A7 · Design full cast — bulk Qwen voice design (plan 195)
 
 Shipped 2026-06-07 (`7f0d5f4b`, PR #637); PR #638 filled the Ship-notes SHA but
@@ -2049,6 +2058,13 @@ character. *Blocked on the same halt as A6* — [#3027](https://github.com/dudar
 > indefinitely — a second instance of the same silent-failure class as A6's
 > halt. Filed as [#3027](https://github.com/dudarenok-maker/Castwright/issues/3027).
 > Evidence: `docs/testing/onbox-mechanical-batch1-results/step-2-a6-a7.md`.
+
+> **2026-09-11 — #3027 fixed (PR #3161), on-box re-run still owed.** Same fix
+> as A6 above: the bulk job no longer halts on a single Gemini persona-design
+> failure. The three bullets this row's PARTIAL run never reached (terminal
+> summary counts, series propagation, 2nd-tab serialization) are still owed a
+> fresh on-box run that gets past the 2/12 point the A6 halt previously capped
+> both runs at — this fix is not itself that run.
 
 ### A8 · Batch the QA re-record loops (plan 228)
 
