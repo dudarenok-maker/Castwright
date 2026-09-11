@@ -46,17 +46,13 @@
    between the two modules (see that function's own comment) — a real,
    override-honouring read site in a different shape, not a gap.
 
-   UNTRIAGED FINDING — `analyzer.engine` (env `ANALYZER`). Not a recogniser
-   miss: `analyzer/index.ts` explicitly says "the ANALYZER env no longer
-   selects the engine — see getResolvedAnalysisEngine", and that function
-   (`workspace/user-settings.ts`) reads `getCachedUserSettings().analysisEngine`
-   — a SEPARATE legacy user-settings JSON field, not the config-override store
-   `analyzer.engine` writes to via `PUT /api/config`. A saved Advanced Settings
-   override for `analyzer.engine` is therefore read by NOTHING that drives
-   engine selection — the same silent-ignore shape #3139 found for the
-   rate-limit knobs, just not one of the five keys #3141 already tracks.
-   Reported here rather than fixed (out of scope for this guard); see
-   `KNOWN_UNREAD` below.
+   No unread knobs: all registered knobs are either read by some live code
+   path (tracked in `src/config/registry.ts` by design), or moved to
+   `KNOWN_UNREAD` when they are retired. `KNOWN_UNREAD` is exact-set-equality
+   asserted, so a stale entry signals a rebase/merge defect (the knob was
+   deleted but the list was not updated), and a missing entry signals a knob
+   left unread by mistake (new code added to the registry before readers are
+   wired). See `KNOWN_UNREAD` below.
 
    BLIND SPOTS (documented, not silently accepted):
      - Textual, not data-flow: a resolver-backed helper reached through a
@@ -226,7 +222,6 @@ const KNOWN_UNREAD = new Set<string>([
   'analyzer.phase0.model', // tracked by #3141
   'analyzer.phase1.model', // tracked by #3141
   'analyzer.phase1.minLagChapters', // tracked by #3141
-  'analyzer.engine', // UNTRIAGED — reported on #3141
 ]);
 
 function collectReadKeys(files: string[]): Set<string> {

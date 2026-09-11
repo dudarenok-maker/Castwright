@@ -93,7 +93,7 @@ const geminiKeyPayloadSchema = z.object({
 });
 
 /* PUT /api/user/settings/gemini-key { key: string | null }
-   - Sets the UI-managed Gemini API key (Account view → Server configuration).
+   - Sets the UI-managed Gemini API key (Admin → Model Manager → Server configuration).
    - Pass `null` to clear it.
    - Response is the same shape as GET /api/user/settings — caller can swap
      it into local state without a follow-up GET.

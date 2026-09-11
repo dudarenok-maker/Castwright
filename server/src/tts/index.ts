@@ -173,7 +173,7 @@ export function selectTtsProvider(modelKey: TtsModelKey): TtsProvider {
     if (!apiKey) {
       throw new Error(
         'Gemini TTS selected but no API key is configured. ' +
-          'Set it from Account → Server configuration → Gemini API key, ' +
+          'Set it in Admin → Model Manager → Gemini API key, ' +
           'or add it to server/.env for CI / power users.',
       );
     }

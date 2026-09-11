@@ -1132,7 +1132,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'OLLAMA_MODEL',
     group: 'analyzer-models',
     label: 'Ollama model',
-    help: 'Ollama model tag passed to /api/chat as the last-resort fallback. The Account-tab model picker takes precedence when it has Ollama tag shape (contains ":")',
+    help: 'Ollama model tag passed to /api/chat as the last-resort fallback. The Model Manager model picker takes precedence when it has Ollama tag shape (contains ":")',
     type: 'string',
     default: 'qwen3.5:4b', // ← OLLAMA_MODEL default in server/.env.example (line 23) + DEFAULT_OLLAMA_MODEL in user-settings.ts
     apply: 'live', risk: 'medium',
