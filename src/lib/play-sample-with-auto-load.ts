@@ -117,7 +117,7 @@ async function prepareSidecar(
        worktree operator to kill the wrong process's port. It's also
        shipped, end-user-facing copy (#2632 N37) — "LOCAL_TTS_PORT" and
        "this checkout" are repo/dev jargon a packaged-app user has never
-       seen, so point at the Account settings field instead of the env var. */
+       seen, so point at the Model Manager field instead of the env var. */
     throw new Error(
       `Voice engine is unreachable — restart the app to relaunch it (or, if you changed its connection details, check Admin → Model Manager → Server configuration → Voice engine URL). [${reason}]`,
     );

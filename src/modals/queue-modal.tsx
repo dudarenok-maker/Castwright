@@ -245,7 +245,7 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
   const bookTitles = useAppSelector((s) => s.library.books);
   /* Plan 108 Wave 3 — when a multi-TTS chapter is queued but the user hasn't
      opted into keeping both engines resident, the row shows the same advisory
-     the generation flow emits (enable dual-model mode in Account settings to
+     the generation flow emits (enable dual-model mode in Admin → Model Manager → Voice engine to
      avoid engine-swap latency). */
   const dualModelEnabled = useAppSelector((s) => s.account?.dualModelEnabled ?? false);
 

@@ -96,13 +96,13 @@ When a render goes wrong, Castwright names the failure instead of shrugging. Eve
 
 **What to do:** Check that Ollama is running (ollama serve), or switch the analyzer to Gemini in Admin → Model Manager with a GEMINI_API_KEY. Then retry the chapter or resume the run.
 
-When GEMINI_API_KEY is set, an unreachable Ollama silently retries against Gemini, so this error usually means no fallback was configured — or both engines failed.
+When GEMINI_API_KEY is set and Cloud fallback is on, an unreachable Ollama retries against Gemini, so this error usually means no fallback was configured (check Cloud fallback in Admin → Model Manager), or both engines failed.
 
 ### Gemini blocked the chapter (copyright filter)
 
 **What you saw:** Gemini blocked this chapter — its recitation filter refused the source text. The gemini-* models reject text they recognise as copyrighted, and a published book's opening chapter is the classic trigger.
 
-**What to do:** Switch the analyzer to a gemma-* model (set GEMINI_MODEL=gemma-4-31b-it in server/.env — the gemma family is not subject to the recitation filter) or to Local Ollama in Admin → Model Manager. Restart, then click Retry.
+**What to do:** Switch the analyzer to a gemma-* model (set GEMINI_MODEL=gemma-4-31b-it in server/.env — the gemma family is not subject to the recitation filter) or to Local Ollama in Admin → Model Manager, then click Retry.
 
 The block is deterministic — retrying the same model on the same text fails identically, so it is not a transient error. gemma-* runs on a separate API bucket without recitation filtering; any local Ollama model (e.g. qwen3.5:4b) avoids the filter entirely and is the most robust choice for copyrighted manuscripts.
 

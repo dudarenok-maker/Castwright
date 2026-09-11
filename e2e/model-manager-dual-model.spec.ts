@@ -1,9 +1,9 @@
-/* Account → dual-model TTS flag + Qwen install card e2e.
+/* Model Manager → dual-model TTS flag + Qwen install card e2e.
  *
- * Pins two in-browser surfaces in the Account view:
- *   - the "Keep both TTS engines loaded (dual-model mode)" checkbox in
- *     the TTS-sidecar card (off by default, toggleable, Save-persisted)
- *   - the Qwen3-TTS install-command card inside the Models card
+ * Pins two in-browser surfaces in the Model Manager:
+ *   - the "Keep both voice engines loaded (dual-model mode)" checkbox in
+ *     the Voice engine section (off by default, toggleable, Save-persisted)
+ *   - the Qwen3-TTS install card inside the Installed models section
  *
  * Mock-mode persistence: the dev server runs with VITE_USE_MOCKS=true, so
  * PUT /api/user/settings is fulfilled in-memory by the mock api layer

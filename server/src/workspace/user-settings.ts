@@ -185,7 +185,7 @@ export const userSettingsSchema = z.object({
      Optional with a `true` default so legacy user-settings.json
      files load unchanged and a fresh install gets TTS-on-boot. */
   autoStartSidecar: z.boolean().optional(),
-  /* Plan 88 phase-2 — Account-tab surface for the per-phase analyzer
+  /* Plan 88 phase-2 — Model Manager surface for the per-phase analyzer
      model knobs. Each `null`/`undefined` means "fall through to env /
      hardcoded default" per the precedence chain enforced in
      server/src/analyzer/select-analyzer.ts: explicit env >
@@ -308,7 +308,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      defaultTtsModelKey. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   autoStartSidecar: true,
-  /* Plan 88 phase-2 — Account-tab surface for the per-phase analyzer
+  /* Plan 88 phase-2 — Model Manager surface for the per-phase analyzer
      knobs. `null` means "fall through to env / hardcoded default" so
      a fresh user-settings.json doesn't pin a value the deployer may
      not have intended. */

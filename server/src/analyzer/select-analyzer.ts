@@ -17,7 +17,7 @@
    Env wins over `opts.model` so an ops override at the process
    boundary can't be silently shadowed by a per-request choice. (This
    inverts the plan-88-phase-1 precedence where `opts.model` won; the
-   Account-tab surface gives users a saved-default they can override,
+   Model Manager surface gives users a saved-default they can override,
    while env stays the triage trump card.)
 
    Fall-through invariant: when NEITHER env var nor user-settings is
