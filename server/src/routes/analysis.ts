@@ -6809,12 +6809,13 @@ export async function runSubsetAnalyzerJob(
 
     /* §4.4 / Task 8 fix round 1 (items 1 + 2) — the DEDUP call above computes
        `dedupRetirements` synchronously (can't throw), but recording them is
-       async I/O — moved inside this try so a throw can't reject before the
-       try starts (runSubsetAnalyzerJob is fire-and-forget with no outer
-       catch; a rejection there would skip `endJob`, leaving the SSE response
-       open and the job stuck in `inFlightSubsetByManuscript` forever). Also
-       wrapped in its own try/catch so a throwing history write still can't
-       fail the analysis persist — mirrors writeFoldJournal/writeDedupJournal. */
+       async I/O — wrapped in its own try/catch so a throwing history write
+       is swallowed as a warning here rather than escaping to this job's
+       top-level catch (which, since D1 (#3169) widened that try to cover
+       this whole function, would otherwise end the job — via `endJob` — over
+       what should be a non-fatal history-write failure). Mirrors
+       writeFoldJournal/writeDedupJournal, which swallow the same way for the
+       same reason. */
     /* `liveIds: null` — same reasoning as the main route's dedup site: no
        roster is final here. See that call site's comment. */
     try {
