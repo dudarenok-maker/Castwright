@@ -23,6 +23,7 @@ import type {
 let capturedOpts: AnalyseOpts | undefined;
 let capturedSubsetCall: { chapterIds: number[]; opts: AnalyseOpts | undefined } | undefined;
 let resolveSubset: ((value: AnalyseResponse) => void) | undefined;
+let rejectSubset: ((reason?: unknown) => void) | undefined;
 let getBookStateImpl: ((bookId: string) => Promise<BookStateResponse | null>) | undefined;
 let getDroppedQuotesImpl: ((bookId: string) => Promise<DroppedQuotesResponse>) | undefined;
 /* Per-test override — when set, the analyseManuscript mock rejects with
@@ -55,8 +56,9 @@ vi.mock('../lib/api', async () => {
          manual resolver so tests can simulate a successful retry. */
       runAnalysisForChapters: (_id: string, chapterIds: number[], opts?: AnalyseOpts) => {
         capturedSubsetCall = { chapterIds, opts };
-        return new Promise<AnalyseResponse>((resolve) => {
+        return new Promise<AnalyseResponse>((resolve, reject) => {
           resolveSubset = resolve;
+          rejectSubset = reject;
         });
       },
       getBookState: (bookId: string) =>
@@ -79,6 +81,7 @@ beforeEach(() => {
   capturedOpts = undefined;
   capturedSubsetCall = undefined;
   resolveSubset = undefined;
+  rejectSubset = undefined;
   getBookStateImpl = undefined;
   getDroppedQuotesImpl = undefined;
   analyseManuscriptRejection = undefined;
@@ -1528,6 +1531,51 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(screen.queryByText(/chapter failed cast detection/i)).not.toBeInTheDocument();
     });
     expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+  });
+
+  it('#3202 — a subset_in_progress rejection surfaces the server message on the row instead of silently clearing it', async () => {
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+
+    /* No onChapterFailed event fires for this rejection — the server
+       rejected the retry outright before starting a job. Without the
+       #3202 branch, the generic catch would treat this as a success
+       (retryReFailed stays false) and silently drop the row. */
+    await act(async () => {
+      rejectSubset?.(
+        new AnalysisError(
+          'A different subset re-analysis is already in progress for this manuscript: Chapter Forty-Seven.',
+          'subset_in_progress',
+        ),
+      );
+    });
+
+    expect(
+      await screen.findByText(
+        /A different subset re-analysis is already in progress for this manuscript: Chapter Forty-Seven\./i,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
   });
 });
 

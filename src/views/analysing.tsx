@@ -901,6 +901,19 @@ export function AnalysingView({
         setConn('idle');
       })
       .catch((err) => {
+        /* subset_in_progress (#3202) — the server rejected this retry
+           outright because a different subset is already running; it
+           never reaches onChapterFailed, so retryReFailed stays false and
+           the generic branch below would wrongly drop the row as if it
+           had succeeded. Surface the server's message instead. */
+        if (err instanceof AnalysisError && err.code === 'subset_in_progress') {
+          setFailedChapters((prev) => {
+            const filtered = prev.filter((f) => f.chapterId !== chapterId);
+            return [...filtered, { chapterId, message: err.message, code: err.code }];
+          });
+          setConn('idle');
+          return;
+        }
         /* The subset route ends without a `result` event when other
            chapters still need retry (Phase 1 gate). api.ts throws
            "no result" in that case — not a real failure, drop the

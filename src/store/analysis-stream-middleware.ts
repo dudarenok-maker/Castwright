@@ -151,11 +151,11 @@ export const analysisStreamMiddleware: Middleware = (store) => {
        take the server dispatcher's subscribe path because we wait for
        the first tick (proof the view's POST landed) before firing.
        Subset branch passes chapterIds because the route requires a
-       non-empty, valid array to pass its own validation — it does NOT
-       compare them against the existing job's subsetChapterIds. A request
-       that validates joins whatever subset job is already running for the
-       manuscript, regardless of which chapters it names (tracked as a
-       decision in #3202). */
+       non-empty, valid array to pass its own validation. The route DOES
+       compare them against the existing job's subsetChapterIds (#3202):
+       this reattach passes the snapshot's own chapter ids, so it matches
+       and joins as before; a request naming a different chapter set gets
+       a terminal `subset_in_progress` error instead. */
     void (async () => {
       try {
         if (desiredKind === 'subset') {

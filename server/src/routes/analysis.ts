@@ -6511,11 +6511,10 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      F2 (#3169 fix wave) — this is a per-POST line, same reasoning as the
      parent route: the stream middleware's own subscribe POST reaches this
      handler too — it sends `chapterIds` because this route's own validation
-     below requires a non-empty, valid array, NOT because the join branch
-     further down compares it against the running job's subsetChapterIds
-     (it doesn't — a request that validates joins whatever subset job is
-     already running for the manuscript, regardless of which chapters it
-     names; tracked as a decision in #3202) — but no `model` — so a single
+     below requires a non-empty, valid array. The join branch further down
+     DOES compare it against the running job's subsetChapterIds (#3202): a
+     chapter-set match joins as before, a mismatch gets a terminal
+     `subset_in_progress` error instead — but no `model` — so a single
      Start click can log it more than once. `model` and `manuscriptId` are both request-supplied text,
      both stringified (F2/F6, hardened post-review) as a log-injection
      guard, same as the parent route. */
@@ -6633,6 +6632,27 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      away without aborting the retry. */
   const existing = inFlightSubsetByManuscript.get(manuscriptId);
   if (existing && !existing.controller.signal.aborted) {
+    /* #3202 — join only when this request's chapter set matches the
+       running job's. Compared as sets (order-independent): a request for
+       different chapters must not silently attach to someone else's run
+       and then report on the wrong chapters. */
+    const requestedIdSet = new Set(toRun.map((t) => t.id));
+    const runningIdSet = new Set(existing.subsetChapterIds ?? []);
+    const sameChapterSet =
+      requestedIdSet.size === runningIdSet.size &&
+      [...requestedIdSet].every((id) => runningIdSet.has(id));
+    if (!sameChapterSet) {
+      const runningChapters = (existing.subsetChapterIds ?? [])
+        .map((id) => hintsById.get(id))
+        .filter((h): h is NonNullable<typeof h> => !!h);
+      send({
+        kind: 'error',
+        code: 'subset_in_progress',
+        message: `A different subset re-analysis is already in progress for this manuscript: ${runningChapters.map((c) => c.title).join(', ')}. Wait for it to finish (or cancel it) before starting a different subset.`,
+      });
+      clearInterval(keepAlive);
+      return res.end();
+    }
     /* F2 (#3169 fix wave) — same rationale as the parent route: the job
        doesn't store the model it's running, so this omits `model` rather
        than printing this POST's own (possibly wrong) requested/default

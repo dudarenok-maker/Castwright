@@ -518,6 +518,11 @@ export function GenerationView({
          user re-excludes it manually. */
       const isAbort =
         (e as Error)?.name === 'AbortError' || (e instanceof AnalysisError && e.code === 'aborted');
+      /* subset_in_progress (#3202) — a different subset retry is already
+         running for this manuscript; this include never got its own job
+         started. Surface the server's message rather than falling
+         through to the generic failure text below. */
+      const isSubsetInProgress = e instanceof AnalysisError && e.code === 'subset_in_progress';
       await rollbackInclude(chapterId).catch((rollbackErr) => {
         console.warn('[generation] include rollback failed', rollbackErr);
       });
@@ -531,6 +536,10 @@ export function GenerationView({
           const { [chapterId]: _, ...rest } = prev;
           return rest;
         });
+        return;
+      }
+      if (isSubsetInProgress) {
+        patchSubset(chapterId, { error: e.message });
         return;
       }
       const message = (e as Error).message || 'Subset analysis failed.';
@@ -668,6 +677,13 @@ export function GenerationView({
           const { [chapterId]: _, ...rest } = prev;
           return rest;
         });
+        return;
+      }
+      /* subset_in_progress (#3202) — a different subset retry is already
+         running for this manuscript; surface the server's message
+         instead of the generic fallback text. */
+      if (e instanceof AnalysisError && e.code === 'subset_in_progress') {
+        patchSubset(chapterId, { error: e.message });
         return;
       }
       patchSubset(chapterId, { error: (e as Error).message || 'Re-analysis failed.' });

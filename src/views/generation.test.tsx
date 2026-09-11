@@ -17,7 +17,7 @@ import { bookMetaSlice } from '../store/book-meta-slice';
 import { GenerationView, ChapterSegmentStrip } from './generation';
 import { textHashForStale } from '../lib/stale-chapters';
 import { MOCK_QA_REPORT } from '../data/qa-report';
-import { api } from '../lib/api';
+import { api, AnalysisError } from '../lib/api';
 import { useTtsLifecycle } from '../lib/use-tts-lifecycle';
 import type { LayoutContext } from '../components/layout';
 import type { Chapter, Character, Sentence, TtsModelKey } from '../lib/types';
@@ -2148,6 +2148,26 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledWith('m1', [1], expect.anything());
   });
 
+  it('#3202 on subset_in_progress (Re-analyse flow), surfaces the server message instead of a generic failure', async () => {
+    const store = makeIncludeStore();
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(
+      new AnalysisError(
+        'A different subset re-analysis is already in progress for this manuscript: Chapter 5.',
+        'subset_in_progress',
+      ),
+    );
+    renderInclude(store);
+
+    fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+    fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+
+    expect(
+      await screen.findByText(
+        /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('on success, merges sentences into the manuscript slice, characters into cast, and clears the row excluded flag', async () => {
     const store = makeIncludeStore();
     setChapterExcludedSpy.mockResolvedValue({
@@ -2289,6 +2309,30 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
          success signal. Either way the spy count is the assertion. */
     });
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('#3202 on subset_in_progress (Include flow), surfaces the server message instead of a generic failure', async () => {
+    const store = makeIncludeStore();
+    setChapterExcludedSpy.mockResolvedValue({
+      id: 3,
+      title: 'Chapter 3',
+      slug: '03-chapter-3',
+      excluded: false,
+    });
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(
+      new AnalysisError(
+        'A different subset re-analysis is already in progress for this manuscript: Chapter 5.',
+        'subset_in_progress',
+      ),
+    );
+
+    renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    expect(
+      await screen.findByText(
+        /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+      ),
+    ).toBeInTheDocument();
   });
 
   it('with a local analyzer selected and a generation stream alive, surfaces the pause-to-analyse modal before firing subset analysis', async () => {
