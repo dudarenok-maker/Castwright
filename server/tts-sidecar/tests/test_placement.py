@@ -1526,13 +1526,14 @@ def test_try_hold_records_the_admitting_engine():
     assert ledger.engines_holding("cuda:0") == {"coqui"}
 
 
-# --- #3097 pinned-device 75 % tolerance ------------------------------------
+# --- #3097 preferred-device 75 % tolerance --------------------------------
 #
-# When a pinned device is set (and the engine is not yet resident), the
-# hinted device wins only if its free headroom is at least 75 % of the
-# unconstrained winner's.  Otherwise the full candidate set is used so a
-# materially freer alternative wins — closing the stale-cache / operator-pin
-# failure mode that defeated the Coqui-derive self-heal (#3058).
+# When a preferred device is set (X-Device-Hint: ..., via `reservation(
+# preferred=...)`), the hinted device wins only if its free headroom is at
+# least 75 % of the unconstrained winner's. Otherwise preferred is dropped
+# and placement falls through to the unconstrained best-fit winner — closing
+# the stale-cache / operator-pin failure mode that defeated the Coqui-derive
+# self-heal (#3058).
 
 
 def test_preferred_tolerance_issue_repro_overrides_hint():
@@ -1558,20 +1559,70 @@ def test_preferred_tolerance_issue_repro_overrides_hint():
 
 def test_preferred_tolerance_near_tie_honours_hint():
     """Hinted device headroom just above the 75 % threshold — must still
-    resolve to the hint. cuda:0 24 000 / 18 000, cuda:1 16 000 / 13 692.
+    resolve to the hint. cuda:0 24 000 / 18 000, cuda:1 16 000 / 13 700.
     After per-device reserve (768 MB each): cuda:0 17232 MB headroom,
-    cuda:1 12924 MB headroom. 12924 ≥ 0.75 × 17232 → hint honored."""
+    cuda:1 12932 MB headroom. 12932 ≥ 0.75 × 17232 = 12924 (margin +8 MB) → hint honored."""
 
     async def body():
         devices = [
             dev(index=0, free=18000, total=24000),
-            dev(index=1, free=13692, total=16000),
+            dev(index=1, free=13700, total=16000),
         ]
         pc = make(devices, peak=4000)
         async with pc.reservation(
             "coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, preferred="cuda:1"
         ) as adm:
             assert adm["device"] == "cuda:1"
+        return _RAN
+
+    run_case(body())
+
+
+def test_preferred_tolerance_ledger_reservation_reduces_effective_headroom():
+    """#3097/#3165 regression: the tolerance check uses actual headroom
+    (accounting for active ledger reservations) not raw freeMb, so a card with
+    large free memory but an active reservation can still fail the tolerance
+    test. cuda:0 24000/18000, cuda:1 16000/16000. Qwen holds 9000 MB on cuda:1
+    via the ledger (in-flight, not yet allocated). Raw freeMb for cuda:1 is
+    16000 (looks plenty free), but actual headroom after ledger reserve is
+    16000-768-9000=6232. With cuda:0 headroom at 17232, the 75% check is
+    6232 < 0.75*17232=12924, so preferred fails and cuda:0 wins."""
+
+    async def body():
+        devices = [
+            dev(index=0, free=18000, total=24000),
+            dev(index=1, free=16000, total=16000),
+        ]
+        pc = make(devices, peak=4000, reserve_cap=768)
+
+        # Simulate Qwen holding a 9000 MB reservation on cuda:1 (via ledger)
+        # before the Coqui derive tries to admit
+        qwen_tok = pc.ledger.try_hold(
+            [("cuda:1", 16000, 16000)],
+            9000,  # peak for Qwen
+            768,   # reserve_cap
+            "qwen",
+        )
+        assert qwen_tok is not None, "Qwen should hold on cuda:1"
+
+        # Now try to place Coqui with preferred cuda:1
+        # Raw freeMb says cuda:1 has 16000 MB (looks great)
+        # But actual headroom is 16000 - 768 (reserve) - 9000 (ledger hold) = 6232
+        # cuda:0 headroom is 18000 - 768 = 17232
+        # 6232 < 0.75 * 17232 = 12924, so tolerance rejects the hint
+        async with pc.reservation(
+            "coqui", "xtts_v2", {}, cpu_capable=False, heavy=True, preferred="cuda:1"
+        ) as adm:
+            # Verify that get_headroom correctly accounted for Qwen's ledger hold
+            assert adm["device"] == "cuda:0", (
+                "preferred cuda:1 should fail tolerance because its true "
+                "headroom (accounting for Qwen's ledger hold) is below 75% of "
+                "cuda:0's headroom, even though raw freeMb looks large"
+            )
+
+        # Clean up: release Qwen's hold
+        pc.ledger.release(qwen_tok)
+
         return _RAN
 
     run_case(body())
