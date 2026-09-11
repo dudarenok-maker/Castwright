@@ -19,15 +19,9 @@ vi.mock('../lib/use-app-info', () => ({
 }));
 vi.mock('../lib/api', () => ({ api: { dismissWhatsNew: h.dismissWhatsNew } }));
 
-vi.mock('../store', async () => {
-  const actual = await vi.importActual<typeof import('../store')>('../store');
-  return {
-    ...actual,
-    useAppDispatch: () => sharedStore.dispatch,
-    useAppSelector: <T,>(sel: (s: ReturnType<typeof sharedStore.getState>) => T): T =>
-      sel(sharedStore.getState()),
-  };
-});
+/* No mock of '../store': useAppDispatch resolves through the react-redux
+   context, so the <Provider> around each render is sufficient — the same
+   plain-Provider pattern as settings-corrupt-banner.test.tsx (#3195 R1). */
 
 import { WhatsNewBanner } from './whats-new-banner';
 
@@ -113,6 +107,30 @@ describe('WhatsNewBanner', () => {
 
     // After dismissWhatsNew succeeds with corruptSettingsFile: true,
     // the store must be updated
+    expect(sharedStore.getState().account.corruptSettingsFile).toBe(true);
+  });
+
+  it('Q1 — a dismiss that succeeds without a readable flag still refreshes (the server-side dismiss must not be reported as a failure)', async () => {
+    /* An older server, a 204, or a body-stripping proxy: the POST succeeded
+       but there is no `corruptSettingsFile` to read. Before #3195 this call
+       never read the body, so this must stay a success path — the refresh
+       runs and the store is left alone. */
+    h.info = { appVersion: '1.6.0', showWhatsNew: true, releaseNotes: '' };
+    h.dismissWhatsNew.mockResolvedValueOnce(undefined as never);
+    sharedStore.dispatch(accountSlice.actions.setCorruptSettingsFile(true));
+
+    render(
+      <Provider store={sharedStore}>
+        <MemoryRouter>
+          <WhatsNewBanner />
+        </MemoryRouter>
+      </Provider>,
+    );
+    fireEvent.click(screen.getByText('Dismiss'));
+    await waitFor(() => expect(h.dismissWhatsNew).toHaveBeenCalledOnce());
+
+    await waitFor(() => expect(h.refresh).toHaveBeenCalled());
+    // No flag in the response → the store's flag is untouched, not clobbered to undefined.
     expect(sharedStore.getState().account.corruptSettingsFile).toBe(true);
   });
 });

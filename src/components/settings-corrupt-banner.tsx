@@ -2,10 +2,16 @@
    in the shell banner region (joining WhatsNewBanner / BulkReassignUndoBanner)
    so it's visible from every stage, not just the account view. Visible exactly
    while account.corruptSettingsFile is true; self-clears with no dismiss
-   button because the flag itself clears server-side the next time settings
-   save successfully (server/src/workspace/user-settings.ts), and the account
-   slice's save thunk re-hydrates from that same response — so a save that
-   succeeds makes the banner go away on its own. */
+   button because the flag itself clears server-side the next time any of the
+   five settings writers completes (server/src/workspace/user-settings.ts),
+   and every endpoint in front of them hands the cleared flag back to this
+   slice: the two settings-save thunks (saveAccountSettings / saveGeminiApiKey)
+   re-hydrate the slice from their responses, and the other three — dismiss
+   what's-new (whats-new-banner.tsx), tour complete (tour-slice.ts's
+   completeTour) and setup complete (routes/index.tsx's SetupRoute) — read
+   `corruptSettingsFile` off their responses and dispatch
+   accountActions.setCorruptSettingsFile. So any successful save makes the
+   banner go away on its own. */
 
 import { useAppSelector } from '../store';
 

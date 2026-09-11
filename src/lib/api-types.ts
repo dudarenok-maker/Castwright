@@ -2787,7 +2787,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Dismiss the what's-new banner */
-        post: operations["realDismissWhatsNew"];
+        post: operations["dismissWhatsNew"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3465,8 +3465,12 @@ export interface components {
              * @description True when the last readUserSettings() had to fall all the way
              *     back to in-memory defaults because neither user-settings.json
              *     nor any `.bak.N` snapshot parsed. Computed fresh per request
-             *     (not persisted); clears the next time a read/recovery or a
-             *     write succeeds. Server-computed — ignored if sent on a PUT.
+             *     (not persisted); clears the next time a read succeeds (the
+             *     server re-reads the file whenever its mtime/size changes on
+             *     disk — a hand-repair, a restore, or another Castwright
+             *     checkout writing the shared file) or a write succeeds (any of
+             *     the five settings writers). Server-computed — ignored if sent
+             *     on a PUT.
              */
             readonly corruptSettingsFile: boolean;
         };
@@ -11052,7 +11056,7 @@ export interface operations {
             };
         };
     };
-    realDismissWhatsNew: {
+    dismissWhatsNew: {
         parameters: {
             query?: never;
             header?: never;

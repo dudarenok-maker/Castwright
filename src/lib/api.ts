@@ -7028,13 +7028,22 @@ async function realCheckCompanionApk(): Promise<CompanionApkAvailability> {
     return { available: false, sizeBytes: null };
   }
 }
-async function realDismissWhatsNew(): Promise<{ ok: boolean; corruptSettingsFile: boolean }> {
+async function realDismissWhatsNew(): Promise<{ ok: boolean; corruptSettingsFile?: boolean }> {
   const res = await fetch('/api/info/dismiss-whats-new', { method: 'POST' });
   if (!res.ok)
     throw new Error(
       `Dismiss what's-new failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
-  return (await res.json()) as { ok: boolean; corruptSettingsFile: boolean };
+  /* Any 2xx IS a successful dismiss. The body carries the settings-corruption
+     flag (DismissWhatsNewResponse), but a 204 or a body-stripping intermediary
+     must not turn a server-side success into a thrown error — before #3195
+     this call never read the body at all, so a parse failure is a failure
+     mode this PR introduced and must absorb (#3195 Q1). */
+  const body = (await res.json().catch(() => null)) as { corruptSettingsFile?: unknown } | null;
+  return {
+    ok: true,
+    corruptSettingsFile: typeof body?.corruptSettingsFile === 'boolean' ? body.corruptSettingsFile : undefined,
+  };
 }
 async function realUpgradeStage(file: File): Promise<UpgradeStageResult> {
   const form = new FormData();

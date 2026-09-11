@@ -360,19 +360,51 @@ export const USER_SETTINGS_BACKUP_KEEP = 3;
     (task 3 of #3175). */
 let settingsFileCorrupt = false;
 
-/** Track the mtime of the settings file when the cache was created, so we can
-    detect out-of-band repairs (e.g., a user hand-editing the JSON). If the file
-    is modified after the cache was populated, we re-read it instead of trusting
-    the stale cached value. Only app writes through the five sanctioned writers
-    update this; genuine out-of-band repairs leave it stale and trigger a re-read. */
-let cachedFileMtime: number | null = null;
+/** Identity of the on-disk file the cache was populated from: its mtime AND
+    its byte size (#3175 P8 — mtime alone has a ~1 ms floor on NTFS, so a
+    same-tick rewrite is invisible to it; a size pairing catches most of
+    those). `null` means the cache was populated while NO file existed (a
+    fresh install's boot warm-up), so any file that later appears — created
+    by a sibling worktree's server, a restore, or the user — is a change and
+    triggers a re-read (#3175 Q4). The five sanctioned writers re-stamp this
+    from the file they just wrote; an out-of-band write leaves it stale and
+    the next readUserSettings() re-reads. */
+type FileStamp = { mtimeMs: number; size: number };
+let cachedFileStamp: FileStamp | null = null;
 
-/** In-flight read promise: when readUserSettings() is executing, concurrent
+/** In-flight read promise: when a disk read is executing, concurrent async
     callers await this same promise instead of each independently racing to
-    read from disk. Prevents the null-window race where cached is set to null
-    but the read hasn't completed yet. Resolves to the populated cache once
-    the read finishes. */
+    read from disk. */
 let inFlightRead: Promise<UserSettings> | null = null;
+
+/** stat the settings file into a FileStamp; `null` when it is absent or
+    cannot be stat'd (a transient EPERM under an antivirus hold counts as
+    "unknown", and the caller keeps serving what it has). */
+function statFileStamp(): FileStamp | null {
+  try {
+    const stat = statSync(USER_SETTINGS_PATH);
+    return { mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch {
+    return null;
+  }
+}
+
+/** Is the in-memory cache still the same content as the file on disk?
+    Compares the file's current stamp with the one recorded at population.
+    Inequality (not `<=`) so a restore that copies an OLDER file back —
+    which can carry an older mtime — still counts as a change. A file that
+    is absent NOW but existed at population is treated as unchanged: the
+    only known way for it to vanish out from under a warm cache is the
+    rotate-then-rename window of a sibling process's own atomic write, and
+    serving the last-known settings across that window beats resetting
+    every resolver to factory defaults for one read. */
+function cacheMatchesDisk(): boolean {
+  const now = statFileStamp();
+  if (now === null) return true;
+  return (
+    cachedFileStamp !== null && now.mtimeMs === cachedFileStamp.mtimeMs && now.size === cachedFileStamp.size
+  );
+}
 
 export function isUserSettingsFileCorrupt(): boolean {
   return settingsFileCorrupt;
@@ -389,48 +421,54 @@ export function isUserSettingsFileCorrupt(): boolean {
     throwing (a throw here would leave `cached` unset forever, so every
     subsequent call — boot warm-up, the sidecar supervisor, every route —
     would re-attempt and re-fail the same parse until the process restarts).
-    Detects out-of-band repairs by comparing the file's current mtime against
-    the mtime recorded when the cache was populated; if the file's mtime has
-    changed, the cache is invalidated and the file is re-read. */
+
+    Detects out-of-band changes (a hand-repair, a restore, a sibling
+    worktree's server writing the shared file) by comparing the file's
+    current mtime+size against the stamp recorded when the cache was
+    populated (see cachedFileStamp); on a mismatch the file is re-read.
+    `cached` is NEVER cleared while that re-read is in flight — the ~18
+    synchronous resolvers below read `cached` directly, and a null gap would
+    hand every one of them a factory default for the duration (#3175 Q3:
+    measured flipping a saved `allowCloudFallback: false` to `true`). The
+    re-read computes into locals and swaps the cache in one synchronous
+    assignment, so a sync reader sees either the pre-change or the
+    post-change settings, never a default. */
 export async function readUserSettings(): Promise<UserSettings> {
   // If another read is already in flight, await it instead of racing
   if (inFlightRead) return inFlightRead;
-
-  // Check if the cache is still valid by comparing the file's current mtime
-  // against when we cached it. If the file was modified out-of-band (e.g., user
-  // hand-repaired it), we need to re-read instead of returning stale defaults.
-  if (cached && cachedFileMtime !== null) {
-    try {
-      const stat = statSync(USER_SETTINGS_PATH);
-      if (stat.mtimeMs <= cachedFileMtime) {
-        // File hasn't changed since we cached it, return the cached value
-        return cached;
-      }
-      // File was modified after caching — invalidate cache and re-read
-      cached = null;
-      cachedFileMtime = null;
-    } catch {
-      // File might not exist yet, or stat failed — keep the cache valid and return it
-      // if it exists, or proceed to read/create if cache is empty
-    }
-  }
-  if (cached) return cached;
+  if (cached && cacheMatchesDisk()) return cached;
 
   // Start the in-flight read before any awaits below, so concurrent callers
   // see it and await the same promise instead of each racing independently
   const readPromise = performUserSettingsRead();
   inFlightRead = readPromise;
   try {
-    const result = await readPromise;
-    return result;
+    return await readPromise;
   } finally {
     inFlightRead = null;
   }
 }
 
-/** Performs the actual async read logic. Separated so we can wrap the entire
-    operation in inFlightRead caching and guarantee all async boundaries are
-    protected. */
+/** Everything the read path derives from disk, committed to the module
+    globals in ONE synchronous step (see commitRead) so no `await` can sit
+    between a partially-updated cache and its stamp/flag/key-set. */
+type ReadOutcome = {
+  settings: UserSettings;
+  explicitKeys: Set<string>;
+  corrupt: boolean;
+  stamp: FileStamp | null;
+};
+
+function commitRead(outcome: ReadOutcome): UserSettings {
+  cached = outcome.settings;
+  explicitlySetKeys = outcome.explicitKeys;
+  settingsFileCorrupt = outcome.corrupt;
+  cachedFileStamp = outcome.stamp;
+  return cached;
+}
+
+/** The disk read proper. Touches no module global until commitRead — every
+    `await` in here runs with the previous `cached` still fully in place. */
 async function performUserSettingsRead(): Promise<UserSettings> {
   await migrateLegacyUserSettings({
     from: LEGACY_USER_SETTINGS_PATH,
@@ -444,42 +482,34 @@ async function performUserSettingsRead(): Promise<UserSettings> {
     /* Main file AND every backup are unparseable (or no backup exists yet —
        the first corruption ever seen). readJsonWithRecovery already tried
        every candidate; only log here, once, for this terminal case — a
-       successful backup recovery below logs its own single warning instead. */
+       successful backup recovery below logs its own single warning instead.
+       The stamp is the CORRUPT file's, so a hand-repair changes it and the
+       next read picks the repair up. */
     console.warn(
       `[user-settings] ${USER_SETTINGS_PATH} and its backups are all unreadable (${(err as Error).message}); ` +
         'using in-memory defaults.',
     );
-    settingsFileCorrupt = true;
-    cached = { ...DEFAULT_USER_SETTINGS };
-    explicitlySetKeys = new Set();
-    // Track the current mtime of the corrupt file, so we can detect if it gets
-    // hand-repaired by the user out-of-band
-    try {
-      cachedFileMtime = statSync(USER_SETTINGS_PATH).mtimeMs;
-    } catch {
-      // File doesn't exist yet, can't track mtime
-      cachedFileMtime = null;
-    }
-    return cached;
+    return commitRead({
+      settings: { ...DEFAULT_USER_SETTINGS },
+      explicitKeys: new Set(),
+      corrupt: true,
+      stamp: statFileStamp(),
+    });
   }
   if (!raw) {
-    settingsFileCorrupt = false;
-    cached = { ...DEFAULT_USER_SETTINGS };
-    explicitlySetKeys = new Set();
-    // Track the file's current mtime even though the file is being created as defaults,
-    // so we can detect out-of-band repairs later (#3175 Q4)
-    try {
-      cachedFileMtime = statSync(USER_SETTINGS_PATH).mtimeMs;
-    } catch {
-      // File doesn't exist or can't be stat'd, don't track mtime
-      cachedFileMtime = null;
-    }
-    return cached;
+    /* No file on disk (readJsonWithRecovery returns null for an absent
+       path; nothing on the read path creates one). A `null` stamp records
+       exactly that, so the file appearing later — before this process has
+       written anything — is detected as a change (#3175 Q4). */
+    return commitRead({
+      settings: { ...DEFAULT_USER_SETTINGS },
+      explicitKeys: new Set(),
+      corrupt: false,
+      stamp: null,
+    });
   }
-  // A successful read or backup recovery means the corruption episode, if any, is over.
-  settingsFileCorrupt = false;
   // Track which keys were explicitly in the file before merging with defaults (#2632 N2)
-  explicitlySetKeys = new Set(Object.keys(raw as Record<string, unknown>));
+  const explicitKeys = new Set(Object.keys(raw as Record<string, unknown>));
 
   const migrated = migrateLegacyEagerLoadFields(raw);
   if (migrated !== raw) {
@@ -490,15 +520,13 @@ async function performUserSettingsRead(): Promise<UserSettings> {
     );
   }
   const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(migrated as object) });
-  cached = parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS };
-  // Track the file's current mtime so we can detect out-of-band modifications
-  try {
-    cachedFileMtime = statSync(USER_SETTINGS_PATH).mtimeMs;
-  } catch {
-    // File doesn't exist or can't be stat'd, don't track mtime
-    cachedFileMtime = null;
-  }
-  return cached;
+  // A successful read or backup recovery means the corruption episode, if any, is over.
+  return commitRead({
+    settings: parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS },
+    explicitKeys,
+    corrupt: false,
+    stamp: statFileStamp(),
+  });
 }
 
 /** Synchronous cached view. Returns the in-memory copy if any prior
@@ -538,19 +566,24 @@ function clearCorruptFlagAfterWrite(): void {
   settingsFileCorrupt = false;
 }
 
-/** Helper to update the cached mtime after a successful write. Called after
-    writeJsonAtomic succeeds so the cache's recorded mtime matches the file's
-    real current mtime. This prevents the next read from incorrectly thinking
-    the file was modified out-of-band when it was actually modified by this
-    writer. Only app writes through the five sanctioned writers update this;
-    genuine out-of-band repairs leave it stale and correctly trigger a re-read. */
-function updateCachedFileMtimeAfterWrite(): void {
-  try {
-    cachedFileMtime = statSync(USER_SETTINGS_PATH).mtimeMs;
-  } catch {
-    // File doesn't exist or can't be stat'd, clear the mtime tracking
-    cachedFileMtime = null;
-  }
+/** A stamp no real file can carry. Recorded when a writer cannot vouch that
+    the file on disk is the one it just wrote, so the next readUserSettings()
+    re-reads instead of trusting `cached`. */
+const STAMP_FORCE_REREAD: FileStamp = { mtimeMs: -1, size: -1 };
+
+/** Re-stamp the cache from the file a writer just wrote, so the next read
+    doesn't mistake this process's own write for an out-of-band change and
+    re-parse the JSON (#3175 P1). The stat happens AFTER writeJsonAtomic's
+    rename resolves, so a sibling process writing in that gap could get ITS
+    file recorded against OUR `cached = merged` — guarded by checking the
+    stat'd size against the byte length writeJsonAtomic serialises: a
+    mismatch (or a failed stat) records STAMP_FORCE_REREAD, and the next
+    read self-heals from disk exactly as it would have with no stamp at
+    all. */
+function stampCacheAfterWrite(written: UserSettings): void {
+  const now = statFileStamp();
+  const expectedSize = Buffer.byteLength(JSON.stringify(written, null, 2), 'utf8');
+  cachedFileStamp = now !== null && now.size === expectedSize ? now : STAMP_FORCE_REREAD;
 }
 
 /** Merges `patch` into the on-disk file, validating each field. Returns the
@@ -592,7 +625,7 @@ export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
     await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
-    updateCachedFileMtimeAfterWrite();
+    stampCacheAfterWrite(merged);
     cached = merged;
     // Track that sentKeys are now explicitly set in the file (#2632 N2)
     for (const key of sentKeys) {
@@ -975,7 +1008,7 @@ export async function writeGeminiApiKey(key: string | null): Promise<UserSetting
     await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
-    updateCachedFileMtimeAfterWrite();
+    stampCacheAfterWrite(merged);
     cached = merged;
     return merged;
   });
@@ -1014,7 +1047,7 @@ export async function writeUpgradeMeta(patch: {
     await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
-    updateCachedFileMtimeAfterWrite();
+    stampCacheAfterWrite(merged);
     cached = merged;
     return merged;
   });
@@ -1040,7 +1073,7 @@ export async function writeSetupCompletedAt(ts: string | null): Promise<UserSett
     await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
-    updateCachedFileMtimeAfterWrite();
+    stampCacheAfterWrite(merged);
     cached = merged;
     return merged;
   });
@@ -1063,7 +1096,7 @@ export async function writeTourCompletedAt(ts: string | null): Promise<UserSetti
     await snapshotCorruptBytesBeforeWrite();
     await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
-    updateCachedFileMtimeAfterWrite();
+    stampCacheAfterWrite(merged);
     cached = merged;
     return merged;
   });
@@ -1100,7 +1133,7 @@ export async function clearAllConfigOverrides(): Promise<void> {
 /** Test-only: drop the in-process cache so the next read re-parses disk. */
 export function _resetUserSettingsCache(): void {
   cached = null;
-  cachedFileMtime = null;
+  cachedFileStamp = null;
   inFlightRead = null;
   explicitlySetKeys = new Set(); // Reset tracked keys alongside cached settings
   writeChain = Promise.resolve();

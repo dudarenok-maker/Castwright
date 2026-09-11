@@ -418,7 +418,7 @@ function ModelManagerRoute() {
 
 /* fs-21 — first-run setup wizard. Fetches readiness on mount; Wave 2 adds
    re-fetch, guided/checklist mode, and onFinish navigation. */
-function SetupRoute() {
+export function SetupRoute() {
   useHydrateStage({ kind: 'setup' }, []);
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
