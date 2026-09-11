@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="19" data-publish-id="6871507027ef"></div>
+  <div hidden data-published-as="20" data-publish-id="8627666711a2"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -292,7 +292,8 @@
       <div class="body">
         <p><b>Narrowed 2026-09-08 (step 9, #2954) — 9 of 10 items discharged.</b> The 10-item checklist ran for real on both cards: real per-card UUIDs from torch · a starved card self-exits with code 43, <code>/health</code> showing the breach first · <code>QWEN_DEVICE</code>/<code>KOKORO_DEVICE</code> on different cards run concurrently, same-card pinning still blocks.</p>
         <p>Task 16/16.5 (<code>runAutoRevert</code> + its operator toast) <b>was built</b> with real paired tests — a mutated guard reddens all four tests, and reverts clean.</p>
-        <p><b>What remains owed:</b> the real-hardware trigger. A forced card-specific three-exits-in-ten-minutes streak did <b>not</b> reach <code>runAutoRevert</code> in production — <code>/api/gpu/trip-status</code> stayed <code>null</code> throughout, no toast fired. <code>start.ps1</code> absorbs and restarts the code-43 child internally on Windows before Node's own supervisor sees three distinct exits. Remaining scope: wire the streak-trip signal through <code>start.ps1</code>'s own restart loop (or an equivalent path), then re-run the hardware trigger.</p>
+        <p><b>What remains owed:</b> re-run the real-hardware trigger after PR #3148 fixes the exit-code visibility gap. The original blocker: <code>start.ps1</code> absorbed code-43 exits internally in its restart loop, preventing Node's supervisor from observing individual exits so the streak guard and <code>runAutoRevert</code> never fired. <b>FIXED</b> by PR #3148, which removes the restart loop from both <code>start.ps1</code> and <code>start.sh</code> and leaves Node's <code>sidecar-supervisor.ts</code> to own all restart decisions and observe individual code-43 exits.</p>
+        <p>A forced card-specific three-exits-in-ten-minutes streak was run for real before this fix and did not reach <code>runAutoRevert</code> — but now the supervised path should observe and respond to individual code-43 exits. <b>Owed:</b> re-run the hardware trigger on real 2-card hardware to confirm the auto-revert trip now fires and resolves the cascade, then record the outcome. Tracked as <a href="https://github.com/dudarenok-maker/Castwright/issues/3121">#3121</a>.</p>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1230">#1230</a></p>
       </div>
     </details>
