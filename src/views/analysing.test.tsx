@@ -626,7 +626,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
      even pre-analysis so the user can pre-warm Ollama from this screen. */
   function renderNoManuscript() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     return render(
       <Provider store={store}>
@@ -799,7 +799,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
 
   it('hides the analyzer pill when a cloud (Gemini) model is selected — nothing to load locally', () => {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -841,7 +841,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
 describe('AnalysingView — analyzer pill Stop/Load in-flight guard (#1929)', () => {
   function renderNoManuscript() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     return render(
       <Provider store={store}>
@@ -1330,7 +1330,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44, 49]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1361,7 +1361,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1427,6 +1427,70 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(capturedOpts!.signal!.aborted).toBe(false);
   });
 
+  /* #3215 pass-2 review (C2) regression: a subset_in_progress rejection
+     must NOT re-arm the paused main run. Same pause-then-retry setup as the
+     test above, but the subset call is REJECTED with subset_in_progress
+     instead of resolved — another subset job is genuinely live for this
+     manuscript, and resuming main here is exactly the cache-write race the
+     PAUSE-AND-RETRY contract exists to prevent. Revert the
+     subsetInProgressRef guard around the re-arm in analysing.tsx and this
+     test reddens: a second analyseManuscript call lands with a fresh,
+     non-aborted signal (verified). */
+  it('#3215 C2 — a subset_in_progress rejection does not re-arm the paused main run', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+    const mainSignal = capturedOpts!.signal!;
+    await act(async () => {
+      capturedOpts!.onPhase!({ phaseId: 0, progress: 0.4 });
+    });
+
+    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+    capturedOpts = undefined;
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+    expect(mainSignal.aborted).toBe(true);
+    expect(capturedSubsetCall).toBeDefined();
+
+    await act(async () => {
+      rejectSubset?.(
+        new AnalysisError(
+          'A different subset re-analysis is already in progress for this manuscript: Chapter Forty-Seven.',
+          'subset_in_progress',
+        ),
+      );
+    });
+
+    await screen.findByText(
+      /A different subset re-analysis is already in progress for this manuscript: Chapter Forty-Seven\./i,
+    );
+
+    /* The regression: main must stay paused. No second analyseManuscript
+       call — capturedOpts (reset to undefined above) stays undefined. */
+    expect(capturedOpts).toBeUndefined();
+  });
+
   it('a chapter-resolved SSE event drops the matching panel row mid-stream', async () => {
     /* Pre-fix the panel was hydrated once on mount from book-state and
        never updated, so a chapter that the main run's Phase 0a re-
@@ -1439,7 +1503,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44, 49]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1487,7 +1551,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1538,7 +1602,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1597,7 +1661,7 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
 
   it('renders the cast preview from a pre-hydrated cast slice before any SSE event fires', () => {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     /* Simulate the layout's getBookState → setCharacters hydration that
        runs ahead of the analysing route mounting. With cast.json now
@@ -1633,7 +1697,7 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
 describe('AnalysingView — dropped-quotes panel', () => {
   function renderWithBookId() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     return render(
       <Provider store={store}>
@@ -2011,6 +2075,7 @@ describe('AnalysingView — cast merge-base advisory toast (#2015)', () => {
         account: accountSlice.reducer,
         bookMeta: bookMetaSlice.reducer,
         notifications: notificationsSlice.reducer,
+        analysis: analysisSlice.reducer,
       },
     });
     render(
@@ -2446,7 +2511,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
       );
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -2470,7 +2535,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
       Promise.resolve(makeBookStateWithErrors([4], {}));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>

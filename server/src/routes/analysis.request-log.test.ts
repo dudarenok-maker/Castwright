@@ -551,9 +551,9 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
       const lines = consoleLogSpy.mock.calls
         .map((call) => call[0])
         .filter((line): line is string => typeof line === 'string');
-      const outcomeLine = lines.find((line) => line.includes('[analysis-subset]'));
-      expect(outcomeLine, 'expected a [analysis-subset] outcome line on rejection').toBeDefined();
-      expect(outcomeLine).toContain('subset_in_progress');
+      const outcomeLine = lines.find((line) => line.startsWith('[analysis-subset] subset_in_progress'));
+      expect(outcomeLine, 'expected a [analysis-subset] subset_in_progress outcome line on rejection').toBeDefined();
+      expect(outcomeLine).toContain(`manuscript=${JSON.stringify(manuscriptId)}`);
     } finally {
       consoleLogSpy.mockRestore();
       removeManuscript(manuscriptId);

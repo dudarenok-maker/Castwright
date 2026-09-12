@@ -14,6 +14,7 @@ import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
 import { queueSlice } from '../store/queue-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
+import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
 import { GenerationView, ChapterSegmentStrip } from './generation';
 import { textHashForStale } from '../lib/stale-chapters';
 import { MOCK_QA_REPORT } from '../data/qa-report';
@@ -2064,6 +2065,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         library: librarySlice.reducer,
         queue: queueSlice.reducer,
         bookMeta: bookMetaSlice.reducer,
+        analysis: analysisSlice.reducer,
       },
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2, ch3Excluded]));
@@ -2166,6 +2168,52 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
       ),
     ).toBeInTheDocument();
+  });
+
+  /* #3215 pass-2 review (C1/B2) regression: a rejected subset_in_progress
+     collision must not clobber-and-strand the snapshot of the OTHER,
+     genuinely-running subset job. This exercises handleReanalyse (chapter 1
+     is a "done" chapter, so its row's action is Re-analyse, not Include) —
+     the optimistic setActiveStream it dispatches right before the POST
+     overwrote the running job's snapshot pre-fix, and the rejection either
+     cleared it outright (the C1 bug) or left the clobbered value
+     permanently stuck (the B2 bug this round fixed) — either way the live
+     job on chapter 5 became invisible. Revert handleReanalyse's
+     priorSnapshot capture/restore in generation.tsx and this test reddens:
+     activeStream ends up holding chapter 1's clobbered snapshot instead of
+     chapter 5's (verified). */
+  it('#3215 C1/B2 — a rejected subset_in_progress collision restores the other, still-running job\'s snapshot instead of stranding it', async () => {
+    const store = makeIncludeStore();
+    const otherJobSnapshot: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 40,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'subset',
+      subsetChapterIds: [5],
+    };
+    store.dispatch(analysisActions.setActiveStream(otherJobSnapshot));
+
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(
+      new AnalysisError(
+        'A different subset re-analysis is already in progress for this manuscript: Chapter 5.',
+        'subset_in_progress',
+      ),
+    );
+    renderInclude(store);
+
+    fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+    fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+
+    await screen.findByText(
+      /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+    );
+
+    expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
   });
 
   it('on success, merges sentences into the manuscript slice, characters into cast, and clears the row excluded flag', async () => {

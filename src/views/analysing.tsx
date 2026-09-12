@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useStore } from 'react-redux';
 import { IconClose, IconRefresh } from '../lib/icons';
 import { helpHrefForFailureCode } from '../lib/router';
 import { HELP_FAILURE_ENTRIES } from '../data/help-failures';
@@ -27,7 +28,7 @@ import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-overrid
 import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
@@ -131,6 +132,7 @@ export function AnalysingView({
   onComplete,
 }: Props) {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   /* `phase` is the pipeline FRONTIER — the highest phase id seen this run.
      It drives the overall %, the sticky bar, and the cross-nav snapshot. The
      per-phase progress + live payloads are kept in separate maps so two
@@ -809,7 +811,7 @@ export function AnalysingView({
        Capture the prior snapshot in case the request fails with
        subset_in_progress; restoration prevents a stale/clobbered state
        from becoming permanent (B2 regression guard). */
-    const priorSnapshot = getState().analysis.activeStream;
+    const priorSnapshot = store.getState().analysis.activeStream;
     dispatch(
       analysisActions.setActiveStream({
         bookId: bookId ?? null,
