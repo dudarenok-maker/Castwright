@@ -37,7 +37,7 @@ import { EventEmitter } from 'node:events';
 function createMockSpawn(exitSequence) {
   let callCount = 0;
 
-  return function mockSpawn() {
+  const mockSpawn = function mockSpawn() {
     if (callCount >= exitSequence.length) {
       // Should not be called more times than provided exit codes
       throw new Error(`mockSpawn called ${callCount + 1} times but only ${exitSequence.length} exit codes provided`);
@@ -52,6 +52,8 @@ function createMockSpawn(exitSequence) {
     });
     return child;
   };
+  mockSpawn.getCallCount = () => callCount;
+  return mockSpawn;
 }
 
 // Capture process.exit calls and throw so the launcher promise rejects
@@ -63,12 +65,16 @@ function setupTestEnvironment(timeSequence = null) {
   const originalSetTimeout = setTimeout;
   let timeIdx = 0;
   const timeoutCallbacks = [];
+  const delays = [];
 
   const mockNow = () => {
     if (timeSequence && timeIdx < timeSequence.length) {
       return timeSequence[timeIdx++];
     }
-    return 1000 + (timeIdx * 1000); // Default incrementing time
+    // Default behavior: once array is exhausted, keep returning a fixed value.
+    // This fallback is load-bearing for tests that under-provide time values.
+    // It ensures consistent "not fresh" classification (lifetime = 0) when the clock runs out.
+    return 1000 + (timeIdx * 1000);
   };
 
   Date.now = mockNow;
@@ -79,9 +85,10 @@ function setupTestEnvironment(timeSequence = null) {
     throw new Error(`process.exit(${code})`);
   };
 
-  // Mock setTimeout to execute immediately (no delay) but track callbacks
-  global.setTimeout = (cb, _delay) => {
+  // Mock setTimeout to execute immediately (no delay) but track callbacks and delays
+  global.setTimeout = (cb, delay) => {
     timeoutCallbacks.push(cb);
+    delays.push(delay);
     setImmediate(cb); // Execute asynchronously but without delay
     return Symbol('timeout');
   };
@@ -94,6 +101,7 @@ function setupTestEnvironment(timeSequence = null) {
     },
     getExitCode: () => actualExitCode,
     wasExitCalled: () => exitCalled,
+    getDelays: () => delays,
   };
 }
 
@@ -154,9 +162,19 @@ test('sidecar restart: code-43 DOES trip on third exit (C2 regression)', async (
 
 test('sidecar restart: old code-43 exit is pruned when outside window', async () => {
   const WINDOW_MS = 600_000; // 10 minutes
-  // t=0 (first exit), t=WINDOW+1 (second, outside first), t=WINDOW+2 (third, outside first but inside window from second)
-  // After pruning, should only have 2 timestamps, so should NOT trip
-  const times = [0, WINDOW_MS + 1, WINDOW_MS + 2];
+  // Sequence: spawn 0, exit 0 (code 43), spawn 1, exit 1 (code 43), spawn 2, exit 2 (code 43), spawn 3, exit 3 (code 0)
+  // We want: exit 0 at t=0, exit 1 at t=WINDOW+1 (outside window from exit 0),
+  // exit 2 at t=WINDOW+2 (outside window from exit 0 but inside from exit 1)
+  // After pruning exit 0 (outside window), streak is 2 (exits 1 and 2), so should NOT trip.
+  const times = [
+    0,  // spawn 0
+    0,  // exit 0 at t=0
+    1,  // spawn 1 at t=1
+    WINDOW_MS + 1,  // exit 1 at t=WINDOW+1
+    WINDOW_MS + 2,  // spawn 2 at t=WINDOW+2
+    WINDOW_MS + 2,  // exit 2 at t=WINDOW+2 (same as spawn, no time gap, simulating immediate exit)
+    WINDOW_MS + 3,  // spawn 3 at t=WINDOW+3
+  ];
   const env = setupTestEnvironment(times);
   try {
     // Spawn 1 exits 43 → restart. Spawn 2 exits 43 → restart. Spawn 3 exits 43 → restart.
@@ -190,10 +208,33 @@ test('sidecar restart: non-43 exit codes propagate immediately without restart',
   }
 });
 
-test('sidecar restart: code-42 (CUDA poison) propagates immediately without retry', async () => {
+// Regression tests for the code-42 generic crash-loop retry (issue #3206).
+// Code 42 (CUDA poison) must retry via its OWN counter/cap, separate from the
+// code-43 streak above — these mirror that streak's test structure.
+
+test('sidecar restart: code-42 (CUDA poison) retries via the generic crash-loop, not immediate propagation', async () => {
   const env = setupTestEnvironment([1000]);
   try {
-    const spawn = createMockSpawn([42]); // Exit code 42
+    // First spawn exits 42 → triggers a crash-loop retry. Second spawn exits 0 → clean exit.
+    const spawn = createMockSpawn([42, 0]);
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+    assert.equal(env.getExitCode(), 0, 'a single code-42 exit should retry, not propagate 42 immediately');
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('sidecar restart: code-42 crash loop gives up after exhausting its cap (mutation probe)', async () => {
+  // CRASH_LOOP_MAX_CONSECUTIVE_FAILURES = 5, so the 6th consecutive code-42
+  // exit trips the give-up branch. The trailing 0 should never be reached.
+  const codes = [42, 42, 42, 42, 42, 42, 0];
+  const env = setupTestEnvironment(codes.map(() => 1000));
+  try {
+    const spawn = createMockSpawn(codes);
     try {
       await launchSidecarWithRestart('linux', '/tmp', spawn);
     } catch {
@@ -202,9 +243,133 @@ test('sidecar restart: code-42 (CUDA poison) propagates immediately without retr
     assert.equal(
       env.getExitCode(),
       42,
-      'should propagate exit code 42 immediately (no restart on 42)',
+      `should give up and exit with code 42 after exhausting the crash-loop cap, got ${env.getExitCode()}`,
     );
-    assert.equal(env.wasExitCalled(), true, 'should have called process.exit(42)');
+    assert.equal(env.wasExitCalled(), true, 'should have called process.exit(42) on give-up');
+    assert.equal(
+      spawn.getCallCount(),
+      6,
+      'should have actually retried through all 6 spawns (5 retries + the give-up exit) before giving up, not exited on the first 42',
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('sidecar restart: code-42 exits do not count toward the code-43 streak cap', async () => {
+  // Interleaved 42s and 43s: only two code-43 exits occur, which must not trip
+  // the 3-in-window streak cap even though four total crash exits happened.
+  const spawn = createMockSpawn([42, 43, 42, 43, 0]);
+  const env = setupTestEnvironment([1000, 1000, 1000, 1000, 1000]);
+  try {
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+    assert.equal(
+      env.getExitCode(),
+      0,
+      'interleaved code-42 exits must not contribute to the code-43 streak count',
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('sidecar restart: non-42, non-0, non-43 exit codes propagate immediately', async () => {
+  // Code 1 (e.g., missing venv) should propagate immediately without retry
+  const env = setupTestEnvironment([1000]);
+  try {
+    const spawn = createMockSpawn([1]); // Exit code 1 (not 42, not 43, not 0)
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+    assert.equal(env.getExitCode(), 1, 'should propagate exit code 1 immediately without retry');
+    assert.equal(spawn.getCallCount(), 1, 'should not have retried a non-42, non-43 exit');
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('sidecar restart: code-42 fresh incidents reset the crash-loop counter', async () => {
+  // Simulate 6 code-42 exits spread across time (each lived > QUICK_DEATH_MS).
+  // QUICK_DEATH_MS = 30000 milliseconds = 30 seconds, so we need lifetimes > 30000 ms.
+  // Iteration 0: spawn@0, exit@100000 (lifetime=100000ms > 30000ms, fresh incident, reset to 0 then 1)
+  // Iteration 1: spawn@200000, exit@300000 (lifetime=100000ms, fresh incident, reset to 0 then 1)
+  // ... repeat for all 6 iterations. Counter resets on each fresh incident, never exceeds 5.
+
+  const times = [];
+  // Build time sequence: spawn at t, exit at t + 100 seconds (100000ms > 30000ms QUICK_DEATH_MS)
+  const LIFETIME_MS = 100000; // Longer than QUICK_DEATH_MS (30000)
+
+  for (let i = 0; i < 6; i++) {
+    const spawnTime = i * 200000; // 200 seconds apart to space out spawns
+    const exitTime = spawnTime + LIFETIME_MS;
+    times.push(spawnTime);
+    times.push(exitTime);
+  }
+
+  // Final spawn and clean exit
+  const finalSpawnTime = 6 * 200000;
+  times.push(finalSpawnTime);
+  times.push(finalSpawnTime + 1);
+
+  const spawn = createMockSpawn([42, 42, 42, 42, 42, 42, 0]); // 6 code-42s followed by clean exit
+  const env = setupTestEnvironment(times);
+  try {
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+    assert.equal(
+      env.getExitCode(),
+      0,
+      'six code-42 exits, each with 100-second lifetime (> 30s threshold), should NOT trigger the crash-loop cap; fresh-incident resets prevent it',
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('sidecar restart: code-42 crash-loop delay uses correct backoff (ordering regression)', async () => {
+  // Regression test for N1: the reset MUST occur before the backoff lookup.
+  // If reset happens after the lookup, the first retry uses CRASH_LOOP_BACKOFFS_MS[-1]
+  // (undefined), causing immediate respawn with no backoff.
+  // This test verifies the correct backoff schedule is used on each attempt.
+
+  // Six code-42 exits with no fresh incident (all quick deaths).
+  // After 5 retries, the cap triggers on the 6th exit and calls process.exit(),
+  // so we get 5 setTimeout delays (for attempts 1–5), not 6.
+  const times = Array(13).fill(1000); // All exits are quick deaths (lifetime = 0)
+  const codes = [42, 42, 42, 42, 42, 42, 0]; // 6 code-42s, then clean exit
+
+  const spawn = createMockSpawn(codes);
+  const env = setupTestEnvironment(times);
+  try {
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+
+    const delays = env.getDelays();
+    // Should have 5 delays (one for each retry before the cap triggers on the 6th code-42)
+    assert.equal(delays.length, 5, `should have 5 retry delays, got ${delays.length}`);
+
+    // Verify the delays match the expected backoff schedule: [2000, 5000, 15000, 15000, 15000]
+    // with index clamping to CRASH_LOOP_BACKOFFS_MS.length - 1
+    const expectedDelays = [2000, 5000, 15000, 15000, 15000];
+    for (let i = 0; i < delays.length; i++) {
+      assert.equal(
+        delays[i],
+        expectedDelays[i],
+        `delay at attempt ${i + 1} should be ${expectedDelays[i]}ms, got ${delays[i]}ms`,
+      );
+    }
   } finally {
     env.cleanup();
   }
