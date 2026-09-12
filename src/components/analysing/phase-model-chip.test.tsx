@@ -243,6 +243,38 @@ describe('PhaseModelChip', () => {
     });
   });
 
+  describe('paused/halted states', () => {
+    it('renders the paused tone/dot, data-phase-state, and "· paused" suffix', () => {
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 0, state: 'paused' },
+        { selectedModel: 'gemini-2.5-flash' },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.className).toContain('text-ink/70');
+      expect(chip.className).toContain('bg-ink/6');
+      expect(chip.querySelector('span.rounded-full')?.className).toContain('bg-ink/40');
+      expect(chip.getAttribute('data-phase-state')).toBe('paused');
+      expect(chip.textContent).toContain('· paused');
+      expect(chip.textContent).not.toContain('· streaming');
+    });
+
+    it('renders the halted tone/dot, data-phase-state, and "· halted" suffix', () => {
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 0, state: 'halted' },
+        { selectedModel: 'gemini-2.5-flash' },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.className).toContain('text-rose-800');
+      expect(chip.className).toContain('bg-rose-100');
+      expect(chip.querySelector('span.rounded-full')?.className).toContain('bg-rose-500');
+      expect(chip.getAttribute('data-phase-state')).toBe('halted');
+      expect(chip.textContent).toContain('· halted');
+      expect(chip.textContent).not.toContain('· streaming');
+    });
+  });
+
   it('renders nothing for phase 2 (no model selection)', () => {
     const { container } = renderChip({}, { phaseId: 2, state: 'pending' });
     expect(container.querySelector('[data-testid^="phase-model-chip"]')).toBeNull();

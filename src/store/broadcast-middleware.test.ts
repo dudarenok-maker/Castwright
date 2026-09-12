@@ -609,6 +609,90 @@ describe('broadcastMiddleware — graceful degradation', () => {
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it('propagates field deletion (undefined assignment) in diff so sibling tabs clear stale values (#3172 finding 28)', () => {
+    const mock = makeMockChannel();
+    const clock = makeClock();
+    const store = makeStore(mock.channel, { now: clock.now, debounceMs: 250 });
+
+    /* Tab A starts with halted state including haltCode and haltReason. */
+    const haltedSnap: AnalysisStreamSnapshot = {
+      ...analysisSnap,
+      state: 'halted',
+      haltCode: 'stream_failed',
+      haltReason: 'Connection lost',
+    };
+    store.dispatch(analysisActions.setActiveStream(haltedSnap));
+    expect(mock.sent).toHaveLength(1);
+    mock.sent.length = 0;
+
+    /* Advance past debounce so the next action is sent immediately. */
+    clock.advance(500);
+
+    /* Tab A heals: a tick lifts the halt by clearing haltCode and haltReason.
+       The heal uses `undefined` assignment instead of `delete` (the fix).
+       The diff must include these cleared fields so sibling tabs also clear them. */
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({
+        manuscriptId: 'm-X',
+        phaseId: 0,
+        phaseProgress: 0.2,
+        lastTickAt: 2000,
+      }),
+    );
+
+    expect(mock.sent).toHaveLength(1);
+    const diffMsg = mock.sent[0];
+    expect(diffMsg.kind).toBe('sync:analysis');
+    expect(diffMsg.mode).toBe('diff');
+
+    if (diffMsg.kind === 'sync:analysis' && diffMsg.mode === 'diff') {
+      /* The diff must include haltCode and haltReason set to undefined so
+         sibling tabs can propagate the clearing. */
+      expect(diffMsg.diff.state).toBe('running');
+      expect(diffMsg.diff.haltCode).toBeUndefined();
+      expect(diffMsg.diff.haltReason).toBeUndefined();
+      expect(Object.keys(diffMsg.diff), 'haltCode must be in diff (set to undefined) so sibling can clear it').toContain('haltCode');
+      expect(Object.keys(diffMsg.diff), 'haltReason must be in diff (set to undefined) so sibling can clear it').toContain('haltReason');
+    }
+
+    /* Now simulate Tab B receiving this diff — verify it correctly applies the
+       undefined values (clearing the stale fields). */
+    const tabBStore = makeStore(mock.channel, { instanceId: 'tab-B' });
+    (mock.channel as unknown as { simulateInbound: (msg: BroadcastMessage) => void }).simulateInbound(
+      {
+        kind: 'sync:analysis',
+        instanceId: 'tab-A',
+        bookId: 'book-X',
+        mode: 'full',
+        snapshot: haltedSnap, // tab B starts with the halted snapshot
+      },
+    );
+    expect(tabBStore.getState().analysis.activeStream?.haltCode).toBe('stream_failed');
+
+    /* Tab B receives Tab A's healing diff. */
+    (mock.channel as unknown as { simulateInbound: (msg: BroadcastMessage) => void }).simulateInbound(
+      {
+        kind: 'sync:analysis',
+        instanceId: 'tab-A',
+        bookId: 'book-X',
+        mode: 'diff',
+        diff: {
+          state: 'running',
+          phaseProgress: 0.2,
+          lastTickAt: 2000,
+          haltCode: undefined,
+          haltReason: undefined,
+        },
+      },
+    );
+
+    /* Tab B's snapshot should now have the fields cleared. */
+    const tabBSnap = tabBStore.getState().analysis.activeStream;
+    expect(tabBSnap?.state).toBe('running');
+    expect(tabBSnap?.haltCode).toBeUndefined();
+    expect(tabBSnap?.haltReason).toBeUndefined();
+  });
 });
 
 // ---- Task 9: sync:substage cross-tab broadcast ----

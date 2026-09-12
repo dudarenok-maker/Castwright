@@ -65,6 +65,7 @@ import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
+import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -2856,6 +2857,7 @@ export class AnalysisError extends Error {
   }
 }
 
+
 async function realAnalyseManuscript(
   manuscriptId: string,
   opts: AnalyseOpts = {},
@@ -2907,14 +2909,14 @@ async function realAnalyseManuscript(
           selector: { manuscriptId },
           shape: '409',
           onRetry: () => realAnalyseManuscript(manuscriptId, opts).then(resolve, reject),
-          onDismiss: () => reject(new Error(msg)),
+          onDismiss: () => reject(new AnalysisError(msg, ANALYSIS_STREAM_FAILED)),
         });
-        if (!accepted) reject(new Error(msg));
+        if (!accepted) reject(new AnalysisError(msg, ANALYSIS_STREAM_FAILED));
       });
     }
-    throw new Error(msg);
+    throw new AnalysisError(msg, ANALYSIS_STREAM_FAILED);
   }
-  if (!res.body) throw new Error(`Analysis stream failed (${res.status}).`);
+  if (!res.body) throw new AnalysisError(`Analysis stream failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -3035,7 +3037,7 @@ async function realAnalyseManuscript(
     }
   }
 
-  if (!result) throw new Error('Analysis stream ended without a result event.');
+  if (!result) throw new AnalysisError('Analysis stream ended without a result event.', ANALYSIS_STREAM_NO_RESULT);
   return result;
 }
 
@@ -5623,7 +5625,12 @@ async function realRunAnalysisForChapters(
       signal,
     },
   );
-  if (!res.ok || !res.body) throw new Error(`Subset analysis failed (${res.status}).`);
+  /* Same two connection-level codes as realAnalyseManuscript — the stream
+     middleware subscribes through this reader too (kind: 'subset') and
+     classifies on `code`, so a plain Error here would land in its generic
+     terminal branch and paint a designed no-result exit as a dead run. */
+  if (!res.ok || !res.body)
+    throw new AnalysisError(`Subset analysis failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -5746,7 +5753,11 @@ async function realRunAnalysisForChapters(
     }
   }
 
-  if (!result) throw new Error('Subset analysis stream ended without a result event.');
+  if (!result)
+    throw new AnalysisError(
+      'Subset analysis stream ended without a result event.',
+      ANALYSIS_STREAM_NO_RESULT,
+    );
   return result;
 }
 
