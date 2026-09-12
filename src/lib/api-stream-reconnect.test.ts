@@ -1,14 +1,20 @@
 /* Plan 102 — realStreamGeneration auto-reconnects on unexpected SSE end.
  *
- * Two scenarios verified:
+ * Six scenarios verified:
  *   1. Stream ends cleanly with no `idle` tick after at least one real tick →
  *      reconnect once, deliver the next batch of ticks.
  *   2. Stream ends with an `idle` tick → no reconnect (queue drained naturally).
- *   3. Caller cancels via the returned canceller → no reconnect, even if no
- *      idle tick was seen (user-initiated stop).
+ *   3. Caller cancels via the returned canceller mid-stream → no reconnect, no
+ *      terminal chapter_failed/idle pair (user-initiated stop).
+ *   4. Stream closes after zero ticks (setup error) → no reconnect, but still
+ *      emit chapter_failed + idle to free the worker slot.
+ *   5. Non-OK response (server error) → no reconnect, emit chapter_failed + idle.
+ *   6. Reconnect attempts exhausted → emit chapter_failed + idle once.
  *
- * Mocks `fetch` to return a streaming Response whose ReadableStream emits a
- * controlled sequence of SSE frames, then closes. The reconnect strategy
+ * The terminal block (chapter_failed + idle pair) is emitted on every give-up
+ * shape except idle-terminated streams and caller cancellation. Mocks `fetch`
+ * to return a streaming Response whose ReadableStream emits a controlled
+ * sequence of SSE frames, then closes, or rejects. The reconnect strategy
  * matches plan 102 invariant 6 (the resume_from server-side ack is the
  * complementary piece, tested separately in
  * server/src/routes/generation-resume-from.test.ts). */
@@ -114,6 +120,7 @@ describe('realStreamGeneration auto-reconnect', () => {
     cancel();
     await new Promise((r) => setTimeout(r, 700));
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(ticks.map((t) => t.type)).toEqual(['progress']);
   });
 
   it('does NOT reconnect when the FIRST fetch never delivered a tick (setup error)', async () => {
@@ -324,5 +331,38 @@ describe('realStreamGeneration auto-reconnect', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /* #3026 — when reader.read() rejects with AbortError (e.g. a network
+     abort mid-flight in a real browser), the AbortError catch at api.ts:5908
+     returns { shouldReconnect: false }, then falls through via the return→break
+     change at :5924 to the terminal block where !cancelled && !sawIdle
+     guards the chapter_failed + idle pair. This test directly exercises that
+     catch edge and its terminal-block delivery, verifying it emits the correct
+     pair once even when called with a single-chapter chapterId. */
+  it('delivers chapter_failed + idle when fetch rejects with AbortError', async () => {
+    const { api } = await import('./api');
+    /* First fetch succeeds with one progress tick, triggering shouldReconnect
+       condition. Second fetch rejects with AbortError, hitting the catch at
+       api.ts:5908 which returns { shouldReconnect: false }, then breaks due to
+       the return→break change at :5924, falling through to the terminal block. */
+    fetchMock
+      .mockResolvedValueOnce(sseResponse([JSON.stringify({ type: 'progress', progress: 0.3 })]))
+      .mockRejectedValueOnce(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+    const ticks: { type: string; chapterId?: number }[] = [];
+    api.streamGeneration({
+      bookId: 'book-A',
+      modelKey: 'kokoro-v1',
+      chapterIds: [7],
+      onTick: (t) => ticks.push(t as { type: string; chapterId?: number }),
+    });
+    await new Promise((r) => setTimeout(r, 800));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    /* After the first fetch succeeds with one tick, reconnect is triggered.
+       The second fetch rejects with AbortError, the catch returns
+       { shouldReconnect: false }, and the terminal block fires with
+       chapter_failed + idle. */
+    expect(ticks.map((t) => t.type)).toEqual(['progress', 'chapter_failed', 'idle']);
+    expect(ticks[1].chapterId).toBe(7);
   });
 });
