@@ -254,6 +254,63 @@ describe('AnalysingView — per-run phase-model picks reach the start request (#
     expect(capturedOpts?.model).toBeUndefined();
   });
 
+  it('C4: a local account default on the un-picked phase keeps the readiness gate closed (#3192 C4)', async () => {
+    // The prior C4 test only asserts on capturedOpts (the request), which the
+    // C3 fix produces — it stays green whether or not effectiveModelIds
+    // mirrors the request. This test asserts on the READINESS GATE itself:
+    // with Ollama unreachable and defaultAnalysisModel = qwen3.5:4b (local)
+    // on the un-picked phase, isLocalAnalyzer must see it and keep the Start
+    // button off, rather than firing the SSE at a cold, unwarmed Ollama.
+    vi.mocked(api.getOllamaHealth).mockResolvedValue({
+      status: 'unreachable',
+      url: 'http://localhost:11434',
+      resident: [],
+      models: [],
+    });
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          selectedModel: 'qwen3.5:4b',
+          selectedModelExplicit: false,
+          analyzerPhasePicks: {
+            // Only Phase 1 is picked, to a cloud model
+            m1: { phase0: undefined, phase1: 'gemini-3.1-flash-lite' },
+          },
+        } as ReturnType<typeof uiSlice.getInitialState>,
+        account: {
+          ...accountSlice.getInitialState(),
+          // Shipped default: local Ollama model
+          defaultAnalysisModel: 'qwen3.5:4b',
+          // No saved split
+          analyzerPhase0Model: null,
+          analyzerPhase1Model: null,
+        } as ReturnType<typeof accountSlice.getInitialState>,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          title="the Coalfall Commission"
+          model="gemini-2.5-flash"
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+    });
+    expect(screen.queryByRole('button', { name: /start analysis/i })).toBeNull();
+  });
+
   it('N10: picks survive when selectedModelExplicit is true (the explicit override collapses the split)', async () => {
     // N7's gate: picks should be cleared only when they were actually sent.
     // When selectedModelExplicit is true, picks are NOT sent (collapsed server-side),
