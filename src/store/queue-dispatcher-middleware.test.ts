@@ -812,5 +812,47 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
       );
       expect((call![0] as { modelKey?: string }).modelKey).toBe('qwen3-tts-0.6b');
     });
+
+    it('claims a queued entry sitting behind leftover awaiting_confirm entries on a fresh store (#3026)', async () => {
+      /* A fresh page load starts the dispatcher's in-memory inFlight map empty
+         (queue-dispatcher-middleware.ts:81), and STEP 2 skips any entry that
+         isn't 'queued' (:228). So leftover awaiting_confirm entries from an
+         earlier session must not block a real queued entry behind them. */
+      const store = makeStore(2);
+      seed(store, [
+        entry({ id: 'a1', bookId: 'book-A', chapterId: 1, status: 'awaiting_confirm' }),
+        entry({ id: 'a2', bookId: 'book-A', chapterId: 2, status: 'awaiting_confirm' }),
+        entry({ id: 'a3', bookId: 'book-A', chapterId: 3, status: 'awaiting_confirm' }),
+        entry({ id: 'q4', bookId: 'book-A', chapterId: 4, status: 'queued' }),
+      ]);
+      await flushMicro();
+
+      expect(openedChapterIds()).toEqual([[4]]);
+    });
+
+    it('frees both worker slots when every in-flight chapter parks (#3026)', async () => {
+      /* A parked chapter's stream handle is closed synchronously on the park
+         tick (generation-stream-runner.ts:539), and the next reconcile frees
+         the slot via takeChapterAwaitingConfirm (queue-dispatcher-middleware.ts
+         :140-142). With 2 workers, parking both in-flight chapters must free
+         both slots for the next queued entry, without any idle tick. */
+      const store = makeStore(2);
+      seed(store, [
+        entry({ id: 'a1', bookId: 'book-A', chapterId: 1, status: 'queued' }),
+        entry({ id: 'a2', bookId: 'book-A', chapterId: 2, status: 'queued' }),
+        entry({ id: 'a3', bookId: 'book-A', chapterId: 3, status: 'queued' }),
+      ]);
+      await flushMicro();
+
+      expect(openedChapterIds().filter((ids) => ids[0] === 1)).toHaveLength(1);
+      expect(openedChapterIds().filter((ids) => ids[0] === 2)).toHaveLength(1);
+      expect(openedChapterIds().filter((ids) => ids[0] === 3)).toHaveLength(0);
+
+      parkStream('book-A', 1);
+      parkStream('book-A', 2);
+      await flushMicro();
+
+      expect(openedChapterIds().filter((ids) => ids[0] === 3)).toHaveLength(1);
+    });
   });
 });

@@ -58,8 +58,11 @@ the pressure-relief valve but makes the whole path *self-healing* instead of
   they spawn uvicorn once and propagate its real exit code immediately. Node's
   `sidecar-supervisor.ts` owns all restart logic for both code 42 and 43
   (poison and recycle). The standalone launcher path (`scripts/launch-sidecar.mjs`,
-  used when `autoStartSidecar` is off) has its own minimal code-43 safeguard with
-  the same 3-in-10-minute streak cap as the supervisor (issue #3121).
+  used when `autoStartSidecar` is off) has its own **code-43 restart safeguard** with
+  the same 3-in-10-minute streak cap as the supervisor (issue #3121), and a **code-42
+  crash-loop retry with fresh-incident reset** matching the supervisor's mechanism
+  (issue #3206) — a child that lived past 30 seconds is a fresh incident and resets
+  the retry counter, preventing a permanent loss of recovery after extended healthy runs.
 - `cast-design.ts` rides out an "unreachable"-class design error up to
   `MAX_RECYCLE_RIDEOUTS` (2): wait for the respawn (`ensureSidecarEngineReady`)
   and retry the SAME character. Only after the budget is exhausted (genuinely
