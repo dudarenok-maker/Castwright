@@ -65,6 +65,7 @@ import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
+import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -630,6 +631,10 @@ export interface StreamArgs {
       Optional for back-compat — pre-plan-102 callers still work, ticks just
       don't carry the field. */
   queueEntryId?: string;
+  /** Loud-fallback gate (generation.ts park-gate) — re-dispatch after a
+      parked chapter's "Render anyway" confirmation so the server skips the
+      park instead of re-queuing it. */
+  fallbackConfirmed?: boolean;
 }
 /** fs-26 — one SSE frame from the per-character splice endpoint. */
 export type SpliceTick =
@@ -2850,6 +2855,7 @@ export class AnalysisError extends Error {
   }
 }
 
+
 async function realAnalyseManuscript(
   manuscriptId: string,
   opts: AnalyseOpts = {},
@@ -2894,14 +2900,14 @@ async function realAnalyseManuscript(
           selector: { manuscriptId },
           shape: '409',
           onRetry: () => realAnalyseManuscript(manuscriptId, opts).then(resolve, reject),
-          onDismiss: () => reject(new Error(msg)),
+          onDismiss: () => reject(new AnalysisError(msg, ANALYSIS_STREAM_FAILED)),
         });
-        if (!accepted) reject(new Error(msg));
+        if (!accepted) reject(new AnalysisError(msg, ANALYSIS_STREAM_FAILED));
       });
     }
-    throw new Error(msg);
+    throw new AnalysisError(msg, ANALYSIS_STREAM_FAILED);
   }
-  if (!res.body) throw new Error(`Analysis stream failed (${res.status}).`);
+  if (!res.body) throw new AnalysisError(`Analysis stream failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -3022,7 +3028,7 @@ async function realAnalyseManuscript(
     }
   }
 
-  if (!result) throw new Error('Analysis stream ended without a result event.');
+  if (!result) throw new AnalysisError('Analysis stream ended without a result event.', ANALYSIS_STREAM_NO_RESULT);
   return result;
 }
 
@@ -5610,7 +5616,12 @@ async function realRunAnalysisForChapters(
       signal,
     },
   );
-  if (!res.ok || !res.body) throw new Error(`Subset analysis failed (${res.status}).`);
+  /* Same two connection-level codes as realAnalyseManuscript — the stream
+     middleware subscribes through this reader too (kind: 'subset') and
+     classifies on `code`, so a plain Error here would land in its generic
+     terminal branch and paint a designed no-result exit as a dead run. */
+  if (!res.ok || !res.body)
+    throw new AnalysisError(`Subset analysis failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -5733,7 +5744,11 @@ async function realRunAnalysisForChapters(
     }
   }
 
-  if (!result) throw new Error('Subset analysis stream ended without a result event.');
+  if (!result)
+    throw new AnalysisError(
+      'Subset analysis stream ended without a result event.',
+      ANALYSIS_STREAM_NO_RESULT,
+    );
   return result;
 }
 
@@ -5824,6 +5839,7 @@ function realStreamGeneration({
   chapterIds,
   force,
   queueEntryId,
+  fallbackConfirmed,
   onTick: rawOnTick,
 }: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
@@ -5832,6 +5848,11 @@ function realStreamGeneration({
   let sawIdle = false;
   let sawAnyTick = false;
   let cancelled = false;
+  /* Set by any exit that isn't a clean idle-terminated drain, so the single
+     terminal-handling block after the reconnect loop (below) knows what
+     reason to report. Left unset for the "no idle after repeated reconnects"
+     exhaustion exit (shape D), which gets its own stable default there. */
+  let failureReason: string | undefined;
   /* Track whether the controller has aborted so the inner catch can
      distinguish "user clicked stop" (AbortError) from "fetch died mid-stream
      and we want to reconnect". */
@@ -5849,15 +5870,16 @@ function realStreamGeneration({
           chapterIds,
           force,
           ...(queueEntryId ? { queueEntryId } : {}),
+          ...(fallbackConfirmed ? { fallbackConfirmed: true } : {}),
         }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
         const detail = await res.text().catch(() => '');
-        onTick({
-          type: 'chapter_failed',
-          errorReason: `Generation stream failed (${res.status}): ${detail || res.statusText}`,
-        });
+        /* Recorded, not emitted here — the terminal-handling block after the
+           reconnect loop (below) delivers the chapter_failed + idle pair once,
+           whichever shape produced it. */
+        failureReason = `Generation stream failed (${res.status}): ${detail || res.statusText}`;
         return { shouldReconnect: false };
       }
 
@@ -5897,14 +5919,12 @@ function realStreamGeneration({
       if ((e as { name?: string })?.name === 'AbortError') return { shouldReconnect: false };
       /* Network error / server bounce mid-stream lands here. If we'd already
          seen ticks, reconnect — the queue likely still has work. Otherwise
-         the failure is the first POST itself; surface to the caller. */
+         the failure is the first POST itself; recorded for the terminal
+         handling below rather than surfaced here directly. */
       if (sawAnyTick && !sawIdle) {
         return { shouldReconnect: true };
       }
-      onTick({
-        type: 'chapter_failed',
-        errorReason: (e as Error).message ?? 'Generation stream failed.',
-      });
+      failureReason = (e as Error).message || 'Generation stream failed.';
       return { shouldReconnect: false };
     }
   };
@@ -5912,9 +5932,10 @@ function realStreamGeneration({
   void (async () => {
     while (attempt < RECONNECT_MAX_ATTEMPTS) {
       const { shouldReconnect } = await openOnce();
-      if (!shouldReconnect || cancelled) return;
+      if (!shouldReconnect || cancelled) break;
       const backoff = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
       attempt += 1;
+      if (attempt >= RECONNECT_MAX_ATTEMPTS) break;
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
           controller.signal.removeEventListener('abort', cancelDuringWait);
@@ -5926,7 +5947,23 @@ function realStreamGeneration({
         };
         controller.signal.addEventListener('abort', cancelDuringWait);
       });
-      if (cancelled) return;
+      if (cancelled) break;
+    }
+    /* Terminal handling, in one place, for every shape that gives up without
+       ever seeing the server's own `idle` — a non-OK response, a zero-tick
+       clean close, a first-fetch throw, or reconnect-attempt exhaustion. A
+       caller cancel (`cancelled`) and a clean idle-terminated drain
+       (`sawIdle`) both emit nothing here; every other give-up delivers
+       exactly one `chapter_failed` (mirroring the server's own terminal
+       shape) followed by exactly one `idle`, so the dispatcher always frees
+       the worker slot. */
+    if (!cancelled && !sawIdle) {
+      onTick({
+        type: 'chapter_failed',
+        ...(chapterIds?.length === 1 ? { chapterId: chapterIds[0] } : {}),
+        errorReason: failureReason ?? 'Generation stream ended without completing.',
+      });
+      onTick({ type: 'idle' });
     }
   })();
 
@@ -6936,6 +6973,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   apiKeyStatus: 'unset',
   workspaceRoot: '(mock)/audiobook-workspace',
   workspaceSource: 'default',
+  corruptSettingsFile: false,
   analyzerKeepAliveByModel: {},
 };
 
@@ -7027,12 +7065,22 @@ async function realCheckCompanionApk(): Promise<CompanionApkAvailability> {
     return { available: false, sizeBytes: null };
   }
 }
-async function realDismissWhatsNew(): Promise<void> {
+async function realDismissWhatsNew(): Promise<{ ok: boolean; corruptSettingsFile?: boolean }> {
   const res = await fetch('/api/info/dismiss-whats-new', { method: 'POST' });
   if (!res.ok)
     throw new Error(
       `Dismiss what's-new failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
+  /* Any 2xx IS a successful dismiss. The body carries the settings-corruption
+     flag (DismissWhatsNewResponse), but a 204 or a body-stripping intermediary
+     must not turn a server-side success into a thrown error — before #3195
+     this call never read the body at all, so a parse failure is a failure
+     mode this PR introduced and must absorb (#3195 Q1). */
+  const body = (await res.json().catch(() => null)) as { corruptSettingsFile?: unknown } | null;
+  return {
+    ok: true,
+    corruptSettingsFile: typeof body?.corruptSettingsFile === 'boolean' ? body.corruptSettingsFile : undefined,
+  };
 }
 async function realUpgradeStage(file: File): Promise<UpgradeStageResult> {
   const form = new FormData();
@@ -7221,11 +7269,12 @@ async function mockCheckCompanionApk(): Promise<CompanionApkAvailability> {
   await wait(20);
   return { available: false, sizeBytes: null };
 }
-export async function mockDismissWhatsNew(): Promise<void> {
+export async function mockDismissWhatsNew(): Promise<{ ok: boolean; corruptSettingsFile: boolean }> {
   await wait(20);
   /* The latch alone carries the dismiss: buildMockAppInfo hardcodes
      showWhatsNew:false, so there is no state write to make. */
   demoWhatsNewDismissed = true;
+  return { ok: true, corruptSettingsFile: false };
 }
 /* Next minor above the running version, so the staged mock candidate stays a
    genuine upgrade over the version-tracking chrome (was frozen at
@@ -8102,30 +8151,31 @@ async function realCompleteSetup(): Promise<SetupCompleteResponse> {
 }
 
 export async function mockCompleteSetup(): Promise<SetupCompleteResponse> {
-  return { completedAt: '2026-06-12T00:00:00.000Z' };
+  return { completedAt: '2026-06-12T00:00:00.000Z', corruptSettingsFile: false };
 }
 
 // --- tour status ---
 type TourStatus = { completedAt: string | null };
+type TourCompleteResponse = { completedAt: string; corruptSettingsFile: boolean };
 
 async function realGetTourStatus(): Promise<TourStatus> {
   const res = await fetch('/api/tour/status');
   if (!res.ok) throw new Error(`tour status ${res.status}`);
   return (await res.json()) as TourStatus;
 }
-async function realCompleteTour(): Promise<TourStatus> {
+async function realCompleteTour(): Promise<TourCompleteResponse> {
   const res = await fetch('/api/tour/complete', { method: 'POST' });
   if (!res.ok) throw new Error(`tour complete ${res.status}`);
-  return (await res.json()) as TourStatus;
+  return (await res.json()) as TourCompleteResponse;
 }
 
 let mockTourCompletedAt: string | null = null;
 export async function mockGetTourStatus(): Promise<TourStatus> {
   return { completedAt: mockTourCompletedAt };
 }
-export async function mockCompleteTour(): Promise<TourStatus> {
+export async function mockCompleteTour(): Promise<TourCompleteResponse> {
   mockTourCompletedAt = new Date().toISOString();
-  return { completedAt: mockTourCompletedAt };
+  return { completedAt: mockTourCompletedAt, corruptSettingsFile: false };
 }
 export function _resetMockTour(): void {
   mockTourCompletedAt = null;

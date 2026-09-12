@@ -171,6 +171,26 @@ export const STEPS = [
            and leave the guard stale-green. Same #1847 trap as fixtures/**
            above, with the enumeration failure mode on top. */
         '.claude/skills/**',
+        /* Residual gap, accepted not fixed (#3010): review-gate-mechanism.test.mjs's
+           skills-mirror drift guard compares `~/.agents/skills/` against what
+           `main` has COMMITTED — via `readCommittedOnMain`/`git show main:<path>`
+           in sync-agent-skills.mjs — not against this worktree's disk copy of
+           .claude/skills/** above. That real input is main's committed tree, not
+           a disk path, so it has no representation in this step's globs/extraFiles
+           at all. A secondary worktree that has NOT pulled the change, while the
+           box's shared main ref has advanced underneath it (linked worktrees share
+           the same .git/refs), can see test:hooks [cached] on the exact commit the
+           guard exists to check — the disk bytes are unchanged, so the cache hash
+           matches. Additionally, the mirror itself (~/.agents/skills/) is shared
+           machine state and can go stale independent of any tracked file changing:
+           a partial sync failure or out-of-band write can leave the mirror
+           desynchronised with no tracked file changes anywhere. At an affected
+           checkout's next real cache miss, the drift guard runs and goes RED —
+           but nothing is actually fixed until `npm run skills:sync` is run
+           successfully. Same #1847
+           trap as fixtures/** above, but with no fix possible short of a new "git
+           ref" input kind (rejected, disproportionate for this) or always running
+           test:hooks (rejected, a permanent tax). */
         /* .claude/agents/** is an input for the same reason .claude/skills/**
            is: review-gate-mechanism.test.mjs reads the six role definitions as
            TEXT at RUNTIME to check them against model-routing's role table.
@@ -470,12 +490,17 @@ export const STEPS = [
         'server/package.json',
         'e2e/global-teardown.ts',
         '.gitattributes',
-        /* #1932 (side-18): coqui-residency-policy.guard.test.ts (server suite) reads both
-           of these at RUNTIME to guard cross-reference rot across Coqui eviction mechanisms
-           and their policy doc — no module-graph edge, same #1847 runtime-read trap as
-           openapi.yaml/scripts/** above. Without these entries, a diff confined to either
-           (exactly the shape that could break the Coqui eviction contract) reports [cached]
-           and the guard never re-runs. */
+        /* #1932 (side-18): coqui-residency-policy.guard.test.ts reads TWO of these at RUNTIME
+           to guard cross-reference rot across Coqui eviction mechanisms and their policy doc
+           — no module-graph edge, same #1847 runtime-read trap as openapi.yaml/scripts/** above.
+           This is item 5 of that guard's own NOTE at server/src/tts/coqui-residency-policy.guard.test.ts.
+           The three paths are DECLARED via COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS
+           (server/src/tts/coqui-residency-policy.guard-targets.ts), the single source of truth
+           for all three locations (server/vitest.config.ts, force-rerun-triggers.test.ts, and
+           this entry). synthesise-chapter.ts is inert here (covered by server/src/** glob already),
+           while main.py and the policy doc are not covered by any glob and would fail SILENTLY
+           (hashFile returns a sentinel for a missing path rather than throwing), unlike the
+           test's own POLICY_DOC_PATH which throws on readFileSync. */
         'server/tts-sidecar/main.py',
         'docs/features/264-vram-aware-gpu-placement.md',
       ],

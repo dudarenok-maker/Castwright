@@ -130,12 +130,11 @@ export const HELP_TOPICS: HelpTopic[] = [
     category: 'voices',
     title: 'Can I design voices without a Gemini API key?',
     body:
-      "Yes — voice design's description-writing step follows the same analyzer engine you've " +
-      'already chosen (Local or Gemini, in Advanced settings). Set the analyzer to Local and ' +
-      "Castwright drafts each character's voice from a model running entirely on your machine, so " +
-      'a fully offline setup, or one with no cloud key, can still design a full cast from scratch. ' +
-      'Gemini stays the default for the richest descriptions; Local is the road for a no-key or ' +
-      'offline setup.',
+      "Yes — voice design's description-writing step has its own engine, Persona generation engine " +
+      'in Advanced settings. Set it to Local and Castwright drafts each character\'s voice from a model ' +
+      'running entirely on your machine, so a fully offline setup, or one with no cloud key, can still ' +
+      'design a full cast from scratch. Gemini is its default for the richest descriptions; Local is ' +
+      'the road for a no-key or offline setup.',
   },
   {
     id: 'vocalizations',
@@ -322,10 +321,11 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: 'I chose a model on my machine, but the analysis ran on Gemini',
     body:
       "When your analyzer engine is set to Local and Ollama can't be reached, Castwright falls back " +
-      "to Gemini — if you've added a Gemini API key — so a stalled daemon doesn't stall your book. " +
-      'The on-machine models still show in the menu while Ollama is down, which is why a "Local" ' +
-      'choice can land on Gemini. Want it to stop and tell you instead? Start Ollama before you ' +
-      'analyse, or set the analyzer engine to Gemini outright.',
+      "to Gemini — if you've added a Gemini API key and Cloud fallback is on — so a stalled daemon " +
+      "doesn't stall your book. The on-machine models still show in the menu while Ollama is down, " +
+      'which is why a "Local" choice can land on Gemini. Want it to stop and tell you instead? Start ' +
+      'Ollama before you analyse, turn off Cloud fallback in analyzer settings, or set the analyzer engine ' +
+      'to Gemini outright.',
   },
   {
     id: 'is-my-data-private',
@@ -350,7 +350,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       'each line runs on a local Ollama model by default. The optional cloud analyzer (Gemini) is ' +
       'the one part that wants a connection: leave it switched off in analyzer settings, or keep ' +
       'your local model running, and the whole pipeline works with no internet at all. Voice design ' +
-      'follows the same analyzer engine, so a no-key, fully-offline setup can still design a cast ' +
-      'from scratch.',
+      'has its own Persona generation engine in Advanced settings, which defaults to Gemini; set it ' +
+      'to Local and a no-key, fully-offline setup can still design a full cast from scratch.',
   },
 ];

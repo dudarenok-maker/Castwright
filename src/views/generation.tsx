@@ -420,6 +420,10 @@ export function GenerationView({
        Captured engine: ui.selectedModel — the analyzer that will
        handle this subset retry. */
     const engine = engineForModelId(selectedAnalyzerModelId);
+    /* Capture the prior snapshot in case the request fails with
+       subset_in_progress; restoration prevents a stale/clobbered state from
+       becoming permanent (B2 regression guard). */
+    const priorSnapshot = store.getState().analysis.activeStream;
     dispatch(
       analysisActions.setActiveStream({
         bookId,
@@ -518,21 +522,40 @@ export function GenerationView({
          user re-excludes it manually. */
       const isAbort =
         (e as Error)?.name === 'AbortError' || (e instanceof AnalysisError && e.code === 'aborted');
+      /* subset_in_progress (#3202) — a different subset retry is already
+         running for this manuscript; this include never got its own job
+         started. Surface the server's message rather than falling
+         through to the generic failure text below. */
+      const isSubsetInProgress = e instanceof AnalysisError && e.code === 'subset_in_progress';
       await rollbackInclude(chapterId).catch((rollbackErr) => {
         console.warn('[generation] include rollback failed', rollbackErr);
       });
-      /* Drop the snapshot on either abort or terminal failure — the
-         server-side job already ended (abort) or surfaced an error,
-         and the row's own error state inside subsetByChapter carries
-         the message for the user. */
-      dispatch(analysisActions.clearActiveStream());
       if (isAbort) {
+        /* Drop the snapshot on abort — the server-side job already ended. */
+        dispatch(analysisActions.clearActiveStream());
         setSubsetByChapter((prev) => {
           const { [chapterId]: _, ...rest } = prev;
           return rest;
         });
         return;
       }
+      if (isSubsetInProgress) {
+        /* A different subset request is already running; this request never
+           started a job, so restore the prior snapshot (B2 regression guard:
+           the pre-POST clobber must not persist on rejection) and surface the
+           server's message instead. */
+        if (priorSnapshot) {
+          dispatch(analysisActions.setActiveStream(priorSnapshot));
+        } else {
+          dispatch(analysisActions.clearActiveStream());
+        }
+        patchSubset(chapterId, { error: e.message });
+        return;
+      }
+      /* Drop the snapshot on terminal failure — the server-side job
+         surfaced an error, and the row's own error state inside subsetByChapter
+         carries the message for the user. */
+      dispatch(analysisActions.clearActiveStream());
       const message = (e as Error).message || 'Subset analysis failed.';
       patchSubset(chapterId, { error: message });
     }
@@ -589,6 +612,11 @@ export function GenerationView({
       },
     }));
     const engine = engineForModelId(selectedAnalyzerModelId);
+    /* Capture the prior snapshot in case the request fails with
+       subset_in_progress; restoration prevents a stale/clobbered state from
+       becoming permanent (B2 regression guard — same as the include flow
+       above). */
+    const priorSnapshot = store.getState().analysis.activeStream;
     dispatch(
       analysisActions.setActiveStream({
         bookId,
@@ -662,14 +690,34 @@ export function GenerationView({
     } catch (e) {
       const isAbort =
         (e as Error)?.name === 'AbortError' || (e instanceof AnalysisError && e.code === 'aborted');
-      dispatch(analysisActions.clearActiveStream());
       if (isAbort) {
+        /* Drop the snapshot on abort — the server-side job already ended. */
+        dispatch(analysisActions.clearActiveStream());
         setSubsetByChapter((prev) => {
           const { [chapterId]: _, ...rest } = prev;
           return rest;
         });
         return;
       }
+      /* subset_in_progress (#3202) — a different subset retry is already
+         running for this manuscript; this request never started a job, so
+         restore the prior snapshot (B2 regression guard: the pre-POST
+         clobber must not persist on rejection) rather than leaving the
+         other job's snapshot overwritten by this one's. Surface the
+         server's message instead of the generic fallback text. */
+      if (e instanceof AnalysisError && e.code === 'subset_in_progress') {
+        if (priorSnapshot) {
+          dispatch(analysisActions.setActiveStream(priorSnapshot));
+        } else {
+          dispatch(analysisActions.clearActiveStream());
+        }
+        patchSubset(chapterId, { error: e.message });
+        return;
+      }
+      /* Drop the snapshot on terminal failure — the server-side job surfaced
+         an error, and the row's own error state inside subsetByChapter carries
+         the message for the user. */
+      dispatch(analysisActions.clearActiveStream());
       patchSubset(chapterId, { error: (e as Error).message || 'Re-analysis failed.' });
     }
   }

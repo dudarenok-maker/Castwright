@@ -108,18 +108,17 @@ async function runSingleDesign(
   language: string,
   seriesFilter: { author: string; series: string } | undefined,
 ): Promise<void> {
-  const cast = await readJson<CastFile>(castJsonPath(job.bookDir));
-  const character = cast?.characters?.find((c) => c.id === job.characterId);
-  if (!character) {
-    endJob(job, { type: 'error', code: 'not_found', message: 'Character no longer exists.' });
-    return;
-  }
-
   const heartbeat = setInterval(
     () => broadcast(job, { type: 'heartbeat', characterId: job.characterId }),
     HEARTBEAT_MS,
   );
   try {
+    const cast = await readJson<CastFile>(castJsonPath(job.bookDir));
+    const character = cast?.characters?.find((c) => c.id === job.characterId);
+    if (!character) {
+      endJob(job, { type: 'error', code: 'not_found', message: 'Character no longer exists.' });
+      return;
+    }
     /* srv-43 — mint/persist voiceUuid before the core names the .pt, matching
        the bulk-job and REST-endpoint paths so every design entry point produces
        the same uuid-keyed cache key. */
@@ -204,6 +203,15 @@ async function runSingleDesign(
        message here could be the absolute path of the book's cast.json, sent
        over SSE. Curated like every other whole-request site; a non-timeout
        failure keeps its own message. */
+    /* #3171 — the raw error, unlike the curated client-facing message below,
+       is safe to log in full (workspace paths and all): this is a server
+       log, never sent over SSE. */
+    console.error('[single-design] failed', {
+      bookId: job.bookId,
+      characterId: job.characterId,
+      name: (e as Error)?.name,
+      message: (e as Error)?.message,
+    });
     const message = requestFailureMessage(e, (e as Error).message || 'Voice design failed.');
     /* #2260 FINAL ROUND (B2) nit — 'design_failed' left this event unable to
        reach the Help entry `helpHrefForFailureCode` (src/lib/router.ts) links

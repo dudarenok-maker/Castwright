@@ -9,8 +9,35 @@
    isMainModule guard at the bottom of index.ts keeps `main()` from running
    merely because this test imports the module). */
 
-import { describe, it, expect, vi } from 'vitest';
-import { runShutdownSequence, type ShutdownDeps } from './index.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+
+/* #3174 (G4) — bootWarmUserSettings() calls the real (module-level)
+   readUserSettings import, so forcing its malformed-file throw needs the
+   whole module mocked (node:fs's own writeFileSync-style spy trick doesn't
+   apply here — this is a plain named export). Same pass-through-delegate
+   convention as server/src/tts/restart-breadcrumb.test.ts. */
+let readUserSettingsShouldThrow = false;
+vi.mock('./workspace/user-settings.js', async () => {
+  const actual = await vi.importActual<typeof import('./workspace/user-settings.js')>(
+    './workspace/user-settings.js',
+  );
+  return {
+    ...actual,
+    readUserSettings: async (...args: Parameters<typeof actual.readUserSettings>) => {
+      if (readUserSettingsShouldThrow) {
+        throw new Error('simulated malformed user-settings.json (JSON.parse failure)');
+      }
+      return actual.readUserSettings(...args);
+    },
+  };
+});
+
+import {
+  runShutdownSequence,
+  bootWarmUserSettings,
+  bootStartSidecarSupervisor,
+  type ShutdownDeps,
+} from './index.js';
 
 function makeDeps(overrides: Partial<ShutdownDeps> = {}): {
   deps: ShutdownDeps;
@@ -131,5 +158,90 @@ describe('runShutdownSequence (#1366)', () => {
     expect(sidecarResolved).toBe(true);
     expect(mdnsResolved).toBe(true);
     expect(forwarderResolved).toBe(true);
+  });
+});
+
+describe('bootWarmUserSettings (#3174 G4)', () => {
+  afterEach(() => {
+    readUserSettingsShouldThrow = false;
+  });
+
+  it('a malformed user-settings.json is contained: no unhandled rejection, logged loudly, resolves', async () => {
+    readUserSettingsShouldThrow = true;
+    let unhandledRejection: unknown = null;
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejection = reason;
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      // Detached the same way the real boot call site uses it
+      // (`void bootWarmUserSettings()`) — a throw escaping as a rejection
+      // here, rather than being caught inside the function, would surface
+      // only as a process-level unhandledRejection.
+      void bootWarmUserSettings();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('user-settings.json could not be read at boot'),
+        expect.any(Error),
+      );
+      expect(unhandledRejection).toBeNull();
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('the control: a readable user-settings.json resolves quietly, with no error logged', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(bootWarmUserSettings()).resolves.toBeUndefined();
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe('bootStartSidecarSupervisor (#3174 G4)', () => {
+  it('a supervisor.start() rejection is contained: no unhandled rejection, logged loudly, resolves', async () => {
+    const supervisor = {
+      start: vi.fn(async () => {
+        throw new Error('simulated spawnOnce/buildOpts failure');
+      }),
+    };
+    let unhandledRejection: unknown = null;
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejection = reason;
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      // Detached the same way the real boot call site uses it
+      // (`void bootStartSidecarSupervisor(sidecarSupervisor)`).
+      void bootStartSidecarSupervisor(supervisor);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(supervisor.start).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith('[sidecar] supervisor failed to start', expect.any(Error));
+      expect(unhandledRejection).toBeNull();
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('the control: a successful start() resolves quietly, with no error logged', async () => {
+    const supervisor = { start: vi.fn(async () => {}) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(bootStartSidecarSupervisor(supervisor)).resolves.toBeUndefined();
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

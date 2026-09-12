@@ -29,9 +29,10 @@
  *      module-load-time pwsh probe). */
 
 import { readdirSync, readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS } from './spawn-windows-hide.guard-targets.js';
 
 /* Characters after which a `/` is far more likely to be opening a regex
    literal than dividing two values — a narrow, deliberately incomplete
@@ -151,6 +152,18 @@ const INDIRECT_RE = /\bspawnFn\s*\(/g;
 
 const REPO_ROOT = join(SRC_ROOT, '..', '..');
 
+/* The external scan roots used by externalFilesFloor() — declared at
+   module scope as a single array that both externalFilesFloor() and the test
+   read from. This ensures that adding a fourth root to the function makes the
+   test fail (proving the root is genuinely scanned), rather than silently
+   agreeing with a stale test array. The test asserts exhaustiveness via toEqual,
+   so any added root is immediately caught. */
+const EXTERNAL_SCAN_ROOTS = [
+  { dir: join(REPO_ROOT, 'scripts'), extensions: ['.mjs', '.cjs', '.js'] },
+  { dir: join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts'), extensions: ['.mjs'] },
+  { dir: join(REPO_ROOT, 'pinokio-scripts', 'lib'), extensions: ['.js', '.mjs'] },
+] as const;
+
 /* Helper: recursively list files matching given extensions under a directory.
    Skips node_modules, dist, and .git subtrees. */
 function listFilesRecursive(dir: string, extensions: string[]): string[] {
@@ -235,7 +248,7 @@ function applyExclusions(files: string[], exclusions: string[]): string[] {
    - scripts/ recursive, .mjs/.cjs/.js, INCLUDING scripts/tests/ (previously
      excluded — that exclusion let an unguarded module-load-time pwsh spawn
      in cross-os-ffmpeg-install.test.mjs pop a visible window on every
-     `npm run test:hooks` run; see externalFilesFloor()'s scripts/ comment)
+     `npm run test:hooks` run)
    - server/tts-sidecar/scripts/ recursive, .mjs
    - pinokio-scripts/lib/ recursive, .js/.mjs
 
@@ -251,27 +264,14 @@ function externalFilesFloor(): string[] {
     }
   }
 
-  // scripts/ recursive, .mjs/.cjs/.js, INCLUDING scripts/tests/ (the old
-  // exclusion of scripts/tests/ was itself the bug: those test files spawn
-  // real child processes as part of their own test logic, and a spawn there
-  // missing windowsHide pops its own visible console/PowerShell window when
-  // run under a parent with no console of its own (e.g. `npm run test:hooks`,
-  // which spawns `node --test scripts/tests/*.test.mjs` WITH windowsHide) —
-  // see cross-os-ffmpeg-install.test.mjs's module-load-time pwsh probe, the
-  // worst offender this exclusion let slip through).
-  const scriptsDir = join(REPO_ROOT, 'scripts');
-  const scriptsFiles = listFilesRecursive(scriptsDir, ['.mjs', '.cjs', '.js']);
-
-  // server/tts-sidecar/scripts/ recursive, .mjs
-  const ttsDir = join(REPO_ROOT, 'server', 'tts-sidecar', 'scripts');
-  const ttsFiles = listFilesRecursive(ttsDir, ['.mjs']);
-
-  // pinokio-scripts/lib/ recursive, .js/.mjs
-  const pinokioDir = join(REPO_ROOT, 'pinokio-scripts', 'lib');
-  const pinokioFiles = listFilesRecursive(pinokioDir, ['.js', '.mjs']);
+  // Scan the configured external roots using the module-level EXTERNAL_SCAN_ROOTS array.
+  // This ensures the test can verify exhaustively that all configured roots are scanned.
+  const externalCandidates = EXTERNAL_SCAN_ROOTS.flatMap((root) =>
+    listFilesRecursive(root.dir, [...root.extensions]),
+  );
 
   // Combine all candidates
-  const candidates = [...rootFiles, ...scriptsFiles, ...ttsFiles, ...pinokioFiles];
+  const candidates = [...rootFiles, ...externalCandidates];
   const filtered = filterSpawningFiles(candidates);
 
   // Concatenate manual entries
@@ -492,6 +492,39 @@ describe('windowsHide invariant (no flashing console windows in prod)', () => {
   const serverFiles = listSourceFiles(SRC_ROOT).filter((f) =>
     readFileSync(f, 'utf8').includes('child_process'),
   );
+
+  it('scan scope matches the declared SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS (#3085)', () => {
+    // Ties this guard's ACTUAL scan roots to the scope it DECLARES via the
+    // sibling module — the same constant force-rerun-triggers.test.ts checks
+    // its forceRerunTriggers entries against — so the two statements of this
+    // guard's scope can never independently drift.
+    const toRepoRel = (p: string) => relative(REPO_ROOT, p).split(sep).join('/');
+
+    // Check that the external directory roots (from EXTERNAL_SCAN_ROOTS) match
+    // the declared globs. externalFilesFloor() and this test both read the same
+    // EXTERNAL_SCAN_ROOTS binding — an added fourth root fails this exhaustive
+    // toEqual check rather than being silently ignored.
+    const externalRootsRel = EXTERNAL_SCAN_ROOTS.map((r) => toRepoRel(r.dir));
+    const expectedExternalRootsRel = [
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[1].replace(/\/\*\*$/, ''),
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[2].replace(/\/\*\*$/, ''),
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[3].replace(/\/\*\*$/, ''),
+    ];
+    expect(externalRootsRel).toEqual(expectedExternalRootsRel);
+
+    expect(toRepoRel(SRC_ROOT)).toBe(
+      SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[0].replace(/\/\*\*$/, ''),
+    );
+    expect(EXTERNAL_FILES_MANUAL.map(toRepoRel)).toEqual([SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[4]]);
+
+    // The two named root files are checked against the guard's own
+    // dynamically-discovered floor, not re-derived here, so a rename that
+    // drops either from the real scan is caught rather than silently
+    // agreeing with a stale constant.
+    const floorRel = EXTERNAL_FILES_FLOOR.map(toRepoRel);
+    expect(floorRel).toContain(SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[5]);
+    expect(floorRel).toContain(SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[6]);
+  });
 
   it('finds at least the known ffmpeg/sidecar spawners (scan is wired up)', () => {
     /* Guard against the scan silently matching nothing (e.g. a refactor that

@@ -10,7 +10,7 @@
  *   POST /api/ollama/install/:id/recheck → re-probe (Windows GUI path)
  *
  * The component is intentionally self-contained — it owns its polling
- * loop and doesn't reach into redux. The Account → Models pane mounts
+ * loop and doesn't reach into redux. The Admin → Model Manager pane mounts
  * it and renders it as a fully-encapsulated card. */
 
 import { useCallback, useEffect, useRef, useState } from 'react';

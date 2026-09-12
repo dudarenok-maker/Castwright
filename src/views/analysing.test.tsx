@@ -6,7 +6,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
-import { analysisSlice } from '../store/analysis-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { notificationsSlice } from '../store/notifications-slice';
@@ -23,6 +23,7 @@ import type {
 let capturedOpts: AnalyseOpts | undefined;
 let capturedSubsetCall: { chapterIds: number[]; opts: AnalyseOpts | undefined } | undefined;
 let resolveSubset: ((value: AnalyseResponse) => void) | undefined;
+let rejectSubset: ((reason?: unknown) => void) | undefined;
 let getBookStateImpl: ((bookId: string) => Promise<BookStateResponse | null>) | undefined;
 let getDroppedQuotesImpl: ((bookId: string) => Promise<DroppedQuotesResponse>) | undefined;
 /* Per-test override — when set, the analyseManuscript mock rejects with
@@ -55,8 +56,9 @@ vi.mock('../lib/api', async () => {
          manual resolver so tests can simulate a successful retry. */
       runAnalysisForChapters: (_id: string, chapterIds: number[], opts?: AnalyseOpts) => {
         capturedSubsetCall = { chapterIds, opts };
-        return new Promise<AnalyseResponse>((resolve) => {
+        return new Promise<AnalyseResponse>((resolve, reject) => {
           resolveSubset = resolve;
+          rejectSubset = reject;
         });
       },
       getBookState: (bookId: string) =>
@@ -79,6 +81,7 @@ beforeEach(() => {
   capturedOpts = undefined;
   capturedSubsetCall = undefined;
   resolveSubset = undefined;
+  rejectSubset = undefined;
   getBookStateImpl = undefined;
   getDroppedQuotesImpl = undefined;
   analyseManuscriptRejection = undefined;
@@ -133,6 +136,35 @@ function renderView() {
   };
 }
 
+/* F3 (#3169 fix wave) — same store shape as renderView, but with no
+   manuscriptId prop at all (the "browser tab lost its in-progress upload"
+   case the view's own "No manuscript loaded" banner already handles). */
+function renderViewWithoutManuscript() {
+  const store = configureStore({
+    reducer: {
+      ui: uiSlice.reducer,
+      cast: castSlice.reducer,
+      analysis: analysisSlice.reducer,
+      account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
+      notifications: notificationsSlice.reducer,
+    },
+  });
+  return {
+    store,
+    ...render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId={undefined}
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    ),
+  };
+}
+
 /* The analysis effect is gated on (a) the probe useEffect having
    resolved getOllamaHealth at least once with modelResident=true so
    isAnalyzerReady flips on, AND (b) the user clicking the "Start
@@ -149,6 +181,59 @@ async function renderViewWaitingForAnalysis() {
   await waitFor(() => expect(capturedOpts).toBeDefined());
   return result;
 }
+
+/* The StickyAnalysisBar mirrors the active PhaseCard's model chip while a
+   run is in flight, so `phase-model-chip-${phaseId}` can match twice once
+   isAnalysisRunning flips on. Resolve to the PhaseCard's own copy (the one
+   NOT inside the sticky bar) so assertions target the card the bug is
+   about, not its sticky-bar echo. */
+function getPhaseCardChip(phaseId: number) {
+  const chip = screen
+    .getAllByTestId(`phase-model-chip-${phaseId}`)
+    .find((el) => !el.closest('[data-testid="sticky-analysis-bar"]'));
+  if (!chip) throw new Error(`no non-sticky-bar phase-model-chip-${phaseId} found`);
+  return chip;
+}
+
+/* Bug #3169: derivePhaseState's frontier rule used to fire for phase 0 even
+   before any run started (maxPhase defaults to 0, which IS phase 0's id),
+   so a freshly-mounted idle view rendered phase 0 with a spinner and the
+   "· streaming" chip — a reader reported a long wait on a screen that looked
+   busy; an idle page that looks busy invites exactly that. */
+describe('AnalysingView — idle phase 0 is not rendered as active before start (#3169)', () => {
+  it('renders phase 0 as pending (no streaming) on a freshly mounted view with no snapshot and no click', async () => {
+    renderView();
+    /* Wait for the analyzer probe to resolve so the button is fully
+       settled — the view is idle either way (no click, no snapshot). */
+    await screen.findByRole('button', { name: /start analysis/i });
+    const chip = getPhaseCardChip(0);
+    expect(chip).toHaveAttribute('data-phase-state', 'pending');
+    expect(chip).not.toHaveTextContent('streaming');
+  });
+
+  it('renders phase 0 as streaming once "Start analysis" is clicked', async () => {
+    await renderViewWaitingForAnalysis();
+    const chip = getPhaseCardChip(0);
+    expect(chip).toHaveAttribute('data-phase-state', 'streaming');
+    expect(chip).toHaveTextContent('streaming');
+  });
+
+  /* F3 (#3169 fix wave) — `activeStreamSnapshot?.manuscriptId ===
+     manuscriptId` reads `undefined === undefined` as true when BOTH sides
+     are absent (no manuscriptId prop, no snapshot), which used to render an
+     idle view as active. Must go red without the `!!manuscriptId` guard. */
+  it('renders phase 0 as pending (no streaming) with no manuscriptId and no snapshot', async () => {
+    renderViewWithoutManuscript();
+    /* No manuscriptId means no "Start analysis" button (gated on
+       `manuscriptId &&`) — wait on the view's own "no manuscript" banner
+       to settle instead, so the phase-card assertion below isn't racing a
+       still-mounting tree. */
+    await screen.findByText('No manuscript loaded');
+    const chip = getPhaseCardChip(0);
+    expect(chip).toHaveAttribute('data-phase-state', 'pending');
+    expect(chip).not.toHaveTextContent('streaming');
+  });
+});
 
 describe('AnalysingView — live ticker (regression for stuck-chapter screenshot bug)', () => {
   it('renders one row per in-flight chapter so a slow chapter does not hide concurrent progress', async () => {
@@ -541,7 +626,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
      even pre-analysis so the user can pre-warm Ollama from this screen. */
   function renderNoManuscript() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     return render(
       <Provider store={store}>
@@ -714,7 +799,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
 
   it('hides the analyzer pill when a cloud (Gemini) model is selected — nothing to load locally', () => {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -756,7 +841,7 @@ describe('AnalysingView — analyzer Load button auto-evicts TTS', () => {
 describe('AnalysingView — analyzer pill Stop/Load in-flight guard (#1929)', () => {
   function renderNoManuscript() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     return render(
       <Provider store={store}>
@@ -1245,7 +1330,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44, 49]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1276,7 +1361,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1342,6 +1427,74 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(capturedOpts!.signal!.aborted).toBe(false);
   });
 
+  /* #3215 pass-2 review (C2) regression: a subset_in_progress rejection
+     must NOT re-arm the paused main run. Same pause-then-retry setup as the
+     test above, but the subset call is REJECTED with subset_in_progress
+     instead of resolved — another subset job is genuinely live for this
+     manuscript, and resuming main here is exactly the cache-write race the
+     PAUSE-AND-RETRY contract exists to prevent. Revert the
+     subsetInProgressRef guard around the re-arm in analysing.tsx and this
+     test reddens: a second analyseManuscript call lands with a fresh,
+     non-aborted signal (verified). */
+  it('#3215 C2 — a subset_in_progress rejection does not re-arm the paused main run', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+    const mainSignal = capturedOpts!.signal!;
+    await act(async () => {
+      capturedOpts!.onPhase!({ phaseId: 0, progress: 0.4 });
+    });
+
+    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+    capturedOpts = undefined;
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+    expect(mainSignal.aborted).toBe(true);
+    expect(capturedSubsetCall).toBeDefined();
+
+    await act(async () => {
+      rejectSubset?.(
+        new AnalysisError(
+          'A different subset re-analysis is already in progress for this manuscript: Chapter Forty-Seven.',
+          'subset_in_progress',
+        ),
+      );
+    });
+
+    await screen.findByText(
+      /A different subset re-analysis is already in progress for this manuscript: Chapter Forty-Seven\./i,
+    );
+
+    /* The regression: main must stay paused. No second analyseManuscript
+       call — capturedOpts (reset to undefined above) stays undefined. */
+    expect(capturedOpts).toBeUndefined();
+
+    /* B3: verify the restored snapshot has state: 'paused' (not 'running'),
+       so layout.tsx's stall detection won't incorrectly mark the pill as stalled. */
+    expect(store.getState().analysis.activeStream?.state).toBe('paused');
+  });
+
   it('a chapter-resolved SSE event drops the matching panel row mid-stream', async () => {
     /* Pre-fix the panel was hydrated once on mount from book-state and
        never updated, so a chapter that the main run's Phase 0a re-
@@ -1354,7 +1507,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44, 49]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1402,7 +1555,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -1447,6 +1600,51 @@ describe('AnalysingView — failed-chapter retry', () => {
     });
     expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
   });
+
+  it('#3202 — a subset_in_progress rejection surfaces the server message on the row instead of silently clearing it', async () => {
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+
+    /* No onChapterFailed event fires for this rejection — the server
+       rejected the retry outright before starting a job. Without the
+       #3202 branch, the generic catch would treat this as a success
+       (retryReFailed stays false) and silently drop the row. */
+    await act(async () => {
+      rejectSubset?.(
+        new AnalysisError(
+          'A different subset re-analysis is already in progress for this manuscript: Chapter Forty-Seven.',
+          'subset_in_progress',
+        ),
+      );
+    });
+
+    expect(
+      await screen.findByText(
+        /A different subset re-analysis is already in progress for this manuscript: Chapter Forty-Seven\./i,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+  });
 });
 
 /* Mid-run recovery surface. With incremental cast.json writes landing on
@@ -1467,7 +1665,7 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
 
   it('renders the cast preview from a pre-hydrated cast slice before any SSE event fires', () => {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     /* Simulate the layout's getBookState → setCharacters hydration that
        runs ahead of the analysing route mounting. With cast.json now
@@ -1503,7 +1701,7 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
 describe('AnalysingView — dropped-quotes panel', () => {
   function renderWithBookId() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     return render(
       <Provider store={store}>
@@ -1811,6 +2009,40 @@ describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
       expect(store.getState().analysis.activeStream?.state).toBe('paused');
     });
   });
+
+  it('server-side pause (aborted code) drops conn to idle: sticky bar unmounts, inline button reads Resume, snapshot is paused', async () => {
+    /* #3198 pass 1 finding 2 / pass 5 🟠 20. A pause issued from another
+       surface or device reaches this view as the SSE rejecting with
+       `AnalysisError('aborted')`. The view's catch must call setConn('idle')
+       BEFORE setPaused, or `conn` lingers at 'connecting'/'streaming',
+       `isAnalysisRunning` stays true, and the sticky bar stays pinned with a
+       pulsing dot and a "Pause analysis" button over cards that say paused.
+       This drives the REAL rejection through the real catch — it does not
+       dispatch anything itself — and asserts the consequences of the conn
+       flip, which are the only observable the fix has.
+       Mutation: remove `setConn('idle')` from the aborted branch in
+       analysing.tsx → conn stays 'connecting' → the sticky bar is still
+       mounted, the inline Resume button never appears → red. */
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError(
+      'Analysis aborted (paused or displaced by a new run).',
+      'aborted',
+    );
+    const { store } = await renderViewWaitingForAnalysis();
+
+    /* Inline Start/Resume button is hidden while isAnalysisRunning; its
+       reappearance labelled Resume is exactly "conn is idle again, and
+       the run has started once". */
+    expect(await screen.findByRole('button', { name: /resume analysis/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('sticky-analysis-bar')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pause analysis/i })).not.toBeInTheDocument();
+    /* And the snapshot is paused, not cleared — the pill keeps the Resume
+       affordance for the user to navigate back to. */
+    expect(store.getState().analysis.activeStream).toMatchObject({
+      manuscriptId: 'm1',
+      state: 'paused',
+    });
+  });
 });
 
 describe('AnalysingView — cast merge-base advisory toast (#2015)', () => {
@@ -1881,6 +2113,7 @@ describe('AnalysingView — cast merge-base advisory toast (#2015)', () => {
         account: accountSlice.reducer,
         bookMeta: bookMetaSlice.reducer,
         notifications: notificationsSlice.reducer,
+        analysis: analysisSlice.reducer,
       },
     });
     render(
@@ -2014,6 +2247,10 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     /* And the button now reads Pause (running), not Start. */
     expect(await screen.findByRole('button', { name: /pause analysis/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /start analysis/i })).not.toBeInTheDocument();
+    /* #3169: a cold-boot running snapshot must render phase 0 as active/
+       streaming (no click involved) — proving `started` picks up
+       analysisStarted from the rehydrate path, not just an explicit click. */
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
   });
 
   it('does NOT auto-subscribe when state=paused but labels the button "Resume analysis"', async () => {
@@ -2027,6 +2264,79 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     expect(await screen.findByRole('button', { name: /resume analysis/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /start analysis/i })).not.toBeInTheDocument();
     expect(capturedOpts).toBeUndefined();
+  });
+
+  /* #3198 pass 1 🔴 (B) / pass 4 🔴 11 / pass 5 🔴 18 — the `runState`
+     manuscript guard at the derivePhaseState call site in analysing.tsx.
+     `analysis.activeStream` is ONE global slot, and a sibling tab's
+     broadcast replaces it wholesale with no bookId filter
+     (broadcast-middleware.ts, applyExternalAnalysisSnapshot). So: this tab
+     is streaming Book A; another tab pauses Book B; the slot now holds a
+     PAUSED snapshot for m2 while m1's run is live and ticking.
+
+     The earlier version of this test preloaded the foreign snapshot into a
+     never-started view, where `started` is false by its own independent
+     route and derivePhaseState returns 'pending' whether or not the
+     runState guard exists — removing the guard left the whole suite green.
+     Here `started` is true by a route the snapshot has no part in (the
+     user clicked Start: analysisStarted), so the ONLY thing between the
+     foreign paused snapshot and a paused card is the guard.
+     Mutation: replace the guarded read with the unguarded
+     `runState: activeStreamSnapshot?.state ?? 'running'` → derivePhaseState
+     gets runState 'paused' with started true → chip reads 'paused' → red. */
+  it('keeps a LIVE run rendering active when a sibling tab\'s broadcast drops a paused snapshot for a DIFFERENT manuscript into the slot', async () => {
+    const { store } = await renderViewWaitingForAnalysis();
+    /* The view seeded its own m1 running snapshot on Start; one tick makes
+       conn 'streaming' so the chip's active form is 'streaming'. */
+    await act(async () => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.3 });
+    });
+    expect(store.getState().analysis.activeStream?.manuscriptId).toBe('m1');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
+
+    /* Sibling tab pauses Book B → inbound broadcast replaces the slot. */
+    await act(async () => {
+      store.dispatch(
+        analysisActions.applyExternalAnalysisSnapshot({
+          bookId: 'book-2',
+          manuscriptId: 'm2',
+          bookTitle: 'Different Book',
+          engine: 'gemini',
+          phaseId: 0,
+          phaseLabel: 'Detecting characters',
+          phaseProgress: 0.1,
+          remainingMs: 0,
+          lastTickAt: Date.now(),
+          state: 'paused',
+        }),
+      );
+    });
+    expect(store.getState().analysis.activeStream?.manuscriptId).toBe('m2');
+    expect(store.getState().analysis.activeStream?.state).toBe('paused');
+
+    /* m1 is still streaming on its own connection: the card must stay
+       active, not adopt m2's paused state. */
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
+  });
+
+  /* Fix round 1 (#3169 review finding 1): the rehydrate effect only writes
+     hasStartedOnceRef.current = true for a paused/halted snapshot — a ref
+     write, which triggers no re-render on its own. Reading
+     activeStreamSnapshot directly in the `started` expression (rather than
+     relying solely on that ref) means phase 0 reads correctly on the very
+     FIRST render, before the effect has had any chance to run. Assert
+     synchronously with getBy… (no findBy/waitFor) so a regression back to
+     the ref-only expression — correct only once some unrelated effect
+     happens to force a re-render — shows up as a hard failure here rather
+     than as a timing-dependent flash a test could accidentally paper over. */
+  it('renders phase 0 as paused SYNCHRONOUSLY (first render, no awaited re-render) for a cold-boot paused snapshot', () => {
+    renderViewWithActiveStream('paused');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'paused');
+  });
+
+  it('renders phase 0 as halted SYNCHRONOUSLY (first render, no awaited re-render) for a cold-boot halted snapshot', () => {
+    renderViewWithActiveStream('halted');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'halted');
   });
 });
 
@@ -2287,7 +2597,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
       );
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>
@@ -2311,7 +2621,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
       Promise.resolve(makeBookStateWithErrors([4], {}));
 
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
     render(
       <Provider store={store}>

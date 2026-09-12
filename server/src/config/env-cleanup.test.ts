@@ -256,7 +256,7 @@ describe('cleanEnvText at realistic ~110-line scale (finding N10)', () => {
     // - Export-prefixed lines
     // - Inline comments after values
     const envContent = `# NOTE (2026-07-15): ANALYZER no longer selects the analyzer engine. The engine
-# is chosen in the UI (Account -> analyzer settings) / user-settings.json and
+# is chosen in the UI (Admin -> Model Manager) / user-settings.json and
 # defaults to LOCAL. This var is retained only for reference/back-compat and is
 # INERT for engine selection — a stray ANALYZER=gemini here does nothing.
 # ANALYZER=local

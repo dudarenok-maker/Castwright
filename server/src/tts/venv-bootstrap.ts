@@ -1,7 +1,7 @@
 /* In-app venv bootstrap (fs-21 decision Z). Spawns
  * server/tts-sidecar/scripts/bootstrap-venv.mjs and surfaces its
  * `[bootstrap-venv]` step lines so a deployer can bootstrap the Python venv
- * from Account → Models without a terminal. When Python 3.12 is not found,
+ * from Admin → Model Manager without a terminal. When Python 3.12 is not found,
  * the job immediately fails with per-OS manual instructions (no spawn).
  *
  * State machine:

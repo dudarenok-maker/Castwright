@@ -104,23 +104,22 @@ $bindHost = if ($env:LOCAL_TTS_HOST) { $env:LOCAL_TTS_HOST } else { "127.0.0.1" 
 # project is local/personal-use only; see the license note in main.py:15-18.
 if (-not $env:COQUI_TOS_AGREED) { $env:COQUI_TOS_AGREED = "1" }
 
-# Supervisor loop. main.py self-exits with one of two recoverable codes:
+# Single-shot launcher. main.py self-exits with one of two recoverable codes:
 #   42 = CUDA device-side assert (context corrupted for the process lifetime;
 #        only a fresh interpreter recovers).
 #   43 = planned recycle (the memory watchdog self-exits when committed RAM or
 #        reserved VRAM crosses the configured ceiling -- a fresh process resets
-#        the leaked/spilled pool). This is REQUESTED recycling, not a crash, so
-#        it must relaunch too; before this was added, a recycle mid-run left the
-#        sidecar dead ("not restarting") and bulk voice design halted on the
-#        next call.
-# On either, we relaunch uvicorn so the next request hits a clean process --
-# model lazy-loads on the first call, ~30-60 s on cold cache. Any other exit
-# code (0 normal shutdown, 1 syntax / import error, 130 Ctrl+C, etc.) breaks
-# the loop so a real bug doesn't trap the supervisor in a tight crash-respawn
-# cycle. The decision lives in sidecar-restart-policy.ps1 (unit-tested).
+#        the leaked/spilled pool). This is REQUESTED recycling, not a crash.
+# start.ps1 no longer decides whether to restart on these codes itself -- it
+# always propagates uvicorn's real exit code as its own process exit code.
+# Node's supervisor (server/src/tts/sidecar-supervisor.ts) owns every restart
+# decision on every exit code, including 42 and 43, via its generic respawn
+# path -- that is what makes the already-tested code-43 streak/auto-revert
+# logic there reachable in production, where before this change the wrapping
+# powershell.exe process never exited on 42/43 and Node never observed them.
 #
 # stop-app.ps1 kills the whole process tree via `taskkill /T`, so this
-# loop tears down cleanly when the user invokes Stop -- the wrapper
+# still tears down cleanly when the user invokes Stop -- the wrapper
 # PowerShell receives the kill alongside its uvicorn child.
 #
 # ASCII-only by design: Windows PowerShell 5.1 reads UTF-8-without-BOM as
@@ -128,23 +127,12 @@ if (-not $env:COQUI_TOS_AGREED) { $env:COQUI_TOS_AGREED = "1" }
 # and breaks the parser at the surrounding `try { ... } finally`. Keep
 # this whole block ASCII so the parser stays happy regardless of how the
 # file is saved.
-. (Join-Path $here "sidecar-restart-policy.ps1")
-$RestartBackoffSec = 2
-
 Push-Location $here
 try {
-    while ($true) {
-        & $venvPython -m uvicorn main:app --host $bindHost --port $port
-        $code = $LASTEXITCODE
-        if (Test-SidecarShouldRestart -ExitCode $code) {
-            $reason = if ($code -eq 42) { "poison code $code (clean CUDA context)" } else { "recycle code $code (reset leaked/spilled memory)" }
-            Write-Host "[supervisor] sidecar exited with $reason - restarting in $RestartBackoffSec seconds."
-            Start-Sleep -Seconds $RestartBackoffSec
-            continue
-        }
-        Write-Host "[supervisor] sidecar exited with code $code - not restarting."
-        break
-    }
+    & $venvPython -m uvicorn main:app --host $bindHost --port $port
+    $code = $LASTEXITCODE
+    Write-Host "[supervisor] sidecar exited with code $code."
+    exit $code
 } finally {
     Pop-Location
 }

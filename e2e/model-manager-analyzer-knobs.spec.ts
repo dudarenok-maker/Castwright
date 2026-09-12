@@ -1,12 +1,12 @@
-/* Plan 88 phase-2 — Account → Analyzer card e2e.
+/* Plan 88 phase-2 — Admin → Model Manager → Two-model analyzer split card e2e.
  *
  * Pins the in-browser surface for the three per-phase analyzer knobs:
  *   - Phase 0 model picker
  *   - Phase 1 model picker
  *   - Phase 1 minimum chapter lag
  *
- * The card lives between "Defaults for new books" and "Cast analysis"
- * on the Account view. Each field accepts a "(use server default)"
+ * The card lives between "Defaults for new books" and "Voice engine"
+ * in the Model Manager. Each field accepts a "(use server default)"
  * sentinel value that maps to `null` in the persisted payload — the
  * server-side selector falls through to env / hardcoded default when
  * the field is null.
