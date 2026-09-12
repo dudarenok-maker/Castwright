@@ -518,7 +518,7 @@ describe('userSettingsSchema — retired eagerLoadKokoro/eagerLoadQwen (preload-
   });
 });
 
-describe('userSettingsSchema — retired analyzer model-override Account fields (#3141 step 2)', () => {
+describe('userSettingsSchema — retired analyzer model-override fields (#3141 step 2)', () => {
   it('no longer appears on DEFAULT_USER_SETTINGS or a fresh parse', () => {
     expect(DEFAULT_USER_SETTINGS).not.toHaveProperty('ollamaUrl');
     expect(DEFAULT_USER_SETTINGS).not.toHaveProperty('analyzerPhase0Model');

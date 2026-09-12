@@ -1,8 +1,8 @@
 /* #3141 step 6 — e2e for the analyzer-settings ownership split (steps 1-5):
- * Advanced Settings owns the Ollama URL + per-phase analyzer models, Account
- * (the Model Manager's "Two-model analyzer split" card, `/#/models`) shows
- * them read-only with a link out, and the analysing view's phase-model swap
- * is a per-run PICK (ui-slice) that never writes UserSettings.
+ * Advanced Settings owns the Ollama URL + per-phase analyzer models, the
+ * Model Manager's "Two-model analyzer split" card (`/#/models`) shows them
+ * read-only with a link out, and the analysing view's phase-model swap is a
+ * per-run PICK (ui-slice) that never writes UserSettings.
  *
  * Scenario 2 needs the account slice already holding a per-phase split so
  * the swap control and chip have something to show/override. The mock

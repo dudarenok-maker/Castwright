@@ -11,7 +11,7 @@ import { MODEL_OPTIONS } from '../lib/models';
 import { GEMINI_KEY_WIKI } from '../lib/wiki-links';
 
 /* Human label for an analyzer model id, for the split-status line and the
-   Account view's read-only per-phase rows (#3141 step 3, which passes
+   Model Manager view's read-only per-phase rows (#3141 step 3, which passes
    'Not set' — the split-status line keeps the default 'server default'). */
 export function analyzerModelLabel(
   id: string | null | undefined,
