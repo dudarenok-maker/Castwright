@@ -303,6 +303,7 @@ export function AnalysingView({
      per-run override (priority 2). */
   const splitActive = useAppSelector((s) => selectAnalyzerSplitIsActive(s.account));
   const selectedModelExplicit = useAppSelector((s) => s.ui.selectedModelExplicit);
+  const defaultAnalysisModel = useAppSelector((s) => s.account.defaultAnalysisModel);
   const phase0Model = useAppSelector((s) => s.account.analyzerPhase0Model);
   const phase1Model = useAppSelector((s) => s.account.analyzerPhase1Model);
   /* #3141 step 5 — per-run picks from the analysing view's PhaseModelSwap
@@ -479,15 +480,16 @@ export function AnalysingView({
        so a later run (retry, or a fresh Start on this manuscript) starts from
        settings instead of silently repeating a one-off choice. An explicit
        per-run override collapses the split server-side, so picks are never
-       sent alongside one — nothing to clear in that case either way. */
-    if (hasPhasePick) dispatch(uiActions.clearPhaseModelPicks({ manuscriptId }));
+       sent alongside one — nothing to clear in that case since they didn't
+       affect this run. */
+    if (hasPhasePick && !selectedModelExplicit) dispatch(uiActions.clearPhaseModelPicks({ manuscriptId }));
     (async () => {
       try {
         const payload = await api.analyseManuscript(manuscriptId, {
           signal: controller.signal,
           model: requestModel,
-          phase0Model: selectedModelExplicit ? undefined : phase0Pick,
-          phase1Model: selectedModelExplicit ? undefined : phase1Pick,
+          phase0Model: selectedModelExplicit ? undefined : (phase0Pick ?? (phase1Pick ? defaultAnalysisModel : undefined)),
+          phase1Model: selectedModelExplicit ? undefined : (phase1Pick ?? (phase0Pick ? defaultAnalysisModel : undefined)),
           fresh: retry.fresh || undefined,
           allowStage1Shrink: retry.allowStage1Shrink || undefined,
           onPhase: ({ phaseId, progress, live, model: serverModel }) => {

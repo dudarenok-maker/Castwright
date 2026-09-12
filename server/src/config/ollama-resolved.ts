@@ -15,14 +15,6 @@
 import { configValue } from './resolver.js';
 import { getCachedDefaultAnalysisModelIfSet } from '../workspace/user-settings.js';
 
-/** Hardcoded Ollama tag used as the terminal fallback in
-    getResolvedOllamaModel. Cannot be derived from
-    DEFAULT_USER_SETTINGS.defaultAnalysisModel any more — that default
-    is now a Gemini id (no colon), and Ollama's /api/chat would 404 on it.
-    Keep this in sync with src/lib/models.ts MODEL_OPTIONS local entries
-    (qwen3.5:4b is still the smallest local option). */
-export const DEFAULT_OLLAMA_MODEL = 'qwen3.5:4b';
-
 /** Resolved through the config resolver (#3141 step 1): OLLAMA_URL env →
     saved Advanced Settings override (`analyzer.ollama.url`) → registry
     default. The Account `ollamaUrl` field is no longer read here. */
@@ -35,7 +27,7 @@ export function getResolvedOllamaUrl(): string {
       1. cached `defaultAnalysisModel` if it has Ollama tag shape (':')
       2. config resolver (#3141 step 1): OLLAMA_MODEL env → saved Advanced
          Settings override (`analyzer.ollama.model`) → registry default
-         (DEFAULT_OLLAMA_MODEL, `qwen3.5:4b`)
+         (DEFAULT_USER_SETTINGS.defaultAnalysisModel, `qwen3.5:4b`, which has a colon)
     The per-request `model` override (see selectAnalyzer) trumps both.
     Only a `:`-tagged saved model is honoured for step 1 — a Gemini id
     saved as defaultAnalysisModel (engine=gemini) must not be handed to

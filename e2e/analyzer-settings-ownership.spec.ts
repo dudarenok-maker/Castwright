@@ -65,7 +65,7 @@ async function seedAnalyzerSplit(page: Page): Promise<void> {
 }
 
 test.describe('#3141 step 6 — analyzer settings ownership', () => {
-  test('Account is read-only for the four fields, with a link to Advanced Settings', async ({
+  test('Model Manager is read-only for the four fields, with a link to Advanced Settings', async ({
     page,
   }) => {
     await page.goto('/#/models');

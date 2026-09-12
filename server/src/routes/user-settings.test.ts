@@ -241,7 +241,7 @@ describe('user-settings router', () => {
      analyzerPhase1MinLagChapters are no longer stored fields. GET still
      surfaces them, but sourced from the config resolver's effective value
      (env > saved Advanced Settings override > registry default) rather than
-     a dedicated stored field, so the Account UI keeps displaying them
+     a dedicated stored field, so the Model Manager UI keeps displaying them
      read-only. */
   describe('GET surfaces the four retired fields from the config resolver (#3141 step 2)', () => {
     it('reflects a configOverrides entry for analyzer.ollama.url as ollamaUrl', async () => {

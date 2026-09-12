@@ -124,4 +124,43 @@ describe('AnalysingView — per-run phase-model picks reach the start request (#
     expect(capturedOpts?.model).toBeUndefined();
     expect(capturedOpts?.phase1Model).toBe('gemini-3.1-flash-lite');
   });
+
+  it('when only one phase is picked, the un-picked phase gets the account defaultAnalysisModel (#3192 C2)', async () => {
+    // Account has defaultAnalysisModel: 'gemini-2.5-flash', but user picks only Phase 1
+    // The un-picked Phase 0 should explicitly receive the account default, not the
+    // server's registry default. This test verifies phase0Model carries the account default.
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          selectedModel: 'gemini-2.5-flash',
+          selectedModelExplicit: false,
+          analyzerPhasePicks: {
+            m1: { phase0: undefined, phase1: 'gemini-3.1-flash-lite' },
+          },
+        } as ReturnType<typeof uiSlice.getInitialState>,
+        account: {
+          ...accountSlice.getInitialState(),
+          defaultAnalysisModel: 'gemini-2.5-flash',
+          // No per-phase split configured
+          analyzerPhase0Model: null,
+          analyzerPhase1Model: null,
+        } as ReturnType<typeof accountSlice.getInitialState>,
+      },
+    });
+    await renderAndStart(store);
+    // Phase 1 is explicitly picked
+    expect(capturedOpts?.phase1Model).toBe('gemini-3.1-flash-lite');
+    // Phase 0 (un-picked) should get the account's defaultAnalysisModel, not undefined
+    expect(capturedOpts?.phase0Model).toBe('gemini-2.5-flash');
+    // The single-model field should not be sent in split mode
+    expect(capturedOpts?.model).toBeUndefined();
+  });
 });

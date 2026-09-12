@@ -34,11 +34,11 @@ export const userSettingsRouter = Router();
 
 /* #3141 step 2 — these four fields are no longer stored on the settings
    document (step 1 moved every server reader onto the config resolver
-   against the matching registry key). The Account UI still needs to show
+   against the matching registry key). The Model Manager UI still needs to show
    them, so GET populates them from the resolver's effective value
    (env > saved Advanced Settings override > registry default) instead of a
    stored field, and the PUT handler below rejects the keys outright rather
-   than silently stripping them (see REJECTED_LEGACY_ANALYZER_FIELDS). */
+   than silently stripping them (see RETIRED_ANALYZER_FIELDS). */
 const RETIRED_ANALYZER_FIELDS = [
   'ollamaUrl',
   'analyzerPhase0Model',
