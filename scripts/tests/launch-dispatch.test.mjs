@@ -65,12 +65,16 @@ function setupTestEnvironment(timeSequence = null) {
   const originalSetTimeout = setTimeout;
   let timeIdx = 0;
   const timeoutCallbacks = [];
+  let currentTime = 0;
 
   const mockNow = () => {
     if (timeSequence && timeIdx < timeSequence.length) {
-      return timeSequence[timeIdx++];
+      currentTime = timeSequence[timeIdx++];
+      return currentTime;
     }
-    return 1000 + (timeIdx * 1000); // Default incrementing time
+    // Default behavior: once array is exhausted, keep returning a fixed incrementing sequence
+    // This preserves backward compatibility with tests that don't provide explicit times
+    return 1000 + (timeIdx * 1000);
   };
 
   Date.now = mockNow;
@@ -156,9 +160,19 @@ test('sidecar restart: code-43 DOES trip on third exit (C2 regression)', async (
 
 test('sidecar restart: old code-43 exit is pruned when outside window', async () => {
   const WINDOW_MS = 600_000; // 10 minutes
-  // t=0 (first exit), t=WINDOW+1 (second, outside first), t=WINDOW+2 (third, outside first but inside window from second)
-  // After pruning, should only have 2 timestamps, so should NOT trip
-  const times = [0, WINDOW_MS + 1, WINDOW_MS + 2];
+  // Sequence: spawn 0, exit 0 (code 43), spawn 1, exit 1 (code 43), spawn 2, exit 2 (code 43), spawn 3, exit 3 (code 0)
+  // We want: exit 0 at t=0, exit 1 at t=WINDOW+1 (outside window from exit 0),
+  // exit 2 at t=WINDOW+2 (outside window from exit 0 but inside from exit 1)
+  // After pruning exit 0 (outside window), streak is 2 (exits 1 and 2), so should NOT trip.
+  const times = [
+    0,  // spawn 0
+    0,  // exit 0 at t=0
+    1,  // spawn 1 at t=1
+    WINDOW_MS + 1,  // exit 1 at t=WINDOW+1
+    WINDOW_MS + 2,  // spawn 2 at t=WINDOW+2
+    WINDOW_MS + 2,  // exit 2 at t=WINDOW+2 (same as spawn, no time gap, simulating immediate exit)
+    WINDOW_MS + 3,  // spawn 3 at t=WINDOW+3
+  ];
   const env = setupTestEnvironment(times);
   try {
     // Spawn 1 exits 43 → restart. Spawn 2 exits 43 → restart. Spawn 3 exits 43 → restart.
@@ -255,6 +269,67 @@ test('sidecar restart: code-42 exits do not count toward the code-43 streak cap'
       env.getExitCode(),
       0,
       'interleaved code-42 exits must not contribute to the code-43 streak count',
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('sidecar restart: non-42, non-0, non-43 exit codes propagate immediately', async () => {
+  // Code 1 (e.g., missing venv) should propagate immediately without retry
+  const env = setupTestEnvironment([1000]);
+  try {
+    const spawn = createMockSpawn([1]); // Exit code 1 (not 42, not 43, not 0)
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+    assert.equal(env.getExitCode(), 1, 'should propagate exit code 1 immediately without retry');
+    assert.equal(spawn.getCallCount(), 1, 'should not have retried a non-42, non-43 exit');
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('sidecar restart: code-42 fresh incidents reset the crash-loop counter', async () => {
+  // Simulate 6 code-42 exits spread across time (each lived > QUICK_DEATH_MS).
+  // QUICK_DEATH_MS = 30000 milliseconds = 30 seconds, so we need lifetimes > 30000 ms.
+  // Iteration 0: spawn@0, exit@1 (lifetime=1ms, quick death, failures=1)
+  // Iteration 1: spawn@100, exit@61100 (lifetime=61000ms > 30000ms, fresh incident, reset to 0 then 1)
+  // Iteration 2: spawn@61200, exit@122200 (lifetime=61000ms, fresh incident, reset to 0 then 1)
+  // ... repeat for all 6 iterations. Counter resets on each fresh incident, never exceeds 5.
+
+  const times = [];
+  // Build time sequence: spawn at t, exit at t + 61 seconds (61000ms > 30000ms QUICK_DEATH_MS)
+  const LIFETIME_MS = 61000; // Longer than QUICK_DEATH_MS (30000)
+  times.push(0); // spawn 0
+  times.push(1); // exit 0 (lifetime=1ms, NOT a fresh incident)
+
+  for (let i = 1; i < 6; i++) {
+    const spawnTime = i * 100000; // 100 seconds apart to space out spawns
+    const exitTime = spawnTime + LIFETIME_MS;
+    times.push(spawnTime);
+    times.push(exitTime);
+  }
+
+  // Final spawn and clean exit
+  const finalSpawnTime = 6 * 100000;
+  times.push(finalSpawnTime);
+  times.push(finalSpawnTime + 1);
+
+  const spawn = createMockSpawn([42, 42, 42, 42, 42, 42, 0]); // 6 code-42s followed by clean exit
+  const env = setupTestEnvironment(times);
+  try {
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+    assert.equal(
+      env.getExitCode(),
+      0,
+      'six code-42 exits, each with 61-second lifetime (> 30s threshold), should NOT trigger the crash-loop cap; fresh-incident resets prevent it',
     );
   } finally {
     env.cleanup();
