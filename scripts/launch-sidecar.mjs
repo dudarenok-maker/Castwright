@@ -48,7 +48,7 @@ const QUICK_DEATH_MS = 30_000; // Child lifetime threshold for fresh-incident de
 export async function launchSidecarWithRestart(platform, repoRoot, spawn = realSpawn) {
   let restart43Timestamps = [];
   let crashLoopFailures = 0;
-  let lastSpawnAt = Date.now(); // Track when we spawned so we can detect fresh incidents
+  let lastSpawnAt = 0;
 
   const launch = () => {
     return new Promise((resolve, reject) => {

@@ -65,15 +65,15 @@ function setupTestEnvironment(timeSequence = null) {
   const originalSetTimeout = setTimeout;
   let timeIdx = 0;
   const timeoutCallbacks = [];
-  let currentTime = 0;
+  const delays = [];
 
   const mockNow = () => {
     if (timeSequence && timeIdx < timeSequence.length) {
-      currentTime = timeSequence[timeIdx++];
-      return currentTime;
+      return timeSequence[timeIdx++];
     }
-    // Default behavior: once array is exhausted, keep returning a fixed incrementing sequence
-    // This preserves backward compatibility with tests that don't provide explicit times
+    // Default behavior: once array is exhausted, keep returning a fixed value.
+    // This fallback is load-bearing for tests that under-provide time values.
+    // It ensures consistent "not fresh" classification (lifetime = 0) when the clock runs out.
     return 1000 + (timeIdx * 1000);
   };
 
@@ -85,9 +85,10 @@ function setupTestEnvironment(timeSequence = null) {
     throw new Error(`process.exit(${code})`);
   };
 
-  // Mock setTimeout to execute immediately (no delay) but track callbacks
-  global.setTimeout = (cb, _delay) => {
+  // Mock setTimeout to execute immediately (no delay) but track callbacks and delays
+  global.setTimeout = (cb, delay) => {
     timeoutCallbacks.push(cb);
+    delays.push(delay);
     setImmediate(cb); // Execute asynchronously but without delay
     return Symbol('timeout');
   };
@@ -100,6 +101,7 @@ function setupTestEnvironment(timeSequence = null) {
     },
     getExitCode: () => actualExitCode,
     wasExitCalled: () => exitCalled,
+    getDelays: () => delays,
   };
 }
 
@@ -295,26 +297,23 @@ test('sidecar restart: non-42, non-0, non-43 exit codes propagate immediately', 
 test('sidecar restart: code-42 fresh incidents reset the crash-loop counter', async () => {
   // Simulate 6 code-42 exits spread across time (each lived > QUICK_DEATH_MS).
   // QUICK_DEATH_MS = 30000 milliseconds = 30 seconds, so we need lifetimes > 30000 ms.
-  // Iteration 0: spawn@0, exit@1 (lifetime=1ms, quick death, failures=1)
-  // Iteration 1: spawn@100, exit@61100 (lifetime=61000ms > 30000ms, fresh incident, reset to 0 then 1)
-  // Iteration 2: spawn@61200, exit@122200 (lifetime=61000ms, fresh incident, reset to 0 then 1)
+  // Iteration 0: spawn@0, exit@100000 (lifetime=100000ms > 30000ms, fresh incident, reset to 0 then 1)
+  // Iteration 1: spawn@200000, exit@300000 (lifetime=100000ms, fresh incident, reset to 0 then 1)
   // ... repeat for all 6 iterations. Counter resets on each fresh incident, never exceeds 5.
 
   const times = [];
-  // Build time sequence: spawn at t, exit at t + 61 seconds (61000ms > 30000ms QUICK_DEATH_MS)
-  const LIFETIME_MS = 61000; // Longer than QUICK_DEATH_MS (30000)
-  times.push(0); // spawn 0
-  times.push(1); // exit 0 (lifetime=1ms, NOT a fresh incident)
+  // Build time sequence: spawn at t, exit at t + 100 seconds (100000ms > 30000ms QUICK_DEATH_MS)
+  const LIFETIME_MS = 100000; // Longer than QUICK_DEATH_MS (30000)
 
-  for (let i = 1; i < 6; i++) {
-    const spawnTime = i * 100000; // 100 seconds apart to space out spawns
+  for (let i = 0; i < 6; i++) {
+    const spawnTime = i * 200000; // 200 seconds apart to space out spawns
     const exitTime = spawnTime + LIFETIME_MS;
     times.push(spawnTime);
     times.push(exitTime);
   }
 
   // Final spawn and clean exit
-  const finalSpawnTime = 6 * 100000;
+  const finalSpawnTime = 6 * 200000;
   times.push(finalSpawnTime);
   times.push(finalSpawnTime + 1);
 
@@ -329,8 +328,48 @@ test('sidecar restart: code-42 fresh incidents reset the crash-loop counter', as
     assert.equal(
       env.getExitCode(),
       0,
-      'six code-42 exits, each with 61-second lifetime (> 30s threshold), should NOT trigger the crash-loop cap; fresh-incident resets prevent it',
+      'six code-42 exits, each with 100-second lifetime (> 30s threshold), should NOT trigger the crash-loop cap; fresh-incident resets prevent it',
     );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('sidecar restart: code-42 crash-loop delay uses correct backoff (ordering regression)', async () => {
+  // Regression test for N1: the reset MUST occur before the backoff lookup.
+  // If reset happens after the lookup, the first retry uses CRASH_LOOP_BACKOFFS_MS[-1]
+  // (undefined), causing immediate respawn with no backoff.
+  // This test verifies the correct backoff schedule is used on each attempt.
+
+  // Six code-42 exits with no fresh incident (all quick deaths).
+  // After 5 retries, the cap triggers on the 6th exit and calls process.exit(),
+  // so we get 5 setTimeout delays (for attempts 1–5), not 6.
+  const times = Array(13).fill(1000); // All exits are quick deaths (lifetime = 0)
+  const codes = [42, 42, 42, 42, 42, 42, 0]; // 6 code-42s, then clean exit
+
+  const spawn = createMockSpawn(codes);
+  const env = setupTestEnvironment(times);
+  try {
+    try {
+      await launchSidecarWithRestart('linux', '/tmp', spawn);
+    } catch {
+      // process.exit throws to break out of the launcher logic
+    }
+
+    const delays = env.getDelays();
+    // Should have 5 delays (one for each retry before the cap triggers on the 6th code-42)
+    assert.equal(delays.length, 5, `should have 5 retry delays, got ${delays.length}`);
+
+    // Verify the delays match the expected backoff schedule: [2000, 5000, 15000, 15000, 15000]
+    // with index clamping to CRASH_LOOP_BACKOFFS_MS.length - 1
+    const expectedDelays = [2000, 5000, 15000, 15000, 15000];
+    for (let i = 0; i < delays.length; i++) {
+      assert.equal(
+        delays[i],
+        expectedDelays[i],
+        `delay at attempt ${i + 1} should be ${expectedDelays[i]}ms, got ${delays[i]}ms`,
+      );
+    }
   } finally {
     env.cleanup();
   }
