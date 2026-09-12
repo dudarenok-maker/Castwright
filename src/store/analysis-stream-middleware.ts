@@ -41,6 +41,7 @@
 
 import type { Dispatch, Middleware } from '@reduxjs/toolkit';
 import { api, AnalysisError } from '../lib/api';
+import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { notificationsActions } from './notifications-slice';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
@@ -68,8 +69,21 @@ const CLEAR_TYPE = analysisActions.clearActiveStream.type;
 const SET_ACTIVE_TYPE = analysisActions.setActiveStream.type;
 const APPLY_TICK_TYPE = analysisActions.applyAnalysisSnapshotTick.type;
 
+/* Dampening for reopens after persistent failure (#3172 finding 27).
+   When the middleware's socket fails to open, the heal on the next view tick
+   lifts the halt and triggers a reopen. If that reopen fails again immediately,
+   we must not retry on the VERY NEXT tick — that would oscillate halted/running
+   on every single tick. Track whether we've already tried a reopen after a heal,
+   and if so, dampen subsequent retries. */
+const REOPEN_FAILURE_DAMPEN_TICKS = 2;
+
 export const analysisStreamMiddleware: Middleware = (store) => {
   let handle: OpenHandle | null = null;
+  /* Track if we've already attempted a reopen after the current halt. The first
+     attempt (after heal) is allowed to proceed. If that fails, we dampen subsequent
+     attempts. */
+  let attemptedReopenAfterCurrentHalt = false;
+  let reopenFailureDampenCount = 0;
 
   const dispatch = store.dispatch as Dispatch;
 
@@ -77,12 +91,24 @@ export const analysisStreamMiddleware: Middleware = (store) => {
     if (!handle) return;
     handle.controller.abort();
     handle = null;
+    /* Note: we DO NOT clear pendingReopenFailure here. The flag should survive
+       the close and only be cleared when openHandle commits to a fresh open. */
   };
 
   const openHandle = (snap: AnalysisStreamSnapshot): void => {
     const desiredKind: 'main' | 'subset' = snap.kind === 'subset' ? 'subset' : 'main';
     if (handle && handle.manuscriptId === snap.manuscriptId && handle.kind === desiredKind) return;
     if (handle) closeHandle();
+
+    /* Dampen retries after a failed reopen to prevent oscillation (#3172 finding 27).
+       Allow the first reopen attempt after a halt to proceed (attemptedReopenAfterCurrentHalt
+       is false). If it fails, subsequent attempts are damped. */
+    if (attemptedReopenAfterCurrentHalt && reopenFailureDampenCount > 0) {
+      reopenFailureDampenCount--;
+      return;
+    }
+    /* Mark that we're attempting a reopen after the current halt. */
+    attemptedReopenAfterCurrentHalt = true;
 
     const manuscriptId = snap.manuscriptId;
     const controller = new AbortController();
@@ -178,6 +204,11 @@ export const analysisStreamMiddleware: Middleware = (store) => {
            manuscript), don't poison the new snapshot with the old
            run's terminal state. */
         if (handle !== localHandle) return;
+        /* Every branch below that dispatches setPaused / setHalted closes
+           this handle as a side effect: the PAUSE_TYPE / HALTED_TYPE hooks
+           in the action handler at the bottom of this file call
+           closeHandle() when the slice flips. Only the branch that
+           dispatches NOTHING (stream_no_result) has to close explicitly. */
         /* Task 9d (#2407) — streaming shape. An unset book language is not a
            generic stream failure: route it to the language-guard host instead of
            the error toast, and re-run this SAME openHandle call (which re-issues
@@ -217,6 +248,22 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           dispatch(analysisActions.setPaused({ manuscriptId }));
           return;
         }
+        /* A clean 200 that ended without a `result` frame says nothing
+           about the RUN — only that this socket closed. On the subset route
+           it is a designed exit (analysis.ts ends the job with no final
+           event when other chapters still need retry, and the view's own
+           subset catch already treats it as "not a real failure"); on the
+           main route every job exit broadcasts its final frame to every
+           subscriber, so a result-less end can only be a per-connection
+           close. Either way the view's primary SSE stays the authority:
+           close our handle and let the next tick's first-tick-opens
+           contract re-subscribe. Declaring halted here painted a live,
+           progressing run as dead — and permanently, because ticks never
+           rewrite `state` (#3198 pass 5). */
+        if (e instanceof AnalysisError && e.code === ANALYSIS_STREAM_NO_RESULT) {
+          closeHandle();
+          return;
+        }
         if (e instanceof AnalysisError) {
           dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
           dispatch(
@@ -228,22 +275,30 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           );
           return;
         }
-        const fallbackMessage = (e as Error)?.message ?? 'Analysis failed.';
+        /* Anything else is a transport failure on this connection — a
+           `fetch` rejection when the box goes offline, a JSON.parse throw
+           on a truncated frame. Halt loudly: when the analysing view is
+           unmounted this is the only connection there is, and a silent
+           close would leave the pill reading an ambiguous `stalled` 30s
+           later (pass 4, 🔴 10). If the view's own connection is in fact
+           still healthy, its next tick contradicts the halt and the slice
+           lifts it (applyAnalysisSnapshotTick heals ANALYSIS_STREAM_FAILED).
+           If we've already attempted a reopen after the heal and it failed,
+           dampen subsequent attempts (#3172 finding 27). */
+        if (attemptedReopenAfterCurrentHalt) {
+          reopenFailureDampenCount = REOPEN_FAILURE_DAMPEN_TICKS;
+        }
         dispatch(
           analysisActions.setHalted({
             manuscriptId,
-            code: 'unknown',
-            message: fallbackMessage,
+            code: ANALYSIS_STREAM_FAILED,
+            message: (e as Error).message,
           }),
         );
-        /* Surface the same fallback to the user via toast — closes
-           the "did anything happen?" gap when the analysing view
-           isn't on-screen at the moment the stream dies. Dedupe so a
-           reconnect-and-fail loop doesn't stack. */
         dispatch(
           notificationsActions.pushToast({
             kind: 'error',
-            message: fallbackMessage,
+            message: (e as Error).message,
             dedupeKey: 'analysis-stream',
           }),
         );
@@ -271,6 +326,16 @@ export const analysisStreamMiddleware: Middleware = (store) => {
       /* Slice already updated by next(action). Tear down the local
          handle — there's nothing more to tick for. */
       closeHandle();
+      /* Note: we do NOT reset attemptedReopenAfterCurrentHalt or reopenFailureDampenCount
+         here. The damping state needs to survive the close so subsequent ticks within
+         the damping window are skipped. It's only reset when a new analysis starts
+         (setActiveStream with a different manuscript) or via explicit clearActiveStream. */
+      if (a.type === CLEAR_TYPE) {
+        /* Only reset for CLEAR, not for HALTED. HALTED just closes the handle,
+           but the next heal might retry within the damping window. */
+        attemptedReopenAfterCurrentHalt = false;
+        reopenFailureDampenCount = 0;
+      }
       return result;
     }
 
@@ -289,6 +354,9 @@ export const analysisStreamMiddleware: Middleware = (store) => {
         const newKind: 'main' | 'subset' = snap.kind === 'subset' ? 'subset' : 'main';
         if (handle.manuscriptId !== snap.manuscriptId || handle.kind !== newKind) {
           closeHandle();
+          /* Reset tracking for the new manuscript — it's starting fresh. */
+          attemptedReopenAfterCurrentHalt = false;
+          reopenFailureDampenCount = 0;
         }
       }
       return result;

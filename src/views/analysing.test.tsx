@@ -6,7 +6,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
-import { analysisSlice } from '../store/analysis-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { notificationsSlice } from '../store/notifications-slice';
@@ -1893,6 +1893,40 @@ describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
       expect(store.getState().analysis.activeStream?.state).toBe('paused');
     });
   });
+
+  it('server-side pause (aborted code) drops conn to idle: sticky bar unmounts, inline button reads Resume, snapshot is paused', async () => {
+    /* #3198 pass 1 finding 2 / pass 5 🟠 20. A pause issued from another
+       surface or device reaches this view as the SSE rejecting with
+       `AnalysisError('aborted')`. The view's catch must call setConn('idle')
+       BEFORE setPaused, or `conn` lingers at 'connecting'/'streaming',
+       `isAnalysisRunning` stays true, and the sticky bar stays pinned with a
+       pulsing dot and a "Pause analysis" button over cards that say paused.
+       This drives the REAL rejection through the real catch — it does not
+       dispatch anything itself — and asserts the consequences of the conn
+       flip, which are the only observable the fix has.
+       Mutation: remove `setConn('idle')` from the aborted branch in
+       analysing.tsx → conn stays 'connecting' → the sticky bar is still
+       mounted, the inline Resume button never appears → red. */
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError(
+      'Analysis aborted (paused or displaced by a new run).',
+      'aborted',
+    );
+    const { store } = await renderViewWaitingForAnalysis();
+
+    /* Inline Start/Resume button is hidden while isAnalysisRunning; its
+       reappearance labelled Resume is exactly "conn is idle again, and
+       the run has started once". */
+    expect(await screen.findByRole('button', { name: /resume analysis/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('sticky-analysis-bar')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pause analysis/i })).not.toBeInTheDocument();
+    /* And the snapshot is paused, not cleared — the pill keeps the Resume
+       affordance for the user to navigate back to. */
+    expect(store.getState().analysis.activeStream).toMatchObject({
+      manuscriptId: 'm1',
+      state: 'paused',
+    });
+  });
 });
 
 describe('AnalysingView — cast merge-base advisory toast (#2015)', () => {
@@ -2115,6 +2149,59 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
     expect(capturedOpts).toBeUndefined();
   });
 
+  /* #3198 pass 1 🔴 (B) / pass 4 🔴 11 / pass 5 🔴 18 — the `runState`
+     manuscript guard at the derivePhaseState call site in analysing.tsx.
+     `analysis.activeStream` is ONE global slot, and a sibling tab's
+     broadcast replaces it wholesale with no bookId filter
+     (broadcast-middleware.ts, applyExternalAnalysisSnapshot). So: this tab
+     is streaming Book A; another tab pauses Book B; the slot now holds a
+     PAUSED snapshot for m2 while m1's run is live and ticking.
+
+     The earlier version of this test preloaded the foreign snapshot into a
+     never-started view, where `started` is false by its own independent
+     route and derivePhaseState returns 'pending' whether or not the
+     runState guard exists — removing the guard left the whole suite green.
+     Here `started` is true by a route the snapshot has no part in (the
+     user clicked Start: analysisStarted), so the ONLY thing between the
+     foreign paused snapshot and a paused card is the guard.
+     Mutation: replace the guarded read with the unguarded
+     `runState: activeStreamSnapshot?.state ?? 'running'` → derivePhaseState
+     gets runState 'paused' with started true → chip reads 'paused' → red. */
+  it('keeps a LIVE run rendering active when a sibling tab\'s broadcast drops a paused snapshot for a DIFFERENT manuscript into the slot', async () => {
+    const { store } = await renderViewWaitingForAnalysis();
+    /* The view seeded its own m1 running snapshot on Start; one tick makes
+       conn 'streaming' so the chip's active form is 'streaming'. */
+    await act(async () => {
+      capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.3 });
+    });
+    expect(store.getState().analysis.activeStream?.manuscriptId).toBe('m1');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
+
+    /* Sibling tab pauses Book B → inbound broadcast replaces the slot. */
+    await act(async () => {
+      store.dispatch(
+        analysisActions.applyExternalAnalysisSnapshot({
+          bookId: 'book-2',
+          manuscriptId: 'm2',
+          bookTitle: 'Different Book',
+          engine: 'gemini',
+          phaseId: 0,
+          phaseLabel: 'Detecting characters',
+          phaseProgress: 0.1,
+          remainingMs: 0,
+          lastTickAt: Date.now(),
+          state: 'paused',
+        }),
+      );
+    });
+    expect(store.getState().analysis.activeStream?.manuscriptId).toBe('m2');
+    expect(store.getState().analysis.activeStream?.state).toBe('paused');
+
+    /* m1 is still streaming on its own connection: the card must stay
+       active, not adopt m2's paused state. */
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'streaming');
+  });
+
   /* Fix round 1 (#3169 review finding 1): the rehydrate effect only writes
      hasStartedOnceRef.current = true for a paused/halted snapshot — a ref
      write, which triggers no re-render on its own. Reading
@@ -2124,20 +2211,15 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
      synchronously with getBy… (no findBy/waitFor) so a regression back to
      the ref-only expression — correct only once some unrelated effect
      happens to force a re-render — shows up as a hard failure here rather
-     than as a timing-dependent flash a test could accidentally paper over.
-
-     F5 (#3169 fix wave) — these two only need to prove `started` is true on
-     first render (not `pending`); which non-pending state the chip actually
-     displays for a paused/halted cold boot is an open design question, not
-     settled here — see #3172. */
-  it('renders phase 0 as NOT pending SYNCHRONOUSLY (first render, no awaited re-render) for a cold-boot paused snapshot', () => {
+     than as a timing-dependent flash a test could accidentally paper over. */
+  it('renders phase 0 as paused SYNCHRONOUSLY (first render, no awaited re-render) for a cold-boot paused snapshot', () => {
     renderViewWithActiveStream('paused');
-    expect(getPhaseCardChip(0)).not.toHaveAttribute('data-phase-state', 'pending');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'paused');
   });
 
-  it('renders phase 0 as NOT pending SYNCHRONOUSLY (first render, no awaited re-render) for a cold-boot halted snapshot', () => {
+  it('renders phase 0 as halted SYNCHRONOUSLY (first render, no awaited re-render) for a cold-boot halted snapshot', () => {
     renderViewWithActiveStream('halted');
-    expect(getPhaseCardChip(0)).not.toHaveAttribute('data-phase-state', 'pending');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'halted');
   });
 });
 

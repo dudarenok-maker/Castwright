@@ -70,6 +70,11 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
     const patch =
       phaseId === 0 ? { analyzerPhase0Model: next } : { analyzerPhase1Model: next };
     void dispatch(saveAccountSettings(patch));
+    /* Toast contextualizes the swap timing based on run state: when actively
+       streaming (isActive), the in-flight chapter finishes on the old model;
+       when paused or halted (not isActive), the swap only affects future runs.
+       The select's title attribute describes the active case specifically,
+       explaining that the swap applies from the next chapter. */
     setToast(
       isActive
         ? 'Applies from the next chapter — current chapter finishes on the previous model'
@@ -104,7 +109,11 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => void dispatch(fetchAnalyzerModels())}
         data-testid={`phase-model-swap-${phaseId}`}
-        title={`Swap the Phase ${phaseId} model. Applies from the next chapter; the in-flight chapter completes on the current model.`}
+        title={
+          isActive
+            ? `Swap the Phase ${phaseId} model. Applies from the next chapter; the in-flight chapter completes on the current model.`
+            : `Swap the Phase ${phaseId} model for future analyses.`
+        }
         className="px-2.5 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
         aria-label={`Phase ${phaseId} model swap`}
       >

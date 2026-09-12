@@ -2,7 +2,7 @@ import { MODEL_OPTIONS } from '../../lib/models';
 import { useAppSelector } from '../../store';
 import { selectAnalyzerSplitIsActive, selectAnalyzerPhase1MinLag } from '../../store/account-slice';
 
-export type PhaseChipState = 'pending' | 'warming' | 'streaming' | 'done';
+export type PhaseChipState = 'pending' | 'warming' | 'streaming' | 'done' | 'paused' | 'halted';
 
 interface PhaseModelChipProps {
   phaseId: 0 | 1 | 2;
@@ -84,6 +84,12 @@ export function PhaseModelChip({ phaseId, state, prefix, serverModel }: PhaseMod
     if (state === 'done') {
       return { tone: 'text-emerald-700 bg-emerald-100/70', dot: 'bg-emerald-500' };
     }
+    if (state === 'paused') {
+      return { tone: 'text-ink/70 bg-ink/6', dot: 'bg-ink/40' };
+    }
+    if (state === 'halted') {
+      return { tone: 'text-rose-800 bg-rose-100', dot: 'bg-rose-500' };
+    }
     return { tone: 'text-ink/50 bg-ink/5', dot: 'bg-ink/30' };
   })();
 
@@ -108,6 +114,8 @@ export function PhaseModelChip({ phaseId, state, prefix, serverModel }: PhaseMod
         {label}
       </span>
       {state === 'streaming' && <span className="text-ink/40">· streaming</span>}
+      {state === 'paused' && <span className="text-ink/40">· paused</span>}
+      {state === 'halted' && <span className="text-ink/40">· halted</span>}
       {showWarmup && <span className="text-ink/40">· warms up after ch. {minLag}</span>}
     </span>
   );

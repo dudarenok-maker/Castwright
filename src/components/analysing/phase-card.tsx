@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconCheck, IconSpinner } from '../../lib/icons';
+import { IconCheck, IconClock, IconSpinner, IconWarning } from '../../lib/icons';
 import {
   api,
   type AnalysisHeartbeat,
@@ -387,6 +387,8 @@ interface PhaseCardProps {
       legacy `activePhaseId === phase.id` comparison. */
   isPhaseActive?: boolean;
   isPhaseDone?: boolean;
+  isPhasePaused?: boolean;
+  isPhaseHalted?: boolean;
   phaseProgress: number;
   phaseLogs: string[];
   live: AnalysisLiveInfo | null;
@@ -415,6 +417,8 @@ export function PhaseCard({
   activePhaseId,
   isPhaseActive,
   isPhaseDone,
+  isPhasePaused,
+  isPhaseHalted,
   phaseProgress,
   phaseLogs,
   live,
@@ -430,6 +434,8 @@ export function PhaseCard({
 }: PhaseCardProps) {
   const isActive = isPhaseActive ?? activePhaseId === p.id;
   const isDone = isPhaseDone ?? activePhaseId > p.id;
+  const isPaused = isPhasePaused ?? false;
+  const isHalted = isPhaseHalted ?? false;
   const throttleActive = throttle && throttle.until > Date.now();
   /* The "warms up after ch. N" handoff only happens when the two-model split
      is engaged — then Phase 1 dispatches `minLag` chapters behind Phase 0
@@ -441,11 +447,15 @@ export function PhaseCard({
      PhaseModelChip (no model selection), so the state value is ignored there. */
   const chipState: PhaseChipState = isDone
     ? 'done'
-    : isActive
-      ? 'streaming'
-      : p.id === 1 && activePhaseId === 0 && splitActive
-        ? 'warming'
-        : 'pending';
+    : isPaused
+      ? 'paused'
+      : isHalted
+        ? 'halted'
+        : isActive
+          ? 'streaming'
+          : p.id === 1 && activePhaseId === 0 && splitActive
+            ? 'warming'
+            : 'pending';
   const hasModelControls = p.id === 0 || p.id === 1;
   return (
     <div className="px-6 py-4 flex items-start gap-4">
@@ -455,17 +465,29 @@ export function PhaseCard({
             <IconCheck className="w-4 h-4 text-emerald-700" />
           </span>
         )}
-        {isActive && (
+        {!isDone && isPaused && (
+          <span className="w-7 h-7 rounded-full bg-ink/6 grid place-items-center">
+            <IconClock className="w-4 h-4 text-ink/50" />
+          </span>
+        )}
+        {!isDone && !isPaused && isHalted && (
+          <span className="w-7 h-7 rounded-full bg-rose-100 grid place-items-center">
+            <IconWarning className="w-4 h-4 text-rose-700" />
+          </span>
+        )}
+        {!isDone && !isPaused && !isHalted && isActive && (
           <span className="w-7 h-7 rounded-full bg-peach/20 grid place-items-center">
             <IconSpinner className="w-4 h-4 text-magenta" />
           </span>
         )}
-        {!isDone && !isActive && <span className="w-7 h-7 rounded-full border border-ink/15" />}
+        {!isDone && !isPaused && !isHalted && !isActive && (
+          <span className="w-7 h-7 rounded-full border border-ink/15" />
+        )}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <p
-            className={`font-semibold min-w-0 flex-1 ${isDone || isActive ? 'text-ink' : 'text-ink/40'}`}
+            className={`font-semibold min-w-0 flex-1 ${isDone || isActive || isPaused || isHalted ? 'text-ink' : 'text-ink/40'}`}
           >
             {p.label}
           </p>
@@ -483,17 +505,21 @@ export function PhaseCard({
         {/* Detail spans the full card width rather than the narrow column
             beneath the label — keeping the model chip/dropdown out of its
             flow so it never wraps into a cramped two- or three-line block. */}
-        <p className={`text-sm mt-0.5 ${isDone || isActive ? 'text-ink/60' : 'text-ink/30'}`}>
+        <p
+          className={`text-sm mt-0.5 ${isDone || isActive || isPaused || isHalted ? 'text-ink/60' : 'text-ink/30'}`}
+        >
           {p.detail}
         </p>
+        {(isActive || isPaused || isHalted) && (
+          <div className="mt-3 h-1 rounded-full bg-ink/6 overflow-hidden">
+            <div
+              className="h-full bg-gradient-progress rounded-full"
+              style={{ width: `${phaseProgress * 100}%` }}
+            />
+          </div>
+        )}
         {isActive && (
           <>
-            <div className="mt-3 h-1 rounded-full bg-ink/6 overflow-hidden">
-              <div
-                className="h-full bg-gradient-progress rounded-full"
-                style={{ width: `${phaseProgress * 100}%` }}
-              />
-            </div>
             {/* Bridging status while the SSE is open but no log lines have
                 arrived yet. On a fresh server the first ~2-3s after clicking
                 Start is spent in getOrHydrateManuscript re-parsing the EPUB —
