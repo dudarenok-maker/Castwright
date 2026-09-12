@@ -18,6 +18,7 @@ const cliArgs = process.argv.slice(2);
 // Run check-onbox-register.mjs with all the CLI arguments
 const checkResult = spawnSync(process.execPath, [join(HERE, 'check-onbox-register.mjs'), ...cliArgs], {
   stdio: 'inherit',
+  windowsHide: true,
 });
 
 // If check-onbox-register failed, exit immediately with its status
@@ -29,6 +30,7 @@ if (checkResult.status !== 0) {
 // (without the CLI args — it only needs --check, not the register-specific flags)
 const buildResult = spawnSync(process.execPath, [join(HERE, 'build-register-live-view.mjs'), '--check'], {
   stdio: 'inherit',
+  windowsHide: true,
 });
 
 // Exit with build-register-live-view's status
