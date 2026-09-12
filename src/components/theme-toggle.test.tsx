@@ -57,6 +57,7 @@ function makeStore({
     apiKeyStatus: 'unset',
     workspaceRoot: '',
     workspaceSource: 'default',
+    corruptSettingsFile: false,
     status: 'idle',
     error: null,
     hydrated: true,

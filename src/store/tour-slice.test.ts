@@ -5,7 +5,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('../lib/api', () => ({
   api: {
     getTourStatus: vi.fn(async () => ({ completedAt: null })),
-    completeTour: vi.fn(async () => ({ completedAt: '2026-06-12T00:00:00.000Z' })),
+    completeTour: vi.fn(async () => ({ completedAt: '2026-06-12T00:00:00.000Z', corruptSettingsFile: false })),
     loadSample: vi.fn(async () => ({ bookId: 'castwright__standalones__the-coalfall-commission' })),
   },
 }));
@@ -15,12 +15,14 @@ import {
   tourActions,
   fetchTourStatus,
   completeTour,
+  finishTour,
   goToStep,
   nextStep,
   prevStep,
   startScreenTour,
 } from './tour-slice';
 import { uiSlice, uiActions } from './ui-slice';
+import { accountSlice } from './account-slice';
 import { configureStore } from '@reduxjs/toolkit';
 
 const reducer = tourSlice.reducer;
@@ -145,5 +147,55 @@ describe('tour navigation thunks', () => {
     expect(store.getState().tour.stepIndex).toBe(3);
     await store.dispatch(prevStep()); // already first in slice → no-op
     expect(store.getState().tour.stepIndex).toBe(3);
+  });
+});
+
+describe('P2 — corruptSettingsFile sync from completeTour response', () => {
+  it('finishTour (completeTour thunk) with corruptSettingsFile: true updates the Redux store', async () => {
+    // P2 test: when completeTour returns corruptSettingsFile: true, the account
+    // slice's corruptSettingsFile state must be updated to true, and selectors
+    // reflecting this flag must be observable.
+
+    // Dynamically import to get fresh mock instances
+    const { api: apiBefore } = await import('../lib/api');
+    vi.mocked(apiBefore.completeTour).mockImplementationOnce(async () => ({
+      completedAt: '2026-06-12T00:00:00.000Z',
+      corruptSettingsFile: true,
+    }));
+
+    const store = configureStore({
+      reducer: { tour: tourSlice.reducer, account: accountSlice.reducer },
+    });
+
+    store.dispatch(tourActions.startTour({ tourId: 'linear', mode: 'linear' }));
+    expect(store.getState().account.corruptSettingsFile).toBe(false);
+
+    await store.dispatch(finishTour() as any);
+
+    // After completeTour succeeds with corruptSettingsFile: true, the store must reflect it
+    expect(store.getState().account.corruptSettingsFile).toBe(true);
+  });
+
+  it('finishTour (completeTour thunk) with corruptSettingsFile: false updates the Redux store', async () => {
+    // Verify the store is also updated when the flag is false
+    const { api: apiAfter } = await import('../lib/api');
+    vi.mocked(apiAfter.completeTour).mockImplementationOnce(async () => ({
+      completedAt: '2026-06-12T00:00:00.000Z',
+      corruptSettingsFile: false,
+    }));
+
+    const store = configureStore({
+      reducer: { tour: tourSlice.reducer, account: accountSlice.reducer },
+    });
+
+    // Pre-set to true to verify it gets cleared
+    store.dispatch(accountSlice.actions.setCorruptSettingsFile(true));
+    expect(store.getState().account.corruptSettingsFile).toBe(true);
+
+    store.dispatch(tourActions.startTour({ tourId: 'linear', mode: 'linear' }));
+    await store.dispatch(finishTour() as any);
+
+    // After completeTour succeeds with corruptSettingsFile: false, the store must reflect it
+    expect(store.getState().account.corruptSettingsFile).toBe(false);
   });
 });

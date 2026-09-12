@@ -249,7 +249,11 @@ export default defineConfig({
          `vitest run --changed` to follow. Without this trigger, a
          generation.ts-only diff selects zero tests from this suite and the
          guard never runs in the scoped CI leg — silent on exactly the
-         call-site change it exists to catch. */
+         call-site change it exists to catch. This entry's literal text is
+         checked against server/src/tts/engine-language-coverage.guard-
+         targets.ts's ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB (#3085), the
+         same constant the guard itself imports, so the two can never
+         independently drift. */
       '{**/server/src/routes/generation.ts,**/.*/**/server/src/routes/generation.ts}',
       /* registry-knob-read.guard.test.ts (#3139/#3146): imports registry.ts
          directly, so a new/changed knob there is already selected by the
@@ -269,6 +273,30 @@ export default defineConfig({
          properly, by having guards export their own scan targets. */
       '{**/server/src/analyzer/rate-limit.ts,**/.*/**/server/src/analyzer/rate-limit.ts}',
       '{**/server/src/tts/segment-asr-qa.ts,**/.*/**/server/src/tts/segment-asr-qa.ts}',
+      /* state-language.guard.test.ts (#3085): a tree-wide scanner —
+         collectSourceFiles(SRC_ROOT) reads every non-test .ts file under
+         server/src/** at RUNTIME (readFileSync), so there is no module-graph
+         edge from the guard to any file it scans. Its declared scope lives in
+         server/src/workspace/state-language.guard-targets.ts
+         (STATE_LANGUAGE_GUARD_SCAN_GLOB), which force-rerun-triggers.test.ts
+         imports and checks THIS entry against, so the two can never
+         independently drift. Deliberately broad: this guard's real scan
+         target is the whole tree, so almost any server source change forces
+         a full --changed rerun — that is the cost of the tree-wide scan, not
+         a defect (#3085's chosen design).
+
+         cast-lock.guard.test.ts (also #3085) is the SAME shape of scanner
+         over the SAME tree — its own declared scope,
+         server/src/workspace/cast-lock.guard-targets.ts's
+         CAST_LOCK_GUARD_SCAN_GLOB, happens to equal this entry's glob text
+         today, so it rides this one trigger rather than needing a second,
+         textually-identical entry; force-rerun-triggers.test.ts checks this
+         entry against BOTH guards' constants independently. Also part of
+         spawn-windows-hide.guard-targets.ts's SPAWN_WINDOWS_HIDE_GUARD_SCAN_
+         GLOBS[0] for the same reason — three independent guards, one
+         trigger, because their real scan target is textually the same
+         tree. */
+      '{**/server/src/**,**/.*/**/server/src/**}',
     ],
     pool: 'forks',
     /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the

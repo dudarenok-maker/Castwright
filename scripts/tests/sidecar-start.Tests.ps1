@@ -56,6 +56,41 @@ BeforeAll {
     }
 }
 
+Describe 'start.ps1 exit-code propagation' {
+    It 'does not reference the removed internal restart-on-43 loop' {
+        $content = Get-Content $script:startScript -Raw
+        # Regression: start.ps1 used to loop internally and relaunch uvicorn on
+        # codes 42/43 without the wrapping powershell.exe process ever exiting,
+        # so Node's ChildProcess 'exit' handler (sidecar-supervisor.ts) never
+        # saw an individual 43 exit and its code-43 streak/auto-revert logic
+        # was unreachable in production. start.ps1 must now be single-shot and
+        # always propagate the real exit code so Node's generic respawn owns
+        # every restart decision.
+        $content | Should -Not -Match 'Test-SidecarShouldRestart'
+        $content | Should -Not -Match 'sidecar-restart-policy\.ps1'
+
+        # Narrowly-scoped check per owner decision (PR #3148 pass 5): catch the
+        # original bug shapes (while/do-while loops wrapping the uvicorn call)
+        # rather than attempt exhaustive coverage of all loop constructs.
+        # This guard does NOT catch foreach, ForEach-Object pipelines, recursive
+        # functions, or re-invoked scriptblocks — see PR #3148 review history for
+        # why exhaustive static checks were abandoned. The scope is: does the
+        # start.ps1 source code contain the specific while/do-while loop patterns
+        # that were the original #3121 regression?
+
+        $hasWhileLoop = $content -match '(?i)while\s*\(\s*\$true\s*\)|while\s*\(\s*1\s*\)'
+        $hasDoWhile = $content -match '(?i)}\s*while\s*\('
+        $hasDoUntil = $content -match '(?i)}\s*until\s*\('
+
+        $hasWhileLoop | Should -Be $false -Because "start.ps1 should not have 'while (`$true)' or 'while (1)' restart loops"
+        $hasDoWhile | Should -Be $false -Because "start.ps1 should not have 'do { ... } while' restart loops"
+        $hasDoUntil | Should -Be $false -Because "start.ps1 should not have 'do { ... } until' restart loops"
+
+        # Verify exit code propagation is present.
+        $content | Should -Match 'exit \$code'
+    }
+}
+
 Describe 'start.ps1 SIDECAR_VENV_DIR resolution' {
     It 'looks for the venv python under SIDECAR_VENV_DIR when it is set' {
         $missing = Join-Path ([System.IO.Path]::GetTempPath()) "fs1-novenv-$([Guid]::NewGuid())"

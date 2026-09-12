@@ -3,9 +3,21 @@
    and legacy-file back-compat. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, basename } from 'node:path';
+
+/* Pass-through spy on the one disk read readUserSettings() performs, so a test
+   can assert whether a read hit the cache or re-parsed the file (#3175 P1 /
+   Q2 test (a)). Behaviour is untouched — every call delegates to the real
+   implementation; only the call count is observable. */
+const diskRead = vi.hoisted(() => ({ spy: vi.fn() }));
+vi.mock('./state-io.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./state-io.js')>();
+  diskRead.spy.mockImplementation(actual.readJsonWithRecovery);
+  return { ...actual, readJsonWithRecovery: diskRead.spy };
+});
+
 import {
   DEFAULT_USER_SETTINGS,
   userSettingsSchema,
@@ -1123,5 +1135,437 @@ describe('getResolvedSidecarUrl — port resolution (#2632)', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe('readUserSettings — corruption recovery (#3175 layer 1)', () => {
+  /* Sweep every artifact this suite can leave behind — main file, every
+     `.bak.N`, and any timestamped `.corrupt-*` diagnostic copy — so one
+     test's leftovers never leak into the next. */
+  function cleanArtifacts(mod: typeof import('./user-settings.js')): void {
+    const dir = dirname(mod.USER_SETTINGS_PATH);
+    const base = basename(mod.USER_SETTINGS_PATH);
+    if (!existsSync(dir)) return;
+    for (const name of readdirSync(dir)) {
+      if (name === base || name.startsWith(`${base}.bak.`) || name.startsWith(`${base}.corrupt-`)) {
+        rmSync(join(dir, name), { force: true });
+      }
+    }
+  }
+
+  beforeEach(async () => {
+    const mod = await import('./user-settings.js');
+    cleanArtifacts(mod);
+    mod._resetUserSettingsCache();
+  });
+
+  afterEach(async () => {
+    const mod = await import('./user-settings.js');
+    cleanArtifacts(mod);
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    mod._resetUserSettingsCache();
+  });
+
+  it('malformed main file + a valid .bak.1 recovers from the backup, corruption flag stays false', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(
+      `${mod.USER_SETTINGS_PATH}.bak.1`,
+      JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Recovered From Backup' }),
+    );
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ this is not valid json');
+
+    const settings = await mod.readUserSettings();
+
+    expect(settings.displayName).toBe('Recovered From Backup');
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+  });
+
+  it('malformed main file + no valid backup falls back to defaults, flags corrupt, and warns once', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ this is not valid json');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const settings = await mod.readUserSettings();
+
+      expect(settings).toEqual(DEFAULT_USER_SETTINGS);
+      expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+      const messages = warnSpy.mock.calls.map((call) => String(call[0]));
+      expect(messages.some((m) => m.includes('unreadable') && m.includes('using in-memory defaults'))).toBe(
+        true,
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('a subsequent successful writeUserSettings clears the flag and leaves a .corrupt-* copy of the bad bytes', async () => {
+    const mod = await import('./user-settings.js');
+    const badBytes = '{ this is not valid json';
+    writeFileSync(mod.USER_SETTINGS_PATH, badBytes);
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+
+    await mod.writeUserSettings({ displayName: 'Post-Recovery Save' });
+
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    const dir = dirname(mod.USER_SETTINGS_PATH);
+    const base = basename(mod.USER_SETTINGS_PATH);
+    const corruptCopies = readdirSync(dir).filter((name) => name.startsWith(`${base}.corrupt-`));
+    expect(corruptCopies.length).toBe(1);
+    expect(readFileSync(join(dir, corruptCopies[0]), 'utf8')).toBe(badBytes);
+    // The new write itself is valid and readable.
+    const onDisk = JSON.parse(readFileSync(mod.USER_SETTINGS_PATH, 'utf8'));
+    expect(onDisk.displayName).toBe('Post-Recovery Save');
+  });
+
+  it('a successful re-read after recovery detects out-of-band repair via mtime change', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+
+    // Step 1: Write a corrupt file
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ this is not valid json');
+
+    // Step 2: Read it — should flag as corrupt and cache the mtime
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+    warnSpy.mockRestore();
+
+    // Step 3: Fix the file by hand (simulating user repair or system restore).
+    // The key point: we DON'T call _resetUserSettingsCache(), we rely on the
+    // mtime check to detect that the file changed.
+    // Add a small delay to ensure mtime actually changes
+    await new Promise((r) => setTimeout(r, 10));
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+
+    // Step 4: Read again — mtime check should detect the change and re-read
+    await mod.readUserSettings();
+
+    // Step 5: Flag should now be false because the file parses successfully
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+  });
+
+  it('every settings writer passes rotate — two successive writeUserSettings calls leave a .bak.1', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    mod._resetUserSettingsCache();
+
+    await mod.writeUserSettings({ displayName: 'First Save' });
+    await mod.writeUserSettings({ displayName: 'Second Save' });
+
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(true);
+    const backup = JSON.parse(readFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, 'utf8'));
+    expect(backup.displayName).toBe('First Save');
+  });
+
+  it('writeUpgradeMeta also rotates (dedicated writer, not just the general writeUserSettings path)', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    mod._resetUserSettingsCache();
+
+    await mod.writeUpgradeMeta({ lastSeenAppVersion: '1.0.0' });
+    await mod.writeUpgradeMeta({ lastSeenAppVersion: '1.0.1' });
+
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(true);
+    const backup = JSON.parse(readFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, 'utf8'));
+    expect(backup.lastSeenAppVersion).toBe('1.0.0');
+  });
+
+  it('MUTATION CHECK PRECEDENT: a total-failure read never throws — callers get defaults, not a rejection', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ this is not valid json');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(mod.readUserSettings()).resolves.toEqual(DEFAULT_USER_SETTINGS);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('MUTATION CHECK: corruption flag clears when writeUpgradeMeta succeeds after file corruption (#3175)', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+
+    // Step 1: Corrupt the file (write gibberish so even backups won't parse).
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ this is invalid json and wont parse }');
+
+    // Step 2: Read it — should flag as corrupt and return defaults.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const reread = await mod.readUserSettings();
+    expect(reread).toEqual(DEFAULT_USER_SETTINGS);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+    warnSpy.mockRestore();
+
+    // Step 3: Call writeUpgradeMeta (simulating What's New banner dismiss).
+    // This should clear the corruption flag.
+    await mod.writeUpgradeMeta({ showWhatsNew: false });
+
+    // Step 4: Verify corruption flag is now false.
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+
+    // Step 5: Verify a .corrupt-<timestamp> file was created.
+    const files = readdirSync(dirname(mod.USER_SETTINGS_PATH));
+    const corruptFiles = files.filter((f) => f.includes('.corrupt-'));
+    expect(corruptFiles.length).toBe(1);
+
+    // Step 6: Verify the .corrupt-* file contains the gibberish (the corrupt bytes).
+    const corruptPath = join(dirname(mod.USER_SETTINGS_PATH), corruptFiles[0]);
+    const corruptContent = readFileSync(corruptPath, 'utf-8');
+    expect(corruptContent).toBe('{ this is invalid json and wont parse }');
+  });
+
+  it('REGRESSION: out-of-band file repair is detected via mtime check, not silently clobbered by cache', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+
+    // Step 1: Corrupt the file at boot.
+    writeFileSync(mod.USER_SETTINGS_PATH, '{ broken json');
+
+    // Step 2: Read it — caches defaults and sets the corruption flag.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let result = await mod.readUserSettings();
+    expect(result).toEqual(DEFAULT_USER_SETTINGS);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+    warnSpy.mockRestore();
+
+    // Step 3: Simulate user hand-repair by writing a valid JSON file directly to disk
+    // (bypassing all the app's write functions, simulating an out-of-band edit).
+    const repaired = { ...DEFAULT_USER_SETTINGS, displayName: 'Hand-Repaired User' };
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(repaired));
+
+    // Step 4: Call readUserSettings() again — should detect the file's mtime changed
+    // and re-read instead of returning stale cached defaults.
+    result = await mod.readUserSettings();
+
+    // Step 5: Assert the flag is now clear AND the repaired content is what's returned.
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    expect(result.displayName).toBe('Hand-Repaired User');
+  });
+
+  it('Q3: a SYNCHRONOUS resolver never sees a bare default while an out-of-band re-read is in flight', async () => {
+    /* The sync resolvers (getResolvedAllowCloudFallback & co.) read `cached`
+       directly and never go through readUserSettings(), so inFlightRead can't
+       protect them — only "never null the cache" can. Saved value is
+       allowCloudFallback:false before AND after the out-of-band edit; the env
+       default the resolver falls through to on a null cache is `true`, so any
+       `true` sample is the null window showing (#3175 Q3 / pass-5 PROBE-C). */
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    delete process.env.ANALYZER_ALLOW_CLOUD_FALLBACK;
+
+    await mod.writeUserSettings({ allowCloudFallback: false, analysisEngine: 'gemini' });
+    expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+
+    // Out-of-band edit: compact JSON (writeJsonAtomic pretty-prints), so the
+    // byte size differs and the change is detected regardless of mtime ticks.
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({
+        ...DEFAULT_USER_SETTINGS,
+        allowCloudFallback: false,
+        analysisEngine: 'gemini',
+        displayName: 'Repaired Out Of Band',
+      }),
+    );
+
+    // Start the re-read but do NOT await it — sample the sync resolvers
+    // synchronously (guaranteed inside the window) and across several turns.
+    const pending = mod.readUserSettings();
+    const fallbackSamples = [mod.getResolvedAllowCloudFallback()];
+    const engineSamples = [mod.getResolvedAnalysisEngine()];
+    for (let i = 0; i < 4; i += 1) {
+      await new Promise((r) => setImmediate(r));
+      fallbackSamples.push(mod.getResolvedAllowCloudFallback());
+      engineSamples.push(mod.getResolvedAnalysisEngine());
+    }
+    const result = await pending;
+
+    expect(result.displayName).toBe('Repaired Out Of Band');
+    expect(fallbackSamples).toEqual([false, false, false, false, false]);
+    expect(engineSamples).toEqual(['gemini', 'gemini', 'gemini', 'gemini', 'gemini']);
+  });
+
+  it('Q4: fresh boot with NO settings file, then a file created out of band before any app write, is picked up on the next read', async () => {
+    /* Pass 4's PROBE3 / pass 5's PROBE-G: bootWarmUserSettings() runs before a
+       fresh install has a file; a sibling worktree's server (or a restore)
+       then creates one. With no baseline stamp the old guard was disarmed for
+       the process lifetime and the defaults stuck forever. */
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    expect(existsSync(mod.USER_SETTINGS_PATH)).toBe(false);
+
+    const boot = await mod.readUserSettings();
+    expect(boot).toEqual(DEFAULT_USER_SETTINGS);
+    // The read path creates nothing — the file is still absent.
+    expect(existsSync(mod.USER_SETTINGS_PATH)).toBe(false);
+    // A repeat read on the still-absent file is a cache hit, not a re-read that flags anything.
+    expect(await mod.readUserSettings()).toEqual(DEFAULT_USER_SETTINGS);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Created By Sibling', analysisEngine: 'gemini' }),
+    );
+
+    const next = await mod.readUserSettings();
+    expect(next.displayName).toBe('Created By Sibling');
+    expect(mod.getResolvedAnalysisEngine()).toBe('gemini');
+  });
+
+  it.each([
+    ['writeUserSettings', (mod: typeof import('./user-settings.js')) => mod.writeUserSettings({ displayName: 'x' })],
+    ['writeGeminiApiKey', (mod: typeof import('./user-settings.js')) => mod.writeGeminiApiKey('key')],
+    ['writeUpgradeMeta', (mod: typeof import('./user-settings.js')) => mod.writeUpgradeMeta({ showWhatsNew: false })],
+    ['writeSetupCompletedAt', (mod: typeof import('./user-settings.js')) => mod.writeSetupCompletedAt('2026-01-01T00:00:00.000Z')],
+    ['writeTourCompletedAt', (mod: typeof import('./user-settings.js')) => mod.writeTourCompletedAt('2026-01-01T00:00:00.000Z')],
+  ])('P9: %s clears the corruption flag and snapshots the bad bytes (five-writer sweep, #3175)', async (_name, write) => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    const badBytes = '{ this is not valid json';
+    writeFileSync(mod.USER_SETTINGS_PATH, badBytes);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await mod.readUserSettings();
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(mod.isUserSettingsFileCorrupt()).toBe(true);
+
+    await write(mod);
+
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    const dir = dirname(mod.USER_SETTINGS_PATH);
+    const base = basename(mod.USER_SETTINGS_PATH);
+    const corruptCopies = readdirSync(dir).filter((name) => name.startsWith(`${base}.corrupt-`));
+    expect(corruptCopies.length).toBe(1);
+    expect(readFileSync(join(dir, corruptCopies[0]), 'utf8')).toBe(badBytes);
+  });
+
+  it('P1 (CRITICAL): out-of-band repair detection still works — (b) external repair triggers re-read', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+
+    // Start with default settings
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    let result = await mod.readUserSettings();
+    expect(result.displayName).toBe(DEFAULT_USER_SETTINGS.displayName);
+
+    // Corrupt the file and write new settings with a different value
+    await mod.writeUserSettings({ displayName: 'App Updated' });
+    result = await mod.readUserSettings();
+    expect(result.displayName).toBe('App Updated');
+
+    // Simulate out-of-band repair: write directly to disk bypassing app writes
+    // This leaves the cached file stamp stale (only the app's writers re-stamp it)
+    await new Promise((r) => setTimeout(r, 10)); // Ensure mtime changes
+    const repaired = { ...DEFAULT_USER_SETTINGS, displayName: 'Hand Repaired' };
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(repaired));
+
+    // Read again — should detect mtime change and re-read, getting the hand-repaired value
+    result = await mod.readUserSettings();
+    expect(result.displayName).toBe('Hand Repaired');
+  });
+
+  it('writeGeminiApiKey rotates backups (dedicated writer; the flag half is the P9 sweep above) (#3175)', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    mod._resetUserSettingsCache();
+
+    // Write twice to verify backups rotate
+    await mod.writeGeminiApiKey('key1');
+    await mod.writeGeminiApiKey('key2');
+
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(true);
+    const backup = JSON.parse(readFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, 'utf8'));
+    expect(backup.geminiApiKey).toBe('key1');
+  });
+
+  it('writeSetupCompletedAt rotates backups (dedicated writer; the flag half is the P9 sweep above) (#3175)', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    mod._resetUserSettingsCache();
+
+    const ts1 = new Date('2026-01-01').toISOString();
+    const ts2 = new Date('2026-01-02').toISOString();
+
+    // Write twice to verify backups rotate
+    await mod.writeSetupCompletedAt(ts1);
+    await mod.writeSetupCompletedAt(ts2);
+
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(true);
+    const backup = JSON.parse(readFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, 'utf8'));
+    expect(backup.setupCompletedAt).toBe(ts1);
+  });
+
+  it('writeTourCompletedAt rotates backups (dedicated writer; the flag half is the P9 sweep above) (#3175)', async () => {
+    const mod = await import('./user-settings.js');
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    mod._resetUserSettingsCache();
+
+    const ts1 = new Date('2026-02-01').toISOString();
+    const ts2 = new Date('2026-02-02').toISOString();
+
+    // Write twice to verify backups rotate
+    await mod.writeTourCompletedAt(ts1);
+    await mod.writeTourCompletedAt(ts2);
+
+    expect(existsSync(`${mod.USER_SETTINGS_PATH}.bak.1`)).toBe(true);
+    const backup = JSON.parse(readFileSync(`${mod.USER_SETTINGS_PATH}.bak.1`, 'utf8'));
+    expect(backup.tourCompletedAt).toBe(ts1);
+  });
+
+  it('MUTATION CHECK P1 (a): an app write re-stamps the cache, so the next read serves the cache instead of re-parsing disk', async () => {
+    /* Pins ONLY the stamp-on-write half of P1. The value a read returns is
+       identical whether it came from the cache or from re-parsing the file
+       the writer just wrote — which is why the previous version of this test
+       could not fail. The observable difference is whether the read touches
+       disk at all, so this asserts on the disk-read spy:
+         - stamp re-recorded by the writer → stamps match → zero disk reads.
+         - stamp-on-write deleted → the stamp is the PRE-write one → the
+           writer's own mtime/size change looks out-of-band → a disk read
+           → this test reddens.
+         - check-on-read deleted → cache always served → still green. That
+           is test (b)'s bug, not this one's. */
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(DEFAULT_USER_SETTINGS));
+    const seeded = await mod.readUserSettings();
+    expect(seeded.displayName).toBe(DEFAULT_USER_SETTINGS.displayName);
+
+    // Longer displayName than the default so the write changes the byte size
+    // as well as the mtime — a stale stamp is then a mismatch on BOTH axes.
+    await mod.writeUserSettings({ displayName: 'Written By App, Not Out Of Band' });
+
+    diskRead.spy.mockClear();
+    const next = await mod.readUserSettings();
+    const again = await mod.readUserSettings();
+
+    expect(next.displayName).toBe('Written By App, Not Out Of Band');
+    expect(again.displayName).toBe('Written By App, Not Out Of Band');
+    expect(diskRead.spy).not.toHaveBeenCalled();
+  });
+
+  it('MUTATION CHECK P1 (b): out-of-band write — genuine external edit is detected and picked up on next read', async () => {
+    // Real test: perform a genuine out-of-band write (bypass all app writers, write
+    // directly to disk), then verify the NEXT readUserSettings() call detects and picks
+    // up the new content (not silently stuck on stale cache).
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+
+    // App write — seed the cache
+    const settings1 = await mod.writeUserSettings({ analysisEngine: 'gemini' });
+    expect(settings1.analysisEngine).toBe('gemini');
+
+    // Out-of-band write: bypass all app writers and write directly to disk
+    const modified = { ...DEFAULT_USER_SETTINGS, analysisEngine: 'local' };
+    writeFileSync(mod.USER_SETTINGS_PATH, JSON.stringify(modified, null, 2));
+
+    // Small delay to ensure mtime changes (millisecond precision varies by filesystem)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Next read MUST detect the file changed and pick up the new value
+    const read2 = await mod.readUserSettings();
+    expect(read2.analysisEngine).toBe('local');
   });
 });

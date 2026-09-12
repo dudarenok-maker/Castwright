@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,9 +563,24 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**48 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**49 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
+
+> **Last change: 2026-09-10, adding A107** (#3086/#3101, claude): the unit-level fix for
+> `/load`'s Kokoro-cold-load arbiter bypass is proven with a pure-Python threading test
+> (fake Kokoro engine, no GPU); the ORIGINAL symptom — a real Kokoro `/load` racing a
+> resident VoiceDesign forward on a shared-device box — still needs a real on-box re-run,
+> recorded here as owed acceptance per CLAUDE.md's before-shipping step 3. Minted as
+> **A107**, not A106 — this branch was cut before PR #3061 minted A106 for #3058's
+> X-Device-Hint row, so the two collided; A107 is the next free id off the Group A
+> `next-id` floor (allocate-once, per the register's own convention). 48 → 49 owed,
+> Group A 32 → 33. `next-id` bumped A107 → A108 in the same change. This lands on top
+> of every register change the parent branch had already merged (the 2-card-boot +
+> Pinokio batch chain, #2950, the A34 repair-and-retest chain, #2903, PR #3061's
+> X-Device-Hint A106 addition, the Mechanical batch 2 A35/A102 discharges, #2960, and
+> ops-71 Part 3's E104 addition, #3047) — verified by row-ID-set diff against the true
+> `git merge-base`, not this branch's own stale base. `npm run check:onbox-register` green.
 
 > **Last change: 2026-09-09 (batch 2 step 5, claude), 49 → 47.** Rows **A35**
 > (stranded VRAM after a chapter render, #2656) and **A102** (CUDA self-test on
@@ -1295,7 +1310,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A107 -->
+<!-- next-id: A108 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -1941,19 +1956,10 @@ guard) each redden the fixtures they own, reverts clean
 `docs/testing/onbox-2card-pinokio-batch-results/step-3-a3-build.md` for the
 original build's own mutation record).
 
-**What remains owed:** the real-hardware trigger. A forced card-specific
-three-exits-in-ten-minutes streak was run for real against this worktree's own
-sidecar and did **not** reach `runAutoRevert` in production — `/api/gpu/trip-status`
-stayed `null` throughout and no toast fired
-(`docs/testing/onbox-2card-pinokio-batch-results/step-4-a3-hardware.md`). Node's
-`onChildExit` never observes the streak because `start.ps1` absorbs and restarts
-the code-43 child internally on Windows before Node's own supervisor sees three
-distinct exits — the same root cause step 2's checklist items 5/6 already
-surfaced. The row narrows to this one item: **wire the streak-trip signal through
-`start.ps1`'s own restart loop (or an equivalent path) so `runAutoRevert` actually
-fires on real hardware**, then re-run the hardware trigger to confirm. Tracked as
-[#3121](https://github.com/dudarenok-maker/Castwright/issues/3121) — a design
-decision (where the exit-visibility boundary moves to), not a one-line fix.
+**What remains owed:** **re-run the real-hardware trigger** after PR #3148 fixes the exit-code visibility gap.
+The original blocker: `start.ps1` absorbed code-43 exits internally in its restart loop, preventing Node's supervisor from observing individual exits so the streak guard and `runAutoRevert` never fired. **FIXED** by PR #3148, which removes the restart loop from both `start.ps1` and `start.sh` and leaves Node's `sidecar-supervisor.ts` to own all restart decisions and observe individual code-43 exits.
+
+A forced card-specific three-exits-in-ten-minutes streak was run for real before this fix and did not reach `runAutoRevert` — but now the supervised path should observe and respond to individual code-43 exits. **Owed:** re-run the hardware trigger on real 2-card hardware to confirm the auto-revert trip now fires and resolves the cascade, then record the outcome. Tracked as [#3121](https://github.com/dudarenok-maker/Castwright/issues/3121).
 
 ### A4 · Audition engine + tier fidelity ([#1849](https://github.com/dudarenok-maker/Castwright/pull/1849))
 
@@ -4539,6 +4545,27 @@ log instrumentation, a VRAM-fill scenario to construct the discriminating placem
 (the fill target is now computed live from the box's own measured `peak` and
 `GPU_RESERVE_MB`, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the
 run sheet's pin/stale-cache scenarios.
+
+### A107 · `/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter ([#3086](https://github.com/dudarenok-maker/Castwright/issues/3086), [#3101](https://github.com/dudarenok-maker/Castwright/issues/3101), PR [#3142](https://github.com/dudarenok-maker/Castwright/pull/3142)) · **single 8 GB GPU card, DirectML profile, real Kokoro weights**
+
+#3086 observed a raw Kokoro `/synthesize` call completing while a VoiceDesign forward was
+still resident. Tracing (#3101) found `KokoroEngine.synthesize()` and `design_voice()`
+already drive `_VD_KOKORO` correctly; the actual bypass was `POST /load {"engine":"kokoro"}`,
+which called `KokoroEngine._ensure_loaded()` directly without going through `_VD_KOKORO.kokoro_synth()`.
+On the DirectML profile a cold Kokoro load is not just bookkeeping — `_directml_selftest_or_fallback`
+runs a real one-shot forward (`kokoro.create("ok", ...)`) to prove the provider works, which could
+land mid-design with no exclusion at all. The fix adds `_kokoro_ensure_loaded_guarded()` and routes
+the `/load` bypass through it. A pure-Python threading test (`test_load_kokoro_arbiter_gate.py`) proves
+`/load` now blocks while a design holds the arbiter, using a fake Kokoro engine — no real model load.
+Unit tests cannot prove the ORIGINAL symptom on real hardware: a live Kokoro `/load` racing a real,
+resident VoiceDesign forward on a shared-device box, with real DirectML self-test timing.
+
+*Needs:* single 8 GB GPU card, DirectML profile, real Kokoro weights, Qwen VoiceDesign 1.7B
+resident.
+*Criteria:* re-run the #3086 repro — concurrent VoiceDesign forward + raw Kokoro `/load`
+on a shared-device box — and confirm the Kokoro load now blocks until the design releases,
+matching the unit-level proof above.
+*Cost:* short — one concurrent repro, same shape as the unit test but against real weights.
 
 ## Group B — local Ollama analyzer only
 
