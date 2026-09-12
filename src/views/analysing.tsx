@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useStore } from 'react-redux';
 import { IconClose, IconRefresh } from '../lib/icons';
 import { helpHrefForFailureCode } from '../lib/router';
 import { HELP_FAILURE_ENTRIES } from '../data/help-failures';
@@ -27,7 +28,7 @@ import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-overrid
 import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
@@ -131,6 +132,7 @@ export function AnalysingView({
   onComplete,
 }: Props) {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   /* `phase` is the pipeline FRONTIER — the highest phase id seen this run.
      It drives the overall %, the sticky bar, and the cross-nav snapshot. The
      per-phase progress + live payloads are kept in separate maps so two
@@ -193,6 +195,11 @@ export function AnalysingView({
      button — after a pause the cache holds completed chapters, so
      "Resume" is the truthful word. */
   const hasStartedOnceRef = useRef(false);
+  /* Tracks whether the current retry attempt was rejected with
+     subset_in_progress (#3202). Used in the finally block to avoid
+     touching the active stream or re-arming the main run when this error
+     occurs — the rejection means another subset job is live. */
+  const subsetInProgressRef = useRef(false);
   /* Per-chapter cast-detection failures that survive across reload. Seeded
      from /api/books/:bookId/state on mount; appended to from the SSE's
      chapter-failed event; cleared per id when a Retry succeeds. */
@@ -766,6 +773,8 @@ export function AnalysingView({
     if (!manuscriptId) return;
     if (retryingChapterId !== null) return;
     setRetryingChapterId(chapterId);
+    /* Reset the subset_in_progress flag for this attempt. */
+    subsetInProgressRef.current = false;
     const markEvent = () => {
       setLastEventAt(Date.now());
       /* First event of any run means we're re-attached — drop the
@@ -799,7 +808,12 @@ export function AnalysingView({
        map. Without this, a navigate-away mid-retry dropped the pill
        and the middleware would have tried to subscribe to the main
        map (which has no job) and either start a fresh main run or
-       fall through. */
+       fall through.
+
+       Capture the prior snapshot in case the request fails with
+       subset_in_progress; restoration prevents a stale/clobbered state
+       from becoming permanent (B2 regression guard). */
+    const priorSnapshot = store.getState().analysis.activeStream;
     dispatch(
       analysisActions.setActiveStream({
         bookId: bookId ?? null,
@@ -903,6 +917,37 @@ export function AnalysingView({
         setConn('idle');
       })
       .catch((err) => {
+        /* subset_in_progress (#3202) — the server rejected this retry
+           outright because a different subset is already running; it
+           never reaches onChapterFailed, so retryReFailed stays false and
+           the generic branch below would wrongly drop the row as if it
+           had succeeded. Surface the server's message instead. This request
+           never started a job, so restore the prior snapshot (B2 regression
+           guard: the pre-POST clobber must not persist on rejection) and
+           mark this in the ref so the finally block knows not to touch it or
+           re-arm the main run. */
+        if (err instanceof AnalysisError && err.code === 'subset_in_progress') {
+          subsetInProgressRef.current = true;
+          if (priorSnapshot) {
+            /* B3 fix: when the main SSE was aborted (pausedMainForRetry is true),
+               we're not re-subscribing to it, so restore with state: 'paused'
+               instead of the original 'running'. This prevents layout.tsx's stall
+               detection from marking the pill as stalled 30s later. */
+            dispatch(
+              analysisActions.setActiveStream(
+                pausedMainForRetry ? { ...priorSnapshot, state: 'paused' } : priorSnapshot,
+              ),
+            );
+          } else {
+            dispatch(analysisActions.clearActiveStream());
+          }
+          setFailedChapters((prev) => {
+            const filtered = prev.filter((f) => f.chapterId !== chapterId);
+            return [...filtered, { chapterId, message: err.message, code: err.code }];
+          });
+          setConn('idle');
+          return;
+        }
         /* The subset route ends without a `result` event when other
            chapters still need retry (Phase 1 gate). api.ts throws
            "no result" in that case — not a real failure, drop the
@@ -917,6 +962,15 @@ export function AnalysingView({
       .finally(() => {
         setRetryingChapterId(null);
         setDroppedQuotesRefreshKey((k) => k + 1);
+        /* If the subset request was rejected with subset_in_progress (#3202),
+           do NOT touch the active stream or re-arm the main run. The rejection
+           means another subset job is live, and resuming the main run while
+           that's active would trigger the cache-write race that the PAUSE-AND-RETRY
+           contract exists to prevent (see the comment at line 751). Leave the
+           main run paused and let the user wait for the other subset to finish. */
+        if (subsetInProgressRef.current) {
+          return;
+        }
         /* Resume the main run if Retry paused it. The analysis effect
            is keyed off (analysisStarted, retry.nonce, …) so we flip
            analysisStarted back on and bump the nonce to re-enter — the

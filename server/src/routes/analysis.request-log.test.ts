@@ -137,12 +137,17 @@ function registerStubManuscript(id: string, count: number): void {
    analysis.test.ts. `controller` is a live (non-aborted) AbortController,
    so the route's subscribe-vs-start dispatch treats it as an in-flight job
    to attach to rather than a stale entry to displace. */
-function buildLiveJobStub(manuscriptId: string, kind: 'main' | 'subset') {
+function buildLiveJobStub(manuscriptId: string, kind: 'main' | 'subset', subsetChapterIds?: number[]) {
   return {
     controller: new AbortController(),
     subscribers: new Set(),
     manuscriptId,
     kind,
+    /* #3202 — the route now compares this request's chapterIds against the
+       running job's subsetChapterIds before joining, so a subset stub used
+       to exercise the subscribe path needs a real value here matching
+       whatever chapterIds the test POSTs (test (e) sends [1]). */
+    ...(kind === 'subset' ? { subsetChapterIds: subsetChapterIds ?? [1] } : {}),
     bookDir: null,
     engine: 'gemini',
     replay: {
@@ -509,6 +514,121 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
         anyResolvedModelLine,
         'no line may resolve/name a model for a subscribe (attach) POST',
       ).toBeUndefined();
+    } finally {
+      consoleLogSpy.mockRestore();
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  });
+
+  it('(i) #3202 — a chapterId-mismatch POST against a live subset job gets a terminal subset_in_progress error and never joins', async () => {
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter, __testRegisterJobForTest } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const manuscriptId = `test-subset-mismatch-${Date.now()}-${Math.random()}`;
+    registerStubManuscript(manuscriptId, 7);
+    const job = buildLiveJobStub(manuscriptId, 'subset', [3]);
+    __testRegisterJobForTest(job as unknown as Parameters<typeof __testRegisterJobForTest>[0]);
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await supertest(app)
+        .post(`/api/manuscripts/${manuscriptId}/analysis/chapters`)
+        .send({ chapterIds: [7] })
+        .buffer(true);
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('subset_in_progress');
+      // Names the chapters actually running (by title), not just a generic message.
+      expect(res.text).toContain('Chapter 3');
+      // N4 assertion — the message format has no dangling colon when titles are present.
+      expect(res.text).toContain('for this manuscript: Chapter 3');
+      // The mismatched request never attaches to the running job.
+      expect((job as unknown as { subscribers: Set<unknown> }).subscribers.size).toBe(0);
+      // N3 assertion — the rejection logs an outcome line naming the outcome.
+      const lines = consoleLogSpy.mock.calls
+        .map((call) => call[0])
+        .filter((line): line is string => typeof line === 'string');
+      const outcomeLine = lines.find((line) => line.startsWith('[analysis-subset] subset_in_progress'));
+      expect(outcomeLine, 'expected a [analysis-subset] subset_in_progress outcome line on rejection').toBeDefined();
+      expect(outcomeLine).toContain(`manuscript=${JSON.stringify(manuscriptId)}`);
+    } finally {
+      consoleLogSpy.mockRestore();
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  });
+
+  it('(i2) N4 — subset_in_progress error message format is correct regardless of title resolution', async () => {
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter, __testRegisterJobForTest } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const manuscriptId = `test-subset-unresolvable-titles-${Date.now()}-${Math.random()}`;
+    // Register a stub manuscript with only 10 chapters, then use chapter ids
+    // well beyond that range so titles won't resolve, testing the titlePart
+    // empty-fallback path.
+    registerStubManuscript(manuscriptId, 10);
+    const job = buildLiveJobStub(manuscriptId, 'subset', [101, 102]); // both unresolvable
+    __testRegisterJobForTest(job as unknown as Parameters<typeof __testRegisterJobForTest>[0]);
+    try {
+      const res = await supertest(app)
+        .post(`/api/manuscripts/${manuscriptId}/analysis/chapters`)
+        .send({ chapterIds: [5] })
+        .buffer(true);
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('subset_in_progress');
+      // N8 assertion — verify the empty-fallback path: when chapter ids don't
+      // resolve, titlePart is empty, so the message ends with
+      // "…for this manuscript. Wait for it to finish" with NO colon.
+      expect(res.text).toMatch(
+        /for this manuscript\. Wait for it to finish/,
+      );
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  });
+
+  it('(j) #3202 — a same-chapter-set POST against a live subset job joins, order-independent', async () => {
+    const express = (await import('express')).default;
+    const { analysisRouter, __testRegisterJobForTest } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const manuscriptId = `test-subset-match-${Date.now()}-${Math.random()}`;
+    registerStubManuscript(manuscriptId, 7);
+    // Running job's set is [3, 7]; the new POST names the same ids in the
+    // opposite order — the comparison must be set-equality, not array
+    // equality, so this must still join.
+    __testRegisterJobForTest(
+      buildLiveJobStub(manuscriptId, 'subset', [3, 7]) as unknown as Parameters<
+        typeof __testRegisterJobForTest
+      >[0],
+    );
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await postAndWaitForLogLine(
+        app,
+        `/api/manuscripts/${manuscriptId}/analysis/chapters`,
+        { chapterIds: [7, 3] },
+        consoleLogSpy,
+        (line) => line.startsWith('[analysis-subset] subscribe'),
+      );
+
+      const lines = consoleLogSpy.mock.calls
+        .map((call) => call[0])
+        .filter((line): line is string => typeof line === 'string');
+      const subscribeLine = lines.find((line) => line.startsWith('[analysis-subset] subscribe'));
+      expect(subscribeLine, 'expected a subscribe outcome line — matching sets must join').toBeDefined();
+      const errorLine = lines.find((line) => line.includes('subset_in_progress'));
+      expect(errorLine, 'a matching chapter set must not get subset_in_progress').toBeUndefined();
     } finally {
       consoleLogSpy.mockRestore();
       removeManuscript(manuscriptId);
