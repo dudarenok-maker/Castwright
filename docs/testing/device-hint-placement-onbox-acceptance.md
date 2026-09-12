@@ -129,8 +129,8 @@ provably diverge.
 **Don't fill VRAM by loading real models** — a Qwen/Kokoro-based fill was
 tried and rejected: `_qwen_design_idle_watchdog` frees the ~4-5 GB
 VoiceDesign share 120-150 s after the last design
-(`server/tts-sidecar/main.py:9067`, `:9098`), or immediately at the next
-`/synthesize` (`:8141-8142`), so the band this criterion depends on evaporates
+(`server/tts-sidecar/main.py:9100`, `:9131`), or immediately at the next
+`/synthesize` (`:8174-8175`), so the band this criterion depends on evaporates
 mid-criterion. Fill with a scratch CUDA allocation instead — `probe_capacity`
 reads driver-level `mem_get_info` (`main.py:4210-4218`, `4297-4326`), so a
 `torch.empty(...)` tensor moves the same number the placement code reads, and
@@ -159,25 +159,23 @@ unlike a resident engine nothing ever evicts it.
    note at step 4 for where to read it from.
 3. Query the sidecar's `GET /debug/memory` and read its `footprints.coqui`
    block (`{seed_mb, learned_mb, sample_count}` — `FootprintTable.snapshot`,
-   `main.py:4480-4497`, served at `main.py:11075-11172`). The Coqui derive's
+   `main.py:4480-4497`, served at `main.py:11108-11205`). The Coqui derive's
    admission footprint (`peak`) is `learned_mb` once `sample_count >= 5`,
    else the seed `SEED_FOOTPRINTS_MB["coqui"]` of **3584 MB**
    (`main.py:4355`, `FootprintTable.peak_mb`, `main.py:4463-4470`) — call
    this value `peak`. A fresh box with no prior Coqui admissions uses the
    3584 MB seed unmodified.
 4. **The target band, in MB:** **First, verify that `headroom0` (measured at step
-   2) exceeds `peak + 200` with room to spare** — this criterion needs sufficient
-   headroom on `cuda:0` to construct a discriminating band at all, and `peak + 200`
-   is the minimum clearance. If it doesn't, record the measured `headroom0` and
-   `peak` in the Result line rather than forcing a pass; the box's current idle
-   state lacks the room this criterion depends on. This criterion constructs a
-   scenario where `cuda:1`'s free headroom sits in a band high enough to pass
-   #3097/#3165's 75%-tolerance check (so the hint is honored when active) but low
-   enough to still lose to `cuda:0`'s unconstrained best-fit (so the control derive
-   without the hint lands elsewhere). The target is `target_headroom1 = 6000`
-   (comfortably inside the accepting region of the tolerance at this box's idle
-   state, with ~680 MB of margin from the real boundary; at the seed `peak` of
-   3584 this lies well within the band defined by `0.75 × headroom0` and `peak`).
+   2) satisfies both `headroom0 > 6000` AND `0.75 × headroom0 ≤ 6000` (i.e., `headroom0 ≤ 8000`)**
+   — this criterion needs sufficient headroom on `cuda:0` to construct a discriminating band, and
+   `target_headroom1 = 6000` depends on both bounds. If it doesn't, record the measured `headroom0`
+   and `peak` in the Result line rather than forcing a pass; the box's current idle state lacks
+   the room this criterion depends on. The lower bound (`headroom0 > 6000`) ensures the unhinted
+   control loses to `cuda:0`'s best-fit. The upper bound (`0.75 × headroom0 ≤ 6000`) ensures the
+   hinted run passes the 75%-tolerance check. This criterion constructs a scenario where `cuda:1`'s
+   free headroom sits in a band high enough to pass #3097/#3165's 75%-tolerance check (so the hint
+   is honored when active) but low enough to still lose to `cuda:0`'s unconstrained best-fit (so
+   the control derive without the hint lands elsewhere). The target is `target_headroom1 = 6000`.
    At the seed value this is **6000 MB**. **The reserve subtracted per device is
    `reserve(total_mb) = min(round(0.05 * total_mb), GPU_RESERVE_MB)` —
    `GPU_RESERVE_MB` is the operator-configurable ceiling (`gpu.reserveMb`,
@@ -441,7 +439,7 @@ costs nothing.
 **Leave `QWEN_DEVICE=cuda:0` (or unset) through this criterion too — do not
 restore the box's standing `cuda:1` pin yet.** Step 2 restarts the sidecar
 with only one CUDA device visible; under a `cuda:1` pin, `_validate_cuda_index`
-(`main.py:5787-5797`) rejects that as out of range and the Qwen load fails
+(`main.py:5820-5830`) rejects that as out of range and the Qwen load fails
 outright, which fails the render before this criterion's own observation is
 ever reached. Restore the standing pin only once this criterion (the last one
 in the sitting) is also done.

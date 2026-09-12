@@ -2490,7 +2490,7 @@ every mechanism test while leaving the whole book wrong.
   full dispatch path and found no per-sentence language mechanism — `langCode` is
   resolved once per chapter (`synthesise-chapter.ts:1371`) and threaded uniformly
   into every title, single-group and batched call, including the sidecar's
-  per-item `language` override (`main.py:8151`, `:8228`) — and ruled out the
+  per-item `language` override (`main.py:8184`, `:8261`) — and ruled out the
   #1998 whole-book English-manifest fallback (every cloned group's `cloned` flag
   is set correctly by `buildSentenceGroups`/`resolveGroup`). Genuinely blocked
   pending a real render: needs the same chapter re-rendered with the same cloned
