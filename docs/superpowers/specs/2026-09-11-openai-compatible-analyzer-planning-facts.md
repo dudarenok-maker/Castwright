@@ -95,12 +95,29 @@ SDK `@google/genai` 2.19.0. `D` = `server/node_modules/@google/genai/dist/genai.
    - Sending BOTH thinkingLevel and thinkingBudget → 400. thinkingBudget to 3.x accepted (back-compat).
    - **Gemma 4 on the Gemini API supports thinking on/off: thinkingLevel "high" = on, "minimal" = off** (ai.google.dev/gemma/docs/core/gemma_on_gemini_api). includeThoughts on Gemma UNCONFIRMED.
    - ⇒ level sets must be per model (table keyed by id pattern), not per family.
+   - **Re-verified 2026-09-13** (owner review F2) against ai.google.dev/gemini-api/docs/generate-content/thinking, ai.google.dev/gemini-api/docs/latest-model (Gemini 3.8 Flash) and ai.google.dev/gemini-api/docs/gemini-3. Quotes below came through a page fetch on that date.
+     - **3.8 Flash and 3.7 Flash:** `low` / `medium` / `high`. `minimal` returns an error (latest-model: "`minimal` thinking level is not supported for Gemini 3.8 Flash and will return an error").
+     - **3.6 Flash and 3.5 Flash:** `minimal` / `low` / `medium` / `high`.
+     - **3.5 Flash-Lite and 3.1 Flash-Lite:** `minimal` / `low` / `medium` / `high` (`minimal` is the default).
+     - **3.1 Pro:** `low` / `medium` / `high`, with no `minimal`.
+     - **No off on 3.x.** Thinking page: "You cannot disable thinking for Gemini 3.1 Pro. Gemini 3 Flash and Flash-Lite also do not support full thinking-off."
+     - **Conflicting default statements for 3.8 / 3.7 Flash.** The owner-review read recorded `low` on the thinking page and `medium` on the 3.8 page (latest-model: "Medium (default): Best quality for most tasks."). A second fetch of the thinking page the same day read its table as `medium` (Default) for "Gemini 3.8 & 3.7 Flash". So the pages changed between reads, or one read misread the table. Either way nothing may depend on a default: `model default` omits the field.
+     - **`thinkingBudget` is still accepted for back-compat** (thinking page: "While `thinkingBudget` is accepted for backwards compatibility, using it with Gemini 3 Pro may result in unexpected performance."; gemini-3 page: "`thinking_budget` is still supported for backward compatibility, but we recommend migrating to `thinking_level`"). **The plan no longer uses it:** P9 is retired, Gemini 2.5 ids get `model default` only, and nothing sends `thinkingBudget`. The 2.5 budget facts above are kept as history only.
+     - **Both fields → 400.** gemini-3 page: "You cannot use both `thinking_level` and the legacy `thinking_budget` parameter in the same request. Doing so will return a 400 error."
 3. **models.list `Model`** fields (`D:10790-10841`): name, displayName, description, version, inputTokenLimit, outputTokenLimit, supportedActions, temperature, maxTemperature, topP, topK, `thinking?: boolean`. No output-modality field ⇒ filter = supportedActions includes generateContent AND name excludes `embedding|-tts|-image|-live|imagen|veo|aqa`.
 4. **responseJsonSchema** (`D:5652-5667`) supported: `$id $defs $ref $anchor type format title description enum items prefixItems minItems maxItems minimum maximum anyOf oneOf properties additionalProperties required propertyOrdering`. NOT: `$schema minLength maxLength pattern exclusiveMinimum`. Docs: "The model ignores unsupported properties." (documented, untested). Size: "may reject very large or deeply nested schemas" (no numbers). `responseSchema` must be omitted when responseJsonSchema set.
 5. `usageMetadata.thoughtsTokenCount?: number` (`D:5917`); stream response carries usageMetadata (`D:5760`); per-chunk presence undocumented (read the last chunk that has it).
 6. maxOutputTokens INCLUDES thought tokens. gemini-3.6-flash and gemini-3.5-flash-lite: 1,048,576 input / 65,536 output.
 7. `MAX_TOKENS` finish (`D:5100-5102`). Empty-text-with-MAX_TOKENS when thinking eats the cap: secondary evidence only (forum; python-genai #782).
 8. Free-tier limits not published officially (AI Studio only); rate-limit.ts table unverifiable.
+9. **Temperature guidance for Gemini 3 (2026-09-13).** A decision is owed outside #3084 (spec "Decisions owed outside #3084").
+   - ai.google.dev/gemini-api/docs/gemini-3:
+     - "For all Gemini 3 models, we strongly recommend keeping the temperature parameter at its default value of `1.0`."
+     - "Changing the temperature (setting it below 1.0) may lead to unexpected behavior, such as looping or degraded performance, particularly in complex mathematical or reasoning tasks."
+   - ai.google.dev/gemini-api/docs/latest-model (3.8 Flash migration): "Strip `temperature`, `top_p`, and `top_k` from generation configs".
+   - Google Cloud's Gemini 3.8 Flash developer guide (docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-8-flash) says temperature, top_p and top_k are ignored by the backend. This is from the owner-review read; a 2026-09-13 re-fetch returned only the page's navigation, so that sentence was not re-read.
+   - Castwright at `46e62a34`: `analyzer.gemini.temperature` defaults to 0.2 (`registry.ts:61-69`), and the Gemini validation retry replays at that temperature (`gemini.ts:484-493`).
+   - Options owed: keep 0.2; default to 1.0; or send no temperature to 3.x.
 
 ## §D — the pinned main commit, and what moved under it
 

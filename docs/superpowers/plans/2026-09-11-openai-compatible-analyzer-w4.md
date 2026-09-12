@@ -50,7 +50,7 @@
 - **Scope:** reasoning and custom payload stay W5's. This PR adds no reasoning or payload field to any request: wave 1's `TransportRequest` / `EngineRequestSettings` have neither, and wave 5 (Task 5.1) adds both fields and their forwarding from `runStage`, `runSingleAttempt` and `runFreeText`.
 
 **Entry criteria:**
-1. PR 3d is merged.
+1. PR 3d is merged. **This is now also a hard type dependency (F4, owner 2026-09-13), not only an ordering one:** Task 3d.4b introduces the `'analyzer-engine'` `KnobType` (P10) for `analyzer.fallback.target`, and Task 3d.4c builds the generic picker UI for it; this wave's persona-engine knob (Task 4.4) and its Advanced Settings row (Task 4.7) both reuse that type and its UI wiring rather than creating either. Confirm before cutting this wave's branch: `git grep -n "'analyzer-engine'" server/src/config/types.ts src/lib/types.ts` finds it in both files, and `src/lib/analyzer-engine-options.ts` exists.
 2. Run from the worktree root:
    `git grep -n -E "export class (OllamaAnalyzer|GeminiAnalyzer|OpenAIAnalyzer|OllamaTransport|GeminiTransport|OpenAITransport|StageRunner|TransportAnalyzer)|export function (resolveEndpointApiKey|endpointsSharingDevice|parseEndpointModelId|isEndpointBusy|registerEndpointCallInFlight|markEndpointRunActive|servedModels|warmEndpointServedLimits|stripThink|hasReasoningEvidence)|class (AnalyzerEndpointMissingError|AnalyzerKeyOriginError|AnalyzerUnreachableError|AnalyzerReasoningOverflowError|AnalyzerTimeoutError|AnalyzerHttpError)|getAnalyzerModels|analyzerRateLimiter =" -- server/src src/lib`
    Every name must be found. `OpenAIAnalyzer` lives in `server/src/analyzer/openai.ts` (W3b Task 3b.12); this wave imports it as `./openai.js` and `../openai.js`.
@@ -980,22 +980,32 @@ git commit -m "feat(server): keep the persona wire shape for free-text Gemini an
 
 ---
 
-### Task 4.4: `analyzer.personaGeneration.engine` becomes a model-id selection (knob type `analyzer-engine`)
+### Task 4.4: `analyzer.personaGeneration.engine` becomes a model-id selection (consumes Task 3d.4b's `analyzer-engine` knob type)
+
+**F4 (owner, 2026-09-13): the `'analyzer-engine'` knob type (P10) is no longer created here — it is landed, not merely planned, by `docs/superpowers/plans/2026-09-11-openai-compatible-analyzer-w3cd.md`'s Task 3d.4b.** That task introduces the type for `analyzer.fallback.target` (env `ANALYZER_FALLBACK_TARGET`, group `analyzer-models`, label `Analyzer fallback`, `options: ['off', 'local', 'gemini']`, `pattern: /^(off|local|gemini|openai:[a-z0-9-]{1,40}::.+)$/`, `default: 'gemini'`). This task now only adds the persona knob's own descriptor, reusing that type. Each knob keeps its own literal id regex; **only the fallback knob's regex admits `off`** — the persona knob's does not, since persona generation never falls back (spec §10, this wave's PR-level "No fallback" rule, kept unchanged).
+
+**Consumes, verbatim, from Task 3d.4b (`w3cd.md:9216-9274`) — none of the following is rebuilt here:**
+- `server/src/config/types.ts:2-5` — `KnobType` gains `'analyzer-engine'`;
+- `server/src/config/types.ts:27-35` — the `options`/`pattern` doc comments, including 3d.4b's own fix of the false "validated case-insensitively" claim (this plan's earlier draft had proposed the identical fix independently; 3d.4b's version is the one that lands, so it is not repeated here);
+- `src/lib/types.ts:892-894` — the frontend `KnobDescriptor.type` union;
+- `server/src/config/registry.test.ts:1-3` (imports) and `:189-198` (the allowed-pattern-types array `['string', 'device']` → `['string', 'device', 'analyzer-engine']`, and its test title/message) — 3d.4b's own describe (`analyzer.fallback.target`, `w3cd.md:9334-9367`) is the one that exercises the type generically; this task's Step 1 adds only the persona-knob-specific describe beside it.
+Before starting this task, confirm 3d.4b has merged: `git grep -n "'analyzer-engine'" server/src/config/types.ts src/lib/types.ts` finds it in both files, and `git grep -n "getKnob('analyzer.fallback.target')" server/src/config/registry.test.ts` finds 3d.4b's describe already in place. If either is missing, stop and report it as a dependency gap rather than re-adding either piece here.
 
 **Files:**
-- Modify: `server/src/config/types.ts:2-5` — `KnobType` gains `'analyzer-engine'`.
-- Modify: `server/src/config/types.ts:27-35` — the `options` doc, and the `pattern` doc at `:29-35`. That doc says a pattern is "validated case-insensitively", which is false: `coerceAndValidate` runs `knob.pattern.test(trimmed)` with the pattern's own flags (`resolver.ts:219-221`). This is found in passing; declare it in the PR body.
-- Modify: `server/src/config/registry.ts:1180-1191`.
-- Modify: `server/src/config/registry.test.ts:1-3` (imports), `:189-198` (allowed pattern types); append a describe.
-- Modify: `src/lib/types.ts:892-894` — frontend `KnobDescriptor.type` union.
+- Modify: `server/src/config/registry.ts` (the persona engine descriptor — same key, same shape as `main`'s enum descriptor, changed to `type: 'analyzer-engine'`, `options`, `pattern`).
+- Modify: `server/src/config/registry.test.ts` — append a describe for the persona knob (no change to the allowed-types array; that is Task 3d.4b's).
 - Modify: `server/src/routes/config.test.ts` — append a describe.
 - Regenerate: `server/.env.example`, via `npm run config:sync`. Only the help comment above `# PERSONA_GEN_ENGINE=gemini` (main line 558) changes.
+- **Also update `docs/wiki/Advanced-Settings.md`'s "Analyzer models & endpoints" row for the persona engine knob in this same PR** (its label and options text change) — `scripts/tests/knob-docs-sync.test.mjs` (#2012, `test:hooks`) fails the build if a registry knob's label has no matching row there, and this task relabels an existing knob rather than adding a new one, so the guard fires the same way a brand-new knob would.
+
+**Dependency:** this wave's `feat/server,frontend-3084-w4-persona` branch cuts off `main` only after PR 3d has merged (Entry criterion 1, unchanged), because `analyzer-engine` must already exist in `KnobType`.
+
+**`findEndpointReferences` needs no new wave 4 step.** Task 3d.4b widens `server/src/workspace/analyzer-endpoints.ts`'s reference-classification guard filter (`/(\.model|Model|\.engine)$/`) to also select every `type === 'analyzer-engine'` knob, and `w3cd.md:9673-9679` pins that `findEndpointReferences` already reports `Advanced setting "analyzer.fallback.target"` for a knob it finds purely by type, not by name. Because the persona knob becomes `type: 'analyzer-engine'` in this same task, it is covered by that same filter automatically — deleting an endpoint the persona knob names now surfaces `Advanced setting "analyzer.personaGeneration.engine"` with no further wiring. This wave adds no test of its own for that path; 3d.4b's generic, type-driven test is the proof, and duplicating it here would only re-test the filter, not this knob.
 
 **Interfaces:**
-- **Consumes:** `parseEndpointModelId` (W3, `server/src/analyzer/model-id.ts`) and the shared case table `server/src/analyzer/__fixtures__/model-id-cases.json` (W3). Test-only: `registry.ts` must stay pure data (`registry-imports.guard.test.ts`), so the grammar is a literal regex pinned against `parseEndpointModelId`.
+- **Consumes:** the `'analyzer-engine'` `KnobType` member, its `OverrideRow`/`AdvancedView` UI wiring, and the widened `findEndpointReferences` filter (all Task 3d.4b/3d.4c, per F4); `parseEndpointModelId` (W3, `server/src/analyzer/model-id.ts`) and the shared case table `server/src/analyzer/__fixtures__/model-id-cases.json` (W3). Test-only: `registry.ts` must stay pure data (`registry-imports.guard.test.ts`), so the grammar is a literal regex pinned against `parseEndpointModelId`.
 - **Produces:**
-  - `KnobType` includes `'analyzer-engine'`: a string knob, validated identically (trim + `pattern`), whose UI is a select over `options` plus live endpoint models.
-  - The persona engine knob: `type: 'analyzer-engine'`, `options: ['local', 'gemini']`, `pattern: /^(local|gemini|openai:[a-z0-9-]{1,40}::.+)$/`, `default: 'gemini'`.
+  - The persona engine knob: `type: 'analyzer-engine'`, `options: ['local', 'gemini']`, `pattern: /^(local|gemini|openai:[a-z0-9-]{1,40}::.+)$/` (no `off` — F4's per-knob rule), `default: 'gemini'`.
 - **Keeps green:**
   - `src/config/registry.test.ts`, including `every knob's own default satisfies its own pattern/options/min/max`;
   - `src/config/resolver.test.ts`;
@@ -1005,16 +1015,13 @@ git commit -m "feat(server): keep the persona wire shape for free-text Gemini an
 
 - [ ] **Step 1: Write the failing tests**
 
-In `server/src/config/registry.test.ts`, extend the imports (lines 1-3):
+In `server/src/config/registry.test.ts`, extend the imports if not already present from Task 3d.4b's own additions:
 ```ts
-import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { GROUPS, KNOBS, allKnobs, getKnob, knobByEnv, knobsInGroup } from './registry.js';
-import { coerceAndValidate, configValue } from './resolver.js';
 import { parseEndpointModelId } from '../analyzer/model-id.js';
 ```
-Change the allowed-types array in the test at `:189-198` from `['string', 'device']` to `['string', 'device', 'analyzer-engine']`. In its message, change "only declared on string/device knobs" to "only declared on string/device/analyzer-engine knobs". Then append:
+Append (no change to the allowed-types array — 3d already added `'analyzer-engine'` to it):
 ```ts
 /* #3084 W4 (spec §10) — persona generation's engine is a model-id-style selection. */
 describe('analyzer.personaGeneration.engine', () => {
@@ -1114,25 +1121,9 @@ describe('PUT /api/config — analyzer.personaGeneration.engine', () => {
     - `accepts no id that parseEndpointModelId rejects…` fails in its last loop (`openai:lab::qwen3:30b`: `expected false to be true`), because main's enum refuses every endpoint id.
 - [ ] **Step 3: Implement**
 
-`server/src/config/types.ts`, replace line 2:
-```ts
-export type KnobType = 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'device' | 'analyzer-engine';
-// 'analyzer-engine' (#3084 W4) is a string knob (validated identically — trim + `pattern` in
-// coerceAndValidate's default case) whose UI picks from its static `options` plus the live
-// OpenAI-compatible endpoint models (GET /api/analyzer/models) instead of a free-text box.
-```
-Replace the `options` and `pattern` docs (lines 27-35; the `pattern?: RegExp;` line after them stays):
-```ts
-  /** For type==='enum' (the closed option set), and the static entries of a type==='analyzer-engine' picker. */
-  options?: string[];
-  /** For type==='string', 'device' or 'analyzer-engine'. A closed VALUE SHAPE for an
-      otherwise free-text knob — tested against the trimmed input in coerceAndValidate's
-      string/default case (resolver.ts) with the pattern's OWN flags: case-sensitive unless
-      the RegExp carries `i`. Small, general capability (#2180): a knob with no closed
-      `options` set can still refuse a malformed value ("cuda1") at save time without being
-      forced into an enum with an unbounded option list (e.g. every "cuda:<n>" card index). */
-```
-Replace the descriptor in `server/src/config/registry.ts:1180-1191`:
+The `KnobType` union, its `options`/`pattern` doc comments, and the frontend `KnobDescriptor.type` union already carry `'analyzer-engine'` from Task 3d.4b — no change to `server/src/config/types.ts` or `src/lib/types.ts` in this task (F4, consumes 3d.4b).
+
+Replace the descriptor in `server/src/config/registry.ts` (`main`'s enum descriptor for `analyzer.personaGeneration.engine`):
 ```ts
   {
     key: 'analyzer.personaGeneration.engine',
@@ -1151,15 +1142,7 @@ Replace the descriptor in `server/src/config/registry.ts:1180-1191`:
     risk: 'medium',
   },
 ```
-`src/lib/types.ts:892-894`:
-```ts
-  /** 'device' is a string knob whose UI is a dropdown built from GET /api/gpu/devices
-      (plus 'auto'/'cpu') instead of a free-text box. 'analyzer-engine' (#3084 W4) is a string
-      knob whose UI is a dropdown of its static `options` plus the OpenAI-compatible endpoint
-      models from GET /api/analyzer/models. */
-  type: 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'device' | 'analyzer-engine';
-```
-Then run `npm run config:sync`.
+Then run `npm run config:sync`, and add the persona engine knob's row (relabelled options text) to `docs/wiki/Advanced-Settings.md`'s "Analyzer models & endpoints" section (the `knob-docs-sync` guard, `test:hooks`).
 
 - [ ] **Step 4: Run and confirm they pass**
   - **Run:** `npm --prefix server run test -- src/config src/routes/config.test.ts`, then `npm test -- src/lib/api.config.test.ts`, then `npm run config:check` and `npm run typecheck`.
@@ -1171,8 +1154,8 @@ Then run `npm run config:sync`.
   4. **Parser agreement:** in the pattern, change the endpoint-id class `[a-z0-9-]` to `[a-z0-9_-]`. Expected red: `accepts no id that parseEndpointModelId rejects…` (`openai:lab_1::qwen3`: `expected true to be false`). The `rejects %j` list alone stays green under this mutation.
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/config/types.ts server/src/config/registry.ts server/src/config/registry.test.ts server/src/routes/config.test.ts src/lib/types.ts server/.env.example
-git commit -m "feat(server,frontend): let the persona engine knob name an OpenAI-compatible endpoint model"
+git add server/src/config/registry.ts server/src/config/registry.test.ts server/src/routes/config.test.ts server/.env.example docs/wiki/Advanced-Settings.md
+git commit -m "feat(server): let the persona engine knob name an OpenAI-compatible endpoint model"
 ```
 
 ---
@@ -2452,99 +2435,40 @@ git commit -m "feat(server): generate personas through the analyzer transports f
 
 ---
 
-### Task 4.7: Advanced Settings — the persona engine picker offers endpoint models
+### Task 4.7: Advanced Settings — the persona engine picker offers endpoint models (consumes Task 3d.4c's `analyzer-engine` UI wiring)
+
+**F4 (owner, 2026-09-13): the generic `analyzer-engine` picker UI is landed, not planned, by Task 3d.4c (`w3cd.md:10268-10306`), for `analyzer.fallback.target`.** This task only reuses it for the persona knob. Nothing here recreates any of the following:
+- `src/lib/analyzer-engine-options.ts` (created by 3d.4c, **not** `persona-engine-options.ts`): `export interface AnalyzerEngineOption { value: string; label: string }`, `export function endpointModelOptions(catalog: AnalyzerCatalog): AnalyzerEngineOption[]`, `export function analyzerEngineOptions(staticValues: readonly string[], endpointModels: readonly AnalyzerEngineOption[], current: string): AnalyzerEngineOption[]` (`w3cd.md:10281-10288`);
+- `src/components/settings/override-row.tsx`'s `analyzer-engine` branch in `KnobControl` (reads `descriptor.options`, not a hard-coded list), `OverrideRowProps.analyzerEndpointModels?: AnalyzerEngineOption[]`, and the `OverrideRow` signature/prop pass-through (3d.4c's Files list, `w3cd.md:10272`);
+- `src/views/advanced.tsx`'s single `api.getAnalyzerModels()` fetch on mount and its pass-through to every row (3d.4c's Files list, `w3cd.md:10273`).
+
+**Before starting, confirm 3d.4c has merged:** `git grep -n "export function analyzerEngineOptions\|export function endpointModelOptions" src/lib/analyzer-engine-options.ts` finds both exports, and `git grep -n "analyzerEndpointModels" src/components/settings/override-row.tsx src/views/advanced.tsx` finds the prop threaded through both files. If either is missing, stop and report it as a dependency gap — do not rebuild either piece under a different name; that would produce two competing implementations of the same picker.
+
+**What this task actually does:** nothing to `src/lib/analyzer-engine-options.ts`, `override-row.tsx` or `advanced.tsx` — the wiring is descriptor-driven (`descriptor.type === 'analyzer-engine'` and `descriptor.options`), not persona-specific, so once Task 4.4 relabels `analyzer.personaGeneration.engine` to `type: 'analyzer-engine'`, 3d.4c's existing picker renders it with no additional frontend code. This task adds only persona-specific regression coverage proving that.
 
 **Files:**
-- Create: `src/lib/persona-engine-options.ts`.
-- Test: Create `src/lib/persona-engine-options.test.ts`.
-- Modify: `src/components/settings/override-row.tsx`:
-  - `:1-7` — imports;
-  - `:206-211` — the `inputRef` doc;
-  - `:200-245` — `ControlProps` and destructure;
-  - a new branch after the `enum` branch (`:437`);
-  - `:541-560` — `OverrideRowProps` and destructure;
-  - `:632-643` — the prop pass-through.
-- Modify: `src/views/advanced.tsx`:
-  - `:32` area — import;
-  - `:249-253` — state;
-  - `:255-285` — effect;
-  - `:542-553` — prop.
-- Test: Modify `src/components/settings/override-row.test.tsx` (append a describe).
-- Test: Modify `src/views/advanced.test.tsx`:
-  - `:16-30` — api mock;
-  - `:32-38` — mocked handles;
-  - `:173-194` — `beforeEach`;
-  - append a describe.
-- Test: Modify `src/test/a11y.test.tsx:140-147` — add `getAnalyzerModels` to the api mock.
+- Test: Append a describe to `src/components/settings/override-row.test.tsx` and `src/views/advanced.test.tsx`, proving the **persona** knob's row specifically (not the fallback knob's, which 3d.4c's own tests at `w3cd.md:10350-10399`/`10406-10440` already cover) offers `local`, `gemini` and every endpoint model, and keeps a saved endpoint model id selectable when the catalog no longer lists it — reusing 3d.4c's `analyzerEngineOptions`/`endpointModelOptions` fixtures rather than re-authoring them.
+- No change to `src/lib/analyzer-engine-options.ts`, `src/components/settings/override-row.tsx` or `src/views/advanced.tsx`.
 
 **Interfaces:**
 - **Consumes:**
-  - `KnobDescriptor.type` `'analyzer-engine'` (Task 4.4);
-  - W3c's `api.getAnalyzerModels()`, returning `AnalyzerCatalog` (`src/lib/types.ts`, generated from `components['schemas']['AnalyzerCatalog']`, Task 3c.6).
-  - Its shape (master contract): `{ groups: Array<{ kind: 'ollama' | 'gemini' | 'endpoint'; id: string; label: string; status: 'ok' | 'fallback' | 'error'; error?: string; models: Array<{ id: string; label: string; contextTokens?: number; outputTokens?: number; capability?: ModelCapabilityRecord; offeredReasoningLevels?: string[] }> }> }`. An endpoint group's `id` is the endpoint id, its `label` the endpoint name, and each entry's `label` the bare model name. W3c's entries also carry `engine`, `model`, `structuredOutput` and `testPlan`; this task reads none of them.
-- **Produces:**
-  ```ts
-  // src/lib/persona-engine-options.ts
-  export interface AnalyzerEngineOption { value: string; label: string }
-  export function endpointModelOptions(catalog: AnalyzerCatalog): AnalyzerEngineOption[];
-  export function analyzerEngineOptions(staticValues: readonly string[], endpointModels: readonly AnalyzerEngineOption[], current: string): AnalyzerEngineOption[];
-  // OverrideRowProps.analyzerEndpointModels?: AnalyzerEngineOption[]
-  ```
+  - `KnobDescriptor.type` `'analyzer-engine'` (Task 3d.4b, reused by Task 4.4's persona descriptor);
+  - `AnalyzerEngineOption`, `analyzerEngineOptions`, `endpointModelOptions` (Task 3d.4c, `src/lib/analyzer-engine-options.ts`) and `OverrideRowProps.analyzerEndpointModels` (Task 3d.4c);
+  - W3c's `api.getAnalyzerModels()`, returning `AnalyzerCatalog` (`src/lib/types.ts`, generated from `components['schemas']['AnalyzerCatalog']`, Task 3c.6). Its shape (master contract): `{ groups: Array<{ kind: 'ollama' | 'gemini' | 'endpoint'; id: string; label: string; status: 'ok' | 'fallback' | 'error'; error?: string; models: Array<{ id: string; label: string; contextTokens?: number; outputTokens?: number; capability?: ModelCapabilityRecord; offeredReasoningLevels?: string[] }> }> }`. An endpoint group's `id` is the endpoint id, its `label` the endpoint name, and each entry's `label` the bare model name.
+- **Produces:** persona-specific test coverage only; no new production symbol (Task 3d.4c owns the shared ones).
 - **Keeps green:**
-  - `src/components/settings/override-row.test.tsx` (all);
+  - `src/components/settings/override-row.test.tsx` (all, including Task 3d.4c's fallback-knob cases);
   - `src/views/advanced.test.tsx` (all, including the device-knob picker cases);
   - `src/test/a11y.test.tsx`;
   - `src/lib/api.config.test.ts`.
 
 - [ ] **Step 1: Write the failing tests**
 
-`src/lib/persona-engine-options.test.ts`:
-```ts
-import { describe, it, expect } from 'vitest';
-import { analyzerEngineOptions, endpointModelOptions } from './persona-engine-options';
-
-const CATALOG = {
-  groups: [
-    { kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [{ id: 'qwen3.5:9b', label: 'qwen3.5:9b' }] },
-    { kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'ok', models: [{ id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite' }] },
-    { kind: 'endpoint', id: 'lab', label: 'Lab box', status: 'ok', models: [{ id: 'openai:lab::qwen3-30b', label: 'qwen3-30b' }] },
-    { kind: 'endpoint', id: 'down', label: 'Down box', status: 'error', error: 'connect ECONNREFUSED', models: [] },
-  ],
-} as Parameters<typeof endpointModelOptions>[0];
-
-describe('endpointModelOptions', () => {
-  it('lists only OpenAI-compatible endpoint models, labelled with the endpoint', () => {
-    expect(endpointModelOptions(CATALOG)).toEqual([{ value: 'openai:lab::qwen3-30b', label: 'Lab box · qwen3-30b' }]);
-  });
-});
-
-describe('analyzerEngineOptions', () => {
-  const lab = [{ value: 'openai:lab::qwen3-30b', label: 'Lab box · qwen3-30b' }];
-
-  it('puts the static entries first, then endpoint models', () => {
-    expect(analyzerEngineOptions(['local', 'gemini'], lab, 'gemini').map((o) => o.value)).toEqual([
-      'local',
-      'gemini',
-      'openai:lab::qwen3-30b',
-    ]);
-  });
-
-  it('keeps a saved value the lists no longer have, flagged, so the select never shows a different choice', () => {
-    const options = analyzerEngineOptions(['local', 'gemini'], [], 'openai:gone::qwen3');
-    expect(options.map((o) => o.value)).toEqual(['local', 'gemini', 'openai:gone::qwen3']);
-    expect(options[2].label).toBe('openai:gone::qwen3 (not in the current model list)');
-  });
-
-  it('does not duplicate a current value that is already offered', () => {
-    expect(analyzerEngineOptions(['local', 'gemini'], lab, 'openai:lab::qwen3-30b')).toHaveLength(3);
-  });
-});
-```
-Append to `src/components/settings/override-row.test.tsx`:
+Append to `src/components/settings/override-row.test.tsx`, reusing Task 3d.4c's `AnalyzerEngineOption` fixtures/helpers:
 ```tsx
-/* ─── analyzer-engine picker (#3084 W4) ─────────────────────────────────── */
+/* ─── persona knob reuses Task 3d.4c's analyzer-engine picker (#3084 W4, F4) ── */
 
-describe('OverrideRow — analyzer-engine picker', () => {
+describe('OverrideRow — persona engine row (analyzer-engine picker, generic UI from 3d.4c)', () => {
   const descriptor = makeDescriptor({
     key: 'analyzer.personaGeneration.engine',
     label: 'Persona generation engine',
@@ -2589,30 +2513,13 @@ describe('OverrideRow — analyzer-engine picker', () => {
     expect(select.value).toBe('openai:gone::qwen3');
     expect(screen.getByRole('option', { name: 'openai:gone::qwen3 (not in the current model list)' })).toBeInTheDocument();
   });
-
-  it('is disabled when the knob is set in .env', () => {
-    render(
-      <OverrideRow
-        descriptor={descriptor}
-        value={makeValue({ key: descriptor.key, effective: 'local', source: 'env', locked: true })}
-        onChange={vi.fn()}
-        onRevert={vi.fn()}
-        analyzerEndpointModels={models}
-      />,
-    );
-    expect(screen.getByRole('combobox', { name: 'Persona generation engine' })).toBeDisabled();
-  });
 });
 ```
-`src/views/advanced.test.tsx`:
-- Add `getAnalyzerModels: vi.fn(),` to the `api` mock object (`:16-30`).
-- Add `const mockGetAnalyzerModels = vi.mocked(api.getAnalyzerModels);` after `:38`.
-- Add `mockGetAnalyzerModels.mockResolvedValue({ groups: [] });` as the last line of `beforeEach` (`:193`).
-- Then append:
+Append to `src/views/advanced.test.tsx` (reusing its existing `getAnalyzerModels` mock and catalog-fetch wiring — Task 3d.4c added both for the fallback knob; do not re-mock them):
 ```tsx
-/* ── Persona engine picker (#3084 W4) ─────────────────────────────────────── */
+/* ── Persona engine row reuses Task 3d.4c's shared catalog fetch (#3084 W4, F4) ── */
 
-describe('AdvancedView — persona engine picker', () => {
+describe('AdvancedView — persona engine row (analyzer-engine picker)', () => {
   const PERSONA_CONFIG: ConfigResponse = {
     ...FIXTURE_CONFIG,
     groups: [
@@ -2656,143 +2563,22 @@ describe('AdvancedView — persona engine picker', () => {
       expect([...select.options].map((o) => o.value)).toEqual(['local', 'gemini', 'openai:lab::qwen3-30b']),
     );
   });
-
-  it('still offers local and gemini when the catalog request fails', async () => {
-    mockGetConfig.mockResolvedValue(PERSONA_CONFIG);
-    mockGetAnalyzerModels.mockRejectedValue(new Error('offline'));
-    renderView();
-    const select = (await screen.findByRole('combobox', { name: 'Persona generation engine' })) as HTMLSelectElement;
-    await waitFor(() => expect(mockGetAnalyzerModels).toHaveBeenCalled());
-    expect([...select.options].map((o) => o.value)).toEqual(['local', 'gemini']);
-  });
 });
 ```
-In `src/test/a11y.test.tsx`, add to the api mock object after `getAnalyzerGpuSplit: mockGetAnalyzerGpuSplit,` (`:146`):
-```ts
-      getAnalyzerModels: () => Promise.resolve({ groups: [] }),
-```
 - [ ] **Step 2: Run them and confirm they fail**
-  - **Run:** `npm test -- src/lib/persona-engine-options.test.ts src/components/settings/override-row.test.tsx src/views/advanced.test.tsx`
-  - **Expected:** FAIL.
-    - `persona-engine-options.test.ts` fails with `Failed to resolve import "./persona-engine-options"`.
-    - The override-row picker cases fail with `Unable to find an accessible element with the role "combobox" and name "Persona generation engine"`: the knob still renders as a text input.
-    - The advanced cases fail with the same missing combobox.
+  - **Run:** `npm test -- src/components/settings/override-row.test.tsx src/views/advanced.test.tsx`
+  - **Expected:** FAIL until Task 4.4's registry change has landed (the persona knob's `descriptor.type` is still `'enum'` on `main`), then PASS with no further frontend code — Task 3d.4c's generic picker already renders any `'analyzer-engine'`-typed descriptor. If it still fails after Task 4.4 lands, the gap is in 3d.4c's wiring (see the note above this task); report it rather than re-adding the removed generic module here.
 - [ ] **Step 3: Implement**
-
-`src/lib/persona-engine-options.ts`:
-```ts
-/* #3084 W4 — options for an 'analyzer-engine' knob (today only analyzer.personaGeneration.engine):
-   the knob's static entries (local, gemini), then every OpenAI-compatible endpoint model the
-   analyzer catalog lists, then the saved value when neither list has it (an endpoint deleted, or
-   not listed right now) — so the select never silently shows a different choice than the one in
-   effect. Static entries keep their raw labels, exactly as the enum row rendered them. */
-import type { AnalyzerCatalog } from './types';
-
-export interface AnalyzerEngineOption {
-  value: string;
-  label: string;
-}
-
-/** Endpoint groups only (`kind: 'endpoint'`): the group label is the endpoint name and each
-    entry's label is the bare model name. A group whose listing failed (`status: 'error'`)
-    has no models, so it contributes nothing. */
-export function endpointModelOptions(catalog: AnalyzerCatalog): AnalyzerEngineOption[] {
-  return catalog.groups
-    .filter((group) => group.kind === 'endpoint')
-    .flatMap((group) => group.models.map((model) => ({ value: model.id, label: `${group.label} · ${model.label}` })));
-}
-
-export function analyzerEngineOptions(
-  staticValues: readonly string[],
-  endpointModels: readonly AnalyzerEngineOption[],
-  current: string,
-): AnalyzerEngineOption[] {
-  const options: AnalyzerEngineOption[] = staticValues.map((value) => ({ value, label: value }));
-  for (const model of endpointModels) {
-    if (!options.some((o) => o.value === model.value)) options.push(model);
-  }
-  if (current !== '' && !options.some((o) => o.value === current)) {
-    options.push({ value: current, label: `${current} (not in the current model list)` });
-  }
-  return options;
-}
-```
-`src/components/settings/override-row.tsx`:
-- Add the import after line 7:
-```ts
-import { analyzerEngineOptions, type AnalyzerEngineOption } from '../../lib/persona-engine-options';
-```
-- In `ControlProps`, after `gpuDevices?: GpuDevice[];`:
-```ts
-  /** Endpoint model options from GET /api/analyzer/models — only consumed by type: 'analyzer-engine' knobs (#3084 W4). */
-  analyzerEndpointModels?: AnalyzerEngineOption[];
-```
-- In the `inputRef` doc (`:209-210`), change "Left unattached (stays null) for boolean/enum/device rows" to "Left unattached (stays null) for boolean/enum/device/analyzer-engine rows".
-- Add `analyzerEndpointModels,` to `KnobControl`'s destructure after `gpuDevices,`.
-- Insert this branch immediately after the `enum` branch's closing `}` (`:437`):
-```tsx
-  if (descriptor.type === 'analyzer-engine') {
-    const current = String(value.effective);
-    const options = analyzerEngineOptions(descriptor.options ?? [], analyzerEndpointModels ?? [], current);
-    return (
-      <select
-        aria-label={descriptor.label}
-        aria-describedby={describedBy}
-        aria-invalid={invalid || undefined}
-        value={current}
-        disabled={disabled}
-        onChange={(e) => commitSimple(e.target.value)}
-        className={`w-full ${base}`}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-    );
-  }
-```
-- In `OverrideRowProps`, after `gpuDevices?: GpuDevice[];`:
-```ts
-  /** Endpoint model options from GET /api/analyzer/models — only consumed by type: 'analyzer-engine' knobs (#3084 W4). */
-  analyzerEndpointModels?: AnalyzerEngineOption[];
-```
-- Change the `OverrideRow` signature to `export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices, analyzerEndpointModels }: OverrideRowProps) {`.
-- Add `analyzerEndpointModels={analyzerEndpointModels}` to the `<KnobControl …>` props after `gpuDevices={gpuDevices}`.
-
-`src/views/advanced.tsx`:
-- After line 32 (`import { api } from '../lib/api';`):
-```ts
-import { endpointModelOptions, type AnalyzerEngineOption } from '../lib/persona-engine-options';
-```
-- After the `gpuSplit` state (`:253`):
-```ts
-  const [analyzerEndpointModels, setAnalyzerEndpointModels] = useState<AnalyzerEngineOption[]>([]);
-```
-- Inside the mount effect, after the `getAnalyzerGpuSplit` chain (before `}, [dispatch]);` at `:285`):
-```ts
-    // #3084 W4 — same best-effort contract as the device probe: a failed
-    // catalog read leaves an analyzer-engine picker with its static entries
-    // and the saved value, never an error.
-    api
-      .getAnalyzerModels()
-      .then((catalog) => setAnalyzerEndpointModels(endpointModelOptions(catalog)))
-      .catch(() => setAnalyzerEndpointModels([]));
-```
-- On the `<OverrideRow …>` (`:542-553`), add `analyzerEndpointModels={analyzerEndpointModels}` after `gpuDevices={gpuDevices}`.
-
+None expected in this task, per the note above. If Step 2 is still red after Task 4.4, the fix belongs to whatever narrow gap Task 3d.4c's diff left (e.g. `advanced.tsx` reading `descriptor.key === 'analyzer.fallback.target'` instead of `descriptor.type === 'analyzer-engine'`) — fix that one line, not a parallel module.
 - [ ] **Step 4: Run and confirm they pass**
-  - **Run:** `npm test -- src/lib/persona-engine-options.test.ts src/components/settings/override-row.test.tsx src/views/advanced.test.tsx src/test/a11y.test.tsx src/lib/api.config.test.ts`, then `npm run typecheck`.
+  - **Run:** `npm test -- src/components/settings/override-row.test.tsx src/views/advanced.test.tsx src/test/a11y.test.tsx src/lib/api.config.test.ts`, then `npm run typecheck`.
   - **Expected:** PASS.
 - [ ] **Step 5: Mutation proof** (restore after each):
-  1. **Saved value:** in `analyzerEngineOptions`, delete the `if (current !== '' && …)` push. Expected red: `keeps a saved value the lists no longer have…` and `keeps a saved endpoint model selectable when the catalog no longer lists it`.
-  2. **Picker branch:** delete the `analyzer-engine` branch in `KnobControl`. Expected red: `offers local, gemini and every endpoint model…` (no combobox).
-  3. **Catalog wiring:** in `advanced.tsx`, change `endpointModelOptions(catalog)` to `[]`. Expected red: `lists endpoint models from the analyzer catalog in the persona engine row`.
+  1. In `override-row.tsx`'s `KnobControl`, delete the `'analyzer-engine'` branch. Expected red (both this task's persona cases AND Task 3d.4c's fallback-knob cases, proving one shared code path): `offers local, gemini and every endpoint model…` here, and Task 3d.4c's own `offers off, local, gemini and every endpoint model…` case in the same file.
 - [ ] **Step 6: Commit**
 ```bash
-git add src/lib/persona-engine-options.ts src/lib/persona-engine-options.test.ts src/components/settings/override-row.tsx src/components/settings/override-row.test.tsx src/views/advanced.tsx src/views/advanced.test.tsx src/test/a11y.test.tsx
-git commit -m "feat(frontend): offer endpoint models in the persona generation engine picker"
+git add src/components/settings/override-row.test.tsx src/views/advanced.test.tsx
+git commit -m "test(frontend): cover the persona engine row through the shared analyzer-engine picker"
 ```
 
 No Playwright spec. The spec's E2E list names no persona case. The change is one control inside an existing Advanced Settings row; it crosses no router, redux or layout seam; and the RTL tests drive the real `AdvancedView` → `OverrideRow` render path.
@@ -2880,10 +2666,9 @@ git push -u origin feat/server,frontend-3084-w4-persona
 PR title: `feat(server,frontend): generate personas through the analyzer transports`. The body keeps the template's sections:
 ```markdown
 ## Summary
-- `analyzer.personaGeneration.engine` accepts `local`, `gemini` or `openai:<endpointId>::<model>` (new `analyzer-engine` knob type, picked in Advanced Settings from the analyzer model catalog); `PERSONA_GEN_ENGINE=local|gemini` keeps working.
+- `analyzer.personaGeneration.engine` accepts `local`, `gemini` or `openai:<endpointId>::<model>` (the `analyzer-engine` knob type, introduced in Task 3d.4b for `analyzer.fallback.target` and reused here per F4, picked in Advanced Settings from the analyzer model catalog through Task 3d.4c's picker); `PERSONA_GEN_ENGINE=local|gemini` keeps working.
 - Persona calls for every engine run through `StageRunner.runFreeText` and the engine transport. Ollama's non-streaming persona call, `keep_alive`, CPU placement and 600 s bound moved into `OllamaTransport` unchanged; Gemini keeps its wire shape and limiter estimate and gains the shared retry helper; endpoint personas get the limiter, concurrency, ceiling, served-limits warm-up, per-call busy registration and the key-origin rule, and a missing endpoint fails before any call. A design job marks no endpoint run; the reason is in the plan's Delivers section.
 - `personaSharesGpu()` (local, or an endpoint that W3d's `endpointsSharingDevice` places on the Qwen card) replaces `engine === 'local'` in `preparePersonaBatch` and Design full cast. The pre-pass ends the job once on an unreachable, missing, key-mismatched, timed-out or 401/403 persona engine (`auth` for key problems). The job's abort signal reaches every persona call.
-- Also fixed, found in passing: the `pattern` doc in `server/src/config/types.ts` said patterns are validated "case-insensitively". `coerceAndValidate` actually tests them with the pattern's own flags (`resolver.ts:219-221`), and the doc now says so.
 - Any error that ends Design full cast carries its failure-taxonomy code instead of `unknown` (`CastDesignEvent.code` admits a `FailureCode`). A local persona call a pause aborts before its first byte reports a clean stop, not an unreachable daemon. Persona outcomes change: an unterminated `<think>` reply is the empty-persona error on every engine; an Ollama thinking-only length stop is `analyzer-reasoning-overflow`; a blocked Gemini reply is `GeminiContentBlockedError`; and a Gemini persona's `thoughtsTokenCount` is not reasoning evidence, because it asks for no thoughts (one flag gates the wire and the count, P27).
 - The Ollama persona call's non-OK body keeps PR 3b's known-secret redaction through the move (P22), and is now an `AnalyzerHttpError` carrying the status and the redacted excerpt instead of a plain `Error`. W3b's `transport-redaction.test.ts` persona case now drives the moved call.
 - #3230 is not an open decision for this PR. `6222e483` (second half of #3027) already made the lazy persona path per-character, and this PR keeps it that way — a lazy persona failure, reasoning overflow included, is a `character_failed` with a reason string, not a job halt. The issue is left OPEN for the owner to verify and close (Refs #3230).
@@ -2891,7 +2676,7 @@ PR title: `feat(server,frontend): generate personas through the analyzer transpo
 
 ## Test plan
 - [ ] server: stage-runner.free-text, ollama, ollama-timeout, transport-redaction (retargeted persona case), gemini/openai-transport.free-text, registry, config route, voice-style, voice-style.endpoint (real HTTP), prepare-persona-batch, cast-design, openapi-design-parity
-- [ ] frontend: persona-engine-options, override-row, advanced, a11y, api.design-sse-event-types
+- [ ] frontend: override-row, advanced, a11y, api.design-sse-event-types
 - [ ] mutation proofs (outputs pasted below)
 - [ ] `npm run typecheck`, `npm run config:check`, `npm run verify:fast:branch`, slow-lane gemini.test.ts
 - On-box: no new row — see Task 4.8 Step 4 reasoning (covered by W3's same-card eviction row).

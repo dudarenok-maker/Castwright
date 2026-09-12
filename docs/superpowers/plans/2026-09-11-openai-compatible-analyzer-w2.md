@@ -31,11 +31,18 @@ Every `file:line` below is as of `origin/main` 46e62a34, with two marked excepti
 - **Must NOT change:**
   - any chunk-budget value: the pinning fixture stays byte-identical after Task 2.1's commit;
   - the per-request input cap. `perRequestInputCap` is `analyzer.gemini.maxInputTokensPerRequest` alone, exactly today's value. The `min(cap, model TPM)` bound ships in PR 2b (Task 2.6): since #3163 a saved `rate.tpm.gemma` / `rate.tpm.gemma26` override below 12000 makes it reachable from Settings, so here it would be a silent budget change in a PR with no release note;
-  - any registry knob, its default or its `.env.example` line;
+  - any registry knob's `env`, `type`, `min`/`max`, `default` or its `.env.example` line — **except** the six chunking/cap knobs' `help` strings, which Task 2.3 extends with a family-derivation sentence (F1); a `help`-only edit changes no runtime behaviour, no default and no `.env.example` line, so it does not reopen this constraint's reason (avoiding a silent budget change with no release note);
   - any request shape sent to Ollama or Gemini;
   - `maxOutputTokens` or the Gemini idle watchdog;
   - any failure-taxonomy outcome;
   - OpenAPI or any frontend file.
+- **On-box acceptance never gates a chunk-size control (F1).** Every knob this
+  wave touches — the six chunking/cap knobs above, `analyzer.gemini.maxOutputTokens`,
+  `analyzer.gemini.thinkingIdleTimeoutMs`, `analyzer.gemini.requestCeilingMs` —
+  stays a live, user-editable Advanced Settings row throughout both PRs. No
+  task in this file locks, hides or defers any of them pending Task 2.10's
+  on-box register rows; those rows measure real chapters so a LATER PR can
+  tune a default, never so THIS wave can withhold an override.
 - **Entry criteria:**
   - PRs 1a and 1b are merged, and so is wave 0: #3139 (PR #3163, merge `ade92d2b` — done) and #3141, whose live fix is **PR #3192** (open as of `4a545750`; the #3152–#3158 / #3167 / #3168 chain is design-time history, not the number to check).
   - #3196 (PR #3199, merge `839c65ac`) is merged to `main`. It makes `attribution-eval/run-eval.ts` pass its engine to `attributeChapterStage2`. Task 2.1's pinning capture must run on a `main` that includes it.
@@ -499,7 +506,8 @@ git commit -m "refactor(server): add EngineCapacity and resolveCapacity (#3084)"
 - Modify: `server/src/analyzer/stage1-chunk.ts:95-125`
 - Modify: `server/src/analyzer/stage2-chunk.ts:70-82`
 - Modify: `server/src/analyzer/chapter-chunker.ts:130-139`
-- Modify: `server/src/config/registry.ts:129` — the comment names `chapterChunkBudget('gemini')`, which no longer exists.
+- Modify: `server/src/config/registry.ts:129` — the comment names `chapterChunkBudget('gemini')`, which no longer exists; and `:70-79`, `:82-91`, `:92-101`, `:102-111`, `:112-121`, `:122-131` — `help` text for the six chunking/cap knobs, naming each family's derivation formula (F1).
+- Modify: `docs/wiki/Advanced-Settings.md` §2 — the five chunking rows' "What it does" column (F1, F3).
 - Modify: `server/src/routes/analysis.ts:12` (import), `:2208-2212`, `:2308`, `:4496-4497`, `:5461`, `:7065-7066`, `:7360`
 - Modify: `server/src/routes/annotate-emotion.ts:178-179` (+ import)
 - Modify: `server/src/routes/instruct-annotation.ts:177-178` (+ import)
@@ -779,6 +787,56 @@ In the same file's comment at `:116-117`, change `- local  ⇒` to `- context ca
 
 `server/src/config/registry.ts:129`: `default: 32000, // ← chapterChunkBudget('gemini') in analyzer/chapter-chunker.ts` → `default: 32000, // ← chapterChunkBudget(request-cap capacity) in analyzer/chapter-chunker.ts`
 
+**Help text: how the effective budget is derived per family (F1).** No chunk-size
+control is locked, hidden or deferred pending on-box acceptance anywhere in
+this wave — every knob below stays user-editable in Advanced Settings before
+any on-box row runs; on-box measurement (Task 2.10, run sheet §3) only tunes
+defaults. Update these five knobs' `help` in `server/src/config/registry.ts` so
+each names its family's formula, matching what Task 2.3 just implemented:
+- **`analyzer.stage1.chunkCharBudget`** (`:102-111` on 46e62a34) — replace the
+  `help` string with: `"Maximum characters per stage-1 cast-detection chunk
+  before the chapter is split. Local (context-family) engines derive the
+  effective budget as min(analyzer.stage1.localInputFraction × Ollama num_ctx ×
+  ~2 chars/token, this ceiling), so a large or non-Latin chapter can never
+  overflow the context window. Cloud (Gemini) engines ignore this knob: their
+  body is sized instead from analyzer.gemini.maxInputTokensPerRequest, bounded
+  by the pass ceiling."`
+- **`analyzer.stage1.localInputFraction`** (`:112-121`) — append to the existing
+  `help`: `" Feeds the min(fraction × num_ctx × ~2 chars/token, analyzer.stage1.chunkCharBudget) formula above; local engines only — Gemini ignores this knob."`
+- **`analyzer.stage2.chunkCharBudget`** (`:82-91`) — replace the `help` string
+  with: `"Maximum characters per stage-2 attribution chunk before the chapter
+  is pre-emptively split. This value is the ceiling for BOTH families: local
+  (context-family) engines derive min(analyzer.stage2.localInputFraction ×
+  Ollama num_ctx × ~2 chars/token, this ceiling); cloud (Gemini) engines derive
+  min(this ceiling, the body sized from analyzer.gemini.maxInputTokensPerRequest)."`
+- **`analyzer.stage2.localInputFraction`** (`:92-101`) — append: `" Feeds the
+  min(fraction × num_ctx × ~2 chars/token, analyzer.stage2.chunkCharBudget)
+  formula above; local engines only — Gemini ignores this knob."`
+- **`analyzer.gemini.outputHeavyChunkChars`** (`:122-131`) — append one sentence
+  to the existing `help`: `" Local (context-family) engines ignore this knob
+  and use the stage-1 cast-detection budget instead (chapterChunkBudget
+  delegates to resolveStage1ChunkCharBudget for that family)."`
+- **`analyzer.gemini.maxInputTokensPerRequest`** (`:70-79`) — append one
+  sentence to the existing `help`, without yet mentioning the model TPM (PR 2b,
+  Task 2.6, adds that bound and edits this same string again): `" Feeds the
+  request-cap family's body sizing in stage 1, stage 2 and the output-heavy
+  passes (cloudBodyCharBudget), each bounded further by that pass's own char
+  ceiling."`
+
+These are `help`-string-only edits (no `env`, `min`/`max`, `default` or `type`
+changes) — `config:sync` (`server/scripts/sync-env-example.ts`) does not read
+`help`, so `.env.example` is unaffected; confirmed by reading that script on
+46e62a34, which builds each managed-block line from `env`/`default`/`label`
+only. `docs/wiki/Advanced-Settings.md` §2's "What it does" column is a
+paraphrase of `help` per knob — update its five rows (Stage-1/Stage-2 chunk
+char budget, Stage-1/Stage-2 local input fraction, Gemini output-heavy chunk
+chars) to name the family split in one clause each, in the same commit.
+`scripts/tests/knob-docs-sync.test.mjs` (#2012, run by `npm run test:hooks`)
+fails if any registry knob's `label` has no row in that file — it does not
+check `help` content, so it does not gate the wording itself, but every knob
+touched here already has a row (this task only edits `help`, not `label`), so
+the guard stays green; run it in Step 4 alongside the existing suites.
+
 `server/src/routes/analysis.ts`:
 - **Imports.** After line 12, add `import { resolveCapacity, type EngineCapacity } from '../analyzer/capacity.js';`.
 - **Lines 2208-2212.** Replace with:
@@ -839,9 +897,14 @@ npm --prefix server run test -- src/routes/annotate-emotion.test.ts src/routes/i
 npm --prefix server run test:slow -- src/routes/analysis-pipelining.test.ts
 npm run typecheck
 npm run check:cycles
+node scripts/tests/knob-docs-sync.test.mjs
 git diff --exit-code -- server/src/analyzer/__fixtures__/capacity-pinning.json
 ```
-Expected: all PASS, and the fixture shows no diff.
+Expected: all PASS, and the fixture shows no diff. `knob-docs-sync.test.mjs`
+(#2012, also run by `npm run test:hooks`) checks that every registry knob's
+`label` has a row in `docs/wiki/Advanced-Settings.md`; it does not check `help`
+content, so it cannot fail from this task's help-text wording, but it does
+confirm the six touched knobs still have their rows after this task's edits.
 - [ ] **Step 5: Mutation proof**
   1. In `stage1-chunk.ts`, change `if (capacity?.family !== 'context') {` to `if (capacity === undefined) {`.
   2. Run `npm --prefix server run test -- src/analyzer/capacity-pinning.test.ts`. Expected red: `… every resolver × engine × script equals the fixture captured from main` (`stage1|gemini-3.5-flash-lite@12000|*` now takes the context branch with `contextTokens` 12000).
@@ -850,7 +913,7 @@ Expected: all PASS, and the fixture shows no diff.
   5. Restore it.
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/token-budget.ts server/src/analyzer/stage1-chunk.ts server/src/analyzer/stage2-chunk.ts server/src/analyzer/chapter-chunker.ts server/src/config/registry.ts server/src/routes/analysis.ts server/src/routes/annotate-emotion.ts server/src/routes/instruct-annotation.ts server/src/routes/script-review.ts server/src/analyzer/attribution-eval/review-run.ts server/src/analyzer/attribution-eval/run-eval.ts server/src/analyzer/attribution-eval/run-eval.test.ts server/src/analyzer/capacity-pinning.test.ts server/src/analyzer/chapter-chunker.test.ts server/src/analyzer/stage1-chunk.test.ts server/src/analyzer/stage2-chunk.test.ts server/src/analyzer/output-heavy-tpm.test.ts server/src/analyzer/attribution-eval/review-run.test.ts
+git add server/src/analyzer/token-budget.ts server/src/analyzer/stage1-chunk.ts server/src/analyzer/stage2-chunk.ts server/src/analyzer/chapter-chunker.ts server/src/config/registry.ts server/src/routes/analysis.ts server/src/routes/annotate-emotion.ts server/src/routes/instruct-annotation.ts server/src/routes/script-review.ts server/src/analyzer/attribution-eval/review-run.ts server/src/analyzer/attribution-eval/run-eval.ts server/src/analyzer/attribution-eval/run-eval.test.ts server/src/analyzer/capacity-pinning.test.ts server/src/analyzer/chapter-chunker.test.ts server/src/analyzer/stage1-chunk.test.ts server/src/analyzer/stage2-chunk.test.ts server/src/analyzer/output-heavy-tpm.test.ts server/src/analyzer/attribution-eval/review-run.test.ts docs/wiki/Advanced-Settings.md
 git commit -m "refactor(server): size analyzer chunk budgets from EngineCapacity (#3084)"
 ```
 
@@ -907,14 +970,15 @@ https://claude.ai/code/session_013DFfsAoY1LtxjDgnGPSZkc
 
 ### PR 2b — Gemini catalog, Auto max output tokens, TPM-bound input cap, thought summaries, thinking window, request ceiling, reasoning overflow
 
-- **Branch:** `feat/server-3084-w2b-output-cap`. Create it with `node scripts/wt-new.mjs feat/server-3084-w2b-output-cap` off the latest `main`, after PR 2a merges.
+- **Branch:** `feat/server,frontend-3084-w2b-output-cap`. Create it with `node scripts/wt-new.mjs feat/server,frontend-3084-w2b-output-cap` off the latest `main`, after PR 2a merges. Widened from `server`-only to `server,frontend` because Task 2.9a lands real frontend component code (`reasoning-overflow-toast.tsx`, `analysing.tsx` JSX, `advanced.tsx`, `router.ts`, `routes/index.tsx`), not just server+openapi+frontend-help; the master plan is being updated to match.
 - **Delivers:**
   - `server/src/analyzer/catalog/gemini-catalog.ts`: a 10-minute cached `models.list`, filtered per planning facts §C.3, warmed before each request by a warm-up bounded at 10 s. The caller's abort signal releases that caller; the shared listing is cancelled only when no caller still waits (Task 2.5, P26).
   - `analyzer.gemini.maxOutputTokens` defaulting to 0 = Auto (the model's `outputTokenLimit`, else 8192), with manual values clamped to the known limit. The runner passes the resolved cap to both transports (Task 2.6).
   - The per-request input cap bounded by the model's TPM, `perRequestInputCap = min(analyzer.gemini.maxInputTokensPerRequest, resolveLimits(model).tpm)`, pinned by a test and announced in the release notes (Task 2.6).
   - Thinking Gemini models — decided by the static id rule in `geminiModelThinks`, never the live catalog (P27) — request `thinkingConfig.includeThoughts: true`. Thought parts feed the heartbeat, and `thoughtsTokenCount` becomes `usage.reasoningTokens` only on a request that asked for thoughts (Task 2.7).
-  - A thinking window, `analyzer.gemini.thinkingIdleTimeoutMs` (env `GEMINI_THINKING_IDLE_MS`, integer 0–290 000; `0` = automatic: 240 000 ms for a thinking model, today's idle window for any other; a positive value applies to every model). It bounds every silent gap until the first answer text; after that, today's 45 s idle watchdog applies unchanged. A thinking-window timeout is `AnalyzerTimeoutError` (`analyzer-timeout`), not retried. Every Gemini request is bounded by `analyzer.gemini.requestCeilingMs` (30 min; `AnalyzerTimeoutError`). One timing line per attempt: time to first chunk, time to first answer text, thought parts before the answer (Task 2.8, P5).
+  - A thinking window, `analyzer.gemini.thinkingIdleTimeoutMs` (env `GEMINI_THINKING_IDLE_MS`, integer 0–290 000; `0` = automatic: 120 000 ms for a thinking model, today's idle window for any other; a positive value applies to every model). It bounds every silent gap until the first answer text; after that, today's 45 s idle watchdog applies unchanged. A thinking-window timeout is `AnalyzerTimeoutError` (`analyzer-timeout`), not retried. Every Gemini request is bounded by `analyzer.gemini.requestCeilingMs` (30 min; `AnalyzerTimeoutError`). One timing line per attempt: time to first chunk, time to first answer text, thought parts before the answer (Task 2.8, P5).
   - The reasoning-overflow rule in `runner/finish.ts`, FailureCode `analyzer-reasoning-overflow` in all six places, and an overflow that stops new spend. It ends the analysis run, and the job then starts no new chapters, escalation windows or non-story classification calls. Chapters already in flight finish and cache for resume. It also stops a script-review pass, the emotion and instruct passes and the attribution eval's review run, as a content block or a daily quota does (Task 2.9, P20).
+  - A reasoning-overflow failure names the chapter, model and engine (Task 2.9), and lists structured `fixes` — Gemini/Ollama settings to raise, each linking `#/advanced?focus=<key>` — rendered as a "How to fix" list and a persistent toast that survives navigating away, plus a new wiki section (Task 2.9a, F7).
   - On-box register rows "Gemini thinking-window timing", "Thinking-model output" and "Capacity recalibration", with the run sheet and live view rows (Task 2.10).
 - **Must NOT change:**
   - any chunk budget at default settings (`capacity-pinning.test.ts` stays green, fixture untouched);
@@ -926,17 +990,18 @@ https://claude.ai/code/session_013DFfsAoY1LtxjDgnGPSZkc
 - **Entry criteria:**
   - PR 2a is merged.
   - `rate-limit.ts`'s limit resolver has been re-read on the current `main`: `function resolveLimits(model: string): ModelLimits` at `:95` after #3163 (`:76` on 46e62a34). Task 2.6 exports it under that name.
-  - **P5 and P20 are pending owner approval.** This PR is written to both recommendations:
-    - **P5:** no probe gate, and a thinking window that bounds silence until the first answer text.
-    - **P20, "stop new spend":** an overflow ends the run and stops new chapters, escalation windows, non-story calls and the output-heavy passes; chapters already in flight finish and cache.
-    - **P20 alternative, pending owner approval:** skip the overflowing chapter and continue.
+  - **P5 and P20 are approved by the owner (2026-09-13).** This PR is written to both:
+    - **P5:** no probe gate, and a thinking window that bounds silence until the first answer text. Its automatic default is 120 000 ms (2 min); Advanced Settings can raise it to at most 290 000 ms.
+    - **P20, "stop new spend," with a loud, actionable warning:** an overflow ends the run and stops new chapters, escalation windows, non-story calls and the output-heavy passes; chapters already in flight finish and cache. The failure names what happened and lists structured fixes the user can act on (Task 2.9a).
+    - **P20 alternative (not chosen):** skip the overflowing chapter and continue.
 
-    The master plan's gate for 2b is both approvals. If the owner decides otherwise before PR 2b starts, stop and ask the coordinator. A different P5 changes only Task 2.8 and run sheet §1; a different P20 changes only Task 2.9's run-stop edits and their tests.
+    The master plan's gate for 2b is both approvals, and both are satisfied. A different P5 would change only Task 2.8 and run sheet §1; a different P20 would change only Task 2.9's run-stop edits, Task 2.9a's fixes, and their tests.
 - **Exit criteria:**
   - All task tests and the mutation proofs are green.
   - `npm run openapi:types` output is committed.
   - `npm run config:check` is green after `npm run config:sync`.
   - `npm run register:build -- --check` (if the script exposes `--check`; otherwise `npm run register:build` followed by `git diff --exit-code`) and `npm run check:onbox-register` are green, and the live view is published.
+  - `node scripts/tests/knob-docs-sync.test.mjs` (#2012) is green — every knob this PR adds or relabels (the thinking window, the request ceiling) has a row in `docs/wiki/Advanced-Settings.md`.
   - `npm run verify:fast:branch` is green.
   - `pr-review-gate` has run at depth `high` (the PR touches the server, openapi, frontend and docs scopes).
 
@@ -1548,7 +1613,8 @@ git commit -m "feat(server): cache the Gemini model catalog with a bounded warm-
 ### Task 2.6: Auto max output tokens and the TPM-bound input cap, warmed before each request
 
 **Files:**
-- Modify: `server/src/config/registry.ts:50-59` (the `analyzer.gemini.maxOutputTokens` knob)
+- Modify: `server/src/config/registry.ts:50-59` (the `analyzer.gemini.maxOutputTokens` knob) and `:70-79` (the `analyzer.gemini.maxInputTokensPerRequest` knob — lift `max` to `1_000_000` and extend `help` with the TPM bound, F1)
+- Modify: `docs/wiki/Advanced-Settings.md` §1 — the "Gemini max output tokens" and "Gemini max input tokens per request" rows' default/range (F1, F3)
 - Modify: `server/src/analyzer/rate-limit.ts` — export `resolveLimits` (`:95` on `origin/main` after #3163; `:76` on 46e62a34)
 - Modify: `server/src/analyzer/capacity.ts` (the Gemini branch reads the catalog and the model's TPM; add `resolveGeminiMaxOutputTokens`)
 - Modify: `server/src/analyzer/runner/transport.ts`: `ChatTransport` gains `prepare?(signal?: AbortSignal): Promise<void>` (the contract's `prepare?()` plus the caller's abort signal, P26).
@@ -1640,6 +1706,34 @@ describe('analyzer.gemini.maxOutputTokens knob (#3084 wave 2b)', () => {
     expect(knob).toMatchObject({ env: 'ANALYZER_MAX_OUTPUT_TOKENS', type: 'integer', min: 0, max: 1_048_576, default: 0 });
     expect(coerceAndValidate(knob, '0').ok).toBe(true);
     expect(coerceAndValidate(knob, '65536').ok).toBe(true);
+  });
+});
+
+describe('analyzer.gemini.maxInputTokensPerRequest knob — max lifted for the TPM bound (#3084 wave 2b, F1)', () => {
+  afterEach(() => {
+    delete process.env.ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST;
+  });
+
+  it('keeps its 12000 default and 1000 minimum, but now accepts up to 1000000', () => {
+    const knob = allKnobs().find((k) => k.key === 'analyzer.gemini.maxInputTokensPerRequest')!;
+    expect(knob).toMatchObject({
+      env: 'ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST',
+      type: 'integer',
+      min: 1000,
+      max: 1_000_000,
+      default: 12000,
+    });
+    expect(coerceAndValidate(knob, '1000000').ok).toBe(true);
+    expect(coerceAndValidate(knob, '1000001').ok).toBe(false);
+  });
+
+  it('a saved value above the OLD 60000 ceiling is accepted, and is still bounded by the model TPM', () => {
+    /* F1: lifting the registry max alone would let an operator size bodies
+       past a model's real per-minute limit. This pins that the NEW ceiling
+       cannot bypass the TPM bound Task 2.6 just added: a saved value of
+       200000 on a model whose TPM is 16000 still yields the smaller cap. */
+    process.env.ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST = '200000';
+    expect(resolveCapacity({ engine: 'gemini', model: 'gemma-4-31b-it' }).perRequestInputCap).toBe(16_000);
   });
 });
 
@@ -1855,7 +1949,7 @@ npm --prefix server run test -- src/analyzer/capacity.test.ts src/analyzer/runne
 npm --prefix server run test:slow -- src/analyzer/gemini.test.ts
 ```
 Expected FAIL:
-- `capacity.test.ts`: `resolveGeminiMaxOutputTokens is not a function`; `…knob > defaults to 0 = Auto…` (received `min: 256, max: 32768, default: 8192`); `a model TPM below the cap binds the per-request input cap` (received 12000) and `the TPM bound reaches the stage-1 body budget` (the two budgets are equal);
+- `capacity.test.ts`: `resolveGeminiMaxOutputTokens is not a function`; `…knob > defaults to 0 = Auto…` (received `min: 256, max: 32768, default: 8192`); `a model TPM below the cap binds the per-request input cap` (received 12000) and `the TPM bound reaches the stage-1 body budget` (the two budgets are equal); `analyzer.gemini.maxInputTokensPerRequest knob … > keeps its 12000 default …` (received `max: 60000`) and `… > a saved value above the OLD 60000 ceiling is accepted …` (the env var falls back to the 12000 default since 200000 is out of today's range, so `perRequestInputCap` is 12000, not 16000);
 - `stage-runner.test.ts`: `awaits transport.prepare(call.signal) before reading settings, on every send` (`prepare` called 0 times; `maxOutputTokens` `[8192, 8192]`);
 - `gemini.test.ts`: `… the listed outputTokenLimit — the catalog is warmed BEFORE the request is built` (`listModels` called 0 times; `maxOutputTokens` 8192).
 - `gemini-transport.test.ts`: both `prepare…` tests (`t.prepare is not a function`).
@@ -1876,6 +1970,21 @@ Expected FAIL:
     apply: 'live', risk: 'medium',
   },
 ```
+
+`server/src/config/registry.ts:70-79` (F1) — lift the ceiling now that a request never sizes past the model's own TPM (Task 2.6's `perRequestInputCap = Math.min(cap, resolveLimits(sel.model).tpm)`, below). Replace the knob with:
+```ts
+  {
+    key: 'analyzer.gemini.maxInputTokensPerRequest',
+    env: 'ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST',
+    group: 'analyzer-sampling',
+    label: 'Gemini max input tokens per request',
+    help: 'Per-request INPUT-token cap for cloud analyzer passes (stage-1, stage-2, script-review/emotion/instruct). Body chunks are sized to the smaller of this and the model TPM (Gemma free tier = 16000/min), so the system prompt + roster fit even when this is set higher than a given model allows. Raise it for a model with more headroom (Gemini 3.x accepts up to 1,000,000 input tokens). Feeds the request-cap family\'s body sizing in stage 1, stage 2 and the output-heavy passes (cloudBodyCharBudget), each bounded further by that pass\'s own char ceiling. Default 12000.',
+    type: 'integer', min: 1000, max: 1_000_000,
+    default: 12000,
+    apply: 'live', risk: 'medium',
+  },
+```
+This is the second edit to this knob's `help` in this wave: Task 2.3 (PR 2a) appended a shorter family-derivation clause without the TPM bound, since the bound does not exist until this task. The string above is the full, post-2.6 replacement — it supersedes 2a's wording rather than appending to it.
 
 `server/src/analyzer/rate-limit.ts`: change `function resolveLimits(model: string): ModelLimits {` (`:95` on `origin/main`) to `export function resolveLimits(model: string): ModelLimits {`. If a later `main` has renamed or re-signatured it, export that resolver, use its name below, and record the name in the PR body.
 
@@ -1975,6 +2084,14 @@ and `:301`:
 # ANALYZER_MAX_OUTPUT_TOKENS=0
 ```
 The managed block line (`:507`) is regenerated in Task 2.10 by `npm run config:sync`.
+
+`docs/wiki/Advanced-Settings.md` §1 (F1, F3) — same commit: update the "Gemini
+max output tokens" row's Default/Range to `0` / `0–1048576`, and the "Gemini
+max input tokens per request" row's Default/Range to `12000` / `1000–1000000`.
+`scripts/tests/knob-docs-sync.test.mjs` (#2012, run by `npm run test:hooks`)
+fails if either knob's `label` has no row here; both already have rows, so
+this is a content update, not a new row, and the guard stays green either way
+— run it in Step 4 to confirm.
 - [ ] **Step 4: Run and confirm it passes**
 Run:
 ```
@@ -1982,8 +2099,9 @@ npm --prefix server run test -- src/analyzer/capacity.test.ts src/analyzer/capac
 npm --prefix server run test:slow -- src/analyzer/gemini.test.ts
 npm run typecheck
 npm run check:cycles
+node scripts/tests/knob-docs-sync.test.mjs
 ```
-Expected: PASS. `src/config` covers `env-cleanup.test.ts`, whose "realistic .env" test derives candidates from registry defaults (`env-cleanup.test.ts:389-402`), so `ANALYZER_MAX_OUTPUT_TOKENS=8192` simply stops being a candidate.
+Expected: PASS. `src/config` covers `env-cleanup.test.ts`, whose "realistic .env" test derives candidates from registry defaults (`env-cleanup.test.ts:389-402`), so `ANALYZER_MAX_OUTPUT_TOKENS=8192` simply stops being a candidate. `knob-docs-sync.test.mjs` (#2012) confirms both touched Gemini knobs still have rows in `docs/wiki/Advanced-Settings.md` after this task's edits.
 - [ ] **Step 5: Mutation proof**
   1. In `stage-runner.ts`'s `send`, delete `await this.transport.prepare?.(call.signal);`. Expected red: `StageRunner (#3084 wave 1) > awaits transport.prepare(call.signal) before reading settings, on every send (#3084 wave 2b)` and slow `… the catalog is warmed BEFORE the request is built` (`listModels` called 0 times). Restore it.
   2. Move `const settings = this.settings();` above the `prepare` line. Expected red: `… awaits transport.prepare(call.signal) before reading settings, on every send` (`maxOutputTokens` `[8192, 65536]`: each request reads the value from before its own warm-up). Restore it.
@@ -1992,9 +2110,10 @@ Expected: PASS. `src/config` covers `env-cleanup.test.ts`, whose "realistic .env
   5. In `ollama.ts`'s settings provider, set `maxOutputTokens: 123,`. Expected red: `OllamaAnalyzer — the runner-resolved output cap reaches the wire > sends options.num_predict from the settings provider (analyzer.ollama.numPredict = 4096)`. Restore it.
   6. In `stage-runner.ts`, change `prepare?.(call.signal)` to `prepare?.()`. Expected red: `… awaits transport.prepare(call.signal) before reading settings, on every send` (the recorded signals are `[undefined, undefined]`). Restore it.
   7. In `gemini-transport.ts`'s `prepare`, remove `signal` from the `warmGeminiCatalog` options. Expected red: `GeminiTransport (#3084 wave 1) > prepare(signal): aborting (pause) releases the wait at once, …` (`expected false to be true`). Restore it.
+  8. In `registry.ts`, change the `analyzer.gemini.maxInputTokensPerRequest` knob's `max: 1_000_000` back to `max: 60_000`. Expected red: `analyzer.gemini.maxInputTokensPerRequest knob … > keeps its 12000 default … but now accepts up to 1000000` (`coerceAndValidate(knob, '1000000').ok` is `false`) and `… > a saved value above the OLD 60000 ceiling is accepted …` (the env override is refused again, so `perRequestInputCap` reads 12000, not 16000). Restore it.
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/config/registry.ts server/src/analyzer/rate-limit.ts server/src/analyzer/capacity.ts server/src/analyzer/capacity.test.ts server/src/analyzer/runner/transport.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/runner/stage-runner.test.ts server/src/analyzer/transports/gemini-transport.ts server/src/analyzer/transports/gemini-transport.test.ts server/src/analyzer/gemini.ts server/src/analyzer/ollama.ts server/src/analyzer/gemini.test.ts server/src/analyzer/ollama.test.ts server/.env.example
+git add server/src/config/registry.ts server/src/analyzer/rate-limit.ts server/src/analyzer/capacity.ts server/src/analyzer/capacity.test.ts server/src/analyzer/runner/transport.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/runner/stage-runner.test.ts server/src/analyzer/transports/gemini-transport.ts server/src/analyzer/transports/gemini-transport.test.ts server/src/analyzer/gemini.ts server/src/analyzer/ollama.ts server/src/analyzer/gemini.test.ts server/src/analyzer/ollama.test.ts server/.env.example docs/wiki/Advanced-Settings.md
 git commit -m "feat(server): Gemini max output tokens default to Auto; input cap bounded by model TPM (#3084)"
 ```
 
@@ -2261,6 +2380,7 @@ git commit -m "feat(server): request Gemini thought summaries from thinking mode
   - constructor option `requestCeilingMs?: number` (contract);
   - in `generate(req)` (wave 1 Task 1.9; body moved from `gemini.ts:684-866`): the ceiling signal, the thinking-window arms, the answer-start re-arm, the timeout classification, and the per-attempt timing line.
 - Modify: `server/.env.example`: the hand-written large-chapter block Task 2.6 edited (`:285-303` on 46e62a34)
+- Modify: `docs/wiki/Advanced-Settings.md` §1 — two new rows, "Gemini thinking idle timeout (ms)" and "Gemini request ceiling (ms)" (F1, F3). These are NEW knob labels, so `scripts/tests/knob-docs-sync.test.mjs` (#2012, run by `npm run test:hooks`) fails without them — name it in Step 4.
 - Modify: `server/src/routes/failure-taxonomy.ts:29-52` (union), `:98-140` (signature row), `:492-534` (classify branch)
 - Modify: `server/src/routes/failure-remediations.ts:94-101` (add an entry after `analyzer-truncated`)
 - Modify: `openapi.yaml:7049` (enum), and regenerate `src/lib/api-types.ts`.
@@ -2275,7 +2395,7 @@ git commit -m "feat(server): request Gemini thought summaries from thinking mode
   - `withTransportRetry` (wave 1 Task 1.9): an `idle` disposition logs `[gemini] stream idle … — retrying in …` and announces a backoff over 1 s through `onThrottle(…, 'retry-after')`; a `no-retry` disposition rethrows at once and does neither;
   - `TransportKind` (`errors.ts`, wave 1), `configValue`, `coerceAndValidate` (`config/resolver.ts:183`), `withCopy` (`failure-taxonomy.ts:481-483`).
 - Produces:
-  - `export const GEMINI_THINKING_IDLE_TIMEOUT_MS = 240_000`;
+  - `export const GEMINI_THINKING_IDLE_TIMEOUT_MS = 120_000`;
   - `export function resolveGeminiThinkingIdleTimeoutMs(model: string): number`;
   - `export class AnalyzerTimeoutError extends Error { readonly code = 'ANALYZER_TIMEOUT'; constructor(readonly transport: TransportKind, readonly model: string, readonly elapsedMs: number, readonly reason: 'ceiling' | 'connect-timeout' | 'thinking-idle') }`. This is the contract class pulled forward from wave 3, which reuses it and must not re-add it. `'thinking-idle'` widens the contract's reason union; the master plan's contract records it.
   - knob `analyzer.gemini.thinkingIdleTimeoutMs` (env `GEMINI_THINKING_IDLE_MS`, integer 0–290 000, default `0`);
@@ -2284,7 +2404,7 @@ git commit -m "feat(server): request Gemini thought summaries from thinking mode
   - the log line `[gemini] stream-timing model=<id> firstChunkMs=<ms|none> firstAnswerMs=<ms|none> thoughtPartsBeforeAnswer=<n>`, one `console.info` per request attempt.
 
 **One knob, both defaults (P5).** `analyzer.gemini.thinkingIdleTimeoutMs` is an integer from `0` to `290_000`:
-- **`0`, the default, is automatic per model:** `GEMINI_THINKING_IDLE_TIMEOUT_MS` (240 000 ms) when `geminiModelThinks(model)`; otherwise `resolveStreamIdleTimeoutMs()`, which is today's 45 000 ms, or `GEMINI_STREAM_IDLE_MS` when set (so every existing idle test keeps its behaviour).
+- **`0`, the default, is automatic per model:** `GEMINI_THINKING_IDLE_TIMEOUT_MS` (120 000 ms) when `geminiModelThinks(model)`; otherwise `resolveStreamIdleTimeoutMs()`, which is today's 45 000 ms, or `GEMINI_STREAM_IDLE_MS` when set (so every existing idle test keeps its behaviour).
 - **A positive value applies to every Gemini model**, thinking or not.
 
 One Settings row therefore expresses both defaults, and nobody needs to know the model list to keep today's behaviour. A per-model value table would be the verdict table P5 removed.
@@ -2304,7 +2424,7 @@ One Settings row therefore expresses both defaults, and nobody needs to know the
   3. caller aborted → `AnalysisAbortedError`;
   4. ceiling aborted → `AnalyzerTimeoutError(…, 'ceiling')`, not retried and never a fallback.
 - **One log line per request attempt,** from the `finally`: model, ms from the stream call to the first chunk, ms to the first answer text (`none` for either that never arrived), and the number of thought parts before the answer text. It never carries request or response content.
-- **Trade-off (P5).** A stalled request on a thinking model — every Gemini 3.x, including the default `gemini-3.5-flash-lite` — fails once, after up to 240 s, instead of two 45 s attempts. The Analysing view's phase card shows it as stalled meanwhile. In return, a think that stays silent, or streams summaries, for up to 240 s at a time is not killed.
+- **Trade-off (P5).** A stalled request on a thinking model — every Gemini 3.x, including the default `gemini-3.5-flash-lite` — fails once, after up to 120 s, instead of two 45 s attempts. The Analysing view's phase card shows it as stalled meanwhile. In return, a think that stays silent, or streams summaries, for up to 120 s at a time is not killed.
 - **Known consequence.** Gemini's `maxTotalMs` stays 90 000 (contract). A mid-answer idle error after a long request is therefore not retried: the loop's elapsed check breaks first and the idle error is thrown, as today.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2350,27 +2470,29 @@ describe('thinking window, request ceiling and the per-attempt timing log (#3084
   });
 
   it('resolves 0 (automatic) per model, and a positive knob value for every model', () => {
-    expect(GEMINI_THINKING_IDLE_TIMEOUT_MS).toBe(240_000);
-    expect(resolveGeminiThinkingIdleTimeoutMs('gemini-3.6-flash')).toBe(240_000);
-    expect(resolveGeminiThinkingIdleTimeoutMs('gemini-3.5-flash-lite')).toBe(240_000);
+    expect(GEMINI_THINKING_IDLE_TIMEOUT_MS).toBe(120_000);
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemini-3.6-flash')).toBe(120_000);
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemini-3.5-flash-lite')).toBe(120_000);
     expect(resolveGeminiThinkingIdleTimeoutMs('gemma-4-31b-it')).toBe(45_000);
     process.env.GEMINI_STREAM_IDLE_MS = '200';
     expect(resolveGeminiThinkingIdleTimeoutMs('gemma-4-31b-it')).toBe(200);
-    process.env.GEMINI_THINKING_IDLE_MS = '120000';
-    expect(resolveGeminiThinkingIdleTimeoutMs('gemini-3.6-flash')).toBe(120_000);
-    expect(resolveGeminiThinkingIdleTimeoutMs('gemma-4-31b-it')).toBe(120_000);
+    /* 150000 is deliberately distinct from both the automatic thinking
+       default (120000) and the automatic non-thinking default (200, set
+       above): a value equal to either default would not prove the knob's
+       override took effect rather than the automatic path. */
+    process.env.GEMINI_THINKING_IDLE_MS = '150000';
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemini-3.6-flash')).toBe(150_000);
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemma-4-31b-it')).toBe(150_000);
   });
 
-  it('a thinking model whose thought parts arrive 60 s apart for 4 min, then answers, is not killed (fake clock)', async () => {
+  it('a thinking model whose thought parts arrive 60 s apart across multiple thinking windows, then answers, is not killed (fake clock)', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const thought = (n: number) => chunk([{ thought: true, text: `thought ${n}` }]);
     const gen = vi.fn().mockImplementation(
       timedStream([
         { atMs: 60_000, item: thought(1) },
         { atMs: 120_000, item: thought(2) },
-        { atMs: 180_000, item: thought(3) },
-        { atMs: 240_000, item: thought(4) },
-        { atMs: 300_000, item: chunk([{ text: ANSWER }], { finishReason: 'STOP' }) },
+        { atMs: 180_000, item: chunk([{ text: ANSWER }], { finishReason: 'STOP' }) },
       ]),
     );
     let text: string | undefined;
@@ -2379,7 +2501,7 @@ describe('thinking window, request ceiling and the per-attempt timing log (#3084
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(gen).toHaveBeenCalledTimes(1); // precondition: the stream call happened before the clock moved
-    await vi.advanceTimersByTimeAsync(299_999);
+    await vi.advanceTimersByTimeAsync(179_999);
     expect(gen).toHaveBeenCalledTimes(1); // no watchdog kill, so no second attempt
     expect(text).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
@@ -2387,7 +2509,7 @@ describe('thinking window, request ceiling and the per-attempt timing log (#3084
     await sent;
   });
 
-  it('a thinking model silent for 241 s fails with AnalyzerTimeoutError after exactly ONE attempt: no retry warning, no onThrottle (fake clock)', async () => {
+  it('a thinking model silent for 121 s fails with AnalyzerTimeoutError after exactly ONE attempt: no retry warning, no onThrottle (fake clock)', async () => {
     /* Real backoffs for this case only: a regression that retried this error
        would log "retrying" and announce its >1 s backoff through onThrottle. */
     process.env.GEMINI_RETRY_BACKOFFS_MS = '6000,12000';
@@ -2396,7 +2518,7 @@ describe('thinking window, request ceiling and the per-attempt timing log (#3084
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const onThrottle = vi.fn();
-    const gen = vi.fn().mockImplementation(answerAfter(241_000));
+    const gen = vi.fn().mockImplementation(answerAfter(121_000));
     let failure: unknown;
     const sent = new fresh.GeminiTransport({
       apiKey: 'test-key',
@@ -2409,7 +2531,7 @@ describe('thinking window, request ceiling and the per-attempt timing log (#3084
         failure = err;
       });
     try {
-      await vi.advanceTimersByTimeAsync(239_999);
+      await vi.advanceTimersByTimeAsync(119_999);
       expect(failure).toBeUndefined();
       await vi.advanceTimersByTimeAsync(1);
       expect(failure).toMatchObject({
@@ -2601,7 +2723,7 @@ describe('thinking window, request ceiling and the per-attempt timing log (#3084
 In `server/src/analyzer/gemini.test.ts`, inside `describe('stream watchdog + abort', …)` (`:618`; idle 120 ms and backoffs `40,80` from its `beforeEach`, `:621-624`), add directly after the `throws GeminiStreamIdleError when the stream goes silent for the watchdog window` test (`:655-673`). That existing test yields an answer chunk (`{ text: '{' }`) before it hangs, so it only ever exercised the after-answer window; these three stall before any answer text:
 ```ts
     /* #3084 P5 — the thinking window is automatic per model: today's idle
-       window for a model that does not think, 240 s for a thinking model. */
+       window for a model that does not think, 120 s for a thinking model. */
     async function* hangBeforeFirstChunk(): AsyncGenerator<{ text: string }> {
       const hang = new AbortController();
       hangControllers.push(hang);
@@ -2624,7 +2746,7 @@ In `server/src/analyzer/gemini.test.ts`, inside `describe('stream watchdog + abo
       expect(generateContentStream).toHaveBeenCalledTimes(3);
     }, 5_000);
 
-    it('a thinking model: a pre-first-chunk wait longer than the idle window completes, inside its automatic 240 s thinking window (#3084 P5)', async () => {
+    it('a thinking model: a pre-first-chunk wait longer than the idle window completes, inside its automatic 120 s thinking window (#3084 P5)', async () => {
       vi.resetModules();
       const { GeminiAnalyzer } = await import('./gemini.js');
       /* asyncFromArray (:76) sleeps delayMs before each item, the first included. */
@@ -2680,7 +2802,7 @@ describe('AnalyzerTimeoutError (#3084 wave 2b)', () => {
 
   it('→ analyzer-timeout naming the thinking window setting and its 290 s maximum for a thinking-idle timeout, not the ceiling', () => {
     const r = classifyAnalysisFailure(
-      new AnalyzerTimeoutError('gemini', 'gemini-3.6-flash', 240_000, 'thinking-idle'),
+      new AnalyzerTimeoutError('gemini', 'gemini-3.6-flash', 120_000, 'thinking-idle'),
       'Gemini (gemini-3.6-flash)',
     );
     expect(r.code).toBe('analyzer-timeout');
@@ -2713,7 +2835,7 @@ Expected FAIL:
 - `gemini-transport-thinking.test.ts`:
   - `resolves 0 (automatic) per model, …`: `resolveGeminiThinkingIdleTimeoutMs is not a function`;
   - `a thinking model whose thought parts arrive 60 s apart …`: `expected "spy" to be called 1 times, but got 2 times` (today's 45 s window killed the first 60 s wait and retried);
-  - `a thinking model silent for 241 s fails with AnalyzerTimeoutError …`: `failure` is a `GeminiStreamIdleError` from today's 45 s window, or `undefined` while its retry backs off;
+  - `a thinking model silent for 121 s fails with AnalyzerTimeoutError …`: `failure` is a `GeminiStreamIdleError` from today's 45 s window, or `undefined` while its retry backs off;
   - `after answer text starts, a 46 s gap …` already passes on today's code, which re-arms 45 s on every chunk; Step 5 proves it can fail;
   - `a positive knob value applies to every model …`: the spared Gemma request fails with `GeminiStreamIdleError` at 200 ms;
   - both ceiling tests: the promise resolves after 2 s (no ceiling);
@@ -2760,7 +2882,7 @@ export class AnalyzerTimeoutError extends Error {
     env: 'GEMINI_THINKING_IDLE_MS',
     group: 'analyzer-sampling',
     label: 'Gemini thinking idle timeout (ms)',
-    help: "How long a Gemini analysis request may stay silent before its answer starts: the wait for the first streamed chunk, and each gap between the model's thought summaries. 0 = automatic: 240000 (4 min) for a model that thinks before answering (Gemini 2.5 Pro and 2.5 Flash, and every Gemini 3.x model), and the 45 s stream idle window for any other model. A positive value applies to every Gemini model. When this window runs out the request fails as analyzer-timeout and is not retried; a model that does not think, at the automatic value, keeps today's idle retry instead. Once the answer starts, the 45 s idle window applies whatever this is set to. Maximum 290000: the Gemini SDK streams over Node's built-in fetch, whose network layer ends a request after 300 s without data, so a longer value could never take effect.",
+    help: "How long a Gemini analysis request may stay silent before its answer starts: the wait for the first streamed chunk, and each gap between the model's thought summaries. Automatic = 2 minutes (0, 120000 ms) for thinking models (Gemini 2.5 Pro and 2.5 Flash, and every Gemini 3.x model); non-thinking models keep the 45 s stream idle window. A positive value applies to every Gemini model. Raise it if long thinks time out; when this window runs out the request fails as analyzer-timeout and is not retried, while a model that does not think, at the automatic value, keeps today's idle retry instead. Once the answer starts, the 45 s idle window applies whatever this is set to. Maximum 290000 (290 seconds): the Gemini SDK streams over Node's built-in fetch, whose network layer ends a request after 300 s without data, so a longer value could never take effect.",
     type: 'integer', min: 0, max: 290_000,
     default: 0, // ← 0 = automatic; resolved by resolveGeminiThinkingIdleTimeoutMs() in analyzer/transports/gemini-transport.ts
     apply: 'live', risk: 'medium',
@@ -2777,6 +2899,18 @@ export class AnalyzerTimeoutError extends Error {
   },
 ```
 
+`docs/wiki/Advanced-Settings.md` §1 (F1, F3, and the model-routing coordinator's
+note on `knob-docs-sync.test.mjs`) — two new rows in the table, directly after
+the "Gemini max input tokens per request" row:
+```markdown
+| Gemini thinking idle timeout (ms) | Silence allowed before a Gemini answer starts: the wait for the first chunk, and each gap between thought summaries. 0 = automatic: 2 min for thinking models, else the 45 s idle window | 0 | integer, 0–290000 | live | medium |
+| Gemini request ceiling (ms) | Absolute time limit for one Gemini analysis request attempt | 1800000 | integer, 60000–14400000 | live | medium |
+```
+`scripts/tests/knob-docs-sync.test.mjs` (#2012, run by `npm run test:hooks`)
+fails until both rows exist, since these are brand-new knob `label`s the guard
+has never seen before this task — add them in this same step, not a later
+one, and run the guard in Step 4.
+
 `server/src/analyzer/transports/gemini-transport.ts`:
 - **Imports.** Add `AnalyzerTimeoutError` to the `../errors.js` import. `configValue` (wave 1 Task 1.9) and `geminiModelThinks` (Task 2.7) are already imported.
 - **Thinking window.** Add below `resolveStreamIdleTimeoutMs` (moved from `gemini.ts:73-78`):
@@ -2787,12 +2921,12 @@ export class AnalyzerTimeoutError extends Error {
    knob's maximum is 290 000 ms: the SDK streams over the global fetch, whose
    undici headers/body timeouts are fixed at 300 s. The wave 2 on-box row (run
    sheet §1) measures real chapters to tune this default. */
-export const GEMINI_THINKING_IDLE_TIMEOUT_MS = 240_000;
+export const GEMINI_THINKING_IDLE_TIMEOUT_MS = 120_000;
 
 /** P5 — the silence allowed before a Gemini request's answer text starts: the
     wait for the first chunk and each gap between thought parts.
     analyzer.gemini.thinkingIdleTimeoutMs = 0 (the default) is automatic per
-    model: 240 s for a model that thinks (static id rule, P27), otherwise the
+    model: 120 s for a model that thinks (static id rule, P27), otherwise the
     stream idle window. A positive value applies to every model. */
 export function resolveGeminiThinkingIdleTimeoutMs(model: string): number {
   const configured = configValue<number>('analyzer.gemini.thinkingIdleTimeoutMs');
@@ -2918,7 +3052,7 @@ with:
 
 `server/.env.example`, in the hand-written large-chapter block Task 2.6 edited: directly below the `#       ANALYZER_NUM_PREDICT        Ollama num_predict (default -1 = until ctx full)` line, add
 ```
-#       GEMINI_THINKING_IDLE_MS     silence allowed before a Gemini answer starts (default 0 = automatic: 240000 for a thinking model, else the 45 s idle window; max 290000)
+#       GEMINI_THINKING_IDLE_MS     silence allowed before a Gemini answer starts (default 0 = automatic: 120000 for a thinking model, else the 45 s idle window; max 290000)
 #       ANALYZER_GEMINI_REQUEST_CEILING_MS  time limit per Gemini request (default 1800000 = 30 min)
 ```
 and directly below `# ANALYZER_NUM_PREDICT=-1`, add
@@ -2992,18 +3126,22 @@ npm --prefix server run test:slow -- src/analyzer/gemini.test.ts
 npx vitest run src/data/help-failures.test.ts src/data/help-categories.test.ts
 npm run typecheck
 npm run check:cycles
+node scripts/tests/knob-docs-sync.test.mjs
 ```
-Expected: PASS. No existing test changes behaviour:
+Expected: PASS. `knob-docs-sync.test.mjs` (#2012) is red until the two new
+wiki rows land, since these are new knob labels the guard has never seen; add
+them in the same step as the registry edit, not after. No existing test
+changes behaviour:
 - `gemini.test.ts`'s two stalling tests (`throws GeminiStreamIdleError when the stream goes silent for the watchdog window`, `:655-673`, and `aborts in-flight stream and throws AnalysisAbortedError when caller signal fires`, `:675-705`) use `gemini-2.5-flash`, a thinking model, but both yield the answer chunk `{ text: '{' }` before they stall, so the 120 ms after-answer window still fires, and the abort test is a caller abort. No existing test stalls before its answer text.
 - Wave 1's `gemini-transport.test.ts` uses `gemma-gt-*` ids, which do not think. At the automatic value their thinking window equals the idle window they already set, and a timeout stays `GeminiStreamIdleError`. Its `thought parts set reasoningSeen, keep the idle watchdog alive, …` test spaces thought parts 100 ms apart under a 150 ms window, so it stays green.
 - `transport-retry.test.ts` (wave 1) drives `withTransportRetry` with its own classifier and is untouched.
 - [ ] **Step 5: Mutation proof** (run each red with `--retry=0`)
-  1. In `resolveGeminiThinkingIdleTimeoutMs`, replace `GEMINI_THINKING_IDLE_TIMEOUT_MS : resolveStreamIdleTimeoutMs()` with `resolveStreamIdleTimeoutMs() : resolveStreamIdleTimeoutMs()`. Expected red: `thinking window, request ceiling and the per-attempt timing log (#3084 wave 2b, P5) > resolves 0 (automatic) per model, …`, `… > a thinking model whose thought parts arrive 60 s apart for 4 min, then answers, is not killed` (`text` stays `undefined`: the 45 s window ended the 60 s wait), and slow `a thinking model: a pre-first-chunk wait longer than the idle window completes …`. Restore it.
+  1. In `resolveGeminiThinkingIdleTimeoutMs`, replace `GEMINI_THINKING_IDLE_TIMEOUT_MS : resolveStreamIdleTimeoutMs()` with `resolveStreamIdleTimeoutMs() : resolveStreamIdleTimeoutMs()`. Expected red: `thinking window, request ceiling and the per-attempt timing log (#3084 wave 2b, P5) > resolves 0 (automatic) per model, …`, `… > a thinking model whose thought parts arrive 60 s apart across multiple thinking windows, then answers, is not killed` (`text` stays `undefined`: the 45 s window ended the 60 s wait), and slow `a thinking model: a pre-first-chunk wait longer than the idle window completes …`. Restore it.
   2. Replace the per-chunk `armIdleTimer(buf !== '');` with `armIdleTimer(true);`. Expected red: `… > a thinking model whose thought parts arrive 60 s apart …` (`gen` called 2 times: the 60 s gap after the first thought part was killed at 45 s and retried). This is the N1 regression. Restore it.
-  3. Delete the answer-start `armIdleTimer(true);`. Expected red: `… > after answer text starts, a 46 s gap on a thinking model is killed at 45 s and retried, as today` (`gen` called 1 time: the gap kept the 240 s window). Restore it.
-  4. Delete `if (configured > 0) return configured;`. Expected red: `… > resolves 0 (automatic) per model, …` (received 240000) and `… > a positive knob value applies to every model …` (the spared Gemma request dies at 200 ms). Restore it.
-  5. Delete the `if (armedForThinking) { … }` block in the `catch`. Expected red: `… > a thinking model silent for 241 s fails with AnalyzerTimeoutError after exactly ONE attempt …` (`failure` is `undefined` while the idle retry backs off), `… > a positive knob value applies to every model …` (`GeminiStreamIdleError`, called 3 times), and slow `… silence past its thinking window before any answer text fails once as AnalyzerTimeoutError …`. Restore it.
-  6. In `GEMINI_RETRY_CLASSIFIER`, change `if (err instanceof AnalyzerTimeoutError) return 'no-retry';` to `if (err instanceof AnalyzerTimeoutError) return 'idle';`. Expected red: `… > a thinking model silent for 241 s fails with AnalyzerTimeoutError after exactly ONE attempt: no retry warning, no onThrottle` (`expected undefined to match object`: the error surfaces only after a logged, `onThrottle`-announced backoff), and `… > a positive knob value applies to every model …` (called 3 times). This is the N2/N11 regression. Restore it.
+  3. Delete the answer-start `armIdleTimer(true);`. Expected red: `… > after answer text starts, a 46 s gap on a thinking model is killed at 45 s and retried, as today` (`gen` called 1 time: the gap kept the 120 s window). Restore it.
+  4. Delete `if (configured > 0) return configured;`. Expected red: `… > resolves 0 (automatic) per model, …` (received 120000, since the 150000 override is ignored and the thinking model falls through to the automatic value) and `… > a positive knob value applies to every model …` (the spared Gemma request dies at 200 ms). Restore it.
+  5. Delete the `if (armedForThinking) { … }` block in the `catch`. Expected red: `… > a thinking model silent for 121 s fails with AnalyzerTimeoutError after exactly ONE attempt …` (`failure` is `undefined` while the idle retry backs off), `… > a positive knob value applies to every model …` (`GeminiStreamIdleError`, called 3 times), and slow `… silence past its thinking window before any answer text fails once as AnalyzerTimeoutError …`. Restore it.
+  6. In `GEMINI_RETRY_CLASSIFIER`, change `if (err instanceof AnalyzerTimeoutError) return 'no-retry';` to `if (err instanceof AnalyzerTimeoutError) return 'idle';`. Expected red: `… > a thinking model silent for 121 s fails with AnalyzerTimeoutError after exactly ONE attempt: no retry warning, no onThrottle` (`expected undefined to match object`: the error surfaces only after a logged, `onThrottle`-announced backoff), and `… > a positive knob value applies to every model …` (called 3 times). This is the N2/N11 regression. Restore it.
   7. Change `geminiThinkingWindowApplies` to `return geminiModelThinks(model);`. Expected red: `… > a positive knob value applies to every model …` (Gemma ends as `GeminiStreamIdleError`, called 3 times). Restore it.
   8. Delete the `if (ceiling.aborted) { … }` block. Expected red: `… > silence past the request ceiling fails as AnalyzerTimeoutError, once, never retried (a thinking model)` and `… > the ceiling also bounds a model that does not think`. Restore it.
   9. Delete the `if (!buf) { thoughtPartsBeforeAnswer += …; }` block. Expected red: `… > logs one timing line per attempt: …` (`thoughtPartsBeforeAnswer=0`) and `… > firstAnswerMs is when the answer text arrived, …`. Restore it.
@@ -3013,7 +3151,7 @@ Expected: PASS. No existing test changes behaviour:
   13. In `classifyAnalysisFailure`, delete the `if (err.reason === 'thinking-idle') { … }` branch. Expected red: `AnalyzerTimeoutError (#3084 wave 2b) > → analyzer-timeout naming the thinking window setting …` (the ceiling copy names the request ceiling). Restore it.
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/errors.ts server/src/config/registry.ts server/src/analyzer/transports/gemini-transport.ts server/src/analyzer/transports/gemini-transport-thinking.test.ts server/src/analyzer/gemini.test.ts server/.env.example server/src/routes/failure-taxonomy.ts server/src/routes/failure-remediations.ts server/src/routes/failure-taxonomy.test.ts openapi.yaml src/lib/api-types.ts src/data/help-failures.ts src/data/help-failures.test.ts src/data/help-categories.test.ts
+git add server/src/analyzer/errors.ts server/src/config/registry.ts server/src/analyzer/transports/gemini-transport.ts server/src/analyzer/transports/gemini-transport-thinking.test.ts server/src/analyzer/gemini.test.ts server/.env.example server/src/routes/failure-taxonomy.ts server/src/routes/failure-remediations.ts server/src/routes/failure-taxonomy.test.ts openapi.yaml src/lib/api-types.ts src/data/help-failures.ts src/data/help-failures.test.ts src/data/help-categories.test.ts docs/wiki/Advanced-Settings.md
 git commit -m "feat(server,openapi,frontend): bound Gemini's silence before an answer and every request's duration (#3084)"
 ```
 
@@ -3035,7 +3173,7 @@ git commit -m "feat(server,openapi,frontend): bound Gemini's silence before an a
 - Modify: `server/src/routes/failure-remediations.ts:94-101` (add after `analyzer-truncated`)
 - Modify: `openapi.yaml:7049` (enum), and regenerate `src/lib/api-types.ts`.
 - Modify: `src/data/help-failures.ts:28-55`, `:57-81`
-- Modify: `server/src/routes/analysis.ts:29` (import), `:2627-2663` (`AnalysisJob.reasoningOverflowed`), before `:2437` (`noteReasoningOverflow`, `buildNonStoryClassifier`), `:4550` (main route, Phase-0 per-chapter catch), `:5685-5689` (main route, Phase-1 pool catch), `:5814-5836` (main route, non-story classifier), `:7149` (subset route, Phase-0 per-chapter catch), `:7540-7566` (subset route, non-story classifier), `:5361-5363` (main route, Phase-1 `stage2Call`: escalation overflow hook), `:7363-7367` (subset route, Phase-1 inline `stageCall`: escalation overflow hook), `:4727-4738` (main route, `runPhase0Pool`'s `launchNextCast`: dispatch check), `:5252-5262` (main route, `runChapter`, after `awaitPhase1Dispatch`: dispatch check), `:7341-7345` (subset route, Phase-1 chapter loop: dispatch check) — P20 run stop and "stop new spend"
+- Modify: `server/src/routes/analysis.ts:29` (import), `:2627-2663` (`AnalysisJob.reasoningOverflowed`), before `:2437` (`noteReasoningOverflow`, `buildNonStoryClassifier`), `:4550` (main route, Phase-0 per-chapter catch), `:5685-5689` (main route, Phase-1 pool catch), `:5814-5836` (main route, non-story classifier), `:7149` (subset route, Phase-0 per-chapter catch), `:7540-7566` (subset route, non-story classifier), `:5361-5363` (main route, Phase-1 `stage2Call`: escalation overflow hook), `:7363-7367` (subset route, Phase-1 inline `stageCall`: escalation overflow hook), `:4727-4738` (main route, `runPhase0Pool`'s `launchNextCast`: dispatch check), `:5252-5262` (main route, `runChapter`, after `awaitPhase1Dispatch`: dispatch check), `:7341-7345` (subset route, Phase-1 chapter loop: dispatch check), `:6444-6450` (main route terminal handler — pass `job.reasoningOverflowChapter` to `classifyAnalysisFailure`, F7) and the subset route's equivalent terminal handler (re-locate by the same pattern) — P20 run stop and "stop new spend"
 - Modify: `server/src/routes/script-review.ts:40` (import), `:924` (capture variable), `:944-951` (catch), `:972-987` (terminal event) — P20 pass stop
 - Modify: `server/src/routes/annotate-emotion.ts:19-20` (imports), `:243-259` (catch) — P20 pass stop
 - Modify: `server/src/routes/instruct-annotation.ts` (imports, beside its `DailyQuotaExhaustedError` import), `:242-258` (catch) — P20 pass stop
@@ -3085,7 +3223,7 @@ The overflow error is not an `AnalyzerTruncatedError`, so both chunkers rethrow 
 
 **Gemma keeps its split recovery (P27).** Task 2.7 reports `thoughtsTokenCount` as `usage.reasoningTokens` only on a request that asked for `includeThoughts`, and Gemma never does: it is outside the static thinking rule. A Gemma empty `MAX_TOKENS` therefore has reasoning evidence only if a thought part arrived (`reasoningSeen`). Otherwise it stays `AnalyzerTruncatedError` and splits, even when the response reports a `thoughtsTokenCount`. `gemini.test.ts` pins both sides below (Gemma splits, `gemini-3.6-flash` overflows, on the same response), and register row `E<next+1>` (Task 2.10) checks on a real chapter that the Gemma split still recovers.
 
-**Run stop (P20 — pending owner approval; this plan is written to it).** A reasoning overflow is not a size problem. The same engine settings overflow again on the next chapter, and each attempt spends a full output budget on thinking — on `gemini-3.6-flash`, one of its 20 requests a day. The fix is a setting change, so the failure stops new spend — new chapters, escalation windows and non-story classification calls — and its copy names the engine's max-output and reasoning settings. **Alternative, pending owner approval:** skip the overflowing chapter and continue, which keeps chapters that fit but can spend a full thinking budget on each chapter that does not. This task is written to the recommendation:
+**Run stop (P20 — approved by the owner 2026-09-13: stop new spend, with a loud, actionable warning; see F7 and Task 2.9a).** A reasoning overflow is not a size problem. The same engine settings overflow again on the next chapter, and each attempt spends a full output budget on thinking — on `gemini-3.6-flash`, one of its 20 requests a day. The fix is a setting change, so the failure stops new spend — new chapters, escalation windows and non-story classification calls — and its copy names the engine's max-output and reasoning settings, with structured fixes (Task 2.9a) pointing at exactly which one to raise. **Alternative (not chosen):** skip the overflowing chapter and continue, which keeps chapters that fit but can spend a full thinking budget on each chapter that does not. This task is written to the recommendation:
 - **Phase 0 (stage 1), main route.** The per-chapter catch rethrows `GeminiContentBlockedError` (`routes/analysis.ts:4550`) instead of recording a chapter failure. It rethrows `AnalyzerReasoningOverflowError` too, marking the job first (below).
 - **Phase 0 (stage 1), subset (Retry) route.** The same, at `routes/analysis.ts:7149`.
 - **Phase 1 (stage 2)** needs no new catch. `runPhase1Pool`'s pool catch marks the job on an overflow and rethrows the first chapter error, as today (`routes/analysis.ts:5680-5691`), to the job's terminal handler, which classifies it with `classifyAnalysisFailure` and ends the job with that code and copy (`:6444-6450`). The subset route's Phase-1 loop (around `:7215`) has no catch either. A test pins that a stage-2 overflow ends the run.
@@ -3434,6 +3572,29 @@ describe('AnalyzerReasoningOverflowError (#3084 wave 2b)', () => {
     expect(r.userMessage).toContain('reasoning level');
     expect(r.remediation).toContain('reasoning');
     expect(r.detail).toContain('reasoningTokens=8100');
+    // #3084 F7 — no chapter was passed, so the message never invents one.
+    expect(r.userMessage).toContain('a chapter');
+    expect(r.userMessage).not.toMatch(/chapter\s+"|chapter\s+\d/);
+  });
+
+  it('names the chapter by title when the caller passes one (#3084 F7)', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
+      'Gemini (gemini-3.6-flash)',
+      { chapter: { id: 4, title: 'The Long Night' } },
+    );
+    expect(r.userMessage).toContain('chapter "The Long Night"');
+    expect(r.detail).toContain('chapterId=4');
+  });
+
+  it('falls back to the bare chapter id when no title was passed (#3084 F7)', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
+      'Gemini (gemini-3.6-flash)',
+      { chapter: { id: 7 } },
+    );
+    expect(r.userMessage).toContain('chapter 7');
+    expect(r.detail).toContain('chapterId=7');
   });
 
   it('names Ollama num_ctx (the binding limit), not num_predict, for an Ollama overflow', () => {
@@ -3594,6 +3755,43 @@ describe('noteReasoningOverflow (#3084 P20)', () => {
     expect(job.reasoningOverflowed).toBe(true);
     expect(budget.remainingWindows).toBe(0);
   });
+
+  it('records the chapter it was told about (#3084 F7)', () => {
+    const job = buildStubJob('m-note-overflow-chapter');
+    const budget = { remainingWindows: 600 };
+    noteReasoningOverflow(
+      job,
+      budget,
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
+      { id: 4, title: 'The Long Night' },
+    );
+    expect(job.reasoningOverflowChapter).toEqual({ id: 4, title: 'The Long Night' });
+  });
+
+  it('keeps the FIRST overflow chapter, like reasoningOverflowError, even when a later call names a different one', () => {
+    const job = buildStubJob('m-note-overflow-first-wins');
+    const budget = { remainingWindows: 600 };
+    noteReasoningOverflow(
+      job,
+      budget,
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
+      { id: 4, title: 'The Long Night' },
+    );
+    noteReasoningOverflow(
+      job,
+      budget,
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 4200),
+      { id: 5, title: 'The Fen' },
+    );
+    expect(job.reasoningOverflowChapter).toEqual({ id: 4, title: 'The Long Night' });
+  });
+
+  it('leaves reasoningOverflowChapter undefined when no chapter is passed', () => {
+    const job = buildStubJob('m-note-overflow-no-chapter');
+    const budget = { remainingWindows: 600 };
+    noteReasoningOverflow(job, budget, new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', undefined));
+    expect(job.reasoningOverflowChapter).toBeUndefined();
+  });
 });
 
 describe('buildNonStoryClassifier — no non-story call after a reasoning overflow (#3084 P20)', () => {
@@ -3621,6 +3819,8 @@ describe('buildNonStoryClassifier — no non-story call after a reasoning overfl
     expect(run).toHaveBeenCalledTimes(1);
     expect(job.reasoningOverflowed).toBe(true);
     expect(budget.remainingWindows).toBe(0);
+    // #3084 F7 — the classifier knows which chapter it was calling for (chapter 1's run).
+    expect(job.reasoningOverflowChapter).toEqual({ id: 1, title: 'Chapter 1' });
   });
 
   it('a job already marked by an overflow elsewhere makes no classification call', async () => {
@@ -3963,6 +4163,11 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
       /* The run ended on the overflow while chapter 1 was still in flight. */
       expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
       expect(seed.job.reasoningOverflowed).toBe(true);
+      // #3084 F7 — end to end through the real Phase-1 pool catch, not just the unit helper.
+      expect(seed.job.reasoningOverflowChapter).toEqual({ id: 2, title: 'Chapter Two' });
+      // #3084 F7 — the terminal handler passed that chapter to classifyAnalysisFailure,
+      // so the SSE error's message names it by title rather than saying "a chapter".
+      expect(events.find((e) => e.kind === 'error')!.message).toContain('chapter "Chapter Two"');
 
       /* P20 — chapter 1 still finishes and caches for resume. */
       await vi.waitFor(
@@ -4598,7 +4803,8 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
     match: () => false,
   },
 ```
-- **Classify branch.** Insert after the `AnalyzerTruncatedError` branch of `classifyAnalysisFailure`. On Ollama it names `num_ctx`, the binding limit (P6):
+- **Signature.** `classifyAnalysisFailure(err: unknown, modelLabel: string): AnalysisFailure` (`failure-taxonomy.ts:492`) gains a third, optional parameter: `classifyAnalysisFailure(err: unknown, modelLabel: string, ctx?: { chapter?: { id: number; title?: string } }): AnalysisFailure`. Every existing call site (the terminal handlers, `failure-taxonomy.test.ts`'s many two-arg calls) keeps compiling unchanged; only the `AnalyzerReasoningOverflowError` branch below reads `ctx`.
+- **Classify branch.** Insert after the `AnalyzerTruncatedError` branch of `classifyAnalysisFailure`. On Ollama it names `num_ctx`, the binding limit (P6). F7 — the failure names the chapter when the caller passed one (below, wired from `job.reasoningOverflowChapter`), and never invents one when it did not:
 ```ts
   if (err instanceof AnalyzerReasoningOverflowError) {
     const outputSetting =
@@ -4607,10 +4813,12 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
         : err.transport === 'gemini'
           ? "'Gemini max output tokens' (ANALYZER_MAX_OUTPUT_TOKENS; 0 = Auto, the model's own limit)"
           : "this endpoint's max output tokens";
+    const chapter = ctx?.chapter;
+    const chapterLabel = chapter ? (chapter.title ? `chapter "${chapter.title}"` : `chapter ${chapter.id}`) : 'a chapter';
     return withCopy(
       'analyzer-reasoning-overflow',
-      `${modelLabel} spent its whole output budget reasoning and returned no answer, so the analysis stopped. Raise ${outputSetting}, or lower the model's reasoning level, then retry.`,
-      `transport=${err.transport} model=${err.model}${err.reasoningTokens ? ` reasoningTokens=${err.reasoningTokens}` : ''}`,
+      `${modelLabel} spent its whole output budget reasoning on ${chapterLabel} and returned no answer, so the analysis stopped. Raise ${outputSetting}, or lower the model's reasoning level, then retry.`,
+      `transport=${err.transport} model=${err.model}${chapter ? ` chapterId=${chapter.id}` : ''}${err.reasoningTokens ? ` reasoningTokens=${err.reasoningTokens}` : ''}`,
     );
   }
 ```
@@ -4646,24 +4854,40 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
       reasoningOverflowed. The chapter pools' dispatch check rethrows it, so a job
       marked by an overflow the runner swallowed ends exactly as a rethrown one does. */
   reasoningOverflowError?: AnalyzerReasoningOverflowError;
+  /** #3084 P20/F7 — the chapter noteReasoningOverflow was told about when it
+      first marked the job (set together with the two fields above). `title`
+      is best-effort: some call sites (an escalation call, the non-story
+      classifier) know only an id at the point they catch the error and would
+      need an extra lookup for a title neither has any other reason to hold;
+      those pass `{ id }` alone. The terminal handler's copy falls back to
+      "a chapter" when this whole field is undefined (an overflow the runner
+      never told which chapter — should not happen once every call site below
+      passes one, but the fallback stays so a future call site that forgets
+      degrades to vague copy, not a crash). */
+  reasoningOverflowChapter?: { id: number; title?: string };
 ```
 - **The helpers.** Directly before the doc comment of `export function attributeChapterStage2WithEval` (`:2437`), add:
 ```ts
-/** #3084 P20 — "stop new spend". Marks the job and empties the book's
+/** #3084 P20/F7 — "stop new spend". Marks the job and empties the book's
     escalation budget: the object every chapter's attributeChapterStage2 call
     shares (:3692, :6805), which escalateFlaggedWindows checks before each
     window (escalation.ts:235), so no chapter still in flight starts another
     window. Nothing is aborted: in-flight chapters finish and cache for resume,
-    as the pools are designed to (:5672-5675). Returns whether `err` was a
-    reasoning overflow. */
+    as the pools are designed to (:5672-5675). `chapter` records WHICH chapter
+    was calling the model when the overflow happened, for the terminal
+    failure's copy (F7 — "naming the chapter"); only the FIRST overflow's
+    chapter is kept, mirroring `reasoningOverflowError`'s own ??=. Returns
+    whether `err` was a reasoning overflow. */
 export function noteReasoningOverflow(
   job: AnalysisJob,
   structureBudget: { remainingWindows: number },
   err: unknown,
+  chapter?: { id: number; title?: string },
 ): boolean {
   if (!(err instanceof AnalyzerReasoningOverflowError)) return false;
   job.reasoningOverflowed = true;
   job.reasoningOverflowError ??= err;
+  job.reasoningOverflowChapter ??= chapter;
   structureBudget.remainingWindows = 0;
   return true;
 }
@@ -4710,7 +4934,9 @@ export function buildNonStoryClassifier(opts: {
       return out.nonStory;
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      noteReasoningOverflow(job, structureBudget, err);
+      /* #3084 F7 — this classifier already has the chapter (`ch`), so the
+         overflow's chapter is never the "should not happen" fallback case. */
+      noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title });
       return false; // Signal-2 hiccup → treat as story, degrade to Signal-1-only
     }
   };
@@ -4724,13 +4950,16 @@ export function buildNonStoryClassifier(opts: {
              a full output budget on thinking. Mark the job (no new escalation
              window or non-story call from here on) and rethrow to the terminal
              handler, whose analyzer-reasoning-overflow copy names the setting to
-             change, instead of grinding chapter by chapter. */
-          if (noteReasoningOverflow(job, structureBudget, chErr)) throw chErr;
+             change, instead of grinding chapter by chapter. `ch` (`ch.id`,
+             `ch.title`) is already in scope here, from `const ch =
+             recordRef.chapterHints[i];` at the top of `runCastChapter`. */
+          if (noteReasoningOverflow(job, structureBudget, chErr, { id: ch.id, title: ch.title })) throw chErr;
 ```
 - **Subset route, Phase-0 per-chapter catch.** Directly after `if (chErr instanceof GeminiContentBlockedError) throw chErr;` (`:7149`), add:
 ```ts
-        /* #3084 P20 — whole-book-fatal reasoning overflow; see the main route. */
-        if (noteReasoningOverflow(job, structureBudget, chErr)) throw chErr;
+        /* #3084 P20/F7 — whole-book-fatal reasoning overflow; see the main
+           route. `ch` is in scope here the same way. */
+        if (noteReasoningOverflow(job, structureBudget, chErr, { id: ch.id, title: ch.title })) throw chErr;
 ```
 - **Main route, Phase-1 pool catch.** In `runPhase1Pool`'s `launchNext` (`:5685-5689`), replace
 ```ts
@@ -4745,10 +4974,15 @@ with
           } catch (e) {
             inFlight.delete(i);
             aborted = true;
-            /* #3084 P20 — the chapters still running in the other workers start
-               no further escalation window. They are not aborted, and still
-               finish and cache (the pool comment above). */
-            noteReasoningOverflow(job, structureBudget, e);
+            /* #3084 P20/F7 — the chapters still running in the other workers
+               start no further escalation window. They are not aborted, and
+               still finish and cache (the pool comment above). `launchNext`
+               has no `ch` of its own (unlike `runChapter`, which this `i`
+               belongs to) — re-derive it the same way `runChapter` does. */
+            noteReasoningOverflow(job, structureBudget, e, {
+              id: recordRef.chapterHints[i].id,
+              title: recordRef.chapterHints[i].title,
+            });
             throw e;
           }
 ```
@@ -4806,7 +5040,18 @@ with
       bookLanguage,
     });
 ```
-- **No terminal-catch change.** Neither terminal catch (main `:6308-6365`, subset `:7867-7912`) aborts the job's controller or changes. The subset route's Phase 1 attributes one chapter at a time (`:7341`) with nothing else in flight, and both routes' non-story pass runs after Phase 1. So the three marks above plus the builder cover every overflow that has other model calls behind it.
+- **No terminal-catch ABORT change.** Neither terminal catch (main `:6308-6365`, subset `:7867-7912`) aborts the job's controller or changes that behaviour. The subset route's Phase 1 attributes one chapter at a time (`:7341`) with nothing else in flight, and both routes' non-story pass runs after Phase 1. So the three marks above plus the builder cover every overflow that has other model calls behind it.
+- **Terminal handler passes the chapter through (F7).** The main route's terminal handler (`:6444-6450`) destructures `classifyAnalysisFailure`'s result and calls `endJob`:
+```ts
+    const {
+      code,
+      userMessage: message,
+      remediation,
+      detail,
+    } = classifyAnalysisFailure(e, analyzerLabel, { chapter: job.reasoningOverflowChapter });
+    endJob(job, { kind: 'error', code, message, remediation, detail });
+```
+  (added: the third argument; nothing else on this snippet changes). The `chapter` field is a no-op for every non-`AnalyzerReasoningOverflowError` failure — the classifier ignores `ctx` unless `err` matches that branch — so this is safe to pass unconditionally rather than gating it on the error type here, which would duplicate the `instanceof` check the classifier already does. Find the subset route's equivalent terminal handler (same `classifyAnalysisFailure(e, …)` call, its own `job` in scope) and make the same one-argument addition.
 
 `server/src/routes/script-review.ts`:
 - **Import.** Change `:40` to `import { AnalyzerReasoningOverflowError, AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';`.
@@ -4895,17 +5140,22 @@ with
 `server/src/routes/analysis.ts`:
 - **Main route, Phase-1 `stage2Call`.** Inside `const stage2Call: StageCall = {` (`:5275`), directly after `language: bookLanguage,` (`:5277`), add:
 ```ts
-        /* #3084 P20 — attributeChapterStage2 hands this StageCall to
+        /* #3084 P20/F7 — attributeChapterStage2 hands this StageCall to
            escalateFlaggedWindows (:2382). An escalation call that overflows
            returns null inside the runner and reports here: the job is marked and
            the book's escalation budget emptied, so neither this chapter nor any
-           other sends a further window (escalation.ts:235). */
-        onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err),
+           other sends a further window (escalation.ts:235). `ch` is in scope
+           (this literal is built inside `runChapter`, same as `stage2Call`'s
+           other fields). */
+        onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }),
 ```
 - **Subset route, Phase-1 inline `stageCall`.** Inside the `stageCall: {` literal passed to `attributeChapterStage2WithEval` (`:7224`), directly after `language: bookLanguage,` (`:7226`), add:
 ```ts
-            /* #3084 P20 — escalation overflow hook; see the main route's stage2Call. */
-            onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err),
+            /* #3084 P20/F7 — escalation overflow hook; see the main route's
+               stage2Call. `ch` is in scope (`const ch = toRun[idx];`, the
+               same loop the "Subset route, Phase 1" dispatch-check bullet
+               above adds throwIfReasoningOverflowed(job) to). */
+            onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }),
 ```
   `job` and `structureBudget` (`:3692`, `:6805`) are in scope at both sites, as they are at the pool catch above.
   - **Every escalation call gets the hook.** The `cloud` escalation analyzer receives the same `stageCall` (`:2382`). `withPassEval` only reassigns `onEvalTiming` on that object (`analyzer-eval-stats.ts:193`). The `stage2CallSeq` spread (`:2303`) copies the hook too, though no stage-2 call reads it.
@@ -4924,6 +5174,9 @@ Expected: PASS.
   1. In `finish.ts`, change `(hasReasoningEvidence(r) || answer.unterminated)` to `answer.unterminated`. Expected red: `mapFinish — reasoning overflow vs truncation (#3084 wave 2b) > length + empty answer + reasoning tokens → AnalyzerReasoningOverflowError carrying the count`, and `GeminiAnalyzer — output truncation (#528) > an empty MAX_TOKENS response WITH thoughtsTokenCount fails as reasoning overflow …`. Restore it.
   2. Change the same condition to `true`. Expected red: `… length + empty answer + NO evidence (Gemma empty MAX_TOKENS) → AnalyzerTruncatedError, so the chunk still splits`. Restore it.
   3. Delete the `AnalyzerReasoningOverflowError` branch in `classifyAnalysisFailure`. Expected red: `AnalyzerReasoningOverflowError (#3084 wave 2b) > → analyzer-reasoning-overflow, naming the Gemini max-output setting…` (the static signature copy lacks the setting name). Restore it.
+  3a. Change `const chapter = ctx?.chapter;` to `const chapter = undefined;`. Expected red: `… > names the chapter by title when the caller passes one (#3084 F7)` and `… > falls back to the bare chapter id when no title was passed (#3084 F7)` (both read `'a chapter'` instead of the passed chapter). Restore it.
+  3b. Change `chapter.title ? … : \`chapter ${chapter.id}\`` to always take the `chapter.title` branch (drop the ternary's `false` arm, e.g. `` `chapter "${chapter.title}"` `` unconditionally). Expected red: `… > falls back to the bare chapter id when no title was passed (#3084 F7)` (`userMessage` reads `chapter "undefined"`, not `chapter 7`). Restore it.
+  3c. In the terminal handler, drop the third argument from `classifyAnalysisFailure(e, analyzerLabel, { chapter: job.reasoningOverflowChapter })`. Expected red: `a reasoning overflow stops new spend, not work already in flight (#3084 P20, N4) > after a stage-2 overflow in chapter 2, chapter 1 (already calling the model) finishes and caches, …` (the SSE `error` event's `message` reads `'a chapter'`, not `'chapter "Chapter Two"'`). Restore it.
   4. In `finish.ts`, move `if (ctx.kind === 'ollama' && !r.text) throw …;` above the `if (r.finish === 'length') {` block. Expected red:
      - `Ollama empty \`length\` stream (#3084 wave 2b) > empty content, no message.thinking → finish length, and mapFinish splits it (AnalyzerTruncatedError)`;
      - `… > empty content after message.thinking chunks → reasoningSeen, and mapFinish fails it as reasoning overflow`;
@@ -4957,6 +5210,9 @@ Expected: PASS.
   29. Delete the same call from the subset route's Phase-1 loop. Expected red: `… > subset route: after one escalation overflow in chapter 1, chapter 2's stage-2 call is never sent …`. Restore it.
   30. Delete the same call from `runPhase0Pool`'s `launchNextCast`. Expected red: `… > pipelined main route: after an escalation overflow, Phase 0 starts no further cast chapter and the run halts with analyzer-reasoning-overflow (#3084 P20)` (`castCalls` contains 3). Restore it.
   31. In `noteReasoningOverflow`, delete `job.reasoningOverflowError ??= err;`. Expected red: the three dispatch-check cases of rows 28–30. The check still stops dispatch, but it throws `undefined`, which classifies as `unknown`, not `analyzer-reasoning-overflow`. Restore it.
+  32. In `noteReasoningOverflow`, delete `job.reasoningOverflowChapter ??= chapter;`. Expected red: `noteReasoningOverflow (#3084 P20) > records the chapter it was told about (#3084 F7)` and `… > keeps the FIRST overflow chapter, …` (`job.reasoningOverflowChapter` is `undefined` in both). Restore it.
+  33. Change `job.reasoningOverflowChapter ??= chapter;` to `job.reasoningOverflowChapter = chapter;` (drop the "first wins" guard). Expected red: `noteReasoningOverflow (#3084 P20) > keeps the FIRST overflow chapter, like reasoningOverflowError, even when a later call names a different one` (`job.reasoningOverflowChapter` reads chapter 5's, not chapter 4's). Restore it.
+  34. In `buildNonStoryClassifier`'s catch, drop the third argument from `noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title })`. Expected red: `buildNonStoryClassifier — no non-story call after a reasoning overflow (#3084 P20) > a classification call that overflows marks the job, reads as story, …` (`job.reasoningOverflowChapter` is `undefined`). Restore it.
 - [ ] **Step 6: Commit**
 ```bash
 git add server/src/analyzer/errors.ts server/src/analyzer/types.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/dialogue-structure/escalation.test.ts server/src/analyzer/runner/finish.ts server/src/analyzer/runner/finish-reasoning-overflow.test.ts server/src/analyzer/runner/finish.test.ts server/src/analyzer/runner/stage-runner.test.ts server/src/analyzer/transports/ollama-transport.ts server/src/analyzer/transports/ollama-transport-overflow.test.ts server/src/analyzer/stage1-chunk.test.ts server/src/analyzer/stage2-chunk.test.ts server/src/analyzer/gemini.test.ts server/src/analyzer/attribution-eval/review-run.ts server/src/analyzer/attribution-eval/review-run.test.ts server/src/routes/failure-taxonomy.ts server/src/routes/failure-remediations.ts server/src/routes/failure-taxonomy.test.ts server/src/routes/analysis.ts server/src/routes/analysis.phase-model.test.ts server/src/routes/analysis.reasoning-overflow.test.ts server/src/routes/script-review.ts server/src/routes/script-review.test.ts server/src/routes/annotate-emotion.ts server/src/routes/annotate-emotion.test.ts server/src/routes/instruct-annotation.ts server/src/routes/instruct-annotation.test.ts openapi.yaml src/lib/api-types.ts src/data/help-failures.ts src/data/help-failures.test.ts src/data/help-categories.test.ts
@@ -4979,6 +5235,345 @@ git commit -m "feat(server,openapi,frontend): fail reasoning overflow instead of
 - `routes/annotate-emotion.test.ts` and `routes/instruct-annotation.test.ts`, whose quota cases share the edited catch;
 - `attribution-eval/review-run.test.ts`, whose `(e)` quota case shares the edited rethrow;
 - `runner/stage-runner.test.ts`, whose `single attempt …` case runs the unchanged `GEMINI_RETRY_POLICY`.
+
+### Task 2.9a: Structured fixes for a reasoning overflow — "How to fix", a persistent notification, and the Advanced Settings deep link (F7)
+
+**Scope note.** This task implements the 2b slice of F7's staging ("2b: Gemini
+and Ollama fixes, the field, router focus, rendering, notification, guard
+test"). It is specified at a coarser grain than the rest of this file — one
+combined test-first step per surface rather than a fully separate mutation row
+for every line — because it touches eight files across three layers (server
+contract, frontend plumbing, two view components) with no existing precedent
+this file can extend line-for-line. Flagged so the coordinator can dispatch a
+task-review pass at higher scrutiny than usual.
+
+**Router mechanism (confirmed).** `parseHash` does not exist in
+`src/lib/router.ts` — a comment at `src/routes/index.tsx:1126` ("Replaces
+parseHash's fallback to `{ kind: 'books' }`") confirms it was retired when the
+router moved to react-router loaders; `stageToHash` and `stageEqual` are the
+two functions that still exist there. The actual parse-side mechanism is
+`useSearchParams()` read inside each route's loader component (e.g.
+`HelpRoute`, `src/routes/index.tsx:491-495`, reads `?code=` into `focusCode`).
+This task extends that mechanism for `advanced`'s new `?focus=` param, extends
+`stageToHash`'s `'advanced'` case to serialize it back, and extends
+`stageEqual` to compare it (below) — mirroring the `'help'`/`focusCode` case
+all three already have. `router.ts` itself stays pure and unit-testable;
+`AdvancedRoute` is not. Wave 5's Task 5.5c extends this same `'advanced'`
+stage with a second field, `reasoningFocus`, and keeps this task's `focusKey`
+name as-is — do not rename it.
+
+**Chapter naming is already done.** Task 2.9's `noteReasoningOverflow` and
+`classifyAnalysisFailure` branch now carry and name the chapter (F7); this
+task only adds `fixes` on top of the copy Task 2.9 already produces — it does
+not touch chapter identity again.
+
+**Files:**
+- Modify: `server/src/routes/failure-taxonomy.ts:400-405` (`AnalysisFailure`, add `fixes?: AnalysisFailureFix[]`), `:481-483` (`withCopy`, unchanged — `fixes` is set only where a branch computes it, never via the static remediation map), the `AnalyzerReasoningOverflowError` branch Task 2.9 wrote — extend IN PLACE (spread `withCopy(...)`'s result and add `fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model })`; append `' Then resume — finished chapters are kept.'` to the `userMessage` template literal). Do not touch `chapter`/`chapterLabel` — that is Task 2.9's addition and already correct.
+- Create: `server/src/routes/failure-taxonomy-fixes.ts` — `AnalysisFailureFix`, `reasoningOverflowFixes(ctx)`, and the guard's registry-key/endpoint-field validator
+- Modify: `server/src/routes/analysis.ts` — the two terminal handlers' destructure of `classifyAnalysisFailure`'s result gains `fixes` (`const { code, userMessage: message, remediation, detail, fixes } = classifyAnalysisFailure(...)`) and the `endJob`/`send` call passes it through (`{ kind: 'error', code, message, remediation, detail, fixes }`). The `classifyAnalysisFailure` CALL itself — including its `{ chapter: job.reasoningOverflowChapter }` third argument — is Task 2.9's edit and is not touched again here.
+- Modify: `openapi.yaml` — add `AnalysisFailureFix` schema and a `fixes` array property on the analysis SSE error shape. **Finding:** the analysis SSE stream's `error`/`chapter-failed` events are NOT modelled in `openapi.yaml` today — `AnalysePhaseEvent` (`:5486-5492`) and `AnalyseWarningEvent` (`:5494-5513`) are the only two members of the `text/event-stream` `oneOf` at `/api/manuscripts/{manuscriptId}/analysis` (`:545-563`) and `/analysis/chapters` (`:578-611`), and neither carries `code`/`message`/`remediation`/`detail`/`fixes` — the real wire shape lives only in `src/lib/api.ts`'s local `AnalysisStreamEvent` interface. This task adds a new `AnalyseErrorEvent` schema (`kind`, `code`, `message`, `remediation`, `detail`, `fixes`) and appends it to both `oneOf` lists, closing that gap rather than leaving `fixes` as the first field ever added to an already-incomplete shape.
+- Modify: `src/lib/api-types.ts` (regenerate via `npm run openapi:types`) and its mock counterpart, `src/mocks/canned-data.ts` (or the manuscript fixture under `src/mocks/manuscripts/` that emits an `error` event, if the reasoning-overflow path has one; otherwise note it has none, since mocks behind `VITE_USE_MOCKS` never call a real analyzer and so cannot organically produce this failure — a hand-authored fixture entry is the only way to exercise it in mock mode).
+- Modify: `src/lib/api.ts:2766-2782` (`AnalysisStreamEvent`, add `fixes?: AnalysisFailureFix[]`), `:2824-2852` (`AnalysisError`, add `fixes` field + 7th constructor param), `:2997-3005` and `:5714-5721` (both terminal-error throw sites, add `payload.fixes`)
+- Modify: `src/lib/types.ts:1073` (`{ kind: 'advanced' }` → `{ kind: 'advanced'; focusKey?: string }`). Wave 5's Task 5.5c extends this same member with `reasoningFocus` — keep the field named `focusKey` exactly, since that is the name both this task's own `stageToHash`/`AdvancedRoute` code below and wave 5's later edit key off.
+- Modify: `src/lib/router.ts:49-50` (`stageToHash`'s `'advanced'` case, mirroring the `'help'` case's `?code=` pattern at `:45-48`) and `:79-97` (`stageEqual` — add an `'advanced'` branch comparing `focusKey`, mirroring the existing `'help'` branch at `:93-95` that compares `focusCode`)
+- Modify: `src/routes/index.tsx:471-475` (`AdvancedRoute`, mirroring `HelpRoute` at `:491-495`)
+- Modify: `src/store/notifications-slice.ts:43-55` (`Toast`, add `fixes?: AnalysisFailureFix[]`), `:63-69` (`PushToastPayload`, same), `:75-101` (`pushToast` reducer, thread `fixes` through like `nudge`)
+- Modify: `src/components/toast-stack.tsx:32-34` (route a `t.fixes` toast to a new component, mirroring the `t.nudge` → `VoiceNudgeToast` branch)
+- Create: `src/components/reasoning-overflow-toast.tsx` — no auto-dismiss timer (mirrors `VoiceNudgeToast`'s exemption from `ToastItem`'s 6 s timer), renders the "How to fix" list via `fixHref`, a dismiss button
+- Create: `src/lib/failure-fixes.ts` — `fixHref(fix)`, the ONE place that turns a structured fix into a link (or `null`). Both `analysing.tsx` and `reasoning-overflow-toast.tsx` call it instead of each branching on `fix.settingKey` inline; 3d adds an `endpointField` branch and 5a a `reasoningSetting` branch to this same function, with no change to either renderer.
+- Modify: `src/views/analysing.tsx:145-150` (`error` state type, add `fixes`), `:655-660` (`setError`, carry `fixes` from the caught `AnalysisError`), `:1342-1344` and `:1592-1594` (the two "What to do:" blocks — render the "How to fix" list beneath `remediation` when `fixes` is non-empty), plus a new effect that dispatches `notificationsActions.pushToast` when `error?.code === 'analyzer-reasoning-overflow'`
+- Modify: `src/views/advanced.tsx` — read `focusKey` from the hydrated stage (via `useAppSelector` on `ui.stage`, the same source `AdvancedRoute` hydrates), scroll the matching `OverrideRow`/`PromptRow` into view and apply a highlight class for ~2 s
+- Modify: `docs/wiki/Analysis-and-the-Analyzer.md` — new section "When a model thinks past its output limit"
+- Test (create): `src/lib/router.test.ts` (or the existing router test file, if one already covers `stageToHash`) — `?focus=` round-trip; `src/lib/failure-fixes.test.ts` — `fixHref`; `server/src/routes/failure-taxonomy-fixes.test.ts` — the guard; `src/components/reasoning-overflow-toast.test.tsx`; extend `server/src/routes/failure-taxonomy.test.ts`'s `AnalyzerReasoningOverflowError` describe (Task 2.9) with a `fixes` assertion.
+
+**Interfaces:**
+- Produces:
+  ```ts
+  // server/src/routes/failure-taxonomy-fixes.ts
+  export interface AnalysisFailureFix {
+    label: string;
+    settingKey?: string;
+    endpointField?: { endpointId: string; field: string };
+    wikiHref?: string;
+  }
+  export function reasoningOverflowFixes(ctx: {
+    transport: 'ollama' | 'gemini'; // 'openai' arrives with endpoint fixes in 3b
+    model: string;
+  }): AnalysisFailureFix[];
+  ```
+  - Gemini: `{ label: 'Lower Gemini max input tokens per request', settingKey: 'analyzer.gemini.maxInputTokensPerRequest' }`, `{ label: 'Lower the Gemini output-heavy chunk size', settingKey: 'analyzer.gemini.outputHeavyChunkChars' }`, and — only when `analyzer.gemini.maxOutputTokens` is currently set to a NON-ZERO value below the model's known limit (`getCachedGeminiModelInfo(model)?.outputTokenLimit`; skip the fix silently when Auto or unknown) — `{ label: 'Raise Gemini max output tokens (or set it back to Auto)', settingKey: 'analyzer.gemini.maxOutputTokens' }`. All three carry `wikiHref: '/wiki/Analysis-and-the-Analyzer#when-a-model-thinks-past-its-output-limit'`.
+  - Ollama: `{ label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' }`, `{ label: 'Lower the stage-1/stage-2 local input fraction', settingKey: 'analyzer.stage1.localInputFraction' }` and the stage-2 twin, same `wikiHref`.
+  - The thinking window (`analyzer.gemini.thinkingIdleTimeoutMs`) never appears: it bounds silence, not output room, so it cannot fix an overflow (F7).
+- Consumes: `getCachedGeminiModelInfo` (Task 2.5), `allKnobs`/registry key set (`server/src/config/registry.ts`), `analyzerEndpointSchema` (wave 3 — this task's guard tolerates its absence in wave 2 by only checking `settingKey` against `allKnobs()`; the `endpointField` branch of the guard is inert until 3b adds the schema and is noted as such in the guard's own test).
+
+**Guard test (server/src/routes/failure-taxonomy-fixes.test.ts):**
+```ts
+import { describe, it, expect } from 'vitest';
+import { reasoningOverflowFixes } from './failure-taxonomy-fixes.js';
+import { allKnobs } from '../config/registry.js';
+
+describe('reasoningOverflowFixes — every settingKey is a real registry key (#3084 wave 2b, F7)', () => {
+  it('Gemini and Ollama fixes only ever name a key allKnobs() actually has', () => {
+    const keys = new Set(allKnobs().map((k) => k.key));
+    for (const ctx of [
+      { transport: 'gemini' as const, model: 'gemini-3.6-flash' },
+      { transport: 'ollama' as const, model: 'qwen3.5:9b' },
+    ]) {
+      for (const fix of reasoningOverflowFixes(ctx)) {
+        if (fix.settingKey) expect(keys.has(fix.settingKey), fix.settingKey).toBe(true);
+      }
+    }
+  });
+
+  it('never offers the thinking window as a fix (it bounds time, not output room)', () => {
+    for (const ctx of [
+      { transport: 'gemini' as const, model: 'gemini-3.6-flash' },
+      { transport: 'ollama' as const, model: 'qwen3.5:9b' },
+    ]) {
+      expect(reasoningOverflowFixes(ctx).map((f) => f.settingKey)).not.toContain(
+        'analyzer.gemini.thinkingIdleTimeoutMs',
+      );
+    }
+  });
+});
+```
+This is the guard F7 asks for; each wave that adds a fix (3b endpoints, 5a
+reasoning-level, 5b payload) extends this same file rather than writing a new
+one — record that convention in this task's PR body so 3b's author finds it.
+
+**Copy ending (F7).** In the `AnalyzerReasoningOverflowError` branch (Task
+2.9's edit to `failure-taxonomy.ts`'s `classifyAnalysisFailure` — re-locate by
+`if (err instanceof AnalyzerReasoningOverflowError) {`, since Task 2.9's own
+other edits above it will have shifted its line number by the time this task
+runs), append `' Then resume — finished chapters are kept.'` to the returned
+`userMessage`, and attach
+`fixes: reasoningOverflowFixes({ transport: err.transport as 'gemini' | 'ollama', model: err.model })`
+on the returned object (the branch already returns a plain object literal from
+`withCopy`; spread it and add the field, since `withCopy`'s own signature stays
+untouched for every OTHER failure code). Update Task 2.9's existing test
+(`failure-taxonomy.test.ts`, `→ analyzer-reasoning-overflow, naming the Gemini
+max-output setting and the reasoning level`) with:
+```ts
+    expect(r.userMessage).toContain('Then resume — finished chapters are kept.');
+    expect(r.fixes).toBeDefined();
+    expect(r.fixes!.some((f) => f.settingKey === 'analyzer.gemini.maxInputTokensPerRequest')).toBe(true);
+```
+
+**Router (pure, tested).** `stageToHash`'s `'advanced'` case becomes:
+```ts
+    case 'advanced': {
+      const qs = stage.focusKey ? `?focus=${encodeURIComponent(stage.focusKey)}` : '';
+      return `#/advanced${qs}`;
+    }
+```
+Test (round-trip, no DOM): `stageToHash({ kind: 'advanced' })` → `'#/advanced'`;
+`stageToHash({ kind: 'advanced', focusKey: 'analyzer.gemini.maxInputTokensPerRequest' })`
+→ `'#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest'`. `AdvancedRoute`
+(not pure — needs the react-router test harness the existing `HelpRoute`
+tests already set up, per `src/routes/index.test.tsx`) reads
+`searchParams.get('focus') ?? undefined` into `focusKey`, mirroring
+`HelpRoute`'s `focusCode` exactly.
+
+`stageEqual` (`:79-97`) gains a branch beside the existing `'help'` one
+(`:93-95`, which compares `focusCode`):
+```ts
+  if (a.kind === 'advanced' && b.kind === 'advanced') {
+    return a.focusKey === b.focusKey;
+  }
+```
+placed directly after the `'help'` branch. Without it, navigating from one
+`#/advanced?focus=<key>` link to a different key while already on the
+Advanced Settings view would read as "the same stage" (today's `stageEqual`
+falls through to `return true` for two same-`kind` stages once `bookId`
+matches, i.e. both `undefined`), so the hydrate effect would not re-run and
+the scroll-and-highlight would not fire for the second link. Test: `stageEqual({ kind: 'advanced', focusKey: 'a' }, { kind: 'advanced', focusKey: 'b' })`
+→ `false`; `stageEqual({ kind: 'advanced' }, { kind: 'advanced' })` → `true`
+(both `undefined`, unchanged from today).
+
+**Shared link helper (avoids duplicating the link logic in two renderers).**
+`analysing.tsx`'s "What to do:" blocks and the new toast component both render
+the same "How to fix" list, and later waves add more fix shapes (3d's
+`endpointField`, 5a's reasoning-level setting) — each of which is another kind
+of link. Rather than branch on `fix.settingKey`/`fix.endpointField`/etc.
+inline in both places (and every renderer having to stay in sync as waves add
+branches), this task creates one small pure module both renderers call:
+```ts
+// src/lib/failure-fixes.ts
+import { stageToHash } from './router.js';
+import type { components } from './api-types.js';
+
+/** The openapi-generated shape, matching `src/lib/types.ts`'s own convention
+    for a schema this repo shares between client and server (e.g. `Character
+    = components['schemas']['Character'] & { … }`, `types.ts:3`). */
+type AnalysisFailureFix = components['schemas']['AnalysisFailureFix'];
+
+/** #3084 F7 — one place that turns a structured fix into a clickable link (or
+    none, for a fix that is plain text, e.g. "switch model"). 3d adds the
+    endpointField branch, 5a the reasoningSetting branch; neither renderer
+    changes when they land. */
+export function fixHref(fix: AnalysisFailureFix): string | null {
+  if (fix.settingKey) return stageToHash({ kind: 'advanced', focusKey: fix.settingKey });
+  return null;
+}
+```
+Test (`src/lib/failure-fixes.test.ts`):
+```ts
+import { describe, it, expect } from 'vitest';
+import { fixHref } from './failure-fixes.js';
+
+describe('fixHref (#3084 wave 2b, F7)', () => {
+  it('a settingKey fix links to the focused Advanced Settings row', () => {
+    expect(fixHref({ label: 'Lower Gemini max input tokens per request', settingKey: 'analyzer.gemini.maxInputTokensPerRequest' })).toBe(
+      '#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest',
+    );
+  });
+
+  it('a fix with no link (e.g. "switch model") returns null', () => {
+    expect(fixHref({ label: 'Switch to a faster analyzer model' })).toBeNull();
+  });
+});
+```
+Mutation row: change `if (fix.settingKey) return …;` to `return
+stageToHash({ kind: 'advanced', focusKey: fix.settingKey });` unconditionally
+(drop the guard). Expected red: `fixHref … > a fix with no link … returns
+null` (receives `'#/advanced'` instead of `null` — `stageToHash`'s own `qs`
+logic treats an `undefined` `focusKey` as "no query string" and still
+returns a valid, if wrong, href rather than throwing, so only the return
+value catches this, not a crash). Restore it.
+
+**Rendering and the persistent notification.** In `analysing.tsx`, both
+"What to do:" blocks (`:1342-1344`, `:1592-1594`) gain, directly below the
+`remediation` paragraph:
+```tsx
+{error.fixes && error.fixes.length > 0 && (
+  <div className="mt-2">
+    <span className="font-semibold">How to fix:</span>
+    <ul className="list-disc pl-5">
+      {error.fixes.map((f) => {
+        const href = fixHref(f);
+        return (
+          <li key={f.label}>
+            {href ? <a href={href}>{f.label}</a> : f.label}
+            {f.wikiHref && <a href={f.wikiHref} className="ml-1 text-xs">(why?)</a>}
+          </li>
+        );
+      })}
+    </ul>
+  </div>
+)}
+```
+`ReasoningOverflowToast` (below) imports `fixHref` the same way and renders the
+identical `href ? <a> : plain text` branch — neither component computes a link
+itself once this task lands, and neither will need to change when 3d/5a add
+new fix shapes, since `fixHref` grows a branch instead.
+
+A new effect, alongside the existing `setError` call in the catch block
+(`:655-660`):
+```tsx
+useEffect(() => {
+  if (error?.code !== 'analyzer-reasoning-overflow') return;
+  dispatch(
+    notificationsActions.pushToast({
+      kind: 'error',
+      message: error.message,
+      fixes: error.fixes,
+      dedupeKey: `analysis-reasoning-overflow-${manuscriptId}`,
+    }),
+  );
+}, [error, manuscriptId, dispatch]);
+```
+`ToastStack` routes a `t.fixes` toast to `<ReasoningOverflowToast>` (new,
+mirroring `VoiceNudgeToast`'s exemption from `ToastItem`'s 6 s
+`AUTO_DISMISS_MS` timer — `toast-stack.tsx:32-34`'s ternary gains a third arm,
+checked before the `nudge` arm since the two fields are mutually exclusive in
+practice but the check order should not rely on that): it renders the same
+"How to fix" list plus a dismiss button (`dispatch(notificationsActions.dismissToast(toast.id))`).
+Because toasts live in the global `notifications` slice, this toast is visible
+from any view until dismissed — that IS "survives navigation": no new
+persistence mechanism is needed, only exemption from the existing 6 s timer.
+
+**Advanced Settings scroll-and-highlight.** `AdvancedView` (or its route
+wrapper) reads `focusKey` and, once the matching descriptor's group section is
+open (may need to programmatically expand `SettingsAccordion` to that
+section first) and the row has mounted, calls
+`document.getElementById('knob-' + focusKey)?.scrollIntoView({ block: 'center' })`
+and toggles a highlight class for ~2 s via `setTimeout`. This needs `id={'knob-' + d.key}`
+added to `OverrideRow`'s and `PromptRow`'s root element — neither has a DOM id
+today (`advanced.tsx:540-553`, `132`-ish for `PromptRow`; re-locate exactly
+when implementing, since this task did not read those two components' JSX in
+full).
+
+**Wiki section.** `docs/wiki/Analysis-and-the-Analyzer.md`, new section "When
+a model thinks past its output limit": what a reasoning overflow is (the model
+spent its whole output budget on hidden reasoning and returned no answer text
+— splitting the chapter cannot help, since the same settings overflow again on
+a smaller chunk too), the settings that fix it per engine (mirroring
+`reasoningOverflowFixes`'s two branches), and a note that the thinking window
+is a different knob that bounds silence, not output room. Link it from the
+`wikiHref` above; the endpoint half of this same heading is 3d's job (F3), not
+this task's.
+
+- [ ] **Step 1: Write the failing tests** — the guard test above; the router
+  round-trip; `failure-taxonomy.test.ts`'s extended assertions; a
+  `reasoning-overflow-toast.test.tsx` asserting no timer fires within 6 s of
+  mount (fake clock) and that a dismiss button removes the toast.
+- [ ] **Step 2: Run and confirm each fails** — `reasoningOverflowFixes is not
+  a function`; the router test fails on the unchanged `'#/advanced'` case;
+  `failure-taxonomy.test.ts`'s new assertions fail (`r.fixes` is `undefined`,
+  no "Then resume" text); the toast test fails since the component doesn't
+  exist yet.
+- [ ] **Step 3: Implement** — per the Files/Interfaces above, in this order:
+  `failure-taxonomy-fixes.ts` → the `failure-taxonomy.ts` branch edit → the
+  two `analysis.ts` terminal sites → the openapi schema + `npm run
+  openapi:types` → `types.ts` / `router.ts` / `routes/index.tsx` → the
+  notifications-slice / toast-stack / new toast component → `analysing.tsx` →
+  `advanced.tsx` → the wiki section.
+- [ ] **Step 4: Run and confirm it passes** —
+  ```
+  node scripts/tests/knob-docs-sync.test.mjs
+  npm --prefix server run test -- src/routes/failure-taxonomy.test.ts src/routes/failure-taxonomy-fixes.test.ts src/routes/analysis.test.ts
+  npm run openapi:types
+  npx vitest run src/lib/router.test.ts src/lib/failure-fixes.test.ts src/routes/index.test.tsx src/components/reasoning-overflow-toast.test.tsx src/views/analysing.test.tsx src/views/advanced.test.tsx src/store/notifications-slice.test.ts
+  npm run typecheck
+  ```
+- [ ] **Step 5: Mutation proof** (lighter than usual, per the scope note):
+  1. In `reasoningOverflowFixes`, return `[]` unconditionally. Expected red:
+     the extended `failure-taxonomy.test.ts` assertion (`r.fixes` is `[]`, no
+     `maxInputTokensPerRequest` entry). Restore it.
+  2. Delete the `fix.settingKey` existence check's `keys.has` call (replace
+     with `true`). Expected red: none — this IS the check the guard test
+     exists to run; deleting it makes the guard vacuous, which is why the
+     guard test asserts on `allKnobs()` directly rather than trusting the
+     function's own claim. Restore it, and note in the PR body that this
+     mutation cannot be proven red by a unit test alone; it is caught by
+     inspection (the guard's whole purpose is invalidated, not one behaviour).
+  3. In `ToastStack`, remove the `t.fixes` branch so a fixes-toast falls
+     through to plain `ToastItem`. Expected red: the toast test (`AUTO_DISMISS_MS`
+     fires within 6 s). Restore it.
+  4. In `stageToHash`'s `'advanced'` case, drop the `qs` suffix. Expected red:
+     the router round-trip test. Restore it.
+  5. Delete the appended `' Then resume — finished chapters are kept.'` from
+     the `AnalyzerReasoningOverflowError` branch's `userMessage`. Expected
+     red: the extended `failure-taxonomy.test.ts` assertion (`r.userMessage`
+     no longer contains that sentence). Restore it.
+  6. In `fixHref`, change `if (fix.settingKey) return …;` to `return
+     stageToHash({ kind: 'advanced', focusKey: fix.settingKey });`
+     unconditionally. Expected red: `fixHref … > a fix with no link … returns
+     null`. Restore it.
+- [ ] **Step 6: Commit**
+```bash
+git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy-fixes.ts server/src/routes/failure-taxonomy-fixes.test.ts server/src/routes/failure-taxonomy.test.ts server/src/routes/analysis.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts src/lib/types.ts src/lib/router.ts src/lib/failure-fixes.ts src/lib/failure-fixes.test.ts src/routes/index.tsx src/store/notifications-slice.ts src/components/toast-stack.tsx src/components/reasoning-overflow-toast.tsx src/components/reasoning-overflow-toast.test.tsx src/views/analysing.tsx src/views/advanced.tsx docs/wiki/Analysis-and-the-Analyzer.md
+git commit -m "feat(server,frontend,openapi): point a reasoning-overflow failure at the settings that fix it (#3084)"
+```
+
+**Tests this task could break:**
+- `failure-taxonomy.test.ts`'s `AnalyzerReasoningOverflowError` describe (Task 2.9) — extended, not replaced;
+- `src/routes/index.test.tsx` (a new `AdvancedRoute` search-param case joins the existing `HelpRoute` ones);
+- `toast-stack.test.tsx` (if one exists) and any test asserting `ToastStack`'s child count/shape for a plain error toast;
+- `analysing.test.tsx`'s existing "What to do:" assertions, which must still pass with no `fixes` present (the new block is conditional on `error.fixes?.length`);
+- anything importing `src/lib/router.ts` for its exports — `failure-fixes.ts` adds a new import of `stageToHash` from there, so a circular-import check (`npm run check:cycles`) is worth an extra look even though `router.ts` itself imports nothing from `src/lib/`.
+
+**Branch scope (settled).** The PR 2b branch is `feat/server,frontend-3084-w2b-output-cap` (renamed above) — this task is why: it lands real `.tsx` component code, not just server+openapi+frontend-help. The final Ship-PR-2b commit/PR title's scope should read `feat(server,frontend):` (or `feat(server,openapi,frontend):` if the reviewer wants openapi called out explicitly per CONTRIBUTING.md's multi-scope syntax) rather than `feat(server):` alone — Task 2.10's own commit-message lines below still say `feat(server, ...)` per task and are unaffected individually; only the PR's own title, not each task commit, needs the wider scope.
 
 ### Task 2.10: Ship PR 2b
 
@@ -5029,12 +5624,12 @@ Settings rows need no frontend change: `src/views/advanced.tsx` renders every kn
 
 `docs/release-notes-next.md`, appended as the last bullet of `## 🗣️ Analyzer, script review & manuscript`. Use the real PR numbers of 2a and 2b.
 ```markdown
-- **Gemini output cap is Auto, thinking models get a thinking window instead of the 45 s watchdog, requests have a ceiling, and reasoning overflow stops new spend** — `analyzer.gemini.maxOutputTokens` (`ANALYZER_MAX_OUTPUT_TOKENS`) now defaults to `0` = Auto: the model's `outputTokenLimit` from a 10-minute cached `models.list()` (`catalog/gemini-catalog.ts`), `8192` when the listing is unavailable; an explicit value keeps its meaning and is clamped to the listed limit. The listing is warmed before each request by a warm-up bounded at 10 s and shared by concurrent requests: pause releases that request at once, and the listing is cancelled only when no request still waits. A timeout falls back to `8192`, and cached limits are only ever served for the current API key. Thinking Gemini models (a static id rule: Gemini 2.5 Pro and 2.5 Flash, and every 3.x) request `thinkingConfig.includeThoughts`, so thought parts feed the chunk heartbeat; `thoughtsTokenCount` is recorded as reasoning tokens only on those requests. A new `analyzer.gemini.thinkingIdleTimeoutMs` (`GEMINI_THINKING_IDLE_MS`, default `0` = automatic, maximum 290 000 because the SDK's `fetch` carries undici's fixed 300 s timeouts) bounds every silent gap before a request's answer text starts, including the wait for the first chunk and each gap between thought parts: 240 000 ms for a thinking model, the existing 45 s idle window for any other; a positive value applies to every model. Running out of it fails once as `analyzer-timeout`, naming the setting, with no retry; a model that does not think keeps today's idle retry, and once the answer text starts the 45 s idle watchdog is unchanged. Every Gemini request attempt is bounded by `analyzer.gemini.requestCeilingMs` (`ANALYZER_GEMINI_REQUEST_CEILING_MS`, 30 min) and fails as `analyzer-timeout`. Each attempt logs `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…`, with no request or response content. A `length`/`MAX_TOKENS` finish with no answer text and reasoning evidence fails as `analyzer-reasoning-overflow` instead of splitting, and stops new spend: the analysis run ends, and the job starts no new chapter, escalation window or non-story classification call, while chapters already calling the model finish and are cached for resume; script-review, emotion and instruct passes stop as they do on a content block or a daily quota; the attribution eval's review run rethrows it; an attribution-escalation call that overflows skips its window, stops every later escalation window in the job, and ends the run the same way: the job starts no further chapter in any pool (Phase 0, Phase 1 or the subset retry) and halts with `analyzer-reasoning-overflow`, while chapters already dispatched finish and cache. An empty `MAX_TOKENS` with no evidence (Gemma) still splits. An empty Ollama response at the context limit now splits the chunk (or fails as reasoning overflow when the model was thinking) instead of failing as an empty response; its copy names `num_ctx`, the binding limit. **Budget change:** the Gemini per-request input cap is now `min(analyzer.gemini.maxInputTokensPerRequest, the model's TPM)`, so a `GEMINI_TPM_<SLUG>` env var or a saved `rate.tpm.gemma*` override below 12000 now shrinks chunk bodies to fit it; defaults are unchanged. Chunk budgets resolve from an `EngineCapacity` descriptor, pinned byte-identical at defaults by a fixture captured from `main`. (#<2a>, #<2b>, #3084)
+- **Gemini output cap is Auto, thinking models get a thinking window instead of the 45 s watchdog, requests have a ceiling, and reasoning overflow stops new spend** — `analyzer.gemini.maxOutputTokens` (`ANALYZER_MAX_OUTPUT_TOKENS`) now defaults to `0` = Auto: the model's `outputTokenLimit` from a 10-minute cached `models.list()` (`catalog/gemini-catalog.ts`), `8192` when the listing is unavailable; an explicit value keeps its meaning and is clamped to the listed limit. The listing is warmed before each request by a warm-up bounded at 10 s and shared by concurrent requests: pause releases that request at once, and the listing is cancelled only when no request still waits. A timeout falls back to `8192`, and cached limits are only ever served for the current API key. Thinking Gemini models (a static id rule: Gemini 2.5 Pro and 2.5 Flash, and every 3.x) request `thinkingConfig.includeThoughts`, so thought parts feed the chunk heartbeat; `thoughtsTokenCount` is recorded as reasoning tokens only on those requests. A new `analyzer.gemini.thinkingIdleTimeoutMs` (`GEMINI_THINKING_IDLE_MS`, default `0` = automatic, maximum 290 000 because the SDK's `fetch` carries undici's fixed 300 s timeouts) bounds every silent gap before a request's answer text starts, including the wait for the first chunk and each gap between thought parts: 120 000 ms for a thinking model, the existing 45 s idle window for any other; a positive value applies to every model. Running out of it fails once as `analyzer-timeout`, naming the setting, with no retry; a model that does not think keeps today's idle retry, and once the answer text starts the 45 s idle watchdog is unchanged. Every Gemini request attempt is bounded by `analyzer.gemini.requestCeilingMs` (`ANALYZER_GEMINI_REQUEST_CEILING_MS`, 30 min) and fails as `analyzer-timeout`. Each attempt logs `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…`, with no request or response content. A `length`/`MAX_TOKENS` finish with no answer text and reasoning evidence fails as `analyzer-reasoning-overflow` instead of splitting, and stops new spend: the analysis run ends, and the job starts no new chapter, escalation window or non-story classification call, while chapters already calling the model finish and are cached for resume; script-review, emotion and instruct passes stop as they do on a content block or a daily quota; the attribution eval's review run rethrows it; an attribution-escalation call that overflows skips its window, stops every later escalation window in the job, and ends the run the same way: the job starts no further chapter in any pool (Phase 0, Phase 1 or the subset retry) and halts with `analyzer-reasoning-overflow`, while chapters already dispatched finish and cache. An empty `MAX_TOKENS` with no evidence (Gemma) still splits. An empty Ollama response at the context limit now splits the chunk (or fails as reasoning overflow when the model was thinking) instead of failing as an empty response; its copy names `num_ctx`, the binding limit. **Budget change:** the Gemini per-request input cap is now `min(analyzer.gemini.maxInputTokensPerRequest, the model's TPM)`, so a `GEMINI_TPM_<SLUG>` env var or a saved `rate.tpm.gemma*` override below 12000 now shrinks chunk bodies to fit it; defaults are unchanged. Chunk budgets resolve from an `EngineCapacity` descriptor, pinned byte-identical at defaults by a fixture captured from `main`. (#<2a>, #<2b>, #3084)
 ```
 
 `RELEASE_NOTES.md`, a new first bullet under `# Castwright 1.15.0`:
 ```markdown
-- **A Gemini model that thinks before it answers no longer stalls on a long chapter.** Some Gemini models reason before replying, and that reasoning counted against a fixed 8,192-token reply limit — so on a big chapter the model could spend its whole allowance thinking and hand back nothing, and Castwright would keep cutting the chapter into smaller pieces without ever getting an answer. Castwright now lets each Gemini model reply up to its own limit, keeps showing activity while the model is thinking, and lets a thinking model stay quiet for up to four minutes at a time before its reply starts, instead of giving up after 45 seconds. When a model genuinely runs out of room while reasoning, Castwright stops starting new work, including the emotion and delivery passes, and says so plainly, naming the setting to raise, instead of grinding through every remaining chapter the same way. Chapters already in progress finish and are kept, so nothing is lost when you resume. The same goes for a local model that fills its context window before writing any answer: Castwright now splits the chapter, or tells you the model ran out of room while thinking, instead of reporting an empty reply. A Gemini request that stays silent past its thinking limit, or runs for more than half an hour, is stopped, and Castwright tells you which setting controls that limit. If you already set your own Gemini output limit, Castwright keeps it. And if you lowered a Gemma model's tokens-per-minute limit below 12,000, Castwright now sends it smaller pieces of each chapter so every request stays within that limit.
+- **A Gemini model that thinks before it answers no longer stalls on a long chapter.** Some Gemini models reason before replying, and that reasoning counted against a fixed 8,192-token reply limit — so on a big chapter the model could spend its whole allowance thinking and hand back nothing, and Castwright would keep cutting the chapter into smaller pieces without ever getting an answer. Castwright now lets each Gemini model reply up to its own limit, keeps showing activity while the model is thinking, and lets a thinking model stay quiet for up to two minutes at a time before its reply starts, instead of giving up after 45 seconds. When a model genuinely runs out of room while reasoning, Castwright stops starting new work, including the emotion and delivery passes, and says so plainly, naming the setting to raise, instead of grinding through every remaining chapter the same way. Chapters already in progress finish and are kept, so nothing is lost when you resume. The same goes for a local model that fills its context window before writing any answer: Castwright now splits the chapter, or tells you the model ran out of room while thinking, instead of reporting an empty reply. A Gemini request that stays silent past its thinking limit, or runs for more than half an hour, is stopped, and Castwright tells you which setting controls that limit. If you already set your own Gemini output limit, Castwright keeps it. And if you lowered a Gemma model's tokens-per-minute limit below 12,000, Castwright now sends it smaller pieces of each chapter so every request stays within that limit.
 ```
 - [ ] **Step 3: Run sheet**
 
@@ -5055,7 +5650,7 @@ Create `docs/testing/3084-openai-analyzer-onbox-acceptance.md`:
 ## 1. Gemini thinking-window timing on real chapters — register row E<next>
 
 **A measurement that gates nothing.** Wave 2 gives a thinking Gemini model a
-thinking window of 240 000 ms (`GEMINI_THINKING_IDLE_TIMEOUT_MS`): every silent
+thinking window of 120 000 ms (`GEMINI_THINKING_IDLE_TIMEOUT_MS`): every silent
 gap before its answer text starts, including the wait for the first chunk, may
 last that long. Any other model keeps today's 45 s (plan decision P5). No real
 chapter has measured those waits. This section records them and whether the
@@ -5099,7 +5694,7 @@ For each model in turn — `gemini-3.5-flash-lite`, `gemini-3.6-flash`,
 ### Decision
 
 - **Lower the thinking default** if every thinking-model `firstAnswerMs` is far
-  below 240 000; record the largest value seen.
+  below 120 000; record the largest value seen.
 - **Raise it, to at most 290 000,** if a thinking-model request failed with
   `analyzer-timeout` naming `analyzer.gemini.thinkingIdleTimeoutMs`. 290 000 is
   the knob's maximum: the SDK's `fetch` ends a request after undici's fixed
@@ -5254,9 +5849,9 @@ Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §3](3084
 ```markdown
 ### E<next> · Gemini thinking-window timing measured on real chapters ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 2) · **any machine with a Gemini key; no GPU**
 
-Wave 2 bounds the silence before a Gemini request's answer text instead of probing each model: a thinking model gets a 240 s thinking window (`GEMINI_THINKING_IDLE_TIMEOUT_MS`, at most 290 s) for the wait for the first chunk and each gap between thought parts, any other model today's 45 s, and each attempt logs `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…`. No real chapter has measured those waits. **This row is a measurement: it gates nothing, and it clears once recorded.**
+Wave 2 bounds the silence before a Gemini request's answer text instead of probing each model: a thinking model gets a 120 s thinking window (`GEMINI_THINKING_IDLE_TIMEOUT_MS`, at most 290 s) for the wait for the first chunk and each gap between thought parts, any other model today's 45 s, and each attempt logs `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…`. No real chapter has measured those waits. **This row is a measurement: it gates nothing, and it clears once recorded.**
 
-On a 19,000–21,000-character chapter, for stage 1 and stage 2 separately, on `gemini-3.5-flash-lite`, `gemini-3.6-flash` and `gemma-4-31b-it`, record the request count, the largest and median `firstChunkMs` and `firstAnswerMs`, the largest `thoughtPartsBeforeAnswer`, and every `firstAnswerMs=none`, `stream idle` or thinking-window `analyzer-timeout` line. Then record whether the 240 s default should change; a raise goes no higher than 290 s.
+On a 19,000–21,000-character chapter, for stage 1 and stage 2 separately, on `gemini-3.5-flash-lite`, `gemini-3.6-flash` and `gemma-4-31b-it`, record the request count, the largest and median `firstChunkMs` and `firstAnswerMs`, the largest `thoughtPartsBeforeAnswer`, and every `firstAnswerMs=none`, `stream idle` or thinking-window `analyzer-timeout` line. Then record whether the 120 s default should change; a raise goes no higher than 290 s.
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §1](3084-openai-analyzer-onbox-acceptance.md). Clears when §1's three `Result:` lines and its recommendation are filled.
 
@@ -5265,7 +5860,7 @@ Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §1](3084
 Wave 2 made four changes to Gemini analysis:
 
 - the output cap is Auto (the model's own limit, not 8192);
-- thinking models are asked for thought summaries and may stay silent for up to 240 s at a time before their answer text;
+- thinking models are asked for thought summaries and may stay silent for up to 120 s at a time before their answer text;
 - an empty `MAX_TOKENS` response with reasoning evidence fails as `analyzer-reasoning-overflow` and stops the run instead of splitting;
 - on Gemma, which asks for no thoughts, only a thought part counts as reasoning evidence, so its empty `MAX_TOKENS` still splits.
 
@@ -5307,10 +5902,10 @@ In `docs/testing/onbox-acceptance-register-live-view.html`:
     <details class="item">
       <summary><span class="num">E&lt;next&gt;</span><span class="iname">Gemini thinking-window timing measured on real chapters (#3084 wave 2)</span><span class="risk low">Measurement, gates nothing</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>Wave 2 gives a thinking Gemini model a 240 s thinking window (every silent gap before its answer text, at most 290 s) and any other model today's 45 s, and logs <code>firstChunkMs</code>, <code>firstAnswerMs</code> and <code>thoughtPartsBeforeAnswer</code> for every attempt. No real chapter has measured those waits; this row records them so the default can be tuned.</p>
+        <p>Wave 2 gives a thinking Gemini model a 120 s thinking window (every silent gap before its answer text, at most 290 s) and any other model today's 45 s, and logs <code>firstChunkMs</code>, <code>firstAnswerMs</code> and <code>thoughtPartsBeforeAnswer</code> for every attempt. No real chapter has measured those waits; this row records them so the default can be tuned.</p>
         <ul>
           <li>On a 19,000–21,000-character chapter, for stage 1 and stage 2, on <code>gemini-3.5-flash-lite</code>, <code>gemini-3.6-flash</code> and <code>gemma-4-31b-it</code>: request count, largest and median <code>firstChunkMs</code> and <code>firstAnswerMs</code>, largest <code>thoughtPartsBeforeAnswer</code>, any <code>firstAnswerMs=none</code>, <code>stream idle</code> or thinking-window <code>analyzer-timeout</code> line.</li>
-          <li><b>Record:</b> keep, lower, or raise (to at most 290 s) the 240 s default.</li>
+          <li><b>Record:</b> keep, lower, or raise (to at most 290 s) the 120 s default.</li>
         </ul>
         <p class="src">Any machine with a Gemini key; no GPU · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
       </div>
@@ -5318,7 +5913,7 @@ In `docs/testing/onbox-acceptance-register-live-view.html`:
     <details class="item">
       <summary><span class="num">E&lt;next+1&gt;</span><span class="iname">A thinking Gemini model completes a 20,000-character chapter with Auto output, and Gemma still splits (#3084 wave 2)</span><span class="risk hot">The reporter's stall</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>Wave 2 made Gemini's output cap Auto (the model's own limit, not 8192), asks thinking models for thought summaries and lets them stay silent for up to 240 s at a time before their answer text, and fails an empty <code>MAX_TOKENS</code> response with reasoning evidence as <code>analyzer-reasoning-overflow</code> instead of splitting. On Gemma only a thought part counts as evidence, so its empty <code>MAX_TOKENS</code> must still split. Unit tests drive all of this against a mocked stream; only real runs prove it.</p>
+        <p>Wave 2 made Gemini's output cap Auto (the model's own limit, not 8192), asks thinking models for thought summaries and lets them stay silent for up to 120 s at a time before their answer text, and fails an empty <code>MAX_TOKENS</code> response with reasoning evidence as <code>analyzer-reasoning-overflow</code> instead of splitting. On Gemma only a thought part counts as evidence, so its empty <code>MAX_TOKENS</code> must still split. Unit tests drive all of this against a mocked stream; only real runs prove it.</p>
         <ul>
           <li>On a 19,000–21,000-character chapter at <b>Auto</b> on <code>gemini-3.6-flash</code>: time to first chunk and to first answer text, whether the heartbeat moves during thinking, idle retries, <code>analyzer-timeout</code> failures, truncations, reasoning-overflow failures, request count.</li>
           <li>The same chapter at <b>8192</b> (Advanced Settings → Gemini max output tokens) as the baseline.</li>
@@ -5349,7 +5944,7 @@ Expected: every command PASS. If `register:build` rewrote the `gcount` spans and
 Run: `npm run verify:fast:branch`  Expected: PASS.
 - [ ] **Step 7: Push and open the PR**
 ```bash
-git push -u origin feat/server-3084-w2b-output-cap
+git push -u origin feat/server,frontend-3084-w2b-output-cap
 gh pr create --title "feat(server,openapi,frontend): Gemini Auto output tokens, thinking window, reasoning overflow (#3084 wave 2b)" --body-file <path-to-body.md>
 ```
 Body:
@@ -5359,19 +5954,20 @@ Body:
 - **Auto max output tokens:** `analyzer.gemini.maxOutputTokens` default `0` = Auto (listed `outputTokenLimit`, else 8192), max lifted to 1048576, explicit values kept and clamped to the listed limit; the runner passes the resolved cap to both transports (Ollama keeps `numPredict`).
 - **TPM-bound input cap (budget change):** `perRequestInputCap = min(analyzer.gemini.maxInputTokensPerRequest, resolveLimits(model).tpm)`. Defaults are unchanged (every built-in TPM is at least 16000); a `GEMINI_TPM_<SLUG>` env var or a saved `rate.tpm.gemma*` override below 12000 now shrinks chunk bodies to fit it. Pinned in `capacity.test.ts` and announced in both release-notes files.
 - **Thinking visibility (P27):** thinking models, by a static id rule and never the live catalog, request `thinkingConfig.includeThoughts`; thought parts feed the heartbeat; `thoughtsTokenCount` → `usage.reasoningTokens` only on those requests, so Gemma keeps its split recovery.
-- **Thinking window, request ceiling, timing log (P5):** `analyzer.gemini.thinkingIdleTimeoutMs` (`GEMINI_THINKING_IDLE_MS`, 0–290 000; `0` = automatic: 240 000 ms for a thinking model, the 45 s idle window otherwise; a positive value applies to every model) bounds every silent gap until the first answer text, thought parts included; after that the 45 s watchdog is unchanged. Running out of it before answer text raises `AnalyzerTimeoutError('thinking-idle')` → `analyzer-timeout` naming the setting, never retried, with no retry warning and no `onThrottle`. A model that does not think, at the automatic value, keeps today's retried `GeminiStreamIdleError`. The 290 000 maximum stays below undici's fixed 300 s timeouts on the SDK's global `fetch`. Every attempt is bounded by `analyzer.gemini.requestCeilingMs` (30 min) → `AnalyzerTimeoutError('ceiling')`; the class is pulled forward from wave 3. One `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…` line per attempt. Trade-off: a stalled request on a thinking model fails once after up to 240 s instead of two 45 s attempts. Owner approved P5 on <date>.
-- **Reasoning overflow (P20):** `length` + no answer text + reasoning evidence → `AnalyzerReasoningOverflowError` / `analyzer-reasoning-overflow` (no split); an empty `MAX_TOKENS` with no evidence (Gemma) still splits. It stops new spend. Both routes' Phase-0 catches rethrow it and Phase 1 already ends the run on its first error; the first rethrow marks the job (`AnalysisJob.reasoningOverflowed`) and empties the book's escalation budget, so chapters still in flight start no escalation window, and `buildNonStoryClassifier` makes no further non-story call. Those chapters are not aborted: they finish and cache for resume, and the job's `halted` snapshot keeps its code (N4). Script-review, emotion and instruct passes stop as they do on a content block or daily quota; the attribution eval's review run rethrows it; an escalation call that overflows still returns `null`, but first reports through the new `StageCall.onReasoningOverflow`, which both routes wire to `noteReasoningOverflow`, so no further window is sent in that chapter or any other. Every chapter dispatch point (main Phase 0, main Phase 1 after the watermark, subset Phase 1) calls `throwIfReasoningOverflowed`, which rethrows the recorded overflow (`AnalysisJob.reasoningOverflowError`), so after an overflow only escalation saw, no later chapter starts and the run halts with the overflow code, as for a rethrown one. Alternative put to the owner: skip the chapter and continue. Ollama now applies the same rule to an empty `done_reason: length` stream (previously the empty-response error), with `reasoningSeen` from `message.thinking`, and its copy names `num_ctx`. `AnalyzerTimeoutError` keeps its Phase 0 / Phase 1 asymmetry unchanged. Owner approved P20 on <date>.
+- **Thinking window, request ceiling, timing log (P5):** `analyzer.gemini.thinkingIdleTimeoutMs` (`GEMINI_THINKING_IDLE_MS`, 0–290 000; `0` = automatic: 120 000 ms for a thinking model, the 45 s idle window otherwise; a positive value applies to every model) bounds every silent gap until the first answer text, thought parts included; after that the 45 s watchdog is unchanged. Running out of it before answer text raises `AnalyzerTimeoutError('thinking-idle')` → `analyzer-timeout` naming the setting, never retried, with no retry warning and no `onThrottle`. A model that does not think, at the automatic value, keeps today's retried `GeminiStreamIdleError`. The 290 000 maximum stays below undici's fixed 300 s timeouts on the SDK's global `fetch`. Every attempt is bounded by `analyzer.gemini.requestCeilingMs` (30 min) → `AnalyzerTimeoutError('ceiling')`; the class is pulled forward from wave 3. One `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…` line per attempt. Trade-off: a stalled request on a thinking model fails once after up to 120 s instead of two 45 s attempts. Owner approved P5 on 2026-09-13: no probe gate; thinking window default 120 s, adjustable in Advanced Settings.
+- **Reasoning overflow (P20):** `length` + no answer text + reasoning evidence → `AnalyzerReasoningOverflowError` / `analyzer-reasoning-overflow` (no split); an empty `MAX_TOKENS` with no evidence (Gemma) still splits. It stops new spend. Both routes' Phase-0 catches rethrow it and Phase 1 already ends the run on its first error; the first rethrow marks the job (`AnalysisJob.reasoningOverflowed`) and empties the book's escalation budget, so chapters still in flight start no escalation window, and `buildNonStoryClassifier` makes no further non-story call. Those chapters are not aborted: they finish and cache for resume, and the job's `halted` snapshot keeps its code (N4). Script-review, emotion and instruct passes stop as they do on a content block or daily quota; the attribution eval's review run rethrows it; an escalation call that overflows still returns `null`, but first reports through the new `StageCall.onReasoningOverflow`, which both routes wire to `noteReasoningOverflow`, so no further window is sent in that chapter or any other. Every chapter dispatch point (main Phase 0, main Phase 1 after the watermark, subset Phase 1) calls `throwIfReasoningOverflowed`, which rethrows the recorded overflow (`AnalysisJob.reasoningOverflowError`), so after an overflow only escalation saw, no later chapter starts and the run halts with the overflow code, as for a rethrown one. Alternative put to the owner (not chosen): skip the chapter and continue. The failure names what happened (chapter, model, engine) and carries structured `fixes` (Task 2.9a) so the "How to fix" list in the Analysing view and a persistent notification point at the settings to raise, ending "then resume — finished chapters are kept". Ollama now applies the same rule to an empty `done_reason: length` stream (previously the empty-response error), with `reasoningSeen` from `message.thinking`, and its copy names `num_ctx`. `AnalyzerTimeoutError` keeps its Phase 0 / Phase 1 asymmetry unchanged. Owner approved P20 on 2026-09-13: stop new spend, with a loud, actionable warning (F7).
 - **On-box:** register rows **B<next>** (capacity recalibration), **E<next>** (Gemini thinking-window timing, a measurement that gates nothing) and **E<next+1>** (thinking-model output and the Gemma split) — write the minted ids — run sheet §1–§3 created, live view republished.
 
 Also fixed, found in passing: `server/.env.example:293,301` stated the old 8192 default; the `MAX_RESPONSE_BYTES` comment (moved to `transports/gemini-transport.ts` by wave 1; `gemini.ts:62-64` on 46e62a34) named the removed `resolveMaxOutputTokens`.
 
 ## Test plan
-- [ ] `gemini-catalog.test.ts` (bounded warm-up released per caller and cancelled once abandoned, failure warning re-armed, cache keyed to the active key, static thinking rule), `capacity.test.ts` (Auto and the TPM bound), `stage-runner.test.ts` (`prepare(call.signal)` before settings; escalation returns `null` on an overflow and calls `onReasoningOverflow` once, never for another failure), `escalation.test.ts` (a real runner over an overflowing transport: one overflow stops that chapter's second window and a later chapter's windows), `gemini-transport.test.ts` (`prepare` released after 10 s and on abort), `gemini-transport-thinking.test.ts` (`includeThoughts`, reasoning tokens, heartbeat; on a fake clock, 60 s thought-part gaps not killed, a 241 s silence failing once with no retry warning or `onThrottle`, and the after-answer idle watchdog; positive knob, 290 000 maximum, ceiling, timing line), `finish-reasoning-overflow.test.ts`, `ollama-transport-overflow.test.ts`, chunker no-split pins, `failure-taxonomy.test.ts`, help counts
+- [ ] `gemini-catalog.test.ts` (bounded warm-up released per caller and cancelled once abandoned, failure warning re-armed, cache keyed to the active key, static thinking rule), `capacity.test.ts` (Auto and the TPM bound), `stage-runner.test.ts` (`prepare(call.signal)` before settings; escalation returns `null` on an overflow and calls `onReasoningOverflow` once, never for another failure), `escalation.test.ts` (a real runner over an overflowing transport: one overflow stops that chapter's second window and a later chapter's windows), `gemini-transport.test.ts` (`prepare` released after 10 s and on abort), `gemini-transport-thinking.test.ts` (`includeThoughts`, reasoning tokens, heartbeat; on a fake clock, 60 s thought-part gaps not killed, a 121 s silence failing once with no retry warning or `onThrottle`, and the after-answer idle watchdog; positive knob, 290 000 maximum, ceiling, timing line), `finish-reasoning-overflow.test.ts`, `ollama-transport-overflow.test.ts`, chunker no-split pins, `failure-taxonomy.test.ts`, help counts
 - [ ] `gemini.test.ts` (slow): Auto wiring, a pre-answer stall for each kind of model and a thinking-window timeout that fails once through the whole analyzer, overflow on `gemini-3.6-flash` and a split on Gemma for the same response; `ollama.test.ts` num_predict wiring
 - [ ] `analysis.phase-model.test.ts` (main-route stage 1, subset stage 1 and stage 2 overflows end the run and mark the job without aborting it; `noteReasoningOverflow`; `buildNonStoryClassifier` makes no call after an overflow), `analysis.reasoning-overflow.test.ts` (a positive control reaches escalation; after an overflow an in-flight chapter finishes and caches with no escalation window, and the `halted` snapshot keeps its code; on the main and subset routes, one overflowing escalation call stops every later window, chapter 2's stage-2 call is never sent, and the run halts with the overflow code in a `halted` snapshot; in pipelined mode, Phase 0 casts no further chapter), `script-review.test.ts`, `annotate-emotion.test.ts` and `instruct-annotation.test.ts` (an overflow ends the pass), `review-run.test.ts` (the eval rethrows)
 - [ ] `capacity-pinning.test.ts` green, fixture untouched
-- [ ] mutation proofs pasted (Tasks 2.5–2.9)
-- [ ] `npm run openapi:types`, `npm run config:check`, `npm run check:onbox-register`, `npm run verify:fast:branch`
+- [ ] `failure-taxonomy-fixes.test.ts` (the guard: every `settingKey` a real registry key, the thinking window never offered), `router.test.ts` (`?focus=` round-trip), `failure-fixes.test.ts` (`fixHref`: a settingKey fix links, a plain-text fix returns `null`), `routes/index.test.tsx` (`AdvancedRoute` reads `focus`), `reasoning-overflow-toast.test.tsx` (no auto-dismiss, dismiss button works), `analysing.test.tsx` ("How to fix" list rendering), `advanced.test.tsx` (scroll-and-highlight) (Task 2.9a, F7)
+- [ ] mutation proofs pasted (Tasks 2.5–2.9, 2.9a)
+- [ ] `npm run openapi:types`, `npm run config:check`, `npm run check:onbox-register`, `npm run verify:fast:branch`, `node scripts/tests/knob-docs-sync.test.mjs`
 - [ ] On-box: owed as register rows B<next>, E<next> and E<next+1> (the minted ids; not run in this PR)
 
 Refs #3084

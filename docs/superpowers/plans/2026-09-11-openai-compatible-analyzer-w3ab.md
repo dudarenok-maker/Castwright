@@ -1587,6 +1587,7 @@ Create it with `node scripts/wt-new.mjs feat/server,openapi-3084-w3b-endpoints`,
 
 **What it delivers.**
 - **Failure codes.** `analyzer-request-rejected`, `analyzer-invalid-output` and `analyzer-endpoint-missing` exist in all six places. `analyzer-timeout` and `AnalyzerTimeoutError` already exist from wave 2b (Task 2.8, always shipped); this PR only uses them and widens their remediation to name endpoints.
+- **Endpoint reasoning-overflow fixes (F7, Task 3b.1b).** `reasoningOverflowFixes` (wave 2, P20) gains an `openai`-transport branch: the endpoint's own `maxOutputTokens` / `contextTokens` fields and the stage input fractions, naming the endpoint by its saved name. Reasoning-level (5a) and payload (5b) fixes are not added here.
 - **Typed errors.** `AnalyzerStreamIncompleteError`, `AnalyzerKeyOriginError` and `AnalyzerInvalidOutputError` are added. `AnalyzerEndpointMissingError` exists from PR 3a (Task 3a.2).
 - **Error mappings.**
   - 401/403 and key-origin errors map to `auth`.
@@ -1609,6 +1610,7 @@ Create it with `node scripts/wt-new.mjs feat/server,openapi-3084-w3b-endpoints`,
   - **Append failure:** a settings write never refuses because an append failed. Until the append lands, every writer writes the still-unarchived entries back into the file, raw and unchanged, so nothing is lost and saving still works.
   - **Keys:** a dropped key entry is archived with its `origin` only, never the `key` value.
   - **Test state:** `_resetUserSettingsCache()` also forgets archived and unarchived drops and any in-flight archive retry. It already clears the in-flight read (`inFlightRead = null`, `:1137`, shipped in #3195).
+- **Save-time validation and drop visibility (F5, Task 3b.6b).** Endpoint create/update, the key write and the settings PUT refuse a malformed field with 400 `{ error, code, issues: [{ path: string[], message }] }`, never echoing a key or field value (extends the routes of Tasks 3b.5/3b.7 rather than a second validator). Every entry dropped at read time (P25, above) is listed read-only on `GET /api/user/settings` as `droppedEndpointEntries`, with `path: code` issue strings (never a value); `POST /api/user/settings/dropped-endpoint-entries/acknowledge` retires the ones the user has seen. An entry whose archive append is still pending is listed too, flagged `archiveId: null`. No UI yet (PR 3d).
 - **Schema adapters.** Per-provider adapters (with a `dropped` snapshot per stage schema) are wired into the runner for Ollama and Gemini now, and for OpenAI through `OpenAIAnalyzer`. `structuredOutputLabel` is exported for 3d.
 - **Structured-output knobs.** `analyzer.ollama.structuredOutput` (default `schema`) and `analyzer.gemini.structuredOutput` (default `json`) are enum knobs with Settings rows and `config:sync`. The Ollama and Gemini transports honour all three modes.
 - **Endpoint storage.** `workspace/analyzer-endpoints.ts` and the user-settings fields `analyzerEndpoints` (in GET, not writable by the general PUT) and `analyzerEndpointKeys` (FORBIDDEN_KEYS; GET exposes `analyzerEndpointKeyStatus`).
@@ -1627,6 +1629,8 @@ Create it with `node scripts/wt-new.mjs feat/server,openapi-3084-w3b-endpoints`,
 **Entry criteria.**
 - PR 3a is merged.
 - Wave 1's `withTransportRetry`, `StageRunner`/`TransportAnalyzer` and both transports exist on `main`.
+- Wave 2's F7 mechanism — `AnalysisFailureFix`, `reasoningOverflowFixes(ctx)`, and its guard test (P20,
+  approved by the owner 2026-09-13) — is merged, for Task 3b.1b's endpoint-half extension.
 
 **Exit criteria.**
 - All of these pass: `npm run typecheck`, `npm run lint`, `npm test`, `npm run test:server`, `npm run config:check`, `npm run check:cycles`.
@@ -3257,6 +3261,108 @@ git commit -m "fix(server): report a classified failure code from every analyzer
 
 ---
 
+### Task 3b.1b: Endpoint `analyzer-reasoning-overflow` fixes (F7 endpoint half)
+
+**Depends on wave 2's `AnalysisFailureFix` / `reasoningOverflowFixes(ctx)` / its guard test.** Those are
+introduced in wave 2 (2b) by a different fixer as part of F7 (P20's "stop new spend, with a loud,
+actionable warning" — approved 2026-09-13); at the time of this task's authoring, wave 2's plan file
+has not yet landed that content, so this task cannot pin exact line numbers into it the way the rest
+of this file pins into `46e62a34`. Locate the wave-2 file's `reasoningOverflowFixes` and its guard test
+by name (`git grep -n reasoningOverflowFixes docs/superpowers/plans docs/superpowers/specs`,
+`server/src/routes/failure-taxonomy.ts`) before starting; if the exported shape differs from the
+contract below, treat that as a contract conflict against the decision record (F7), not something to
+improvise around.
+
+**What this task adds, per the decision record's exact contract:**
+```ts
+// server/src/routes/failure-taxonomy.ts (2b defines AnalysisFailureFix / reasoningOverflowFixes)
+if (ctx.transport === 'openai' && ctx.endpointId) {
+  const endpoint = /* the saved AnalyzerEndpoint for ctx.endpointId */;
+  fixes.push(
+    { label: `Lower ${endpoint.name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' }, wikiHref: ENDPOINT_REASONING_OVERFLOW_WIKI_HREF },
+    { label: `Lower ${endpoint.name}'s context size`, endpointField: { endpointId: ctx.endpointId, field: 'contextTokens' }, wikiHref: ENDPOINT_REASONING_OVERFLOW_WIKI_HREF },
+    { label: 'Shrink Stage 1 chunks', settingKey: 'analyzer.stage1.localInputFraction' },
+    { label: 'Shrink Stage 2 chunks', settingKey: 'analyzer.stage2.localInputFraction' },
+  );
+}
+```
+Per F7: reasoning-level (5a) and payload (5b) fixes are **not** added here — only the endpoint's own
+`maxOutputTokens` / `contextTokens` fields and the stage input fractions. `endpoint.name` is looked up
+from the saved `analyzerEndpoints` (Task 3b.6) so the copy names the endpoint the user gave it, never
+just its id.
+
+**Files:**
+- Modify: `server/src/routes/failure-taxonomy.ts` — the `transport === 'openai'` branch of `reasoningOverflowFixes` (wave 2).
+- Modify: the guard test wave 2 adds (`every settingKey is a registry key, and every endpointField.field is a key of analyzerEndpointSchema's shape`) — extend its `endpointField.field` half if wave 2 only wrote the `settingKey` half; if wave 2 already added the `endpointField.field` half of the guard, this task only adds this branch's rows to make it exercise something.
+- Test: extend wave 2's `reasoningOverflowFixes` test file with an `openai` transport case.
+
+**Interfaces:**
+- Consumes: `AnalysisFailureFix`, `reasoningOverflowFixes` (wave 2, F7); `AnalyzerEndpoint`, `analyzerEndpointSchema` (Task 3b.5); the saved `analyzerEndpoints` (Task 3b.6, to resolve `ctx.endpointId` → `endpoint.name`).
+- Produces: no new exports — an added branch inside the existing function.
+
+**Guard test extension (F7's "Each wave that adds a fix extends it").** The guard fails if any
+`endpointField.field` is not a key of `analyzerEndpointSchema.shape` — `maxOutputTokens` and
+`contextTokens` both are (Task 3b.5), so the guard passes without change to the shape it checks;
+this task's job is to add THIS branch's two `endpointField` rows to the set the guard iterates, so a
+future typo in this branch (e.g. `field: 'maxOutputToken'`) is caught the same way wave 2's Gemini/Ollama
+rows already are.
+
+**Wiki anchor not yet written.** `ENDPOINT_REASONING_OVERFLOW_WIKI_HREF` points at the F3 wiki page's
+"When a model thinks past its output limit" section — that page (`docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md`)
+is written in PR 3d (F3), so this task defines the constant now (a string literal, e.g.
+`'/wiki/OpenAI-Compatible-Analyzer-Endpoints#when-a-model-thinks-past-its-output-limit'`) and PR 3d's
+task is the one that makes the anchor real; note this in that PR's task instead of blocking here.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to wave 2's `reasoningOverflowFixes` test file (locate by name):
+```ts
+it('an openai-transport overflow offers the endpoint\'s own maxOutputTokens/contextTokens and the stage fractions, naming the endpoint, never reasoning or payload (F7)', async () => {
+  await api.createAnalyzerEndpoint({ id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8080/v1', contextTokens: 32768 });
+  const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' });
+  expect(fixes).toEqual([
+    expect.objectContaining({ label: expect.stringContaining('Lab box'), endpointField: { endpointId: 'lab', field: 'maxOutputTokens' } }),
+    expect.objectContaining({ label: expect.stringContaining('Lab box'), endpointField: { endpointId: 'lab', field: 'contextTokens' } }),
+    expect.objectContaining({ settingKey: 'analyzer.stage1.localInputFraction' }),
+    expect.objectContaining({ settingKey: 'analyzer.stage2.localInputFraction' }),
+  ]);
+  expect(fixes.some((f) => f.settingKey?.includes('reasoning') || 'endpointField' in f && f.endpointField?.field === 'reasoning')).toBe(false);
+});
+```
+
+- [ ] **Step 2: Run and confirm failure**
+
+Run the wave-2 failure-taxonomy test file. Expected: FAIL — the `openai` branch does not exist yet
+(`fixes` is `[]` or the Gemini/Ollama branch's rows, depending on wave 2's `ctx.transport` default handling).
+
+- [ ] **Step 3: Implement**
+
+Add the `transport === 'openai'` branch shown above to `reasoningOverflowFixes`, resolving
+`endpoint.name` from the saved `analyzerEndpoints` for `ctx.endpointId` (fall back to `ctx.endpointId`
+itself if the endpoint was deleted between the failure and the fix lookup — do not throw building a
+remediation list).
+
+- [ ] **Step 4: Run and confirm pass**
+
+Run the same file, plus `npm run typecheck` and the wave-2 guard test. Expected: PASS.
+
+- [ ] **Step 5: Mutation proofs**
+
+| Revert | Expected red test |
+|---|---|
+| Delete the `transport === 'openai'` branch | `an openai-transport overflow offers the endpoint's own maxOutputTokens/contextTokens…` |
+| `field: 'maxOutputToken'` (typo) | the wave-2 guard test (`endpointField.field` is not a key of `analyzerEndpointSchema`'s shape) |
+| Add a `{ endpointField: { endpointId, field: 'reasoning' } }` row to this branch | the same test's `not.toBe(true)`-style reasoning/payload assertion |
+| `endpoint.name` → `ctx.endpointId` unconditionally | the same test (`label` no longer contains `'Lab box'`) |
+
+- [ ] **Step 6: Commit**
+```bash
+git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy.test.ts
+git commit -m "feat(server): offer endpoint-specific reasoning-overflow fixes (#3084 F7)"
+```
+
+---
+
 ### Task 3b.2: The runner throws `AnalyzerInvalidOutputError` (message text unchanged)
 
 **Files:**
@@ -4286,7 +4392,7 @@ describe('create / update / delete / key decisions', () => {
   it('refuses a missing context size, naming the field', () => {
     const r = refusal(() => applyCreate(empty, { id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1' }));
     expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
-    expect(r.details.join('\n')).toContain('contextTokens');
+    expect(r.issues.some((i) => i.path.join('.') === 'contextTokens')).toBe(true);
   });
   it.each(['Lab', 'lab_1', '', 'a'.repeat(41)])('refuses the endpoint id %j', (id) => {
     expect(refusal(() => applyCreate(empty, { ...base, id }))).toMatchObject({ status: 400, refusal: 'invalid' });
@@ -4295,10 +4401,11 @@ describe('create / update / delete / key decisions', () => {
     const once = applyCreate(empty, base);
     expect(refusal(() => applyCreate(once, base))).toMatchObject({ status: 409, refusal: 'duplicate-id' });
   });
-  it('refuses an unload URL on another origin, accepts one on the same origin', () => {
-    expect(
-      refusal(() => applyCreate(empty, { ...base, unloadUrl: 'http://127.0.0.1:9999/api/models/unload/{model}' })),
-    ).toMatchObject({ status: 400, refusal: 'unload-off-origin' });
+  it('refuses an unload URL on another origin, accepts one on the same origin, and never echoes either URL (F5)', () => {
+    const r = refusal(() => applyCreate(empty, { ...base, unloadUrl: 'http://127.0.0.1:9999/api/models/unload/{model}' }));
+    expect(r).toMatchObject({ status: 400, refusal: 'unload-off-origin' });
+    expect(r.issues).toEqual([{ path: ['unloadUrl'], message: 'must be on the same scheme, host and port as baseUrl' }]);
+    expect(JSON.stringify({ message: r.message, issues: r.issues })).not.toContain('9999');
     expect(
       applyCreate(empty, { ...base, unloadUrl: 'http://127.0.0.1:8080/api/models/unload/{model}' }).analyzerEndpoints,
     ).toHaveLength(1);
@@ -4306,10 +4413,14 @@ describe('create / update / delete / key decisions', () => {
   it('until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload, naming the PR that enables each (P23)', () => {
     const reasoning = refusal(() => applyCreate(empty, { ...base, reasoning: 'high' }));
     expect(reasoning).toMatchObject({ status: 400, refusal: 'invalid' });
-    expect(reasoning.details).toEqual(['reasoning: only "model-default" can be saved until PR 5a enables reasoning levels']);
+    expect(reasoning.issues).toEqual([
+      { path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' },
+    ]);
     const payload = refusal(() => applyUpdate(applyCreate(empty, base), 'lab', { ...base, extraParams: { top_k: 20 } }));
     expect(payload).toMatchObject({ status: 400, refusal: 'invalid' });
-    expect(payload.details).toEqual(['extraParams: custom request parameters cannot be saved until PR 5b enables them']);
+    expect(payload.issues).toEqual([
+      { path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' },
+    ]);
     expect(applyCreate(empty, { ...base, reasoning: 'model-default', extraParams: {} }).analyzerEndpoints).toHaveLength(1);
   });
   it('update keeps the id immutable and 404s an unknown endpoint', () => {
@@ -4333,7 +4444,7 @@ describe('create / update / delete / key decisions', () => {
       const r = refusal(() => applyKey(s, 'lab', key));
       expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
       expect(r.message).toBe(ENDPOINT_KEY_CONTROL_CHARACTER_RULE);
-      expect(JSON.stringify({ message: r.message, details: r.details })).not.toContain('secret-1');
+      expect(JSON.stringify({ message: r.message, issues: r.issues })).not.toContain('secret-1');
     }
     expect(applyKey(s, 'lab', 'sk-printable-1234').analyzerEndpointKeys.lab.key).toBe('sk-printable-1234');
   });
@@ -4354,9 +4465,9 @@ describe('create / update / delete / key decisions', () => {
     };
     const r = refusal(() => applyDelete(s, refs, 'lab'));
     expect(r).toMatchObject({ status: 409, refusal: 'referenced' });
-    expect(r.details).toEqual([
-      'Account setting "analyzerPhase0Model"',
-      'Advanced setting "analyzer.phase1.model"',
+    expect(r.issues).toEqual([
+      { path: [], message: 'Account setting "analyzerPhase0Model"' },
+      { path: [], message: 'Advanced setting "analyzer.phase1.model"' },
     ]);
     const after = applyDelete(s, DEFAULT_USER_SETTINGS, 'lab');
     expect(after).toEqual(empty);
@@ -4490,7 +4601,12 @@ export class AnalyzerEndpointRefusal extends Error {
     readonly status: 400 | 404 | 409,
     readonly refusal: 'invalid' | 'duplicate-id' | 'unload-off-origin' | 'not-found' | 'referenced',
     message: string,
-    readonly details: string[] = [],
+    /* #3084 F5 — {path, message} pairs the route echoes verbatim as the response's
+       `issues`. Never a field or key value: a route renders these inline next to
+       the named field, so a value here would leak it into a save-time error body.
+       path is [] for a refusal that names no single field (duplicate-id,
+       not-found, referenced). */
+    readonly issues: { path: string[]; message: string }[] = [],
   ) {
     super(message);
     this.name = 'AnalyzerEndpointRefusal';
@@ -4527,6 +4643,12 @@ export function resolveUnloadUrl(endpoint: AnalyzerEndpoint, model: string | und
   return endpoint.unloadUrl.split('{model}').join(encodeURIComponent(model));
 }
 
+/* #3084 F4 (not this PR) — PR 3d extends this to also count the
+   `analyzer.fallback.target` knob (`resolveAnalyzerFallbackTarget`'s saved
+   override, a bare `openai:<endpointId>::<model>` string) as a reference, so
+   deleting an endpoint the fallback names is refused like any other
+   reference. The fallback knob itself is not introduced in 3b (F4: it lands
+   in PR 3d alongside the `'analyzer-engine'` knob type). */
 export function findEndpointReferences(settings: EndpointReferenceSource, endpointId: string): string[] {
   const names = (value: unknown): boolean =>
     typeof value === 'string' && parseEndpointModelId(value.trim())?.endpointId === endpointId;
@@ -4554,7 +4676,10 @@ export function parseEndpointInput(input: unknown): AnalyzerEndpoint {
       400,
       'invalid',
       'Invalid analyzer endpoint.',
-      parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`),
+      /* #3084 F5 — structured {path, message}, never the rejected value: a zod
+         issue's `.message` names the rule ("Required", "Invalid url", …), not the
+         input, so this never echoes a bad key or URL. */
+      parsed.error.issues.map((i) => ({ path: i.path.map(String), message: i.message })),
     );
   }
   const ep = parsed.data;
@@ -4562,12 +4687,12 @@ export function parseEndpointInput(input: unknown): AnalyzerEndpoint {
      custom payload, and a value saved now would bypass wave 5's checks for good
      (settings load leniently). PR 5a deletes the `reasoning` refusal; PR 5b
      deletes the `extraParams` refusal. */
-  const notYet: string[] = [];
+  const notYet: { path: string[]; message: string }[] = [];
   if (ep.reasoning !== 'model-default') {
-    notYet.push('reasoning: only "model-default" can be saved until PR 5a enables reasoning levels');
+    notYet.push({ path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' });
   }
   if (ep.extraParams !== undefined && Object.keys(ep.extraParams).length > 0) {
-    notYet.push('extraParams: custom request parameters cannot be saved until PR 5b enables them');
+    notYet.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
   }
   if (notYet.length > 0) {
     throw new AnalyzerEndpointRefusal(400, 'invalid', 'Invalid analyzer endpoint.', notYet);
@@ -4576,11 +4701,12 @@ export function parseEndpointInput(input: unknown): AnalyzerEndpoint {
     const unloadOrigin = new URL(ep.unloadUrl).origin;
     const baseOrigin = new URL(ep.baseUrl).origin;
     if (unloadOrigin !== baseOrigin) {
+      /* #3084 F5 — names the mismatched field without echoing either URL. */
       throw new AnalyzerEndpointRefusal(
         400,
         'unload-off-origin',
         'The unload URL must be on the same scheme, host and port as the base URL.',
-        [`unloadUrl origin ${unloadOrigin} is not baseUrl origin ${baseOrigin}`],
+        [{ path: ['unloadUrl'], message: 'must be on the same scheme, host and port as baseUrl' }],
       );
     }
   }
@@ -4628,7 +4754,7 @@ export function applyDelete(
       409,
       'referenced',
       `Analyzer endpoint "${endpointId}" is still used by ${refs.length} saved setting(s).`,
-      refs,
+      refs.map((r) => ({ path: [], message: r })),
     );
   }
   const keys = { ...state.analyzerEndpointKeys };
@@ -4660,8 +4786,10 @@ export const ENDPOINT_KEY_CONTROL_CHARACTER_RULE =
 export function applyKey(state: EndpointState, endpointId: string, key: string | null): EndpointState {
   const ep = state.analyzerEndpoints[indexOrRefuse(state, endpointId)];
   if (typeof key === 'string' && hasControlCharacter(key)) {
-    /* The rule only — never the key — in the message and details. */
-    throw new AnalyzerEndpointRefusal(400, 'invalid', ENDPOINT_KEY_CONTROL_CHARACTER_RULE, [ENDPOINT_KEY_CONTROL_CHARACTER_RULE]);
+    /* The rule only — never the key — in the message and issues (F5 no-echo). */
+    throw new AnalyzerEndpointRefusal(400, 'invalid', ENDPOINT_KEY_CONTROL_CHARACTER_RULE, [
+      { path: ['key'], message: ENDPOINT_KEY_CONTROL_CHARACTER_RULE },
+    ]);
   }
   const normalised = typeof key === 'string' && key.trim().length > 0 ? key.trim() : null;
   const keys = { ...state.analyzerEndpointKeys };
@@ -5658,6 +5786,477 @@ git commit -m "feat(server): store analyzer endpoints and origin-bound keys in u
 
 ---
 
+### Task 3b.6b: Surface dropped endpoint entries on GET, and an acknowledge route (F5, server half)
+
+Owner decision (F5): a drop at read time (Task 3b.6, P25) is not silent. `GET /api/user/settings`
+exposes every unacknowledged drop read-only; an acknowledge route retires the ones the user has
+seen; a new drop after acknowledgement shows again. The UI banner is PR 3d's job — this task ships
+the data only.
+
+**Archive stays append-only (P25, unchanged).** `user-settings.invalid-endpoints.json` is still never
+truncated or rewritten (Task 3b.6). Acknowledgement therefore cannot mark a line in that file. A
+second, small sidecar file records which `archiveId`s are acknowledged; `listDroppedEndpointEntries`
+joins the two at read time. This is a design decision this task makes, not one the decision record
+specified — recorded here because it is the one place F5(c) could have contradicted P25's
+append-only rule if done carelessly.
+
+**Unarchived pending entries ARE listed.** An entry whose append is still retrying (`unarchivedDrops`,
+Task 3b.6) has no `archiveId` yet. It is listed with `archiveId: null` — the user must still be told
+even though the archive write hasn't landed — and `acknowledgeDroppedEndpointEntries` ignores a
+`null` or unknown id rather than refusing (an ack racing a retry is not an error).
+
+**Issues are `path: code`, never `path: message`.** Task 3b.6's `DroppedEndpointEntry.issues` is
+kept as-is (human-readable, used by the console warning and by Task 3b.6's own
+`'repeats the id of an earlier endpoint'` / duplicate-id test). This task adds a parallel
+`codes: string[]` — `path: code` from the same zod issues (or a synthetic code for the two
+non-zod refusals: `duplicate_id`, `invalid_type`) — because a raw zod `.message` can echo shape
+hints an attacker-controlled entry chose, while `.code` is a fixed enum. The summary's `issues`
+field is `codes`, never `issues`.
+
+**Files:**
+- Modify: `server/src/workspace/user-settings.ts` — `DroppedEndpointEntry` (Task 3b.6, after `entry`/`raw`): add `codes: string[]`; `zodIssues` (add sibling `zodIssueCodes`); the three `dropped.push(…)` call sites in `dropInvalidEndpointEntries` (whole-field, per-entry, key-entry) each gain a `codes` value alongside `issues`; `archiveDroppedEndpointEntries` (assign `archiveId: randomUUID()` per line in the serialised object); add `droppedEndpointEntriesAcknowledgedPath()`, `readAcknowledgedIds()`, `listDroppedEndpointEntriesSync()`, `listDroppedEndpointEntries()`, `acknowledgeDroppedEndpointEntries()` after `invalidEndpointsArchivePath()` (acknowledgement is written with the existing `writeJsonAtomic`, not a dedicated writer function). Add `randomUUID` to the top `node:crypto` import (new).
+- Modify: `server/src/routes/user-settings.ts`:
+  - `UserSettingsResponse` — add `droppedEndpointEntries: DroppedEndpointEntrySummary[]`;
+  - `envDerived` — add `droppedEndpointEntries: listDroppedEndpointEntriesSync()` (envDerived is synchronous and shared by every endpoint-CRUD 200 response, Task 3b.7; the archive and ack files are tiny, so a sync read costs nothing worth an async threading-through);
+  - `FORBIDDEN_KEYS` (Task 3b.6) — append `'droppedEndpointEntries'`, mirroring `analyzerEndpoints`;
+  - new route `POST /dropped-endpoint-entries/acknowledge` on `userSettingsRouter` (not `analyzerEndpointsRouter` — the decision names it under `/api/user/settings`), body `{ archiveIds: string[] }`, 200 with the `GET` body.
+- Modify: `openapi.yaml`:
+  - `UserSettings.properties` — add `droppedEndpointEntries` (readOnly array of `DroppedEndpointEntry` — renamed in this schema to avoid colliding with Task 3b.6's internal type of the same name; call the OpenAPI schema `DroppedEndpointEntrySummary`);
+  - new schema `DroppedEndpointEntrySummary`;
+  - new path `/api/user/settings/dropped-endpoint-entries/acknowledge`, operationId `acknowledgeDroppedEndpointEntries`.
+- Regenerate: `src/lib/api-types.ts`.
+- Modify: `src/lib/api.ts` — `MOCK_USER_SETTINGS` gains `droppedEndpointEntries: []`; a mock `acknowledgeDroppedEndpointEntries` alongside the other mock endpoint functions (Task 3b.9), added to `real`/`mock`. No account-slice thunk yet — PR 3d wires the banner and dispatches it.
+- Test: `server/src/workspace/user-settings.dropped-entries.test.ts` (new).
+- Test: `server/src/routes/user-settings.test.ts` (add).
+
+**Interfaces:**
+- Consumes: `DroppedEndpointEntry`, `unarchivedDrops`, `invalidEndpointsArchivePath`, `USER_SETTINGS_PATH` (Task 3b.6).
+- Produces:
+  - `export interface DroppedEndpointEntrySummary { archiveId: string | null; kind: 'endpoint' | 'key'; endpointId?: string; name?: string; origin?: string; issues: string[]; droppedAt: string }` (no `acknowledgedAt`: acknowledgement lives only in the sidecar file, and a listed entry is by definition unacknowledged, so nothing would ever set it)
+  - `export async function listDroppedEndpointEntries(): Promise<DroppedEndpointEntrySummary[]>`
+  - `export async function acknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<void>`
+  - `export function droppedEndpointEntriesAcknowledgedPath(): string` — beside the settings file, like `invalidEndpointsArchivePath()`.
+
+**Tests kept green:** `server/src/workspace/user-settings.endpoints.test.ts` (Task 3b.6) — `codes` is additive, so its `issues`-based assertions are untouched.
+
+- [ ] **Step 1: Write the failing tests**
+
+`server/src/workspace/user-settings.dropped-entries.test.ts`:
+```ts
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import {
+  USER_SETTINGS_PATH,
+  _resetUserSettingsCache,
+  acknowledgeDroppedEndpointEntries,
+  droppedEndpointEntriesAcknowledgedPath,
+  invalidEndpointsArchivePath,
+  listDroppedEndpointEntries,
+  readUserSettings,
+} from './user-settings.js';
+
+const ARCHIVE = join(dirname(USER_SETTINGS_PATH), 'user-settings.invalid-endpoints.json');
+const ACK = droppedEndpointEntriesAcknowledgedPath();
+
+beforeEach(() => {
+  if (existsSync(USER_SETTINGS_PATH)) rmSync(USER_SETTINGS_PATH, { force: true });
+  rmSync(ARCHIVE, { force: true, recursive: true });
+  rmSync(ACK, { force: true, recursive: true });
+  _resetUserSettingsCache();
+});
+afterAll(() => {
+  if (existsSync(USER_SETTINGS_PATH)) rmSync(USER_SETTINGS_PATH, { force: true });
+  rmSync(ARCHIVE, { force: true, recursive: true });
+  rmSync(ACK, { force: true, recursive: true });
+  _resetUserSettingsCache();
+});
+
+async function quietly(body: () => Promise<void>): Promise<void> {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    await body();
+  } finally {
+    warn.mockRestore();
+  }
+}
+
+describe('listDroppedEndpointEntries / acknowledgeDroppedEndpointEntries (#3084 F5)', () => {
+  it('lists a dropped endpoint entry with a code, not a message, and never the rejected value', async () => {
+    writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpoints: [{ id: 'Bad_Id', name: 'Lab', baseUrl: 'not a url' }] }));
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      await readUserSettings();
+      const [entry] = await listDroppedEndpointEntries();
+      expect(entry).toMatchObject({ kind: 'endpoint', endpointId: 'Bad_Id', name: 'Lab' });
+      expect(typeof entry.archiveId).toBe('string');
+      expect(entry.issues.some((c) => c.endsWith(': invalid_string'))).toBe(true);
+      expect(entry.issues.join(' ')).not.toContain('not a url');
+    });
+  });
+
+  it('lists a dropped key entry with the origin only, never the key', async () => {
+    writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpointKeys: { lab: { origin: 99, key: 'sk-listed-secret-1' } } }));
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      await readUserSettings();
+      const [entry] = await listDroppedEndpointEntries();
+      expect(entry).toMatchObject({ kind: 'key', endpointId: 'lab' });
+      expect(entry.origin).toBeUndefined(); // origin itself (99) failed its own schema check
+      expect(JSON.stringify(entry)).not.toContain('sk-listed-secret-1');
+    });
+  });
+
+  it('an unarchived pending entry is listed with archiveId null', async () => {
+    writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpoints: [{ id: 'Pending_Bad', name: 'P', baseUrl: 'nope' }] }));
+    mkdirSync(ARCHIVE);
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      await readUserSettings();
+      const [entry] = await listDroppedEndpointEntries();
+      expect(entry).toMatchObject({ archiveId: null, endpointId: 'Pending_Bad' });
+    });
+  });
+
+  it('acknowledging an archiveId hides it, and a fresh drop of the same shape after acknowledgement shows again', async () => {
+    writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpoints: [{ id: 'Ack_Bad', name: 'A', baseUrl: 'nope' }] }));
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      await readUserSettings();
+      const [first] = await listDroppedEndpointEntries();
+      await acknowledgeDroppedEndpointEntries([first.archiveId as string]);
+      expect(await listDroppedEndpointEntries()).toEqual([]);
+      /* A later restart re-parses the same file and drops it again (Task 3b.6's
+         archivedDrops de-dupe is per-process); the fresh archive line gets a new
+         archiveId and is not pre-acknowledged. */
+      _resetUserSettingsCache();
+      await readUserSettings();
+      const after = await listDroppedEndpointEntries();
+      expect(after).toHaveLength(1);
+      expect(after[0].archiveId).not.toBe(first.archiveId);
+    });
+  });
+
+  it('acknowledging an unknown or null archiveId is a no-op, not a refusal', async () => {
+    await expect(acknowledgeDroppedEndpointEntries(['does-not-exist'])).resolves.toBeUndefined();
+  });
+
+  it('GET /api/user/settings exposes droppedEndpointEntries and refuses it on the general PUT', async () => {
+    const { default: request } = await import('supertest');
+    process.env.WORKSPACE_DIR = dirname(USER_SETTINGS_PATH);
+    const [{ userSettingsRouter }] = await Promise.all([import('../routes/user-settings.js')]);
+    const express = (await import('express')).default;
+    const app = express();
+    app.use(express.json());
+    app.use('/api/user/settings', userSettingsRouter);
+    writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpoints: [{ id: 'Route_Bad', name: 'R', baseUrl: 'nope' }] }));
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      const get = await request(app).get('/api/user/settings');
+      expect(get.body.droppedEndpointEntries).toHaveLength(1);
+      const put = await request(app).put('/api/user/settings').send({ droppedEndpointEntries: [] });
+      expect(put.status).toBe(200);
+      expect((await request(app).get('/api/user/settings')).body.droppedEndpointEntries).toHaveLength(1);
+      /* The acknowledge route's malformed-body refusal matches every other
+         refusal in this file: { error, code, issues }. */
+      const bad = await request(app).post('/api/user/settings/dropped-endpoint-entries/acknowledge').send({ archiveIds: 'not-an-array' });
+      expect(bad.status).toBe(400);
+      expect(bad.body).toMatchObject({ error: 'Invalid payload.', code: 'invalid' });
+      expect(bad.body.issues[0]).toMatchObject({ path: ['archiveIds'] });
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Run and confirm failure**
+
+Run: `npm --prefix server run test -- src/workspace/user-settings.dropped-entries.test.ts`
+
+Expected: FAIL, `does not provide an export named 'listDroppedEndpointEntries'`.
+
+- [ ] **Step 3: Implement**
+
+`server/src/workspace/user-settings.ts`:
+
+1. Import `randomUUID` from `node:crypto` at the top.
+
+2. Extend `DroppedEndpointEntry` (Task 3b.6) with one field after `raw: unknown;`:
+```ts
+  /** #3084 F5 — "path: code" strings, one per zodIssues() entry (or a synthetic
+      code for the two non-zod refusals). Never a value: exposed to the client
+      via listDroppedEndpointEntries, where `issues` (path: message) is not. */
+  codes: string[];
+```
+
+3. Add beside `zodIssues`:
+```ts
+function zodIssueCodes(error: z.ZodError): string[] {
+  return error.issues.map((i) => `${i.path.join('.') || '(entry)'}: ${i.code}`);
+}
+```
+
+4. In `dropInvalidEndpointEntries`, add a `codes` entry to each of the three `dropped.push(…)` calls:
+   - whole-list-invalid: `codes: ['analyzerEndpoints: invalid_type']`
+   - per-entry: `codes: parsed.success ? ['id: duplicate_id'] : zodIssueCodes(parsed.error)`
+   - whole-map-invalid: `codes: ['analyzerEndpointKeys: invalid_type']`
+   - key-entry: `codes: zodIssueCodes(parsed.error)`
+
+5. In `archiveDroppedEndpointEntries`, the serialised line gains an `archiveId` and a `codes` field.
+   No `acknowledgedAt`: acknowledgement lives only in the sidecar file
+   (`droppedEndpointEntriesAcknowledgedPath()`), never on the archive record — a listed entry is by
+   definition unacknowledged, so the archive line would never have anything else to hold there.
+```ts
+  const lines = fresh.map((d) =>
+    `${JSON.stringify({
+      archiveId: randomUUID(),
+      droppedAt: d.droppedAt,
+      field: d.field,
+      position: d.position,
+      id: d.id,
+      issues: d.issues,
+      codes: d.codes,
+      entry: d.entry,
+    })}\n`,
+  );
+```
+
+6. After `invalidEndpointsArchivePath`:
+```ts
+export interface DroppedEndpointEntrySummary {
+  archiveId: string | null;
+  kind: 'endpoint' | 'key';
+  endpointId?: string;
+  name?: string;
+  origin?: string;
+  issues: string[]; // path: code — never a value
+  droppedAt: string;
+}
+
+/** Beside the settings file, like the archive itself. A tiny JSON array of
+    acknowledged archiveIds. P25's append-only rule stays on the archive
+    file — this sidecar is what acknowledgement actually mutates. */
+export function droppedEndpointEntriesAcknowledgedPath(): string {
+  return join(dirname(USER_SETTINGS_PATH), 'user-settings.invalid-endpoints.acknowledged.json');
+}
+
+function readAcknowledgedIds(): Set<string> {
+  try {
+    const raw = JSON.parse(readFileSync(droppedEndpointEntriesAcknowledgedPath(), 'utf8'));
+    return new Set(Array.isArray(raw) ? raw.filter((v) => typeof v === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function summariseArchiveLine(line: string): DroppedEndpointEntrySummary | null {
+  let rec: Record<string, unknown>;
+  try {
+    rec = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof rec.archiveId !== 'string') return null; // a pre-F5 line, from before this task shipped
+  const kind: 'endpoint' | 'key' = rec.field === 'analyzerEndpoints' ? 'endpoint' : 'key';
+  const entry = rec.entry as Record<string, unknown> | undefined;
+  return {
+    archiveId: rec.archiveId,
+    kind,
+    endpointId: kind === 'endpoint' ? (typeof rec.id === 'string' ? rec.id : undefined) : (typeof rec.position === 'string' ? rec.position : undefined),
+    name: kind === 'endpoint' && entry && typeof entry.name === 'string' ? entry.name : undefined,
+    origin: kind === 'key' && entry && typeof entry.origin === 'string' ? entry.origin : undefined,
+    issues: Array.isArray(rec.codes) ? (rec.codes as string[]) : [],
+    droppedAt: typeof rec.droppedAt === 'string' ? rec.droppedAt : new Date(0).toISOString(),
+  };
+}
+
+function summarisePending(d: DroppedEndpointEntry): DroppedEndpointEntrySummary {
+  const kind: 'endpoint' | 'key' = d.field === 'analyzerEndpoints' ? 'endpoint' : 'key';
+  const entry = d.entry as Record<string, unknown> | undefined;
+  return {
+    archiveId: null,
+    kind,
+    endpointId: kind === 'endpoint' ? (typeof d.id === 'string' ? d.id : undefined) : (typeof d.position === 'string' ? d.position : undefined),
+    name: kind === 'endpoint' && entry && typeof entry.name === 'string' ? entry.name : undefined,
+    origin: kind === 'key' && entry && typeof entry.origin === 'string' ? entry.origin : undefined,
+    issues: d.codes,
+    droppedAt: d.droppedAt,
+  };
+}
+
+/** #3084 F5 — every unacknowledged drop: archived (from the append-only archive
+    file, minus anything in the acknowledged sidecar) plus whatever is still
+    pending an archive append (unarchivedDrops, Task 3b.6, listed with
+    archiveId: null — the user must still be told even though the append
+    hasn't landed). Synchronous: both files are small, and envDerived (sync,
+    shared by every endpoint-CRUD 200 response) needs this too. */
+function listDroppedEndpointEntriesSync(): DroppedEndpointEntrySummary[] {
+  const acknowledged = readAcknowledgedIds();
+  let archived: DroppedEndpointEntrySummary[] = [];
+  try {
+    archived = readFileSync(invalidEndpointsArchivePath(), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim().length > 0)
+      .map(summariseArchiveLine)
+      .filter((s): s is DroppedEndpointEntrySummary => s !== null && !acknowledged.has(s.archiveId as string));
+  } catch {
+    archived = [];
+  }
+  return [...archived, ...unarchivedDrops.map(summarisePending)];
+}
+
+export async function listDroppedEndpointEntries(): Promise<DroppedEndpointEntrySummary[]> {
+  return listDroppedEndpointEntriesSync();
+}
+
+/** #3084 F5 — an id not currently listed (already acknowledged, still pending
+    an archive append, or simply unknown) is ignored rather than refused: an
+    ack racing a retry or a duplicate click is not an error. */
+export async function acknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<void> {
+  const ids = new Set(readAcknowledgedIds());
+  for (const id of archiveIds) if (id) ids.add(id);
+  await writeJsonAtomic(droppedEndpointEntriesAcknowledgedPath(), [...ids]);
+}
+```
+`readFileSync` and `writeJsonAtomic` are already imported (Task 3b.6 / main). Export `listDroppedEndpointEntriesSync` alongside the async wrapper — `routes/user-settings.ts`'s `envDerived` needs the sync form.
+
+`server/src/routes/user-settings.ts`:
+1. Import `listDroppedEndpointEntriesSync, acknowledgeDroppedEndpointEntries, type DroppedEndpointEntrySummary` from `../workspace/user-settings.js`.
+2. `UserSettingsResponse` (Task 3b.6's replacement block) gains:
+```ts
+  /* #3084 F5 — every unacknowledged drop from Task 3b.6's read-time safety net.
+     Read-only; POST /dropped-endpoint-entries/acknowledge is the only writer. */
+  droppedEndpointEntries: DroppedEndpointEntrySummary[];
+```
+3. `envDerived`'s returned object gains `droppedEndpointEntries: listDroppedEndpointEntriesSync(),`.
+4. `FORBIDDEN_KEYS` (Task 3b.6) gains `'droppedEndpointEntries',` in the same block as `'analyzerEndpoints'`.
+5. After the GET handler, add:
+```ts
+const acknowledgeSchema = z.object({ archiveIds: z.array(z.string()) });
+
+userSettingsRouter.post('/dropped-endpoint-entries/acknowledge', async (req: Request, res: Response) => {
+  const parsed = acknowledgeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    /* Same shape and code as every other malformed-body 400 in this file
+       (Task 3b.7's key-payload refusal, AnalyzerEndpointRefusal's 'invalid'). */
+    return res.status(400).json({
+      error: 'Invalid payload.',
+      code: 'invalid',
+      issues: parsed.error.issues.map((i) => ({ path: i.path.map(String), message: i.message })),
+    });
+  }
+  await acknowledgeDroppedEndpointEntries(parsed.data.archiveIds);
+  res.json(envDerived(await readUserSettings()));
+});
+```
+(`z`, `readUserSettings` and `envDerived` are already in scope in this file.)
+
+- [ ] **Step 4: Run and confirm pass**
+
+```bash
+npm --prefix server run test -- src/workspace/user-settings.dropped-entries.test.ts src/workspace/user-settings.endpoints.test.ts src/routes/user-settings.test.ts
+npm run typecheck
+npm run openapi:types
+```
+Expected: PASS; `openapi:types` leaves no diff once the schema edits below land.
+
+`openapi.yaml` — `UserSettings.properties`, after `analyzerEndpointKeyStatus`:
+```yaml
+        droppedEndpointEntries:
+          type: array
+          readOnly: true
+          items: { $ref: '#/components/schemas/DroppedEndpointEntrySummary' }
+          description: |
+            #3084 F5 — every unacknowledged analyzer-endpoint entry dropped at
+            read time (Task 3b.6). Never a key or field value.
+```
+New schema, after `AnalyzerEndpointDetectResult`:
+```yaml
+    DroppedEndpointEntrySummary:
+      type: object
+      required: [kind, issues, droppedAt]
+      properties:
+        archiveId: { type: string, nullable: true, description: 'null while the archive append is still pending.' }
+        kind: { type: string, enum: [endpoint, key] }
+        endpointId: { type: string }
+        name: { type: string }
+        origin: { type: string }
+        issues: { type: array, items: { type: string }, description: '"path: code" strings, never a value.' }
+        droppedAt: { type: string, format: date-time }
+```
+New path, after the `/api/analyzer/endpoints/{endpointId}/key` block:
+```yaml
+  /api/user/settings/dropped-endpoint-entries/acknowledge:
+    post:
+      summary: Acknowledge dropped analyzer endpoint entries
+      operationId: acknowledgeDroppedEndpointEntries
+      description: |
+        #3084 F5 — marks each named archiveId acknowledged; it stops appearing
+        in droppedEndpointEntries. An unknown or already-acknowledged id is
+        ignored, not refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [archiveIds]
+              properties:
+                archiveIds: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Malformed body (archiveIds is not an array of strings)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+```
+
+`src/lib/api.ts`:
+1. `MOCK_USER_SETTINGS` gains `droppedEndpointEntries: [],`.
+2. After the mock endpoint functions (Task 3b.9), add:
+```ts
+async function mockAcknowledgeDroppedEndpointEntries(_archiveIds: string[]): Promise<UserSettings> {
+  await wait(50);
+  /* #3084 F5 — the mock never drops an entry to begin with (mockEndpointFromInput
+     refuses at save time, matching the server's F5 save-time validation), so
+     there is nothing to acknowledge; this exists only so mock mode can call the
+     same operationId as real mode without a 404. */
+  return mockSettingsWithEndpoints(mockEndpoints());
+}
+async function realAcknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<UserSettings> {
+  return analyzerEndpointRequest('/api/user/settings/dropped-endpoint-entries/acknowledge', {
+    method: 'POST',
+    body: JSON.stringify({ archiveIds }),
+  });
+}
+```
+3. Add `acknowledgeDroppedEndpointEntries: realAcknowledgeDroppedEndpointEntries` / `: mockAcknowledgeDroppedEndpointEntries` to the `real` / `mock` objects.
+
+- [ ] **Step 5: Mutation proofs**
+
+| Revert | Expected red test |
+|---|---|
+| `summariseArchiveLine`: use `rec.issues` instead of `rec.codes` for the summary's `issues` | `lists a dropped endpoint entry with a code, not a message…` (the message text, including `'not a url'`, appears) |
+| Delete the `!acknowledged.has(...)` filter in `listDroppedEndpointEntriesSync` | `acknowledging an archiveId hides it…` (still listed after ack) |
+| `acknowledgeDroppedEndpointEntries`: skip reading the existing set first (`ids = new Set(archiveIds)`) | the same test, second ack call, if two acks ever raced (documents the union, not just replace) |
+| `archiveDroppedEndpointEntries`: drop `archiveId: randomUUID()` from the serialised line | `lists a dropped endpoint entry…` (`typeof entry.archiveId).toBe('string')` fails — `summariseArchiveLine` returns null) |
+| `envDerived`: delete `droppedEndpointEntries: listDroppedEndpointEntriesSync()` | `GET /api/user/settings exposes droppedEndpointEntries…` |
+| Remove `'droppedEndpointEntries'` from `FORBIDDEN_KEYS` | the same test's PUT half (a client could smuggle a fabricated entry back in) |
+| `summarisePending`: `archiveId: 'placeholder'` instead of `null` | `an unarchived pending entry is listed with archiveId null` |
+| Key-entry `codes` push → reuse the endpoint entry's `zodIssueCodes(...)` unconditionally instead of the key schema's | `lists a dropped key entry with the origin only…` (wrong path prefix in the code string) |
+
+- [ ] **Step 6: Commit**
+```bash
+git add server/src/workspace/user-settings.ts server/src/routes/user-settings.ts server/src/workspace/user-settings.dropped-entries.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts
+git commit -m "feat(server,frontend): surface dropped analyzer endpoint entries and an acknowledge route (#3084 F5)"
+```
+
+---
+
 ### Task 3b.6a: Construction-time redaction in the Ollama and Gemini transports (P22)
 
 P22 redacts known secrets where errors are built in **all three** transports. Task 3b.11 does it for the OpenAI transport. This task does it for the Ollama and Gemini paths, at every place they build or rethrow error text from an upstream body: Ollama's non-OK body, Ollama's in-stream `parsed.error` echo, the Ollama persona call's non-OK body (A8), and Gemini's rethrown error. With no secret in the text, every message, snapshot and taxonomy outcome is byte-identical, and a Gemini error with no secret is rethrown as the same object.
@@ -6024,7 +6623,7 @@ git commit -m "fix(server): redact known analyzer secrets where the ollama and g
   - `export const analyzerEndpointsRouter` mounted at `/api/analyzer/endpoints`;
   - `POST /` → 201;
   - `PUT /:endpointId`, `DELETE /:endpointId`, `PUT /:endpointId/key` → 200 with the `GET /api/user/settings` body;
-  - refusals as `{ error, code, details }` with status 400 / 404 / 409.
+  - refusals as `{ error, code, issues }` with status 400 / 404 / 409 (F5 — `issues: { path: string[]; message: string }[]`, never a field or key value).
 
 **Tests kept green:** `server/src/routes/user-settings.test.ts`, and any app-level integration test that imports `app.ts`.
 
@@ -6090,12 +6689,20 @@ describe('POST /api/analyzer/endpoints', () => {
     expect(res.body.analyzerEndpoints[0].gpu).toBe('none');
   });
 
-  it('refuses a missing context size with 400 naming contextTokens', async () => {
+  it('refuses a missing context size with 400 naming contextTokens (F5: {error, issues})', async () => {
     const noContext = { id: lab.id, name: lab.name, baseUrl: lab.baseUrl };
     const res = await request(app).post('/api/analyzer/endpoints').send(noContext);
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('invalid');
-    expect(res.body.details.join('\n')).toContain('contextTokens');
+    expect(res.body.issues.some((i: { path: string[] }) => i.path.join('.') === 'contextTokens')).toBe(true);
+  });
+
+  it('refuses a bad base URL with 400 and never echoes it in the response body (F5 no-echo)', async () => {
+    const badUrl = 'http://[not-a-real-host/v1';
+    const res = await request(app).post('/api/analyzer/endpoints').send({ ...lab, baseUrl: badUrl });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid');
+    expect(JSON.stringify(res.body)).not.toContain(badUrl);
   });
 
   it('refuses a bad endpoint id with 400', async () => {
@@ -6124,12 +6731,14 @@ describe('POST /api/analyzer/endpoints', () => {
     expect(reasoning.status).toBe(400);
     expect(reasoning.body).toMatchObject({
       code: 'invalid',
-      details: ['reasoning: only "model-default" can be saved until PR 5a enables reasoning levels'],
+      issues: [{ path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' }],
     });
     await request(app).post('/api/analyzer/endpoints').send(lab);
     const payload = await request(app).put('/api/analyzer/endpoints/lab').send({ ...lab, extraParams: { top_k: 20 } });
     expect(payload.status).toBe(400);
-    expect(payload.body.details).toEqual(['extraParams: custom request parameters cannot be saved until PR 5b enables them']);
+    expect(payload.body.issues).toEqual([
+      { path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' },
+    ]);
     expect(JSON.parse(readFileSync(userSettingsPath, 'utf8')).analyzerEndpoints[0]).not.toHaveProperty('extraParams');
   });
 
@@ -6218,7 +6827,10 @@ describe('DELETE /api/analyzer/endpoints/:id', () => {
     const res = await request(app).delete('/api/analyzer/endpoints/lab');
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('referenced');
-    expect(res.body.details).toEqual(['Account setting "analyzerPhase0Model"', 'Advanced setting "analyzer.phase1.model"']);
+    expect(res.body.issues).toEqual([
+      { path: [], message: 'Account setting "analyzerPhase0Model"' },
+      { path: [], message: 'Advanced setting "analyzer.phase1.model"' },
+    ]);
   });
 
   it('deletes the endpoint and its key once nothing references it', async () => {
@@ -6276,10 +6888,14 @@ function stateOf(s: UserSettings): EndpointState {
   return { analyzerEndpoints: s.analyzerEndpoints, analyzerEndpointKeys: s.analyzerEndpointKeys };
 }
 
-/** Sends a refusal and returns true, or returns false for any other error. */
+/** Sends a refusal and returns true, or returns false for any other error.
+    #3084 F5 — the body is `{ error, code, issues }`: `issues` is the decided
+    save-time-validation shape ({path, message}[]), never a field or key value
+    (AnalyzerEndpointRefusal.issues already carries that shape); `code` stays
+    as an additional machine-readable refusal kind for existing callers. */
 function sendRefusal(res: Response, err: unknown): boolean {
   if (!(err instanceof AnalyzerEndpointRefusal)) return false;
-  res.status(err.status).json({ error: err.message, code: err.refusal, details: err.details });
+  res.status(err.status).json({ error: err.message, code: err.refusal, issues: err.issues });
   return true;
 }
 
@@ -6338,7 +6954,12 @@ const keyPayloadSchema = z.object({ key: z.string().nullable() });
 analyzerEndpointsRouter.put('/:endpointId/key', async (req: Request, res: Response) => {
   const parsed = keyPayloadSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ error: 'Invalid payload.', code: 'invalid', details: parsed.error.issues.map((i) => i.message) });
+    /* #3084 F5 — same shape as sendRefusal: {path, message}, never the value. */
+    return res.status(400).json({
+      error: 'Invalid payload.',
+      code: 'invalid',
+      issues: parsed.error.issues.map((i) => ({ path: i.path.map(String), message: i.message })),
+    });
   }
   try {
     const updated = await mutateUserSettings((current) =>
@@ -6894,7 +7515,7 @@ git commit -m "feat(server,docs): add on-demand served-context detect for llama.
   - `export class AnalyzerEndpointError`;
   - test-only `export function _setMockUserSettingsForTest(patch)` — the mock PUT refuses endpoint model ids until PR 3d (Task 3a.5), so a reference is seeded through this;
   - types `AnalyzerEndpoint`, `AnalyzerEndpointInput`, `AnalyzerEndpointKeyStatus`, `AnalyzerEndpointDetectRequest`, `AnalyzerEndpointDetectResult`;
-  - thunks `createAnalyzerEndpoint`, `updateAnalyzerEndpoint`, `deleteAnalyzerEndpoint`, `saveAnalyzerEndpointKey`.
+  - thunks `createAnalyzerEndpoint`, `updateAnalyzerEndpoint`, `deleteAnalyzerEndpoint`, `saveAnalyzerEndpointKey`, each typed `{ rejectValue: AnalyzerEndpointRejection }` (F5 — see "Reducers" below) and exported alongside `export interface AnalyzerEndpointRejection { error: string; code: string; issues: { path: string[]; message: string }[] }` from `src/store/account-slice.ts`.
 
 **Why Detect is not on `api`.** `export const api = USE_MOCKS ? mock : real` (`src/lib/api.ts:10625`) unions the two objects. A member only on `real` would not be callable through `api`. Detect has no mock by design, so PR 3d's form imports the standalone function.
 
@@ -6964,7 +7585,7 @@ describe('mock analyzer endpoint API', () => {
     await api.createAnalyzerEndpoint(input('m-ctrl'));
     const r = await refusal(api.putAnalyzerEndpointKey('m-ctrl', 'sk-mock-ctrl-1\r\nX-Injected: 1'));
     expect(r.code).toBe('invalid');
-    expect(`${r.message} ${JSON.stringify(r.details)}`).not.toContain('sk-mock-ctrl-1');
+    expect(`${r.message} ${JSON.stringify(r.issues)}`).not.toContain('sk-mock-ctrl-1');
     expect((await api.getUserSettings()).analyzerEndpointKeyStatus?.['m-ctrl']).toBe('unset');
   });
 
@@ -6976,7 +7597,10 @@ describe('mock analyzer endpoint API', () => {
     });
     const r = await refusal(api.deleteAnalyzerEndpoint('m-ref'));
     expect(r.code).toBe('referenced');
-    expect(r.details).toEqual(['Account setting "analyzerPhase0Model"', 'Advanced setting "analyzer.phase1.model"']);
+    expect(r.issues).toEqual([
+      { path: [], message: 'Account setting "analyzerPhase0Model"' },
+      { path: [], message: 'Advanced setting "analyzer.phase1.model"' },
+    ]);
     _setMockUserSettingsForTest({ analyzerPhase0Model: null, configOverrides: {} });
     const s = await api.deleteAnalyzerEndpoint('m-ref');
     expect(s.analyzerEndpoints?.some((e) => e.id === 'm-ref')).toBe(false);
@@ -6986,10 +7610,12 @@ describe('mock analyzer endpoint API', () => {
     const r = await refusal(api.createAnalyzerEndpoint({ ...input('m-reasoning'), reasoning: 'high' }));
     expect(r).toMatchObject({
       code: 'invalid',
-      details: ['reasoning: only "model-default" can be saved until PR 5a enables reasoning levels'],
+      issues: [{ path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' }],
     });
     const p = await refusal(api.createAnalyzerEndpoint({ ...input('m-payload'), extraParams: { top_k: 20 } }));
-    expect(p.details).toEqual(['extraParams: custom request parameters cannot be saved until PR 5b enables them']);
+    expect(p.issues).toEqual([
+      { path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' },
+    ]);
   });
 
   it('the general PUT cannot write analyzerEndpoints (same as the server FORBIDDEN_KEYS)', async () => {
@@ -7006,7 +7632,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 
 vi.stubEnv('VITE_USE_MOCKS', 'true');
-const { accountSlice, createAnalyzerEndpoint, saveAnalyzerEndpointKey, deleteAnalyzerEndpoint } = await import('./account-slice');
+const { accountSlice, createAnalyzerEndpoint, updateAnalyzerEndpoint, saveAnalyzerEndpointKey, deleteAnalyzerEndpoint } = await import('./account-slice');
+const { api } = await import('../lib/api');
 
 describe('account slice analyzer-endpoint thunks (#3084 PR 3b)', () => {
   it('swaps the settings response into state on each write', async () => {
@@ -7029,6 +7656,47 @@ describe('account slice analyzer-endpoint thunks (#3084 PR 3b)', () => {
     expect(store.getState().account.error).toContain('already exists');
     expect(store.getState().account.analyzerEndpoints).toEqual(before);
   });
+
+  /* #3084 F5 defect — found in review. Without a typed rejectValue and a catch
+     for AnalyzerEndpointError, createAsyncThunk's default rejection path drops
+     `issues` (miniSerializeError keeps only name/message/stack/code), so
+     .unwrap() rejects with a plain object that has no issues at all. */
+  it('a refused create rejects .unwrap() with the {error, code, issues} payload intact, issues included (F5)', async () => {
+    const store = configureStore({ reducer: { account: accountSlice.reducer } });
+    await store.dispatch(
+      createAnalyzerEndpoint({ id: 'slice-bad', name: 'Bad', baseUrl: 'http://127.0.0.1:8080/v1' } as never),
+    );
+    const rejection = await store
+      .dispatch(createAnalyzerEndpoint({ id: 'slice-bad', name: 'Bad', baseUrl: 'http://127.0.0.1:8080/v1' } as never))
+      .unwrap()
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect(rejection).toMatchObject({ code: 'duplicate-id' });
+    expect(Array.isArray((rejection as { issues: unknown }).issues)).toBe(true);
+  });
+
+  it('a non-refusal rejection still rejects .unwrap() as before, with no issues array (F5)', async () => {
+    const store = configureStore({ reducer: { account: accountSlice.reducer } });
+    await store.dispatch(createAnalyzerEndpoint({ id: 'slice-network', name: 'N', baseUrl: 'http://127.0.0.1:8080/v1', contextTokens: 8192 }));
+    const spy = vi.spyOn(api, 'updateAnalyzerEndpoint').mockRejectedValueOnce(new TypeError('network down'));
+    const rejection = await store
+      .dispatch(
+        updateAnalyzerEndpoint({
+          endpointId: 'slice-network',
+          input: { id: 'slice-network', name: 'N', baseUrl: 'http://127.0.0.1:8080/v1', contextTokens: 8192 },
+        }),
+      )
+      .unwrap()
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect((rejection as { message: string }).message).toBe('network down');
+    expect(rejection).not.toHaveProperty('issues');
+    spy.mockRestore();
+  });
 });
 ```
 
@@ -7039,6 +7707,12 @@ Run:
 npx vitest run src/lib/api-analyzer-endpoints-mock.test.ts src/store/account-slice.analyzer-endpoints.test.ts
 ```
 Expected: FAIL, `api.createAnalyzerEndpoint is not a function` / `createAnalyzerEndpoint is not exported`.
+Once the plain (non-`rejectWithValue`) thunks from an earlier draft exist but before the F5 catch is
+added, the two new F5 tests fail differently: `a refused create rejects .unwrap() with the {error,
+code, issues} payload intact…` fails because the unwrapped rejection has no `issues` property at all
+(RTK's `miniSerializeError` kept only `name`/`message`/`stack`/`code`); `a non-refusal rejection still
+rejects…` passes even on the plain thunks, since that path was never broken — it stays green
+throughout as the "already worked" half of the regression pair.
 
 - [ ] **Step 3: Implement**
 
@@ -7163,7 +7837,7 @@ Expected: FAIL, `api.createAnalyzerEndpoint is not a function` / `createAnalyzer
         #3084 — refused with 409 while a saved setting references the endpoint
         (defaultAnalysisModel, analyzerPhase0Model, analyzerPhase1Model, or the
         analyzer.phase0.model / analyzer.phase1.model /
-        analyzer.personaGeneration.engine overrides); `details` lists them.
+        analyzer.personaGeneration.engine overrides); `issues` lists them.
       responses:
         '200':
           description: Updated settings
@@ -7284,11 +7958,22 @@ Expected: FAIL, `api.createAnalyzerEndpoint is not a function` / `createAnalyzer
 
     AnalyzerEndpointRefusal:
       type: object
-      required: [error, code, details]
+      required: [error, code, issues]
+      description: |
+        #3084 F5 — issues are {path, message} pairs, never a field or key value:
+        a UI shows each one inline next to the named field. path is [] for a
+        refusal naming no single field (duplicate-id, not-found, referenced).
       properties:
         error: { type: string }
         code: { type: string, enum: [invalid, duplicate-id, unload-off-origin, not-found, referenced] }
-        details: { type: array, items: { type: string } }
+        issues:
+          type: array
+          items:
+            type: object
+            required: [path, message]
+            properties:
+              path: { type: array, items: { type: string } }
+              message: { type: string }
 
     AnalyzerEndpointDetectRequest:
       type: object
@@ -7330,14 +8015,16 @@ export type AnalyzerEndpointDetectResult = components['schemas']['AnalyzerEndpoi
 
 3. After `realPutGeminiKey` (`:6979`):
 ```ts
-/* #3084 — analyzer endpoint writes. A refusal keeps its machine code and the
-   per-field details so the PR 3d form can show them next to the right input. */
+/* #3084 F5 — analyzer endpoint writes. A refusal keeps its machine code and
+   the structured {path, message} issues so the PR 3d form can show each one
+   next to the right input, without ever holding a rejected field or key
+   value (the server never sends one). */
 export class AnalyzerEndpointError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
     message: string,
-    readonly details: string[] = [],
+    readonly issues: { path: string[]; message: string }[] = [],
   ) {
     super(message);
     this.name = 'AnalyzerEndpointError';
@@ -7347,8 +8034,12 @@ export class AnalyzerEndpointError extends Error {
 async function analyzerEndpointRequest<T>(url: string, init: RequestInit): Promise<T> {
   const res = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json' } });
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string; details?: string[] };
-    throw new AnalyzerEndpointError(res.status, body.code ?? 'unknown', body.error ?? res.statusText, body.details ?? []);
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      code?: string;
+      issues?: { path: string[]; message: string }[];
+    };
+    throw new AnalyzerEndpointError(res.status, body.code ?? 'unknown', body.error ?? res.statusText, body.issues ?? []);
   }
   return res.json() as Promise<T>;
 }
@@ -7397,24 +8088,30 @@ function mockOrigin(url: string): string | null {
 }
 
 function mockEndpointFromInput(input: AnalyzerEndpointInput): AnalyzerEndpoint {
-  const problems: string[] = [];
-  if (!MOCK_ENDPOINT_ID.test(input.id ?? '')) problems.push('id: must match ^[a-z0-9-]{1,40}$');
-  if (!input.name?.trim()) problems.push('name: required');
+  /* #3084 F5 — {path, message}, never the rejected value (mirrors the server). */
+  const problems: { path: string[]; message: string }[] = [];
+  if (!MOCK_ENDPOINT_ID.test(input.id ?? '')) problems.push({ path: ['id'], message: 'must match ^[a-z0-9-]{1,40}$' });
+  if (!input.name?.trim()) problems.push({ path: ['name'], message: 'required' });
   const baseOrigin = mockOrigin(input.baseUrl ?? '');
-  if (!baseOrigin) problems.push('baseUrl: must be a URL');
-  if (typeof input.contextTokens !== 'number' || input.contextTokens < 512) problems.push('contextTokens: required, at least 512');
+  if (!baseOrigin) problems.push({ path: ['baseUrl'], message: 'must be a URL' });
+  if (typeof input.contextTokens !== 'number' || input.contextTokens < 512) {
+    problems.push({ path: ['contextTokens'], message: 'required, at least 512' });
+  }
   if (problems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', problems);
   /* #3084 P23 — mirrors the server's parseEndpointInput until PRs 5a/5b. */
-  const notYet: string[] = [];
+  const notYet: { path: string[]; message: string }[] = [];
   if (input.reasoning !== undefined && input.reasoning !== 'model-default') {
-    notYet.push('reasoning: only "model-default" can be saved until PR 5a enables reasoning levels');
+    notYet.push({ path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' });
   }
   if (input.extraParams !== undefined && Object.keys(input.extraParams).length > 0) {
-    notYet.push('extraParams: custom request parameters cannot be saved until PR 5b enables them');
+    notYet.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
   }
   if (notYet.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', notYet);
   if (input.unloadUrl && mockOrigin(input.unloadUrl) !== baseOrigin) {
-    throw new AnalyzerEndpointError(400, 'unload-off-origin', 'The unload URL must be on the same scheme, host and port as the base URL.');
+    /* F5 no-echo — names the field, never either URL. */
+    throw new AnalyzerEndpointError(400, 'unload-off-origin', 'The unload URL must be on the same scheme, host and port as the base URL.', [
+      { path: ['unloadUrl'], message: 'must be on the same scheme, host and port as baseUrl' },
+    ]);
   }
   return {
     ...input,
@@ -7483,7 +8180,12 @@ async function mockDeleteAnalyzerEndpoint(id: string): Promise<UserSettings> {
       .map((k) => `Advanced setting "${k}"`),
   ];
   if (refs.length > 0) {
-    throw new AnalyzerEndpointError(409, 'referenced', `Analyzer endpoint "${id}" is still used by ${refs.length} saved setting(s).`, refs);
+    throw new AnalyzerEndpointError(
+      409,
+      'referenced',
+      `Analyzer endpoint "${id}" is still used by ${refs.length} saved setting(s).`,
+      refs.map((r) => ({ path: [], message: r })),
+    );
   }
   delete mockEndpointKeyOrigins[id];
   return mockSettingsWithEndpoints(mockEndpoints().filter((e) => e.id !== id));
@@ -7505,7 +8207,9 @@ async function mockPutAnalyzerEndpointKey(id: string, key: string | null): Promi
   await wait(50);
   const ep = mockEndpointOrThrow(id);
   if (typeof key === 'string' && mockHasControlCharacter(key)) {
-    throw new AnalyzerEndpointError(400, 'invalid', MOCK_ENDPOINT_KEY_CONTROL_CHARACTER_RULE, [MOCK_ENDPOINT_KEY_CONTROL_CHARACTER_RULE]);
+    throw new AnalyzerEndpointError(400, 'invalid', MOCK_ENDPOINT_KEY_CONTROL_CHARACTER_RULE, [
+      { path: ['key'], message: MOCK_ENDPOINT_KEY_CONTROL_CHARACTER_RULE },
+    ]);
   }
   if (key && key.trim().length > 0) mockEndpointKeyOrigins[id] = new URL(ep.baseUrl).origin;
   else delete mockEndpointKeyOrigins[id];
@@ -7542,28 +8246,77 @@ export function _setMockUserSettingsForTest(
 
 `src/store/account-slice.ts`:
 
-1. Imports. `:9` becomes `import { createSlice, createAsyncThunk, isAnyOf, type PayloadAction } from '@reduxjs/toolkit';`, and `:10` becomes `import type { AnalyzerEndpointInput, UserSettings, UserSettingsPatch } from '../lib/types';`.
+1. Imports. `:9` becomes `import { createSlice, createAsyncThunk, isAnyOf, type PayloadAction } from '@reduxjs/toolkit';`, and `:10` becomes `import type { AnalyzerEndpointInput, UserSettings, UserSettingsPatch } from '../lib/types';`. Add `AnalyzerEndpointError` to whichever existing import already brings in `api` from `../lib/api` (the module `saveGeminiApiKey`, below, already calls into).
 
 2. After `saveGeminiApiKey` (`:68`):
 ```ts
 /* #3084 PR 3b — analyzer endpoint writes. Each response is the full settings
-   body, swapped in like saveGeminiApiKey. PR 3d's Settings form dispatches these. */
-export const createAnalyzerEndpoint = createAsyncThunk<UserSettings, AnalyzerEndpointInput>(
+   body, swapped in like saveGeminiApiKey. PR 3d's Settings form dispatches these.
+
+   F5 defect (found in review): a bare `(input) => api.createAnalyzerEndpoint(input)`
+   thunk lets a thrown AnalyzerEndpointError fall through to createAsyncThunk's
+   default rejection path, which RTK serialises via miniSerializeError — that
+   keeps only name/message/stack/code and drops the class and its `issues`
+   array. `.unwrap()` then rejects with a plain object with no `issues` at all,
+   so PR 3d's form has nothing to show inline next to a field. Each thunk
+   below is typed with `rejectValue: AnalyzerEndpointRejection` and explicitly
+   catches AnalyzerEndpointError to carry `issues` through `rejectWithValue`;
+   anything else is rethrown and takes RTK's normal (unrelated) rejection path. */
+export interface AnalyzerEndpointRejection {
+  error: string;
+  code: string;
+  issues: { path: string[]; message: string }[];
+}
+
+function rejectAnalyzerEndpointError(e: unknown, rejectWithValue: (v: AnalyzerEndpointRejection) => unknown): unknown {
+  if (e instanceof AnalyzerEndpointError) {
+    return rejectWithValue({ error: e.message, code: e.code, issues: e.issues });
+  }
+  throw e;
+}
+
+export const createAnalyzerEndpoint = createAsyncThunk<UserSettings, AnalyzerEndpointInput, { rejectValue: AnalyzerEndpointRejection }>(
   'account/createAnalyzerEndpoint',
-  (input) => api.createAnalyzerEndpoint(input),
+  async (input, { rejectWithValue }) => {
+    try {
+      return await api.createAnalyzerEndpoint(input);
+    } catch (e) {
+      return rejectAnalyzerEndpointError(e, rejectWithValue);
+    }
+  },
 );
-export const updateAnalyzerEndpoint = createAsyncThunk<UserSettings, { endpointId: string; input: AnalyzerEndpointInput }>(
-  'account/updateAnalyzerEndpoint',
-  ({ endpointId, input }) => api.updateAnalyzerEndpoint(endpointId, input),
-);
-export const deleteAnalyzerEndpoint = createAsyncThunk<UserSettings, string>(
+export const updateAnalyzerEndpoint = createAsyncThunk<
+  UserSettings,
+  { endpointId: string; input: AnalyzerEndpointInput },
+  { rejectValue: AnalyzerEndpointRejection }
+>('account/updateAnalyzerEndpoint', async ({ endpointId, input }, { rejectWithValue }) => {
+  try {
+    return await api.updateAnalyzerEndpoint(endpointId, input);
+  } catch (e) {
+    return rejectAnalyzerEndpointError(e, rejectWithValue);
+  }
+});
+export const deleteAnalyzerEndpoint = createAsyncThunk<UserSettings, string, { rejectValue: AnalyzerEndpointRejection }>(
   'account/deleteAnalyzerEndpoint',
-  (endpointId) => api.deleteAnalyzerEndpoint(endpointId),
+  async (endpointId, { rejectWithValue }) => {
+    try {
+      return await api.deleteAnalyzerEndpoint(endpointId);
+    } catch (e) {
+      return rejectAnalyzerEndpointError(e, rejectWithValue);
+    }
+  },
 );
-export const saveAnalyzerEndpointKey = createAsyncThunk<UserSettings, { endpointId: string; key: string | null }>(
-  'account/saveAnalyzerEndpointKey',
-  ({ endpointId, key }) => api.putAnalyzerEndpointKey(endpointId, key),
-);
+export const saveAnalyzerEndpointKey = createAsyncThunk<
+  UserSettings,
+  { endpointId: string; key: string | null },
+  { rejectValue: AnalyzerEndpointRejection }
+>('account/saveAnalyzerEndpointKey', async ({ endpointId, key }, { rejectWithValue }) => {
+  try {
+    return await api.putAnalyzerEndpointKey(endpointId, key);
+  } catch (e) {
+    return rejectAnalyzerEndpointError(e, rejectWithValue);
+  }
+});
 
 const endpointWrites = [createAnalyzerEndpoint, updateAnalyzerEndpoint, deleteAnalyzerEndpoint, saveAnalyzerEndpointKey] as const;
 ```
@@ -7585,8 +8338,12 @@ const endpointWrites = [createAnalyzerEndpoint, updateAnalyzerEndpoint, deleteAn
         s.hydrated = true;
       })
       .addMatcher(isAnyOf(...endpointWrites.map((t) => t.rejected)), (s, a) => {
+        /* #3084 F5 — a.payload is set only via rejectWithValue (an
+           AnalyzerEndpointError); a non-refusal rejection (rethrown above)
+           carries no payload and falls back to RTK's own a.error.message,
+           same as before this task. */
         s.status = 'error';
-        s.error = a.error.message ?? 'Failed to save the analyzer endpoint.';
+        s.error = a.payload?.error ?? a.error.message ?? 'Failed to save the analyzer endpoint.';
       });
 ```
 If `isAnyOf` rejects the spread of a mapped tuple at typecheck, list the four action creators explicitly in each `isAnyOf(...)` call instead.
@@ -7614,6 +8371,10 @@ Revert one change at a time, confirm the named test goes red, then restore:
 | In `names`, match with a plain prefix test on `'openai:' + id` (no `::` and no grammar) | the same test (`openai:m-ref2::m` is then read as `m-ref`) |
 | Delete the `notYet` block in `mockEndpointFromInput` | `until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload, as the server does` |
 | Delete the `mockHasControlCharacter(key)` refusal in `mockPutAnalyzerEndpointKey` | `refuses a key containing a control character, as the server does…` |
+| In `createAnalyzerEndpoint`, drop the `try/catch` and `rejectWithValue` (back to a bare `(input) => api.createAnalyzerEndpoint(input)`) | `a refused create rejects .unwrap() with the {error, code, issues} payload intact…` (the unwrapped rejection has no `issues` property) |
+| `rejectAnalyzerEndpointError`: build the payload as `{ error: e.message }` only (drop `code`/`issues`) | the same test (`toMatchObject({ code: 'duplicate-id' })` fails, and `issues` is `undefined`) |
+| `rejectAnalyzerEndpointError`: `return rejectWithValue(e as never)` instead of rethrowing a non-`AnalyzerEndpointError` | `a non-refusal rejection still rejects .unwrap() as before, with no issues array` (the `TypeError` gets wrapped as a rejection payload instead of RTK's own serialised error, so `.message` is no longer `'network down'`) |
+| Reducer's rejected matcher: `s.error = a.error.message ?? '…'` (drop the `a.payload?.error ??` half) | `records a refusal as an error without changing endpoints` (the message reverts to RTK's generic serialised-error text instead of the server's `'…already exists.'` wording) |
 
 - [ ] **Step 6: Commit**
 ```bash
