@@ -2339,12 +2339,12 @@ than a single committed clip.
 > marked the chapter "In progress"/"Stalled" at 0/N lines with zero `[tts]`
 > activity and the sidecar's own `/health` never showing `inflight_synth`,
 > reproduced across a full clean server restart. A follow-up session (step 3)
-> found a plausible, reproducible alternate cause for the identical symptom —
-> stale, never-answered `awaiting_confirm` queue entries blocking the FIFO
-> queue — filed as
-> [#3026](https://github.com/dudarenok-maker/Castwright/issues/3026); this
-> row is blocked on that queue behaviour, not on anything specific to plan
-> 274's own hoist. Evidence:
+> investigated and filed [#3026](https://github.com/dudarenok-maker/Castwright/issues/3026)
+> (queue blocking theory), but subsequent testing revealed the actual root
+> cause was a stream-slot-leak when SSE streams died without closing
+> gracefully — the dispatcher's queue worker slot stayed held indefinitely,
+> blocking all downstream generation. Fixed in PR #3234 (stream-slot-leak +
+> fallbackConfirmed work). Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-1-a4-a14.md`.
 
 ### A15 · Measurement-failure path renders as untrusted, not as a fabricated reading (plan [274](../features/archive/274-loudness-measurement-provenance.md))
