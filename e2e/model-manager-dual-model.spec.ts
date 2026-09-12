@@ -16,11 +16,11 @@ import { test, expect } from '@playwright/test';
 import { waitForRouteReady, stubAccountModelProbes } from './helpers';
 
 /* Run this file's tests sequentially (not across parallel workers): the
-   Account view is heavy and its mount-time probes flake under contention.
+   Model Manager view is heavy and its mount-time probes flake under contention.
    Matches account-models.spec.ts. */
 test.describe.configure({ mode: 'serial' });
 
-/* Stub the raw-fetch install probes so the Account view renders a
+/* Stub the raw-fetch install probes so the Model Manager view renders a
    deterministic not-installed state regardless of whether a real backend is
    live on :8080 (the proxy target) — see stubAccountModelProbes. */
 test.beforeEach(async ({ page }) => {
@@ -35,7 +35,7 @@ async function readAccountSlice(page: import('@playwright/test').Page) {
   });
 }
 
-test.describe('Account — dual-model TTS flag', () => {
+test.describe('Model Manager — dual-model TTS flag', () => {
   test('renders the dual-model checkbox unchecked by default', async ({ page }) => {
     await page.goto('/#/models');
     await waitForRouteReady(page);

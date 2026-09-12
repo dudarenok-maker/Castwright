@@ -4822,7 +4822,7 @@ components:
         defaultTtsModelKeyExplicit:
           type: boolean
           description: |
-            Set by the Account view to true when the user deliberately picks a
+            Set by the Model Manager to true when the user deliberately picks a
             default TTS model that differs from the resolved (Qwen-when-installed)
             default — pins their choice so the server stops preferring Qwen.
             The server also auto-latches this on any genuine change to

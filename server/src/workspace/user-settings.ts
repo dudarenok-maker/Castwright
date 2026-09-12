@@ -825,7 +825,7 @@ export async function writeGeminiApiKey(key: string | null): Promise<UserSetting
 
 /** Plan 49 — resolve the Gemini API key from the canonical fallback chain:
       1. process.env.GEMINI_API_KEY (wins for CI / power users)
-      2. cached user-settings.geminiApiKey (UI-saved via Account view)
+      2. cached user-settings.geminiApiKey (UI-saved via the Model Manager)
       3. null (no key configured)
     Trims whitespace on both sources so a stray trailing newline in `.env`
     doesn't masquerade as a real key. Returns null instead of throwing —
