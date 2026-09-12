@@ -73,6 +73,27 @@ export const STEPS = [
     },
   },
   {
+    /* On-box register consistency: folded in from the separate, path-filtered,
+       non-required onbox-register-check.yml workflow (#3138) so the checks run
+       as part of the already-required `npm run verify` context instead of a
+       job that can never become required itself. Globs mirror that workflow's
+       own path filter, plus .github/workflows/verify.yml — the wiring step itself
+       — so a diff touching the check's own gate (e.g. changing the `if:` condition
+       on the three steps in verify.yml) puts this scope key in scope (#3138).
+       Without this, a verify.yml-only diff reports [cached] and the check never
+       re-runs on exactly the diff that might break its wiring. */
+    name: 'check:onbox-register',
+    inputs: {
+      globs: [
+        'docs/testing/onbox-acceptance-register.md',
+        'docs/testing/onbox-acceptance-register-live-view.html',
+        'scripts/**/*.mjs',
+        '.github/workflows/verify.yml',
+      ],
+      includeLockfiles: [],
+    },
+  },
+  {
     name: 'test:hooks',
     inputs: {
       /* fixtures/** is an input because ffmpeg-version.test.mjs drives its
