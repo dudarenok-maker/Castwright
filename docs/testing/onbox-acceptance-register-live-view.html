@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="23" data-publish-id="4af8257a7107"></div>
+  <div hidden data-published-as="24" data-publish-id="a3fa58271bd8"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -741,6 +741,7 @@
           <li>Coqui XTTS installer via Admin &#8594; Model Manager: click <b>Install Coqui XTTS v2</b>, observe the installer runs with the sidecar held (the UI says &#8220;Stopping the voice engine&#8230;&#8221; and any queued chapter waits), completes successfully, and leaves the GPU ONNX runtime intact (<code>pip check</code> clean after install).</li>
           <li>Same installer clicked mid-render: a chapter mid-render (or with a chapter queued to render immediately) triggers the &#8220;Cannot install while a chapter is being generated&#8221; refusal, not a silent abort. Kokoro and Whisper follow the same two paths.</li>
         </ul>
+        <p><em>Note on idle watchdog coverage:</em> the idle watchdog mechanism (kill a child that produces no output for 30 minutes) is not independently observable in the above criteria &#8212; both would pass unchanged on a box where the watchdog code was deleted. The watchdog is tested in the unit suite (<code>childIdleTimeoutMs</code> is an injectable constructor option, and unit tests shorten it and assert the kill and hold-release), but an on-box stall scenario would require a real stuck installer or pip process and cannot be readily reproduced in this row&#39;s current setup.</p>
         <p class="src">GPU box with a real sidecar, Qwen resident (the installer test itself does not require Qwen, but the chapter-mid-render scenario does) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3056">#3056</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/3197">PR #3197</a> &#183; no separate run sheet &#183; low &#8212; each of the three engines needs one successful install from the UI (Admin &#8594; Model Manager, account-logged, real install-*.mjs script, real pip swap, real venv I/O but not a multi-minute download, ~30s per engine if the weights are already present or pre-cached) and one refusal attempt with a chapter queued to render (Qwen, since it&#39;s the fastest to boot). No golden-audio comparison, no complex fixture setup, no timeout tolerance tuning.</p>
       </div>
     </details>
