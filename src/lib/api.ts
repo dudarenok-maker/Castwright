@@ -631,6 +631,10 @@ export interface StreamArgs {
       Optional for back-compat — pre-plan-102 callers still work, ticks just
       don't carry the field. */
   queueEntryId?: string;
+  /** Loud-fallback gate (generation.ts park-gate) — re-dispatch after a
+      parked chapter's "Render anyway" confirmation so the server skips the
+      park instead of re-queuing it. */
+  fallbackConfirmed?: boolean;
 }
 /** fs-26 — one SSE frame from the per-character splice endpoint. */
 export type SpliceTick =
@@ -5835,6 +5839,7 @@ function realStreamGeneration({
   chapterIds,
   force,
   queueEntryId,
+  fallbackConfirmed,
   onTick: rawOnTick,
 }: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
@@ -5843,6 +5848,11 @@ function realStreamGeneration({
   let sawIdle = false;
   let sawAnyTick = false;
   let cancelled = false;
+  /* Set by any exit that isn't a clean idle-terminated drain, so the single
+     terminal-handling block after the reconnect loop (below) knows what
+     reason to report. Left unset for the "no idle after repeated reconnects"
+     exhaustion exit (shape D), which gets its own stable default there. */
+  let failureReason: string | undefined;
   /* Track whether the controller has aborted so the inner catch can
      distinguish "user clicked stop" (AbortError) from "fetch died mid-stream
      and we want to reconnect". */
@@ -5860,15 +5870,16 @@ function realStreamGeneration({
           chapterIds,
           force,
           ...(queueEntryId ? { queueEntryId } : {}),
+          ...(fallbackConfirmed ? { fallbackConfirmed: true } : {}),
         }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
         const detail = await res.text().catch(() => '');
-        onTick({
-          type: 'chapter_failed',
-          errorReason: `Generation stream failed (${res.status}): ${detail || res.statusText}`,
-        });
+        /* Recorded, not emitted here — the terminal-handling block after the
+           reconnect loop (below) delivers the chapter_failed + idle pair once,
+           whichever shape produced it. */
+        failureReason = `Generation stream failed (${res.status}): ${detail || res.statusText}`;
         return { shouldReconnect: false };
       }
 
@@ -5908,14 +5919,12 @@ function realStreamGeneration({
       if ((e as { name?: string })?.name === 'AbortError') return { shouldReconnect: false };
       /* Network error / server bounce mid-stream lands here. If we'd already
          seen ticks, reconnect — the queue likely still has work. Otherwise
-         the failure is the first POST itself; surface to the caller. */
+         the failure is the first POST itself; recorded for the terminal
+         handling below rather than surfaced here directly. */
       if (sawAnyTick && !sawIdle) {
         return { shouldReconnect: true };
       }
-      onTick({
-        type: 'chapter_failed',
-        errorReason: (e as Error).message ?? 'Generation stream failed.',
-      });
+      failureReason = (e as Error).message || 'Generation stream failed.';
       return { shouldReconnect: false };
     }
   };
@@ -5923,9 +5932,10 @@ function realStreamGeneration({
   void (async () => {
     while (attempt < RECONNECT_MAX_ATTEMPTS) {
       const { shouldReconnect } = await openOnce();
-      if (!shouldReconnect || cancelled) return;
+      if (!shouldReconnect || cancelled) break;
       const backoff = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
       attempt += 1;
+      if (attempt >= RECONNECT_MAX_ATTEMPTS) break;
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
           controller.signal.removeEventListener('abort', cancelDuringWait);
@@ -5937,7 +5947,23 @@ function realStreamGeneration({
         };
         controller.signal.addEventListener('abort', cancelDuringWait);
       });
-      if (cancelled) return;
+      if (cancelled) break;
+    }
+    /* Terminal handling, in one place, for every shape that gives up without
+       ever seeing the server's own `idle` — a non-OK response, a zero-tick
+       clean close, a first-fetch throw, or reconnect-attempt exhaustion. A
+       caller cancel (`cancelled`) and a clean idle-terminated drain
+       (`sawIdle`) both emit nothing here; every other give-up delivers
+       exactly one `chapter_failed` (mirroring the server's own terminal
+       shape) followed by exactly one `idle`, so the dispatcher always frees
+       the worker slot. */
+    if (!cancelled && !sawIdle) {
+      onTick({
+        type: 'chapter_failed',
+        ...(chapterIds?.length === 1 ? { chapterId: chapterIds[0] } : {}),
+        errorReason: failureReason ?? 'Generation stream ended without completing.',
+      });
+      onTick({ type: 'idle' });
     }
   })();
 

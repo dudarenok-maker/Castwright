@@ -20,7 +20,8 @@ mid-chapter when a designed voice's `.pt` artifact is missing — ask the sideca
 to place *that one derive* on `cuda:1`, so it does not contend with a Qwen that
 is already generating on `cuda:0`. The request carries `X-Device-Hint: cuda:1`;
 the sidecar threads it into `reservation(preferred=...)`, which tries that card
-first and falls back to ordinary unconstrained placement if it does not fit.
+first, but only honors the hint if the card has at least 75% of the unconstrained
+winner's free headroom — otherwise it falls back to ordinary unconstrained placement.
 
 #3058's original acceptance text said *"issue a hinted derive request and
 confirm via `nvidia-smi` that Coqui loads on GPU1."* **Do not run that.** A
@@ -46,7 +47,7 @@ criterion below is driven from the app.
    policy normally pins it to `cuda:1` — see row **A1**'s environmental notes
    in [`onbox-acceptance-register.md`](onbox-acceptance-register.md)). Under
    that pin `_resolve_admission`'s `constraint` is set and the hint is skipped
-   outright (`main.py:5184`), so every criterion below is a no-op until it's
+   outright (`main.py:5217`), so every criterion below is a no-op until it's
    cleared. **`QWEN_DEVICE` must NOT stay pinned to `cuda:1` for Criteria 2
    and 3.** It is true that the knob does not gate Coqui's *admission check*
    directly — but each of those criteria triggers a full chapter render
@@ -74,8 +75,9 @@ criterion below is driven from the app.
    from step 1 below must itself be large enough for whichever Qwen model the
    render's book actually chooses (`SEED_FOOTPRINTS_MB`: 0.6B seed 3072 MB at
    `main.py:4340`, 1.7B seed 6144 MB at `main.py:4341`) — routine on an
-   empty 8 GB card, but pick a 0.6B-only book if this render also has to
-   compete with the `headroom0 > peak + 400` check at step 4.
+   empty 8 GB card, but pick a 0.6B-only book if Criterion 2's step 4 reports
+   that the box lacks sufficient headroom margin (`headroom0` must exceed
+   `peak + 200` with room to spare).
 
 ---
 
@@ -91,7 +93,7 @@ what actually proves the mechanism**, end to end, without needing this one.
 
 To observe the header directly anyway, temporarily add one line in
 `xtts_clone_voice` right after `device_hint = _parse_device_hint(...)`
-(`main.py:12011`): `log.info("device_hint=%s", device_hint)`. Revert it after
+(`main.py:12044`): `log.info("device_hint=%s", device_hint)`. Revert it after
 the run — it is not part of the shipped code.
 
 **Do not open Admin → Advanced configuration at any point before the render.**
@@ -127,8 +129,8 @@ provably diverge.
 **Don't fill VRAM by loading real models** — a Qwen/Kokoro-based fill was
 tried and rejected: `_qwen_design_idle_watchdog` frees the ~4-5 GB
 VoiceDesign share 120-150 s after the last design
-(`server/tts-sidecar/main.py:9067`, `:9098`), or immediately at the next
-`/synthesize` (`:8141-8142`), so the band this criterion depends on evaporates
+(`server/tts-sidecar/main.py:9100`, `:9131`), or immediately at the next
+`/synthesize` (`:8174-8175`), so the band this criterion depends on evaporates
 mid-criterion. Fill with a scratch CUDA allocation instead — `probe_capacity`
 reads driver-level `mem_get_info` (`main.py:4210-4218`, `4297-4326`), so a
 `torch.empty(...)` tensor moves the same number the placement code reads, and
@@ -157,21 +159,24 @@ unlike a resident engine nothing ever evicts it.
    note at step 4 for where to read it from.
 3. Query the sidecar's `GET /debug/memory` and read its `footprints.coqui`
    block (`{seed_mb, learned_mb, sample_count}` — `FootprintTable.snapshot`,
-   `main.py:4480-4497`, served at `main.py:11075-11172`). The Coqui derive's
+   `main.py:4480-4497`, served at `main.py:11108-11205`). The Coqui derive's
    admission footprint (`peak`) is `learned_mb` once `sample_count >= 5`,
    else the seed `SEED_FOOTPRINTS_MB["coqui"]` of **3584 MB**
    (`main.py:4355`, `FootprintTable.peak_mb`, `main.py:4463-4470`) — call
    this value `peak`. A fresh box with no prior Coqui admissions uses the
    3584 MB seed unmodified.
-4. **The target band, in MB:** this criterion needs `headroom0 > peak + 400`
-   to have room to construct a discriminating band at all — if it doesn't,
-   record the measured `headroom0` and `peak` in the Result line rather than
-   forcing a pass — the exact headroom this box has needs on-box confirmation
-   either way. Otherwise the target is
-   `target_headroom1 = peak + 200` (comfortably inside the band's floor;
-   at the seed value that's **3784 MB**) — enough margin above `peak` to
-   survive nvidia-smi's own read noise, and (given the check above) still
-   short of `headroom0`. **The reserve subtracted per device is
+4. **The target band, in MB:** **First, verify that `headroom0` (measured at step
+   2) satisfies both `headroom0 > 6000` AND `0.75 × headroom0 ≤ 6000` (i.e., `headroom0 ≤ 8000`)**
+   — this criterion needs sufficient headroom on `cuda:0` to construct a discriminating band, and
+   `target_headroom1 = 6000` depends on both bounds. If it doesn't, record the measured `headroom0`
+   and `peak` in the Result line rather than forcing a pass; the box's current idle state lacks
+   the room this criterion depends on. The lower bound (`headroom0 > 6000`) ensures the unhinted
+   control loses to `cuda:0`'s best-fit. The upper bound (`0.75 × headroom0 ≤ 6000`) ensures the
+   hinted run passes the 75%-tolerance check. This criterion constructs a scenario where `cuda:1`'s
+   free headroom sits in a band high enough to pass #3097/#3165's 75%-tolerance check (so the hint
+   is honored when active) but low enough to still lose to `cuda:0`'s unconstrained best-fit (so
+   the control derive without the hint lands elsewhere). The target is `target_headroom1 = 6000`.
+   At the seed value this is **6000 MB**. **The reserve subtracted per device is
    `reserve(total_mb) = min(round(0.05 * total_mb), GPU_RESERVE_MB)` —
    `GPU_RESERVE_MB` is the operator-configurable ceiling (`gpu.reserveMb`,
    `server/src/config/registry.ts:829-838`), not a hardcoded 500.** The value
@@ -191,7 +196,7 @@ unlike a resident engine nothing ever evicts it.
    default. `target_free1 = target_headroom1 + reserve(total1)`
    — at `total1 = 16376`, `round(0.05 * 16376) = 819`, so
    `reserve(16376) = min(819, GPU_RESERVE_MB)`, which is `min(819, 500) =
-   500` at the default, giving `target_free1 = 3784 + 500 = 4284` at the
+   500` at the default, giving `target_free1 = 6000 + 500 = 6500` at the
    seed `peak`. **Use `reserve(total1)` — the full formula, not the raw
    `GPU_RESERVE_MB` — on both sides of this criterion**: computing
    `target_free1` here, and reading `headroom1` back from the fill in step 5
@@ -211,9 +216,9 @@ unlike a resident engine nothing ever evicts it.
    ```python
    import torch, time
    torch.cuda.set_device(1)
-   TARGET_FREE_MB = 4284  # target_free1 from step 4 at the seed peak and the DEFAULT
+   TARGET_FREE_MB = 6500  # target_free1 from step 4 at the seed peak and the DEFAULT
                           # GPU_RESERVE_MB=500 -- this box's own server/.env sets
-                          # GPU_RESERVE_MB=768, which recomputes to 4552; always
+                          # GPU_RESERVE_MB=768, which recomputes to 6768; always
                           # recompute from your box's actual peak/GPU_RESERVE_MB
                           # rather than pasting either literal.
    _free0_b, total0_b = torch.cuda.mem_get_info(0)
@@ -272,7 +277,7 @@ unlike a resident engine nothing ever evicts it.
    `POST /api/sidecar/unload`) — leave it non-resident, don't reload it.
    Reloading it here would re-admit it and pin `_resolve_admission`'s
    `constraint` to wherever it just landed, which skips the `preferred`/hint
-   check entirely regardless of what the header says next (`main.py:5184`).
+   check entirely regardless of what the header says next (`main.py:5217`).
    Then re-delete the `.pt` artifact for the same character (Setup step 4) —
    step 6's derive already wrote a fresh one, and without deleting it again
    the next call finds `ptExists && !stale` and skips the derive outright
@@ -322,9 +327,9 @@ hard pin that PR #3061's review rejected. Under a hard pin this scenario cost a
 catalogue voice**.
 
 **There is no log line that says "the preference was offered and not
-taken."** `_resolve_admission` (`main.py:5126-5253`) is the same function
-Criterion 1 already audited: the `preferred` try_hold at `main.py:5184-5187`
-and its unconstrained fallback at `main.py:5188-5189` are both silent — no
+taken."** `_resolve_admission` (`main.py:5133-5286`) is the same function
+Criterion 1 already audited: the `preferred` try_hold at `main.py:5217-5220`
+and its unconstrained fallback at `main.py:5221-5222` are both silent — no
 `log.` call anywhere in that path records whether the preferred device was
 tried, or whether it was tried and rejected before falling through. A
 `noCapacity` refusal naming `cuda:1` isn't a log line either; it would surface
@@ -344,9 +349,9 @@ To observe the fallback directly anyway, add two temporary log lines in
 `_resolve_admission` and revert them after the run — they are not part of the
 shipped code:
 
-- right after the `preferred` try at `main.py:5187`:
+- right after the `preferred` try at `main.py:5220`:
   `log.info("preferred=%s held=%s", preferred, held)`
-- right after the fallback try at `main.py:5189`:
+- right after the fallback try at `main.py:5222`:
   `log.info("fallback held=%s", held)`
 
 1. Fill `cuda:1` so the derive cannot fit there — using the same scratch-CUDA
@@ -384,7 +389,7 @@ shipped code:
    `main.py:4335`) over the 1.7B (~3915 MB, `main.py:4344`) — on a
    `cuda:0` actually holding the just-landed Coqui derive rather than its
    pristine reading, a 1.7B book's own admission can trigger `_evict_until`
-   (`main.py:5199`) and evict the very Coqui this criterion exists to
+   (`main.py:5232`) and evict the very Coqui this criterion exists to
    observe, which a green render can silently absorb (a substituted stock
    voice is not visible in the render's status — see the fourth Pass bullet
    below). Leave the scratch fill running across it, and kill it once this
@@ -394,9 +399,11 @@ shipped code:
 
 - the derive **succeeds on GPU0**, in its normal time;
 - (diagnostic only, with the temporary log lines above) the first log line
-  shows `held=None` for `preferred="cuda:1"`, and the second shows a non-`None`
-  fallback `held` on `cuda:0` — i.e. the preference was tried, rejected, and
-  fallen through, rather than a `noCapacity` refusal ever reaching Node;
+  shows `preferred=None` (the hint was rejected by the 75%-tolerance check
+  before the try_hold, so there is no "preferred try rejected" — the fallback
+  is the unconstrained winner), and the second shows `held` on `cuda:0` — this
+  proves the tolerance dropped the hint and fell through to the winner, rather
+  than a `noCapacity` refusal ever reaching Node;
 - there is **no ~60 s stall** before it proceeds;
 - the character renders in **its own designed voice**.
 
@@ -432,7 +439,7 @@ costs nothing.
 **Leave `QWEN_DEVICE=cuda:0` (or unset) through this criterion too — do not
 restore the box's standing `cuda:1` pin yet.** Step 2 restarts the sidecar
 with only one CUDA device visible; under a `cuda:1` pin, `_validate_cuda_index`
-(`main.py:5787-5797`) rejects that as out of range and the Qwen load fails
+(`main.py:5820-5830`) rejects that as out of range and the Qwen load fails
 outright, which fails the render before this criterion's own observation is
 ever reached. Restore the standing pin only once this criterion (the last one
 in the sitting) is also done.
