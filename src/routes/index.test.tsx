@@ -26,7 +26,7 @@ import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { tourSlice } from '../store/tour-slice';
 import { router as appRouter } from './index';
-import { AnalysingRoute, BooksRoute, ChangelogRoute, ReadyRoute } from './index';
+import { AnalysingRoute, BooksRoute, ChangelogRoute, ReadyRoute, SetupRoute } from './index';
 import { chaptersActions } from '../store/chapters-slice';
 import type { LayoutContext } from '../components/layout';
 import type { Chapter, Character, LibraryBook, ChangeLogEvent } from '../lib/types';
@@ -38,9 +38,23 @@ const getLibraryMock = vi.fn();
 const deleteBookMock = vi.fn();
 const putBookStateMock = vi.fn();
 const getWorkspaceInfoMock = vi.fn();
+const completeSetupMock = vi.fn();
+
+/* #3195 R2 — SetupRoute's onFinish is what the "corruptSettingsFile sync"
+   test below exercises; the five-step wizard behind SetupView is pinned by
+   its own suite (components/setup/setup-wizard.test.tsx), so stub the view
+   down to the one affordance the route owns: the finish callback. */
+vi.mock('../views/setup', () => ({
+  SetupView: ({ onFinish }: { onFinish: () => void }) => (
+    <button type="button" onClick={onFinish}>
+      Finish setup
+    </button>
+  ),
+}));
 
 vi.mock('../lib/api', () => ({
   api: {
+    completeSetup: () => completeSetupMock(),
     analyseManuscript: (manuscriptId: string, opts: unknown) => {
       analyseMock(manuscriptId, opts);
       /* Never resolves — keeps the AnalysingView effect parked in its
@@ -188,6 +202,56 @@ beforeEach(() => {
   deleteBookMock.mockReset();
   putBookStateMock.mockReset();
   getWorkspaceInfoMock.mockReset();
+  completeSetupMock.mockReset();
+});
+
+describe('SetupRoute — corruptSettingsFile sync from the completeSetup response (#3195 P2/R2)', () => {
+  function renderAtSetup(store: ReturnType<typeof makeStore>) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/setup']}>
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route path="/setup" element={<SetupRoute />} />
+              <Route path="/" element={<div data-testid="home" />} />
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+
+  it('finishing setup with corruptSettingsFile: true in the response updates the account slice', async () => {
+    completeSetupMock.mockResolvedValueOnce({
+      completedAt: '2026-06-12T00:00:00.000Z',
+      corruptSettingsFile: true,
+    });
+    const store = makeStore();
+    renderAtSetup(store);
+    expect(store.getState().account.corruptSettingsFile).toBe(false);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Finish setup' }));
+
+    await waitFor(() => expect(completeSetupMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(store.getState().account.corruptSettingsFile).toBe(true));
+    // and the route still navigates home afterwards
+    await screen.findByTestId('home');
+  });
+
+  it('finishing setup with corruptSettingsFile: false clears a flag that was set', async () => {
+    completeSetupMock.mockResolvedValueOnce({
+      completedAt: '2026-06-12T00:00:00.000Z',
+      corruptSettingsFile: false,
+    });
+    const store = makeStore();
+    store.dispatch(accountSlice.actions.setCorruptSettingsFile(true));
+    renderAtSetup(store);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Finish setup' }));
+
+    await waitFor(() => expect(completeSetupMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(store.getState().account.corruptSettingsFile).toBe(false));
+  });
 });
 
 describe('AnalysingRoute manuscriptId derivation', () => {

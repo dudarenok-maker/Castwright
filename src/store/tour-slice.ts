@@ -2,6 +2,7 @@ import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/tool
 import type { ThunkAction, UnknownAction } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
 import { uiActions } from './ui-slice';
+import { accountActions } from './account-slice';
 import { TOUR_STEPS, stepsForScreen, SAMPLE, type TourScreen } from '../lib/tour-steps';
 import type { Stage } from '../lib/types';
 
@@ -176,6 +177,11 @@ export function startScreenTour(screen: TourScreen): AppThunk {
 /** Stamp completion server-side (the completeTour.fulfilled reducer mirrors it locally + ends). */
 export function finishTour(): AppThunk {
   return async (dispatch) => {
-    await dispatch(completeTour());
+    const result = await dispatch(completeTour());
+    // Update the corruption banner state if completeTour succeeded
+    const payload = result.payload as { completedAt: string; corruptSettingsFile: boolean } | undefined;
+    if (payload && payload.corruptSettingsFile !== undefined) {
+      dispatch(accountActions.setCorruptSettingsFile(payload.corruptSettingsFile));
+    }
   };
 }

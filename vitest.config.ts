@@ -113,6 +113,21 @@ export default defineConfig({
          files. */
       '{**/src/lib/api.ts,**/.*/**/src/lib/api.ts}',
       '{**/src/lib/api-types.ts,**/.*/**/src/lib/api-types.ts}',
+      /* #2889 — src/index-html-fonts.test.ts (the #698 self-hosted-fonts
+         guard) readFile()s index.html at RUNTIME and neither imports it nor
+         has any module-graph edge to it, so `vitest --changed` would never
+         select it for an index.html-only diff. src/styles.css is different:
+         src/main.tsx imports it (so the module-graph edge exists), but
+         src/test/dark-mode-css.test.ts and src/styles-neutrals.test.ts both
+         readFileSync() it directly with no module-graph path from the change
+         to the guard, creating a partial-selection gap that would miss both
+         guards. Both files are in scope for the `test` step — index.html via
+         its `extraFiles` entry, src/styles.css via globs: ['src/**'] — but
+         that only schedules the step; it is `--changed` inside the run that
+         then selects zero/one test file. These triggers are what force the
+         full run, closing the matching gap in vitest's own selection. */
+      '{**/index.html,**/.*/**/index.html}',
+      '{**/styles.css,**/.*/**/styles.css}',
     ],
     /* One retry to absorb transient jsdom/timer flakes inside a single
        verify run instead of forcing a full pre-push re-execution. See

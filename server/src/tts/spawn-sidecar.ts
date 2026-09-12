@@ -1,11 +1,12 @@
 /* Plan 43 — spawn the Python TTS sidecar as a child process of the Node
    server, owned by the user's `autoStartSidecar` preference.
 
-   The spawn target is the existing `server/tts-sidecar/start.ps1` launcher
-   (venv check, CUDA poison-code-42 supervisor loop, uvicorn bind). We just
-   propagate `PRELOAD_COQUI` derived from `defaultTtsModelKey`, pipe logs,
-   and write the child PID to `.run/tts.pid` so the existing
-   `scripts/stop-app.ps1` reaps it the same as before.
+   The spawn target is the existing `server/tts-sidecar/start.ps1` (Windows) or
+   `start.sh` (POSIX) launcher (venv check, uvicorn bind). Both launchers are
+   single-shot and always propagate the real exit code so Node's supervisor
+   owns all restart decisions (issue #3121). We propagate `PRELOAD_COQUI`
+   derived from `defaultTtsModelKey`, pipe logs, and write the child PID to
+   `.run/tts.pid` so the existing `scripts/stop-app.ps1` reaps it the same as before.
 
    Three early-exit cases:
      1. autoStart === false            → log and return null.
@@ -867,10 +868,12 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
 
   /* If the child exits on its own (e.g. start.ps1/start.sh venv check failed),
      surface that as a single warning so the user knows TTS won't be
-     available. The supervisor loop inside start.ps1/start.sh already handles
-     transient CUDA poison restarts internally; an exit here means
-     the launcher itself terminated. Use a once-guard so an 'error' event
-     followed by a synthetic 'exit' (or vice-versa) only fires onExit once. */
+     available. The launchers are single-shot and always propagate the real exit
+     code; Node's supervisor (sidecar-supervisor.ts) handles all transient
+     restarts. An exit here means the launcher itself terminated or a real
+     sidecar exit (code 42, 43, 0, 1, etc.) — the supervisor owns the restart
+     decision. Use a once-guard so an 'error' event followed by a synthetic
+     'exit' (or vice-versa) only fires onExit once. */
   let exitNotified = false;
   const notifyExit = (code: number | null, signal: NodeJS.Signals | null): void => {
     if (exitNotified) return;

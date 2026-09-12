@@ -30,6 +30,10 @@ import { existsSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS } from './tts/coqui-residency-policy.guard-targets.js';
+import { STATE_LANGUAGE_GUARD_SCAN_GLOB } from './workspace/state-language.guard-targets.js';
+import { SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS } from './spawn-windows-hide.guard-targets.js';
+import { CAST_LOCK_GUARD_SCAN_GLOB } from './workspace/cast-lock.guard-targets.js';
+import { ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB } from './tts/engine-language-coverage.guard-targets.js';
 
 const SERVER_ROOT = resolve(__dirname, '..');
 const REPO_ROOT = resolve(SERVER_ROOT, '..');
@@ -104,26 +108,43 @@ const MAIN_COVERED = [
   { rel: 'vitest.config.slow.ts', file: 'the slow-tier config', base: SERVER_ROOT },
   /* Pins the `vite` half of the brace. Without a case for it, narrowing the
      trigger to `vitest.config.ts` would leave every assertion green while
-     silently dropping coverage for the vite build config. */
+     silently dropping coverage for the vite build config. Also one of the
+     concrete root files SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[5] names
+     (#3085) — its coverage here doubles as that guard's file-coverage case. */
   { rel: 'vite.config.ts', file: 'the vite build config', base: REPO_ROOT },
   { rel: 'openapi.yaml', file: 'the API contract', base: REPO_ROOT },
-  /* #2567 review round 3: spawn-windows-hide.test.ts (this suite) reads
-     these trees as TEXT at RUNTIME to scan for a missing windowsHide —
-     no module-graph edge, so a diff confined to any of them selected zero
-     tests under `vitest run --changed` before these triggers existed. */
-  { rel: 'scripts/verify-cache.mjs', file: 'an arbitrary scripts/** file', base: REPO_ROOT },
+  /* #2567 review round 3, re-derived from SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS
+     (#3085): spawn-windows-hide.test.ts (this suite) reads these trees as
+     TEXT at RUNTIME to scan for a missing windowsHide — no module-graph
+     edge, so a diff confined to any of them selected zero tests under
+     `vitest run --changed` before these triggers existed. Each `rel` below
+     is DERIVED from the guard's own declared scope, not a second hand-typed
+     literal that happens to agree with it today. */
   {
-    rel: 'server/tts-sidecar/scripts/install-ort.mjs',
-    file: 'a server/tts-sidecar/scripts/** file (via the scripts/** trigger)',
+    rel: SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[1].replace(/\*\*$/, 'verify-cache.mjs'),
+    file: 'an arbitrary scripts/** file (SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS)',
     base: REPO_ROOT,
   },
   {
-    rel: 'pinokio-scripts/lib/resolve-release.js',
-    file: 'a pinokio-scripts/** file',
+    rel: SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[2].replace(/\*\*$/, 'install-ort.mjs'),
+    file: 'a server/tts-sidecar/scripts/** file (via the scripts/** trigger; SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS)',
     base: REPO_ROOT,
   },
-  { rel: 'e2e/global-teardown.ts', file: 'the e2e Playwright teardown', base: REPO_ROOT },
-  { rel: 'launch.mjs', file: 'the versioned-dir launcher', base: REPO_ROOT },
+  {
+    rel: SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[3].replace(/\*\*$/, 'resolve-release.js'),
+    file: 'a pinokio-scripts/** file (SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS)',
+    base: REPO_ROOT,
+  },
+  {
+    rel: SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[4],
+    file: 'the e2e Playwright teardown (SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS)',
+    base: REPO_ROOT,
+  },
+  {
+    rel: SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[6],
+    file: 'the versioned-dir launcher (SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS)',
+    base: REPO_ROOT,
+  },
   /* #2588 pass-2 review: venv-migration.test.ts (this suite) reads BOTH of these
      at RUNTIME — .gitattributes to assert the requirements/*.txt LF pin rule is
      declared, the requirements files themselves to assert the pin materialised
@@ -163,13 +184,47 @@ const MAIN_COVERED = [
      generation.ts at RUNTIME (readFileSync + a TypeScript parse) to scan for
      the resolveEligibleEngines(...) call site; the same #1847 runtime-read
      trap as the entries above, since the guard scans the file's source text
-     rather than importing it. */
-  { rel: 'src/routes/generation.ts', file: 'the generation route (resolveEligibleEngines call site)', base: SERVER_ROOT },
+     rather than importing it. The rel path below is DERIVED from
+     ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB (#3085), the same constant the
+     guard itself declares, not a second hand-typed literal that happens to
+     agree with it today. */
+  {
+    rel: ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB,
+    file: 'the generation route (resolveEligibleEngines call site)',
+    base: REPO_ROOT,
+  },
+  /* cast-lock.guard.test.ts (#3085): a tree-wide scanner — collectSourceFiles
+     (SRC_ROOT) reads every non-test .ts file under server/src/** at RUNTIME,
+     no module-graph edge to any of them. The rel path below is DERIVED from
+     CAST_LOCK_GUARD_SCAN_GLOB (the same constant the guard itself imports),
+     not a second hand-typed literal that happens to agree with it today —
+     so this assertion and the guard's declared scope can never
+     independently drift. Same underlying glob text as
+     STATE_LANGUAGE_GUARD_SCAN_GLOB below (both guards' real scope IS the
+     whole server/src/** tree), sourced from cast-lock's own constant so the
+     two guards' declarations are verified independently. */
+  {
+    rel: CAST_LOCK_GUARD_SCAN_GLOB.replace(/\*\*$/, 'index.ts'),
+    file: 'a file under the cast-lock guard scan scope (CAST_LOCK_GUARD_SCAN_GLOB)',
+    base: REPO_ROOT,
+  },
   /* #3139/#3146: registry-knob-read.guard.test.ts reads these two files' source
      text at RUNTIME to verify its DECLARED_DYNAMIC_READERS claims — the same
      #1847 runtime-read trap as the entries above. */
   { rel: 'src/analyzer/rate-limit.ts', file: 'the rate-limit dynamic-reader lookup', base: SERVER_ROOT },
   { rel: 'src/tts/segment-asr-qa.ts', file: 'the per-language maxWer dynamic-reader lookup', base: SERVER_ROOT },
+  /* state-language.guard.test.ts (#3085): a tree-wide scanner —
+     collectSourceFiles(SRC_ROOT) reads every non-test .ts file under
+     server/src/** at RUNTIME, no module-graph edge to any of them. The rel
+     path below is DERIVED from STATE_LANGUAGE_GUARD_SCAN_GLOB (the same
+     constant the guard itself imports), not a second hand-typed literal that
+     happens to agree with it today — so this assertion and the guard's
+     declared scope can never independently drift. */
+  {
+    rel: STATE_LANGUAGE_GUARD_SCAN_GLOB.replace(/\*\*$/, 'index.ts'),
+    file: 'a file under the state-language guard scan scope (STATE_LANGUAGE_GUARD_SCAN_GLOB)',
+    base: REPO_ROOT,
+  },
 ];
 
 const SLOW_COVERED = [
@@ -181,9 +236,28 @@ const SLOW_COVERED = [
    trigger to something like `**` + a suffix glob is caught rather than only
    the crudest `**`. */
 const NOT_COVERED = [
-  { rel: 'src/index.ts', file: 'an ordinary server source file', base: SERVER_ROOT },
   { rel: 'tsconfig.json', file: 'a JSON file that is not a manifest', base: REPO_ROOT },
   { rel: 'apps/android/pubspec.yaml', file: 'a YAML file that is not the contract', base: REPO_ROOT },
+];
+
+/* The slow config's triggers are untouched by #3085, so an ordinary server
+   source file is still a valid not-covered case there. */
+const SLOW_NOT_COVERED = [
+  ...NOT_COVERED,
+  { rel: 'src/index.ts', file: 'an ordinary server source file', base: SERVER_ROOT },
+];
+
+/* #3085: state-language.guard.test.ts's new trigger deliberately covers the
+   whole server/src/** tree, so "an ordinary server source file" is no longer
+   a valid not-covered case for the MAIN config — matching it is the point.
+   Swap in files outside every guard's declared scope instead — one for each
+   major extension type (non-source, source-extension) so widening a trigger
+   to a broad glob (e.g. ** + any-extension) is caught rather than only the
+   crudest widening. */
+const MAIN_NOT_COVERED = [
+  ...NOT_COVERED,
+  { rel: 'CONTRIBUTING.md', file: 'an ordinary repo file outside every guard scope', base: REPO_ROOT },
+  { rel: 'src/lib/account-defaults.ts', file: 'a frontend source file outside every guard scope', base: REPO_ROOT },
 ];
 
 const crossProduct = (covered: typeof MAIN_COVERED) =>
@@ -210,10 +284,80 @@ describe('server/vitest.config.ts forceRerunTriggers', () => {
     },
   );
 
+  /* #3085: the file-coverage case above only proves the CURRENT scope is
+     covered — narrowing STATE_LANGUAGE_GUARD_SCAN_GLOB to a subtree (e.g.
+     'server/src/tts/**') would still pass it, because a narrower scope is
+     still a subset of the real (unchanged) trigger below. This assertion
+     checks the trigger array contains the EXACT brace-glob built from the
+     imported constant, so narrowing OR widening the constant without
+     updating vitest.config.ts's literal entry to match is caught either way. */
+  it('main forceRerunTriggers has the exact entry derived from STATE_LANGUAGE_GUARD_SCAN_GLOB (#3085)', () => {
+    const expected = `{**/${STATE_LANGUAGE_GUARD_SCAN_GLOB},**/.*/**/${STATE_LANGUAGE_GUARD_SCAN_GLOB}}`;
+    expect(mainTriggers).toContain(expected);
+  });
+
+  /* Same check as above, independently sourced from cast-lock's own
+     constant — both guards' real scope happens to be the whole
+     server/src/** tree today, and each is verified against
+     server/vitest.config.ts on its own terms rather than assuming the two
+     can never diverge. */
+  it('main forceRerunTriggers has the exact entry derived from CAST_LOCK_GUARD_SCAN_GLOB (#3085)', () => {
+    const expected = `{**/${CAST_LOCK_GUARD_SCAN_GLOB},**/.*/**/${CAST_LOCK_GUARD_SCAN_GLOB}}`;
+    expect(mainTriggers).toContain(expected);
+  });
+
+  it('main forceRerunTriggers has the exact entry derived from ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB (#3085)', () => {
+    const expected =
+      `{**/${ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB},` +
+      `**/.*/**/${ENGINE_LANGUAGE_COVERAGE_GUARD_SCAN_GLOB}}`;
+    expect(mainTriggers).toContain(expected);
+  });
+
+  /* coqui-residency-policy.guard.test.ts (#1932, side-18) reads
+     server/src/tts/synthesise-chapter.ts at RUNTIME — the file is importable
+     but the guard doesn't import it, it scans its source text for eviction
+     policy cross-references, so there is no module-graph edge from the guard
+     to this file. The new broad server/src/** trigger added in #3085 now
+     covers this file, making the specific entry able to be deleted without
+     failing this test suite — but the guard still declares
+     synthesise-chapter.ts as its own scope. This exact-entry pin guards against
+     the entry being silently deleted on the assumption that the broader trigger
+     handles it (it does, today, but the guard's scope is still the specific
+     file). */
+  it('main forceRerunTriggers has the exact entry for coqui-residency-policy.guard.test.ts synthesise-chapter.ts (#3085)', () => {
+    const coquiSynthesiseEntry = '{**/server/src/tts/synthesise-chapter.ts,**/.*/**/server/src/tts/synthesise-chapter.ts}';
+    expect(mainTriggers).toContain(coquiSynthesiseEntry);
+  });
+
+  /* Only entries 1, 4 and 6 have their OWN literal brace-glob trigger to pin
+     exactly (NOTE: don't write the glob text itself, globstar-slash, inline
+     in a block comment — see the "don't write the glob text" note in
+     server/vitest.config.ts for why that closes the comment early):
+       - [0], scope index 0, is the same literal glob
+         STATE_LANGUAGE_GUARD_SCAN_GLOB's exact-entry check above already
+         pins.
+       - [2], the tts-sidecar scripts subtree, has no entry of its own — it
+         rides the broader [1] entry (the top-level scripts subtree), which
+         matches any path with a 'scripts' segment anywhere (see that
+         entry's own comment in server/vitest.config.ts); the file-coverage
+         case above already proves that reuse still covers it.
+       - [3], the pinokio-scripts lib subtree, similarly rides a broader
+         pinokio-scripts entry, not one scoped to its lib subfolder.
+       - [5], vite.config.ts, is covered by the vitest/vite config brace, a
+         different shape this simple form doesn't match — its own
+         MAIN_COVERED entry (the vite build config case) is that guard's
+         proof instead. */
+  it.each(
+    [1, 4, 6].map((i) => SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS[i]),
+  )('main forceRerunTriggers has the exact entry derived from SPAWN_WINDOWS_HIDE_GUARD_SCAN_GLOBS entry %s (#3085)', (glob) => {
+    const expected = `{**/${glob},**/.*/**/${glob}}`;
+    expect(mainTriggers).toContain(expected);
+  });
+
   /* Guards against "fixing" a dead trigger by widening it to something that
      matches everything — that would force a full run on every diff and
      quietly undo the point of --changed. */
-  it.each(crossProduct(NOT_COVERED))('does not match $file from $shape', ({ rel, base, root }) => {
+  it.each(crossProduct(MAIN_NOT_COVERED))('does not match $file from $shape', ({ rel, base, root }) => {
     expect(matchesTrigger(mainTriggers, absPathUnder(root, base, rel))).toBe(false);
   });
 });
@@ -226,7 +370,7 @@ describe('server/vitest.config.slow.ts forceRerunTriggers', () => {
     },
   );
 
-  it.each(crossProduct(NOT_COVERED))('does not match $file from $shape', ({ rel, base, root }) => {
+  it.each(crossProduct(SLOW_NOT_COVERED))('does not match $file from $shape', ({ rel, base, root }) => {
     expect(matchesTrigger(slowTriggers, absPathUnder(root, base, rel))).toBe(false);
   });
 });
