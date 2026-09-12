@@ -4629,6 +4629,14 @@ class ReservationLedger:
                     best_key, best_headroom = key, headroom
             return best_key
 
+    def get_headroom(self, device_key: str, free_mb: int, total_mb: int, reserve_cap: int) -> int:
+        """Get the available headroom for a device, accounting for reservations
+        already held on it. For tolerance comparisons that need actual headroom
+        values (not just best-fit selection) — e.g. device-hint tolerances
+        that compare against unconstrained placement."""
+        with self._lock:
+            return self._headroom(device_key, free_mb, total_mb, reserve_cap)
+
 
 # #1993 review (n11) — `gc.collect()` + `empty_cache()` failures are
 # best-effort and swallowed (see the docstring below), but a broken CUDA
@@ -4960,16 +4968,15 @@ class PlacementController:
         device key (e.g. from an engine's *_DEVICE env) restricting candidates
         to that one device when the engine isn't already resident — residency
         always takes precedence since the model is already loaded there.
-        `preferred` mirrors `_resolve_admission`'s ADVISORY sibling (#3061
-        review C3/N6): tries that device first via the read-only `best_fit`
+        `preferred` tries that device first via the read-only `best_fit`
         (never `try_hold` — this function holds nothing), then falls back to
         the unconstrained candidates below if it doesn't fit or isn't given.
-        Kept in parity with `reservation()`/`_resolve_admission` even though
-        `admit()` has no production caller today (see test_placement.py) —
-        an advisory decision function that silently dropped a parameter its
-        binding twin honors would disagree with that twin the moment
-        something calls it with a hint, which is exactly the invariant this
-        docstring already claims to hold.
+        NOTE: unlike `reservation()`'s `preferred` handling, this function does
+        NOT apply the #3097/#3165 75%-tolerance check before trying the hinted
+        device. Since `admit()` has no production caller today (see
+        test_placement.py), the asymmetry carries no runtime impact; if one
+        ever appears, this difference should be reconciled or the new caller
+        should use `reservation()` instead.
 
         Deliberately does NOT take `_admit_lock` (plan 273, T4), unlike
         `reservation()` — two reasons, not one:
@@ -5203,13 +5210,39 @@ class PlacementController:
         # try_hold restricted to that device, and if it doesn't fit we fall
         # straight through to the ordinary unconstrained path below —
         # candidates, evict ladder, reclaim, noCapacity key, every one of
-        # them untouched by the preference. That is the whole difference
-        # from `pinned`, which restricts `_gpu_candidates` for the entire
-        # admission and turns "the hinted card is busy" into a 503.
+        # them untouched by the preference.
         # Residency and an operator's env pin both outrank it: if
         # `constraint` is set the engine either cannot migrate or the
         # operator has said where it goes, and a per-request hint must not
         # overrule either.
+        # #3097 / #3165 — `preferred` wins only if its free headroom is at
+        # least 75% of the unconstrained winner's; otherwise placement falls
+        # through to the unconstrained winner. On failing the tolerance check
+        # we null out `preferred` itself rather than rewriting `candidates`,
+        # letting the guard below skip straight to the unconstrained `try_hold`.
+        if preferred is not None and constraint is None and candidates:
+            all_gpus = self._gpu_candidates(devices, None)
+            if len(all_gpus) > 1:
+                preferred_candidates = [c for c in candidates if c[0] == preferred]
+                if preferred_candidates:
+                    # #3097 / #3165 — prefer only wins if its headroom is ≥ 75% of
+                    # the unconstrained winner's. Use actual headroom (accounting for
+                    # ledger reservations), not raw freeMb, so a card that is already
+                    # booked by a pending reservation doesn't get treated as free.
+                    pref_key, pref_free, pref_total = preferred_candidates[0]
+                    preferred_headroom = self.ledger.get_headroom(
+                        pref_key, pref_free, pref_total, reserve_cap
+                    )
+                    # Compute winner headroom across all GPUs
+                    winner_headroom = -1
+                    for key, free_mb, total_mb in all_gpus:
+                        headroom = self.ledger.get_headroom(key, free_mb, total_mb, reserve_cap)
+                        if headroom > winner_headroom:
+                            winner_headroom = headroom
+                    # If preferred is not competitive, drop it
+                    if preferred_headroom < 0.75 * winner_headroom:
+                        preferred = None
+
         held: Optional[tuple] = None
         if preferred is not None and constraint is None:
             held = self.ledger.try_hold(

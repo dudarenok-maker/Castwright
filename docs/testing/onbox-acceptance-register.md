@@ -2496,7 +2496,7 @@ every mechanism test while leaving the whole book wrong.
   full dispatch path and found no per-sentence language mechanism — `langCode` is
   resolved once per chapter (`synthesise-chapter.ts:1371`) and threaded uniformly
   into every title, single-group and batched call, including the sidecar's
-  per-item `language` override (`main.py:8151`, `:8228`) — and ruled out the
+  per-item `language` override (`main.py:8184`, `:8261`) — and ruled out the
   #1998 whole-book English-manifest fallback (every cloned group's `cloned` flag
   is set correctly by `buildSentenceGroups`/`resolveGroup`). Genuinely blocked
   pending a real render: needs the same chapter re-rendered with the same cloned
@@ -4506,7 +4506,7 @@ Coqui derive — the designed-voice self-heal in `resolveDesignedVoicesForChapte
 never does, and Qwen ignores the header entirely. The single POST that carries it is
 `/xtts/clone-voice` (`deriveEngineArtifact`, `server/src/tts/derive-engine-artifact.ts:145-147`),
 never `/synthesize`. Against an already-resident Coqui, or under a `COQUI_DEVICE` pin, the
-hint is a documented no-op (`main.py:5183-5187`, `:11994-11998`) — the prerequisite above is
+hint is a documented no-op (`main.py:5216-5220`, `:12027-12031`) — the prerequisite above is
 the state in which the hint can actually do anything.
 
 **There is no log line for this on the success path.** `_parse_device_hint` and the
@@ -4515,9 +4515,11 @@ honoured; the only `log.warning` calls (`main.py:4164/4172/4180/4183`) fire on t
 *rejection* paths (oversized header, unresolved uuid, non-device-key value, unparsable
 value). And the hint does **not** "hint Coqui off Qwen's card" — `try_hold`/`best_fit`
 already pick the roomiest card, so on this box, where `cuda:1` is the 16 GB card, an
-*unhinted* derive can land there anyway, and a hint can equally park the derive on the exact
-card Qwen is generating on when that card merely fits (the corrected comment at
-`clone-voice-resolver.ts:906-916` is the authority here, not this row's earlier wording).
+*unhinted* derive can land there anyway. **A hinted derive no longer wins by merely fitting
+on the hinted card** — #3097 added a 75%-tolerance check: the hint wins only if the hinted
+card's free headroom is at least 75% of the unconstrained winner's; otherwise `preferred` is
+dropped and placement falls back to ordinary unconstrained placement (the corrected comment at
+`clone-voice-resolver.ts:907-916` describes this tolerance and is the authority here).
 Confirm the mechanism only via the run sheet's discriminating placement criterion, which
 forces `cuda:0` to be the momentarily roomier card so a hinted vs. unhinted derive provably
 diverge — VRAM/log inspection under the box's normal (`cuda:1`-favoring) state proves
