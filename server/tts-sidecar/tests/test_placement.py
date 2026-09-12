@@ -1585,8 +1585,8 @@ def test_preferred_tolerance_ledger_reservation_reduces_effective_headroom():
     test. cuda:0 24000/18000, cuda:1 16000/16000. Qwen holds 9000 MB on cuda:1
     via the ledger (in-flight, not yet allocated). Raw freeMb for cuda:1 is
     16000 (looks plenty free), but actual headroom after ledger reserve is
-    16000-768-9000=6232. With cuda:0 headroom at 17232, the 75% check is
-    6232 < 0.75*17232=12924, so preferred fails and cuda:0 wins."""
+    computed as min(free_mb, total_mb - reserved) - reserve = min(16000, 16000-9000) - 768 = 6232.
+    With cuda:0 headroom at 17232, the 75% check is 6232 < 0.75*17232=12924, so preferred fails and cuda:0 wins."""
 
     async def body():
         devices = [
@@ -1607,7 +1607,8 @@ def test_preferred_tolerance_ledger_reservation_reduces_effective_headroom():
 
         # Now try to place Coqui with preferred cuda:1
         # Raw freeMb says cuda:1 has 16000 MB (looks great)
-        # But actual headroom is 16000 - 768 (reserve) - 9000 (ledger hold) = 6232
+        # But actual headroom is min(16000, 16000-9000) - 768 = 6232 (accounting for
+        # Qwen's 9000 MB ledger hold and the reserve)
         # cuda:0 headroom is 18000 - 768 = 17232
         # 6232 < 0.75 * 17232 = 12924, so tolerance rejects the hint
         async with pc.reservation(
