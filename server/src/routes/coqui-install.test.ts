@@ -122,6 +122,7 @@ describe('POST /api/coqui/install/:id/recheck', () => {
         repoRoot: '/repo',
         detectFn: () => cur,
         spawnFn: () => fakeChild(0) as never,
+        generationActiveFn: () => false,
       }),
     );
     const app = makeApp();

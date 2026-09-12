@@ -51,7 +51,11 @@ export const DEFAULT_CHILD_IDLE_TIMEOUT_MS = 30 * 60_000;
     the sidecar hold — without it a stalled child holds the sidecar down
     indefinitely and POST /api/sidecar/restart is inert. */
 export function runChild(
-  spawnFn: (cmd: string, args: readonly string[], opts?: any) => ChildProcess,
+  spawnFn: (
+    cmd: string,
+    args: readonly string[],
+    opts?: { cwd?: string; windowsHide?: boolean },
+  ) => ChildProcess,
   repoRoot: string,
   cmd: string,
   args: readonly string[],
@@ -89,7 +93,7 @@ export function runChild(
         }
         reject(
           new Error(
-            `${cmd} produced no output for ${Math.round(timeout / 60_000)} minutes ` +
+            `${opts.engineLabel} produced no output for ${Math.round(timeout / 60_000)} minutes ` +
               'and was stopped as stalled. The voice engine has been released. Retry the install (downloads resume).',
           ),
         );

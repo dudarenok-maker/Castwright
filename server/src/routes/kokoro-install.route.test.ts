@@ -122,6 +122,7 @@ describe('POST /api/kokoro/install/:id/recheck', () => {
         repoRoot: '/repo',
         detectFn: () => installed,
         spawnFn: () => fakeChild(0) as never,
+        generationActiveFn: () => false,
       }),
     );
     const app = makeApp();

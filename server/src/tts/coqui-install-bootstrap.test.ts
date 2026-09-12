@@ -12,7 +12,8 @@ import type { CoquiInstallState } from './coqui-install-detect.js';
 
 /* Every bootstrap under test gets the offline seams: no real supervisor hold,
    no real pip swap. */
-const OFFLINE: Pick<CoquiInstallOptions, 'holdSidecarFn' | 'restoreOrtFn'> = {
+const OFFLINE: Pick<CoquiInstallOptions, 'holdSidecarFn' | 'restoreOrtFn' | 'generationActiveFn'> = {
+  generationActiveFn: () => false,
   holdSidecarFn: (fn) => fn(),
   restoreOrtFn: async () => 'not-needed',
 };
@@ -181,6 +182,7 @@ describe('CoquiInstallBootstrap', () => {
       const calls: string[] = [];
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn,
         spawnFn: () => {
@@ -201,6 +203,7 @@ describe('CoquiInstallBootstrap', () => {
     it("an installer failure still releases the hold, still runs the ORT restore, and is the job's error", async () => {
       const calls: string[] = [];
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
         spawnFn: () => {
@@ -226,6 +229,7 @@ describe('CoquiInstallBootstrap', () => {
     it('already installed: never enters the hold, never spawns', async () => {
       const calls: string[] = [];
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'ready',
         spawnFn: () => {
@@ -243,6 +247,7 @@ describe('CoquiInstallBootstrap', () => {
     it("a refused hold (adopted sidecar, mid-respawn, …) is the job's error, and the installer never runs", async () => {
       let spawned = 0;
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
         spawnFn: () => {
@@ -264,6 +269,7 @@ describe('CoquiInstallBootstrap', () => {
       const calls: string[] = [];
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn,
         spawnFn: () => {
@@ -322,6 +328,7 @@ describe('CoquiInstallBootstrap', () => {
       const spawned: { cmd: string; args: string[] }[] = [];
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot,
         detectFn,
         spawnFn: (cmd, args) => {
@@ -357,6 +364,7 @@ describe('CoquiInstallBootstrap', () => {
       const spawned: string[] = [];
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot,
         detectFn,
         spawnFn: (cmd) => {
@@ -376,6 +384,7 @@ describe('CoquiInstallBootstrap', () => {
       const { repoRoot } = tempRepo('nvidia');
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot,
         detectFn,
         spawnFn: (_cmd, args) =>
@@ -446,6 +455,7 @@ describe('CoquiInstallBootstrap', () => {
     it('installer FAILS + restore SUCCEEDS: reports the installer failure, says the runtime is intact, points at a retry', async () => {
       let restoreCalled = false;
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
         spawnFn: () => failingInstaller() as never,
@@ -474,6 +484,7 @@ describe('CoquiInstallBootstrap', () => {
 
     it('installer FAILS + restore FAILS: reports the installer failure AND names the runtime repair', async () => {
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
         spawnFn: () => failingInstaller() as never,
@@ -496,6 +507,7 @@ describe('CoquiInstallBootstrap', () => {
 
     it('installer SUCCEEDS + restore FAILS: reports that Coqui DID land and only the runtime needs repair', async () => {
       const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
         spawnFn: () => makeFakeChild(0) as never,
@@ -512,6 +524,88 @@ describe('CoquiInstallBootstrap', () => {
       expect(error).toMatch(/install-ort\.mjs/);
       // Nothing from an installer failure — there wasn't one.
       expect(error).not.toMatch(/XTTS v2 pre-fetch failed/);
+    });
+
+    it('when a chapter is being generated, the installer refuses immediately without holding the sidecar', async () => {
+      const calls: string[] = [];
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => true,
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(0) as never;
+        },
+        holdSidecarFn: async (fn) => {
+          calls.push('hold');
+          try {
+            return await fn();
+          } finally {
+            calls.push('release');
+          }
+        },
+        restoreOrtFn: async () => {
+          calls.push('ort');
+          return 'not-needed';
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(b.getJob(job.id)?.error).toMatch(/while a chapter is being generated/);
+      expect(calls).toEqual([]);
+    });
+
+    it('a child that goes completely silent is killed and reported as stalled, releasing the hold', async () => {
+      vi.useFakeTimers();
+      try {
+        const calls: string[] = [];
+        let killed = false;
+        const b = new CoquiInstallBootstrap({
+          repoRoot: '/repo',
+          detectFn: () => 'not-installed',
+          spawnFn: () => {
+            calls.push('spawn');
+            /* A child that emits nothing and never closes — the stalled-download
+               shape. makeFakeChild always settles, so this one is hand-built. */
+            const proc = new EventEmitter() as EventEmitter & {
+              stdout: EventEmitter;
+              stderr: EventEmitter;
+              kill: () => boolean;
+            };
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.kill = () => {
+              killed = true;
+              return true;
+            };
+            return proc as never;
+          },
+          holdSidecarFn: async (fn) => {
+            calls.push('hold');
+            try {
+              return await fn();
+            } finally {
+              calls.push('release');
+            }
+          },
+          restoreOrtFn: async () => {
+            calls.push('ort');
+            return 'not-needed';
+          },
+          generationActiveFn: () => false,
+          childIdleTimeoutMs: 20,
+        });
+        const job = b.start();
+        await vi.advanceTimersByTimeAsync(100);
+
+        expect(killed).toBe(true);
+        // The hold released — without that the sidecar never comes back.
+        expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']);
+        expect(b.getJob(job.id)?.error).toMatch(/no output for .* minutes/);
+        expect(b.getJob(job.id)?.error).toMatch(/stalled/);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

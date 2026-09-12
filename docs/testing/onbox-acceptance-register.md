@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,7 +563,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**48 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**49 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
@@ -4503,6 +4503,35 @@ log instrumentation, a VRAM-fill scenario to construct the discriminating placem
 (the fill target is now computed live from the box's own measured `peak` and
 `GPU_RESERVE_MB`, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the
 run sheet's pin/stale-cache scenarios.
+
+### A107 · #3056 — Coqui/Kokoro/Whisper installer hold-down and idle watchdog · **0 of 2 run · 2 owed**
+
+Ported from #3039 (Qwen3-TTS): all four in-app TTS installers now run with the sidecar
+held down and restore the GPU ONNX runtime afterwards. Two safety mechanisms added to
+Coqui/Kokoro/Whisper shipped without on-box acceptance: (1) an idle watchdog that kills
+a child (installer or pip step) that produces no output for 30 minutes, releasing the
+sidecar hold so the queue recovers — without it a stalled installer deadlocks the sidecar
+indefinitely; (2) an active-generation refusal that stops the installer immediately if
+a chapter is rendering, rather than silently aborting it.
+
+*Prerequisites:* GPU box with a real sidecar, Qwen resident (the installer test itself
+does not require Qwen, but the chapter-mid-render scenario does).
+
+*Criteria:*
+1. Coqui XTTS installer via Account → Models: click **Install Coqui XTTS v2**, observe
+   the installer runs with the sidecar held (the UI says "Stopping the voice engine…"
+   and any queued chapter waits), completes successfully, and leaves the GPU ONNX
+   runtime intact (`pip check` clean after install).
+2. Same installer clicked mid-render: a chapter mid-render (or with a cover letter
+   queued to render immediately) triggers the "Cannot install while a chapter is being
+   generated" refusal, not a silent abort. Kokoro and Whisper follow the same two paths.
+
+*Cost:* low — each of the three engines needs one successful install from the UI
+(Account → Models, account-logged, real install-*.mjs script, real pip swap, real venv
+I/O but not a multi-minute download, ~30s per engine if the weights are already present
+or pre-cached) and one refusal attempt with a chapter queued to render (Qwen, since
+it's the fastest to boot). No golden-audio comparison, no complex fixture setup, no
+timeout tolerance tuning.
 
 ## Group B — local Ollama analyzer only
 
