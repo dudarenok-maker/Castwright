@@ -20,6 +20,9 @@
 > workspace. Wave-3 step 4 confirmed both verdicts by re-reading the plan's
 > own citations; no new evidence was gathered beyond that re-resolution.
 >
+> **A29 is this pack's pre-allocate-once numbering — the current register
+> calls this row A22 (see `onbox-acceptance-register.md`).**
+>
 > **Correction, 2026-08-21 (wave 4, #2551 step 6).** **A43 is DISCHARGED and
 > removed from this pack** — wave-4 step 5e ran it fully live in a real
 > browser (positive link, dry-run count drop, and the negative case's both
@@ -55,11 +58,11 @@ Stated once for the sitting; do not repeat per row.
       character with dialogue in it. `ASR_DEVICE` and `ASR_COMPUTE_TYPE` must
       agree (a `cpu` device with a pinned `int8_float16` makes every
       `/transcribe` 500 — A23 needs a working `/transcribe`).
-- [ ] **The real, already-affected workspace book for A29** —
+- [ ] **The real, already-affected workspace book for A29 (old numbering — now A22)** —
       *Playing with Fire* (Derek Landy, Skulduggery Pleasant) at
       `C:\AudiobookWorkspace\books\Derek Landy\Skulduggery Pleasant\Playing with Fire`.
       Present and untouched — do not run the Wave-3 repair script or any cast
-      edit against it before A29's section runs.
+      edit against it before A29's (old numbering — now A22) section runs.
       **Back up `16-chapter-twelve-barfight.segments.json`,
       `19-chapter-fifteen-point-blank.segments.json`, and their `.mp3`s**
       before re-rendering, so a bad run can be reverted without re-importing.
@@ -80,7 +83,7 @@ Stated once for the sitting; do not repeat per row.
       listener on `:9000`, ability to start a fresh sidecar manually, and
       ability to set `SIDECAR_NEVER_ADOPT` on the server process.
 - [ ] **A30 §8.7 (added 2026-08-20):** the same *Заказ Коалфолла* real
-      workspace book already staged for A29-adjacent work (`.audiobook/cast-
+      workspace book already staged for A29-adjacent (old numbering — now A22) work (`.audiobook/cast-
       id-history.json` should already carry `mayrin→mairin`,
       `coalfall→coalfall-dragon` from the wave-3 `--apply` run of 2026-08-05
       — confirm present before starting, do not re-run `--apply`).
@@ -382,7 +385,7 @@ remain owed:
   and item 4 (batched with E1) remain unrun. STILL OWED.
 - **A28** — `gh issue view 1980` closed, matches; plan 276 `status: stable`.
   Run sheet's every `Result:` line still blank. STILL OWED.
-- **A29** — `gh issue view 2040` closed, matches. Run sheet §§3-6 blank; §9's
+- **A29** (old numbering — now A22) — `gh issue view 2040` closed, matches. Run sheet §§3-6 blank; §9's
   2026-08-11 run covers a different book for a different (discharged) row.
   STILL OWED.
 - **A39** — `gh issue view 2026` still **OPEN**; `gh pr view 2050` merged,
@@ -411,10 +414,12 @@ A16's genuine frontmatter-vs-body contradiction handled in
       server has been restarted at least once since.
 - [ ] Confirm no foreign listener is still bound on `:9000` (A41 Scenario 1).
 - [ ] Restore the *Playing with Fire* workspace book from the backups taken
-      in Preconditions if either re-render (A29 §§13-14) needs reverting, or
+      in Preconditions if either re-render (A29 §§13-14, old numbering — now
+      A22) needs reverting, or
       confirm the new state is intentionally kept.
 - [ ] Confirm *Заказ Коалфолла* ch2's re-render (A30 §8.7) is intentionally
-      kept or reverted — same backup-before-reverting discipline as A29.
+      kept or reverted — same backup-before-reverting discipline as A29 (old
+      numbering — now A22).
 - [ ] Confirm any A25 static-FFmpeg-box changes (env vars, PATH) are left as
       found.
 - [ ] Confirm the card returns to baseline (`nvidia-smi` ≈ idle) before
