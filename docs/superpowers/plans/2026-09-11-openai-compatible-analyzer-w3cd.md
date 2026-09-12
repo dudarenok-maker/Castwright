@@ -1,17 +1,17 @@
 # OpenAI-compatible analyzer — Wave 3 (PRs 3c, 3d) plan
 
-> Part of the [OpenAI-compatible analyzer implementation plan](2026-09-11-openai-compatible-analyzer.md). Read that file first: its Global Constraints, planning decisions (P1–P11) and interface contract bind every task below. Spec: [2026-09-10-openai-compatible-analyzer-design.md](../specs/2026-09-10-openai-compatible-analyzer-design.md).
+> Part of the [OpenAI-compatible analyzer implementation plan](2026-09-11-openai-compatible-analyzer.md). Read that file first: its Global Constraints, planning decisions (P1–P28) and interface contract bind every task below. Spec: [2026-09-10-openai-compatible-analyzer-design.md](../specs/2026-09-10-openai-compatible-analyzer-design.md).
 
 ## Wave 3 — Endpoints become selectable (PRs 3c and 3d)
 
-> Written against `origin/main` 2b63b451 **plus** the contract's products of W1, W2, 3a and 3b. Every `file:line` into a file that an earlier PR edits is a 2b63b451 line: re-read it before editing (Global Constraints). Lines inside files that only exist after an earlier PR (`capacity.ts`, `openai-transport.ts`, `schema-adapters.ts`, `analyzer-endpoints.ts`, `registry-knob-read.guard.test.ts`) are located by symbol, not number.
+> Written against `origin/main` 46e62a34 **plus** the contract's products of W1, W2, 3a and 3b. Every `file:line` into a file that an earlier PR edits is a 46e62a34 line: re-read it before editing (Global Constraints). Lines inside files that only exist after an earlier PR (`capacity.ts`, `openai-transport.ts`, `schema-adapters.ts`, `analyzer-endpoints.ts`, `registry-knob-read.guard.test.ts`) are located by symbol, not number.
 
 **Consumed from earlier PRs (contract names; not re-declared here):**
-- W1: `server/src/analyzer/runner/transport.ts` (`ChatTransport`, `TransportRequest`, `TransportResult`, `StructuredOutputMode`); `runner/parse.ts` (`stripThink`, `stripCodeFences`); `errors.ts` (`AnalysisAbortedError`, `AnalyzerUnreachableError`, `AnalyzerHttpError`); `FallbackAnalyzer` falls back on `AnalyzerUnreachableError`; `OllamaTransport`, `GeminiTransport`.
-- W2: `server/src/analyzer/capacity.ts` (`EngineCapacity`, `resolveCapacity`, `TODAY_LOCAL_CAPACITY`); the capacity-typed signatures of `resolveStage1ChunkCharBudget`, `resolveStage2ChunkCharBudget`, `chapterChunkBudget`; `catalog/gemini-catalog.ts` (`listGeminiModels`, `GeminiModelInfo`).
+- W1: `server/src/analyzer/runner/transport.ts` (`ChatTransport`, `TransportRequest`, `TransportResult`, `StructuredOutputMode`); `runner/parse.ts` (`stripThink`, `parseAndValidate` and its helpers `stripCodeFences`, `trimTrailingProse`, `repairStructuralPunctuation`, `repairUnescapedQuotes`); `runner/prompt.ts` (`estimateInputTokens`); `ollama-settings.ts` (`resolveNumPredict`); `errors.ts` (`AnalysisAbortedError`, `AnalyzerUnreachableError`, `AnalyzerHttpError`); `FallbackAnalyzer` falls back on `AnalyzerUnreachableError`; `OllamaTransport`, `GeminiTransport`.
+- W2: `ChatTransport.prepare?(signal?: AbortSignal)`, awaited by `StageRunner` as `prepare?.(call.signal)` before every settings read (W2 Task 2.6; must never reject, must be bounded, returns at once when the signal aborts — P26); `server/src/analyzer/capacity.ts` (`EngineCapacity`, `resolveCapacity`, `TODAY_LOCAL_CAPACITY`, `resolveGeminiMaxOutputTokens`); the capacity-typed signatures of `resolveStage1ChunkCharBudget`, `resolveStage2ChunkCharBudget`, `chapterChunkBudget`; `catalog/gemini-catalog.ts` (`listGeminiModels`, `GeminiModelInfo`).
 - 3a: `server/src/analyzer/model-id.ts` and `src/lib/model-id.ts` (`AnalysisEngine`, `inferEngineFromModelId` / `engineForModelId`, `parseEndpointModelId`, `endpointModelId`); `ModelOption.engine: AnalysisEngine`; `AnalysisStreamSnapshot.engine?: AnalysisEngine`; `ANALYSIS_ENGINE_VALUES` and the two `openapi.yaml` `analysisEngine` enums still held at `local | gemini`.
-- 3b: `server/src/workspace/analyzer-endpoints.ts` (`analyzerEndpointSchema`, `AnalyzerEndpoint`, `defaultGpuForBaseUrl`, `keyOriginMatches`, `resolveUnloadUrl`, `findEndpointReferences`); user-settings `analyzerEndpoints`, `analyzerEndpointKeys` (server-only), GET-only `analyzerEndpointKeyStatus`; `transports/openai-transport.ts` `OpenAITransport`; `transports/endpoint-runtime.ts` (`noteEndpointModelUsed`, `lastUsedModel`, `endpointSemaphore`); `OpenAIAnalyzer`; `runner/schema-adapters.ts` (`adaptSchemaForOllama|Gemini|OpenAI`, `AdaptedSchema`, `structuredOutputLabel`); knobs `analyzer.ollama.structuredOutput`, `analyzer.gemini.structuredOutput`; error classes `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`, `AnalyzerCapabilityRejectedError`; `classifyAnalysisFailure` mapping them to `analyzer-endpoint-missing`, `auth`, `analyzer-request-rejected`; routes + mocks for `createAnalyzerEndpoint`, `updateAnalyzerEndpoint`, `deleteAnalyzerEndpoint`, `putAnalyzerEndpointKey`; real-only `detectAnalyzerEndpointContext`.
-- **Assumed 3b frontend client names** (operationId → same-named function): `api.createAnalyzerEndpoint(body: AnalyzerEndpoint)`, `api.updateAnalyzerEndpoint(endpointId, body)`, `api.deleteAnalyzerEndpoint(endpointId)`, `api.putAnalyzerEndpointKey(endpointId, key: string | null)`, each resolving to the `UserSettings` GET shape; `detectAnalyzerEndpointContext({ baseUrl, endpointId?, model? })` exported from `src/lib/api.ts`, resolving to `{ contextTokens: number | null }`. If 3b shipped other names or shapes, rename at the 3d call sites only.
+- 3b: `server/src/workspace/analyzer-endpoints.ts` (`analyzerEndpointSchema`, `AnalyzerEndpoint`, `defaultGpuForBaseUrl`, `keyOriginMatches`, `resolveUnloadUrl`, `findEndpointReferences`); user-settings `analyzerEndpoints`, `analyzerEndpointKeys` (server-only), GET-only `analyzerEndpointKeyStatus`; `transports/openai-transport.ts` `OpenAITransport` (records a model as served when its request is sent: runs, Tests and requests that then fail, P3); `transports/endpoint-runtime.ts` (`noteEndpointModelUsed`, `servedModels`, `endpointSemaphore`); `analyzer/known-secrets-gate.ts` (`knownAnalyzerSecrets`, `loadKnownAnalyzerSecrets`: every 3c/3d module reads known secrets through it, never by importing `user-settings.ts`); `analyzerSelectionErrorEvent(err)` in `routes/failure-taxonomy.ts` (3b Task 3b.1a: codes every error, never `null`, and forwards the classification's `detail`); script review's, annotate-emotion's and instruct-annotation's selection already wrapped in 3b.1a's `let selection: AnalyzerSelection; try { … }`; `OpenAIAnalyzer`; `runner/schema-adapters.ts` (`adaptSchemaForOllama|Gemini|OpenAI`, `AdaptedSchema`, `structuredOutputLabel`); knobs `analyzer.ollama.structuredOutput`, `analyzer.gemini.structuredOutput`; error classes `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`, `AnalyzerCapabilityRejectedError`; `classifyAnalysisFailure` mapping them to `analyzer-endpoint-missing`, `auth`, `analyzer-request-rejected`; routes + mocks for `createAnalyzerEndpoint`, `updateAnalyzerEndpoint`, `deleteAnalyzerEndpoint`, `putAnalyzerEndpointKey`; real-only `detectAnalyzerEndpointContext`.
+- **Assumed 3b frontend client names** (operationId → same-named function): `api.createAnalyzerEndpoint(body: AnalyzerEndpoint)`, `api.updateAnalyzerEndpoint(endpointId, body)`, `api.deleteAnalyzerEndpoint(endpointId)`, `api.putAnalyzerEndpointKey(endpointId, key: string | null)`, each resolving to the `UserSettings` GET shape; standalone `detectAnalyzerEndpointContext({ baseUrl, model?, apiKey?, endpointId?, flavor: 'llama.cpp' | 'llama-swap', allowModelLoad? })` exported from `src/lib/api.ts` (3b Task 3b.9), resolving to `{ contextTokens: number; source: 'llama.cpp /props' | 'llama-swap /props' }` and throwing `AnalyzerEndpointError` on a 400/502 (3b Task 3b.8). If 3b shipped other names or shapes, rename at the 3d call sites only.
 
 **Commands** (from the worktree root; never `cd`):
 - one server test file: `npm --prefix server run test -- src/<path>.test.ts`
@@ -30,8 +30,9 @@
 - `modelLabel(id, catalog?)` replacing all nine `MODEL_OPTIONS.find(...)?.label ?? id`-shaped sites.
 - Engine-aware exported `resolveLimits`, the `analyzerRateLimitsByModel` user-settings map, the retirement of the six `rate.*.gemma*` knobs (with a data migration), and a per-model limits editor in Advanced Settings.
 - `resolveCapacity`'s endpoint branch and the per-request cap on context-family budgets.
-- `POST /api/analyzer/models/test` + `server/src/analyzer/capabilities.ts`, persisted `analyzerCapabilitiesByModel`, a Test button with request-count confirmation that passes through the forward GPU guard.
-- `server/src/analyzer/preflight.ts` wired before the first analyzer call of the analysis (main + subset), script-review, annotate-emotion and instruct-annotation routes.
+- `POST /api/analyzer/models/test` + `server/src/analyzer/capabilities.ts`: the P7 request ladder (control → [wave 5 level step] → mode step, one prompt and one resolved cap for every step, records keyed by the level actually sent, size-limit 400s inconclusive, cancelled when the client leaves), persisted `analyzerCapabilitiesByModel` (a failed control keeps the previous record; an Ollama record carries the model `digest` from its first write, and a record for another digest is discarded, so a re-pulled model's stale `rejected` never refuses runs — pulled forward from 5a by the final plan review, A3), a Test button with request-count confirmation that passes through the forward GPU guard.
+- Endpoint served limits warmed at run start through `OpenAITransport.prepare(signal)`, cached per base URL with a TTL (P15), and reaching the wire through `OpenAIAnalyzer`'s settings. The warm-up is bounded at 10 s, one listing per base URL is shared by concurrent requests, a timeout or failure proceeds with fallback limits, and a caller's abort releases only that caller (P26).
+- `server/src/analyzer/preflight.ts` wired before the first analyzer call of the analysis (main + subset — only when a new job is created, after the rejoin path, P14), script-review, annotate-emotion and instruct-annotation routes. Every check failure is sent through 3b Task 3b.1a's `analyzerSelectionErrorEvent`, the same coded event selection failures already use (P23). The three book routes read saved settings with `await readUserSettings()` before the checks, as the analysis POSTs do, so a cold cache after a restart never reports a saved endpoint as missing.
 
 **Must NOT change:**
 - No picker, settings default or env path selects an endpoint model: `selectAnalyzer` keeps 3a's refusal for `openai`, the six picker-group builder sites keep `buildModelOptionGroups`, `ANALYSIS_ENGINE_VALUES` stays `local | gemini`.
@@ -47,8 +48,8 @@
 ### Task 3c.1: Engine-aware `resolveLimits`, the `analyzerRateLimitsByModel` map, retire the `rate.*.gemma*` knobs
 
 **Files:**
-- Modify: `server/src/analyzer/rate-limit.ts:22-84` — remove #3163's `allKnobs`/`resolveKnob` imports, `overrideValue` and `tpmLimit`; in `resolveLimits` (exported by W2 Task 2.3; its first statement is 3b Task 3b.10's `if (inferEngineFromModelId(model) === 'openai') return UNLIMITED;`) insert the settings-map read **ahead of** that early return. `analyzerRateLimiter` and the endpoint-unlimited default already exist (3b) and are not re-added.
-- Modify: `server/src/workspace/user-settings.ts:69-95` (add a sibling migration after it), `:253` (schema field), `:334` (default), `:369` (migration hook)
+- Modify: `server/src/analyzer/rate-limit.ts:22-84` — remove #3163's `allKnobs`/`resolveKnob` imports, `overrideValue` and `tpmLimit`; in `resolveLimits` (exported by W2 Task 2.6; its first statement is 3b Task 3b.10's `if (inferEngineFromModelId(model) === 'openai') return UNLIMITED;`) insert the settings-map read **ahead of** that early return. `analyzerRateLimiter` and the endpoint-unlimited default already exist (3b) and are not re-added.
+- Modify: `server/src/workspace/user-settings.ts:69-95` (add a sibling migration after it), `:253` (schema field), `:334` (default), `:514` (migration hook)
 - Modify: `server/src/config/registry.ts:13` (group label/help), `:1015-1075` (delete the rate-limits section and its six knobs)
 - Modify: `server/src/config/registry-knob-read.guard.test.ts` (#3163) — the `rate.*` entry of `DECLARED_DYNAMIC_READERS` and the header's DYNAMIC READERS paragraph
 - Modify: `server/src/force-rerun-triggers.test.ts` (#3163's `MAIN_COVERED` entry for `src/analyzer/rate-limit.ts`), `server/vitest.config.ts` (#3163's `rate-limit.ts` `forceRerunTriggers` line and the sentence of its comment that names it)
@@ -57,7 +58,7 @@
 - Test: `server/src/analyzer/rate-limit.test.ts` (replace #3163's `describe('saved rate-limit overrides in user settings', …)`), Create `server/src/workspace/user-settings.rate-limits.test.ts`
 
 **Interfaces:**
-- Consumes: `inferEngineFromModelId` (3a), `getCachedUserSettings`, `_setUserSettingsCacheForTest`, `_resetUserSettingsCache` (`user-settings.ts:385`, `:946`, `:928`).
+- Consumes: `inferEngineFromModelId` (3a), `getCachedUserSettings`, `_setUserSettingsCacheForTest`, `_resetUserSettingsCache` (`user-settings.ts:537`, `:1155`, `:1134`).
 - Consumes also: W2's exported `resolveLimits(model: string): ModelLimits`; 3b's endpoint early return and `UNLIMITED` constant in it; 3b's `findEndpointReferences` classification guard in `server/src/workspace/analyzer-endpoints.test.ts` (its `FIELD_EXCLUDED` set).
 - Produces: `resolveLimits` reads the map (signature unchanged); user-settings field `analyzerRateLimitsByModel: Record<string, { rpm?: number; tpm?: number; rpd?: number }>`; `export function migrateLegacyRateLimitOverrides(raw: unknown): unknown`.
 - Also modify: `server/src/workspace/analyzer-endpoints.test.ts` (3b) — add `'analyzerRateLimitsByModel', // map keyed by model id, not a selection` to `FIELD_EXCLUDED`; the guard's `/model/i` filter matches the new field.
@@ -210,6 +211,19 @@ describe('analyzerRateLimitsByModel persistence (#3084)', () => {
     expect(JSON.parse(readFileSync(file, 'utf8')).defaultAnalysisModel).toBe('mistral:7b');
   });
 
+  it('an override above 2^53 is dropped without resetting any other setting (P8: Number.isSafeInteger)', async () => {
+    const unsafe = 2 ** 53 + 2; // an integer to Number.isInteger, not a safe integer
+    const { ws, file } = await freshSettingsModule({
+      defaultAnalysisModel: 'mistral:7b',
+      configOverrides: { 'rate.rpd.gemma': unsafe },
+    });
+    const s = await ws.readUserSettings();
+    expect(s.defaultAnalysisModel).toBe('mistral:7b');
+    expect(s.analyzerRateLimitsByModel).toEqual({});
+    expect(s.configOverrides).toEqual({});
+    expect(JSON.parse(readFileSync(file, 'utf8')).defaultAnalysisModel).toBe('mistral:7b');
+  });
+
   it('never throws on a shape it does not recognise, and leaves it for the schema (P8)', async () => {
     const { ws } = await freshSettingsModule({});
     for (const raw of [null, 'x', 42, [], { configOverrides: 'x' }, { configOverrides: 7 }, { configOverrides: null }, { configOverrides: [] }]) {
@@ -311,8 +325,12 @@ const LEGACY_RATE_KNOBS: ReadonlyArray<{ key: string; model: string; field: 'rpm
 
 /* The smallest value analyzerRateLimitsByModel's schema accepts per field. A saved
    override below it is dropped, never copied: copying it would make
-   userSettingsSchema.safeParse fail, and readUserSettings (:375-376) would then
-   reset EVERY saved setting to defaults (P8). */
+   userSettingsSchema.safeParse fail, and readUserSettings (:522-525) would then
+   reset EVERY saved setting to defaults (P8) — that's the schema-validation-failure
+   path; an unparseable file is recovered from its .bak.N backups, else it falls back
+   with a corruption flag (:479-498), so it never reaches this code. The
+   same holds for an integer past 2^53: zod 4's `.int()` accepts safe integers only,
+   so the copy test is Number.isSafeInteger, not Number.isInteger. */
 const LEGACY_RATE_MIN: Readonly<Record<'rpm' | 'tpm' | 'rpd', number>> = { rpm: 1, tpm: 0, rpd: 1 };
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -336,7 +354,7 @@ export function migrateLegacyRateLimitOverrides(raw: unknown): unknown {
   const map: Record<string, unknown> = { ...(existing ?? {}) };
   for (const { key, model, field } of LEGACY_RATE_KNOBS) {
     const value = overrides[key];
-    if (typeof value !== 'number' || !Number.isInteger(value) || value < LEGACY_RATE_MIN[field]) continue;
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < LEGACY_RATE_MIN[field]) continue;
     const current = map[model];
     if (current !== undefined && !isPlainObject(current)) continue;
     const entry: Record<string, unknown> = { ...(current ?? {}) };
@@ -371,7 +389,13 @@ Schema, after `analyzerKeepAliveByModel` (`:253`):
 
 Default, after `analyzerKeepAliveByModel: {},` (`:334`): `analyzerRateLimitsByModel: {},`
 
-Hook (`:369`): `const migrated = migrateLegacyRateLimitOverrides(migrateLegacyEagerLoadFields(raw));`
+Hook — the `const migrated = …` line inside `performUserSettingsRead`, `:514` (**not** `:369`, which is where this line sat before PR #3195 moved the read path; the Files list and Step 5's mutation proof both use `:514`):
+
+```ts
+  const migrated = migrateLegacyRateLimitOverrides(migrateLegacyEagerLoadFields(raw));
+```
+
+This composes with 3b's P25 drop rather than competing with it: 3b adds `dropInvalidEndpointEntries(migrated, …)` *below* this line and before the whole-object `safeParse` (`:522`), so wrapping the migration here simply changes what `migrated` holds. Neither edit touches `inFlightRead`, `commitRead`, or the `.bak.N` recovery.
 
 `server/src/config/registry.ts` — `:13` becomes:
 
@@ -453,9 +477,10 @@ Run: `npm --prefix server run test -- src/analyzer/rate-limit.test.ts src/analyz
 - [ ] **Step 5: Mutation proof**
 1. `rate-limit.ts` Gemini branch: delete `?? savedPositive(entry?.rpm)` → red: "resolveLimits reads a saved Gemini rpm from the user-settings map", "the limiter enforces the saved rpm…". Restore.
 2. `rate-limit.ts`: put 3b's `if (inferEngineFromModelId(modelId) === 'openai') return UNLIMITED;` back as the first statement (the map read no longer comes first) → red: "endpoint ids are unlimited until a field is saved, then honour exactly that field", "the limiter enforces a saved endpoint rpm…". Restore.
-3. `user-settings.ts:369`: revert to `migrateLegacyEagerLoadFields(raw)` → red: "migrates saved rate.*.gemma* config overrides…". Restore.
+3. `user-settings.ts:514`: revert to `migrateLegacyEagerLoadFields(raw)` → red: "migrates saved rate.*.gemma* config overrides…". Restore.
 4. `migrateLegacyRateLimitOverrides`: delete `|| value < LEGACY_RATE_MIN[field]` → red: "a malformed saved override is dropped without resetting any other setting (P8)". The saved `rpm: -3` reaches the map, the schema rejects it, and `defaultAnalysisModel` falls back to its default. Restore.
 5. `migrateLegacyRateLimitOverrides`: replace `if (current !== undefined && !isPlainObject(current)) continue;` with nothing → red: "never throws on a shape it does not recognise…" (the broken entry `'broken'` is spread into `{0:'b',…}`). Restore.
+6. `migrateLegacyRateLimitOverrides`: change `Number.isSafeInteger(value)` back to `Number.isInteger(value)` → red: "an override above 2^53 is dropped without resetting any other setting (P8…)". Either way zod treats the copied value, the test is red: if `.int()` rejects it, the whole settings file resets (`defaultAnalysisModel` lost); if it accepts it, the map is no longer `{}`. Paste which of the two the red output shows into the PR body. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -529,7 +554,7 @@ In both `UserSettings` and `UserSettingsPatch`, after the `analyzerKeepAliveByMo
 Run `npm run openapi:types`.
 
 `src/lib/api.ts:6939` — after `analyzerKeepAliveByModel: {},` add `analyzerRateLimitsByModel: {},`.
-`src/lib/api.ts:7312-7342` — add `analyzerRateLimitsByModel,` after `analyzerKeepAliveByModel,` in the destructure (`:7324`) and in the `Object.entries({ … })` literal (`:7341`).
+`src/lib/api.ts:7320-7358` (`mockPutUserSettings`; it moved to `:7331` on `4a545750`, so locate it by name rather than by line) — add `analyzerRateLimitsByModel,` after `analyzerKeepAliveByModel,` in the destructure (`:7324-7337`, last entry `:7336`) and in the `Object.entries({ … })` literal (`:7341-7354`, last entry `:7353`).
 
 - [ ] **Step 4: Run and confirm it passes**  Run: `npx vitest run src/lib/api-put-user-settings-mock.test.ts src/lib/api-types.test.ts` and `npm run typecheck`. Expected: PASS.
 
@@ -543,24 +568,31 @@ git commit -m "feat(openapi,frontend): expose analyzerRateLimitsByModel on user 
 
 ---
 
-### Task 3c.3: `capabilities.ts` — records, pre-run assertion, request plan, probe schema; `analyzerCapabilitiesByModel` storage
+### Task 3c.3: `capabilities.ts` — records keyed by the level sent, pre-run assertion, request plan, probe schema, marker probe; `analyzerCapabilitiesByModel` storage
 
 **Files:**
 - Create: `server/src/analyzer/capabilities.ts`
 - Create: `server/src/analyzer/__fixtures__/structured-output-label-cases.json`
-- Modify: `server/src/workspace/user-settings.ts` — record schema above `userSettingsSchema` (`:111`), field after the Task 3c.1 field, default after `analyzerRateLimitsByModel: {},`, `FORBIDDEN_KEYS` (`:450-467`), writer after `writeGeminiApiKey` (`:809-820`)
+- Modify: `server/src/analyzer/runner/parse.ts` (W1 moved `parseAndValidate` there from `gemini.ts:1006-1096`): extract its candidate list into an exported `jsonParseCandidates`; `parseAndValidate` calls it (behaviour-preserving)
+- Modify: `server/src/workspace/user-settings.ts` — record schema above `userSettingsSchema` (`:111`), field after the Task 3c.1 field, default after `analyzerRateLimitsByModel: {},`, `FORBIDDEN_KEYS` (`:643-661`), writer after `writeGeminiApiKey` (`:1003-1012`)
+- Modify: `server/src/workspace/analyzer-endpoints.test.ts` (3b) — `FIELD_EXCLUDED`
 - Test: `server/src/analyzer/capabilities.test.ts`, `server/src/analyzer/structured-output-label-cases.test.ts`
 
 **Interfaces:**
-- Consumes: `StructuredOutputMode`, `ChatTransport` (W1); `stripThink`, `stripCodeFences` (W1 `runner/parse.ts`); `AnalyzerCapabilityRejectedError` (3b); `structuredOutputLabel`, `AdaptedSchema` (3b); the eight grammar schemas the stage table sends (`server/src/handoff/schemas.ts`: `stage1GrammarSchema` `:246`, `stage1ChapterGrammarSchema` `:239`, `stage2ChapterSchema` `:167`, `emotionAnnotationSchema` `:174`, `nonStoryClassificationSchema` `:190`, `scriptReviewSchema` `:265`, `stage3ChapterSchema` `:332`, `escalationSchema` `:359`).
-- Produces (contract names): `ProbeOutcome`, `ModelCapabilityRecord`, `capabilityRecordFor`, `assertConfiguredCapabilitiesAllowed`, `plannedTestRequestCount`, `ModelTestDeps`; plus `CONFIGURED_LEVEL_KEY`, `ALL_STRUCTURED_OUTPUT_MODES`, `STAGE_GRAMMAR_SCHEMAS`, `draft07`, `largestStageSchema`, `MARKER_KEY`, `newMarkerValue`, `withMarker`, `classifyMarkerProbe`; user-settings `analyzerCapabilitiesByModel`, `modelCapabilityRecordSchema`, `writeAnalyzerCapabilityRecord(modelId, record)`.
-- Contract deviation (reported): the contract types `reasoning` keys and `configured.reasoning` as `ReasoningLevel`, which is born in W5. W3 uses `string`; W5 narrows.
+- Consumes: `StructuredOutputMode`, `ChatTransport` (W1); `stripThink`, `stripCodeFences`, `trimTrailingProse`, `repairStructuralPunctuation`, `repairUnescapedQuotes` (W1 `runner/parse.ts`); `TransportKind`, `AnalyzerCapabilityRejectedError` (`errors.ts`, W1/3b); `structuredOutputLabel`, `AdaptedSchema` (3b); the eight grammar schemas the stage table sends (`server/src/handoff/schemas.ts`: `stage1GrammarSchema` `:246`, `stage1ChapterGrammarSchema` `:239`, `stage2ChapterSchema` `:167`, `emotionAnnotationSchema` `:174`, `nonStoryClassificationSchema` `:190`, `scriptReviewSchema` `:265`, `stage3ChapterSchema` `:332`, `escalationSchema` `:359`).
+- Produces (contract names): `ProbeOutcome`, `ModelCapabilityRecord`, `capabilityRecordFor`, `assertConfiguredCapabilitiesAllowed`, `plannedTestRequestCount`, `ModelTestDeps`; plus `defaultReasoningKey`, `ALL_STRUCTURED_OUTPUT_MODES`, `STAGE_GRAMMAR_SCHEMAS`, `draft07`, `largestStageSchema`, `MARKER_KEY`, `newMarkerValue`, `withMarker`, `classifyMarkerProbe`; `runner/parse.ts` `jsonParseCandidates(text)`; user-settings `analyzerCapabilitiesByModel`, `modelCapabilityRecordSchema`, `writeAnalyzerCapabilityRecord(modelId, record)`.
+- Contract deviations (reported):
+  - The contract types `reasoning` keys and `configured.reasoning` as `ReasoningLevel`, which is born in W5. W3 uses `string`; W5 narrows.
+  - `assertConfiguredCapabilitiesAllowed`'s `configured.reasoning` is required (`string`, not `string | undefined`). Records are keyed by the level actually sent (P7), so the check needs the level the run will send. W3 callers pass `defaultReasoningKey(kind)`.
+  - `ModelTestDeps` has no `offeredLevels`. The contract's pre-W5 stand-in filed every record under `configured`, which encodes no level, so a `rejected` kept refusing after the level changed. `plannedTestRequestCount`'s deps are `Pick<ModelTestDeps, 'configuredMode' | 'offeredModes'>`. `ModelTestDeps` gains `probeLimits` and `signal`, which Task 3c.4 uses.
 
-Keeps green: `workspace/user-settings.test.ts`, `routes/user-settings.test.ts`.
+**Record keys (P7).** A record is filed under the reasoning level its requests actually sent. In W3 the only reasoning field on the wire is Ollama's `think: false`, sent on every analyzer call (`ollama.ts:651`, `:956`). So the key is `off` for Ollama and `model-default` for Gemini and endpoints: the same values as W5's `defaultReasoningLevel`. When W5 starts sending a different level, the lookup key moves with it, so a W3 rejection never refuses a run at a level that was never tested.
+
+Keeps green: `workspace/user-settings.test.ts`, `routes/user-settings.test.ts`, and every `parseAndValidate` suite. List them with `git grep -l "parseAndValidate" -- "server/src/**/*.test.ts"` and run each (a `gemini.test.ts` hit runs with `npm --prefix server run test:slow -- src/analyzer/gemini.test.ts`).
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `server/src/analyzer/__fixtures__/structured-output-label-cases.json` with inputs only — the `expected` column is captured in Step 3 from 3b's function, never typed by hand:
+Create `server/src/analyzer/__fixtures__/structured-output-label-cases.json` with inputs only. The `expected` column is captured in Step 3 from 3b's function, never typed by hand:
 
 ```json
 [
@@ -581,7 +613,8 @@ Create `server/src/analyzer/structured-output-label-cases.test.ts`:
 ```ts
 /* #3084 — one case table for structuredOutputLabel, shared with the frontend twin
    (src/lib/structured-output-label.ts, Task 3c.6). `expected` is captured from 3b's
-   server function with CAPTURE_LABELS=1, never written by hand. */
+   server function with CAPTURE_LABELS=1, never written by hand. The record is filed under
+   `model-default`, the level an endpoint or Gemini request is sent at (P7). */
 import { describe, it, expect } from 'vitest';
 import cases from './__fixtures__/structured-output-label-cases.json' with { type: 'json' };
 import { structuredOutputLabel } from './runner/schema-adapters.js';
@@ -595,13 +628,15 @@ type LabelCase = {
   expected?: string;
 };
 
+const LEVEL = 'model-default';
+
 function recordFor(c: LabelCase): ModelCapabilityRecord | undefined {
   if (c.outcome === null) return undefined;
   return {
     serverUrl: 'http://127.0.0.1:8080/v1',
     testedAt: '2026-09-11T00:00:00.000Z',
     control: { ok: true },
-    structuredOutput: { [c.mode]: { configured: c.outcome } },
+    structuredOutput: { [c.mode]: { [LEVEL]: c.outcome } },
     reasoning: {},
   };
 }
@@ -610,14 +645,14 @@ describe('structuredOutputLabel case table (#3084)', () => {
   it.runIf(process.env.CAPTURE_LABELS === '1')('prints the expected column (capture only)', () => {
     const out = (cases as LabelCase[]).map(({ expected: _e, ...c }) => ({
       ...c,
-      expected: structuredOutputLabel(c.mode, c.dropped, recordFor(c), 'configured'),
+      expected: structuredOutputLabel(c.mode, c.dropped, recordFor(c), LEVEL),
     }));
     console.log(JSON.stringify(out, null, 2));
   });
 
   it.each(cases as LabelCase[])('$mode dropped=$dropped outcome=$outcome', (c) => {
     expect(c.expected, 'run the capture step and paste the expected column').toBeTypeOf('string');
-    expect(structuredOutputLabel(c.mode, c.dropped, recordFor(c), 'configured')).toBe(c.expected);
+    expect(structuredOutputLabel(c.mode, c.dropped, recordFor(c), LEVEL)).toBe(c.expected);
   });
 });
 ```
@@ -637,18 +672,18 @@ import {
   capabilityRecordFor,
   assertConfiguredCapabilitiesAllowed,
   plannedTestRequestCount,
+  defaultReasoningKey,
   ALL_STRUCTURED_OUTPUT_MODES,
-  CONFIGURED_LEVEL_KEY,
   type ModelCapabilityRecord,
 } from './capabilities.js';
 import { AnalyzerCapabilityRejectedError } from './errors.js';
-import { DEFAULT_USER_SETTINGS } from '../workspace/user-settings.js';
+import { DEFAULT_USER_SETTINGS, modelCapabilityRecordSchema } from '../workspace/user-settings.js';
 
 const record = (over: Partial<ModelCapabilityRecord> = {}): ModelCapabilityRecord => ({
   serverUrl: 'http://127.0.0.1:8080/v1',
   testedAt: '2026-09-11T10:00:00.000Z',
   control: { ok: true },
-  structuredOutput: { schema: { configured: 'rejected' } },
+  structuredOutput: { schema: { 'model-default': 'rejected' } },
   reasoning: {},
   ...over,
 });
@@ -686,13 +721,43 @@ describe('probe schema', () => {
     expect(out.required).toEqual(['a', MARKER_KEY]);
     expect(props.a).toEqual((base.properties as Record<string, unknown>).a);
   });
+});
 
-  it('classifyMarkerProbe: enforced only when the marker key carries the exact value', () => {
+describe('classifyMarkerProbe — the runner extraction and repair chain before the marker check', () => {
+  it('enforced only when the marker key carries the exact value', () => {
     expect(classifyMarkerProbe(`{"${MARKER_KEY}":"mk-1","characters":[]}`, 'mk-1')).toBe('enforced');
     expect(classifyMarkerProbe(`<think>hm</think>\n\`\`\`json\n{"${MARKER_KEY}":"mk-1"}\n\`\`\``, 'mk-1')).toBe('enforced');
     expect(classifyMarkerProbe('{"characters":[]}', 'mk-1')).toBe('ignored');
     expect(classifyMarkerProbe(`{"${MARKER_KEY}":"mk-2"}`, 'mk-1')).toBe('ignored');
     expect(classifyMarkerProbe('not json', 'mk-1')).toBe('ignored');
+  });
+
+  it('JSON followed by trailing prose is still enforced (trimTrailingProse, as a run would accept it)', () => {
+    expect(
+      classifyMarkerProbe(`{"${MARKER_KEY}":"mk-1","characters":[]}\n\nI filled every required field with a placeholder.`, 'mk-1'),
+    ).toBe('enforced');
+  });
+
+  it('a missing comma between two properties is still enforced (repairStructuralPunctuation)', () => {
+    expect(classifyMarkerProbe(`{"note":"x" "${MARKER_KEY}":"mk-1"}`, 'mk-1')).toBe('enforced');
+  });
+
+  it('JSON after a reasoning prefix that is not a <think> block is still enforced', () => {
+    expect(
+      classifyMarkerProbe(
+        `Thinking Process:\n1. The response format requires an object.\n2. Use placeholders.\n\n{"${MARKER_KEY}":"mk-1","characters":[]}`,
+        'mk-1',
+      ),
+    ).toBe('enforced');
+    expect(classifyMarkerProbe(`[THINK]plan the object[/THINK]{"${MARKER_KEY}":"mk-1"} Done.`, 'mk-1')).toBe('enforced');
+  });
+});
+
+describe('defaultReasoningKey (P7: records are keyed by the level actually sent)', () => {
+  it('Ollama sends think:false → off; Gemini and endpoints send no reasoning field → model-default', () => {
+    expect(defaultReasoningKey('ollama')).toBe('off');
+    expect(defaultReasoningKey('gemini')).toBe('model-default');
+    expect(defaultReasoningKey('openai')).toBe('model-default');
   });
 });
 
@@ -706,13 +771,27 @@ describe('capabilityRecordFor', () => {
     const settings = { ...DEFAULT_USER_SETTINGS, analyzerCapabilitiesByModel: { 'openai:lab::m': record() } };
     expect(capabilityRecordFor(settings, 'openai:lab::m', 'http://10.0.0.5:8080/v1')).toBeUndefined();
   });
+
+  it('A3 — discards a record whose digest differs from the installed model, keeps it when they match or either is unknown', () => {
+    const url = 'http://localhost:11434';
+    const stamped = record({ serverUrl: url, digest: 'sha256:old' });
+    const settings = { ...DEFAULT_USER_SETTINGS, analyzerCapabilitiesByModel: { 'qwen3.5:4b': stamped, 'mistral:7b': record({ serverUrl: url }) } };
+    expect(capabilityRecordFor(settings, 'qwen3.5:4b', url, 'sha256:new')).toBeUndefined();
+    expect(capabilityRecordFor(settings, 'qwen3.5:4b', url, 'sha256:old')).toEqual(stamped);
+    expect(capabilityRecordFor(settings, 'qwen3.5:4b', url)).toEqual(stamped); // installed digest unknown → kept
+    expect(capabilityRecordFor(settings, 'mistral:7b', url, 'sha256:new')).toEqual(record({ serverUrl: url })); // unstamped → kept
+  });
+
+  it('A3 — modelCapabilityRecordSchema accepts and keeps digest', () => {
+    expect(modelCapabilityRecordSchema.parse(record({ digest: 'sha256:abc' })).digest).toBe('sha256:abc');
+  });
 });
 
 describe('assertConfiguredCapabilitiesAllowed', () => {
-  it('throws AnalyzerCapabilityRejectedError naming the setting and test date for a rejected configured mode', () => {
+  it('throws AnalyzerCapabilityRejectedError naming the setting and test date for a mode rejected at the level the run sends', () => {
     let caught: unknown;
     try {
-      assertConfiguredCapabilitiesAllowed(record(), { structuredOutput: 'schema', reasoning: undefined }, 'openai:lab::m');
+      assertConfiguredCapabilitiesAllowed(record(), { structuredOutput: 'schema', reasoning: 'model-default' }, 'openai:lab::m');
     } catch (err) {
       caught = err;
     }
@@ -726,12 +805,22 @@ describe('assertConfiguredCapabilitiesAllowed', () => {
   });
 
   it('allows a mode the record did not reject, a missing record, and a record whose control failed', () => {
-    expect(() => assertConfiguredCapabilitiesAllowed(record(), { structuredOutput: 'json', reasoning: undefined }, 'm')).not.toThrow();
-    expect(() => assertConfiguredCapabilitiesAllowed(undefined, { structuredOutput: 'schema', reasoning: undefined }, 'm')).not.toThrow();
+    expect(() => assertConfiguredCapabilitiesAllowed(record(), { structuredOutput: 'json', reasoning: 'model-default' }, 'm')).not.toThrow();
+    expect(() => assertConfiguredCapabilitiesAllowed(undefined, { structuredOutput: 'schema', reasoning: 'model-default' }, 'm')).not.toThrow();
     expect(() =>
       assertConfiguredCapabilitiesAllowed(
         record({ control: { ok: false, error: 'boom' } }),
-        { structuredOutput: 'schema', reasoning: undefined },
+        { structuredOutput: 'schema', reasoning: 'model-default' },
+        'm',
+      ),
+    ).not.toThrow();
+  });
+
+  it('a rejection recorded at another reasoning level does not refuse the run (P7)', () => {
+    expect(() =>
+      assertConfiguredCapabilitiesAllowed(
+        record({ structuredOutput: { schema: { high: 'rejected' } } }),
+        { structuredOutput: 'schema', reasoning: 'model-default' },
         'm',
       ),
     ).not.toThrow();
@@ -749,8 +838,8 @@ describe('assertConfiguredCapabilitiesAllowed', () => {
 });
 
 describe('plannedTestRequestCount', () => {
-  const deps = { configuredMode: 'schema' as const, offeredModes: ALL_STRUCTURED_OUTPUT_MODES, offeredLevels: [CONFIGURED_LEVEL_KEY] };
-  it('configured = control + one check; all = control + the schema and json checks (the off check reuses the off-mode control)', () => {
+  const deps = { configuredMode: 'schema' as const, offeredModes: ALL_STRUCTURED_OUTPUT_MODES };
+  it('configured = control + one mode step; all = control + the schema and json steps (the off step is the control)', () => {
     expect(plannedTestRequestCount({ modelId: 'm', scope: 'configured' }, deps)).toBe(2);
     expect(plannedTestRequestCount({ modelId: 'm', scope: 'all' }, deps)).toBe(3);
   });
@@ -762,23 +851,43 @@ describe('plannedTestRequestCount', () => {
 
 - [ ] **Step 2: Run them and confirm they fail**
 Run: `npm --prefix server run test -- src/analyzer/capabilities.test.ts src/analyzer/structured-output-label-cases.test.ts`
-Expected: FAIL — `Failed to load url ./capabilities.js` (module does not exist yet); the label table fails `run the capture step and paste the expected column`.
+Expected: FAIL. `Failed to load url ./capabilities.js`, because the module does not exist yet. The label table fails `run the capture step and paste the expected column`.
 
 - [ ] **Step 3: Implement**
+
+`server/src/analyzer/runner/parse.ts` — above `parseAndValidate`, add:
+
+```ts
+/** The candidate strings parseAndValidate tries to JSON.parse, in its order (see its comment):
+    fence strip, trailing-prose trim, structural-punctuation repair, the quote walker, and the
+    combinations. Exported so the Test action's marker probe (#3084 P7) accepts exactly the
+    outputs a run accepts. The caller dedupes, as parseAndValidate's loop does. */
+export function jsonParseCandidates(raw: string): string[] {
+  const stripped = stripCodeFences(raw);
+  const trimmed = trimTrailingProse(stripped);
+  const trimThenStruct = repairStructuralPunctuation(trimmed);
+  const quoteFixed = repairUnescapedQuotes(stripped);
+  const quoteThenTrim = trimTrailingProse(quoteFixed);
+  const quoteThenTrimThenStruct = repairStructuralPunctuation(quoteThenTrim);
+  return [stripped, trimmed, trimThenStruct, quoteFixed, quoteThenTrim, quoteThenTrimThenStruct];
+}
+```
+
+In `parseAndValidate`, replace the six `const` lines from `const stripped = stripCodeFences(…);` through the closing `];` of the `candidates` literal (`gemini.ts:1036-1053` before W1's move) with `const candidates = jsonParseCandidates(…);`. Pass it the same string those lines received: after W1 that is the text left by its `<think>` strip. Keep the `seen`/`winner` loop and the "Order of candidates tried" comment unchanged.
 
 Create `server/src/analyzer/capabilities.ts`:
 
 ```ts
-/* #3084 W3 — what a model accepts and enforces, recorded by the Test action (spec
-   decision 2b) and checked before a run's first call. Pure helpers first; the request
-   sequence (runModelTest) is appended by Task 3c.4. */
+/* #3084 W3 — what a model accepts and enforces, recorded by the Test action (spec §2,
+   P7) and checked before a run's first call. Pure helpers first; the request ladder
+   (runModelTest) is appended by Task 3c.4. */
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
 import type { UserSettings } from '../workspace/user-settings.js';
 import type { ChatTransport, StructuredOutputMode } from './runner/transport.js';
 import type { AdaptedSchema } from './runner/schema-adapters.js';
-import { stripCodeFences, stripThink } from './runner/parse.js';
-import { AnalyzerCapabilityRejectedError } from './errors.js';
+import { jsonParseCandidates, stripThink } from './runner/parse.js';
+import { AnalyzerCapabilityRejectedError, type TransportKind } from './errors.js';
 import {
   emotionAnnotationSchema,
   escalationSchema,
@@ -796,28 +905,46 @@ export interface ModelCapabilityRecord {
   /** Endpoint baseUrl, Ollama URL, or 'gemini'. A record for another URL is discarded. */
   serverUrl: string;
   testedAt: string;
+  /** W3 saves only `{ ok: true }`: a failed control saves nothing (Task 3c.4). */
   control: { ok: true } | { ok: false; error: string };
-  /** mode → reasoning-level key ('configured' in W3) → outcome. */
+  /** mode → reasoning level the requests actually sent → outcome (P7). */
   structuredOutput: Partial<Record<StructuredOutputMode, Record<string, ProbeOutcome>>>;
   /** W5 narrows the key to ReasoningLevel; W3 records `{}`. */
   reasoning: Partial<Record<string, 'accepted' | 'rejected'>>;
+  /** 3c (A3): Ollama only — the installed model's `/api/tags` digest when the Test ran. A record
+      whose digest differs from the model installed now is discarded, like a moved server URL,
+      so `ollama pull` of a fixed build cannot leave a stale `rejected` refusing every run. */
+  digest?: string;
 }
 
 export interface ModelTestDeps {
   transport: ChatTransport;
   serverUrl: string;
+  /** 3c (A3): Ollama only — resolves the installed model's digest, stamped on the record. Absent
+      for Gemini and endpoints (no digest exists). A rejection or throw stamps nothing. */
+  modelDigest?: () => Promise<string | undefined>;
   configuredMode: StructuredOutputMode;
   offeredModes: readonly StructuredOutputMode[];
-  /** W3: `[CONFIGURED_LEVEL_KEY]`. W5 adds the offered reasoning levels. */
-  offeredLevels: readonly string[];
   adaptSchema: (draft07: Record<string, unknown>) => AdaptedSchema;
+  /** P7: the model's context size and resolved Auto output cap (`null` = no cap, the context
+      governs). Read once, after `transport.prepare()` has warmed served limits (P15). */
+  probeLimits: () => { contextTokens: number; maxOutputTokens: number | null };
+  /** The client's abort signal: the route aborts it when the request closes. */
+  signal?: AbortSignal;
   now?: () => Date;
   markerValue?: () => string;
   redact?: (text: string) => string;
 }
 
-export const CONFIGURED_LEVEL_KEY = 'configured';
 export const ALL_STRUCTURED_OUTPUT_MODES: readonly StructuredOutputMode[] = ['schema', 'json', 'off'];
+
+/** The reasoning level every W3 request is sent at, and so the key a Test record is filed
+    under (P7). Ollama sends `think: false` on every analyzer call (`ollama.ts:651`), so
+    `off`; Gemini and endpoints send no reasoning field, so `model-default`. W5 replaces this
+    with reasoning.ts `defaultReasoningLevel`, which returns the same values. */
+export function defaultReasoningKey(kind: TransportKind): string {
+  return kind === 'ollama' ? 'off' : 'model-default';
+}
 
 export const STAGE_GRAMMAR_SCHEMAS: ReadonlyArray<{ name: string; schema: z.ZodType<unknown> }> = [
   { name: 'stage1GrammarSchema', schema: stage1GrammarSchema },
@@ -866,18 +993,39 @@ export function withMarker(schema: Record<string, unknown>, marker: string): Rec
   return { ...schema, properties, required };
 }
 
+/** `enforced` only when the output, after the runner's own extraction and repair chain,
+    is an object whose marker key carries the exact value. The chain is W1's `<think>` strip,
+    then parseAndValidate's candidates (fence strip, trailing-prose trim, structural and quote
+    repairs). Some models write their reasoning before the JSON in a form the runner does not
+    strip (`Thinking Process:`, `[THINK]…[/THINK]`). For those, the text is also tried from its
+    first `{`, so a model that followed the schema after thinking out loud is never recorded
+    "not enforced". */
 export function classifyMarkerProbe(text: string, marker: string): 'enforced' | 'ignored' {
-  const candidate = stripCodeFences(stripThink(text).text).trim();
-  try {
-    const parsed = JSON.parse(candidate) as unknown;
-    return parsed !== null &&
-      typeof parsed === 'object' &&
-      (parsed as Record<string, unknown>)[MARKER_KEY] === marker
-      ? 'enforced'
-      : 'ignored';
-  } catch {
-    return 'ignored';
+  const answer = stripThink(text).text;
+  const firstBrace = answer.indexOf('{');
+  const seeds = firstBrace > 0 ? [answer, answer.slice(firstBrace)] : [answer];
+  const seen = new Set<string>();
+  for (const seed of seeds) {
+    for (const candidate of jsonParseCandidates(seed)) {
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(candidate);
+      } catch {
+        continue;
+      }
+      if (
+        parsed !== null &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed) &&
+        (parsed as Record<string, unknown>)[MARKER_KEY] === marker
+      ) {
+        return 'enforced';
+      }
+    }
   }
+  return 'ignored';
 }
 
 function sameServer(a: string, b: string): boolean {
@@ -888,33 +1036,40 @@ export function capabilityRecordFor(
   settings: UserSettings,
   modelId: string,
   currentServerUrl: string,
+  /** A3: the digest of the model installed now (Ollama only). Unknown → the record is kept. */
+  currentDigest?: string,
 ): ModelCapabilityRecord | undefined {
   const stored = settings.analyzerCapabilitiesByModel[modelId];
-  return stored && sameServer(stored.serverUrl, currentServerUrl) ? stored : undefined;
+  if (!stored || !sameServer(stored.serverUrl, currentServerUrl)) return undefined;
+  /* A3: a record written for another build of the model says nothing about this one. Fail-open on
+     an unknown current digest: the check never invents a discard it cannot see a reason for. */
+  if (stored.digest !== undefined && currentDigest !== undefined && stored.digest !== currentDigest) return undefined;
+  return stored;
 }
 
 export function assertConfiguredCapabilitiesAllowed(
   record: ModelCapabilityRecord | undefined,
-  configured: { structuredOutput: StructuredOutputMode; reasoning: string | undefined },
+  configured: { structuredOutput: StructuredOutputMode; reasoning: string },
   modelId: string,
 ): void {
   if (!record || !record.control.ok) return;
-  if (record.structuredOutput[configured.structuredOutput]?.[CONFIGURED_LEVEL_KEY] === 'rejected') {
-    throw new AnalyzerCapabilityRejectedError(modelId, 'structuredOutput', configured.structuredOutput, record.testedAt);
-  }
-  if (configured.reasoning !== undefined && record.reasoning[configured.reasoning] === 'rejected') {
+  if (record.reasoning[configured.reasoning] === 'rejected') {
     throw new AnalyzerCapabilityRejectedError(modelId, 'reasoning', configured.reasoning, record.testedAt);
+  }
+  /* P7: only a rejection recorded at the level this run sends refuses it. */
+  if (record.structuredOutput[configured.structuredOutput]?.[configured.reasoning] === 'rejected') {
+    throw new AnalyzerCapabilityRejectedError(modelId, 'structuredOutput', configured.structuredOutput, record.testedAt);
   }
 }
 
 export function plannedTestRequestCount(
   input: { modelId: string; scope: 'configured' | 'all' },
-  deps: Pick<ModelTestDeps, 'configuredMode' | 'offeredModes' | 'offeredLevels'>,
+  deps: Pick<ModelTestDeps, 'configuredMode' | 'offeredModes'>,
 ): number {
-  /* The control request goes first, with no structured output (`off`). An `off` check
-     therefore sends nothing more; only `schema` and `json` checks add requests. */
+  /* P7 ladder: the control (`off` mode) always; wave 5 adds its level step here; then one
+     mode step per `schema` / `json` mode. An `off` mode step is the control itself. */
   const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
-  return 1 + modes.filter((mode) => mode !== 'off').length * deps.offeredLevels.length;
+  return 1 + modes.filter((mode) => mode !== 'off').length;
 }
 ```
 
@@ -924,7 +1079,8 @@ export function plannedTestRequestCount(
 const probeOutcomeSchema = z.enum(['enforced', 'ignored', 'rejected', 'accepted']);
 const probeByLevelSchema = z.record(z.string(), probeOutcomeSchema);
 /* #3084 — persisted shape of analyzer/capabilities.ts ModelCapabilityRecord (declared
-   here, not imported, so user-settings stays a leaf of the analyzer import graph). */
+   here, not imported, so user-settings stays a leaf of the analyzer import graph). The
+   inner record keys are the reasoning level the Test requests actually sent (P7). */
 export const modelCapabilityRecordSchema = z.object({
   serverUrl: z.string(),
   testedAt: z.string(),
@@ -935,6 +1091,8 @@ export const modelCapabilityRecordSchema = z.object({
     off: probeByLevelSchema.optional(),
   }),
   reasoning: z.record(z.string(), z.enum(['accepted', 'rejected'])),
+  /* 3c (A3): Ollama digest at Test time; 5a adds verdictTestedAt beside it. */
+  digest: z.string().optional(),
 });
 ```
 
@@ -947,18 +1105,20 @@ Field after `analyzerRateLimitsByModel`:
   analyzerCapabilitiesByModel: z.record(z.string(), modelCapabilityRecordSchema).default({}),
 ```
 
-Default: `analyzerCapabilitiesByModel: {},`. `FORBIDDEN_KEYS`, after `'tourCompletedAt',` (`:466`):
+Default: `analyzerCapabilitiesByModel: {},`. `FORBIDDEN_KEYS`, after `'tourCompletedAt',` (`:660`, the set's last entry before `]);` at `:661`):
 
 ```ts
   /* #3084 Test-action records — written only by writeAnalyzerCapabilityRecord. */
   'analyzerCapabilitiesByModel',
 ```
 
-After 3b's `mutateUserSettings` (the serialised read-decide-write helper 3b adds beside `writeGeminiApiKey`, `:809-820`):
+After 3b's `mutateUserSettings` (the serialised read-decide-write helper 3b adds after `writeUserSettings`, which ends `:638`; `writeGeminiApiKey` itself is `:1003-1012`):
 
 ```ts
 /** #3084 — persist one Test-action record, replacing any earlier record for the id.
-    Goes through mutateUserSettings so it serialises with endpoint and key writes. */
+    Goes through mutateUserSettings so it serialises with endpoint and key writes. Only a
+    completed test calls it: a failed control or an inconclusive step writes nothing, so the
+    previous record stays (P7). */
 export async function writeAnalyzerCapabilityRecord(
   modelId: string,
   record: z.infer<typeof modelCapabilityRecordSchema>,
@@ -976,41 +1136,59 @@ In `server/src/workspace/analyzer-endpoints.test.ts` (3b), add to `FIELD_EXCLUDE
       'analyzerCapabilitiesByModel', // Test records keyed by model id, not a selection (#3084 PR 3c)
 ```
 
-(Add `server/src/workspace/analyzer-endpoints.test.ts` to this task's Step 4 run and Step 6 `git add`.)
-
-Capture the label column: PowerShell `$env:CAPTURE_LABELS='1'; npm --prefix server run test -- src/analyzer/structured-output-label-cases.test.ts; Remove-Item Env:CAPTURE_LABELS` (Git Bash: `CAPTURE_LABELS=1 npm --prefix server run test -- src/analyzer/structured-output-label-cases.test.ts`). Replace the fixture's contents with the printed array, and paste it into the PR body.
+Capture the label column. PowerShell: `$env:CAPTURE_LABELS='1'; npm --prefix server run test -- src/analyzer/structured-output-label-cases.test.ts; Remove-Item Env:CAPTURE_LABELS`. Git Bash: `CAPTURE_LABELS=1 npm --prefix server run test -- src/analyzer/structured-output-label-cases.test.ts`. Replace the fixture's contents with the printed array, and paste it into the PR body.
 
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/analyzer/capabilities.test.ts src/analyzer/structured-output-label-cases.test.ts src/workspace/user-settings.test.ts src/routes/user-settings.test.ts`  Expected: PASS.
+Run: `npm --prefix server run test -- src/analyzer/capabilities.test.ts src/analyzer/structured-output-label-cases.test.ts src/workspace/user-settings.test.ts src/routes/user-settings.test.ts src/workspace/analyzer-endpoints.test.ts`, then every `parseAndValidate` suite listed under "Keeps green". Expected: PASS; the `parseAndValidate` suites are unchanged.
 
 - [ ] **Step 5: Mutation proof**
 1. `assertConfiguredCapabilitiesAllowed`: change the structured-output `=== 'rejected'` to `=== 'ignored'` → red: "throws AnalyzerCapabilityRejectedError naming the setting and test date…". Restore.
-2. `capabilityRecordFor`: return `stored` unconditionally → red: "discards the record after the base URL changes". Restore.
-3. `classifyMarkerProbe`: drop `=== marker` (any value counts) → red: "enforced only when the marker key carries the exact value". Restore.
+2. `assertConfiguredCapabilitiesAllowed`: replace `record.structuredOutput[configured.structuredOutput]?.[configured.reasoning] === 'rejected'` with `Object.values(record.structuredOutput[configured.structuredOutput] ?? {}).includes('rejected')` (a rejection at any level) → red: "a rejection recorded at another reasoning level does not refuse the run (P7)". Restore.
+3. `capabilityRecordFor`: return `stored` unconditionally → red: "discards the record after the base URL changes" and "A3 — discards a record whose digest differs…". Restore.
+3a. `capabilityRecordFor`: delete the digest line → red: "A3 — discards a record whose digest differs…" (first assertion). Restore. Then drop `currentDigest !== undefined &&` → red: the same case's "installed digest unknown → kept". Restore.
+3b. `modelCapabilityRecordSchema`: delete `digest: z.string().optional(),` → red: "A3 — modelCapabilityRecordSchema accepts and keeps digest" (zod strips the unknown key). Restore.
+4. `classifyMarkerProbe`: drop `=== marker` (any value counts) → red: "enforced only when the marker key carries the exact value". Restore.
+5. `classifyMarkerProbe`: replace `jsonParseCandidates(seed)` with `[seed.trim()]` → red: "JSON followed by trailing prose is still enforced…", "a missing comma between two properties is still enforced…". Restore.
+6. `classifyMarkerProbe`: replace `const seeds = firstBrace > 0 ? [answer, answer.slice(firstBrace)] : [answer];` with `const seeds = [answer];` → red: "JSON after a reasoning prefix that is not a <think> block is still enforced". Restore.
+7. `defaultReasoningKey`: return `'model-default'` for every kind → red: "Ollama sends think:false → off…". Restore.
+8. `jsonParseCandidates`: delete `trimmed,` from the returned list → red: "JSON followed by trailing prose is still enforced…" and the existing `parseAndValidate` trailing-prose (Ch44) case. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/capabilities.ts server/src/analyzer/capabilities.test.ts server/src/analyzer/__fixtures__/structured-output-label-cases.json server/src/analyzer/structured-output-label-cases.test.ts server/src/workspace/user-settings.ts
+git add server/src/analyzer/capabilities.ts server/src/analyzer/capabilities.test.ts server/src/analyzer/runner/parse.ts server/src/analyzer/__fixtures__/structured-output-label-cases.json server/src/analyzer/structured-output-label-cases.test.ts server/src/workspace/user-settings.ts server/src/workspace/analyzer-endpoints.test.ts
 git commit -m "feat(server): model capability records and the structured-output probe helpers"
 ```
 
 ---
-### Task 3c.4: `runModelTest` — control request, configured check, marker probe, `scope: 'all'`
+### Task 3c.4: `runModelTest` — the P7 request ladder: control, mode step, one cap, size-limit 400s, abort
 
 **Files:**
 - Modify: `server/src/analyzer/capabilities.ts` (append; extend its imports)
 - Test: Create `server/src/analyzer/capabilities.run-model-test.test.ts`
 
 **Interfaces:**
-- Consumes: Task 3c.3 helpers; `ChatTransport.send(req: TransportRequest): Promise<TransportResult>` (W1); `AnalyzerHttpError` (`httpStatus`), `AnalysisAbortedError` (W1).
-- Produces: `runModelTest(input: { modelId: string; scope: 'configured' | 'all' }, deps: ModelTestDeps): Promise<ModelCapabilityRecord>`; `class ModelTestInconclusiveError`.
+- Consumes: Task 3c.3 helpers; `ChatTransport.send(req)`, `ChatTransport.prepare?(signal?: AbortSignal)` (W1; W2 Task 2.6); `AnalyzerHttpError` (`httpStatus`, `bodyExcerpt`), `AnalysisAbortedError` (W1); `AnalyzerTransportError` (3b Task 3b.1, P22 rule 7; test only); `estimateInputTokens(systemInstruction, contents)` (W1 `runner/prompt.ts`, moved from `gemini.ts:927`); `LIMIT_400_PATTERNS` and `namesContextOrTokenLimit(text)` from the leaf `server/src/analyzer/limit-400-patterns.ts` (3b Task 3b.1). This task imports the table and never redefines it.
+- Produces: `runModelTest(input: { modelId: string; scope: 'configured' | 'all' }, deps: ModelTestDeps): Promise<ModelCapabilityRecord>` — stamps `digest` from `deps.modelDigest` when it resolves one (A3, pulled forward from 5a); `class ModelTestControlFailedError`, `class ModelTestInconclusiveError`; `probeOutputCap(limits, estimatedInputTokens)`, `PROBE_PROMPT`.
+- Note: `defaultReasoningKey` (Task 3c.3), used for the record key and cited in mutation row 10, is replaced by `defaultReasoningLevel` in PR 5a.
+- Contract deviation (reported): a failed control no longer returns a record with `control: { ok: false }`. It throws `ModelTestControlFailedError`, so the route saves nothing and the previous record stays (spec §2, P7). The `ModelCapabilityRecord.control` union is left as the contract types it; W3 writes only `{ ok: true }`.
 
 Rules (spec §2 "The Test action", P7):
-- Requests run sequentially.
-- The control request goes first. It uses **no structured output** (`off` mode), a trivial prompt and a 256-token cap. It never uses `json` mode: some servers reject `json_object` with a 400 (LM Studio), which would fail every test there. A failing control records the whole test as failed and marks nothing `rejected`.
-- With the control OK, a 400 → `rejected`. The `schema` check → `enforced` / `ignored` by the marker. The `json` check → `accepted` / `rejected`; it is probed like any other mode.
-- The `off` check sends nothing and records `accepted`, because the control already sent that exact request successfully.
-- Any other failure after a good control is inconclusive. That covers a 5xx after the transport's own retries, a timeout, an unreachable server, and a `length` or `blocked` finish on a `schema` or `json` probe. It propagates, **no record is written**, and the route answers 502 (Task 3c.6), because a probe that could not be attributed must not be stored as a verdict. The rate limiter is acquired inside the Gemini and OpenAI transports for every request (W1/3b), so the test adds no limiter code; Ollama has no limiter today.
+- **Steps**, sequential:
+  1. control (`off` mode, at the level the engine sends by default);
+  2. wave 5's level step, marked in the code;
+  3. one mode step per tested mode.
+
+  Each step differs from the one before it in one field. An `off` mode step sends nothing: it is the control.
+- **Same prompt, same cap.** Every step sends `PROBE_SYSTEM` + `PROBE_PROMPT`. The schema step attaches the largest stage schema with the marker key. The cap is `probeOutputCap(deps.probeLimits(), <estimated input of the largest step>)`: the model's resolved Auto cap, clamped to context minus that estimate. `transport.prepare()` runs before the cap is read, so an endpoint's served limits are warm (P15). Why not a tiny cap: thinking tokens count against it, so a thinking model would end `length` and record nothing.
+- **Control.** Passes whenever the provider accepts it, including a `length` finish. Any other failure throws `ModelTestControlFailedError` (redacted, capped), and nothing is recorded.
+- **A mode-step 400** records `rejected`, unless the provider's message names a context, token or length limit (`namesContextOrTokenLimit`, imported from `limit-400-patterns.ts`). That case is inconclusive.
+- **Inconclusive** covers a size-limit 400, a 5xx after the transport's own retries, a timeout, an unreachable server, and a `length` or `blocked` finish on a mode step. It throws `ModelTestInconclusiveError`: no record, and the route answers 502 (Task 3c.6).
+- **`AnalyzerTransportError` is a request failure, never an unreachable server (P22 rule 7).** 3b's transport rebuilds an unrecognised error into it, sometimes with a connect-phase `causeCode` such as `ECONNREFUSED`. It has no HTTP status, so a mode step never records it `rejected`. On step 1 it fails the control; on a mode step it is inconclusive. Neither catch retries it, classifies it from its `causeCode`, or falls back. The Test action has no fallback, and the 502 carries the transport's own sanitised text. Pinned by "an AnalyzerTransportError is a request failure, never an unreachable server…".
+- **Outcomes.** A `schema` step is `enforced` / `ignored` by `classifyMarkerProbe`; a `json` step is `accepted`.
+- **Record key:** `defaultReasoningKey(deps.transport.kind)`.
+- **Abort.** `deps.signal` rides on every request and is checked before every step, so a client that leaves stops the ladder at the next boundary even if a transport ignores the signal. It is also passed to `transport.prepare(deps.signal)`, so a client that leaves releases a stalled warm-up at once (P26).
+- **Limiter.** The Gemini and OpenAI transports acquire the model's limiter for every request (W1/3b), so the test adds no limiter code. Ollama has no limiter today.
+- **Stop-the-run errors (P20).** Both catches here (the control's and `modeStep`'s) wrap only `transport.send`. They never see the runner's `mapFinish`, which is where `AnalyzerReasoningOverflowError` is raised. A `length` finish reaches them as a result, not an error: it is accepted on the control and inconclusive on a mode step. The Test route's catch (Task 3c.6) sees only `runModelTest`'s errors. A Test action is not an analysis run, so there is no run to stop: no pass-through and no test is owed.
 
 Keeps green: `capabilities.test.ts`.
 
@@ -1021,23 +1199,36 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   runModelTest,
   plannedTestRequestCount,
+  probeOutputCap,
   largestStageSchema,
   MARKER_KEY,
   ALL_STRUCTURED_OUTPUT_MODES,
-  CONFIGURED_LEVEL_KEY,
+  ModelTestControlFailedError,
   ModelTestInconclusiveError,
   type ModelTestDeps,
 } from './capabilities.js';
-import { AnalyzerHttpError } from './errors.js';
+/* The shared size-limit table lives in the 3b leaf; the Test action imports it, never copies it. */
+import { LIMIT_400_PATTERNS, namesContextOrTokenLimit } from './limit-400-patterns.js';
+import { AnalysisAbortedError, AnalyzerHttpError, AnalyzerTransportError, type TransportKind } from './errors.js';
 import type { ChatTransport, TransportRequest, TransportResult } from './runner/transport.js';
 
-const ok = (text: string): TransportResult => ({ text, reasoningSeen: false, finish: 'stop', receivedBytes: text.length });
+const ok = (text: string, over: Partial<TransportResult> = {}): TransportResult => ({
+  text,
+  reasoningSeen: false,
+  finish: 'stop',
+  receivedBytes: text.length,
+  ...over,
+});
 
-function fakeTransport(respond: (req: TransportRequest, n: number) => TransportResult) {
+function fakeTransport(
+  respond: (req: TransportRequest, n: number) => TransportResult,
+  opts: { kind?: TransportKind; prepare?: (signal?: AbortSignal) => Promise<void> } = {},
+) {
   const calls: TransportRequest[] = [];
   const transport: ChatTransport = {
-    kind: 'openai',
+    kind: opts.kind ?? 'openai',
     model: 'qwen3-30b',
+    ...(opts.prepare ? { prepare: opts.prepare } : {}),
     send: vi.fn(async (req: TransportRequest) => {
       calls.push(req);
       return respond(req, calls.length);
@@ -1052,8 +1243,8 @@ function deps(transport: ChatTransport, over: Partial<ModelTestDeps> = {}): Mode
     serverUrl: 'http://127.0.0.1:8080/v1',
     configuredMode: 'schema',
     offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
-    offeredLevels: [CONFIGURED_LEVEL_KEY],
     adaptSchema: (s) => ({ schema: s, dropped: [] }),
+    probeLimits: () => ({ contextTokens: 32768, maxOutputTokens: null }),
     now: () => new Date('2026-09-11T10:00:00.000Z'),
     markerValue: () => 'mk-fixed',
     ...over,
@@ -1065,28 +1256,112 @@ const markerOf = (req: TransportRequest): string | undefined =>
     ? (req.structuredOutput.schema.properties as Record<string, { enum?: string[] }>)[MARKER_KEY]?.enum?.[0]
     : undefined;
 
-describe('runModelTest (#3084)', () => {
-  it('a failing control request records the test as failed and marks nothing rejected', async () => {
-    const { transport, calls } = fakeTransport(() => {
-      throw new AnalyzerHttpError('openai', 400, '{"error":"response_format.type must be json_schema"}', 'HTTP 400');
-    });
+/** A model that follows whatever response format it is given. */
+const obedient = (req: TransportRequest): TransportResult =>
+  ok(req.structuredOutput.mode === 'schema' ? `{"${MARKER_KEY}":"${markerOf(req)}"}` : '{"ok":true}');
+
+const http400 = (body: string) => new AnalyzerHttpError('openai', 400, body, 'HTTP 400');
+
+describe('runModelTest — the P7 ladder (#3084)', () => {
+  it('sends the control (off) then the configured mode, with the same prompt and the same cap on every step', async () => {
+    const { transport, calls } = fakeTransport(obedient);
     const record = await runModelTest({ modelId: 'openai:lab::qwen3-30b', scope: 'configured' }, deps(transport));
-    expect(calls).toHaveLength(1);
-    expect(calls[0].structuredOutput).toEqual({ mode: 'off' });
-    expect(record.control).toMatchObject({ ok: false });
-    expect(record.structuredOutput).toEqual({});
+    expect(calls.map((c) => c.structuredOutput.mode)).toEqual(['off', 'schema']);
+    expect(calls[1].system).toBe(calls[0].system);
+    expect(calls[1].messages).toEqual(calls[0].messages);
+    expect(calls[1].maxOutputTokens).toBe(calls[0].maxOutputTokens);
+    expect(calls[0].maxOutputTokens).toBe(probeOutputCap({ contextTokens: 32768, maxOutputTokens: null }, calls[1].estimatedInputTokens));
+    expect(calls[0].maxOutputTokens! + calls[1].estimatedInputTokens).toBeLessThanOrEqual(32768);
+    expect(record).toEqual({
+      serverUrl: 'http://127.0.0.1:8080/v1',
+      testedAt: '2026-09-11T10:00:00.000Z',
+      control: { ok: true },
+      structuredOutput: { schema: { 'model-default': 'enforced' } },
+      reasoning: {},
+    });
   });
 
-  it('the control request sends no structured output, so a server that rejects json mode still passes it (LM Studio)', async () => {
+  it('A3 — stamps the digest modelDigest resolves; no dep, an undefined answer or a throw stamps nothing', async () => {
+    const { transport } = fakeTransport(obedient, { kind: 'ollama' });
+    const input = { modelId: 'qwen3.5:4b', scope: 'configured' as const };
+    expect((await runModelTest(input, deps(transport, { modelDigest: async () => 'sha256:abc' }))).digest).toBe('sha256:abc');
+    expect(await runModelTest(input, deps(transport))).not.toHaveProperty('digest');
+    expect(await runModelTest(input, deps(transport, { modelDigest: async () => undefined }))).not.toHaveProperty('digest');
+    expect(await runModelTest(input, deps(transport, { modelDigest: async () => { throw new Error('ECONNREFUSED'); } }))).not.toHaveProperty('digest');
+  });
+
+  it("the cap is the model's resolved Auto cap when that is smaller than the room left", async () => {
+    const { transport, calls } = fakeTransport(obedient);
+    await runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport, { probeLimits: () => ({ contextTokens: 32768, maxOutputTokens: 2048 }) }));
+    expect(calls.map((c) => c.maxOutputTokens)).toEqual([2048, 2048]);
+  });
+
+  it('probeOutputCap clamps a cap to context minus input, and never goes below 1', () => {
+    expect(probeOutputCap({ contextTokens: 4096, maxOutputTokens: 16384 }, 1000)).toBe(3096);
+    expect(probeOutputCap({ contextTokens: 32768, maxOutputTokens: 2048 }, 1000)).toBe(2048);
+    expect(probeOutputCap({ contextTokens: 32768, maxOutputTokens: null }, 1000)).toBe(31768);
+    expect(probeOutputCap({ contextTokens: 4096, maxOutputTokens: null }, 5000)).toBe(1);
+  });
+
+  it('prepare() runs before the cap is read, so served limits warmed at start size every step (P15)', async () => {
+    let limits: { contextTokens: number; maxOutputTokens: number | null } = { contextTokens: 32768, maxOutputTokens: null };
+    const { transport, calls } = fakeTransport(obedient, {
+      prepare: async () => {
+        limits = { contextTokens: 32768, maxOutputTokens: 1024 };
+      },
+    });
+    await runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport, { probeLimits: () => limits }));
+    expect(calls.map((c) => c.maxOutputTokens)).toEqual([1024, 1024]);
+  });
+
+  it('files the record under the level actually sent: off for Ollama (think:false), model-default for Gemini and endpoints', async () => {
+    for (const [kind, level] of [['ollama', 'off'], ['gemini', 'model-default'], ['openai', 'model-default']] as const) {
+      const { transport } = fakeTransport(obedient, { kind });
+      const record = await runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport));
+      expect(record.structuredOutput).toEqual({ schema: { [level]: 'enforced' } });
+    }
+  });
+
+  it('a control that stops with length still counts as accepted', async () => {
+    const { transport } = fakeTransport((req, n) => (n === 1 ? ok('', { finish: 'length', reasoningSeen: true }) : obedient(req)));
+    const record = await runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport));
+    expect(record).toMatchObject({ control: { ok: true }, structuredOutput: { schema: { 'model-default': 'enforced' } } });
+  });
+
+  it('a failing control throws ModelTestControlFailedError, sends no mode step and produces no record', async () => {
+    const { transport, calls } = fakeTransport(() => {
+      throw new AnalyzerHttpError('openai', 503, 'loading model', 'HTTP 503 loading model');
+    });
+    await expect(runModelTest({ modelId: 'openai:lab::qwen3-30b', scope: 'all' }, deps(transport))).rejects.toBeInstanceOf(
+      ModelTestControlFailedError,
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0].structuredOutput).toEqual({ mode: 'off' });
+  });
+
+  it('control failure text passes through redact and is capped', async () => {
+    const { transport } = fakeTransport(() => {
+      throw new AnalyzerHttpError('openai', 401, 'bad key sk-secret-123', `HTTP 401 bad key sk-secret-123 ${'x'.repeat(900)}`);
+    });
+    const err = await runModelTest(
+      { modelId: 'm', scope: 'configured' },
+      deps(transport, { redact: (t) => t.replaceAll('sk-secret-123', '[redacted]') }),
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ModelTestControlFailedError);
+    const message = (err as Error).message;
+    expect(message).toContain('[redacted]');
+    expect(message).not.toContain('sk-secret-123');
+    expect(message.length).toBeLessThanOrEqual(700);
+  });
+
+  it('the control sends no structured output, so a server that rejects json mode still passes it (LM Studio)', async () => {
     const { transport, calls } = fakeTransport((req) => {
-      if (req.structuredOutput.mode === 'json') {
-        throw new AnalyzerHttpError('openai', 400, "'response_format.type' must be 'json_schema' or 'text'", 'HTTP 400');
-      }
+      if (req.structuredOutput.mode === 'json') throw http400("'response_format.type' must be 'json_schema' or 'text'");
       return ok('{"ok":true}');
     });
     const record = await runModelTest({ modelId: 'openai:lab::qwen3-30b', scope: 'configured' }, deps(transport, { configuredMode: 'json' }));
     expect(calls.map((c) => c.structuredOutput.mode)).toEqual(['off', 'json']);
-    expect(record).toMatchObject({ control: { ok: true }, structuredOutput: { json: { configured: 'rejected' } } });
+    expect(record.structuredOutput).toEqual({ json: { 'model-default': 'rejected' } });
   });
 
   it('configured mode off sends only the control request and records it accepted', async () => {
@@ -1095,48 +1370,97 @@ describe('runModelTest (#3084)', () => {
     const record = await runModelTest({ modelId: 'm', scope: 'configured' }, d);
     expect(calls).toHaveLength(1);
     expect(calls).toHaveLength(plannedTestRequestCount({ modelId: 'm', scope: 'configured' }, d));
-    expect(record.structuredOutput).toEqual({ off: { configured: 'accepted' } });
-  });
-
-  it('marker present in the output → enforced', async () => {
-    const { transport } = fakeTransport((req) =>
-      ok(req.structuredOutput.mode === 'schema' ? `{"${MARKER_KEY}":"${markerOf(req)}"}` : '{"ok":true}'),
-    );
-    const record = await runModelTest({ modelId: 'openai:lab::qwen3-30b', scope: 'configured' }, deps(transport));
-    expect(record).toMatchObject({
-      control: { ok: true },
-      structuredOutput: { schema: { configured: 'enforced' } },
-      testedAt: '2026-09-11T10:00:00.000Z',
-      serverUrl: 'http://127.0.0.1:8080/v1',
-    });
+    expect(record.structuredOutput).toEqual({ off: { 'model-default': 'accepted' } });
   });
 
   it('a 200 without the marker → ignored', async () => {
     const { transport } = fakeTransport(() => ok('{"characters":[]}'));
     const record = await runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport));
-    expect(record.structuredOutput).toEqual({ schema: { configured: 'ignored' } });
+    expect(record.structuredOutput).toEqual({ schema: { 'model-default': 'ignored' } });
   });
 
-  it('a 400 on the schema check after a good control → rejected', async () => {
+  it('a 400 on the schema step after a good control → rejected', async () => {
     const { transport } = fakeTransport((_req, n) => {
       if (n === 1) return ok('{"ok":true}');
-      throw new AnalyzerHttpError('openai', 400, 'json_schema unsupported', 'HTTP 400');
+      throw http400('json_schema unsupported');
     });
     const record = await runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport));
-    expect(record.structuredOutput).toEqual({ schema: { configured: 'rejected' } });
+    expect(record.structuredOutput).toEqual({ schema: { 'model-default': 'rejected' } });
   });
 
   it('a Gemini ApiError-shaped status 400 also counts as rejected', async () => {
-    const { transport } = fakeTransport((_req, n) => {
-      if (n === 1) return ok('{"ok":true}');
-      throw Object.assign(new Error('INVALID_ARGUMENT'), { status: 400 });
-    });
+    const { transport } = fakeTransport(
+      (_req, n) => {
+        if (n === 1) return ok('{"ok":true}');
+        throw Object.assign(new Error('INVALID_ARGUMENT: responseJsonSchema is not supported for this model'), { status: 400 });
+      },
+      { kind: 'gemini' },
+    );
     const record = await runModelTest({ modelId: 'gemini-3.6-flash', scope: 'configured' }, deps(transport));
-    expect(record.structuredOutput).toEqual({ schema: { configured: 'rejected' } });
+    expect(record.structuredOutput).toEqual({ schema: { 'model-default': 'rejected' } });
   });
 
-  it('the schema probe sends the largest stage schema plus a required marker the prompt never mentions', async () => {
-    const { transport, calls } = fakeTransport((req) => ok(`{"${MARKER_KEY}":"${markerOf(req) ?? ''}"}`));
+  it.each(LIMIT_400_PATTERNS)('a 400 naming a size limit is inconclusive, not rejected ($provider)', async (row) => {
+    for (const thrown of [http400(row.example), Object.assign(new Error(row.example), { status: 400 })]) {
+      const { transport } = fakeTransport((_req, n) => {
+        if (n === 1) return ok('{"ok":true}');
+        throw thrown;
+      });
+      await expect(runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport))).rejects.toBeInstanceOf(ModelTestInconclusiveError);
+    }
+  });
+
+  it('namesContextOrTokenLimit leaves a mode refusal alone', () => {
+    for (const refusal of [
+      "'response_format.type' must be 'json_schema' or 'text'",
+      'json_schema unsupported',
+      "Invalid schema for response_format 'castwright_probe': 'minLength' is not permitted.",
+      'INVALID_ARGUMENT: responseJsonSchema is not supported for this model',
+    ]) {
+      expect(namesContextOrTokenLimit(refusal), refusal).toBe(false);
+    }
+  });
+
+  it('a small-context endpoint whose oversized served cap would 400 does not record rejected', async () => {
+    const CONTEXT = 16384;
+    /* vLLM rejects input + max_tokens above the served context with this 400 (vllm#42474). */
+    const { transport } = fakeTransport((req) => {
+      const input = req.estimatedInputTokens;
+      const output = req.maxOutputTokens ?? 0;
+      if (input + output > CONTEXT) {
+        throw http400(
+          `This model's maximum context length is ${CONTEXT} tokens. However, you requested ${output} output tokens and your prompt contains at least ${input} input tokens, for a total of at least ${input + output} tokens.`,
+        );
+      }
+      return obedient(req);
+    });
+    const record = await runModelTest(
+      { modelId: 'openai:vllm::m', scope: 'configured' },
+      deps(transport, { probeLimits: () => ({ contextTokens: CONTEXT, maxOutputTokens: 65536 }) }),
+    );
+    expect(record.structuredOutput).toEqual({ schema: { 'model-default': 'enforced' } });
+  });
+
+  it('a thinking-style model that reasons before answering records a verdict within the resolved cap', async () => {
+    const REASONING_TOKENS = 6000;
+    const { transport } = fakeTransport(
+      (req) => {
+        if ((req.maxOutputTokens ?? Infinity) < REASONING_TOKENS + 64) {
+          return { text: '', reasoningSeen: true, finish: 'length', receivedBytes: 0 };
+        }
+        return { ...obedient(req), reasoningSeen: true };
+      },
+      { kind: 'gemini' },
+    );
+    const record = await runModelTest(
+      { modelId: 'gemini-3.6-flash', scope: 'configured' },
+      deps(transport, { probeLimits: () => ({ contextTokens: 1_048_576, maxOutputTokens: 65_536 }) }),
+    );
+    expect(record.structuredOutput).toEqual({ schema: { 'model-default': 'enforced' } });
+  });
+
+  it('the schema step sends the largest stage schema plus a required marker the prompt never mentions', async () => {
+    const { transport, calls } = fakeTransport(obedient);
     await runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport));
     const probe = calls[1];
     expect(probe.structuredOutput.mode).toBe('schema');
@@ -1149,63 +1473,108 @@ describe('runModelTest (#3084)', () => {
     expect(promptText).not.toContain('mk-fixed');
   });
 
-  it('configured mode json → a json check recorded accepted', async () => {
+  it('configured mode json → a json step recorded accepted', async () => {
     const { transport, calls } = fakeTransport(() => ok('{"ok":true}'));
     const record = await runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport, { configuredMode: 'json' }));
     expect(calls.map((c) => c.structuredOutput.mode)).toEqual(['off', 'json']);
-    expect(record.structuredOutput).toEqual({ json: { configured: 'accepted' } });
+    expect(record.structuredOutput).toEqual({ json: { 'model-default': 'accepted' } });
   });
 
   it("scope 'all' tests every mode, and the request count equals plannedTestRequestCount for both scopes", async () => {
     for (const scope of ['configured', 'all'] as const) {
-      const { transport, calls } = fakeTransport((req) => ok(`{"${MARKER_KEY}":"${markerOf(req) ?? ''}","ok":true}`));
+      const { transport, calls } = fakeTransport(obedient);
       const d = deps(transport);
       const record = await runModelTest({ modelId: 'm', scope }, d);
       expect(calls).toHaveLength(plannedTestRequestCount({ modelId: 'm', scope }, d));
       if (scope === 'all') {
-        // off-mode control, then schema and json; the off check sends nothing
         expect(calls.map((c) => c.structuredOutput.mode)).toEqual(['off', 'schema', 'json']);
         expect(record.structuredOutput).toEqual({
-          schema: { configured: 'enforced' },
-          json: { configured: 'accepted' },
-          off: { configured: 'accepted' },
+          schema: { 'model-default': 'enforced' },
+          json: { 'model-default': 'accepted' },
+          off: { 'model-default': 'accepted' },
         });
       }
     }
   });
 
-  it('a length finish on a schema or json probe is inconclusive, not ignored or accepted', async () => {
+  it('a length or blocked finish on a mode step is inconclusive, not ignored or accepted', async () => {
     for (const configuredMode of ['schema', 'json'] as const) {
-      const { transport } = fakeTransport((_req, n) =>
-        n === 1 ? ok('{"ok":true}') : { text: '{"char', reasoningSeen: true, finish: 'length', receivedBytes: 6 },
-      );
-      await expect(runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport, { configuredMode }))).rejects.toBeInstanceOf(
-        ModelTestInconclusiveError,
-      );
+      for (const finish of ['length', 'blocked'] as const) {
+        const { transport } = fakeTransport((_req, n) =>
+          n === 1 ? ok('{"ok":true}') : { text: '{"char', reasoningSeen: true, finish, receivedBytes: 6 },
+        );
+        await expect(runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport, { configuredMode }))).rejects.toBeInstanceOf(
+          ModelTestInconclusiveError,
+        );
+      }
     }
   });
 
-  it('a non-400 failure after a good control propagates (no record is produced)', async () => {
+  it('a 5xx after a good control is inconclusive and produces no record', async () => {
     const { transport } = fakeTransport((_req, n) => {
       if (n === 1) return ok('{"ok":true}');
       throw new AnalyzerHttpError('openai', 503, 'loading model', 'HTTP 503');
     });
-    await expect(runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport))).rejects.toBeInstanceOf(AnalyzerHttpError);
+    await expect(runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport))).rejects.toBeInstanceOf(ModelTestInconclusiveError);
   });
 
-  it('control failure text passes through redact and is capped at 500 chars', async () => {
-    const { transport } = fakeTransport(() => {
-      throw new AnalyzerHttpError('openai', 401, 'bad key sk-secret-123', `HTTP 401 bad key sk-secret-123 ${'x'.repeat(900)}`);
+  it('an AnalyzerTransportError is a request failure, never an unreachable server: inconclusive on a mode step, a failed control on step 1, no retry (P22)', async () => {
+    /* 3b's rule 7 shape, with a connect-phase causeCode: nothing here may read that code as "unreachable". */
+    const transportError = () =>
+      new AnalyzerTransportError(
+        'openai',
+        'qwen3-30b',
+        'Endpoint qwen3-30b request failed before a response (ECONNREFUSED) (APIConnectionError <- TypeError).',
+        'ECONNREFUSED',
+      );
+
+    const onStep = fakeTransport((_req, n) => {
+      if (n === 1) return ok('{"ok":true}');
+      throw transportError();
     });
-    const record = await runModelTest(
-      { modelId: 'm', scope: 'configured' },
-      deps(transport, { redact: (t) => t.replaceAll('sk-secret-123', '[redacted]') }),
+    const stepErr = await runModelTest({ modelId: 'openai:lab::qwen3-30b', scope: 'configured' }, deps(onStep.transport)).catch((e: unknown) => e);
+    expect(stepErr).toBeInstanceOf(ModelTestInconclusiveError);
+    expect((stepErr as Error).message).toContain('Endpoint qwen3-30b request failed (APIConnectionError <- TypeError).');
+    expect((stepErr as Error).message).not.toMatch(/unreachable|could not be reached/i);
+    expect(onStep.calls).toHaveLength(2);
+
+    const onControl = fakeTransport(() => {
+      throw transportError();
+    });
+    const controlErr = await runModelTest({ modelId: 'openai:lab::qwen3-30b', scope: 'all' }, deps(onControl.transport)).catch((e: unknown) => e);
+    expect(controlErr).toBeInstanceOf(ModelTestControlFailedError);
+    expect((controlErr as Error).message).toContain('Endpoint qwen3-30b request failed (APIConnectionError <- TypeError).');
+    expect((controlErr as Error).message).not.toMatch(/unreachable|could not be reached/i);
+    expect(onControl.calls).toHaveLength(1);
+  });
+
+  it('every request carries the abort signal the route passes', async () => {
+    const controller = new AbortController();
+    const { transport, calls } = fakeTransport(obedient);
+    await runModelTest({ modelId: 'm', scope: 'all' }, deps(transport, { signal: controller.signal }));
+    expect(calls).toHaveLength(3);
+    expect(calls.every((c) => c.signal === controller.signal)).toBe(true);
+  });
+
+  it('prepare() receives the route abort signal, so a client that leaves releases a stalled warm-up (P26)', async () => {
+    const controller = new AbortController();
+    const prepare = vi.fn(async (_signal?: AbortSignal) => {});
+    const { transport } = fakeTransport(obedient, { prepare });
+    await runModelTest({ modelId: 'm', scope: 'configured' }, deps(transport, { signal: controller.signal }));
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(prepare).toHaveBeenCalledWith(controller.signal);
+  });
+
+  it('a client abort stops the ladder: no further step is sent', async () => {
+    const controller = new AbortController();
+    const { transport, calls } = fakeTransport((req) => {
+      controller.abort();
+      return obedient(req);
+    });
+    await expect(runModelTest({ modelId: 'm', scope: 'all' }, deps(transport, { signal: controller.signal }))).rejects.toBeInstanceOf(
+      AnalysisAbortedError,
     );
-    expect(record.control.ok).toBe(false);
-    const error = record.control.ok ? '' : record.control.error;
-    expect(error).toContain('[redacted]');
-    expect(error.length).toBeLessThanOrEqual(500);
-    expect(JSON.stringify(record)).not.toContain('sk-secret-123');
+    expect(calls).toHaveLength(1);
   });
 });
 ```
@@ -1214,84 +1583,116 @@ describe('runModelTest (#3084)', () => {
 Run: `npm --prefix server run test -- src/analyzer/capabilities.run-model-test.test.ts`
 Expected: FAIL — `TypeError: runModelTest is not a function`.
 
-- [ ] **Step 3: Implement** — in `server/src/analyzer/capabilities.ts` change the imports to `import type { ChatTransport, StructuredOutputMode, TransportRequest, TransportResult } from './runner/transport.js';` and `import { AnalysisAbortedError, AnalyzerCapabilityRejectedError, AnalyzerHttpError } from './errors.js';`, then append:
+- [ ] **Step 3: Implement** — in `server/src/analyzer/capabilities.ts` change the imports to `import type { ChatTransport, StructuredOutputMode, TransportRequest, TransportResult } from './runner/transport.js';`, `import { AnalysisAbortedError, AnalyzerCapabilityRejectedError, AnalyzerHttpError, type TransportKind } from './errors.js';` and add `import { estimateInputTokens } from './runner/prompt.js';` and `import { namesContextOrTokenLimit } from './limit-400-patterns.js';` (the 3b leaf; do not define `LIMIT_400_PATTERNS` or `namesContextOrTokenLimit` in `capabilities.ts`). Then append:
 
 ```ts
+/** The control request failed, so nothing could be attributed. Nothing is saved; an
+    earlier record stays (spec §2). */
+export class ModelTestControlFailedError extends Error {
+  constructor(
+    readonly modelId: string,
+    detail: string,
+  ) {
+    super(`The control request to ${modelId} failed, so nothing could be tested: ${detail} Nothing was recorded; any earlier test result is kept.`);
+    this.name = 'ModelTestControlFailedError';
+  }
+}
+
+/** A step's outcome cannot be attributed to the field it changed. Nothing is saved. */
 export class ModelTestInconclusiveError extends Error {
   constructor(
     readonly modelId: string,
-    readonly mode: StructuredOutputMode,
+    readonly step: StructuredOutputMode,
     detail: string,
   ) {
-    super(`The ${mode} check for ${modelId} was inconclusive (${detail}). Nothing was recorded; run the test again.`);
+    super(`The ${step} check for ${modelId} was inconclusive (${detail}). Nothing was recorded; any earlier test result is kept. Run the test again.`);
     this.name = 'ModelTestInconclusiveError';
   }
 }
 
+/* P7 — a 400 whose provider text names a context, token or length limit is about the request's
+   size, not about the field the step changed, so it is inconclusive. The table and
+   namesContextOrTokenLimit live in the leaf ./limit-400-patterns.ts (3b Task 3b.1), shared with
+   the failure taxonomy's max-output hint (P24); add rows there, never here. */
+
 const PROBE_SYSTEM = 'You are a JSON generator. Output only JSON.';
-const CONTROL_PROMPT = 'Reply with exactly this JSON object and nothing else: {"ok": true}';
-const PROBE_PROMPT =
-  'Return one JSON object that satisfies the response format you were given. Use empty arrays, zeros and short placeholder strings wherever a value is required.';
-const CONTROL_MAX_OUTPUT_TOKENS = 256;
-const PROBE_MAX_OUTPUT_TOKENS = 4096;
+/** P7: the one prompt every step sends. It names no key, so only an enforced schema yields the marker. */
+export const PROBE_PROMPT =
+  'Return one JSON object. If you were given a response format, satisfy it; otherwise return {"ok": true}. Use empty arrays, zeros and short placeholder strings wherever a value is required.';
+
+type ProbeFormat = TransportRequest['structuredOutput'];
+
+/** P7: the one output cap every step uses — the model's resolved Auto cap clamped to the
+    context minus the largest step's estimated input. */
+export function probeOutputCap(limits: { contextTokens: number; maxOutputTokens: number | null }, estimatedInputTokens: number): number {
+  const room = Math.max(1, limits.contextTokens - estimatedInputTokens);
+  return limits.maxOutputTokens !== null && limits.maxOutputTokens > 0 ? Math.min(limits.maxOutputTokens, room) : room;
+}
+
+function estimateProbeInput(format: ProbeFormat): number {
+  /* An enforced schema is input on every provider that enforces it: charge its JSON as prompt text. */
+  const formatText = format.mode === 'schema' ? `\n${JSON.stringify(format.schema)}` : '';
+  return estimateInputTokens(PROBE_SYSTEM, [{ role: 'user', parts: [{ text: `${PROBE_PROMPT}${formatText}` }] }]);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new AnalysisAbortedError('Model test cancelled: the client left.');
+}
 
 function isHttp400(err: unknown): boolean {
   if (err instanceof AnalyzerHttpError) return err.httpStatus === 400;
   return (err as { status?: unknown } | null)?.status === 400; // @google/genai ApiError
 }
 
-function sendProbe(
-  transport: ChatTransport,
-  structuredOutput: TransportRequest['structuredOutput'],
-  prompt: string,
-  maxOutputTokens: number,
-): Promise<TransportResult> {
-  const approxChars = PROBE_SYSTEM.length + prompt.length + JSON.stringify(structuredOutput).length;
-  return transport.send({
+/** The provider's own words: the error message plus, for a transport HTTP error, its body excerpt. */
+function providerText(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return err instanceof AnalyzerHttpError ? `${message} ${err.bodyExcerpt}` : message;
+}
+
+function sendStep(deps: ModelTestDeps, format: ProbeFormat, maxOutputTokens: number): Promise<TransportResult> {
+  throwIfAborted(deps.signal);
+  return deps.transport.send({
     system: PROBE_SYSTEM,
-    messages: [{ role: 'user', content: prompt }],
-    structuredOutput,
+    messages: [{ role: 'user', content: PROBE_PROMPT }],
+    structuredOutput: format,
     temperature: 0,
     maxOutputTokens,
-    estimatedInputTokens: Math.ceil(approxChars / 4) + 50,
+    estimatedInputTokens: estimateProbeInput(format),
+    signal: deps.signal,
     call: {},
   });
 }
 
-/** P7: only a `stop` finish is evidence. A `length` or `blocked` finish is inconclusive. */
-function requireStop(result: TransportResult, modelId: string, mode: StructuredOutputMode): TransportResult {
-  if (result.finish !== 'stop') throw new ModelTestInconclusiveError(modelId, mode, `finish=${result.finish}`);
-  return result;
+function formatFor(mode: Exclude<StructuredOutputMode, 'off'>, marker: string, deps: ModelTestDeps): ProbeFormat {
+  if (mode === 'json') return { mode: 'json' };
+  const largest = largestStageSchema();
+  return { mode: 'schema', name: `castwright_probe_${largest.name}`, schema: deps.adaptSchema(withMarker(largest.schema, marker)).schema };
 }
 
-async function checkMode(modelId: string, mode: StructuredOutputMode, deps: ModelTestDeps): Promise<ProbeOutcome> {
-  /* The control request already sent exactly this request (no structured output) and it
-     succeeded, so an `off` check has nothing left to learn and sends nothing. */
-  if (mode === 'off') return 'accepted';
+async function modeStep(
+  modelId: string,
+  mode: Exclude<StructuredOutputMode, 'off'>,
+  format: ProbeFormat,
+  marker: string,
+  cap: number,
+  deps: ModelTestDeps,
+  redact: (text: string) => string,
+): Promise<ProbeOutcome> {
+  let result: TransportResult;
   try {
-    if (mode === 'schema') {
-      const marker = (deps.markerValue ?? newMarkerValue)();
-      const largest = largestStageSchema();
-      const adapted = deps.adaptSchema(withMarker(largest.schema, marker));
-      const result = requireStop(
-        await sendProbe(
-          deps.transport,
-          { mode: 'schema', name: `castwright_probe_${largest.name}`, schema: adapted.schema },
-          PROBE_PROMPT,
-          PROBE_MAX_OUTPUT_TOKENS,
-        ),
-        modelId,
-        mode,
-      );
-      return classifyMarkerProbe(result.text, marker);
-    }
-    /* `json` is probed like any other mode (never used for the control: LM Studio 400s it). */
-    requireStop(await sendProbe(deps.transport, { mode: 'json' }, CONTROL_PROMPT, CONTROL_MAX_OUTPUT_TOKENS), modelId, mode);
-    return 'accepted';
+    result = await sendStep(deps, format, cap);
   } catch (err) {
-    if (isHttp400(err)) return 'rejected';
-    throw err;
+    if (err instanceof AnalysisAbortedError) throw err;
+    if (isHttp400(err)) {
+      if (!namesContextOrTokenLimit(providerText(err))) return 'rejected';
+      throw new ModelTestInconclusiveError(modelId, mode, 'the provider refused the request size, not the mode');
+    }
+    throw new ModelTestInconclusiveError(modelId, mode, redact(err instanceof Error ? err.message : String(err)).slice(0, 300));
   }
+  /* Only a `stop` finish is evidence: a `length` or `blocked` finish says nothing about the mode. */
+  if (result.finish !== 'stop') throw new ModelTestInconclusiveError(modelId, mode, `finish=${result.finish}`);
+  return mode === 'schema' ? classifyMarkerProbe(result.text, marker) : 'accepted';
 }
 
 export async function runModelTest(
@@ -1299,45 +1700,72 @@ export async function runModelTest(
   deps: ModelTestDeps,
 ): Promise<ModelCapabilityRecord> {
   const redact = deps.redact ?? ((t: string) => t);
-  const base = {
-    serverUrl: deps.serverUrl,
-    testedAt: (deps.now ?? (() => new Date()))().toISOString(),
-    reasoning: {},
-  };
+  const testedAt = (deps.now ?? (() => new Date()))().toISOString();
+  /* P7: a record is keyed by the level its requests actually sent. */
+  const level = defaultReasoningKey(deps.transport.kind);
+  const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
+  const marker = (deps.markerValue ?? newMarkerValue)();
+  const control: ProbeFormat = { mode: 'off' };
+  const stepFormats = new Map<StructuredOutputMode, ProbeFormat>(
+    modes.filter((m): m is Exclude<StructuredOutputMode, 'off'> => m !== 'off').map((m) => [m, formatFor(m, marker, deps)]),
+  );
+
+  throwIfAborted(deps.signal);
+  await deps.transport.prepare?.(deps.signal); // P15: served limits are warm before the cap is read; P26: leaving releases the warm-up
+  const largestInput = Math.max(estimateProbeInput(control), ...[...stepFormats.values()].map(estimateProbeInput));
+  const cap = probeOutputCap(deps.probeLimits(), largestInput);
+
+  /* Step 1 — control: `off` mode at the engine's default level. Any finish passes. */
   try {
-    /* Control: no structured output (P7). `json` would 400 on LM Studio and fail every test there. */
-    await sendProbe(deps.transport, { mode: 'off' }, CONTROL_PROMPT, CONTROL_MAX_OUTPUT_TOKENS);
+    await sendStep(deps, control, cap);
   } catch (err) {
     if (err instanceof AnalysisAbortedError) throw err;
-    const text = err instanceof Error ? err.message : String(err);
-    return { ...base, control: { ok: false, error: redact(text).slice(0, 500) }, structuredOutput: {} };
+    throw new ModelTestControlFailedError(input.modelId, redact(err instanceof Error ? err.message : String(err)).slice(0, 500));
   }
-  const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
+
+  /* Step 2 — WAVE 5 (Task 5a) INSERTS THE LEVEL STEP HERE: `off` mode at the configured
+     reasoning level, differing from the control only in that level. It records
+     `reasoning[configuredLevel]`, skips step 3 when that level is rejected, and changes
+     `level` below to the configured level. W3 sends no reasoning field, so the control's
+     level is the only level there is. */
+
+  /* Step 3 — one mode step per tested mode. An `off` step is the control, already sent. */
   const structuredOutput: ModelCapabilityRecord['structuredOutput'] = {};
   for (const mode of modes) {
-    for (const level of deps.offeredLevels) {
-      const outcome = await checkMode(input.modelId, mode, deps);
-      structuredOutput[mode] = { ...(structuredOutput[mode] ?? {}), [level]: outcome };
-    }
+    const format = stepFormats.get(mode);
+    structuredOutput[mode] = {
+      [level]: format && mode !== 'off' ? await modeStep(input.modelId, mode, format, marker, cap, deps, redact) : 'accepted',
+    };
   }
-  return { ...base, control: { ok: true }, structuredOutput };
+  /* A3: stamp the installed build, so a later `ollama pull` discards this record rather than
+     letting a stale verdict refuse runs. Best-effort: no digest, no stamp. */
+  const digest = deps.modelDigest ? await deps.modelDigest().catch(() => undefined) : undefined;
+  return { serverUrl: deps.serverUrl, testedAt, control: { ok: true }, structuredOutput, reasoning: {}, ...(digest ? { digest } : {}) };
 }
 ```
 
 - [ ] **Step 4: Run and confirm it passes**  Run: `npm --prefix server run test -- src/analyzer/capabilities.run-model-test.test.ts src/analyzer/capabilities.test.ts`  Expected: PASS.
 
 - [ ] **Step 5: Mutation proof**
-1. In `runModelTest`'s control `catch`, replace the `return { …control: { ok: false … } }` with `throw err` → red: "a failing control request records the test as failed…". Restore.
-2. In `checkMode`, delete `if (isHttp400(err)) return 'rejected';` → red: "a 400 on the schema check after a good control → rejected", "a Gemini ApiError-shaped status 400…". Restore.
-3. Replace `withMarker(largest.schema, marker)` with `largest.schema` → red: "marker present in the output → enforced", "the schema probe sends the largest stage schema plus a required marker…". Restore.
-4. In `runModelTest`'s control call change `{ mode: 'off' }` to `{ mode: 'json' }` → red: "a failing control request records the test as failed…" (`calls[0].structuredOutput`) and "the control request sends no structured output, so a server that rejects json mode still passes it (LM Studio)" (the control fails, so nothing is `rejected`). Restore.
-5. In `checkMode` delete `if (mode === 'off') return 'accepted';` → red: "configured mode off sends only the control request and records it accepted" and "scope 'all' tests every mode…" (one request more than `plannedTestRequestCount`). Restore.
-6. In `checkMode` replace `requireStop(await sendProbe(deps.transport, { mode: 'json' }, …), modelId, mode);` with `await sendProbe(deps.transport, { mode: 'json' }, CONTROL_PROMPT, CONTROL_MAX_OUTPUT_TOKENS);` → red: "a length finish on a schema or json probe is inconclusive, not ignored or accepted" (the json pass resolves `accepted`). Restore.
+1. `probeOutputCap`: return `limits.maxOutputTokens ?? room` (no clamp) → red: "a small-context endpoint whose oversized served cap would 400 does not record rejected" (the control 400s on size), "probeOutputCap clamps a cap…". Restore.
+2. `modeStep`: pass `256` instead of `cap` to `sendStep` → red: "sends the control (off) then the configured mode, with the same prompt and the same cap…", "a thinking-style model that reasons before answering records a verdict…". Restore.
+3. `modeStep`: replace `if (!namesContextOrTokenLimit(providerText(err))) return 'rejected';` with `return 'rejected';` → red: every "a 400 naming a size limit is inconclusive, not rejected (…)" row. Restore.
+3a. `runModelTest`: drop `...(digest ? { digest } : {})` from the returned record → red: "A3 — stamps the digest modelDigest resolves…" (first assertion). Restore. Then drop `.catch(() => undefined)` → red: the same case's throw assertion (the Test rejects). Restore.
+4. `providerText`: return only `message` → red: the `http400(row.example)` half of those rows, since the message is `HTTP 400` and the provider text is in `bodyExcerpt`. Restore.
+5. `runModelTest` control `catch`: replace the `throw new ModelTestControlFailedError(…)` with `return { serverUrl: deps.serverUrl, testedAt, control: { ok: false, error: String(err) }, structuredOutput: {}, reasoning: {} };` → red: "a failing control throws ModelTestControlFailedError…", "control failure text passes through redact…". Restore.
+6. `sendStep`: delete `throwIfAborted(deps.signal);` → red: "a client abort stops the ladder…". Restore. Then delete `signal: deps.signal,` → red: "every request carries the abort signal the route passes". Restore.
+7. `modeStep`: delete the `if (result.finish !== 'stop')` line → red: "a length or blocked finish on a mode step is inconclusive…". Restore.
+8. `runModelTest`: drop the `.filter(…)` so an `off` mode gets a format too, and drop `&& mode !== 'off'` → red: "configured mode off sends only the control request…", "scope 'all' tests every mode…". Restore.
+9. `runModelTest`: delete `await deps.transport.prepare?.(deps.signal);` → red: "prepare() runs before the cap is read…". Restore.
+10. `runModelTest`: replace `defaultReasoningKey(deps.transport.kind)` with `'configured'` → red: "files the record under the level actually sent…" and every record assertion. Restore.
+11. `runModelTest`: change `prepare?.(deps.signal)` to `prepare?.()` → red: "prepare() receives the route abort signal, so a client that leaves releases a stalled warm-up (P26)". Restore.
+12. `modeStep`'s catch: add `AnalyzerTransportError` to the `./errors.js` import and replace `if (err instanceof AnalysisAbortedError) throw err;` with `if (err instanceof AnalysisAbortedError || err instanceof AnalyzerTransportError) throw err;` → red: "an AnalyzerTransportError is a request failure, never an unreachable server…" (received `AnalyzerTransportError`, not `ModelTestInconclusiveError`). Restore. Make the same change in the control's catch → red: the same test's control half (received `AnalyzerTransportError`, not `ModelTestControlFailedError`). Restore both, and drop the import again.
+13. `modeStep`'s catch: before the final `throw new ModelTestInconclusiveError(…)`, add `if ((err as { causeCode?: unknown }).causeCode === 'ECONNREFUSED') throw new ModelTestInconclusiveError(modelId, mode, 'the server is unreachable');`. That classifies a transport error by its cause code. → red: the same test (the message matches `/unreachable/` and lacks the transport's text). Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
 git add server/src/analyzer/capabilities.ts server/src/analyzer/capabilities.run-model-test.test.ts
-git commit -m "feat(server): runModelTest records what a model accepts and enforces"
+git commit -m "feat(server): runModelTest runs the capability ladder with one prompt and one resolved cap"
 ```
 
 ---
@@ -1346,14 +1774,29 @@ git commit -m "feat(server): runModelTest records what a model accepts and enfor
 **Files:**
 - Create: `server/src/analyzer/catalog/analyzer-catalog.ts`
 - Test: Create `server/src/analyzer/catalog/analyzer-catalog.test.ts`
+- Not modified: `server/src/analyzer/transports/allowlisted-fetch.ts` and `transports/openai-transport.ts`. 3b Task 3b.11 already defines `allowlistedFetch` in that leaf, and this task only imports it (see "Headers (P22)" below).
 
 **Interfaces:**
-- Consumes: `listGeminiModels(apiKey, { refresh })`, `GeminiModelInfo` (W2); `keyOriginMatches`, `AnalyzerEndpoint` (3b); `endpointModelId` (3a); `adaptSchemaFor*`, `structuredOutputLabel` (3b); Task 3c.3 (`capabilityRecordFor`, `STAGE_GRAMMAR_SCHEMAS`, `draft07`, `plannedTestRequestCount`, `ALL_STRUCTURED_OUTPUT_MODES`, `CONFIGURED_LEVEL_KEY`); `getResolvedOllamaUrl` (`user-settings.ts:597`), `getResolvedGeminiApiKey` (`:830`), `getCachedUserSettings` (`:385`); knobs `analyzer.ollama.structuredOutput`, `analyzer.gemini.structuredOutput` (3b).
-- Produces: `AnalyzerCatalog`, `AnalyzerCatalogGroup`, `AnalyzerCatalogEntry`, `CatalogDeps`, `DEFAULT_CATALOG_DEPS`, `CATALOG_TTL_MS`, `buildAnalyzerCatalog(opts, deps?)`, `servedLimitsFromModelEntry(entry)`, `getCachedCatalogLimits(modelId)`, `previewEndpointModels(input, deps?)`, `EndpointModelsPreview`, `_resetCatalogCacheForTest()`.
+- Consumes: `listGeminiModels(apiKey, { refresh })`, `GeminiModelInfo` (W2); `keyOriginMatches`, `AnalyzerEndpoint` (3b); `endpointModelId` (3a); `adaptSchemaFor*`, `structuredOutputLabel` (3b); Task 3c.3 (`capabilityRecordFor`, `STAGE_GRAMMAR_SCHEMAS`, `draft07`, `plannedTestRequestCount`, `ALL_STRUCTURED_OUTPUT_MODES`, `defaultReasoningKey`); `getResolvedOllamaUrl` (`user-settings.ts:791`), `getResolvedGeminiApiKey` (`:1027`), `getCachedUserSettings` (`:537`); knobs `analyzer.ollama.structuredOutput`, `analyzer.gemini.structuredOutput` (3b); `allowlistedFetch(apiKey: string | null, keyOrigin: string)` from the leaf `transports/allowlisted-fetch.ts` (3b Task 3b.11; never from `openai-transport.ts`); `redactKnownSecrets(text, secrets)` (3b Task 3b.1, `analyzer/redact.ts`); `knownAnalyzerSecrets()` (3b, `workspace/user-settings.ts`); `AnalyzerTransportError(transport, model, message, causeCode)` and `sanitizeCauseCode(value, secrets)` (3b Task 3b.1); `AnalyzerHttpError(transport, httpStatus, bodyExcerpt, message)`, `AnalysisAbortedError` (W1); the `openai` SDK's `APIError`, `APIConnectionError`, `APIConnectionTimeoutError`, `APIUserAbortError`.
+- Produces: `AnalyzerCatalog`, `AnalyzerCatalogGroup`, `AnalyzerCatalogEntry`, `CatalogDeps`, `DEFAULT_CATALOG_DEPS`, `CATALOG_TTL_MS`, `buildAnalyzerCatalog(opts, deps?)`, `servedLimitsFromModelEntry(entry)`, `previewEndpointModels(input, deps?)`, `EndpointModelsPreview`, `listingErrorMessage(err, secrets)`, `_resetCatalogCacheForTest()`. There is no run-time accessor for the catalog's cached limits. A run reads served limits warmed by its own transport's `prepare()`, cached per base URL with a TTL (Task 3c.9, P15), so its caps never depend on whether the catalog view was opened.
 
 Decisions encoded here:
 - **Served context only** (06-local-server-facts "Consequences"): `max_model_len` (vLLM) → `meta.n_ctx` (llama.cpp per-slot; llama-swap config) → `context_length` (OpenRouter; llama-swap config). Never `meta.n_ctx_train`, never LiteLLM `max_input_tokens`. Output limit only from OpenRouter `top_provider.max_completion_tokens` (LiteLLM's `max_output_tokens` is a catalogue value, not served).
-- **Key-origin rule:** a stored key whose origin no longer matches the base URL means no request at all; the group is listed as `failed` with a re-enter message. No stored key → the SDK is built with `apiKey: null`, which sends no `Authorization` header (`openai` 7.15 `client.js:391-393`); the test proves it over a real socket.
+- **Key-origin rule:** a stored key whose origin no longer matches the base URL means no request at all; the group is listed as `failed` with a re-enter message. No stored key → `allowlistedFetch(null, …)` sends no `Authorization` header; the test proves it over a real socket.
+- **Headers (P22):**
+  - The listing client is built the way 3b's transport builds its client: `fetch: allowlistedFetch(apiKey, new URL(baseUrl).origin)`, 3b's placeholder SDK key (so the SDK never reads `OPENAI_API_KEY`), `organization` / `project` null, logging off.
+  - The preview and the served-limits warm-up (Task 3c.9) list through this same `listEndpoint`, so no header from the host's `OPENAI_CUSTOM_HEADERS` reaches any of them.
+  - **Import from the leaf.** 3b already defines `allowlistedFetch` in the leaf `transports/allowlisted-fetch.ts`. The leaf imports only `undici`, and `openai-transport.ts` re-exports the function. This file imports it from the leaf, never from `openai-transport.ts`. Task 3c.9 makes `openai-transport.ts` import `endpoint-served-limits.ts`, which imports this file, so importing from the transport would close an import cycle that `npm run check:cycles` rejects. This task does not move, copy or redefine `allowlistedFetch`.
+- **No raw SDK errors (P22).** The catalog, the preview and the served-limits warm-up (Task 3c.9) all list through `listEndpoint`. Its catch rebuilds every error the SDK throws, the way 3b's rule 7 rebuilds the transport's. It never rethrows the SDK's error and never attaches it as `cause`: undici's header errors embed the header value (`Headers.append: "Bearer <key>" is an invalid header value.`), and a logged or inspected error prints its cause chain.
+  - `APIUserAbortError` → `AnalysisAbortedError('Endpoint model listing aborted.')`.
+  - An `APIError` carrying an HTTP status → `AnalyzerHttpError('openai', status, excerpt, excerpt)`. The excerpt is the SDK's message, redacted against the listing's key and `knownAnalyzerSecrets()`, then capped at 300 characters.
+  - Anything else → `AnalyzerTransportError('openai', 'models.list', 'Endpoint model listing failed (<code>).', causeCode)`. `APIConnectionTimeoutError` says `timed out` instead of `failed`. The message holds fixed text and only the code that `sanitizeCauseCode` kept: a transient code from the cause chain if one is there, otherwise the first code.
+- **Listing failures (P21, P22):**
+  - The catalog has no "unreachable" state. A reset or DNS hiccup gets a curated transient message asking for a retry: `ECONNRESET`, `UND_ERR_SOCKET` or `EAI_AGAIN` as a `code` anywhere in the cause chain, or as the `causeCode` of a rebuilt `AnalyzerTransportError`, which has no chain. An HTTP status failure keeps the provider's redacted words. Any other failure keeps the rebuilt error's own fixed text.
+  - **`AnalyzerTransportError` is never unreachable.** An endpoint group whose listing fails with one is `error`, with that text, or with the transient message when its `causeCode` is transient. No copy says "unreachable", even for a connect-phase `causeCode` such as `ECONNREFUSED`.
+  - Every message is redacted by `redactKnownSecrets` before it is capped at 300 characters.
+  - The catalog redacts against the Gemini key and every endpoint key in the settings this call read. The preview redacts against the typed or stored key plus `knownAnalyzerSecrets()`.
+  - The preview logs one `console.warn` line per failure, carrying only that curated message, never the error object.
 - **Group status** follows the master contract (`'ok' | 'fallback' | 'error'`) and spec §3 "Failure":
   - **Gemini:** no key → `fallback`, and no `models.list()` call. A failed listing → `fallback` with `error`. Neither carries models; the **frontend** overlays its curated Gemini list (`MODEL_OPTIONS` is a frontend constant).
   - **Ollama and endpoints:** a failed listing, or a stored key bound to another host → `error` with the message and no models. Ollama keeps plan 221's installed-only rule, so nothing is overlaid. Endpoint groups always appear, from saved settings.
@@ -1364,7 +1807,7 @@ Decisions encoded here:
 - **Cache:** raw listings (not entries) are cached 30 s per source key, failures included; `refresh` bypasses. Entries are rebuilt per call so a fresh Test record or a changed structured-output setting shows at once.
 - **`dropped`** for an entry in `schema` mode is the union of what that provider's adapter drops across the eight stage grammars.
 
-Keeps green: `catalog/gemini-catalog.test.ts` (W2), `capabilities.test.ts`.
+Keeps green: `catalog/gemini-catalog.test.ts` (W2), `capabilities.test.ts`. This task does not edit `transports/openai-transport.ts` or `transports/allowlisted-fetch.ts`, so 3b's transport suites are untouched.
 
 - [ ] **Step 1: Write the failing test** — create `server/src/analyzer/catalog/analyzer-catalog.test.ts`:
 
@@ -1372,13 +1815,17 @@ Keeps green: `catalog/gemini-catalog.test.ts` (W2), `capabilities.test.ts`.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { inspect } from 'node:util';
+import { readFileSync } from 'node:fs';
+import { AnalyzerHttpError, AnalyzerTransportError } from '../errors.js';
 import {
   buildAnalyzerCatalog,
   previewEndpointModels,
   servedLimitsFromModelEntry,
-  getCachedCatalogLimits,
+  listingErrorMessage,
   DEFAULT_CATALOG_DEPS,
   CATALOG_TTL_MS,
+  TEST_REQUEST_MAX_ATTEMPTS,
   _resetCatalogCacheForTest,
   type CatalogDeps,
 } from './analyzer-catalog.js';
@@ -1403,7 +1850,7 @@ function deps(over: Partial<CatalogDeps> = {}): CatalogDeps {
     settings: () => settings(),
     ollamaUrl: () => 'http://localhost:11434',
     geminiApiKey: () => null,
-    listOllamaTags: vi.fn(async () => ['qwen3.5:4b']),
+    listOllamaTags: vi.fn(async () => [{ name: 'qwen3.5:4b' }]),
     listGemini: vi.fn(async () => [{ id: 'gemini-3.6-flash', displayName: 'Gemini 3.6 Flash', inputTokenLimit: 1_048_576, outputTokenLimit: 65_536 }]),
     listEndpoint: vi.fn(async () => [{ id: 'qwen3-30b', object: 'model', meta: { n_ctx: 32768, n_ctx_train: 262144 } }]),
     now: () => (t += 1),
@@ -1442,7 +1889,18 @@ describe('buildAnalyzerCatalog', () => {
     expect(catalog.groups[0].models[0]).toMatchObject({ id: 'qwen3.5:4b', label: 'qwen3.5:4b' });
     const entry = catalog.groups[2].models[0];
     expect(entry).toMatchObject({ id: 'openai:lab::qwen3-30b', label: 'qwen3-30b', engine: 'openai', model: 'qwen3-30b', contextTokens: 32768 });
-    expect(entry.testPlan).toEqual({ configured: 2, all: 3 });
+    /* N6: `attempts` is the most attempts one Test request can take on that transport. */
+    expect(entry.testPlan).toEqual({ configured: 2, all: 3, attempts: 3 });
+    expect(catalog.groups[0].models[0].testPlan.attempts).toBe(1);
+  });
+
+  it('TEST_REQUEST_MAX_ATTEMPTS matches each transport's own retry budget (N6)', () => {
+    const source = (file: string) => readFileSync(new URL(`../transports/${file}`, import.meta.url), 'utf8');
+    expect(source('openai-transport.ts')).toContain(`maxAttempts: ${TEST_REQUEST_MAX_ATTEMPTS.openai},`);
+    expect(source('gemini-transport.ts')).toContain(`maxAttempts: ${TEST_REQUEST_MAX_ATTEMPTS.gemini},`);
+    /* Ollama's transport has no transport retry (W1 Task 1.9 moved chat() as is). */
+    expect(source('ollama-transport.ts')).not.toContain('withTransportRetry');
+    expect(TEST_REQUEST_MAX_ATTEMPTS.local).toBe(1);
   });
 
   it('lists Gemini with limits and display-name labels when a key is set', async () => {
@@ -1480,6 +1938,18 @@ describe('buildAnalyzerCatalog', () => {
     expect(d.listEndpoint).toHaveBeenCalledWith('http://127.0.0.1:8080/v1', 'sk-x');
   });
 
+  it('a failed endpoint listing that echoes the stored key is shown redacted (P22)', async () => {
+    const KEY = 'sk-lab-catalog-secret-01';
+    const d = deps({
+      settings: () => settings({ analyzerEndpointKeys: { lab: { origin: 'http://127.0.0.1:8080', key: KEY } } }),
+      listEndpoint: vi.fn(async () => { throw new Error(`401 Incorrect API key provided: ${KEY}`); }),
+    });
+    const group = (await buildAnalyzerCatalog({ refresh: false }, d)).groups[2];
+    expect(group.status).toBe('error');
+    expect(group.error).toContain('[redacted]');
+    expect(group.error).not.toContain(KEY);
+  });
+
   it('a failed Ollama listing keeps the group, marked error, without models (installed-only)', async () => {
     const d = deps({ listOllamaTags: vi.fn(async () => { throw new Error('connect ECONNREFUSED'); }) });
     const catalog = await buildAnalyzerCatalog({ refresh: false }, d);
@@ -1506,7 +1976,7 @@ describe('buildAnalyzerCatalog', () => {
       serverUrl: 'http://127.0.0.1:8080/v1',
       testedAt: '2026-09-11T10:00:00.000Z',
       control: { ok: true as const },
-      structuredOutput: { schema: { configured: 'ignored' as const } },
+      structuredOutput: { schema: { 'model-default': 'ignored' as const } },
       reasoning: {},
     };
     const d = deps({ settings: () => settings({ analyzerCapabilitiesByModel: { 'openai:lab::qwen3-30b': rec } }) });
@@ -1525,11 +1995,34 @@ describe('buildAnalyzerCatalog', () => {
     expect((await buildAnalyzerCatalog({ refresh: false }, moved)).groups[2].models[0].capability).toBeUndefined();
   });
 
-  it('getCachedCatalogLimits reads the last listing without fetching', async () => {
-    const d = deps();
-    expect(getCachedCatalogLimits('openai:lab::qwen3-30b')).toBeUndefined();
-    await buildAnalyzerCatalog({ refresh: false }, d);
-    expect(getCachedCatalogLimits('openai:lab::qwen3-30b')).toEqual({ contextTokens: 32768 });
+  it('labels an Ollama entry from a record filed under off, the level Ollama sends (P7)', async () => {
+    const rec = {
+      serverUrl: 'http://localhost:11434',
+      testedAt: '2026-09-11T10:00:00.000Z',
+      control: { ok: true as const },
+      structuredOutput: { schema: { off: 'ignored' as const, 'model-default': 'enforced' as const } },
+      reasoning: {},
+    };
+    const d = deps({ settings: () => settings({ analyzerCapabilitiesByModel: { 'qwen3.5:4b': rec } }) });
+    const entry = (await buildAnalyzerCatalog({ refresh: false }, d)).groups[0].models[0];
+    expect(entry.structuredOutput.label).toBe('schema (not enforced)');
+  });
+
+  it('A3 — drops an Ollama Test record once the installed digest differs, and keeps it while it matches', async () => {
+    const rec = {
+      serverUrl: 'http://localhost:11434',
+      testedAt: '2026-09-11T10:00:00.000Z',
+      control: { ok: true as const },
+      structuredOutput: { schema: { off: 'rejected' as const } },
+      reasoning: {},
+      digest: 'sha256:old',
+    };
+    const withRec = () => settings({ analyzerCapabilitiesByModel: { 'qwen3.5:4b': rec } });
+    const repulled = deps({ settings: withRec, listOllamaTags: vi.fn(async () => [{ name: 'qwen3.5:4b', digest: 'sha256:new' }]) });
+    expect((await buildAnalyzerCatalog({ refresh: false }, repulled)).groups[0].models[0].capability).toBeUndefined();
+    _resetCatalogCacheForTest();
+    const same = deps({ settings: withRec, listOllamaTags: vi.fn(async () => [{ name: 'qwen3.5:4b', digest: 'sha256:old' }]) });
+    expect((await buildAnalyzerCatalog({ refresh: false }, same)).groups[0].models[0].capability).toEqual(rec);
   });
 });
 
@@ -1553,6 +2046,52 @@ describe('previewEndpointModels', () => {
     );
     expect(out).toMatchObject({ status: 'failed', models: [] });
     expect(out.error).toContain('401');
+  });
+
+  it('logs one line per failure, carrying only the redacted message, never the error object (P22)', async () => {
+    const KEY = 'sk-preview-log-secret-0001';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await previewEndpointModels(
+        { baseUrl: 'http://127.0.0.1:8080/v1', apiKey: KEY },
+        { listEndpoint: async () => { throw new Error(`401 bad key ${KEY}`); } },
+      );
+      const lines = warn.mock.calls.map((args) => args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: 8 }))).join(' '));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('preview listing failed');
+      expect(lines[0]).toContain('[redacted]');
+      expect(lines[0]).not.toContain(KEY);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('listingErrorMessage (P21, P22)', () => {
+  it.each(['ECONNRESET', 'UND_ERR_SOCKET', 'EAI_AGAIN'])('%s anywhere in the cause chain is a transient failure, never unreachable', (code) => {
+    const err = Object.assign(new Error('Connection error.'), {
+      cause: Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('socket'), { code }) }),
+    });
+    const message = listingErrorMessage(err, []);
+    expect(message).toMatch(/connection dropped/i);
+    expect(message).toContain(code);
+    expect(message).not.toMatch(/unreachable|could not be reached/i);
+  });
+
+  it('any other failure keeps its redacted message, capped at 300 characters', () => {
+    const KEY = 'sk-listing-secret-0001';
+    const message = listingErrorMessage(new Error(`401 bad key ${KEY} ${'x'.repeat(400)}`), [KEY]);
+    expect(message.startsWith('401 bad key [redacted]')).toBe(true);
+    expect(message).toHaveLength(300);
+  });
+
+  it('a rebuilt AnalyzerTransportError reads its transient code from causeCode; any other keeps its own text, never unreachable (P21, P22)', () => {
+    const dropped = new AnalyzerTransportError('openai', 'models.list', 'Endpoint model listing failed (UND_ERR_SOCKET).', 'UND_ERR_SOCKET');
+    expect(listingErrorMessage(dropped, [])).toMatch(/connection dropped/i);
+    expect(listingErrorMessage(dropped, [])).toContain('UND_ERR_SOCKET');
+    const refused = new AnalyzerTransportError('openai', 'models.list', 'Endpoint model listing failed (ECONNREFUSED).', 'ECONNREFUSED');
+    expect(listingErrorMessage(refused, [])).toBe('Endpoint model listing failed (ECONNREFUSED).');
+    expect(listingErrorMessage(refused, [])).not.toMatch(/unreachable|could not be reached/i);
   });
 });
 
@@ -1591,6 +2130,87 @@ describe('DEFAULT_CATALOG_DEPS.listEndpoint over a real socket', () => {
     await DEFAULT_CATALOG_DEPS.listEndpoint(`http://127.0.0.1:${port}/v1`, 'sk-local');
     expect(seenAuth).toBe('Bearer sk-local');
   });
+
+  it('OPENAI_CUSTOM_HEADERS in the host env never reaches the listing; the endpoint key does (P22)', async () => {
+    const seen: Array<Record<string, string | string[] | undefined>> = [];
+    server = createServer((req, res) => {
+      seen.push(req.headers);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [] }));
+    });
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+    const { port } = server.address() as AddressInfo;
+    /* The SDK merges this env into every request after its own auth header (client.mjs:240-249). */
+    process.env.OPENAI_CUSTOM_HEADERS = 'Authorization: Bearer stolen\nX-Leak: 1\nX-Stainless-Lang: evil';
+    try {
+      await DEFAULT_CATALOG_DEPS.listEndpoint(`http://127.0.0.1:${port}/v1`, 'sk-local');
+    } finally {
+      delete process.env.OPENAI_CUSTOM_HEADERS;
+    }
+    expect(seen).toHaveLength(1);
+    expect(seen[0].authorization).toBe('Bearer sk-local');
+    expect(seen[0]['x-leak']).toBeUndefined();
+    /* P22: no x-stainless-* header at all, so the injected X-Stainless-Lang cannot ride along. */
+    expect(Object.keys(seen[0]).filter((name) => name.startsWith('x-stainless-'))).toEqual([]);
+  });
+
+  it('a connection the server drops is a transient listing failure, never unreachable (P21)', async () => {
+    server = createServer((req) => req.socket.destroy());
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+    const { port } = server.address() as AddressInfo;
+    const out = await previewEndpointModels({ baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: null });
+    expect(out.status).toBe('failed');
+    expect(out.error).toMatch(/connection dropped/i);
+    expect(out.error).not.toMatch(/unreachable|could not be reached/i);
+  });
+
+  it('a refused listing whose body echoes the key is rebuilt as AnalyzerHttpError: redacted, no cause, nothing in inspect() (P22)', async () => {
+    const KEY = 'sk-listing-echo-secret-0001';
+    /* The endpoint echoes the Authorization header it received, as some proxies do on a 401. */
+    server = createServer((req, res) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: `Incorrect API key provided: ${req.headers.authorization ?? 'none'}`, type: 'invalid_request_error' } }));
+    });
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+    const { port } = server.address() as AddressInfo;
+    const err = await DEFAULT_CATALOG_DEPS.listEndpoint(`http://127.0.0.1:${port}/v1`, KEY).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AnalyzerHttpError);
+    expect((err as AnalyzerHttpError).httpStatus).toBe(401);
+    /* '[redacted]' proves the key reached the endpoint and came back, so the checks below cannot pass vacuously. */
+    expect((err as Error).message).toContain('[redacted]');
+    expect((err as { cause?: unknown }).cause).toBeUndefined();
+    for (const s of [(err as Error).message, (err as Error).stack ?? '', inspect(err, { depth: 8 })]) {
+      expect(s).not.toContain(KEY);
+    }
+  });
+
+  it('a key undici refuses as a header value is rebuilt as AnalyzerTransportError: no cause, nothing in inspect() (P22)', async () => {
+    const KEY = 'sk-listing-inject-secret-0001';
+    let requests = 0;
+    server = createServer((_req, res) => {
+      requests += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [] }));
+    });
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+    const { port } = server.address() as AddressInfo;
+    /* undici throws `Headers.append: "Bearer <key>" is an invalid header value.` before dispatching;
+       the SDK wraps it as APIConnectionError's cause, so the raw error's chain carries the key. */
+    const err = await DEFAULT_CATALOG_DEPS.listEndpoint(`http://127.0.0.1:${port}/v1`, `${KEY}\nX-Injected: 1`).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(requests).toBe(0);
+    expect(err).toBeInstanceOf(AnalyzerTransportError);
+    expect((err as Error).message).toMatch(/^Endpoint model listing failed/);
+    expect((err as { cause?: unknown }).cause).toBeUndefined();
+    for (const s of [(err as Error).message, (err as Error).stack ?? '', inspect(err, { depth: 8 })]) {
+      expect(s).not.toContain(KEY);
+    }
+  });
 });
 ```
 
@@ -1605,23 +2225,28 @@ Expected: FAIL — `Failed to load url ./analyzer-catalog.js`.
    models.list() (only with a key), and each saved OpenAI-compatible endpoint's
    /v1/models through the openai SDK under the key-origin rule. Served context/output
    limits and the Test record ride on each entry; the frontend overlays curated labels. */
-import OpenAI from 'openai';
-import { Agent, fetch as undiciFetch } from 'undici';
+import OpenAI, { APIConnectionError, APIConnectionTimeoutError, APIError, APIUserAbortError } from 'openai';
+import { Agent } from 'undici';
 import { configValue } from '../../config/resolver.js';
+import { AnalysisAbortedError, AnalyzerHttpError, AnalyzerTransportError, sanitizeCauseCode } from '../errors.js';
 import {
   getCachedUserSettings,
   getResolvedGeminiApiKey,
   getResolvedOllamaUrl,
   type UserSettings,
 } from '../../workspace/user-settings.js';
+/* Known secrets come through 3b's leaf gate, never from user-settings.ts (import-cycle rule, A9). */
+import { knownAnalyzerSecrets } from '../known-secrets-gate.js';
+import { allowlistedFetch } from '../transports/allowlisted-fetch.js';
+import { redactKnownSecrets } from '../redact.js';
 import { keyOriginMatches, type AnalyzerEndpoint } from '../../workspace/analyzer-endpoints.js';
 import { endpointModelId } from '../model-id.js';
 import { listGeminiModels, type GeminiModelInfo } from './gemini-catalog.js';
 import {
   ALL_STRUCTURED_OUTPUT_MODES,
-  CONFIGURED_LEVEL_KEY,
   STAGE_GRAMMAR_SCHEMAS,
   capabilityRecordFor,
+  defaultReasoningKey,
   draft07,
   plannedTestRequestCount,
   type ModelCapabilityRecord,
@@ -1650,8 +2275,19 @@ export interface AnalyzerCatalogEntry {
   engine: 'local' | 'gemini' | 'openai';
   model: string;
   structuredOutput: { mode: StructuredOutputMode; dropped: string[]; label: string };
-  testPlan: { configured: number; all: number };
+  /** `attempts` (N6): the most attempts one Test request can take on this model's transport,
+      retries included, so the confirm dialog can state the maximum. */
+  testPlan: { configured: number; all: number; attempts: number };
 }
+
+/** N6 — each transport's retry budget for one request: `OpenAITransport` and `GeminiTransport`
+    call `withTransportRetry` with `maxAttempts: 3`; `OllamaTransport` does not retry. Pinned
+    against the transport sources by `TEST_REQUEST_MAX_ATTEMPTS matches each transport's own retry budget`. */
+export const TEST_REQUEST_MAX_ATTEMPTS: Readonly<Record<'local' | 'gemini' | 'openai', number>> = {
+  local: 1,
+  gemini: 3,
+  openai: 3,
+};
 
 export interface AnalyzerCatalogGroup {
   kind: CatalogGroupKind;
@@ -1672,7 +2308,8 @@ export interface CatalogDeps {
   settings(): UserSettings;
   ollamaUrl(): string;
   geminiApiKey(): string | null;
-  listOllamaTags(url: string): Promise<string[]>;
+  /** A3: each tag with its digest, so an entry drops a Test record for another build. */
+  listOllamaTags(url: string): Promise<Array<{ name: string; digest?: string }>>;
   listGemini(apiKey: string, refresh: boolean): Promise<GeminiModelInfo[]>;
   listEndpoint(baseUrl: string, apiKey: string | null): Promise<Array<Record<string, unknown>>>;
   now(): number;
@@ -1690,25 +2327,64 @@ const LISTING_DISPATCHER = new Agent({
   bodyTimeout: ENDPOINT_LIST_TIMEOUT_MS,
 });
 
-async function listOllamaTags(url: string): Promise<string[]> {
+async function listOllamaTags(url: string): Promise<Array<{ name: string; digest?: string }>> {
   const resp = await fetch(`${url}/api/tags`, { method: 'GET', signal: AbortSignal.timeout(OLLAMA_TAGS_TIMEOUT_MS) });
   if (!resp.ok) throw new Error(`Ollama returned ${resp.status} ${resp.statusText}`);
-  const body = (await resp.json()) as { models?: Array<{ name?: string; model?: string }> };
-  return (body.models ?? []).map((m) => m.name ?? m.model ?? '').filter(Boolean);
+  const body = (await resp.json()) as { models?: Array<{ name?: string; model?: string; digest?: string }> };
+  return (body.models ?? [])
+    .map((m) => ({ name: m.name ?? m.model ?? '', ...(typeof m.digest === 'string' && m.digest ? { digest: m.digest } : {}) }))
+    .filter((m) => m.name);
 }
 
 async function listEndpoint(baseUrl: string, apiKey: string | null): Promise<Array<Record<string, unknown>>> {
   const client = new OpenAI({
     baseURL: baseUrl,
-    apiKey, // null → no Authorization header (openai client.js:391-393)
+    /* As 3b's transport: a placeholder only, so the SDK never reads OPENAI_API_KEY.
+       allowlistedFetch drops the header the SDK builds from it and every host
+       OPENAI_CUSTOM_HEADERS header, and sends the real key on its own origin only;
+       a null key sends none (P22). */
+    apiKey: 'castwright-placeholder-key',
+    organization: null,
+    project: null,
     maxRetries: 0,
     timeout: ENDPOINT_LIST_TIMEOUT_MS,
-    fetch: undiciFetch as unknown as NonNullable<ConstructorParameters<typeof OpenAI>[0]>['fetch'],
+    logLevel: 'off',
+    fetch: allowlistedFetch(apiKey, new URL(baseUrl).origin) as unknown as NonNullable<ConstructorParameters<typeof OpenAI>[0]>['fetch'],
     fetchOptions: { dispatcher: LISTING_DISPATCHER } as unknown as RequestInit,
   });
   const out: Array<Record<string, unknown>> = [];
-  for await (const model of client.models.list()) out.push(model as unknown as Record<string, unknown>);
+  try {
+    for await (const model of client.models.list()) out.push(model as unknown as Record<string, unknown>);
+  } catch (err) {
+    throw rebuildListingError(err, apiKey);
+  }
   return out;
+}
+
+/* P22 — the SDK's errors never leave the listing client, as 3b's rule 7 does for the transport.
+   Nothing is rethrown and nothing is attached as `cause`: undici's header errors embed the header
+   value (`Headers.append: "Bearer <key>" is an invalid header value.`), and a logged or inspected
+   error prints its whole cause chain. An HTTP status keeps the provider's words, redacted before
+   they are capped; everything else carries fixed text and a sanitized code only. None of these is
+   AnalyzerUnreachableError: a listing is never "unreachable" (P21). The listing can only echo the
+   key it sent, so its key plus the saved analyzer secrets are enough to redact against. */
+function rebuildListingError(err: unknown, apiKey: string | null): Error {
+  const secrets = [...(apiKey === null ? [] : [apiKey]), ...knownAnalyzerSecrets()];
+  if (err instanceof APIUserAbortError) return new AnalysisAbortedError('Endpoint model listing aborted.');
+  if (err instanceof APIError && !(err instanceof APIConnectionError) && typeof err.status === 'number') {
+    const excerpt = redactKnownSecrets(err.message, secrets).slice(0, 300);
+    return new AnalyzerHttpError('openai', err.status, excerpt, excerpt);
+  }
+  const codes: string[] = [];
+  let cur: unknown = err;
+  for (let depth = 0; cur !== null && typeof cur === 'object' && depth <= 4; depth += 1) {
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === 'string') codes.push(code);
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  const causeCode = sanitizeCauseCode(codes.find((c) => TRANSIENT_LISTING_CODES.has(c)) ?? codes[0], secrets);
+  const outcome = err instanceof APIConnectionTimeoutError ? 'timed out' : 'failed';
+  return new AnalyzerTransportError('openai', 'models.list', `Endpoint model listing ${outcome}${causeCode ? ` (${causeCode})` : ''}.`, causeCode);
 }
 
 export const DEFAULT_CATALOG_DEPS: CatalogDeps = {
@@ -1744,6 +2420,8 @@ interface RawModel {
   displayName?: string;
   contextTokens?: number;
   maxOutputTokens?: number;
+  /** A3: Ollama only — the installed digest from /api/tags. */
+  digest?: string;
 }
 type Listing = { ok: true; models: RawModel[] } | { ok: false; error: string };
 
@@ -1753,32 +2431,43 @@ export function _resetCatalogCacheForTest(): void {
   listingCache.clear();
 }
 
-async function cachedListing(key: string, refresh: boolean, now: () => number, load: () => Promise<RawModel[]>): Promise<Listing> {
+/* P21: a reset or DNS hiccup is transient, never "unreachable" — the next view or Refresh lists
+   again. P22: any other message is redacted before it is capped, so the cut cannot leave half a key. */
+const TRANSIENT_LISTING_CODES: ReadonlySet<string> = new Set(['ECONNRESET', 'UND_ERR_SOCKET', 'EAI_AGAIN']);
+
+export function listingErrorMessage(err: unknown, secrets: ReadonlyArray<string | null | undefined>): string {
+  let cur: unknown = err;
+  for (let depth = 0; cur !== null && typeof cur === 'object' && depth <= 4; depth += 1) {
+    const { code, causeCode } = cur as { code?: unknown; causeCode?: unknown };
+    if (typeof code === 'string' && TRANSIENT_LISTING_CODES.has(code)) {
+      return `The connection dropped before the server answered (${code}). Try again.`;
+    }
+    /* listEndpoint's rebuilt AnalyzerTransportError carries its code here and has no cause chain (P22). */
+    if (typeof causeCode === 'string' && TRANSIENT_LISTING_CODES.has(causeCode)) {
+      return `The connection dropped before the server answered (${causeCode}). Try again.`;
+    }
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return redactKnownSecrets(err instanceof Error ? err.message : String(err), secrets).slice(0, 300);
+}
+
+async function cachedListing(
+  key: string,
+  refresh: boolean,
+  now: () => number,
+  secrets: readonly string[],
+  load: () => Promise<RawModel[]>,
+): Promise<Listing> {
   const hit = listingCache.get(key);
   if (!refresh && hit && now() - hit.at < CATALOG_TTL_MS) return hit.listing;
   let listing: Listing;
   try {
     listing = { ok: true, models: await load() };
   } catch (err) {
-    listing = { ok: false, error: (err instanceof Error ? err.message : String(err)).slice(0, 300) };
+    listing = { ok: false, error: listingErrorMessage(err, secrets) };
   }
   listingCache.set(key, { at: now(), listing });
   return listing;
-}
-
-/** Last known served limits for a model id, from any cached listing (TTL ignored). */
-export function getCachedCatalogLimits(modelId: string): { contextTokens?: number; maxOutputTokens?: number } | undefined {
-  for (const { listing } of listingCache.values()) {
-    if (!listing.ok) continue;
-    const hit = listing.models.find((m) => m.id === modelId);
-    if (hit) {
-      return {
-        ...(hit.contextTokens !== undefined ? { contextTokens: hit.contextTokens } : {}),
-        ...(hit.maxOutputTokens !== undefined ? { maxOutputTokens: hit.maxOutputTokens } : {}),
-      };
-    }
-  }
-  return undefined;
 }
 
 const droppedMemo = new Map<CatalogGroupKind, string[]>();
@@ -1794,15 +2483,17 @@ function droppedForKind(kind: CatalogGroupKind): string[] {
   return out;
 }
 
-const OFFERED = { offeredModes: ALL_STRUCTURED_OUTPUT_MODES, offeredLevels: [CONFIGURED_LEVEL_KEY] };
+const OFFERED = { offeredModes: ALL_STRUCTURED_OUTPUT_MODES };
 
 function toEntry(
   raw: RawModel,
   ctx: { kind: CatalogGroupKind; engine: AnalyzerCatalogEntry['engine']; mode: StructuredOutputMode; serverUrl: string; settings: UserSettings },
 ): AnalyzerCatalogEntry {
-  const capability = capabilityRecordFor(ctx.settings, raw.id, ctx.serverUrl);
+  const capability = capabilityRecordFor(ctx.settings, raw.id, ctx.serverUrl, raw.digest); // A3: another build's record is dropped
   const dropped = ctx.mode === 'schema' ? droppedForKind(ctx.kind) : [];
   const planDeps = { ...OFFERED, configuredMode: ctx.mode };
+  /* P7: label from the record filed under the level a run of this model sends. */
+  const level = defaultReasoningKey(ctx.kind === 'endpoint' ? 'openai' : ctx.kind);
   return {
     id: raw.id,
     label: raw.displayName ?? raw.model,
@@ -1811,19 +2502,20 @@ function toEntry(
     ...(capability ? { capability } : {}),
     engine: ctx.engine,
     model: raw.model,
-    structuredOutput: { mode: ctx.mode, dropped, label: structuredOutputLabel(ctx.mode, dropped, capability, CONFIGURED_LEVEL_KEY) },
+    structuredOutput: { mode: ctx.mode, dropped, label: structuredOutputLabel(ctx.mode, dropped, capability, level) },
     testPlan: {
       configured: plannedTestRequestCount({ modelId: raw.id, scope: 'configured' }, planDeps),
       all: plannedTestRequestCount({ modelId: raw.id, scope: 'all' }, planDeps),
+      attempts: TEST_REQUEST_MAX_ATTEMPTS[ctx.engine],
     },
   };
 }
 
-async function ollamaGroup(refresh: boolean, deps: CatalogDeps, settings: UserSettings): Promise<AnalyzerCatalogGroup> {
+async function ollamaGroup(refresh: boolean, deps: CatalogDeps, settings: UserSettings, secrets: readonly string[]): Promise<AnalyzerCatalogGroup> {
   const url = deps.ollamaUrl();
   const base = { kind: 'ollama' as const, id: 'ollama', label: 'Local Ollama' };
-  const listing = await cachedListing(`ollama:${url}`, refresh, deps.now, async () =>
-    (await deps.listOllamaTags(url)).map((name) => ({ id: name, model: name })),
+  const listing = await cachedListing(`ollama:${url}`, refresh, deps.now, secrets, async () =>
+    (await deps.listOllamaTags(url)).map((t) => ({ id: t.name, model: t.name, ...(t.digest ? { digest: t.digest } : {}) })),
   );
   /* Plan 221 installed-only: a failed /api/tags lists nothing, and nothing is overlaid. */
   if (!listing.ok) return { ...base, status: 'error', error: listing.error, models: [] };
@@ -1831,14 +2523,14 @@ async function ollamaGroup(refresh: boolean, deps: CatalogDeps, settings: UserSe
   return { ...base, status: 'ok', models: listing.models.map((m) => toEntry(m, { kind: 'ollama', engine: 'local', mode, serverUrl: url, settings })) };
 }
 
-async function geminiGroup(refresh: boolean, deps: CatalogDeps, settings: UserSettings): Promise<AnalyzerCatalogGroup> {
+async function geminiGroup(refresh: boolean, deps: CatalogDeps, settings: UserSettings, secrets: readonly string[]): Promise<AnalyzerCatalogGroup> {
   const base = { kind: 'gemini' as const, id: 'gemini', label: 'Gemini API' };
   const apiKey = deps.geminiApiKey();
   /* Spec §3: no key, or a failed listing, falls back to the curated list. The server has no
      curated list (it is the frontend's MODEL_OPTIONS), so the group carries no models and
      `fallback` tells the frontend to overlay it. */
   if (!apiKey) return { ...base, status: 'fallback', models: [] };
-  const listing = await cachedListing('gemini', refresh, deps.now, async () =>
+  const listing = await cachedListing('gemini', refresh, deps.now, secrets, async () =>
     (await deps.listGemini(apiKey, refresh)).map((m) => ({
       id: m.id,
       model: m.id,
@@ -1852,13 +2544,19 @@ async function geminiGroup(refresh: boolean, deps: CatalogDeps, settings: UserSe
   return { ...base, status: 'ok', models: listing.models.map((m) => toEntry(m, { kind: 'gemini', engine: 'gemini', mode, serverUrl: 'gemini', settings })) };
 }
 
-async function endpointGroup(endpoint: AnalyzerEndpoint, refresh: boolean, deps: CatalogDeps, settings: UserSettings): Promise<AnalyzerCatalogGroup> {
+async function endpointGroup(
+  endpoint: AnalyzerEndpoint,
+  refresh: boolean,
+  deps: CatalogDeps,
+  settings: UserSettings,
+  secrets: readonly string[],
+): Promise<AnalyzerCatalogGroup> {
   const base = { kind: 'endpoint' as const, id: endpoint.id, label: endpoint.name };
   const stored = settings.analyzerEndpointKeys[endpoint.id];
   if (stored && !keyOriginMatches(stored, endpoint.baseUrl)) {
     return { ...base, status: 'error', error: `Re-enter the API key for ${endpoint.name}: the saved key belongs to a different host.`, models: [] };
   }
-  const listing = await cachedListing(`endpoint:${endpoint.id}:${endpoint.baseUrl}`, refresh, deps.now, async () =>
+  const listing = await cachedListing(`endpoint:${endpoint.id}:${endpoint.baseUrl}`, refresh, deps.now, secrets, async () =>
     (await deps.listEndpoint(endpoint.baseUrl, stored?.key ?? null))
       .filter((raw) => typeof raw.id === 'string')
       .map((raw) => ({ id: endpointModelId(endpoint.id, raw.id as string), model: raw.id as string, ...servedLimitsFromModelEntry(raw) })),
@@ -1873,10 +2571,15 @@ async function endpointGroup(endpoint: AnalyzerEndpoint, refresh: boolean, deps:
 
 export async function buildAnalyzerCatalog(opts: { refresh: boolean }, deps: CatalogDeps = DEFAULT_CATALOG_DEPS): Promise<AnalyzerCatalog> {
   const settings = deps.settings();
+  /* P22: every analyzer secret the listings could echo. The settings this call read may be
+     injected (never the cache), so their endpoint keys are taken from them. */
+  const secrets = [deps.geminiApiKey(), ...Object.values(settings.analyzerEndpointKeys).map((k) => k.key)].filter(
+    (s): s is string => typeof s === 'string',
+  );
   const groups = await Promise.all([
-    ollamaGroup(opts.refresh, deps, settings),
-    geminiGroup(opts.refresh, deps, settings),
-    ...settings.analyzerEndpoints.map((e) => endpointGroup(e, opts.refresh, deps, settings)),
+    ollamaGroup(opts.refresh, deps, settings, secrets),
+    geminiGroup(opts.refresh, deps, settings, secrets),
+    ...settings.analyzerEndpoints.map((e) => endpointGroup(e, opts.refresh, deps, settings, secrets)),
   ]);
   return { groups };
 }
@@ -1900,21 +2603,45 @@ export async function previewEndpointModels(
     const contexts = models.map((m) => m.contextTokens).filter((n): n is number => n !== undefined);
     return { status: 'ok', models, ...(contexts.length > 0 ? { suggestedContextTokens: Math.min(...contexts) } : {}) };
   } catch (err) {
-    return { status: 'failed', error: (err instanceof Error ? err.message : String(err)).slice(0, 300), models: [] };
+    /* P21 transient codes get the curated message; anything else is redacted against the key this
+       preview used and every saved analyzer secret (P22). */
+    const error = listingErrorMessage(err, [input.apiKey, ...knownAnalyzerSecrets()]);
+    /* P22: the log line carries only that curated text, never `err` (console would inspect it). */
+    console.warn(`[analyzer-catalog] preview listing failed: ${error}`);
+    return { status: 'failed', error, models: [] };
   }
 }
 ```
 
+`allowlistedFetch` comes from 3b's leaf `server/src/analyzer/transports/allowlisted-fetch.ts` through the import above. This task neither creates nor edits that file or `openai-transport.ts`, and defines no second copy of the function. Confirm with `git grep -n "function allowlistedFetch" -- server/src`, which must print exactly one line, in `transports/allowlisted-fetch.ts`. The leaf imports only `undici`, so Task 3c.9's `openai-transport.ts → endpoint-served-limits.ts → analyzer-catalog.ts` chain cannot reach back into the transport.
+
 The `'schema (not enforced)'` expectation in the Test-record case must equal row 5 of the captured label table (Task 3c.3); if 3b's text differs, change this assertion to the captured value.
 
 - [ ] **Step 4: Run and confirm it passes**
-Run: `npm --prefix server run test -- src/analyzer/catalog/analyzer-catalog.test.ts src/analyzer/catalog/gemini-catalog.test.ts` then `npm run check:cycles`. Expected: PASS; no new cycle.
+Run: `npm --prefix server run test -- src/analyzer/catalog/analyzer-catalog.test.ts src/analyzer/catalog/gemini-catalog.test.ts` then `npm run typecheck` and `npm run check:cycles`. Expected: PASS; no new cycle.
 
 - [ ] **Step 5: Mutation proof**
 1. In `servedLimitsFromModelEntry` add `?? positiveInt(meta?.n_ctx_train)` → red: "llama.cpp with only n_ctx_train → nothing". Restore.
 2. In `endpointGroup`, delete the `if (stored && !keyOriginMatches(…)) return …` block → red: "a stored key for another origin sends no request…". Restore.
 3. In `cachedListing`, drop `!refresh &&` → red: "caches listings for CATALOG_TTL_MS; refresh bypasses the cache". Restore.
-4. In `listEndpoint`, replace `apiKey,` with `apiKey: apiKey ?? 'no-key',` → red: "…sends no Authorization header without a key". Restore.
+4. In `listEndpoint`, replace `allowlistedFetch(apiKey, new URL(baseUrl).origin)` with `allowlistedFetch(apiKey ?? 'no-key', new URL(baseUrl).origin)` → red: "…sends no Authorization header without a key". Restore.
+5. In `toEntry`, replace `defaultReasoningKey(ctx.kind === 'endpoint' ? 'openai' : ctx.kind)` with `'model-default'` → red: "labels an Ollama entry from a record filed under off, the level Ollama sends (P7)". Restore.
+6. In `listEndpoint`, replace `fetch: allowlistedFetch(apiKey, new URL(baseUrl).origin) as unknown as …` with `fetch: undiciFetch as unknown as …` (adding `fetch as undiciFetch` to the `undici` import) → red: "OPENAI_CUSTOM_HEADERS in the host env never reaches the listing; the endpoint key does (P22)" (the server sees `Bearer stolen`, `x-leak` and `x-stainless-lang: evil`). Restore.
+7. In `listingErrorMessage`, delete the `if (typeof code === 'string' && TRANSIENT_LISTING_CODES.has(code)) { … }` block → red: "%s anywhere in the cause chain is a transient failure, never unreachable" (the message is `Connection error.`). Restore.
+8. In `listingErrorMessage`, return `(err instanceof Error ? err.message : String(err)).slice(0, 300)` without `redactKnownSecrets` → red: "any other failure keeps its redacted message, capped at 300 characters" and "a failed endpoint listing that echoes the stored key is shown redacted (P22)". Restore.
+9. In `buildAnalyzerCatalog`, build `secrets` from `[deps.geminiApiKey()]` alone → red: "a failed endpoint listing that echoes the stored key is shown redacted (P22)". Restore.
+10. In `listingErrorMessage`, delete the `if (typeof causeCode === 'string' && TRANSIENT_LISTING_CODES.has(causeCode)) { … }` block → red: "a rebuilt AnalyzerTransportError reads its transient code from causeCode…" and "a connection the server drops is a transient listing failure, never unreachable (P21)". In the second, the message is the rebuilt `Endpoint model listing failed (…).`. Restore.
+11. In `listEndpoint`, replace `throw rebuildListingError(err, apiKey);` with `throw err;` → red: both halves.
+    - Here: "a refused listing whose body echoes the key is rebuilt as AnalyzerHttpError…" (received an `APIError`), and "a key undici refuses as a header value is rebuilt as AnalyzerTransportError…" (received an `APIConnectionError`, whose `inspect()` prints the `TypeError` cause carrying the key).
+    - Task 3c.6's "an injected error carrying the key never reaches the preview response, its log line or inspect(err) (P22)" goes red too.
+12. In `toEntry`, drop `raw.digest` from `capabilityRecordFor(…)` → red: "A3 — drops an Ollama Test record once the installed digest differs…" (first assertion). Restore. In `ollamaGroup`, drop the `digest` spread → red: the same. Restore.
+
+    Restore.
+12. In `rebuildListingError`, replace `redactKnownSecrets(err.message, secrets).slice(0, 300)` with `err.message.slice(0, 300)` → red: "a refused listing whose body echoes the key is rebuilt as AnalyzerHttpError…". Restore.
+13. In `rebuildListingError`, return `Object.assign(new AnalyzerTransportError(…), { cause: err })` for the last case → red: "a key undici refuses as a header value is rebuilt as AnalyzerTransportError…" (`cause` is set and `inspect()` prints the key). Restore.
+14. In `previewEndpointModels`, replace the `console.warn` line with `console.warn('[analyzer-catalog] preview listing failed:', err);` → red: "logs one line per failure, carrying only the redacted message, never the error object (P22)" (console inspects the raw `Error`, whose message holds the key). Restore.
+15. `TEST_REQUEST_MAX_ATTEMPTS`: set `gemini: 2` → red: "TEST_REQUEST_MAX_ATTEMPTS matches each transport's own retry budget (N6)". Restore.
+16. In `toEntry`, hard-code `attempts: 3` → red: the listing test's `expect(catalog.groups[0].models[0].testPlan.attempts).toBe(1)` (the Ollama entry claims Gemini's retry budget). Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -1926,19 +2653,34 @@ git commit -m "feat(server): analyzer model catalog across Ollama, Gemini and en
 ### Task 3c.6: Routes, OpenAPI, mocks and client — catalog GET, Test POST, preview POST
 
 **Files:**
-- Create: `server/src/analyzer/model-test-deps.ts`, `server/src/routes/analyzer-models.ts`
-- Modify: `server/src/app.ts` — mount beside 3b's `analyzerEndpointsRouter` (2b63b451 neighbourhood: after `:319`)
+- Create: `server/src/analyzer/model-test-deps.ts`, `server/src/routes/analyzer-models.ts`, `server/src/analyzer/ollama-digest.ts` (A3 leaf) and `server/src/analyzer/ollama-digest.test.ts` (add both test files — this and `model-test-deps.test.ts`'s new case — to this task's Step 2 and Step 4 runs)
+- Modify: `server/src/app.ts` — mount beside 3b's `analyzerEndpointsRouter` (46e62a34 neighbourhood: after `:319`)
 - Modify: `openapi.yaml` — three paths after 3b's `/api/analyzer/endpoints/detect-context:` path; schemas before `    UserSettingsPatch:` (`:4809`); `analyzerCapabilitiesByModel` (readOnly) after the Task 3c.2 property in `UserSettings`
 - Modify (generated): `src/lib/api-types.ts`
 - Modify: `src/lib/types.ts` (after `UserSettingsPatch`, `:141-145`), `src/lib/api.ts` (`MOCK_USER_SETTINGS` `:6930-6940`, real functions after `realPutGeminiKey` `:6979`, mock functions after `mockGetGpuDevices` `:8623`, `real` object `:9947`, `mock` object `:10259`)
 - Create: `src/lib/structured-output-label.ts`
-- Test: Create `server/src/routes/analyzer-models.test.ts`, `server/src/analyzer/model-test-deps.test.ts`, `src/lib/structured-output-label.test.ts`, `src/lib/api-analyzer-catalog-mock.test.ts`
+- Test: Create `server/src/routes/analyzer-models.test.ts`, `server/src/routes/analyzer-models.preview-redaction.test.ts`, `server/src/analyzer/model-test-deps.test.ts`, `src/lib/structured-output-label.test.ts`, `src/lib/api-analyzer-catalog-mock.test.ts`
 
 **Interfaces:**
-- Consumes: Tasks 3c.3–3c.5; `OllamaTransport`, `GeminiTransport` (W1), `OpenAITransport` (3b); `adaptSchemaFor*` (3b); `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError` (3b); `readUserSettings`, `writeAnalyzerCapabilityRecord`; `parseEndpointModelId`, `endpointModelId` (3a frontend + server).
-- Produces: `modelTestDepsFor(modelId, settings): ModelTestDeps`, `GeminiKeyMissingForTestError`; `analyzerModelsRouter` with `GET /models`, `POST /models/test`, `POST /models/preview` mounted at `/api/analyzer`; operationIds `getAnalyzerModels`, `testAnalyzerModel` (contract) and `previewAnalyzerEndpointModels` (**addition to the contract's route table** — the add-endpoint form must list an unsaved endpoint's models to prefill `contextTokens`, and the catalog only lists saved endpoints); frontend `api.getAnalyzerModels(refresh?)`, `api.testAnalyzerModel(body)`, `api.previewAnalyzerEndpointModels(body)`; types `AnalyzerCatalog`, `AnalyzerCatalogGroup`, `AnalyzerCatalogEntry`, `ModelCapabilityRecord`, `AnalyzerModelTestRequest`, `AnalyzerEndpointModelsPreviewRequest`, `AnalyzerEndpointModelsPreview`, `StructuredOutputMode`; `structuredOutputLabel` frontend twin; exported mocks `mockGetAnalyzerModels`, `mockTestAnalyzerModel`, `mockPreviewAnalyzerEndpointModels`.
+- Consumes: Tasks 3c.3–3c.5; `OllamaTransport`, `GeminiTransport` (W1), `OpenAITransport` (3b); `adaptSchemaFor*` (3b); `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError` (3b); `readUserSettings`, `writeAnalyzerCapabilityRecord`; `parseEndpointModelId`, `endpointModelId` (3a frontend + server); `redactKnownSecrets(text, secrets)` (3b Task 3b.1, `analyzer/redact.ts`), `knownAnalyzerSecrets()` (3b, `workspace/user-settings.ts`); `listingErrorMessage` (Task 3c.5, inside `previewEndpointModels`).
+- Produces: `modelTestDepsFor(modelId, settings): ModelTestDeps` (an Ollama model's deps carry `modelDigest`, A3), `GeminiKeyMissingForTestError`; `ollamaModelDigest(url, model, fetchImpl?): Promise<string | undefined>` and `OLLAMA_DIGEST_TIMEOUT_MS` (A3 leaf `analyzer/ollama-digest.ts`, never throws; Task 3c.10's preflight reuses it); `analyzerModelsRouter` with `GET /models`, `POST /models/test`, `POST /models/preview` mounted at `/api/analyzer`; operationIds `getAnalyzerModels`, `testAnalyzerModel` (contract) and `previewAnalyzerEndpointModels` (**addition to the contract's route table** — the add-endpoint form must list an unsaved endpoint's models to prefill `contextTokens`, and the catalog only lists saved endpoints); frontend `api.getAnalyzerModels(refresh?)`, `api.testAnalyzerModel(body)`, `api.previewAnalyzerEndpointModels(body)`; types `AnalyzerCatalog`, `AnalyzerCatalogGroup`, `AnalyzerCatalogEntry`, `ModelCapabilityRecord`, `AnalyzerModelTestRequest`, `AnalyzerEndpointModelsPreviewRequest`, `AnalyzerEndpointModelsPreview`, `StructuredOutputMode`; `structuredOutputLabel` frontend twin; exported mocks `mockGetAnalyzerModels`, `mockTestAnalyzerModel`, `mockPreviewAnalyzerEndpointModels`.
 
-HTTP mapping for `POST /models/test`: 400 bad body; 404 `{ code: 'analyzer-endpoint-missing' }`; 401 `{ code: 'auth' }` for a key-origin mismatch or a Gemini model without a key; 502 `{ error }` when the test was inconclusive or a non-400 request failed (nothing persisted); 200 the saved record (a failed control request is a saved record).
+HTTP mapping for `POST /models/test`:
+- 400: a bad body.
+- 404 `{ code: 'analyzer-endpoint-missing' }`: the endpoint is no longer saved.
+- 401 `{ code: 'auth' }`: a key-origin mismatch, or a Gemini model without a key.
+- 502 `{ error, outcome: 'failed' }`: the control request failed (`ModelTestControlFailedError`).
+- 502 `{ error, outcome: 'inconclusive' }`: a step was inconclusive or any other request failure.
+- 200: the saved record.
+
+Neither 502 writes anything, so a previous record stays (P7). The route aborts the test when the client's request closes (spec §2, "Cancelling"); a cancelled test writes nothing and answers nothing.
+
+**Redaction (P22).** Every error text these routes return or log goes through `redactKnownSecrets`. The secrets are `knownAnalyzerSecrets()` plus every endpoint key in the settings the route read. Mocked or freshly read settings are not the cache, so their keys are added.
+- **Test.** `modelTestDepsFor` sets `ModelTestDeps.redact`, so Task 3c.4 redacts before it caps and a cut can never leave half a key. The 502 body is redacted again, which covers failures that did not pass through 3c.4's catches.
+- **Catalog.** The GET's failure log line is redacted. Group errors are redacted where Task 3c.5 builds them.
+- **Preview.** The error text is redacted inside `previewEndpointModels` (Task 3c.5). A route test with no module mocks proves it against an endpoint that echoes the key.
+  - **No raw SDK error (P22).** The listing client rebuilds every SDK error before `previewEndpointModels` sees it (Task 3c.5).
+  - **One test, three surfaces.** A second route test injects a key that undici rejects as a header value, the rule-7 shape. It proves the key reaches none of the three: the response, the preview's log line, or `inspect()` of the error that listing throws.
 
 Keeps green: `server/src/app.test.ts` if present (route mount), `src/lib/api-types.test.ts`, `npm run typecheck`.
 
@@ -1947,28 +2689,117 @@ Keeps green: `server/src/app.test.ts` if present (route mount), `src/lib/api-typ
 Create `server/src/analyzer/model-test-deps.test.ts`:
 
 ```ts
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { modelTestDepsFor, GeminiKeyMissingForTestError } from './model-test-deps.js';
-import { AnalyzerEndpointMissingError, AnalyzerKeyOriginError } from './errors.js';
+import { AnalysisAbortedError, AnalyzerEndpointMissingError, AnalyzerKeyOriginError } from './errors.js';
 import { OpenAITransport } from './transports/openai-transport.js';
 import { OllamaTransport } from './transports/ollama-transport.js';
+import { endpointSemaphore, servedModels, _resetEndpointRuntimeForTest } from './transports/endpoint-runtime.js';
+import { resolveCapacity } from './capacity.js';
 import { DEFAULT_USER_SETTINGS, type UserSettings } from '../workspace/user-settings.js';
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
 
 const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768, structuredOutput: 'json' });
 const settings = (over: Partial<UserSettings> = {}): UserSettings => ({ ...DEFAULT_USER_SETTINGS, analyzerEndpoints: [lab], analyzerEndpointKeys: {}, ...over });
 
+beforeEach(() => _resetEndpointRuntimeForTest());
 afterEach(() => {
   delete process.env.GEMINI_API_KEY;
+  delete process.env.ANALYZER_NUM_PREDICT;
 });
 
 describe('modelTestDepsFor (#3084)', () => {
-  it('endpoint model → OpenAITransport, the endpoint URL and its own structured-output mode', () => {
+  it('endpoint model → OpenAITransport, the endpoint URL, its own structured-output mode and its context as the probe limit', () => {
     const d = modelTestDepsFor('openai:lab::qwen3-30b', settings());
     expect(d.transport).toBeInstanceOf(OpenAITransport);
     expect(d.serverUrl).toBe('http://127.0.0.1:8080/v1');
     expect(d.configuredMode).toBe('json');
-    expect(d.offeredLevels).toEqual(['configured']);
+    expect(d.probeLimits()).toEqual({ contextTokens: 32768, maxOutputTokens: null });
+  });
+
+  const PROBE_REQUEST = {
+    system: 's',
+    messages: [{ role: 'user' as const, content: 'hi' }],
+    structuredOutput: { mode: 'off' as const },
+    temperature: 0,
+    estimatedInputTokens: 10,
+    call: {},
+  };
+
+  it('the Test transport records the model it sends to, so a {model} unload can name it (N2)', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(
+        `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 0, model: 'm', choices: [{ index: 0, delta: { content: '{}' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
+      );
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const local = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: `http://127.0.0.1:${port}/v1`, gpu: 'any', contextTokens: 32768 });
+      const d = modelTestDepsFor('openai:lab::qwen3-30b', settings({ analyzerEndpoints: [local] }));
+      const result = await d.transport.send(PROBE_REQUEST);
+      expect(result.finish).toBe('stop');
+      /* A Test leaves the model loaded, so it is a valid unload target (P3, N2). */
+      expect(servedModels('lab')).toEqual(['qwen3-30b']);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it("a Test queued on the endpoint's concurrency semaphore stops as soon as the route aborts, and records nothing", async () => {
+    /* The route passes its client-disconnect signal into every request (Task 3c.4). 3b's
+       transport hands that signal to CountSemaphore.acquire({ signal }), so a Test that is
+       still queued behind a concurrency-1 endpoint's in-flight call stops at the abort
+       instead of waiting for the holder. */
+    let hits = 0;
+    const server = createServer((_req, res) => {
+      hits += 1;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(
+        `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 0, model: 'm', choices: [{ index: 0, delta: { content: '{}' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
+      );
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const local = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: `http://127.0.0.1:${port}/v1`, gpu: 'any', contextTokens: 32768, concurrency: 1 });
+      const d = modelTestDepsFor('openai:lab::qwen3-30b', settings({ analyzerEndpoints: [local] }));
+      const holder = await endpointSemaphore(local).acquire();
+      const controller = new AbortController();
+      const pending = d.transport.send({ ...PROBE_REQUEST, signal: controller.signal });
+      await new Promise((r) => setTimeout(r, 30));
+      controller.abort();
+      await expect(pending).rejects.toBeInstanceOf(AnalysisAbortedError);
+      holder();
+      expect(hits).toBe(0);
+      expect(servedModels('lab')).toEqual([]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it('A3 — only an Ollama model gets a modelDigest dep', () => {
+    expect(modelTestDepsFor('qwen3.5:4b', settings()).modelDigest).toBeTypeOf('function');
+    expect(modelTestDepsFor('openai:lab::qwen3-30b', settings()).modelDigest).toBeUndefined();
+    process.env.GEMINI_API_KEY = 'k';
+    expect(modelTestDepsFor('gemini-3.6-flash', settings()).modelDigest).toBeUndefined();
+  });
+
+  it("Ollama's probe limit is its num_ctx, with no output cap by default and ANALYZER_NUM_PREDICT when set", () => {
+    const context = resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }).contextTokens;
+    expect(modelTestDepsFor('qwen3.5:4b', settings()).probeLimits()).toEqual({ contextTokens: context, maxOutputTokens: null });
+    process.env.ANALYZER_NUM_PREDICT = '4096';
+    expect(modelTestDepsFor('qwen3.5:4b', settings()).probeLimits()).toEqual({ contextTokens: context, maxOutputTokens: 4096 });
+  });
+
+  it("Gemini's probe limit is its resolved Auto output cap (8192 while the model list is unavailable)", () => {
+    process.env.GEMINI_API_KEY = 'k';
+    expect(modelTestDepsFor('gemini-3.6-flash', settings()).probeLimits().maxOutputTokens).toBe(8192);
   });
 
   it('a missing endpoint throws AnalyzerEndpointMissingError', () => {
@@ -1990,6 +2821,15 @@ describe('modelTestDepsFor (#3084)', () => {
   it('Gemini model without a key throws GeminiKeyMissingForTestError', () => {
     expect(() => modelTestDepsFor('gemini-3.6-flash', settings())).toThrow(GeminiKeyMissingForTestError);
   });
+
+  it('redact removes the endpoint key and every saved analyzer secret, so 3c.4 caps redacted text (P22)', () => {
+    process.env.GEMINI_API_KEY = 'gk-test-secret-0001';
+    const d = modelTestDepsFor(
+      'openai:lab::m',
+      settings({ analyzerEndpointKeys: { lab: { origin: 'http://127.0.0.1:8080', key: 'sk-lab-test-secret-01' } } }),
+    );
+    expect(d.redact?.('401 sk-lab-test-secret-01 / gk-test-secret-0001')).toBe('401 [redacted] / [redacted]');
+  });
 });
 ```
 
@@ -1999,7 +2839,9 @@ Create `server/src/routes/analyzer-models.test.ts`:
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { AnalyzerEndpointMissingError, AnalyzerKeyOriginError, AnalyzerHttpError } from '../analyzer/errors.js';
+import { request as httpRequest } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { AnalysisAbortedError, AnalyzerEndpointMissingError, AnalyzerKeyOriginError } from '../analyzer/errors.js';
 
 const h = vi.hoisted(() => ({
   buildAnalyzerCatalog: vi.fn(),
@@ -2030,6 +2872,7 @@ vi.mock('../workspace/user-settings.js', async (importOriginal) => ({
 
 const { analyzerModelsRouter } = await import('./analyzer-models.js');
 const { DEFAULT_USER_SETTINGS } = await import('../workspace/user-settings.js');
+const { ModelTestControlFailedError, ModelTestInconclusiveError } = await import('../analyzer/capabilities.js');
 
 function makeApp() {
   const app = express();
@@ -2042,7 +2885,7 @@ const RECORD = {
   serverUrl: 'http://127.0.0.1:8080/v1',
   testedAt: '2026-09-11T10:00:00.000Z',
   control: { ok: true },
-  structuredOutput: { schema: { configured: 'ignored' } },
+  structuredOutput: { schema: { 'model-default': 'ignored' } },
   reasoning: {},
 };
 
@@ -2069,6 +2912,22 @@ describe('GET /api/analyzer/models', () => {
     await request(makeApp()).get('/api/analyzer/models');
     expect(h.buildAnalyzerCatalog).toHaveBeenCalledWith({ refresh: false });
   });
+
+  it('logs a catalog failure without a saved secret (P22)', async () => {
+    process.env.GEMINI_API_KEY = 'gk-route-secret-0001';
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      h.buildAnalyzerCatalog.mockRejectedValue(new Error('boom gk-route-secret-0001'));
+      const res = await request(makeApp()).get('/api/analyzer/models');
+      expect(res.status).toBe(500);
+      const logged = error.mock.calls.flat().map(String).join('\n');
+      expect(logged).toContain('[redacted]');
+      expect(logged).not.toContain('gk-route-secret-0001');
+    } finally {
+      error.mockRestore();
+      delete process.env.GEMINI_API_KEY;
+    }
+  });
 });
 
 describe('POST /api/analyzer/models/test', () => {
@@ -2079,7 +2938,10 @@ describe('POST /api/analyzer/models/test', () => {
     const res = await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:lab::m', scope: 'all' });
     expect(res.status).toBe(200);
     expect(res.body).toEqual(RECORD);
-    expect(h.runModelTest).toHaveBeenCalledWith({ modelId: 'openai:lab::m', scope: 'all' }, deps);
+    expect(h.runModelTest).toHaveBeenCalledWith(
+      { modelId: 'openai:lab::m', scope: 'all' },
+      expect.objectContaining({ transport: deps.transport, signal: expect.any(AbortSignal) }),
+    );
     expect(h.writeAnalyzerCapabilityRecord).toHaveBeenCalledWith('openai:lab::m', RECORD);
   });
 
@@ -2106,12 +2968,67 @@ describe('POST /api/analyzer/models/test', () => {
     expect(res.body.code).toBe('auth');
   });
 
-  it('502 and nothing persisted when the test fails after a good control', async () => {
+  it('a failed control answers 502 outcome failed and keeps the previous record (nothing written)', async () => {
     h.modelTestDepsFor.mockReturnValue({});
-    h.runModelTest.mockRejectedValue(new AnalyzerHttpError('openai', 503, 'loading', 'HTTP 503 loading'));
+    h.runModelTest.mockRejectedValue(new ModelTestControlFailedError('openai:lab::m', 'HTTP 503 loading model.'));
     const res = await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:lab::m', scope: 'configured' });
     expect(res.status).toBe(502);
+    expect(res.body.outcome).toBe('failed');
+    expect(res.body.error).toContain('control request');
     expect(h.writeAnalyzerCapabilityRecord).not.toHaveBeenCalled();
+  });
+
+  it('an inconclusive step answers 502 outcome inconclusive and writes nothing', async () => {
+    h.modelTestDepsFor.mockReturnValue({});
+    h.runModelTest.mockRejectedValue(new ModelTestInconclusiveError('openai:lab::m', 'schema', 'finish=length'));
+    const res = await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:lab::m', scope: 'configured' });
+    expect(res.status).toBe(502);
+    expect(res.body.outcome).toBe('inconclusive');
+    expect(h.writeAnalyzerCapabilityRecord).not.toHaveBeenCalled();
+  });
+
+  it('a 502 never returns a saved key the provider echoed (P22)', async () => {
+    h.modelTestDepsFor.mockReturnValue({});
+    h.runModelTest.mockRejectedValue(new Error('upstream rejected Bearer sk-stored'));
+    const res = await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:lab::m', scope: 'configured' });
+    expect(res.status).toBe(502);
+    expect(res.body.error).toContain('[redacted]');
+    expect(res.body.error).not.toContain('sk-stored');
+  });
+
+  it('a client that disconnects aborts the running test, and nothing is written', async () => {
+    h.modelTestDepsFor.mockReturnValue({ transport: {} });
+    let seenSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const running = new Promise<void>((r) => (started = r));
+    h.runModelTest.mockImplementation((_input: unknown, d: { signal: AbortSignal }) => {
+      seenSignal = d.signal;
+      started();
+      return new Promise((_resolve, reject) => d.signal.addEventListener('abort', () => reject(new AnalysisAbortedError('cancelled'))));
+    });
+    const server = makeApp().listen(0, '127.0.0.1');
+    await new Promise<void>((r) => server.once('listening', () => r()));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const body = JSON.stringify({ modelId: 'openai:lab::m', scope: 'configured' });
+      const clientReq = httpRequest({
+        host: '127.0.0.1',
+        port,
+        path: '/api/analyzer/models/test',
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+      });
+      clientReq.on('error', () => {});
+      clientReq.end(body);
+      await running;
+      clientReq.destroy();
+      await vi.waitFor(() => expect(seenSignal?.aborted).toBe(true));
+      await new Promise((r) => setImmediate(r));
+      expect(h.writeAnalyzerCapabilityRecord).not.toHaveBeenCalled();
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });
 
@@ -2133,6 +3050,94 @@ describe('POST /api/analyzer/models/preview', () => {
 });
 ```
 
+Create `server/src/routes/analyzer-models.preview-redaction.test.ts` (no module mocks, so the real `previewEndpointModels` lists through the SDK):
+
+```ts
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { inspect } from 'node:util';
+import { analyzerModelsRouter } from './analyzer-models.js';
+import { DEFAULT_CATALOG_DEPS } from '../analyzer/catalog/analyzer-catalog.js';
+import { AnalyzerTransportError } from '../analyzer/errors.js';
+
+describe('POST /api/analyzer/models/preview — redaction (#3084 P22)', () => {
+  let server: Server | undefined;
+  afterEach(async () => {
+    server?.closeAllConnections();
+    await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
+    server = undefined;
+  });
+
+  it('a listing error whose body echoes the typed key is returned redacted', async () => {
+    const KEY = 'sk-typed-echo-secret-0001';
+    /* The endpoint echoes the Authorization header it received, as some proxies do on a 401. */
+    server = createServer((req, res) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: `Incorrect API key provided: ${req.headers.authorization ?? 'none'}`, type: 'invalid_request_error' } }));
+    });
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+    const { port } = server.address() as AddressInfo;
+    const app = express();
+    app.use(express.json());
+    app.use('/api/analyzer', analyzerModelsRouter);
+    const res = await request(app).post('/api/analyzer/models/preview').send({ baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: KEY });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('failed');
+    expect(res.body.error).toContain('401');
+    /* '[redacted]' proves the key reached the endpoint and came back, so the check cannot pass vacuously. */
+    expect(res.body.error).toContain('[redacted]');
+    expect(JSON.stringify(res.body)).not.toContain(KEY);
+  });
+
+  it('an injected error carrying the key never reaches the preview response, its log line or inspect(err) (P22)', async () => {
+    const KEY = 'sk-preview-inject-secret-0001';
+    /* undici rejects this as a header value (`Headers.append: "Bearer <key>…" is an invalid header value.`)
+       before dispatching; the SDK wraps that TypeError as APIConnectionError's cause. */
+    const INJECTED = `${KEY}\nX-Injected: 1`;
+    let requests = 0;
+    server = createServer((_req, res) => {
+      requests += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [] }));
+    });
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
+    const { port } = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${port}/v1`;
+    const lines: string[] = [];
+    const spies = (['log', 'info', 'warn', 'error'] as const).map((method) =>
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+        lines.push(args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: 8 }))).join(' '));
+      }),
+    );
+    try {
+      const app = express();
+      app.use(express.json());
+      app.use('/api/analyzer', analyzerModelsRouter);
+      const res = await request(app).post('/api/analyzer/models/preview').send({ baseUrl, apiKey: INJECTED });
+      /* The same listing the route ran, for the thrown error itself. */
+      const err = await DEFAULT_CATALOG_DEPS.listEndpoint(baseUrl, INJECTED).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      /* Non-vacuous: undici refused the header, so every surface below comes from the error path. */
+      expect(requests).toBe(0);
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('failed');
+      expect(lines.some((l) => l.includes('preview listing failed'))).toBe(true);
+      expect(err).toBeInstanceOf(AnalyzerTransportError);
+      for (const s of [JSON.stringify(res.body), ...lines, (err as Error).message, (err as Error).stack ?? '', inspect(err, { depth: 8 })]) {
+        expect(s).not.toContain(KEY);
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+});
+```
+
 Create `src/lib/structured-output-label.test.ts`:
 
 ```ts
@@ -2148,8 +3153,8 @@ describe('structuredOutputLabel frontend twin (#3084) — same table as the serv
     const record: ModelCapabilityRecord | undefined =
       c.outcome === null
         ? undefined
-        : { serverUrl: 'x', testedAt: '2026-09-11T00:00:00.000Z', control: { ok: true }, structuredOutput: { [c.mode]: { configured: c.outcome } }, reasoning: {} };
-    expect(structuredOutputLabel(c.mode, c.dropped, record, 'configured')).toBe(c.expected);
+        : { serverUrl: 'x', testedAt: '2026-09-11T00:00:00.000Z', control: { ok: true }, structuredOutput: { [c.mode]: { 'model-default': c.outcome } }, reasoning: {} };
+    expect(structuredOutputLabel(c.mode, c.dropped, record, 'model-default')).toBe(c.expected);
   });
 });
 ```
@@ -2178,13 +3183,13 @@ describe('mockGetAnalyzerModels (#3084)', () => {
     const catalog = await mockGetAnalyzerModels(false, { analyzerEndpoints: [endpoint], analyzerCapabilitiesByModel: {}, apiKeyStatus: 'unset' });
     const group = catalog.groups.find((g) => g.kind === 'endpoint');
     expect(group).toMatchObject({ id: 'lab-server', label: 'Lab server', status: 'ok' });
-    expect(group?.models[0]).toMatchObject({ id: 'openai:lab-server::qwen3-30b', label: 'qwen3-30b', engine: 'openai', testPlan: { configured: 2, all: 3 } });
+    expect(group?.models[0]).toMatchObject({ id: 'openai:lab-server::qwen3-30b', label: 'qwen3-30b', engine: 'openai', testPlan: { configured: 2, all: 3, attempts: 3 } });
     expect(Object.keys(catalog)).toEqual(['groups']);
     expect(catalog.groups.find((g) => g.kind === 'gemini')).toMatchObject({ status: 'fallback', models: [] });
   });
 
   it('labels from a seeded Test record for the same server URL', async () => {
-    const rec: ModelCapabilityRecord = { serverUrl: 'http://127.0.0.1:8080/v1', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: { schema: { configured: 'ignored' } }, reasoning: {} };
+    const rec: ModelCapabilityRecord = { serverUrl: 'http://127.0.0.1:8080/v1', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: { schema: { 'model-default': 'ignored' } }, reasoning: {} };
     (globalThis as Record<string, unknown>).__SEED_ENDPOINT_MODELS__ = { 'lab-server': ['qwen3-30b'] };
     (globalThis as Record<string, unknown>).__SEED_ANALYZER_CAPABILITIES__ = { 'openai:lab-server::qwen3-30b': rec };
     const catalog = await mockGetAnalyzerModels(false, { analyzerEndpoints: [endpoint], analyzerCapabilitiesByModel: {}, apiKeyStatus: 'unset' });
@@ -2193,10 +3198,10 @@ describe('mockGetAnalyzerModels (#3084)', () => {
     expect(entry?.structuredOutput.label).toBe('schema (not enforced)');
   });
 
-  it('mockTestAnalyzerModel returns a record for the configured mode', async () => {
-    const rec = await mockTestAnalyzerModel({ modelId: 'qwen3.5:4b', scope: 'configured' });
-    expect(rec.control).toEqual({ ok: true });
-    expect(rec.structuredOutput.schema?.configured).toBe('enforced');
+  it('mockTestAnalyzerModel returns a record for the configured mode, filed under the level the engine sends', async () => {
+    const local = await mockTestAnalyzerModel({ modelId: 'qwen3.5:4b', scope: 'configured' });
+    expect(local.control).toEqual({ ok: true });
+    expect(local.structuredOutput.schema).toEqual({ off: 'enforced' });
   });
 });
 ```
@@ -2204,7 +3209,7 @@ describe('mockGetAnalyzerModels (#3084)', () => {
 (The `'schema (not enforced)'` literal must equal row 5 of the captured table.)
 
 - [ ] **Step 2: Run them and confirm they fail**
-Run: `npm --prefix server run test -- src/analyzer/model-test-deps.test.ts src/routes/analyzer-models.test.ts` and `npx vitest run src/lib/structured-output-label.test.ts src/lib/api-analyzer-catalog-mock.test.ts`
+Run: `npm --prefix server run test -- src/analyzer/model-test-deps.test.ts src/routes/analyzer-models.test.ts src/routes/analyzer-models.preview-redaction.test.ts` and `npx vitest run src/lib/structured-output-label.test.ts src/lib/api-analyzer-catalog-mock.test.ts`
 Expected: FAIL — `Failed to load url ./model-test-deps.js` / `./analyzer-models.js`; frontend `Failed to resolve import "./structured-output-label"` and `mockGetAnalyzerModels is not a function`.
 
 - [ ] **Step 3: Implement**
@@ -2213,18 +3218,25 @@ Create `server/src/analyzer/model-test-deps.ts`:
 
 ```ts
 /* #3084 W3 — builds the Test action's dependencies for one model id: the transport,
-   the server URL its record binds to, the configured structured-output mode, and the
-   provider's schema adapter. Enforces the key-origin rule before any transport exists. */
+   the server URL its record binds to, the configured structured-output mode, the
+   provider's schema adapter, and the limits the probe cap is resolved from (P7).
+   Enforces the key-origin rule before any transport exists. */
 import { configValue } from '../config/resolver.js';
 import { getResolvedGeminiApiKey, getResolvedOllamaUrl, type UserSettings } from '../workspace/user-settings.js';
+/* Known secrets come through 3b's leaf gate, never from user-settings.ts (A9). */
+import { knownAnalyzerSecrets } from './known-secrets-gate.js';
 import { resolveEndpointApiKey } from '../workspace/analyzer-endpoints.js';
+import { redactKnownSecrets } from './redact.js';
 import { inferEngineFromModelId, parseEndpointModelId } from './model-id.js';
 import { AnalyzerEndpointMissingError } from './errors.js';
 import { OllamaTransport } from './transports/ollama-transport.js';
 import { GeminiTransport } from './transports/gemini-transport.js';
 import { OpenAITransport } from './transports/openai-transport.js';
 import { adaptSchemaForGemini, adaptSchemaForOllama, adaptSchemaForOpenAI } from './runner/schema-adapters.js';
-import { ALL_STRUCTURED_OUTPUT_MODES, CONFIGURED_LEVEL_KEY, type ModelTestDeps } from './capabilities.js';
+import { resolveCapacity, resolveGeminiMaxOutputTokens } from './capacity.js';
+import { resolveNumPredict } from './ollama-settings.js';
+import { ollamaModelDigest } from './ollama-digest.js';
+import { ALL_STRUCTURED_OUTPUT_MODES, type ModelTestDeps } from './capabilities.js';
 import type { StructuredOutputMode } from './runner/transport.js';
 
 export class GeminiKeyMissingForTestError extends Error {
@@ -2234,8 +3246,13 @@ export class GeminiKeyMissingForTestError extends Error {
   }
 }
 
+/** Without `signal`: the route adds the client's abort signal. */
 export function modelTestDepsFor(modelId: string, settings: UserSettings): ModelTestDeps {
-  const offered = { offeredModes: ALL_STRUCTURED_OUTPUT_MODES, offeredLevels: [CONFIGURED_LEVEL_KEY] };
+  /* P22: runModelTest redacts before it caps (Task 3c.4). `settings` may not be the cache, so its
+     endpoint keys are added to the saved secrets. */
+  const secrets = [...knownAnalyzerSecrets(), ...Object.values(settings.analyzerEndpointKeys).map((k) => k.key)];
+  const redact = (text: string): string => redactKnownSecrets(text, secrets);
+  const offered = { offeredModes: ALL_STRUCTURED_OUTPUT_MODES, redact };
   const engine = inferEngineFromModelId(modelId);
   if (engine === 'openai') {
     const parsed = parseEndpointModelId(modelId);
@@ -2245,10 +3262,15 @@ export function modelTestDepsFor(modelId: string, settings: UserSettings): Model
     const apiKey = resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl);
     return {
       ...offered,
+      /* N2: no opt-out flag. A Test leaves the model loaded on the server exactly as a run
+         does, so its name must reach the `{model}` unload URL too (P3). */
       transport: new OpenAITransport({ endpoint, apiKey, model: parsed.model }),
       serverUrl: endpoint.baseUrl,
       configuredMode: endpoint.structuredOutput,
       adaptSchema: adaptSchemaForOpenAI,
+      /* The saved context and manual cap. Task 3c.9 replaces this with resolveCapacity, which
+         also clamps to the served limit prepare() warms. */
+      probeLimits: () => ({ contextTokens: endpoint.contextTokens, maxOutputTokens: endpoint.maxOutputTokens > 0 ? endpoint.maxOutputTokens : null }),
     };
   }
   if (engine === 'gemini') {
@@ -2260,6 +3282,11 @@ export function modelTestDepsFor(modelId: string, settings: UserSettings): Model
       serverUrl: 'gemini',
       configuredMode: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'),
       adaptSchema: adaptSchemaForGemini,
+      /* W2's Auto cap (the listed outputTokenLimit, 8192 without a list); prepare() warms the list. */
+      probeLimits: () => ({
+        contextTokens: resolveCapacity({ engine: 'gemini', model: modelId }).contextTokens,
+        maxOutputTokens: resolveGeminiMaxOutputTokens(modelId),
+      }),
     };
   }
   const url = getResolvedOllamaUrl();
@@ -2267,11 +3294,96 @@ export function modelTestDepsFor(modelId: string, settings: UserSettings): Model
     ...offered,
     transport: new OllamaTransport({ url, model: modelId }),
     serverUrl: url,
+    /* A3: the installed build is stamped on the record, so a later `ollama pull` discards it. */
+    modelDigest: () => ollamaModelDigest(url, modelId),
     configuredMode: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'),
     adaptSchema: adaptSchemaForOllama,
+    /* num_ctx is the context; num_predict -1 (the default) is Ollama's Auto — the context governs. */
+    probeLimits: () => {
+      const numPredict = resolveNumPredict();
+      return {
+        contextTokens: resolveCapacity({ engine: 'local', model: modelId }).contextTokens,
+        maxOutputTokens: numPredict > 0 ? numPredict : null,
+      };
+    },
   };
 }
 ```
+
+Create `server/src/analyzer/ollama-digest.ts` (A3 — a leaf; it imports nothing from the analyzer graph):
+
+```ts
+/* #3084 A3 — the installed digest of one Ollama model, stamped on a Test record (Task 3c.4) and
+   compared before a run (Task 3c.10) and in the catalog (Task 3c.5). Never throws and is bounded
+   at 2 s: an unknown digest keeps a record (capabilityRecordFor fails open), it never discards one. */
+export const OLLAMA_DIGEST_TIMEOUT_MS = 2_000;
+
+export async function ollamaModelDigest(
+  url: string,
+  model: string,
+  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
+): Promise<string | undefined> {
+  try {
+    const resp = await fetchImpl(`${url.replace(/\/+$/, '')}/api/tags`, { method: 'GET', signal: AbortSignal.timeout(OLLAMA_DIGEST_TIMEOUT_MS) });
+    if (!resp.ok) return undefined;
+    const body = (await resp.json()) as { models?: Array<{ name?: string; model?: string; digest?: string }> };
+    /* Exact tag match; 5a widens this through normalizeModelTag. */
+    const hit = (body.models ?? []).find((m) => m.name === model || m.model === model);
+    return typeof hit?.digest === 'string' && hit.digest.length > 0 ? hit.digest : undefined;
+  } catch {
+    return undefined;
+  }
+}
+```
+
+Create `server/src/analyzer/ollama-digest.test.ts` (a real server, as the catalog tests use):
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { createServer, type RequestListener } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { ollamaModelDigest } from './ollama-digest.js';
+
+async function withServer(handler: RequestListener, fn: (url: string) => Promise<void>): Promise<void> {
+  const server = createServer(handler);
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  try {
+    await fn(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+}
+
+describe('ollamaModelDigest (#3084 A3)', () => {
+  it('returns the exact tag\'s digest, and undefined for an absent tag or a tag without one', async () => {
+    await withServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ models: [{ name: 'qwen3.5:4b', digest: 'sha256:abc' }, { name: 'mistral:7b' }] }));
+    }, async (url) => {
+      expect(await ollamaModelDigest(url, 'qwen3.5:4b')).toBe('sha256:abc');
+      expect(await ollamaModelDigest(url, 'qwen3.5')).toBeUndefined();
+      expect(await ollamaModelDigest(url, 'mistral:7b')).toBeUndefined();
+    });
+  });
+
+  it('never throws: a 500, a non-JSON body and a dropped connection all answer undefined', async () => {
+    await withServer((_req, res) => { res.writeHead(500); res.end('boom'); }, async (url) => {
+      expect(await ollamaModelDigest(url, 'qwen3.5:4b')).toBeUndefined();
+    });
+    await withServer((_req, res) => { res.writeHead(200); res.end('not json'); }, async (url) => {
+      expect(await ollamaModelDigest(url, 'qwen3.5:4b')).toBeUndefined();
+    });
+    await withServer((req) => { req.socket.destroy(); }, async (url) => {
+      await expect(ollamaModelDigest(url, 'qwen3.5:4b')).resolves.toBeUndefined();
+    });
+  });
+});
+```
+
+Mutation proof additions for this task (append to its Step 5): (a) `ollamaModelDigest`: delete the `try`/`catch` (let errors propagate) → red: "never throws…". Restore. (b) Match `m.name?.startsWith(model)` instead of equality → red: "returns the exact tag's digest…" (`qwen3.5` answers `sha256:abc`). Restore. (c) `modelTestDepsFor`: delete the `modelDigest:` line → red: "A3 — only an Ollama model gets a modelDigest dep". Restore.
+
+**Whole-record writes until wave 5 (accepted residual, #8).** `writeAnalyzerCapabilityRecord(modelId, record)` replaces the model's whole record, so a `configured` Test drops the verdicts an earlier "every mode" Test recorded for the modes it did not send. Wave 5 owns the merge (`mergeCapabilityRecords`, master contract). It is accepted here because the residual is one-directional: a lost verdict can only remove a recorded `rejected`, so at worst a mode's "(not enforced)" label disappears until the next Test — a pre-run check refuses only on a recorded `rejected` (Task 3c.10), so a lost verdict can never refuse a run that would otherwise start. Stated in the PR body.
 
 Create `server/src/routes/analyzer-models.ts`:
 
@@ -2283,19 +3395,28 @@ import { Router } from 'express';
 import { z } from 'zod';
 import type { Request, Response } from '../http.js';
 import { buildAnalyzerCatalog, previewEndpointModels } from '../analyzer/catalog/analyzer-catalog.js';
-import { runModelTest } from '../analyzer/capabilities.js';
+import { ModelTestControlFailedError, runModelTest } from '../analyzer/capabilities.js';
 import { modelTestDepsFor, GeminiKeyMissingForTestError } from '../analyzer/model-test-deps.js';
 import { AnalyzerEndpointMissingError, AnalyzerKeyOriginError } from '../analyzer/errors.js';
 import { keyOriginMatches } from '../workspace/analyzer-endpoints.js';
-import { readUserSettings, writeAnalyzerCapabilityRecord } from '../workspace/user-settings.js';
+import { readUserSettings, writeAnalyzerCapabilityRecord, type UserSettings } from '../workspace/user-settings.js';
+/* Known secrets come through 3b's leaf gate, never from user-settings.ts (A9). */
+import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
+import { redactKnownSecrets } from '../analyzer/redact.js';
 
 export const analyzerModelsRouter = Router();
+
+/* P22: every error text these routes return or log is redacted. Settings read here may not be the
+   cache, so their endpoint keys are added to the saved secrets. */
+function secretsFor(settings?: UserSettings): string[] {
+  return [...knownAnalyzerSecrets(), ...Object.values(settings?.analyzerEndpointKeys ?? {}).map((k) => k.key)];
+}
 
 analyzerModelsRouter.get('/models', async (req: Request, res: Response) => {
   try {
     res.json(await buildAnalyzerCatalog({ refresh: req.query.refresh === '1' }));
   } catch (err) {
-    console.error('[analyzer-models] GET /models failed', err);
+    console.error('[analyzer-models] GET /models failed:', redactKnownSecrets(err instanceof Error ? (err.stack ?? err.message) : String(err), secretsFor()));
     res.status(500).json({ error: 'Failed to list analyzer models.' });
   }
 });
@@ -2309,9 +3430,10 @@ analyzerModelsRouter.post('/models/test', async (req: Request, res: Response) =>
   const parsed = testBodySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid payload.', issues: parsed.error.issues });
   const { modelId, scope } = parsed.data;
+  const settings = await readUserSettings();
   let deps;
   try {
-    deps = modelTestDepsFor(modelId, await readUserSettings());
+    deps = modelTestDepsFor(modelId, settings);
   } catch (err) {
     if (err instanceof AnalyzerEndpointMissingError) {
       return res.status(404).json({ error: err.message, code: 'analyzer-endpoint-missing' });
@@ -2321,13 +3443,22 @@ analyzerModelsRouter.post('/models/test', async (req: Request, res: Response) =>
     }
     throw err;
   }
+  /* Spec §2 "Cancelling": leaving the page cancels a queued or running test. */
+  const controller = new AbortController();
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
   try {
-    const record = await runModelTest({ modelId, scope }, deps);
+    const record = await runModelTest({ modelId, scope }, { ...deps, signal: controller.signal });
     await writeAnalyzerCapabilityRecord(modelId, record);
     return res.json(record);
   } catch (err) {
-    console.warn(`[analyzer-models] test of ${modelId} did not complete: ${(err as Error).name}`);
-    return res.status(502).json({ error: ((err as Error).message ?? 'Model test failed.').slice(0, 500) });
+    if (controller.signal.aborted) return; // the client left: nothing to answer, nothing written
+    /* P7: a failed control or an inconclusive step writes nothing, so a previous record stays. */
+    const outcome = err instanceof ModelTestControlFailedError ? 'failed' : 'inconclusive';
+    console.warn(`[analyzer-models] test of ${modelId} ${outcome}: ${(err as Error).name}`);
+    const message = redactKnownSecrets((err as Error).message ?? 'Model test failed.', secretsFor(settings));
+    return res.status(502).json({ error: message.slice(0, 800), outcome });
   }
 });
 
@@ -2393,14 +3524,23 @@ app.use('/api/analyzer', analyzerModelsRouter); // #3084 — GET /models (catalo
             schema: { $ref: '#/components/schemas/AnalyzerModelTestRequest' }
       responses:
         '200':
-          description: The saved capability record (a failed control request is still saved)
+          description: The saved capability record, keyed by the reasoning level the requests sent
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ModelCapabilityRecord' }
         '400': { description: Invalid body }
         '401': { description: 'Key bound to another host, or Gemini key missing (code: auth)' }
         '404': { description: 'Endpoint no longer configured (code: analyzer-endpoint-missing)' }
-        '502': { description: Inconclusive test or request failure; nothing saved }
+        '502':
+          description: 'The control request failed (outcome: failed) or a step was inconclusive (outcome: inconclusive). Nothing is saved; an earlier record stays.'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, outcome]
+                properties:
+                  error: { type: string }
+                  outcome: { type: string, enum: [failed, inconclusive] }
   /api/analyzer/models/preview:
     post:
       summary: List an endpoint's models before it is saved (context prefill)
@@ -2431,6 +3571,9 @@ Schemas, before `    UserSettingsPatch:`:
       properties:
         serverUrl: { type: string }
         testedAt: { type: string, format: date-time }
+        digest:
+          type: string
+          description: '#3084 (3c) — Ollama only: the model digest when the Test ran; a record for another digest is discarded.'
         control:
           type: object
           required: [ok]
@@ -2470,10 +3613,16 @@ Schemas, before `    UserSettingsPatch:`:
             label: { type: string }
         testPlan:
           type: object
-          required: [configured, all]
+          required: [configured, all, attempts]
           properties:
             configured: { type: integer }
             all: { type: integer }
+            attempts:
+              type: integer
+              description: >-
+                The most attempts one Test request can take on this model's transport,
+                retries included (Ollama 1, Gemini and endpoints 3). The confirm dialog
+                states requests x attempts as the maximum.
     AnalyzerCatalogGroup:
       type: object
       required: [kind, id, label, status, models]
@@ -2571,7 +3720,7 @@ export function structuredOutputLabel(
 
 `src/lib/api.ts`:
 - `MOCK_USER_SETTINGS` (`:6939`): add `analyzerCapabilitiesByModel: {},`.
-- Imports: add `AnalyzerCatalog`, `AnalyzerCatalogEntry`, `ModelCapabilityRecord`, `AnalyzerModelTestRequest`, `AnalyzerEndpointModelsPreviewRequest`, `AnalyzerEndpointModelsPreview`, `StructuredOutputMode` to the existing `./types` type import; `import { structuredOutputLabel } from './structured-output-label';`; `import { endpointModelId, parseEndpointModelId } from './model-id';`.
+- Imports: add `AnalyzerCatalog`, `AnalyzerCatalogEntry`, `ModelCapabilityRecord`, `AnalyzerModelTestRequest`, `AnalyzerEndpointModelsPreviewRequest`, `AnalyzerEndpointModelsPreview`, `StructuredOutputMode` to the existing `./types` type import; `import { structuredOutputLabel } from './structured-output-label';`; `import { endpointModelId, engineForModelId, parseEndpointModelId } from './model-id';`.
 - After `realPutGeminiKey` (`:6979`):
 
 ```ts
@@ -2617,6 +3766,12 @@ async function realPreviewAnalyzerEndpointModels(body: AnalyzerEndpointModelsPre
    follow the contract: Gemini without a key is `fallback`. */
 type MockCatalogSource = Pick<UserSettings, 'analyzerEndpoints' | 'analyzerCapabilitiesByModel' | 'apiKeyStatus'>;
 
+/* The level a W3 request is sent at, and so the record key (server capabilities.ts
+   defaultReasoningKey, P7): Ollama sends think:false, Gemini and endpoints send nothing. */
+function mockLevelKey(modelId: string): string {
+  return engineForModelId(modelId) === 'local' ? 'off' : 'model-default';
+}
+
 function mockServerUrlFor(modelId: string, source: MockCatalogSource): string {
   const parsed = parseEndpointModelId(modelId);
   if (parsed) return source.analyzerEndpoints?.find((e) => e.id === parsed.endpointId)?.baseUrl ?? '';
@@ -2643,8 +3798,8 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
       ...(record ? { capability: record } : {}),
       engine,
       model,
-      structuredOutput: { mode, dropped, label: structuredOutputLabel(mode, dropped, record, 'configured') },
-      testPlan: { configured: mode === 'off' ? 1 : 2, all: 3 },
+      structuredOutput: { mode, dropped, label: structuredOutputLabel(mode, dropped, record, mockLevelKey(id)) },
+      testPlan: { configured: mode === 'off' ? 1 : 2, all: 3, attempts: engine === 'local' ? 1 : 3 },
     };
   };
   return {
@@ -2671,14 +3826,15 @@ export async function mockTestAnalyzerModel(body: AnalyzerModelTestRequest): Pro
   const seeded = (globalThis as unknown as { __SEED_TEST_OUTCOME__?: 'enforced' | 'ignored' | 'rejected' }).__SEED_TEST_OUTCOME__ ?? 'enforced';
   const catalog = await mockGetAnalyzerModels(false);
   const mode = catalog.groups.flatMap((x) => x.models).find((m) => m.id === body.modelId)?.structuredOutput.mode ?? 'schema';
+  const level = mockLevelKey(body.modelId);
   const record: ModelCapabilityRecord = {
     serverUrl: mockServerUrlFor(body.modelId, MOCK_USER_SETTINGS),
     testedAt: new Date().toISOString(),
     control: { ok: true },
     structuredOutput:
       body.scope === 'all'
-        ? { schema: { configured: seeded }, json: { configured: 'accepted' }, off: { configured: 'accepted' } }
-        : { [mode]: { configured: mode === 'schema' ? seeded : 'accepted' } },
+        ? { schema: { [level]: seeded }, json: { [level]: 'accepted' }, off: { [level]: 'accepted' } }
+        : { [mode]: { [level]: mode === 'schema' ? seeded : 'accepted' } },
     reasoning: {},
   };
   Object.assign(MOCK_USER_SETTINGS, {
@@ -2698,16 +3854,27 @@ export async function mockPreviewAnalyzerEndpointModels(_body: AnalyzerEndpointM
 - `mock` object (`:10259`): add `getAnalyzerModels: mockGetAnalyzerModels, testAnalyzerModel: mockTestAnalyzerModel, previewAnalyzerEndpointModels: mockPreviewAnalyzerEndpointModels,`.
 
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/analyzer/model-test-deps.test.ts src/routes/analyzer-models.test.ts`, `npx vitest run src/lib/structured-output-label.test.ts src/lib/api-analyzer-catalog-mock.test.ts src/lib/api-types.test.ts`, `npm run typecheck`, `npm run check:cycles`. Expected: PASS.
+Run: `npm --prefix server run test -- src/analyzer/model-test-deps.test.ts src/routes/analyzer-models.test.ts src/routes/analyzer-models.preview-redaction.test.ts`, `npx vitest run src/lib/structured-output-label.test.ts src/lib/api-analyzer-catalog-mock.test.ts src/lib/api-types.test.ts`, `npm run typecheck`, `npm run check:cycles`. Expected: PASS.
 
 - [ ] **Step 5: Mutation proof**
-1. Route `POST /models/test`: move `await writeAnalyzerCapabilityRecord(modelId, record);` into the `catch` before the 502 → red: "502 and nothing persisted…", "runs the test, persists the record…". Restore.
+1. Route `POST /models/test`: move `await writeAnalyzerCapabilityRecord(modelId, record);` into the `catch` before the 502 → red: "a failed control answers 502 outcome failed and keeps the previous record…", "an inconclusive step answers 502…", "runs the test, persists the record…". Restore.
 2. Route preview: drop the `keyOriginMatches(stored, baseUrl)` condition → red: "uses the stored key only when its origin matches…". Restore.
 3. `structured-output-label.ts`: change `dropped.length > 0` to `false` → red: the frontend table test on the rows with a non-empty `dropped` and no `ignored` outcome (rows 2 and 3). Restore.
+4. Route: pass `deps` instead of `{ ...deps, signal: controller.signal }` → red: "a client that disconnects aborts the running test…" (`seenSignal` undefined) and "runs the test, persists the record…". Restore.
+5. Route: make `outcome` always `'inconclusive'` → red: "a failed control answers 502 outcome failed…". Restore.
+6. In 3b's `openai-transport.ts` (a temporary edit, to prove this task's two P3/N2 cases can fail): move `noteEndpointModelUsed(this.endpoint.id, this.model);` below the `await this.client.chat.completions.create(…)` line → red: nothing here (the Test's own call succeeds), so instead delete that call → red: "the Test transport records the model it sends to, so a {model} unload can name it (N2)". Restore. Then drop `{ signal: caller }` from the `endpointSemaphore(this.endpoint).acquire` call → red: "a Test queued on the endpoint's concurrency semaphore stops as soon as the route aborts…" (it waits for the holder and then sends). Restore.
+7. `model-test-deps.ts` Ollama branch: `maxOutputTokens: numPredict` (no `> 0` test) → red: "Ollama's probe limit is its num_ctx, with no output cap by default…". Restore.
+8. `api.ts` `mockLevelKey`: return `'model-default'` always → red: "mockTestAnalyzerModel returns a record for the configured mode, filed under the level the engine sends". Restore.
+9. `analyzer-catalog.ts` `previewEndpointModels`: replace `listingErrorMessage(err, [input.apiKey, ...knownAnalyzerSecrets()])` with `(err instanceof Error ? err.message : String(err)).slice(0, 300)` → red: "a listing error whose body echoes the typed key is returned redacted". Restore.
+10. Route `POST /models/test`: replace `redactKnownSecrets((err as Error).message ?? 'Model test failed.', secretsFor(settings))` with `(err as Error).message ?? 'Model test failed.'` → red: "a 502 never returns a saved key the provider echoed (P22)". Restore.
+11. `secretsFor`: return `knownAnalyzerSecrets()` alone → red: "a 502 never returns a saved key the provider echoed (P22)" (the mocked settings' key is not in the cache). Restore.
+12. Route `GET /models`: log `err` instead of the redacted text → red: "logs a catalog failure without a saved secret (P22)". Restore.
+13. `model-test-deps.ts`: delete `redact` from `offered` → red: "redact removes the endpoint key and every saved analyzer secret, so 3c.4 caps redacted text (P22)". Restore.
+14. `analyzer-catalog.ts` `listEndpoint` (Task 3c.5): replace `throw rebuildListingError(err, apiKey);` with `throw err;` → red: "an injected error carrying the key never reaches the preview response, its log line or inspect(err) (P22)". `inspect(err)` prints the `APIConnectionError`'s `TypeError` cause, and that cause holds the key. The response and log halves stay green, because `listingErrorMessage` redacts the typed key; that is why the test also inspects the thrown error. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/model-test-deps.ts server/src/analyzer/model-test-deps.test.ts server/src/routes/analyzer-models.ts server/src/routes/analyzer-models.test.ts server/src/app.ts openapi.yaml src/lib/api-types.ts src/lib/types.ts src/lib/api.ts src/lib/structured-output-label.ts src/lib/structured-output-label.test.ts src/lib/api-analyzer-catalog-mock.test.ts
+git add server/src/analyzer/model-test-deps.ts server/src/analyzer/model-test-deps.test.ts server/src/routes/analyzer-models.ts server/src/routes/analyzer-models.test.ts server/src/routes/analyzer-models.preview-redaction.test.ts server/src/app.ts openapi.yaml src/lib/api-types.ts src/lib/types.ts src/lib/api.ts src/lib/structured-output-label.ts src/lib/structured-output-label.test.ts src/lib/api-analyzer-catalog-mock.test.ts
 git commit -m "feat(server,openapi): analyzer catalog, model Test and endpoint preview routes"
 ```
 
@@ -2744,11 +3911,11 @@ const catalog: AnalyzerCatalog = {
   groups: [
     {
       kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'ok',
-      models: [{ id: 'gemini-4.0-flash', label: 'Gemini 4.0 Flash', engine: 'gemini', model: 'gemini-4.0-flash', structuredOutput: { mode: 'json', dropped: [], label: 'json' }, testPlan: { configured: 2, all: 3 } }],
+      models: [{ id: 'gemini-4.0-flash', label: 'Gemini 4.0 Flash', engine: 'gemini', model: 'gemini-4.0-flash', structuredOutput: { mode: 'json', dropped: [], label: 'json' }, testPlan: { configured: 2, all: 3, attempts: 3 } }],
     },
     {
       kind: 'endpoint', id: 'lab', label: 'Lab server', status: 'ok',
-      models: [{ id: 'openai:lab::qwen3-30b', label: 'qwen3-30b', engine: 'openai', model: 'qwen3-30b', structuredOutput: { mode: 'schema', dropped: ['$schema'], label: 'schema (not enforced)' }, testPlan: { configured: 2, all: 3 } }],
+      models: [{ id: 'openai:lab::qwen3-30b', label: 'qwen3-30b', engine: 'openai', model: 'qwen3-30b', structuredOutput: { mode: 'schema', dropped: ['$schema'], label: 'schema (not enforced)' }, testPlan: { configured: 2, all: 3, attempts: 3 } }],
     },
   ],
 };
@@ -2816,7 +3983,7 @@ import { buildCatalogOptionGroups, MODEL_OPTIONS } from './models';
 import type { AnalyzerCatalog, AnalyzerCatalogEntry } from './types';
 
 const e = (id: string, engine: AnalyzerCatalogEntry['engine'], model = id): AnalyzerCatalogEntry => ({
-  id, label: model, engine, model, structuredOutput: { mode: 'schema', dropped: [], label: 'schema' }, testPlan: { configured: 2, all: 3 },
+  id, label: model, engine, model, structuredOutput: { mode: 'schema', dropped: [], label: 'schema' }, testPlan: { configured: 2, all: 3, attempts: 3 },
 });
 
 const catalog = (over: Partial<Record<'ollama' | 'gemini', 'ok' | 'fallback' | 'error'>> = {}): AnalyzerCatalog => ({
@@ -2875,7 +4042,7 @@ Re-grep the sites (the scout's list of 3 was incomplete; this grep finds 8 lines
 rg -n "(?<![A-Z_])MODEL_OPTIONS\.find\(" src --pcre2 -g '!*.test.*'
 rg -n "selectedOption\?\.label \?\? selectedModel" src
 ```
-Expected at 2b63b451: `account-forms.tsx:18`, `analyzer-model-override-badge.tsx:19`, `analysing/phase-model-swap.tsx:82`, `analysing/phase-model-chip.tsx:72`, `:75`, `analysing/phase-card.tsx:354`, `status-popover.tsx:165`, `:307`; and `analysis-model-picker.tsx:43`. Nine sites — the spec's "~9" was right.
+Expected at 46e62a34: `account-forms.tsx:18`, `analyzer-model-override-badge.tsx:19`, `analysing/phase-model-swap.tsx:82`, `analysing/phase-model-chip.tsx:72`, `:75`, `analysing/phase-card.tsx:354`, `status-popover.tsx:165`, `:307`; and `analysis-model-picker.tsx:43`. Nine sites — the spec's "~9" was right.
 
 Create `src/lib/model-label.ts`:
 
@@ -3179,7 +4346,8 @@ vi.mock('../../lib/api', () => ({
 vi.mock('../../store/queue-thunks', () => ({ haltActiveGeneration: vi.fn(() => ({ type: 'test/halt' })) }));
 
 const entry = (id: string, engine: AnalyzerCatalogEntry['engine'], model = id): AnalyzerCatalogEntry => ({
-  id, label: model, engine, model, structuredOutput: { mode: 'schema', dropped: [], label: 'schema' }, testPlan: { configured: 2, all: 3 },
+  id, label: model, engine, model, structuredOutput: { mode: 'schema', dropped: [], label: 'schema' },
+  testPlan: { configured: 2, all: 3, attempts: engine === 'local' ? 1 : 3 },
 });
 
 const CATALOG: AnalyzerCatalog = {
@@ -3238,16 +4406,26 @@ describe('AnalyzerModelLimits (#3084)', () => {
     );
   });
 
-  it('Test shows the request count, switches to the all-modes count, and sends the chosen scope', async () => {
+  it('Test shows the request count and the maximum including retries, switches to the all-modes count, and sends the chosen scope', async () => {
     renderLimits();
     fireEvent.click(await screen.findByTestId('model-test-gemini-3.6-flash'));
     expect(screen.getByTestId('model-test-request-count')).toHaveTextContent('2');
+    /* N6: the transport retries a 500/502/503/504 up to three times per request. */
+    expect(screen.getByTestId('model-test-max-requests')).toHaveTextContent('6');
     expect(screen.getByText(/count against today's Gemini quota/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('model-test-scope-all'));
     // off-mode control + schema + json (the off check reuses the control)
     expect(screen.getByTestId('model-test-request-count')).toHaveTextContent('3');
+    expect(screen.getByTestId('model-test-max-requests')).toHaveTextContent('9');
     fireEvent.click(screen.getByRole('button', { name: 'Run test' }));
     await waitFor(() => expect(api.testAnalyzerModel).toHaveBeenCalledWith({ modelId: 'gemini-3.6-flash', scope: 'all' }));
+  });
+
+  it('an Ollama model states no maximum, because its transport does not retry (N6)', async () => {
+    renderLimits();
+    fireEvent.click(await screen.findByTestId('model-test-qwen3.5:4b'));
+    expect(screen.getByTestId('model-test-request-count')).toHaveTextContent('2');
+    expect(screen.queryByTestId('model-test-max-requests')).toBeNull();
   });
 
   it('testing a local model while TTS is generating opens the GPU guard before any request; Wait sends nothing', async () => {
@@ -3317,9 +4495,10 @@ import { api } from '../../lib/api';
 import type { AnalyzerCatalogEntry } from '../../lib/types';
 
 export function describeTestOutcome(entry: AnalyzerCatalogEntry): string | null {
+  /* A failed control or an inconclusive test saves no record (P7); its 502 message is shown
+     through `error` below instead, and the previous outcome keeps showing here. */
   const record = entry.capability;
   if (!record) return null;
-  if (!record.control.ok) return `Test failed: ${record.control.error ?? 'the control request did not succeed'}`;
   return `${entry.structuredOutput.label} · tested ${record.testedAt.slice(0, 10)}`;
 }
 
@@ -3331,6 +4510,9 @@ export function ModelTestButton({ entry, label }: { entry: AnalyzerCatalogEntry;
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requests = scopeAll ? entry.testPlan.all : entry.testPlan.configured;
+  /* N6: a 500/502/503/504 is retried by the transport (3 attempts on Gemini and endpoints,
+     1 on Ollama), so the count above is the minimum; the dialog states the maximum too. */
+  const maxRequests = requests * entry.testPlan.attempts;
   const outcome = describeTestOutcome(entry);
 
   const run = async () => {
@@ -3375,7 +4557,15 @@ export function ModelTestButton({ entry, label }: { entry: AnalyzerCatalogEntry;
           <>
             <p>
               This sends <b data-testid="model-test-request-count">{requests}</b> request{requests === 1 ? '' : 's'} to the
-              model{entry.engine === 'gemini' ? ", and they count against today's Gemini quota" : ''}.
+              model
+              {maxRequests > requests ? (
+                <>
+                  {' '}
+                  — up to <b data-testid="model-test-max-requests">{maxRequests}</b> if the server answers with an error
+                  Castwright retries
+                </>
+              ) : null}
+              {entry.engine === 'gemini' ? ", and they count against today's Gemini quota" : ''}.
             </p>
             <label className="mt-3 flex items-center gap-2 text-sm">
               <input
@@ -3526,6 +4716,8 @@ Run: `npx vitest run src/hooks/use-local-analyzer-guard.test.tsx src/components/
 2. Guard: revert `engine === 'gemini'` to `engine !== 'local'` → red: "an OpenAI-compatible endpoint model fails closed…". Restore.
 3. `ModelTestButton` `onConfirm`: replace `guard(() => void run())` with `void run()` → red: "testing a local model while TTS is generating opens the GPU guard…". Restore.
 4. `setField`: remove `if (Object.keys(nextEntry).length === 0) delete next[id];` → red: "Save writes the whole map, omitting blank fields and empty models". Restore.
+5. `ModelTestButton`: `const maxRequests = requests;` → red: "Test shows the request count and the maximum including retries…" (`6`/`9` expected) and "an Ollama model states no maximum…" stays green, since `attempts` is 1 there. Restore.
+6. `ModelTestButton`: replace the `maxRequests > requests` condition with `true` → red: "an Ollama model states no maximum, because its transport does not retry (N6)". Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -3534,23 +4726,56 @@ git commit -m "feat(frontend): per-model analyzer rate limits and a guarded mode
 ```
 
 ---
-### Task 3c.9: `resolveCapacity` endpoint branch and the per-request cap on context-family budgets
+### Task 3c.9: `resolveCapacity` endpoint branch, served limits warmed at run start, and the per-request cap on context-family budgets
 
 **Files:**
+- Create: `server/src/analyzer/catalog/endpoint-served-limits.ts`
 - Modify: `server/src/analyzer/capacity.ts` (W2) — the `engine === 'openai'` case of `resolveCapacity`
+- Modify: `server/src/analyzer/transports/openai-transport.ts` (3b) — add `prepare(signal?)` and the test-only `servedLimitsTimeoutMs` constructor option. The `apiKey` field has existed since 3b Task 3b.11 and is not re-added. `resolveEndpointMaxOutputTokens` now clamps a manual cap to the served limit.
+- Modify: `server/src/analyzer/openai.ts` (3b Task 3b.12) — the `settings` provider passes the served output limit into `openAIRequestSettings(endpoint, servedOutputLimit)`
+- Modify: `server/src/analyzer/catalog/analyzer-catalog.ts` (Task 3c.5) — `CatalogDeps.listEndpoint` and `listEndpoint` take an optional `signal` (P26)
+- Modify: `server/src/analyzer/openai-analyzer.test.ts` (3b Task 3b.12) — its fake server answers `GET /v1/models`
+- Modify: `server/src/analyzer/model-test-deps.ts` (Task 3c.6) — the endpoint `probeLimits`
 - Modify: `server/src/analyzer/token-budget.ts:47-51` (`cloudBodyCharBudgetForCap`; `cloudBodyCharBudget` delegates)
-- Modify: `server/src/analyzer/stage1-chunk.ts`, `stage2-chunk.ts`, `chapter-chunker.ts` — the context-family return of each W2 resolver (at 2b63b451 these are the `engine === 'local'` paths: `stage1-chunk.ts:119-124`, `stage2-chunk.ts:76-81`, `chapter-chunker.ts:136`)
-- Test: Create `server/src/analyzer/capacity.endpoint.test.ts`
+- Modify: `server/src/analyzer/stage1-chunk.ts`, `stage2-chunk.ts`, `chapter-chunker.ts` — the context-family return of each W2 resolver (at 46e62a34 these are the `engine === 'local'` paths: `stage1-chunk.ts:119-124`, `stage2-chunk.ts:76-81`, `chapter-chunker.ts:136`)
+- Test: Create `server/src/analyzer/capacity.endpoint.test.ts`, `server/src/analyzer/openai-served-limits.test.ts`
 
 **Interfaces:**
-- Consumes: `EngineCapacity`, `resolveCapacity(sel)`, `TODAY_LOCAL_CAPACITY(numCtx)` (W2); `resolveLimits` (Task 3c.1); `getCachedCatalogLimits` (Task 3c.5); `parseEndpointModelId`, `endpointModelId` (3a); `AnalyzerEndpointMissingError` (3b); `analyzerEndpointSchema` (3b).
-- Produces: `resolveCapacity({ engine: 'openai', model, endpoint? })` → `{ family: 'context', contextTokens: endpoint.contextTokens, maxOutputTokens, perRequestInputCap? }`; `cloudBodyCharBudgetForCap(capTokens, body, reservedChars?, reservedTokens?)`.
+- Consumes: `EngineCapacity`, `resolveCapacity(sel)`, `TODAY_LOCAL_CAPACITY(numCtx)` (W2); `ChatTransport.prepare?(signal?: AbortSignal)`, awaited by `StageRunner` as `prepare?.(call.signal)` before every settings read (W2 Task 2.6); `resolveLimits` (Task 3c.1); `servedLimitsFromModelEntry`, `DEFAULT_CATALOG_DEPS.listEndpoint`, `CatalogDeps` (Task 3c.5); `modelTestDepsFor` (Task 3c.6); `parseEndpointModelId`, `endpointModelId` (3a); `AnalyzerEndpointMissingError` (3b); `analyzerEndpointSchema`, `OpenAITransport` (with its `apiKey` field), `OpenAIAnalyzer`, `openAIRequestSettings(endpoint, servedOutputLimit?)`, `resolveEndpointMaxOutputTokens(endpoint, servedOutputLimit?)` (3b Tasks 3b.11/3b.12); `redactKnownSecrets` (3b Task 3b.1, `analyzer/redact.ts`); `OPENAI_RETRY_POLICY`, `adaptSchemaForOpenAI`, `StageRunner`, `TransportAnalyzer` (tests).
+- Produces: `resolveCapacity({ engine: 'openai', model, endpoint? })` → `{ family: 'context', contextTokens: endpoint.contextTokens, maxOutputTokens, perRequestInputCap? }`; `cloudBodyCharBudgetForCap(capTokens, body, reservedChars?, reservedTokens?)`; `warmEndpointServedLimits(endpoint, apiKey, deps?: { listEndpoint?; now?; timeoutMs?; signal? })`, `getEndpointServedLimits(baseUrl, model, now?)`, `SERVED_LIMITS_TTL_MS`, `SERVED_LIMITS_WARMUP_TIMEOUT_MS` (10 000), `ServedLimits`, `_resetEndpointServedLimitsForTest()`; `OpenAITransport.prepare(signal?: AbortSignal)`.
+- Contract deviations (reported): `OpenAITransport`'s options gain the test-only `servedLimitsTimeoutMs?: number`, and `CatalogDeps.listEndpoint` gains an optional third `signal` parameter.
 
-Rules (spec §6): endpoints are context family; `perRequestInputCap` = min of the endpoint's `maxInputTokensPerRequest` and its saved TPM limit, each only if set (unset TPM resolves to Infinity for endpoints and is ignored); when a cap is set, each context-family budget is additionally limited by `cloudBodyCharBudget`'s formula at that cap, with the same reservations that pass's request-cap branch uses (stage 1: roster chars + `STAGE1_CLOUD_RESERVED_TOKENS`; stage 2: none; chapter-level: the caller's `reservedChars`/`reservedTokens`). `sel.model` may be the full `openai:<id>::<model>` id or the bare model with `sel.endpoint`; the endpoint is looked up from cached settings when not passed; a missing endpoint throws `AnalyzerEndpointMissingError(endpointId, 'settings')`. `maxOutputTokens` = the manual value clamped to the served limit when known; `0` (Auto) → the served limit, or `null` when unknown (the transport computes `contextTokens − estimated input`, spec §7). Ollama and Gemini branches are untouched — W2's pinning test is the proof.
+Rules (spec §6, §7, P15):
+- **Family.** Endpoints are context family.
+- **`perRequestInputCap`** is the smaller of the endpoint's `maxInputTokensPerRequest` and its saved TPM limit, each counted only if set (an unset TPM resolves to Infinity for endpoints and is ignored). When a cap is set, each context-family budget is also limited by `cloudBodyCharBudget`'s formula at that cap, with the reservations that pass's request-cap branch uses:
+  - stage 1: roster chars + `STAGE1_CLOUD_RESERVED_TOKENS`;
+  - stage 2: none;
+  - chapter-level: the caller's `reservedChars` / `reservedTokens`.
+- **Model and endpoint.** `sel.model` may be the full `openai:<id>::<model>` id, or the bare model with `sel.endpoint`. The endpoint is looked up from cached settings when not passed; a missing endpoint throws `AnalyzerEndpointMissingError(endpointId, 'settings')`.
+- **`maxOutputTokens`.** A manual value is clamped to the served limit when known. `0` (Auto) → the served limit, or `null` when unknown (the transport then sends `contextTokens − estimated input`, spec §7).
+- **Served limits (P15)** come from `getEndpointServedLimits(endpoint.baseUrl, model)`. They are never read from the catalog view's cache, so a run's caps never depend on whether a catalog was opened.
+  - **Warm-up.** `OpenAITransport.prepare(signal)` warms them before every settings read, through W2's runner hook (`prepare?.(call.signal)`). The listing uses the catalog's `listEndpoint` (served fields only, `servedLimitsFromModelEntry`). That listing is built with `allowlistedFetch`, so no header from the host's `OPENAI_CUSTOM_HEADERS` reaches it (P22, Task 3c.5).
+  - **Bounded (P26).** The warm-up runs before the limiter, the request ceiling and the idle watchdog, so it bounds itself:
+    - **One listing per base URL** is in flight at a time. Every concurrent request waits on it.
+    - **The listing's signal** is `AbortSignal.any([AbortSignal.timeout(SERVED_LIMITS_WARMUP_TIMEOUT_MS), cancel])`. `cancel` fires when every waiting caller has aborted. The same signal reaches the `GET /v1/models` fetch, and the wait also races it, so a listing function that ignores the signal cannot hold a request.
+    - **A caller's abort** (pause, client gone) releases only that caller, at once. The listing is cancelled only when no caller is left. An abandoned listing caches nothing, so the next run lists again.
+    - **A timeout or a failure** proceeds with fallback limits: the limits stay unknown. That includes a reset or DNS hiccup (`ECONNRESET`, `UND_ERR_SOCKET`, `EAI_AGAIN`), which is transient and never unreachable (P21); the warm-up has no unreachable state. It backs off 60 s, as a failed listing does. `prepare()` never rejects.
+    - **Rebuilt errors only (P22).** The listing rejects only with the classes `listEndpoint` rebuilds in Task 3c.5: `AnalyzerHttpError`, `AnalyzerTransportError` or `AnalysisAbortedError`. It never rejects with an SDK error, so the catch's log line can carry no SDK cause chain. An `AnalyzerTransportError` is a failed listing like any other: backed off, never read as unreachable, never a reason to fall back.
+  - **Cache.** Keyed by base URL, with a 10-minute TTL. A failed or timed-out listing backs off 60 s, never rejects, and leaves the limits unknown. Its log line is redacted against the endpoint key. A changed base URL never reads another server's limits.
+  - **Stop-the-run errors (P20).** The warm-up's catch wraps only the model listing, never a stage call, so no pass-through is owed.
+  - **Context.** The warm-up stores served context and output; `resolveCapacity` applies the output limit only. Spec §6 keeps the endpoint's required `contextTokens` as the context.
+- **`OpenAIAnalyzer`'s settings** are `openAIRequestSettings(endpoint, getEndpointServedLimits(endpoint.baseUrl, model)?.maxOutputTokens)` (3b's resolver, P24), so every request carries a number.
+  - **Manual cap.** `resolveEndpointMaxOutputTokens` clamps it to the served limit when that is known.
+  - **Auto.** `min(served limit if known, contextTokens − margin)`.
+  - **`resolveCapacity(…).maxOutputTokens`** applies the same manual clamp. It is `null` for an unknown Auto, where the request's number is the context bound.
+  - **Test action.** Its `probeLimits` for an endpoint reads `resolveCapacity`.
+- **Unchanged.** Ollama and Gemini branches are untouched; W2's pinning test is the proof.
 
-Keeps green: W2's capacity pinning test, `stage1-chunk.test.ts`, `stage2-chunk.test.ts`, `chapter-chunker.test.ts`, `token-budget.test.ts`, `output-heavy-tpm.test.ts`, `attribution-eval/review-run.test.ts`, route tests `annotate-emotion.test.ts:257`, `instruct-annotation.test.ts:302`, `script-review.test.ts:607`.
+Keeps green: W2's capacity pinning test, Task 3c.5's `catalog/analyzer-catalog.test.ts` (the listing gains an optional parameter), 3b's `resolveEndpointMaxOutputTokens` / `openAIRequestSettings` cases (they pass no served limit), `stage1-chunk.test.ts`, `stage2-chunk.test.ts`, `chapter-chunker.test.ts`, `token-budget.test.ts`, `output-heavy-tpm.test.ts`, `attribution-eval/review-run.test.ts`, 3b's `openai-analyzer.test.ts` and `openai-transport.contract.test.ts`, `model-test-deps.test.ts`, route tests `annotate-emotion.test.ts:257`, `instruct-annotation.test.ts:302`, `script-review.test.ts:607`.
 
-- [ ] **Step 1: Write the failing test** — create `server/src/analyzer/capacity.endpoint.test.ts`:
+- [ ] **Step 1: Write the failing tests**
+
+Create `server/src/analyzer/capacity.endpoint.test.ts`:
 
 ```ts
 import { describe, it, expect, afterEach } from 'vitest';
@@ -3562,7 +4787,7 @@ import { cloudBodyCharBudget, cloudBodyCharBudgetForCap, resolveMaxInputTokensPe
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
 import { AnalyzerEndpointMissingError } from './errors.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
-import { _resetCatalogCacheForTest } from './catalog/analyzer-catalog.js';
+import { _resetEndpointServedLimitsForTest } from './catalog/endpoint-served-limits.js';
 
 const LATIN = 'The lamp guttered while Hart counted the coal sacks by the door. '.repeat(400);
 const CYRILLIC = 'Фонарь мигал, пока Харт считал мешки с углём у двери. '.repeat(400);
@@ -3574,7 +4799,7 @@ function endpoint(over: Record<string, unknown> = {}) {
 
 afterEach(() => {
   _resetUserSettingsCache();
-  _resetCatalogCacheForTest();
+  _resetEndpointServedLimitsForTest();
 });
 
 describe('resolveCapacity — endpoint branch (#3084 W3)', () => {
@@ -3657,11 +4882,306 @@ describe('budgets for an endpoint capacity', () => {
 });
 ```
 
-The second `it` in "a binding cap lowers stage 1…" asserts a `Math.min` composition by design: the value is new behaviour defined as that composition (spec §6), and the preceding `toBeLessThan` proves the cap actually binds for this input.
+The second `it` in "a binding cap lowers stage 1…" asserts a `Math.min` composition by design. The value is new behaviour defined as that composition (spec §6), and the preceding `toBeLessThan` proves the cap actually binds for this input.
 
-- [ ] **Step 2: Run it and confirm it fails**
-Run: `npm --prefix server run test -- src/analyzer/capacity.endpoint.test.ts`
-Expected: FAIL — `cloudBodyCharBudgetForCap is not a function` and the endpoint branch throwing (W2 does not handle `openai`).
+Create `server/src/analyzer/openai-served-limits.test.ts`:
+
+```ts
+/* #3084 P15 — endpoint served limits are warmed at run start through OpenAITransport.prepare(),
+   cached per base URL with a TTL, and reach the wire through OpenAIAnalyzer's settings. No
+   test here builds a catalog: a run never depends on the catalog view having been opened.
+   Real http servers (Global Constraints). */
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { readdir, rm } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+process.env.GEMINI_RETRY_BACKOFFS_MS = '10,10';
+
+const { OpenAIAnalyzer, openAIRequestSettings } = await import('./openai.js');
+const { OpenAITransport, resolveEndpointMaxOutputTokens } = await import('./transports/openai-transport.js');
+/* If wave 1 exported TransportAnalyzer from runner/transport-analyzer.ts, split this import to match. */
+const { StageRunner, TransportAnalyzer } = await import('./runner/stage-runner.js');
+const { OPENAI_RETRY_POLICY } = await import('./runner/retry-policy.js');
+const { adaptSchemaForOpenAI } = await import('./runner/schema-adapters.js');
+const { AnalysisAbortedError } = await import('./errors.js');
+const { resolveCapacity } = await import('./capacity.js');
+const { modelTestDepsFor } = await import('./model-test-deps.js');
+const {
+  warmEndpointServedLimits,
+  getEndpointServedLimits,
+  SERVED_LIMITS_TTL_MS,
+  SERVED_LIMITS_WARMUP_TIMEOUT_MS,
+  _resetEndpointServedLimitsForTest,
+} = await import('./catalog/endpoint-served-limits.js');
+const { _resetCatalogCacheForTest } = await import('./catalog/analyzer-catalog.js');
+const { _resetEndpointRuntimeForTest } = await import('./transports/endpoint-runtime.js');
+const { geminiRateLimiter } = await import('./rate-limit.js');
+const { analyzerEndpointSchema } = await import('../workspace/analyzer-endpoints.js');
+const { DEFAULT_USER_SETTINGS, _resetUserSettingsCache, _setUserSettingsCacheForTest } = await import('../workspace/user-settings.js');
+
+const HANDOFF_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'handoff');
+const ID = 'm_openai_served_limits';
+const VALID = JSON.stringify({
+  characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator', evidence: [{ quote: 'a' }, { quote: 'bb' }, { quote: 'ccc' }] }],
+});
+
+type Seen = { method: string; url: string; body: Record<string, unknown> };
+const servers: Server[] = [];
+
+/** A fake OpenRouter-shaped server: /v1/models lists one model with a served output limit.
+    `listDelayMs` answers the listing late; `stallList` never answers it (P26). `listClosed`
+    resolves when a listing response closes — for a stalled listing only the client can close it. */
+async function lab(
+  maxCompletionTokens: number,
+  opts: { listDelayMs?: number; stallList?: boolean } = {},
+): Promise<{ baseUrl: string; seen: Seen[]; listClosed: Promise<void> }> {
+  const seen: Seen[] = [];
+  let markListClosed: () => void = () => {};
+  const listClosed = new Promise<void>((r) => (markListClosed = r));
+  const server = createServer((req, res) => {
+    let raw = '';
+    req.on('data', (d) => (raw += d));
+    req.on('end', () => {
+      seen.push({ method: req.method ?? '', url: req.url ?? '', body: raw ? (JSON.parse(raw) as Record<string, unknown>) : {} });
+      if (req.method === 'GET' && req.url === '/v1/models') {
+        res.on('close', () => markListClosed());
+        if (opts.stallList) return;
+        setTimeout(() => {
+          if (res.destroyed) return;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              object: 'list',
+              data: [{ id: 'qwen3-30b', object: 'model', created: 0, owned_by: 'x', context_length: 32768, top_provider: { context_length: 32768, max_completion_tokens: maxCompletionTokens } }],
+            }),
+          );
+        }, opts.listDelayMs ?? 0);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: VALID }, finish_reason: null }] })}\n\n`);
+      res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      res.end('data: [DONE]\n\n');
+    });
+  });
+  servers.push(server);
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  return { baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`, seen, listClosed };
+}
+
+const endpoint = (baseUrl: string, over: Record<string, unknown> = {}) =>
+  analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl, gpu: 'any', contextTokens: 32768, ...over });
+const chatBodies = (seen: Seen[]) => seen.filter((s) => s.method === 'POST').map((s) => s.body);
+const gets = (seen: Seen[]) => seen.filter((s) => s.method === 'GET');
+
+/** OpenAIAnalyzer's own wiring (openai.ts), with the transport's test-only warm-up bound (P26). */
+function runnerFor(ep: ReturnType<typeof endpoint>, servedLimitsTimeoutMs: number) {
+  return new TransportAnalyzer(
+    new StageRunner({
+      transport: new OpenAITransport({ endpoint: ep, apiKey: null, model: 'qwen3-30b', servedLimitsTimeoutMs }),
+      policy: OPENAI_RETRY_POLICY,
+      settings: () => openAIRequestSettings(ep, getEndpointServedLimits(ep.baseUrl, 'qwen3-30b')?.maxOutputTokens),
+      adaptSchema: adaptSchemaForOpenAI,
+    }),
+  );
+}
+
+beforeEach(() => {
+  _resetEndpointServedLimitsForTest();
+  _resetCatalogCacheForTest();
+  _resetEndpointRuntimeForTest();
+  geminiRateLimiter._reset();
+});
+afterEach(async () => {
+  _resetUserSettingsCache();
+  await Promise.all(
+    servers.splice(0).map((s) => {
+      s.closeAllConnections();
+      return new Promise<void>((r) => s.close(() => r()));
+    }),
+  );
+});
+afterAll(async () => {
+  delete process.env.GEMINI_RETRY_BACKOFFS_MS;
+  for (const sub of ['inbox', 'outbox']) {
+    const dir = resolve(HANDOFF_ROOT, sub);
+    const names = await readdir(dir).catch(() => [] as string[]);
+    await Promise.all(names.filter((n) => n.startsWith(ID)).map((n) => rm(resolve(dir, n), { force: true })));
+  }
+});
+
+describe('endpoint served limits warmed at run start (#3084 P15)', () => {
+  it('a run with no prior catalog view sends max_tokens clamped to the served output limit', async () => {
+    const { baseUrl, seen } = await lab(2048);
+    const ep = endpoint(baseUrl);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [ep], analyzerRateLimitsByModel: {} });
+    await new OpenAIAnalyzer({ endpoint: ep, apiKey: null, model: 'qwen3-30b' }).runStage1Chapter(ID, 1, '# p', {});
+    expect(seen[0]).toMatchObject({ method: 'GET', url: '/v1/models' });
+    expect(chatBodies(seen)[0].max_tokens).toBe(2048);
+  });
+
+  it('a manual max output above the served limit is clamped to it on the wire', async () => {
+    const { baseUrl, seen } = await lab(2048);
+    const ep = endpoint(baseUrl, { maxOutputTokens: 8192 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [ep], analyzerRateLimitsByModel: {} });
+    await new OpenAIAnalyzer({ endpoint: ep, apiKey: null, model: 'qwen3-30b' }).runStage1Chapter(ID, 1, '# p', {});
+    expect(chatBodies(seen)[0].max_tokens).toBe(2048);
+  });
+
+  it('limits are cached per base URL: an endpoint moved to another server never reads the old limits', async () => {
+    const a = await lab(2048);
+    const b = await lab(1024);
+    await new OpenAITransport({ endpoint: endpoint(a.baseUrl), apiKey: null, model: 'qwen3-30b' }).prepare();
+    const moved = endpoint(b.baseUrl);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [moved], analyzerRateLimitsByModel: {} });
+    expect(resolveCapacity({ engine: 'openai', model: 'openai:lab::qwen3-30b' }).maxOutputTokens).toBeNull();
+    await new OpenAITransport({ endpoint: moved, apiKey: null, model: 'qwen3-30b' }).prepare();
+    expect(resolveCapacity({ engine: 'openai', model: 'openai:lab::qwen3-30b' }).maxOutputTokens).toBe(1024);
+  });
+
+  it('within the TTL a second warm-up does not list again; once it expires, it does', async () => {
+    let now = 1_000;
+    const listEndpoint = vi.fn(async () => [{ id: 'm', top_provider: { max_completion_tokens: 512 } }]);
+    const ep = { baseUrl: 'http://127.0.0.1:1/v1' };
+    await warmEndpointServedLimits(ep, null, { listEndpoint, now: () => now });
+    now += SERVED_LIMITS_TTL_MS - 1;
+    await warmEndpointServedLimits(ep, null, { listEndpoint, now: () => now });
+    expect(listEndpoint).toHaveBeenCalledTimes(1);
+    expect(getEndpointServedLimits(ep.baseUrl, 'm', now)).toEqual({ maxOutputTokens: 512 });
+    now += 2;
+    expect(getEndpointServedLimits(ep.baseUrl, 'm', now)).toBeUndefined();
+    await warmEndpointServedLimits(ep, null, { listEndpoint, now: () => now });
+    expect(listEndpoint).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failed listing never rejects, leaves the limits unknown, and logs no key (P22)', async () => {
+    const KEY = 'sk-lab-listing-secret-01';
+    const listEndpoint = vi.fn(async () => {
+      throw new Error(`401 invalid key ${KEY}`);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(warmEndpointServedLimits({ baseUrl: 'http://127.0.0.1:1/v1' }, KEY, { listEndpoint })).resolves.toBeUndefined();
+    expect(getEndpointServedLimits('http://127.0.0.1:1/v1', 'm')).toBeUndefined();
+    const logged = warn.mock.calls.flat().join('\n');
+    expect(logged).toContain('[redacted]');
+    expect(logged).not.toContain(KEY);
+    warn.mockRestore();
+  });
+
+  it('resolveEndpointMaxOutputTokens clamps a manual cap to the served limit only when one is known (P15, P24)', () => {
+    const ep = endpoint('http://127.0.0.1:8080/v1', { maxOutputTokens: 8192 });
+    expect(resolveEndpointMaxOutputTokens(ep, 2048)).toBe(2048);
+    expect(resolveEndpointMaxOutputTokens(ep, 16384)).toBe(8192);
+    expect(resolveEndpointMaxOutputTokens(ep)).toBe(8192);
+    expect(openAIRequestSettings(ep, 2048).maxOutputTokens).toBe(2048);
+  });
+
+  it("the Test action's probe cap uses the served limit prepare() warmed", async () => {
+    const { baseUrl } = await lab(2048);
+    const ep = endpoint(baseUrl);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [ep], analyzerRateLimitsByModel: {} });
+    const d = modelTestDepsFor('openai:lab::qwen3-30b', { ...DEFAULT_USER_SETTINGS, analyzerEndpoints: [ep], analyzerEndpointKeys: {} });
+    expect(d.probeLimits().maxOutputTokens).toBeNull();
+    await d.transport.prepare?.();
+    expect(d.probeLimits()).toEqual({ contextTokens: 32768, maxOutputTokens: 2048 });
+  });
+});
+
+describe('the served-limits warm-up is bounded (#3084 P26)', () => {
+  it('the production bound is 10 s', () => {
+    expect(SERVED_LIMITS_WARMUP_TIMEOUT_MS).toBe(10_000);
+  });
+
+  it('a server that never answers /v1/models releases the run after the warm-up bound, with fallback limits, and backs off', async () => {
+    const { baseUrl, seen } = await lab(2048, { stallList: true });
+    const ep = endpoint(baseUrl);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [ep], analyzerRateLimitsByModel: {} });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const started = Date.now();
+    await runnerFor(ep, 300).runStage1Chapter(ID, 1, '# p', {});
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(290);
+    expect(elapsed).toBeLessThan(5_000);
+    expect(gets(seen)).toHaveLength(1);
+    /* Fallback limits: the listing never arrived, so Auto is the context bound, not the 2048 the server would list. */
+    expect(chatBodies(seen)[0].max_tokens).toBeGreaterThan(2048);
+    expect(resolveCapacity({ engine: 'openai', model: 'openai:lab::qwen3-30b' }).maxOutputTokens).toBeNull();
+    expect(warn.mock.calls.flat().join('\n')).toContain('no answer within 300 ms');
+    /* A timeout counts as a failed listing: the 60 s back-off stops the next run from listing (and waiting) again. */
+    await runnerFor(ep, 300).runStage1Chapter(ID, 2, '# p', {});
+    expect(gets(seen)).toHaveLength(1);
+    expect(chatBodies(seen)).toHaveLength(2);
+    warn.mockRestore();
+  }, 15_000);
+
+  it('a paused run (caller abort) during a stalled warm-up stops at once and sends no chat request', async () => {
+    const { baseUrl, seen } = await lab(2048, { stallList: true });
+    const ep = endpoint(baseUrl);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [ep], analyzerRateLimitsByModel: {} });
+    const controller = new AbortController();
+    const run = runnerFor(ep, 8_000).runStage1Chapter(ID, 3, '# p', { signal: controller.signal });
+    await vi.waitFor(() => expect(gets(seen)).toHaveLength(1));
+    const abortedAt = Date.now();
+    controller.abort();
+    await expect(run).rejects.toBeInstanceOf(AnalysisAbortedError);
+    expect(Date.now() - abortedAt).toBeLessThan(1_000);
+    expect(chatBodies(seen)).toHaveLength(0);
+  });
+
+  it('concurrent requests share one bounded listing per base URL', async () => {
+    const { baseUrl, seen } = await lab(2048, { listDelayMs: 150 });
+    const ep = endpoint(baseUrl);
+    const t1 = new OpenAITransport({ endpoint: ep, apiKey: null, model: 'qwen3-30b' });
+    const t2 = new OpenAITransport({ endpoint: ep, apiKey: null, model: 'qwen3-30b' });
+    await Promise.all([t1.prepare(), t2.prepare(), t1.prepare()]);
+    expect(gets(seen)).toHaveLength(1);
+    expect(getEndpointServedLimits(baseUrl, 'qwen3-30b')?.maxOutputTokens).toBe(2048);
+  });
+
+  it('a caller abort releases prepare() at once, cancels the listing when no one else waits, and caches nothing', async () => {
+    const { baseUrl, seen, listClosed } = await lab(2048, { stallList: true });
+    const transport = new OpenAITransport({ endpoint: endpoint(baseUrl), apiKey: null, model: 'qwen3-30b', servedLimitsTimeoutMs: 8_000 });
+    const first = new AbortController();
+    const pending = transport.prepare(first.signal);
+    await vi.waitFor(() => expect(gets(seen)).toHaveLength(1));
+    const abortedAt = Date.now();
+    first.abort();
+    await expect(pending).resolves.toBeUndefined();
+    expect(Date.now() - abortedAt).toBeLessThan(1_000);
+    await listClosed; // the client closed the GET itself, long before the 8 s bound or the SDK's 10 s timeout
+    expect(Date.now() - abortedAt).toBeLessThan(2_000);
+    expect(getEndpointServedLimits(baseUrl, 'qwen3-30b')).toBeUndefined();
+    /* An abandoned listing is not a failed one: no back-off, so the next warm-up lists again. */
+    const second = new AbortController();
+    const again = transport.prepare(second.signal);
+    await vi.waitFor(() => expect(gets(seen)).toHaveLength(2));
+    second.abort();
+    await again;
+  });
+
+  it('an abort releases only that caller: a request still waiting gets the listing', async () => {
+    const { baseUrl, seen } = await lab(2048, { listDelayMs: 300 });
+    const ep = endpoint(baseUrl);
+    const leaving = new AbortController();
+    const left = new OpenAITransport({ endpoint: ep, apiKey: null, model: 'qwen3-30b' }).prepare(leaving.signal);
+    const stayed = new OpenAITransport({ endpoint: ep, apiKey: null, model: 'qwen3-30b' }).prepare();
+    await vi.waitFor(() => expect(gets(seen)).toHaveLength(1));
+    leaving.abort();
+    await left;
+    expect(getEndpointServedLimits(baseUrl, 'qwen3-30b')).toBeUndefined();
+    await stayed;
+    expect(gets(seen)).toHaveLength(1);
+    expect(getEndpointServedLimits(baseUrl, 'qwen3-30b')?.maxOutputTokens).toBe(2048);
+  });
+});
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+Run: `npm --prefix server run test -- src/analyzer/capacity.endpoint.test.ts src/analyzer/openai-served-limits.test.ts`
+Expected: FAIL. `capacity.endpoint.test.ts` fails with `cloudBodyCharBudgetForCap is not a function` and the endpoint branch throwing (W2 does not handle `openai`). `openai-served-limits.test.ts` fails with `Failed to load url ./catalog/endpoint-served-limits.js`.
 
 - [ ] **Step 3: Implement**
 
@@ -3683,6 +5203,157 @@ export function cloudBodyCharBudget(body: string, reservedChars = 0, reservedTok
 
 (If W2 already parametrised `cloudBodyCharBudget` by a cap, keep W2's function and add `cloudBodyCharBudgetForCap` as a thin alias of it with this signature.)
 
+Create `server/src/analyzer/catalog/endpoint-served-limits.ts`:
+
+```ts
+/* #3084 P15 / P26 — an endpoint's served limits (context, output), warmed at run start through
+   OpenAITransport.prepare(signal) — the W2 hook StageRunner awaits before every settings read —
+   and cached per base URL with a TTL. resolveCapacity and OpenAIAnalyzer's settings read them,
+   so a run's caps never depend on whether the catalog view was opened, and limits listed by an
+   old base URL never apply to a new one.
+   P26: the warm-up runs before the limiter, the request ceiling and the idle watchdog, so it
+   bounds itself. One listing per base URL is in flight at a time and every concurrent request
+   waits on it. The listing's signal is the 10 s bound plus "every waiter has left"; the wait
+   also races that signal, so a listing that ignores it cannot hold a request. A caller's abort
+   releases only that caller. A timeout or a failure proceeds with fallback limits and backs off
+   60 s; an abandoned listing caches nothing. Never rejects. */
+import { DEFAULT_CATALOG_DEPS, servedLimitsFromModelEntry, type CatalogDeps } from './analyzer-catalog.js';
+import { redactKnownSecrets } from '../redact.js';
+
+export const SERVED_LIMITS_TTL_MS = 10 * 60_000;
+export const SERVED_LIMITS_WARMUP_TIMEOUT_MS = 10_000;
+const FAILED_LISTING_BACKOFF_MS = 60_000;
+
+export interface ServedLimits {
+  contextTokens?: number;
+  maxOutputTokens?: number;
+}
+
+interface WarmDeps {
+  listEndpoint?: CatalogDeps['listEndpoint'];
+  now?: () => number;
+  /** Test seam; production uses SERVED_LIMITS_WARMUP_TIMEOUT_MS. */
+  timeoutMs?: number;
+  /** The caller's abort signal (pause, client gone): releases this caller only. */
+  signal?: AbortSignal;
+}
+
+type InFlight = { done: Promise<void>; waiters: number; cancel: AbortController };
+
+const cache = new Map<string, { expiresAt: number; byModel: Map<string, ServedLimits> }>();
+const inflight = new Map<string, InFlight>();
+const ABORTED = Symbol('aborted');
+
+function keyFor(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '');
+}
+
+/** `work`'s value, or ABORTED as soon as `signal` aborts. `work` always keeps a rejection
+    handler, so a rejection that lands after the abort is never unhandled. */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T | typeof ABORTED> {
+  if (!signal) return work;
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(ABORTED);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
+async function listInto(
+  key: string,
+  baseUrl: string,
+  apiKey: string | null,
+  deps: WarmDeps,
+  listing: AbortSignal,
+  cancel: AbortSignal,
+): Promise<void> {
+  const now = deps.now ?? Date.now;
+  try {
+    const list = deps.listEndpoint ?? DEFAULT_CATALOG_DEPS.listEndpoint;
+    const rows = await untilAborted(list(baseUrl, apiKey, listing), listing);
+    if (rows === ABORTED) throw new Error(`no answer within ${deps.timeoutMs ?? SERVED_LIMITS_WARMUP_TIMEOUT_MS} ms`);
+    const byModel = new Map<string, ServedLimits>();
+    for (const row of rows) if (typeof row.id === 'string') byModel.set(row.id, servedLimitsFromModelEntry(row));
+    cache.set(key, { expiresAt: now() + SERVED_LIMITS_TTL_MS, byModel });
+  } catch (err) {
+    /* Every waiter left (pause, client gone): not a failed listing. Cache nothing, so the next run lists again. */
+    if (cancel.aborted) return;
+    /* P22: a listing error can carry the server's echo of the key. Only the listing runs here — no stage call (P20). */
+    const message = redactKnownSecrets(err instanceof Error ? err.message : String(err), [apiKey]);
+    console.warn(`[endpoint-limits] listing ${key}/models failed; output caps fall back to context minus input: ${message}`);
+    cache.set(key, { expiresAt: now() + FAILED_LISTING_BACKOFF_MS, byModel: new Map() });
+  }
+}
+
+export async function warmEndpointServedLimits(
+  endpoint: { baseUrl: string },
+  apiKey: string | null,
+  deps: WarmDeps = {},
+): Promise<void> {
+  const now = deps.now ?? Date.now;
+  const key = keyFor(endpoint.baseUrl);
+  const hit = cache.get(key);
+  if (hit && now() < hit.expiresAt) return;
+  if (deps.signal?.aborted) return;
+  let run = inflight.get(key);
+  if (!run) {
+    const cancel = new AbortController();
+    const listing = AbortSignal.any([AbortSignal.timeout(deps.timeoutMs ?? SERVED_LIMITS_WARMUP_TIMEOUT_MS), cancel.signal]);
+    const entry: InFlight = { done: Promise.resolve(), waiters: 0, cancel };
+    entry.done = listInto(key, endpoint.baseUrl, apiKey, deps, listing, cancel.signal).finally(() => {
+      if (inflight.get(key) === entry) inflight.delete(key);
+    });
+    inflight.set(key, entry);
+    run = entry;
+  }
+  const joined = run;
+  joined.waiters += 1;
+  try {
+    await untilAborted(joined.done, deps.signal);
+  } finally {
+    joined.waiters -= 1;
+    /* An abort releases only this caller; the shared listing is cancelled once nobody waits on it. */
+    if (joined.waiters === 0 && deps.signal?.aborted) joined.cancel.abort();
+  }
+}
+
+export function getEndpointServedLimits(baseUrl: string, model: string, now: number = Date.now()): ServedLimits | undefined {
+  const hit = cache.get(keyFor(baseUrl));
+  if (!hit || now >= hit.expiresAt) return undefined;
+  return hit.byModel.get(model);
+}
+
+/** Test-only. */
+export function _resetEndpointServedLimitsForTest(): void {
+  for (const run of inflight.values()) run.cancel.abort();
+  inflight.clear();
+  cache.clear();
+}
+```
+
+`server/src/analyzer/catalog/analyzer-catalog.ts` (Task 3c.5). The warm-up passes its bounded signal to the listing. The catalog view passes none, so its behaviour is unchanged. In `CatalogDeps`, `listEndpoint(baseUrl: string, apiKey: string | null): Promise<Array<Record<string, unknown>>>;` becomes:
+
+```ts
+  /** P26: `signal` bounds and cancels the listing (the served-limits warm-up passes one; the catalog does not). */
+  listEndpoint(baseUrl: string, apiKey: string | null, signal?: AbortSignal): Promise<Array<Record<string, unknown>>>;
+```
+
+and `async function listEndpoint(baseUrl: string, apiKey: string | null)` gains `, signal?: AbortSignal` as its third parameter. Its `for await (const model of client.models.list()) out.push(model as unknown as Record<string, unknown>);` becomes:
+
+```ts
+  for await (const model of client.models.list(signal ? { signal } : undefined)) out.push(model as unknown as Record<string, unknown>);
+```
+
 `server/src/analyzer/capacity.ts` — imports:
 
 ```ts
@@ -3691,10 +5362,10 @@ import type { AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { endpointModelId, parseEndpointModelId } from './model-id.js';
 import { resolveLimits } from './rate-limit.js';
 import { AnalyzerEndpointMissingError } from './errors.js';
-import { getCachedCatalogLimits } from './catalog/analyzer-catalog.js';
+import { getEndpointServedLimits } from './catalog/endpoint-served-limits.js';
 ```
 
-Add the function below. W2's `resolveCapacity(sel: { engine: 'local' | 'gemini'; model: string })` (Task 2.3) has no `openai` case. Do not redefine it; widen it in place (next paragraph):
+Add the function below. W2's `resolveCapacity(sel: { engine: 'local' | 'gemini'; model: string })` (Task 2.2) has no `openai` case. Do not redefine it; widen it in place (next paragraph):
 
 ```ts
 function resolveEndpointCapacity(sel: { model: string; endpoint?: AnalyzerEndpoint }): EngineCapacity {
@@ -3702,12 +5373,13 @@ function resolveEndpointCapacity(sel: { model: string; endpoint?: AnalyzerEndpoi
   const endpointId = parsed?.endpointId ?? sel.endpoint?.id ?? sel.model;
   const endpoint = sel.endpoint ?? getCachedUserSettings().analyzerEndpoints.find((e) => e.id === endpointId);
   if (!endpoint) throw new AnalyzerEndpointMissingError(endpointId, 'settings');
-  const fullId = endpointModelId(endpoint.id, parsed?.model ?? sel.model);
-  const tpm = resolveLimits(fullId).tpm;
+  const model = parsed?.model ?? sel.model;
+  const tpm = resolveLimits(endpointModelId(endpoint.id, model)).tpm;
   const caps = [endpoint.maxInputTokensPerRequest, Number.isFinite(tpm) ? tpm : undefined].filter(
     (n): n is number => typeof n === 'number',
   );
-  const served = getCachedCatalogLimits(fullId)?.maxOutputTokens;
+  /* P15: served limits warmed by this endpoint's transport, keyed by its current base URL. */
+  const served = getEndpointServedLimits(endpoint.baseUrl, model)?.maxOutputTokens;
   const manual = endpoint.maxOutputTokens > 0 ? endpoint.maxOutputTokens : undefined;
   const maxOutputTokens =
     manual !== undefined ? (served !== undefined ? Math.min(manual, served) : manual) : (served ?? null);
@@ -3720,7 +5392,64 @@ function resolveEndpointCapacity(sel: { model: string; endpoint?: AnalyzerEndpoi
 }
 ```
 
-`resolveCapacity`: widen W2's signature in place to `export function resolveCapacity(sel: { engine: AnalysisEngine; model: string; endpoint?: AnalyzerEndpoint }): EngineCapacity`, and add `import type { AnalysisEngine } from './model-id.js';`, merging with the `model-id.js` import above. Keep W2's body. Insert `if (sel.engine === 'openai') return resolveEndpointCapacity(sel);` as its first statement. W2's `local` / `gemini` branches do not change, so W2's pinning test stays byte-identical.
+`resolveCapacity`: widen W2's signature in place to `export function resolveCapacity(sel: { engine: AnalysisEngine; model: string; endpoint?: AnalyzerEndpoint }): EngineCapacity`, and add `import type { AnalysisEngine } from './model-id.js';` (merge with the `model-id.js` import above). Keep W2's body, and insert `if (sel.engine === 'openai') return resolveEndpointCapacity(sel);` as its first statement. W2's `local` / `gemini` branches do not change, so W2's pinning test stays byte-identical.
+
+`server/src/analyzer/transports/openai-transport.ts` (3b):
+- Import `import { warmEndpointServedLimits } from '../catalog/endpoint-served-limits.js';`.
+- Do **not** add an `apiKey` field: 3b Task 3b.11 already keeps `private readonly apiKey: string | null`.
+- In the constructor's options type add `/** Test-only: the served-limits warm-up bound (P26). Production uses SERVED_LIMITS_WARMUP_TIMEOUT_MS. */ servedLimitsTimeoutMs?: number;`. Next to the other fields add `private readonly servedLimitsTimeoutMs: number | undefined;`, and in the constructor add `this.servedLimitsTimeoutMs = opts.servedLimitsTimeoutMs;`.
+- After `send()`:
+
+```ts
+  /** P15 / P26: warm this endpoint's served limits before the runner reads settings (W2 Task 2.6
+      passes call.signal). Bounded at SERVED_LIMITS_WARMUP_TIMEOUT_MS, one listing per base URL
+      shared by concurrent requests, released at once when `signal` aborts. Never rejects. */
+  prepare(signal?: AbortSignal): Promise<void> {
+    return warmEndpointServedLimits(this.endpoint, this.apiKey, { signal, timeoutMs: this.servedLimitsTimeoutMs });
+  }
+```
+
+- `resolveEndpointMaxOutputTokens` (3b Task 3b.11):
+  - In its doc comment, replace `A manual value is returned as saved; PR 3c clamps it to the served limit.` with `A manual value is clamped to the served output limit when one is known (PR 3c, P15).`
+  - Replace its first line, `if (endpoint.maxOutputTokens > 0) return endpoint.maxOutputTokens;`, with:
+
+```ts
+  if (endpoint.maxOutputTokens > 0) {
+    return servedOutputLimit !== undefined ? Math.min(endpoint.maxOutputTokens, servedOutputLimit) : endpoint.maxOutputTokens;
+  }
+```
+
+  3b's `resolveEndpointMaxOutputTokens(endpoint({ maxOutputTokens: 4_096 }))` and `openAIRequestSettings(…, { maxOutputTokens: 4_096 })` assertions pass no served limit, so they stay green. `buildOpenAIRequestBody` sends a manual cap as resolved, so the clamp reaches the wire.
+
+`server/src/analyzer/openai.ts` (3b Task 3b.12). The old `maxOutputTokens: … : undefined` anchor no longer exists: `OpenAIAnalyzer`'s provider is `settings: () => openAIRequestSettings(opts.endpoint),`. Add `import { getEndpointServedLimits } from './catalog/endpoint-served-limits.js';` and replace that line with:
+
+```ts
+        /* P15 / P24: the served output limit prepare() warmed for this base URL (undefined when
+           unknown); openAIRequestSettings keeps maxOutputTokens a number either way. */
+        settings: () => openAIRequestSettings(opts.endpoint, getEndpointServedLimits(opts.endpoint.baseUrl, opts.model)?.maxOutputTokens),
+```
+
+`server/src/analyzer/openai-analyzer.test.ts` (3b Task 3b.12) — its `start()` handler now also sees the runner's `prepare()` listing. At the top of the `req.on('end', () => {` callback, before `bodies.push(JSON.parse(raw));`, insert:
+
+```ts
+      /* #3084 P15: prepare() lists /v1/models before the first chat request. */
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ object: 'list', data: [] }));
+        return;
+      }
+```
+
+`server/src/analyzer/model-test-deps.ts` (Task 3c.6) — replace the endpoint branch's `probeLimits` and the comment above it with:
+
+```ts
+      /* P7/P15: the same capacity a run resolves — the saved context, and the manual cap
+         clamped to the served limit transport.prepare() warms (runModelTest calls it first). */
+      probeLimits: () => {
+        const capacity = resolveCapacity({ engine: 'openai', model: parsed.model, endpoint });
+        return { contextTokens: capacity.contextTokens, maxOutputTokens: capacity.maxOutputTokens };
+      },
+```
 
 Context-family returns — `stage1-chunk.ts` (import `cloudBodyCharBudgetForCap` from `./token-budget.js` beside `cloudBodyCharBudget`). The W2 context branch (today's `:119-124` body, parametrised by `capacity.contextTokens`) becomes:
 
@@ -3764,37 +5493,89 @@ Context-family returns — `stage1-chunk.ts` (import `cloudBodyCharBudgetForCap`
 (Stripping the cap before delegating keeps stage 1's reservations out of the output-heavy passes, which reserve their own.)
 
 - [ ] **Step 4: Run and confirm it passes**
-Run: `npm --prefix server run test -- src/analyzer/capacity.endpoint.test.ts src/analyzer/stage1-chunk.test.ts src/analyzer/stage2-chunk.test.ts src/analyzer/chapter-chunker.test.ts src/analyzer/token-budget.test.ts src/analyzer/output-heavy-tpm.test.ts` plus W2's pinning test file, then `npm run check:cycles`. Expected: PASS; pinning values unchanged.
+Run: `npm --prefix server run test -- src/analyzer/capacity.endpoint.test.ts src/analyzer/openai-served-limits.test.ts src/analyzer/openai-analyzer.test.ts src/analyzer/catalog/analyzer-catalog.test.ts src/analyzer/transports/openai-transport.contract.test.ts src/analyzer/model-test-deps.test.ts src/analyzer/stage1-chunk.test.ts src/analyzer/stage2-chunk.test.ts src/analyzer/chapter-chunker.test.ts src/analyzer/token-budget.test.ts src/analyzer/output-heavy-tpm.test.ts` plus W2's pinning test file, then `npm run check:cycles`. Expected: PASS; pinning values unchanged.
 
 - [ ] **Step 5: Mutation proof**
 1. `stage2-chunk.ts`: replace the capped `return Math.min(…)` with `return contextBudget;` → red: "a binding cap lowers the stage-2 budget…". Restore.
 2. `resolveEndpointCapacity`: drop `Number.isFinite(tpm) ? tpm : undefined` from `caps` → red: "perRequestInputCap is the min of maxInputTokensPerRequest and the saved TPM". Restore.
 3. `chapter-chunker.ts`: pass `capacity` (not the cap-stripped copy) to `resolveStage1ChunkCharBudget` → red: "…chapter passes using the caller reservations" (stage-1 reservations now leak in). Restore.
+4. `openai-transport.ts`: delete `prepare(signal)` → red: "a run with no prior catalog view sends max_tokens clamped…", "a manual max output above the served limit…", "the Test action's probe cap uses the served limit prepare() warmed". Restore.
+5. `endpoint-served-limits.ts`: make `keyFor` return `'endpoint'` (one cache for every base URL) → red: "limits are cached per base URL…". Restore.
+6. `warmEndpointServedLimits`: replace `if (hit && now() < hit.expiresAt) return;` with `if (hit) return;` → red: "within the TTL a second warm-up does not list again; once it expires, it does". Restore.
+7. `openai.ts`: put back `settings: () => openAIRequestSettings(opts.endpoint),` (no served limit) → red: "a run with no prior catalog view…" (Auto sends the context bound) and "a manual max output above the served limit is clamped to it on the wire" (8192 is sent). Restore.
+8. `resolveEndpointMaxOutputTokens`: put back `if (endpoint.maxOutputTokens > 0) return endpoint.maxOutputTokens;` → red: "resolveEndpointMaxOutputTokens clamps a manual cap…", "a manual max output above the served limit is clamped to it on the wire". Restore.
+9. `warmEndpointServedLimits`: replace `AbortSignal.any([AbortSignal.timeout(deps.timeoutMs ?? SERVED_LIMITS_WARMUP_TIMEOUT_MS), cancel.signal])` with `cancel.signal` → red: "a server that never answers /v1/models releases the run after the warm-up bound…" (test timeout). Restore.
+10. `listInto`: replace `if (rows === ABORTED) throw new Error(…);` with `if (rows === ABORTED) return;` → red: the same test (no back-off, so a second GET, and no `no answer within 300 ms` line). Restore.
+11. `warmEndpointServedLimits`: replace `await untilAborted(joined.done, deps.signal);` with `await joined.done;` → red: "a caller abort releases prepare() at once…" and "a paused run (caller abort) during a stalled warm-up stops at once…" (both wait out the 8 s bound). Restore.
+12. `listInto`'s catch: delete `if (cancel.aborted) return;` → red: "a caller abort releases prepare() at once, … and caches nothing" (the abandoned listing backs off, so the second warm-up sends no GET). Restore.
+13. `warmEndpointServedLimits`: replace `let run = inflight.get(key);` with `let run: InFlight | undefined;` → red: "concurrent requests share one bounded listing per base URL" (3 GETs). Restore.
+14. `warmEndpointServedLimits`: replace `if (joined.waiters === 0 && deps.signal?.aborted)` with `if (deps.signal?.aborted)` → red: "an abort releases only that caller: a request still waiting gets the listing". Restore.
+15. `analyzer-catalog.ts` `listEndpoint`: replace `client.models.list(signal ? { signal } : undefined)` with `client.models.list()` → red: "a caller abort releases prepare() at once, cancels the listing…" (`listClosed` does not resolve before the test timeout). Restore.
+16. `listInto`: log the raw message without `redactKnownSecrets` → red: "a failed listing never rejects, leaves the limits unknown, and logs no key (P22)". Restore.
+17. `SERVED_LIMITS_WARMUP_TIMEOUT_MS = 60_000` → red: "the production bound is 10 s". Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/capacity.ts server/src/analyzer/capacity.endpoint.test.ts server/src/analyzer/token-budget.ts server/src/analyzer/stage1-chunk.ts server/src/analyzer/stage2-chunk.ts server/src/analyzer/chapter-chunker.ts
-git commit -m "feat(server): endpoint capacity and per-request caps on context-family budgets"
+git add server/src/analyzer/capacity.ts server/src/analyzer/capacity.endpoint.test.ts server/src/analyzer/catalog/endpoint-served-limits.ts server/src/analyzer/openai-served-limits.test.ts server/src/analyzer/transports/openai-transport.ts server/src/analyzer/openai.ts server/src/analyzer/openai-analyzer.test.ts server/src/analyzer/catalog/analyzer-catalog.ts server/src/analyzer/model-test-deps.ts server/src/analyzer/token-budget.ts server/src/analyzer/stage1-chunk.ts server/src/analyzer/stage2-chunk.ts server/src/analyzer/chapter-chunker.ts
+git commit -m "feat(server): endpoint capacity, served limits warmed at run start, per-request caps"
 ```
 
 ---
-### Task 3c.10: Pre-run checks — endpoint exists, key origin, capability record — before the first analyzer call
+### Task 3c.10: Pre-run checks — endpoint exists, key origin, capability record — on new-job creation only, before the first analyzer call
 
 **Files:**
 - Modify: `server/src/analyzer/select-analyzer.ts:61-100` (extract `resolvePhaseModelSelection`; `selectAnalyzerForPhase` delegates — behaviour-preserving)
 - Create: `server/src/analyzer/preflight.ts`
-- Modify: `server/src/routes/analysis.ts:3315-3316` (main POST), `:6543-6546` (subset POST)
-- Modify: `server/src/routes/script-review.ts:36,42` (imports), `:695` (job start)
-- Modify: `server/src/routes/annotate-emotion.ts` (imports; before `:147`), `server/src/routes/instruct-annotation.ts` (imports; before `:146`)
-- Test: Create `server/src/analyzer/preflight.test.ts`, `server/src/analyzer/select-analyzer.phase-source.test.ts`, `server/src/routes/analysis.preflight.test.ts`; extend `server/src/routes/annotate-emotion.test.ts`, `server/src/routes/instruct-annotation.test.ts`, `server/src/routes/script-review.test.ts`
+- Modify: `server/src/routes/analysis.ts` — both analysis POSTs, located by symbol (3b Task 3b.1a already rewrote these blocks, and #3163, #3199 and #3173 moved their lines): in both, the rejoin branch becomes a double-checked dispatch (live-job check → digest read on the new-job path only → live-job re-check → checks, selection and registration with no `await`); in `analysisRouter.post('/:id/analysis')`, 3b.1a's phase-0 selection `try`/`catch` and the `if (requestedModel) { console.log(…) }` after it move below the re-check; in `analysisRouter.post('/:id/analysis/chapters')`, 3b.1a's phase-0/phase-1 selection `try`/`catch` is replaced below the re-check
+- Modify: `server/src/routes/script-review.ts` — `:36` (the user-settings import gains `readUserSettings`) and `runScriptReviewJob` directly above 3b Task 3b.1a's `let selection: AnalyzerSelection;` (3b.1a wrapped the bare selection line; its `try`/`catch` is unchanged)
+- Modify: `server/src/routes/annotate-emotion.ts`, `server/src/routes/instruct-annotation.ts` — imports, and a new block directly above 3b.1a's `let selection: AnalyzerSelection;` (3b.1a's selection `try`/`catch` itself is unchanged)
+- Test: Create `server/src/analyzer/preflight.test.ts`, `server/src/analyzer/select-analyzer.phase-source.test.ts`, `server/src/routes/analysis.preflight.test.ts`, `server/src/routes/selection-error-coding.test.ts`; extend `server/src/routes/annotate-emotion.test.ts`, `server/src/routes/instruct-annotation.test.ts`, `server/src/routes/script-review.test.ts`
+
+None of the test files is in `server/vitest.config.slow.ts`'s `SLOW_FILES`.
 
 **Interfaces:**
-- Consumes: `capabilityRecordFor`, `assertConfiguredCapabilitiesAllowed` (Task 3c.3); `keyOriginMatches` (3b); `inferEngineFromModelId`, `parseEndpointModelId` (3a); `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError` (3b); `classifyAnalysisFailure` (`failure-taxonomy.ts:492`, 3b's mappings); `getResolvedAnalysisEngine` (`user-settings.ts:781`), `getResolvedOllamaModel` (`:766`), `getResolvedOllamaUrl` (`:597`), `configValue`.
-- Produces: `resolvePhaseModelSelection(opts: PerPhaseAnalyzerOptions): { modelId: string | null; source: 'env' | 'run-pick' | 'settings' | 'default' }`; `PreflightTarget`; `preflightTargets(phases, requestedModel, settings)`; `runAnalyzerPreflight(targets, settings): void`.
+- Consumes: `capabilityRecordFor`, `assertConfiguredCapabilitiesAllowed`, `defaultReasoningKey` (Task 3c.3); `resolveEndpointApiKey` (3b); `inferEngineFromModelId`, `parseEndpointModelId`, `AnalysisEngine` (3a); `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError` (3b); `classifyAnalysisFailure` (`failure-taxonomy.ts:492`, 3b's mappings; it always returns a code, `unknown` as the last resort); `analyzerSelectionErrorEvent(err): { kind: 'error'; code: FailureCode; message; remediation; detail? }` (3b Task 3b.1a — it codes every error through `classifyAnalysisFailure`, never returns `null`, and carries the classification's detail); `getResolvedAnalysisEngine` (3a's version of `user-settings.ts:975`), `getResolvedOllamaModel` (`:960`), `getResolvedOllamaUrl` (`:791`), `readUserSettings` (`:436`), `configValue`; `__testRegisterJobForTest`, `endJob` (`analysis.ts:3063`).
+- Produces: `resolvePhaseModelSelection(opts: PerPhaseAnalyzerOptions): PhaseModelSelection` — the discriminated union `{ modelId: string; source: 'env' | 'run-pick' | 'settings' } | { modelId: null; source: 'default' }` (contract deviation, reported: the contract's `{ modelId, source }` is narrowed so `selectAnalyzerForPhase` can pass `source` straight into 3a's `modelSource`, which has no `default`); `PreflightTarget { modelId; source; engine }`; `preflightTargets(phases, requestedModel, settings)`; `runAnalyzerPreflight(targets, settings, digests?: ReadonlyMap<string, string | undefined>): void` (synchronous); `resolvePreflightDigests(targets, deps?): Promise<Map<string, string | undefined>>` (A3 — the installed digest of each distinct Ollama target via Task 3c.6's `ollamaModelDigest`; never throws); in `analysis.ts`, a function-scope `preflight: PreflightTarget[]` in both POSTs (declared above the checks `try`, assigned inside it) that Task 3d.1 reads.
 
-Order of checks per distinct model id: endpoint id exists in saved settings (else `AnalyzerEndpointMissingError(id, source)` — `source` is `env` for `ANALYZER_PHASE{0,1}_MODEL`, `run-pick` for the request's `model`, `settings` otherwise); a stored key whose origin differs from the base URL (`AnalyzerKeyOriginError`); a Test record for the current server URL that marks the configured structured-output mode `rejected` (`AnalyzerCapabilityRejectedError`). Ollama and Gemini ids get the capability check only. Each route answers with its SSE `error` event carrying `classifyAnalysisFailure`'s `code`, `message`, `remediation` and ends before `selectAnalyzerForPhase` runs. The env-var tier order is moved verbatim from `selectAnalyzerForPhase`; if #3141 changed that tier list on `main`, move `main`'s tiers.
+**When the checks run (P14).** Only when a new job is created. The main POST today selects the phase-0 analyzer (3b.1a's selection `try`/`catch`, directly after `const userSettings = await readUserSettings();`) before the rejoin branch (`if (existing && !existing.controller.signal.aborted && !requestedFresh) { … return; }`). That order would refuse the reload of a live job whose endpoint was deleted mid-run, even though the running job keeps its own analyzer. The checks and the selection therefore move below the rejoin branch. The subset POST already rejoins first (`if (existing && !existing.controller.signal.aborted) { … return; }`); its `const requestedModel = …` line is already near the top of the handler (`:6523`, moved there by #3169 D2), so nothing moves above its rejoin branch.
 
-Keeps green: `select-analyzer.test.ts`, `analysis.test.ts`, `analysis.phase-model.test.ts`, `analysis-pipelining.test.ts` (slow lane: `npm --prefix server run test:slow -- src/routes/analysis-pipelining.test.ts`), `annotate-emotion.test.ts`, `instruct-annotation.test.ts`, `script-review.test.ts`, `direct-env-reader-guard.test.ts` (the `process.env[phaseEnvKey]` read moves within `select-analyzer.ts`; its literal names keep the same occurrence count).
+**Double-checked dispatch (P14, #3004).** The checks need one `await`, the digest read (A3, below), and #3004 forbids an `await` between "no live job found" and job registration: two concurrent POSTs would both see no job and both register one. A reload needs neither the read nor the checks. Both POSTs therefore dispatch in four steps:
+1. **Live-job check, synchronous.** Today's condition, unchanged: `existing && !existing.controller.signal.aborted && !requestedFresh` in the main POST (`inFlightAnalysisByManuscript`, `:3399-3400`), `existing && !existing.controller.signal.aborted` in the subset POST (`inFlightSubsetByManuscript`, `:6634-6635`). A match joins through today's rejoin body, moved verbatim into a local `joinLive(live)`, and returns. No digest read and no check runs, so a reload is never refused (P14) and never waits.
+2. **New-job path only: `await resolvePreflightDigests(…)`.** In the subset POST this follows `const userSettings = await readUserSettings();`, which already sat between that POST's rejoin branch and its registration on `46e62a34` (`:6659`). That is a #3004 window this step closes too.
+3. **Re-check, synchronous, same map and same condition.** A job registered by a concurrent POST while this one awaited is joined through `joinLive`, not duplicated. The main POST reassigns `existing` here, so the `if (existing) { existing.controller.abort(); … }` displacement and `shouldCheckForRejoinMiss(existing, requestedFresh)` below act on the job that is live *now*. A `fresh: true` POST therefore aborts a job registered during its wait instead of orphaning it.
+4. **Checks, selection, registration, with no `await` between the re-check and `inFlight…ByManuscript.set(manuscriptId, job)`.** `preflightTargets`, `runAnalyzerPreflight` and selection are synchronous, so the window stays atomic.
+
+**Same resolution as selection (P14).** Each target carries the engine selection will build:
+- an explicit id (env, per-run pick, saved phase model) → `inferEngineFromModelId(id)`, exactly as `selectAnalyzer({ model })`;
+- no id → `selectAnalyzer({})` builds the **saved engine's** default model, so the target is that model checked as `getResolvedAnalysisEngine()`.
+
+A saved `openai` engine whose default model is not an endpoint id (e.g. `qwen3.5:4b`) is checked as an endpoint and fails as `analyzer-endpoint-missing`. It is not re-inferred as Ollama, which would pass the check and then fail selection without a code. That case is reachable only once 3d.4 lets `getResolvedAnalysisEngine` return `openai`, so its tests are added in Task 3d.4.
+
+**Coded failures (P14), on top of 3b Task 3b.1a (P23).** 3b.1a already sends `analyzerSelectionErrorEvent(err)` for **every** error selection throws, at all six call sites: the helper codes each class through `classifyAnalysisFailure`, never returns `null`, and carries the classification's `detail`. This task adds the checks in front of (or inside) 3b.1a's `try` at each site and sends their failures through that same helper — one event builder, no per-site fallback object:
+
+| Site (3b.1a's table) | After 3b.1a | After this task |
+|---|---|---|
+| analysis phase 0, `analysisRouter.post('/:id/analysis')` | selection in a `try`; `catch` sends `analyzerSelectionErrorEvent(e)` | `preflightTargets`, `runAnalyzerPreflight` and selection share that `try`, moved below the post-digest live-job re-check; the `catch` itself is unchanged |
+| subset retry, `analysisRouter.post('/:id/analysis/chapters')` | both selections in one `try`, same `catch` | the checks join that `try`, below the post-digest live-job re-check; the `catch` is unchanged |
+| analysis phase 1, `runMainAnalyzerJob` | job `catch` → `classifyAnalysisFailure` | unchanged; the POST's checks already cover the phase-1 target |
+| annotate-emotion | selection wrapped as `let selection: AnalyzerSelection; try { … } catch { send(the helper's event); clearInterval; res.end(); return; }` | a checks `try` directly above it, whose `catch` sends the same helper's event. 3b.1a's selection `try` is unchanged |
+| instruct-annotation | the same | the same |
+| script review, `runScriptReviewJob` | selection wrapped the same way inside the job; the launch's detached `.catch` still answers `internal_error` for a throw from later in the job | a checks `try` directly above 3b.1a's `let selection: AnalyzerSelection;`, same `catch` shape. The selection `try` and the detached `.catch` are unchanged |
+
+**Why every site keeps the helper.** For `AnalyzerEndpointMissingError` the helper's event and a hand-built `classifyAnalysisFailure` event are identical on the wire: the copy does not use the model label and sets no `detail`. A site that replaced the helper would therefore pass every code assertion while no longer building P23's event in the one shared place, and would drop the `detail` the helper adds for selection's own missing-Gemini-key error. `selection-error-coding.test.ts` spies on the helper at all five of its sites, once for a failure raised by a check and once for one raised by selection.
+
+**No unreachable classification (P21, P22).** The checks read saved settings only and send no request, and so does selection. No transport error can reach the shared `catch`, `AnalyzerTransportError` included. `classifyAnalysisFailure` maps an `AnalyzerTransportError` to `unknown` (3b Task 3b.1), never to `analyzer-unreachable`. This task adds no unreachable mapping and no fallback.
+
+**Order of checks per distinct target:**
+1. The endpoint id exists in saved settings. Otherwise `AnalyzerEndpointMissingError(id, source)`; `source` is `env` for `ANALYZER_PHASE{0,1}_MODEL`, `run-pick` for the request's `model`, `settings` otherwise.
+2. A stored key's origin matches the base URL. Otherwise `AnalyzerKeyOriginError`.
+3. No Test record for the current server URL — and, for Ollama, the installed digest — marks the configured structured-output mode `rejected` at the level the run sends (`defaultReasoningKey`). Otherwise `AnalyzerCapabilityRejectedError`.
+
+**A re-pulled Ollama model is not refused on a stale record (A3).** A record carries the digest of the build it tested (Tasks 3c.3/3c.4), and `capabilityRecordFor` discards it when the installed digest is known and differs. Reading the installed digest is a network call, but the checks are synchronous (#3004), so it is resolved first by `resolvePreflightDigests` and handed to `runAnalyzerPreflight` as a map. The analysis POSTs resolve it **on the new-job path only**, between the live-job check and its re-check (double-checked dispatch, above). The cost is one bounded (2 s) `/api/tags` read per analysis POST that starts a new job whose targets include an Ollama model. A reload that joins a live job reads nothing. Gemini and endpoint targets cost nothing. Fail-open: an unreachable Ollama keeps the record, so a stale `rejected` still refuses while Ollama cannot be asked, which is also when the run itself could not start.
+
+Ollama and Gemini ids get the capability check only. script-review, annotate-emotion and instruct-annotation run the checks at their own job start and answer through their SSE `error` event before `selectAnalyzerForPhase` runs. The env-var tier order moves verbatim from `selectAnalyzerForPhase`; if #3141 changed that tier list on `main`, move `main`'s tiers.
+
+Keeps green: `select-analyzer.test.ts`, 3a's `select-analyzer-endpoint-id.test.ts` (its `each phase source is named: env, run pick, saved phase model` case is what pins `modelSource` through this extraction), `analysis.test.ts`, `analysis.phase-model.test.ts`, `analysis.rejoin-miss.test.ts`, `analysis-pipelining.test.ts` (slow lane: `npm --prefix server run test:slow -- src/routes/analysis-pipelining.test.ts`), `annotate-emotion.test.ts`, `instruct-annotation.test.ts`, `script-review.test.ts` (including 3b.1a's `…instead of hanging` case, still `internal_error`), 3b Task 3b.1a's `failure-taxonomy.test.ts` and `analysis.endpoint-missing.test.ts` (its phase-0 and subset cases now meet the check instead of selection, with the same `run-pick` message), `direct-env-reader-guard.test.ts` (the `process.env[phaseEnvKey]` read moves within `select-analyzer.ts`; its literal names keep the same occurrence count).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3832,15 +5613,15 @@ Create `server/src/analyzer/preflight.test.ts`:
 
 ```ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { runAnalyzerPreflight, preflightTargets } from './preflight.js';
+import { runAnalyzerPreflight, preflightTargets, resolvePreflightDigests } from './preflight.js';
 import { AnalyzerCapabilityRejectedError, AnalyzerEndpointMissingError, AnalyzerKeyOriginError } from './errors.js';
-import { DEFAULT_USER_SETTINGS, type UserSettings } from '../workspace/user-settings.js';
+import { DEFAULT_USER_SETTINGS, _resetUserSettingsCache, type UserSettings } from '../workspace/user-settings.js';
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
 
 const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab server', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 });
 const rejectedSchema = {
   serverUrl: 'http://127.0.0.1:8080/v1', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true as const },
-  structuredOutput: { schema: { configured: 'rejected' as const } }, reasoning: {},
+  structuredOutput: { schema: { 'model-default': 'rejected' as const } }, reasoning: {},
 };
 const settings = (over: Partial<UserSettings> = {}): UserSettings => ({
   ...DEFAULT_USER_SETTINGS, analyzerEndpoints: [lab], analyzerEndpointKeys: {}, analyzerCapabilitiesByModel: {}, ...over,
@@ -3853,12 +5634,19 @@ function thrown(fn: () => void): unknown {
 
 afterEach(() => {
   delete process.env.ANALYZER_PHASE1_MODEL;
+  _resetUserSettingsCache();
 });
 
 describe('runAnalyzerPreflight (#3084)', () => {
   it('passes a configured endpoint with no key and no record', () => {
     const s = settings();
     expect(() => runAnalyzerPreflight(preflightTargets(['phase0', 'phase1'], 'openai:lab::qwen3-30b', s), s)).not.toThrow();
+  });
+
+  it('targets carry the engine selection will build: inferred from an explicit id', () => {
+    const s = settings();
+    expect(preflightTargets(['phase0'], 'openai:lab::qwen3-30b', s)).toEqual([{ modelId: 'openai:lab::qwen3-30b', source: 'run-pick', engine: 'openai' }]);
+    expect(preflightTargets(['phase0'], 'qwen3.5:4b', s)).toEqual([{ modelId: 'qwen3.5:4b', source: 'run-pick', engine: 'local' }]);
   });
 
   it('a deleted endpoint from the per-run pick → AnalyzerEndpointMissingError source run-pick', () => {
@@ -3884,7 +5672,7 @@ describe('runAnalyzerPreflight (#3084)', () => {
     expect(thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'openai:lab::m', s), s))).toBeInstanceOf(AnalyzerKeyOriginError);
   });
 
-  it('a Test record that rejected the configured mode refuses the run', () => {
+  it('a Test record that rejected the configured mode at the level the run sends refuses the run', () => {
     const s = settings({ analyzerCapabilitiesByModel: { 'openai:lab::m': rejectedSchema } });
     expect(thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'openai:lab::m', s), s))).toBeInstanceOf(AnalyzerCapabilityRejectedError);
   });
@@ -3894,9 +5682,45 @@ describe('runAnalyzerPreflight (#3084)', () => {
     expect(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'openai:lab::m', s), s)).not.toThrow();
   });
 
-  it('an Ollama model whose configured schema mode was rejected at the Ollama URL is refused', () => {
-    const s = settings({ analyzerCapabilitiesByModel: { 'qwen3.5:4b': { ...rejectedSchema, serverUrl: 'http://localhost:11434' } } });
+  it('an Ollama model whose schema mode was rejected at off (the level Ollama sends) at the Ollama URL is refused', () => {
+    const s = settings({
+      analyzerCapabilitiesByModel: {
+        'qwen3.5:4b': { ...rejectedSchema, serverUrl: 'http://localhost:11434', structuredOutput: { schema: { off: 'rejected' as const } } },
+      },
+    });
     expect(thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'qwen3.5:4b', s), s))).toBeInstanceOf(AnalyzerCapabilityRejectedError);
+  });
+
+  it('A3 — an Ollama rejection recorded for another installed digest no longer refuses; the same digest, or an unknown one, still does', () => {
+    const rec = { ...rejectedSchema, serverUrl: 'http://localhost:11434', structuredOutput: { schema: { off: 'rejected' as const } }, digest: 'sha256:old' };
+    const s = settings({ analyzerCapabilitiesByModel: { 'qwen3.5:4b': rec } });
+    const targets = preflightTargets(['phase0'], 'qwen3.5:4b', s);
+    expect(() => runAnalyzerPreflight(targets, s, new Map([['qwen3.5:4b', 'sha256:new']]))).not.toThrow();
+    expect(thrown(() => runAnalyzerPreflight(targets, s, new Map([['qwen3.5:4b', 'sha256:old']])))).toBeInstanceOf(AnalyzerCapabilityRejectedError);
+    expect(thrown(() => runAnalyzerPreflight(targets, s))).toBeInstanceOf(AnalyzerCapabilityRejectedError);
+  });
+});
+
+describe('resolvePreflightDigests (#3084 A3)', () => {
+  it('asks once per distinct Ollama model, never for Gemini or endpoint targets, and maps a failure to undefined', async () => {
+    const s = settings();
+    const asked: string[] = [];
+    const targets = [
+      ...preflightTargets(['phase0', 'phase1'], 'qwen3.5:4b', s),
+      ...preflightTargets(['phase0'], 'gemini-3.6-flash', s),
+      ...preflightTargets(['phase0'], 'openai:lab::m', s),
+      ...preflightTargets(['phase0'], 'mistral:7b', s),
+    ];
+    const out = await resolvePreflightDigests(targets, {
+      ollamaUrl: () => 'http://localhost:11434',
+      modelDigest: async (_url, model) => {
+        asked.push(model);
+        if (model === 'mistral:7b') throw new Error('boom');
+        return 'sha256:q';
+      },
+    });
+    expect(asked.sort()).toEqual(['mistral:7b', 'qwen3.5:4b']);
+    expect(Object.fromEntries(out)).toEqual({ 'qwen3.5:4b': 'sha256:q', 'mistral:7b': undefined });
   });
 });
 ```
@@ -3904,33 +5728,85 @@ describe('runAnalyzerPreflight (#3084)', () => {
 Create `server/src/routes/analysis.preflight.test.ts`:
 
 ```ts
-/* #3084 — the main analysis POST refuses a run whose model points at a missing endpoint
-   before any analyzer is selected (spec data-flow step 1). */
+/* #3084 P14 — the analysis POSTs run the pre-run checks only when a NEW job is created, and
+   every check or selection failure carries a failure code. */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import { putManuscript, removeManuscript, type ChapterHint } from '../store/manuscripts.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 
-const { selectSpy } = vi.hoisted(() => ({ selectSpy: vi.fn() }));
+const { selectSpy, selectOverride, digest, bookLookup } = vi.hoisted(() => ({
+  selectSpy: vi.fn(),
+  selectOverride: { fn: null as null | ((opts: unknown) => unknown) },
+  /* A3 — every installed-digest read the routes make, answered by hand when `answer` is set. */
+  digest: { models: [] as string[], answer: null as null | ((model: string) => Promise<string | undefined>) },
+  /* When set, a newly registered job waits on this promise at its first await. */
+  bookLookup: { held: null as null | Promise<unknown> },
+}));
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../analyzer/select-analyzer.js')>();
   return {
     ...actual,
     selectAnalyzerForPhase: (opts: Parameters<typeof actual.selectAnalyzerForPhase>[0]) => {
       selectSpy(opts);
+      if (selectOverride.fn) return selectOverride.fn(opts);
       return actual.selectAnalyzerForPhase(opts);
     },
   };
 });
 
-const { analysisRouter } = await import('./analysis.js');
+/* #3084 A3 — preflight.ts reads installed digests through this leaf. An unanswered read resolves
+   undefined (fail-open), so no case here waits on a real Ollama. */
+vi.mock('../analyzer/ollama-digest.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/ollama-digest.js')>();
+  return {
+    ...actual,
+    ollamaModelDigest: async (_url: string, model: string): Promise<string | undefined> => {
+      digest.models.push(model);
+      return digest.answer ? digest.answer(model) : undefined;
+    },
+  };
+});
+/* runMainAnalyzerJob and runSubsetAnalyzerJob both start with
+   `await resolveBookLanguageForManuscript(id)`, which awaits this lookup: holding it keeps a
+   registered job live, and resolving it with a book that has no language ends that job as
+   `language_unset` before any analyzer call. */
+vi.mock('../workspace/scan.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/scan.js')>();
+  return {
+    ...actual,
+    findBookByManuscriptId: ((id: string) => bookLookup.held ?? actual.findBookByManuscriptId(id)) as typeof actual.findBookByManuscriptId,
+  };
+});
+
+const { analysisRouter, __testRegisterJobForTest, endJob } = await import('./analysis.js');
+type AnalysisJob = import('./analysis.js').AnalysisJob;
 
 afterEach(() => {
   removeManuscript('m_preflight');
   _resetUserSettingsCache();
   selectSpy.mockReset();
+  selectOverride.fn = null;
+  digest.models.length = 0;
+  digest.answer = null;
+  bookLookup.held = null;
 });
+
+function makeApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/manuscripts', analysisRouter);
+  return app;
+}
+
+function seedManuscript() {
+  const chapterHints = [{ id: 1, title: 'Chapter One', body: 'The lamp guttered.' }] as unknown as ChapterHint[];
+  putManuscript({
+    manuscriptId: 'm_preflight', format: 'plaintext', title: 'Stub', wordCount: 3, byteSize: 100,
+    uploadedAt: new Date().toISOString(), sourceText: 'The lamp guttered.', chapterHints,
+  });
+}
 
 function parseSse(body: string): Array<Record<string, unknown>> {
   return body.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice('data: '.length)));
@@ -3938,23 +5814,173 @@ function parseSse(body: string): Array<Record<string, unknown>> {
 
 describe('POST /api/manuscripts/:id/analysis — pre-run checks (#3084)', () => {
   it('refuses a per-run pick of a deleted endpoint with analyzer-endpoint-missing, before selection', async () => {
-    const chapterHints = [{ id: 1, title: 'Chapter One', body: 'The lamp guttered.' }] as unknown as ChapterHint[];
-    putManuscript({
-      manuscriptId: 'm_preflight', format: 'plaintext', title: 'Stub', wordCount: 3, byteSize: 100,
-      uploadedAt: new Date().toISOString(), sourceText: 'The lamp guttered.', chapterHints,
-    });
+    seedManuscript();
     _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
-    const app = express();
-    app.use(express.json());
-    app.use('/api/manuscripts', analysisRouter);
-    const res = await request(app).post('/api/manuscripts/m_preflight/analysis').send({ model: 'openai:gone::qwen3-30b' });
+    const res = await request(makeApp()).post('/api/manuscripts/m_preflight/analysis').send({ model: 'openai:gone::qwen3-30b' });
     expect(parseSse(res.text)).toContainEqual(expect.objectContaining({ kind: 'error', code: 'analyzer-endpoint-missing' }));
     expect(selectSpy).not.toHaveBeenCalled();
+  });
+
+  it('a reload of a live job still joins it after its endpoint was deleted (checks run only on new-job creation, P14)', async () => {
+    seedManuscript();
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: 'm_preflight',
+      kind: 'main',
+      bookDir: null,
+      engine: 'openai',
+      replay: { logs: [], lastPhase: null, lastEta: null, lastCastUpdate: null, failedByChapterId: new Map(), lastSeriesPrior: null, warnings: new Map() },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+    __testRegisterJobForTest(job);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+    const done = request(makeApp()).post('/api/manuscripts/m_preflight/analysis').send({ model: 'openai:gone::qwen3-30b' }).then((r) => r);
+    await vi.waitFor(() => expect(job.subscribers.size).toBe(1));
+    endJob(job, { kind: 'error', code: 'cancelled', message: 'test over' });
+    const events = parseSse((await done).text);
+    expect(events).not.toContainEqual(expect.objectContaining({ code: 'analyzer-endpoint-missing' }));
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'cancelled' }));
+    expect(selectSpy).not.toHaveBeenCalled();
+  });
+
+  /* A missing endpoint is coded by 3b Task 3b.1a's helper at both POSTs, which
+     selection-error-coding.test.ts pins. These two cases pin the rest of that catch: every
+     OTHER check or selection failure keeps its classified code once the block moves below
+     the live-job re-check. The helper codes every class (Q2), so nothing here may go back to a
+     code-less `{ kind: 'error', message }`. */
+  it('a selection failure other than a missing endpoint carries its classified code (P14)', async () => {
+    seedManuscript();
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+    selectOverride.fn = () => {
+      throw new Error('misconfigured engine');
+    };
+    const res = await request(makeApp()).post('/api/manuscripts/m_preflight/analysis').send({ model: 'qwen3.5:4b' });
+    expect(parseSse(res.text)).toContainEqual(
+      expect.objectContaining({ kind: 'error', code: 'unknown', message: expect.stringContaining('misconfigured engine') }),
+    );
+    expect(selectSpy).toHaveBeenCalled();
+  });
+
+  it('the subset POST classifies a selection failure other than a missing endpoint too (P14)', async () => {
+    seedManuscript();
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+    selectOverride.fn = () => {
+      throw new Error('misconfigured engine');
+    };
+    const res = await request(makeApp()).post('/api/manuscripts/m_preflight/analysis/chapters').send({ model: 'qwen3.5:4b', chapterIds: [1] });
+    expect(parseSse(res.text)).toContainEqual(
+      expect.objectContaining({ kind: 'error', code: 'unknown', message: expect.stringContaining('misconfigured engine') }),
+    );
+  });
+});
+
+/* #3084 P14 + A3 + #3004 — the double-checked dispatch. A reload joins a live job before any
+   digest read. A new job reads the digests, re-checks for a job registered while it waited,
+   then checks, selects and registers with no await in between. */
+describe('analysis POSTs — digest read on the new-job path only, live job re-checked after it (#3084, #3004)', () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+  /* No case reaches an analyzer call, so selection never has to build a real analyzer. */
+  const stubSelection = () => ({ analyzer: {}, engine: 'local', model: 'qwen3.5:4b', fallbackModel: null });
+  /* Each POST selects phase 0 once per job it creates, and nothing else selects phase 0
+     (runMainAnalyzerJob selects phase 1 only, and only after its first await). */
+  const phase0Selections = () => selectSpy.mock.calls.filter(([opts]) => (opts as { phase: string }).phase === 'phase0').length;
+  function liveJob(kind: 'main' | 'subset'): AnalysisJob {
+    return {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: 'm_preflight',
+      kind,
+      ...(kind === 'subset' ? { subsetChapterIds: [1] } : {}),
+      bookDir: null,
+      engine: 'local',
+      replay: { logs: [], lastPhase: null, lastEta: null, lastCastUpdate: null, failedByChapterId: new Map(), lastSeriesPrior: null, warnings: new Map() },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+  }
+  interface Route {
+    route: 'main' | 'subset';
+    post: (app: express.Express) => request.Test;
+  }
+  const ROUTES: Route[] = [
+    { route: 'main', post: (app) => request(app).post('/api/manuscripts/m_preflight/analysis').send({ model: 'qwen3.5:4b' }) },
+    { route: 'subset', post: (app) => request(app).post('/api/manuscripts/m_preflight/analysis/chapters').send({ model: 'qwen3.5:4b', chapterIds: [1] }) },
+  ];
+
+  it.each(ROUTES)('$route: a reload of a live job reads no digest and runs no check (P14)', async ({ route, post }) => {
+    seedManuscript();
+    const job = liveJob(route);
+    __testRegisterJobForTest(job);
+    const done = post(makeApp()).then((r) => r);
+    await vi.waitFor(() => expect(job.subscribers.size).toBe(1));
+    expect(digest.models).toEqual([]); // an Ollama pick: a new job would have read its digest
+    expect(selectSpy).not.toHaveBeenCalled();
+    endJob(job, { kind: 'error', code: 'cancelled', message: 'test over' });
+    expect(parseSse((await done).text)).toContainEqual(expect.objectContaining({ kind: 'error', code: 'cancelled' }));
+  });
+
+  it.each(ROUTES)('$route: two new-job POSTs parked on the digest read start ONE job, and the other joins it (#3004)', async ({ route, post }) => {
+    seedManuscript();
+    selectOverride.fn = stubSelection;
+    const digestRead = deferred<string | undefined>();
+    digest.answer = () => digestRead.promise;
+    const app = makeApp();
+    const first = post(app).then((r) => r);
+    const second = post(app).then((r) => r);
+    /* Both passed the first live-job check (no job existed) and now wait on the same read. */
+    await vi.waitFor(() => expect(digest.models).toHaveLength(2));
+    const lookup = deferred<unknown>();
+    bookLookup.held = lookup.promise; // armed only now: the main POST's own language check has already run
+    /* One promise answers both reads, so both POSTs resume in the same microtask checkpoint. The
+       first to resume registers a job; the second's re-check runs before any timer fires. */
+    digestRead.resolve('sha256:q');
+    await vi.waitFor(() => expect(phase0Selections()).toBeGreaterThan(0));
+    lookup.resolve({ state: {} }); // a located book with no language: every registered job ends as language_unset
+    const events = (await Promise.all([first, second])).map((r) => parseSse(r.text));
+    expect(phase0Selections()).toBe(1);
+    for (const stream of events) {
+      expect(stream).toContainEqual(expect.objectContaining({ kind: 'error', code: 'language_unset' }));
+    }
+    if (route === 'main') expect(events.flat().filter((e) => e.kind === 'rejoin-miss')).toHaveLength(1);
+  });
+
+  const rejectedAtOff = {
+    serverUrl: 'http://localhost:11434', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true as const },
+    structuredOutput: { schema: { off: 'rejected' as const } }, reasoning: {}, digest: 'sha256:old',
+  };
+
+  it('a new job reads the installed digest and still refuses a Test rejection recorded for that build (A3)', async () => {
+    seedManuscript();
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [], analyzerCapabilitiesByModel: { 'qwen3.5:4b': rejectedAtOff } });
+    digest.answer = async () => 'sha256:old';
+    const res = await request(makeApp()).post('/api/manuscripts/m_preflight/analysis').send({ model: 'qwen3.5:4b' });
+    expect(digest.models).toEqual(['qwen3.5:4b']);
+    expect(parseSse(res.text)).toContainEqual(expect.objectContaining({ kind: 'error', code: 'analyzer-request-rejected' }));
+    expect(selectSpy).not.toHaveBeenCalled();
+  });
+
+  it('a new job for a re-pulled model discards that rejection and reaches selection (A3)', async () => {
+    seedManuscript();
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [], analyzerCapabilitiesByModel: { 'qwen3.5:4b': rejectedAtOff } });
+    digest.answer = async () => 'sha256:new';
+    selectOverride.fn = () => {
+      throw new Error('reached selection');
+    };
+    const res = await request(makeApp()).post('/api/manuscripts/m_preflight/analysis').send({ model: 'qwen3.5:4b' });
+    expect(digest.models).toEqual(['qwen3.5:4b']);
+    expect(parseSse(res.text)).not.toContainEqual(expect.objectContaining({ code: 'analyzer-request-rejected' }));
+    expect(selectSpy).toHaveBeenCalled();
   });
 });
 ```
 
-Append to `server/src/routes/annotate-emotion.test.ts` (inside `describe('POST /api/books/:bookId/annotate-emotion'`), and the same block to `instruct-annotation.test.ts` with the path `instruct-annotation`; add `import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';` at the top of each:
+Append to `server/src/routes/annotate-emotion.test.ts` (inside `describe('POST /api/books/:bookId/annotate-emotion'`), and the same block to `instruct-annotation.test.ts` with the path `instruct-annotation`. Add `import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';` at the top of each:
 
 ```ts
   it('#3084 — refuses a model on a deleted endpoint before the analyzer is called', async () => {
@@ -3968,9 +5994,28 @@ Append to `server/src/routes/annotate-emotion.test.ts` (inside `describe('POST /
       _resetUserSettingsCache();
     }
   });
+
+  it('#3084 N7 — reads saved settings before the checks, so a saved endpoint passes them on a cold cache (after a restart)', async () => {
+    writeBook(SENTENCES);
+    writeFileSync(
+      USER_SETTINGS_PATH,
+      JSON.stringify({
+        analyzerEndpoints: [{ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 }],
+      }),
+    );
+    _resetUserSettingsCache(); // nothing cached, exactly as after a server restart
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(parseSse(res.text)).not.toContainEqual(expect.objectContaining({ code: 'analyzer-endpoint-missing' }));
+      expect(runEmotion).toHaveBeenCalled();
+    } finally {
+      rmSync(USER_SETTINGS_PATH, { force: true });
+      _resetUserSettingsCache();
+    }
+  });
 ```
 
-(In `instruct-annotation.test.ts` the hoisted fake is the one that file's `vi.hoisted` declares at the same place as `runEmotion` here; assert `not.toHaveBeenCalled()` on that fake.)
+In `instruct-annotation.test.ts` both blocks read the same except: the first title says `before the instruct analyzer is called`, the path is `/api/books/${bookId}/instruct-annotation`, and `runEmotion` becomes `runStage3` (that file's hoisted fake, `:32-33`). Add to each file's imports whatever it lacks: `writeFileSync` / `rmSync` from `node:fs` and `USER_SETTINGS_PATH` from `../workspace/user-settings.js` (`server/src/test-setup.ts` points that path at a temp file, so the write is safe).
 
 Append to `server/src/routes/script-review.test.ts` (inside its POST `describe`; it already imports both user-settings helpers at `:19`):
 
@@ -3987,11 +6032,286 @@ Append to `server/src/routes/script-review.test.ts` (inside its POST `describe`;
       _resetUserSettingsCache();
     }
   });
+
+  it('#3084 N7 — reads saved settings before the checks, so a saved endpoint passes them on a cold cache (after a restart)', async () => {
+    writeBook(SENTENCES);
+    writeFileSync(
+      USER_SETTINGS_PATH,
+      JSON.stringify({
+        analyzerEndpoints: [{ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 }],
+      }),
+    );
+    _resetUserSettingsCache();
+    selectAnalyzerForPhaseMock.mockClear();
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(parseSse(res.text)).not.toContainEqual(expect.objectContaining({ code: 'analyzer-endpoint-missing' }));
+      expect(selectAnalyzerForPhaseMock).toHaveBeenCalled();
+    } finally {
+      rmSync(USER_SETTINGS_PATH, { force: true });
+      _resetUserSettingsCache();
+    }
+  });
+```
+
+(Add `writeFileSync` / `rmSync` from `node:fs` and `USER_SETTINGS_PATH` from `../workspace/user-settings.js` to this file's imports if they are not already there.)
+
+Create `server/src/routes/selection-error-coding.test.ts` — the six selection call sites of 3b Task 3b.1a in one table, run after this task's checks exist:
+
+```ts
+/* #3084 P23 + P14 — after Task 3c.10 adds the pre-run checks, every analyzer selection call
+   site still reports a missing endpoint as analyzer-endpoint-missing, and the five sites
+   3b Task 3b.1a routed through analyzerSelectionErrorEvent still send THAT helper's event,
+   whether the error comes from a pre-run check (`check`: no endpoint `gone` is saved) or
+   from selection itself (`selection`: the check passes an Ollama id and selection throws).
+   For this class the helper's event and classifyAnalysisFailure's are identical on the
+   wire, so the spy on the helper is what tells a site that kept it from one that replaced
+   it. Phase 1 codes the error through runMainAnalyzerJob's job catch, as 3b.1a left it. */
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import express, { type Express } from 'express';
+import request from 'supertest';
+import { AnalyzerEndpointMissingError } from '../analyzer/errors.js';
+import type { Analyzer, AnalyzerSelection } from '../analyzer/index.js';
+import type { Stage1ChapterOutput } from '../handoff/schemas.js';
+import { analyzerSelectionErrorEvent } from './failure-taxonomy.js';
+import type { AnalysisJob } from './analysis.js';
+
+const { selection } = vi.hoisted(() => ({ selection: { error: null as Error | null } }));
+
+vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/select-analyzer.js')>();
+  return {
+    ...actual,
+    selectAnalyzerForPhase: (opts: Parameters<typeof actual.selectAnalyzerForPhase>[0]) => {
+      if (selection.error) throw selection.error;
+      return actual.selectAnalyzerForPhase(opts);
+    },
+    isPerPhaseModelSelectionActive: () => false,
+  };
+});
+vi.mock('./failure-taxonomy.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./failure-taxonomy.js')>();
+  return { ...actual, analyzerSelectionErrorEvent: vi.fn(actual.analyzerSelectionErrorEvent) };
+});
+/* Defensive, as in script-review.test.ts: no row reaches the review teardown, but the real
+   unloadResidentOllama evicts every resident model on a box with a live daemon. */
+vi.mock('./ollama-health.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./ollama-health.js')>();
+  return { ...actual, unloadResidentOllama: vi.fn(async () => {}) };
+});
+
+const AUTHOR = 'Selection Coding Author';
+const SERIES = 'Selection Coding Series';
+const BOOK = 'Selection Coding Book';
+const SENTENCES = [
+  { id: 1, chapterId: 1, characterId: 'narrator', text: 'The room was quiet.' },
+  { id: 2, chapterId: 1, characterId: 'wren', text: '"Get down!"' },
+];
+
+let workspaceRoot: string;
+let app: Express;
+let bookId: string;
+
+function writeBook(): void {
+  const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
+  mkdirSync(join(dir, '.audiobook'), { recursive: true });
+  writeFileSync(
+    join(dir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId,
+      manuscriptId: `m_${bookId}`,
+      title: BOOK,
+      author: AUTHOR,
+      series: SERIES,
+      seriesPosition: 1,
+      isStandalone: true,
+      language: 'en',
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  writeFileSync(join(dir, 'manuscript.txt'), 'placeholder');
+  writeFileSync(
+    join(dir, '.audiobook', 'cast.json'),
+    JSON.stringify({ characters: [{ id: 'wren', name: 'Wren', role: 'protagonist', color: '#ff0000' }] }),
+  );
+  writeFileSync(join(dir, '.audiobook', 'manuscript-edits.json'), JSON.stringify({ sentences: SENTENCES }));
+}
+
+async function registerStub(): Promise<string> {
+  const { putManuscript } = await import('../store/manuscripts.js');
+  const id = `m_selection_coding_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const chapterHints = [1, 2].map((n) => ({ id: n, title: `Chapter ${n}`, body: `Chapter ${n} body. ` + 'lorem ipsum dolor sit amet '.repeat(50) }));
+  putManuscript({
+    manuscriptId: id,
+    format: 'plaintext',
+    title: `Stub ${id}`,
+    wordCount: 200,
+    byteSize: 10_000,
+    uploadedAt: new Date().toISOString(),
+    sourceText: chapterHints.map((c) => c.body).join('\n\n'),
+    chapterHints,
+  });
+  return id;
+}
+
+function parseSse(body: string): Array<Record<string, unknown>> {
+  return body
+    .split('\n')
+    .filter((l) => l.startsWith('data: '))
+    .map((l) => JSON.parse(l.slice('data: '.length)) as Record<string, unknown>);
+}
+
+beforeAll(async () => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-selection-coding-test-'));
+  process.env.WORKSPACE_DIR = workspaceRoot;
+  /* Sequential awaits, not Promise.all (#2083): a Promise.all of dynamic imports races the
+     async vi.mock factories above. */
+  const { analysisRouter } = await import('./analysis.js');
+  const { annotateEmotionRouter } = await import('./annotate-emotion.js');
+  const { instructAnnotationRouter } = await import('./instruct-annotation.js');
+  const { scriptReviewRouter } = await import('./script-review.js');
+  const { makeBookId } = await import('../workspace/paths.js');
+  bookId = makeBookId(AUTHOR, SERIES, BOOK);
+  app = express();
+  app.use(express.json());
+  app.use('/api/manuscripts', analysisRouter);
+  app.use('/api/books', annotateEmotionRouter);
+  app.use('/api/books', instructAnnotationRouter);
+  app.use('/api/books', scriptReviewRouter);
+});
+
+beforeEach(() => {
+  rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
+  vi.mocked(analyzerSelectionErrorEvent).mockClear();
+});
+
+afterEach(() => {
+  selection.error = null;
+});
+
+afterAll(() => {
+  if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
+  delete process.env.WORKSPACE_DIR;
+});
+
+interface RouteSite {
+  site: string;
+  target: 'manuscript' | 'book';
+  post: (id: string, model: string) => request.Test;
+}
+
+const ROUTE_SITES: RouteSite[] = [
+  { site: 'analysis phase 0', target: 'manuscript', post: (id, model) => request(app).post(`/api/manuscripts/${id}/analysis`).send({ model }) },
+  { site: 'subset retry', target: 'manuscript', post: (id, model) => request(app).post(`/api/manuscripts/${id}/analysis/chapters`).send({ chapterIds: [1], model }) },
+  { site: 'annotate-emotion', target: 'book', post: (id, model) => request(app).post(`/api/books/${id}/annotate-emotion`).send({ model }) },
+  { site: 'instruct-annotation', target: 'book', post: (id, model) => request(app).post(`/api/books/${id}/instruct-annotation`).send({ model }) },
+  { site: 'script review', target: 'book', post: (id, model) => request(app).post(`/api/books/${id}/script-review`).send({ model }) },
+];
+
+const ROWS = ROUTE_SITES.flatMap((s) => (['check', 'selection'] as const).map((source) => ({ ...s, source })));
+
+describe('every selection call site codes a missing endpoint after the pre-run checks (#3084 P23, P14)', () => {
+  it.each(ROWS)('$site ($source) sends analyzerSelectionErrorEvent\'s analyzer-endpoint-missing event', async ({ target, post, source }) => {
+    let manuscriptId: string | null = null;
+    if (target === 'book') writeBook();
+    else manuscriptId = await registerStub();
+    /* check: the per-run pick names an endpoint that is not saved, so runAnalyzerPreflight throws.
+       selection: an Ollama id passes the checks (no Test record), and selection throws. */
+    const model = source === 'check' ? 'openai:gone::m' : 'qwen3.5:4b';
+    if (source === 'selection') selection.error = new AnalyzerEndpointMissingError('gone', 'settings');
+    try {
+      const res = await post(target === 'book' ? bookId : manuscriptId!, model);
+      expect(res.status).toBe(200);
+      const error = parseSse(res.text).find((e) => e.kind === 'error');
+      expect(error).toMatchObject({ kind: 'error', code: 'analyzer-endpoint-missing' });
+      const helper = vi.mocked(analyzerSelectionErrorEvent);
+      expect(helper).toHaveBeenCalledWith(expect.any(AnalyzerEndpointMissingError));
+      const sent = helper.mock.results.find((r) => r.type === 'return')?.value; // never null (Q2)
+      expect(error).toEqual(sent);
+    } finally {
+      if (manuscriptId) {
+        const { removeManuscript } = await import('../store/manuscripts.js');
+        removeManuscript(manuscriptId);
+      }
+    }
+  });
+
+  it('analysis phase 1 — runMainAnalyzerJob codes a selection throw through its job catch', async () => {
+    const { runMainAnalyzerJob } = await import('./analysis.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const id = await registerStub();
+    selection.error = new AnalyzerEndpointMissingError('gone', 'settings');
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const cast = (chapterId: number): Stage1ChapterOutput => ({
+      characters: [
+        { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator', evidence: [{ quote: 'lorem ipsum dolor sit amet' }, { quote: 'lorem ipsum dolor sit amet' }, { quote: 'lorem ipsum dolor sit amet' }] },
+        { id: `ch${chapterId}-char`, name: `Character_ch${chapterId}`, role: 'character', color: 'unset', evidence: [{ quote: 'lorem ipsum dolor sit amet' }, { quote: 'lorem ipsum dolor sit amet' }, { quote: 'lorem ipsum dolor sit amet' }] },
+      ],
+    });
+    const phase0Analyzer: Analyzer = {
+      runStage1: () => Promise.reject(new Error('not used')),
+      runStage1Chapter: (_m, chapterId) => Promise.resolve(cast(chapterId)),
+      runStage2Chapter: () => Promise.reject(new Error('not used')),
+      runEmotionChapter: () => Promise.reject(new Error('not used')),
+      runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+      runStage3Chapter: () => Promise.reject(new Error('not used')),
+      runAttributionEscalation: () => Promise.resolve(null),
+    };
+    const events: Array<Record<string, unknown>> = [];
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId: id,
+      kind: 'main',
+      bookDir: null,
+      engine: 'gemini',
+      replay: { logs: [], lastPhase: null, lastEta: null, lastCastUpdate: null, failedByChapterId: new Map(), lastSeriesPrior: null, warnings: new Map() },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+    const keepAlive = setInterval(() => {}, 100_000);
+    clearInterval(keepAlive);
+    job.subscribers.add({
+      send: (payload: unknown) => events.push(payload as Record<string, unknown>),
+      res: { end: () => {} } as unknown as import('express').Response,
+      keepAlive,
+    });
+    const phase0: AnalyzerSelection = { analyzer: phase0Analyzer, engine: 'gemini', model: 'gemma-selection-coding-test', fallbackModel: null };
+    try {
+      await runMainAnalyzerJob(job, getManuscript(id) as never, phase0, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      expect(events.find((e) => e.kind === 'error')).toMatchObject({ kind: 'error', code: 'analyzer-endpoint-missing' });
+    } finally {
+      removeManuscript(id);
+      await clearAnalysisCache(id);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+    }
+  }, 60_000);
+});
 ```
 
 - [ ] **Step 2: Run them and confirm they fail**
-Run: `npm --prefix server run test -- src/analyzer/select-analyzer.phase-source.test.ts src/analyzer/preflight.test.ts src/routes/analysis.preflight.test.ts src/routes/annotate-emotion.test.ts src/routes/instruct-annotation.test.ts src/routes/script-review.test.ts`
-Expected: FAIL — `resolvePhaseModelSelection is not a function`; `Failed to load url ./preflight.js`; route tests see no `analyzer-endpoint-missing` event (the run reaches selection, and 3a's `selectAnalyzer` refusal or the fake analyzer answers instead).
+Run: `npm --prefix server run test -- src/analyzer/select-analyzer.phase-source.test.ts src/analyzer/select-analyzer-endpoint-id.test.ts src/analyzer/preflight.test.ts src/routes/analysis.preflight.test.ts src/routes/selection-error-coding.test.ts src/routes/annotate-emotion.test.ts src/routes/instruct-annotation.test.ts src/routes/script-review.test.ts`
+Expected: FAIL.
+- `resolvePhaseModelSelection is not a function`; `Failed to load url ./preflight.js`.
+- `refuses a per-run pick of a deleted endpoint with analyzer-endpoint-missing, before selection` gets its coded event from 3b.1a's selection catch (3a's refusal), but FAILS on `selectSpy` having been called.
+- The three `#3084 — refuses a model on a deleted endpoint before …` cases FAIL: their mocked selection answers, so the analyzer runs (or, for script review, `selectAnalyzerForPhaseMock` is called) and no `analyzer-endpoint-missing` event arrives.
+- The three `#3084 N7 — reads saved settings before the checks …` cases FAIL for the opposite reason once the checks exist and read the cache: with nothing cached, a saved endpoint is reported missing. They fail on unmodified code too — no checks run, so `runEmotion` / `runStage3` / `selectAnalyzerForPhaseMock` is reached, which is what they assert — so their proof is Step 5 row 13, not this step.
+- The main and subset `… other than a missing endpoint …` cases **PASS** already: 3b Task 3b.1a codes every selection error at both POSTs. They pin that moving the block below the post-digest live-job re-check keeps that; Step 5 row 7 proves they can fail.
+- 3a's `each phase source is named: env, run pick, saved phase model` **PASSES** on `main` and must still pass after Step 3 — it is what keeps `modelSource` threaded through the extraction (Step 5 row 12).
+- The reload case already passes on unmodified code, because no check exists yet. Step 5 mutation 6 proves it guards the new order.
+- The two `$route: a reload of a live job reads no digest and runs no check (P14)` rows **PASS** on unmodified code, because no digest read exists yet. Step 5 row 18 proves they pin where the read sits.
+- The two `$route: two new-job POSTs parked on the digest read start ONE job, and the other joins it (#3004)` rows FAIL: no digest read exists, so `digest.models` never reaches two and the first `vi.waitFor` times out.
+- `a new job reads the installed digest and still refuses a Test rejection recorded for that build (A3)` FAILS on `digest.models` (`[]`); with no checks, selection is also called and no `analyzer-request-rejected` event arrives. `a new job for a re-pulled model discards that rejection and reaches selection (A3)` FAILS on `digest.models` (`[]`).
+- `selection-error-coding.test.ts` **PASSES** in full: on 3b.1a's code, every `check` row meets 3a's selection refusal, which each site already sends through the helper. It pins what Step 3 must keep. Step 5 rows 9–11 prove it can fail.
 
 - [ ] **Step 3: Implement**
 
@@ -3999,12 +6319,17 @@ Expected: FAIL — `resolvePhaseModelSelection is not a function`; `Failed to lo
 
 ```ts
 export type PhaseModelSource = 'env' | 'run-pick' | 'settings' | 'default';
+/** An explicit id always carries one of 3a's `modelSource` values; only the engine default
+    has none, so the union lets `selectAnalyzerForPhase` pass `source` straight through. */
+export type PhaseModelSelection =
+  | { modelId: string; source: 'env' | 'run-pick' | 'settings' }
+  | { modelId: null; source: 'default' };
 
 /** The precedence chain of selectAnalyzerForPhase, without constructing an analyzer, so
     pre-run checks (#3084) validate the same model id the run will use and can name where
     it came from. Precedence (highest first): env ANALYZER_PHASE{0,1}_MODEL → per-request
     opts.model → user-settings analyzerPhase{0,1}Model → engine default (modelId null). */
-export function resolvePhaseModelSelection(opts: PerPhaseAnalyzerOptions): { modelId: string | null; source: PhaseModelSource } {
+export function resolvePhaseModelSelection(opts: PerPhaseAnalyzerOptions): PhaseModelSelection {
   const phaseEnvKey = opts.phase === 'phase0' ? 'ANALYZER_PHASE0_MODEL' : 'ANALYZER_PHASE1_MODEL';
   const phaseEnvModel = process.env[phaseEnvKey];
   if (phaseEnvModel && phaseEnvModel.trim().length > 0) {
@@ -4022,18 +6347,25 @@ export function resolvePhaseModelSelection(opts: PerPhaseAnalyzerOptions): { mod
     precedence. The route layer caches the result per phase. */
 export function selectAnalyzerForPhase(opts: PerPhaseAnalyzerOptions): AnalyzerSelection {
   const resolved = resolvePhaseModelSelection(opts);
-  return resolved.modelId === null ? selectAnalyzer({}) : selectAnalyzer({ model: resolved.modelId });
+  /* 3a's `modelSource` must survive this extraction: it is what makes an endpoint named by
+     ANALYZER_PHASE{0,1}_MODEL report `source: 'env'` rather than `run-pick`
+     (3a Task 3a.2, `each phase source is named: env, run pick, saved phase model`). */
+  return resolved.modelId === null
+    ? selectAnalyzer({})
+    : selectAnalyzer({ model: resolved.modelId, modelSource: resolved.source });
 }
 ```
 
 Create `server/src/analyzer/preflight.ts`:
 
 ```ts
-/* #3084 W3 — pre-run checks (spec data flow step 1): before a run's first analyzer call,
-   every model id the run will use must name an existing endpoint, a key still bound to
-   that endpoint's origin, and no Test record that rejected the configured structured-
-   output mode. Env and per-run picks cannot be blocked at settings-save time, so this is
-   where they fail — as analyzer-endpoint-missing / auth / analyzer-request-rejected. */
+/* #3084 W3 — pre-run checks (spec data flow step 1, P14). When a new job is created and
+   before its first analyzer call, every model id the run will use must name an existing
+   endpoint, a key still bound to that endpoint's origin, and no Test record that rejected
+   the configured structured-output mode at the level the run sends. Env and per-run picks
+   cannot be blocked at settings-save time, so this is where they fail — as
+   analyzer-endpoint-missing / auth / analyzer-request-rejected. Each target is checked as
+   the engine selection will build, so the check never passes a run selection then refuses. */
 import { configValue } from '../config/resolver.js';
 import {
   getResolvedAnalysisEngine,
@@ -4042,19 +6374,22 @@ import {
   type UserSettings,
 } from '../workspace/user-settings.js';
 import { resolveEndpointApiKey } from '../workspace/analyzer-endpoints.js';
-import { inferEngineFromModelId, parseEndpointModelId } from './model-id.js';
+import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
 import { AnalyzerEndpointMissingError } from './errors.js';
-import { assertConfiguredCapabilitiesAllowed, capabilityRecordFor } from './capabilities.js';
+import { assertConfiguredCapabilitiesAllowed, capabilityRecordFor, defaultReasoningKey } from './capabilities.js';
 import { resolvePhaseModelSelection, type AnalysisPhase } from './select-analyzer.js';
 import type { StructuredOutputMode } from './runner/transport.js';
+import { ollamaModelDigest } from './ollama-digest.js';
 
 export interface PreflightTarget {
   modelId: string;
   source: 'env' | 'run-pick' | 'settings';
+  /** The engine selection builds for this target: inferred from an explicit id
+      (`selectAnalyzer({ model })`), the saved engine for the default (`selectAnalyzer({})`). */
+  engine: AnalysisEngine;
 }
 
-function engineDefaultModelId(settings: UserSettings): string {
-  const engine = getResolvedAnalysisEngine();
+function engineDefaultModelId(engine: AnalysisEngine, settings: UserSettings): string {
   if (engine === 'openai') return settings.defaultAnalysisModel;
   if (engine === 'gemini') return configValue<string>('analyzer.gemini.model');
   return getResolvedOllamaModel();
@@ -4067,37 +6402,67 @@ export function preflightTargets(
 ): PreflightTarget[] {
   return phases.map((phase) => {
     const resolved = resolvePhaseModelSelection({ phase, model: requestedModel, userSettings: settings });
-    if (resolved.modelId === null) return { modelId: engineDefaultModelId(settings), source: 'settings' };
-    return { modelId: resolved.modelId, source: resolved.source === 'default' ? 'settings' : resolved.source };
+    if (resolved.modelId === null) {
+      const engine = getResolvedAnalysisEngine();
+      return { modelId: engineDefaultModelId(engine, settings), source: 'settings', engine };
+    }
+    return {
+      modelId: resolved.modelId,
+      source: resolved.source === 'default' ? 'settings' : resolved.source,
+      engine: inferEngineFromModelId(resolved.modelId),
+    };
   });
 }
 
-export function runAnalyzerPreflight(targets: readonly PreflightTarget[], settings: UserSettings): void {
+/** A3 — the installed digest of every distinct Ollama target, so a record written for another build
+    is discarded rather than refusing the run. The one await the checks need: callers resolve it
+    before the synchronous check block. The analysis POSTs call it on the new-job path only, then
+    re-check for a live job before the checks (#3004, P14). Gemini and endpoint targets have no
+    digest and cost nothing. Never throws. */
+export async function resolvePreflightDigests(
+  targets: readonly PreflightTarget[],
+  deps: { ollamaUrl?: () => string; modelDigest?: (url: string, model: string) => Promise<string | undefined> } = {},
+): Promise<Map<string, string | undefined>> {
+  const digestOf = deps.modelDigest ?? ollamaModelDigest;
+  const models = [...new Set(targets.filter((t) => t.engine === 'local').map((t) => t.modelId))];
+  const out = new Map<string, string | undefined>();
+  if (models.length === 0) return out;
+  const url = (deps.ollamaUrl ?? getResolvedOllamaUrl)();
+  await Promise.all(models.map(async (model) => out.set(model, await digestOf(url, model).catch(() => undefined))));
+  return out;
+}
+
+export function runAnalyzerPreflight(
+  targets: readonly PreflightTarget[],
+  settings: UserSettings,
+  /** A3: from resolvePreflightDigests. Absent or missing a model → that record is kept (fail-open). */
+  digests?: ReadonlyMap<string, string | undefined>,
+): void {
   const seen = new Set<string>();
   for (const target of targets) {
-    if (seen.has(target.modelId)) continue;
-    seen.add(target.modelId);
-    const engine = inferEngineFromModelId(target.modelId);
-    if (engine === 'openai') {
+    const key = `${target.engine}|${target.modelId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (target.engine === 'openai') {
       const parsed = parseEndpointModelId(target.modelId);
       const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
       if (!parsed || !endpoint) throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? target.modelId, target.source);
       resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl); // throws AnalyzerKeyOriginError for a key bound to another host
       assertConfiguredCapabilitiesAllowed(
         capabilityRecordFor(settings, target.modelId, endpoint.baseUrl),
-        { structuredOutput: endpoint.structuredOutput, reasoning: undefined },
+        { structuredOutput: endpoint.structuredOutput, reasoning: defaultReasoningKey('openai') },
         target.modelId,
       );
-    } else if (engine === 'gemini') {
+    } else if (target.engine === 'gemini') {
       assertConfiguredCapabilitiesAllowed(
         capabilityRecordFor(settings, target.modelId, 'gemini'),
-        { structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'), reasoning: undefined },
+        { structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'), reasoning: defaultReasoningKey('gemini') },
         target.modelId,
       );
     } else {
       assertConfiguredCapabilitiesAllowed(
-        capabilityRecordFor(settings, target.modelId, getResolvedOllamaUrl()),
-        { structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'), reasoning: undefined },
+        capabilityRecordFor(settings, target.modelId, getResolvedOllamaUrl(), digests?.get(target.modelId)),
+        { structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'), reasoning: defaultReasoningKey('ollama') },
         target.modelId,
       );
     }
@@ -4105,45 +6470,190 @@ export function runAnalyzerPreflight(targets: readonly PreflightTarget[], settin
 }
 ```
 
-`server/src/routes/analysis.ts` — import `import { preflightTargets, runAnalyzerPreflight } from '../analyzer/preflight.js';`. Main POST, between `const userSettings = await readUserSettings();` (`:3315`) and `let selection: AnalyzerSelection;` (`:3316`):
+`server/src/routes/analysis.ts` — add `import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight, type PreflightTarget } from '../analyzer/preflight.js';`. The `./failure-taxonomy.js` import already brings `classifyAnalysisFailure` and, since 3b Task 3b.1a, `analyzerSelectionErrorEvent`; leave it as it is.
+
+**Stop-the-run errors (P20).** Each catch below wraps only `preflightTargets`, `runAnalyzerPreflight` and analyzer selection. None makes a stage call, so `AnalyzerReasoningOverflowError` cannot reach these catches. The per-chapter and per-pass catches that rethrow `GeminiContentBlockedError` are not touched. No pass-through and no test is owed here.
+
+**Main POST.** In `analysisRouter.post('/:id/analysis')`, delete 3b.1a's block, from `let selection: AnalyzerSelection;` through the closing brace of the `if (requestedModel) { console.log(…) }` that follows its `catch`. That `catch` reads:
+```ts
+  } catch (e) {
+    /* #3084 P23 — every selection error is sent with its classified code. */
+    send(analyzerSelectionErrorEvent(e));
+    clearInterval(keepAlive);
+    return res.end();
+  }
+```
+Leave `const userSettings = await readUserSettings();` and the `const priorOutcome = …` read where they are, and keep the `/* ── Dispatch: subscribe-vs-start. … */` comment. Under that comment, replace `const existing = inFlightAnalysisByManuscript.get(manuscriptId);` and the rejoin branch (`if (existing && !existing.controller.signal.aborted && !requestedFresh) { … return; }`) with the block below. The block ends where `if (existing) {` begins. The rejoin body moves verbatim into `joinLive`, with `existing` renamed `live`. `if (existing) { existing.controller.abort(); … }`, the #3004 rejoin-miss block and everything from `const job: AnalysisJob = {` onward stay as they are, and now read the re-checked `existing`:
 
 ```ts
-  /* #3084 — pre-run checks for both phases, before any analyzer is built or called. */
+  /* #3084 P14 + #3004 — double-checked dispatch. `joinLive` is today's rejoin body, unchanged. */
+  const joinLive = (live: AnalysisJob): void => {
+    /* F2 (#3169 fix wave) — the one outcome line for the attach path. The
+       job object doesn't store the model it's running (only `engine`), so
+       this deliberately omits `model` rather than printing the requesting
+       POST's own `requestedModel` (or the saved default), which would be
+       the WRONG model whenever the running job was started with an
+       explicitly picked one. */
+    console.log(`[analysis] subscribe manuscript=${JSON.stringify(manuscriptId)}`);
+    const subscriber: AnalysisSubscriber = { send, res, keepAlive };
+    live.subscribers.add(subscriber);
+    replayCatchUp(live, send);
+    res.on('close', () => {
+      if (res.writableEnded) return;
+      live.subscribers.delete(subscriber);
+      clearInterval(keepAlive);
+      /* Do NOT abort — sticky semantics. The analyzer keeps running
+         until /pause or the queue drains. */
+    });
+    res.on('finish', () => clearInterval(keepAlive));
+  };
+  let existing = inFlightAnalysisByManuscript.get(manuscriptId);
+  /* 1. P14 — a reload joins the live job before any pre-run work: no digest read, no checks.
+     An endpoint (or its key) deleted mid-run must not refuse the reload, and the running job
+     keeps its own analyzer. */
+  if (existing && !existing.controller.signal.aborted && !requestedFresh) {
+    joinLive(existing);
+    return;
+  }
+  /* 2. #3084 A3 — only a new job reads the installed digests of its Ollama targets (bounded
+     2 s, fail-open). */
+  const preflightDigests = await resolvePreflightDigests(preflightTargets(['phase0', 'phase1'], requestedModel, userSettings));
+  /* 3. #3004 — that await reopened the check-then-register window: a concurrent POST may have
+     registered a job while this one waited. Re-check with the same condition and join that
+     job rather than start a second one. Reassigning `existing` also makes the displacement
+     below abort a job registered during the wait (fresh: true) instead of orphaning it. */
+  existing = inFlightAnalysisByManuscript.get(manuscriptId);
+  if (existing && !existing.controller.signal.aborted && !requestedFresh) {
+    joinLive(existing);
+    return;
+  }
+  /* 4. #3084 P14 — pre-run checks and analyzer selection, for a NEW job only. All three calls
+     are synchronous: no `await` from the re-check above to `inFlightAnalysisByManuscript.set`
+     below, so the check-then-register window stays atomic (#3004). `preflight` stays in
+     function scope: Task 3d.1 reads it. */
+  let preflight: PreflightTarget[];
+  let selection: AnalyzerSelection;
   try {
-    runAnalyzerPreflight(preflightTargets(['phase0', 'phase1'], requestedModel, userSettings), userSettings);
+    preflight = preflightTargets(['phase0', 'phase1'], requestedModel, userSettings);
+    runAnalyzerPreflight(preflight, userSettings, preflightDigests);
+    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, userSettings });
   } catch (e) {
-    const { code, userMessage: message, remediation, detail } = classifyAnalysisFailure(e, requestedModel ?? 'analyzer');
-    send({ kind: 'error', code, message, remediation, detail });
+    /* #3084 P23/P14 — one coded event for every check or selection failure: 3b Task 3b.1a's
+       helper classifies each class, never returns null, and carries its detail. This `catch`
+       is 3b.1a's, unchanged; only the block above it moved and grew the two check calls. */
+    send(analyzerSelectionErrorEvent(e));
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  /* No log line here. On `46e62a34` the resolved selection is already logged once the
+     dispatch decision has been made — `[analysis] start manuscript=… engine=… model=…`
+     (`analysis.ts:3502-3504`, both values `JSON.stringify`d against log injection, #3169 F2).
+     The conditional `[analysis] manuscript=…` line this block used to re-add no longer
+     exists, so adding one here would duplicate the start line. */
+```
+
+**Subset POST.** In `analysisRouter.post('/:id/analysis/chapters')`, `const requestedModel = …` already sits near the top of the handler (`:6523`) and stays there. Keep the `/* ── Plan 32 D1 subscribe-vs-start dispatch. … */` comment. Replace everything from `const existing = inFlightSubsetByManuscript.get(manuscriptId);` through 3b.1a's selection `catch`'s closing brace (the same `catch` as the main POST's above) with the block below. That span holds the rejoin branch, the `/* Plan 118 — resolve cast … */` comment, `const userSettings = await readUserSettings();` and 3b.1a's block. The comment and the settings read reappear in the block unchanged, and the rejoin body moves verbatim into `joinLive`, with `existing` renamed `live`:
+
+```ts
+  /* #3084 P14 + #3004 — the same double-checked dispatch as the main POST. `joinLive` is
+     today's subset rejoin body, unchanged. */
+  const joinLive = (live: AnalysisJob): void => {
+    /* F2 (#3169 fix wave) — same rationale as the parent route: the job
+       doesn't store the model it's running, so this omits `model` rather
+       than printing this POST's own (possibly wrong) requested/default
+       one. */
+    console.log(`[analysis-subset] subscribe manuscript=${JSON.stringify(manuscriptId)}`);
+    const subscriber: AnalysisSubscriber = { send, res, keepAlive };
+    live.subscribers.add(subscriber);
+    replayCatchUp(live, send);
+    res.on('close', () => {
+      if (res.writableEnded) return;
+      live.subscribers.delete(subscriber);
+      clearInterval(keepAlive);
+      /* Do NOT abort — sticky semantics. The retry keeps running until
+         /pause or terminal completion. */
+    });
+    res.on('finish', () => clearInterval(keepAlive));
+  };
+  let existing = inFlightSubsetByManuscript.get(manuscriptId);
+  /* 1. P14 — a reload joins the live subset job: no settings read, no digest read, no checks. */
+  if (existing && !existing.controller.signal.aborted) {
+    joinLive(existing);
+    return;
+  }
+
+  /* Plan 118 — resolve cast (Phase 0) and attribution (Phase 1) analyzers
+     via the per-phase selector so a saved split applies to the subset
+     retry too. This path is sequential (no watermark); the split only
+     changes which model each pass uses. */
+  const userSettings = await readUserSettings();
+  /* 2. #3084 A3 — installed digests for the Ollama targets, new subset job only (bounded 2 s,
+     fail-open). */
+  const preflightDigests = await resolvePreflightDigests(preflightTargets(['phase0', 'phase1'], requestedModel, userSettings));
+  /* 3. #3004 — both awaits above reopen the check-then-register window (the settings read
+     already did on 46e62a34). Re-check with the same condition: a job a concurrent POST
+     registered meanwhile is joined, not duplicated. */
+  existing = inFlightSubsetByManuscript.get(manuscriptId);
+  if (existing && !existing.controller.signal.aborted) {
+    joinLive(existing);
+    return;
+  }
+  /* 4. #3084 P14 — the checks and both selections share one failure path, and P23's shared
+     coded event (3b Task 3b.1a) reports every failure on it, checks included. No `await`
+     from the re-check above to `inFlightSubsetByManuscript.set` below (#3004). */
+  let preflight: PreflightTarget[];
+  let selection: AnalyzerSelection;
+  let phase1Selection: AnalyzerSelection;
+  try {
+    preflight = preflightTargets(['phase0', 'phase1'], requestedModel, userSettings);
+    runAnalyzerPreflight(preflight, userSettings, preflightDigests);
+    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, userSettings });
+    phase1Selection = selectAnalyzerForPhase({
+      phase: 'phase1',
+      model: requestedModel,
+      userSettings,
+    });
+  } catch (e) {
+    send(analyzerSelectionErrorEvent(e)); // P23/P14 — the shared coded event, checks included
     clearInterval(keepAlive);
     return res.end();
   }
 ```
 
-Subset POST, between `const userSettings = await readUserSettings();` (`:6543`) and `let selection: AnalyzerSelection;` (`:6544`): the same block.
-
-`server/src/routes/script-review.ts` — `:36` becomes `import { getCachedUserSettings, getResolvedGeminiApiKey, getResolvedAllowCloudFallback } from '../workspace/user-settings.js';`; add `import { classifyAnalysisFailure } from './failure-taxonomy.js';` and `import { preflightTargets, runAnalyzerPreflight } from '../analyzer/preflight.js';`. Before `const selection = selectAnalyzerForPhase({ phase: 'phase1', model });` (`:695`):
+`server/src/routes/script-review.ts`:
+- `:36` becomes `import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback, readUserSettings } from '../workspace/user-settings.js';`.
+- Add `import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight } from '../analyzer/preflight.js';`. 3b Task 3b.1a's `import { analyzerSelectionErrorEvent } from './failure-taxonomy.js';` is unchanged, and no `classifyAnalysisFailure` import is added: the helper owns the classification.
+- In `runScriptReviewJob` (a new job; it is already `async`), directly above 3b Task 3b.1a's `let selection: AnalyzerSelection;`, insert the block below. 3b.1a's selection `try`/`catch` under it and the launch's detached `.catch` are unchanged.
 
 ```ts
   try {
-    const settings = getCachedUserSettings();
-    runAnalyzerPreflight(preflightTargets(['phase1'], model, settings), settings);
+    /* N7 — from disk, as the analysis POSTs do. The cache can still be cold after a restart,
+       and getCachedUserSettings() would then report every saved endpoint as missing. */
+    const settings = await readUserSettings();
+    const targets = preflightTargets(['phase1'], model, settings);
+    runAnalyzerPreflight(targets, settings, await resolvePreflightDigests(targets)); // A3: Ollama only, fail-open
   } catch (e) {
-    const { code, userMessage: message, remediation } = classifyAnalysisFailure(e, model ?? 'analyzer');
-    send({ kind: 'error', code, message, remediation });
+    /* #3084 P23/P14 — the one coded event every selection call site sends (3b Task 3b.1a). */
+    send(analyzerSelectionErrorEvent(e));
     for (const sub of job.subscribers) sub.res.end();
     return;
   }
 ```
 
-`server/src/routes/annotate-emotion.ts` and `instruct-annotation.ts` — add `import { getCachedUserSettings } from '../workspace/user-settings.js';`, `import { classifyAnalysisFailure } from './failure-taxonomy.js';`, `import { preflightTargets, runAnalyzerPreflight } from '../analyzer/preflight.js';`. Before `const selection = selectAnalyzerForPhase({ phase: 'phase1', model: req.body?.model });` (`annotate-emotion.ts:147`, `instruct-annotation.ts:146`):
+`server/src/routes/annotate-emotion.ts` and `instruct-annotation.ts` (the same edit in each):
+- Add `import { readUserSettings } from '../workspace/user-settings.js';` (neither file imports from it on 46e62a34) and `import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight } from '../analyzer/preflight.js';`. 3b Task 3b.1a's `import { analyzerSelectionErrorEvent } from './failure-taxonomy.js';` is unchanged, and no `classifyAnalysisFailure` import is added.
+- Directly above 3b.1a's `let selection: AnalyzerSelection;` (the line 3b.1a put in place of `const selection = selectAnalyzerForPhase({ phase: 'phase1', model: req.body?.model });`), insert the block below. Both handlers are already `async`. 3b.1a's selection `try`/`catch` under it is unchanged.
 
 ```ts
     try {
-      const settings = getCachedUserSettings();
-      runAnalyzerPreflight(preflightTargets(['phase1'], req.body?.model, settings), settings);
-    } catch (e) {
-      const { code, userMessage: message, remediation } = classifyAnalysisFailure(e, req.body?.model ?? 'analyzer');
-      send({ kind: 'error', code, message, remediation });
+      /* N7 — from disk, as the analysis POSTs do: a cold cache after a restart would make
+         every saved endpoint look missing. */
+      const settings = await readUserSettings();
+      const targets = preflightTargets(['phase1'], req.body?.model, settings);
+      runAnalyzerPreflight(targets, settings, await resolvePreflightDigests(targets)); // A3: Ollama only, fail-open
+    } catch (err) {
+      /* #3084 P23/P14 — the one coded event every selection call site sends (3b Task 3b.1a). */
+      send(analyzerSelectionErrorEvent(err));
       clearInterval(keepAlive);
       res.end();
       return;
@@ -4151,18 +6661,37 @@ Subset POST, between `const userSettings = await readUserSettings();` (`:6543`) 
 ```
 
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/analyzer/select-analyzer.phase-source.test.ts src/analyzer/select-analyzer.test.ts src/analyzer/preflight.test.ts src/routes/analysis.preflight.test.ts src/routes/analysis.test.ts src/routes/analysis.phase-model.test.ts src/routes/annotate-emotion.test.ts src/routes/instruct-annotation.test.ts src/routes/script-review.test.ts src/config/direct-env-reader-guard.test.ts`, then `npm --prefix server run test:slow -- src/routes/analysis-pipelining.test.ts`, then `npm run check:cycles`. Expected: PASS.
+Run: `npm --prefix server run test -- src/analyzer/select-analyzer.phase-source.test.ts src/analyzer/select-analyzer.test.ts src/analyzer/select-analyzer-endpoint-id.test.ts src/analyzer/preflight.test.ts src/routes/analysis.preflight.test.ts src/routes/selection-error-coding.test.ts src/routes/failure-taxonomy.test.ts src/routes/analysis.endpoint-missing.test.ts src/routes/analysis.test.ts src/routes/analysis.rejoin-miss.test.ts src/routes/analysis.phase-model.test.ts src/routes/annotate-emotion.test.ts src/routes/instruct-annotation.test.ts src/routes/script-review.test.ts src/config/direct-env-reader-guard.test.ts`, then `npm --prefix server run test:slow -- src/routes/analysis-pipelining.test.ts`, then `npm run check:cycles`. Expected: PASS.
 
 - [ ] **Step 5: Mutation proof**
 1. `preflight.ts`: delete the `if (!parsed || !endpoint) throw …` line → red: "a deleted endpoint from the per-run pick…", the route tests. Restore.
 2. `preflight.ts`: pass `'settings'` instead of `target.source` → red: "a deleted endpoint named by env → source env", "…per-run pick → … source run-pick". Restore.
-3. `analysis.ts` main POST: delete the preflight `try/catch` block → red: `analysis.preflight.test.ts` (selection spy called; no `analyzer-endpoint-missing`). Restore.
+3. `analysis.ts` main POST: delete `runAnalyzerPreflight(preflight, userSettings, preflightDigests);` → red: "refuses a per-run pick of a deleted endpoint…" (selection spy called; no `analyzer-endpoint-missing`). Restore.
 4. `annotate-emotion.ts`: delete its preflight block → red: "#3084 — refuses a model on a deleted endpoint before the analyzer is called". Restore. Repeat for `instruct-annotation.ts` and `script-review.ts`.
+5. `preflight.ts` `preflightTargets`: return `engine: inferEngineFromModelId(resolved.modelId)` for explicit ids **and** for the engine default (`inferEngineFromModelId(engineDefaultModelId(…))`) → red: Task 3d.4's "the engine default is checked as the saved engine builds it…". Restore.
+6. `analysis.ts` main POST: move step 4's checks `try`, together with the step 2 digest read it needs, back above the first live-job check → red: "a reload of a live job still joins it after its endpoint was deleted…" and `main: a reload of a live job reads no digest and runs no check (P14)`. Restore.
+7. `analysis.ts` main POST `catch`: replace `send(analyzerSelectionErrorEvent(e));` with the pre-3b.1a `send({ kind: 'error', message: (e as Error).message });` → red: "a selection failure other than a missing endpoint carries its classified code (P14)" and `analysis phase 0 (check)` / `analysis phase 0 (selection)` in `selection-error-coding.test.ts`. Restore. Repeat for the subset POST → red: "the subset POST classifies a selection failure other than a missing endpoint too (P14)" and its two rows. Restore.
+8. `preflight.ts`: pass `reasoning: 'model-default'` in the Ollama branch → red: "an Ollama model whose schema mode was rejected at off…". Restore.
+9. Replace a site's helper call with a hand-built classified event: in `annotate-emotion.ts`'s checks `catch`, replace `send(analyzerSelectionErrorEvent(err));` with `const f = classifyAnalysisFailure(err, 'analyzer'); send({ kind: 'error', code: f.code, message: f.userMessage, remediation: f.remediation });` (importing `classifyAnalysisFailure` for the mutation only) → red: `annotate-emotion (check) sends analyzerSelectionErrorEvent's analyzer-endpoint-missing event` (the helper is never called). The event on the wire is unchanged, so every other code assertion stays green: only this spy sees the change. Restore. Repeat, one site at a time:
+   - `instruct-annotation.ts` → `instruct-annotation (check) …`;
+   - `script-review.ts` → `script review (check) …`;
+   - the main POST `catch` → `analysis phase 0 (check) …` and `analysis phase 0 (selection) …`;
+   - the subset POST `catch` → `subset retry (check) …` and `subset retry (selection) …`.
+10. 3b.1a's selection catches, which this task keeps. In `annotate-emotion.ts`'s selection `catch`, replace `send(analyzerSelectionErrorEvent(err)); clearInterval(keepAlive); res.end(); return;` with `throw err;` → red: `annotate-emotion (selection) …` (the throw escapes after the SSE headers, so no `error` event arrives and the request hangs to the test timeout). Restore. The same in `instruct-annotation.ts` → `instruct-annotation (selection) …`. In `script-review.ts`, replace 3b.1a's selection-catch `send(analyzerSelectionErrorEvent(err));` with `throw err;`, so the launch's detached `.catch` answers instead → red: `script review (selection) …` (`internal_error`). Restore each.
+11. Delete Task 3b.1's `if (err instanceof AnalyzerEndpointMissingError) { … }` branch in `classifyAnalysisFailure` → red: `analysis phase 1 — runMainAnalyzerJob codes a selection throw through its job catch` (code `unknown`). Restore.
+12. `select-analyzer.ts`: drop `modelSource: resolved.source` from `selectAnalyzerForPhase` → red: 3a's `each phase source is named: env, run pick, saved phase model` (an env-named endpoint reports `run-pick`), and, from Task 3d.4 on, `a missing endpoint names where its id came from: env, run pick, saved phase model`. Restore.
+13. `annotate-emotion.ts`: replace `await readUserSettings()` in the checks block with `getCachedUserSettings()` → red: that route's `#3084 N7 — reads saved settings before the checks, so a saved endpoint passes them on a cold cache (after a restart)`. Restore. Repeat in `instruct-annotation.ts` and `script-review.ts` → each file's own N7 case. Restore.
+14. `preflight.ts` Ollama branch: drop `digests?.get(target.modelId)` → red: "A3 — an Ollama rejection recorded for another installed digest no longer refuses…" (first assertion). Restore.
+15. `resolvePreflightDigests`: drop `.filter((t) => t.engine === 'local')` → red: "asks once per distinct Ollama model, never for Gemini or endpoint targets…". Restore. Drop `.catch(() => undefined)` → red: the same case (the call rejects). Restore.
+16. `analysis.ts` main POST: call `runAnalyzerPreflight(preflight, userSettings)` without `preflightDigests` → red: "a new job for a re-pulled model discards that rejection and reaches selection (A3)" (the record is kept and refuses). Restore.
+17. `analysis.ts` main POST: delete step 3's re-check (`existing = inFlightAnalysisByManuscript.get(manuscriptId);` and the `if` under it) → red: `main: two new-job POSTs parked on the digest read start ONE job, and the other joins it (#3004)` (two phase-0 selections, two `rejoin-miss` events). Restore. The same in the subset POST → red: `subset: two new-job POSTs …` (two phase-0 selections). Restore.
+18. `analysis.ts` main POST: move `const preflightDigests = await resolvePreflightDigests(…);` back above the first live-job check → red: `main: a reload of a live job reads no digest and runs no check (P14)` (`digest.models` is `['qwen3.5:4b']`). Restore. The same in the subset POST, moving `const userSettings = await readUserSettings();` up with it because the read needs it → red: `subset: a reload …`. Restore.
+19. `analysis.ts` main POST: insert `await Promise.resolve();` between step 3's re-check and step 4's `let preflight` → red: `main: two new-job POSTs …`. Both POSTs resume from the one digest promise in the same microtask checkpoint, so the extra hop queues the first POST's registration behind the second POST's re-check, and both register. Restore. The same in the subset POST → red: `subset: two new-job POSTs …`. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/select-analyzer.ts server/src/analyzer/select-analyzer.phase-source.test.ts server/src/analyzer/preflight.ts server/src/analyzer/preflight.test.ts server/src/routes/analysis.ts server/src/routes/analysis.preflight.test.ts server/src/routes/script-review.ts server/src/routes/script-review.test.ts server/src/routes/annotate-emotion.ts server/src/routes/annotate-emotion.test.ts server/src/routes/instruct-annotation.ts server/src/routes/instruct-annotation.test.ts
-git commit -m "feat(server): pre-run analyzer checks for endpoints, keys and Test records"
+git add server/src/analyzer/select-analyzer.ts server/src/analyzer/select-analyzer.phase-source.test.ts server/src/analyzer/preflight.ts server/src/analyzer/preflight.test.ts server/src/routes/analysis.ts server/src/routes/analysis.preflight.test.ts server/src/routes/selection-error-coding.test.ts server/src/routes/script-review.ts server/src/routes/script-review.test.ts server/src/routes/annotate-emotion.ts server/src/routes/annotate-emotion.test.ts server/src/routes/instruct-annotation.ts server/src/routes/instruct-annotation.test.ts
+git commit -m "feat(server): pre-run analyzer checks on new jobs, with coded selection failures"
 ```
 
 ---
@@ -4180,24 +6709,40 @@ Run: `npm run openapi:types` (commit any diff), `npm run config:sync` then `npm 
 
 - [ ] **Step 2: On-box row (the Test action runs against real servers only on the box)**
 
-Read the Group A marker; at 2b63b451 it is `<!-- next-id: A107 -->`. Its value at ship time is this row's id, written `‹row-3c›` below (no literal id in the steps), bump the marker by one in the same commit. Add to Group A, after the last row:
+Read the Group A marker; at 46e62a34 it is `<!-- next-id: A107 -->`. Its value at ship time is this row's id, written `‹row-3c›` below (no literal id in the steps); bump the marker by one in the same commit. Add to Group A, after the last row:
 
 ```markdown
-### ‹row-3c› · Live structured output — Test action ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #NNNN) · **GPU box with Ollama + a llama-swap endpoint on one card; a Gemini key**
+### ‹row-3c› · Live structured output — Test action ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #NNNN) · **GPU box with Ollama + a llama-swap endpoint on one card; a Gemini key; a small-context vLLM or an OpenRouter endpoint**
 
-The Test action (Advanced Settings → Analyzer rate limits → **Test**) sends a control
-request with no structured output (`off` mode, so a server that rejects `json`, such as LM
-Studio, still passes it), then the configured structured-output check with a schema marker
-the prompt never mentions, and records `enforced` / `ignored` / `rejected`. Unit tests use fake transports;
-only real servers show whether the recorded outcome matches what the model does.
+The Test action (Advanced Settings → Analyzer rate limits → **Test**) runs a ladder: a
+control request with no structured output, then one request per mode (`schema` with a
+marker key the prompt never mentions, `json`). Every request carries the same prompt and
+the same output cap: the model's resolved Auto cap clamped to context minus input. A 400
+that names a context, token or length limit is inconclusive rather than `rejected`, and
+records are keyed by the reasoning level actually sent. Unit tests use fake transports;
+only real servers show whether real models finish the probes and whether the recorded
+outcome matches what the model does.
 
 - Run **Test** (configured) and **Test every mode** on `qwen3.5:4b` (Ollama), a `gemma-*`
   and a `gemini-*` model, and a llama-swap endpoint model with thinking on and off.
 - Record each outcome and compare it with a hand request in the same mode: an `ignored`
   record must correspond to output without the marker; `enforced` to output with it.
+- **Thinking models produce a record:** `gemini-3.6-flash` in its default `json` mode, and
+  the llama-swap Qwen3 model with thinking on, each end with a saved record (not a 502 that
+  says `finish=length`). Note the cap the requests carried (server log / request dump).
+- **Small context never records `rejected` by size:** on a vLLM endpoint whose served
+  context is small (e.g. `--max-model-len 8192`) or an OpenRouter model whose
+  `max_completion_tokens` exceeds what is left of its context, run **Test every mode**. The
+  record must not show `rejected` for a mode the model accepts; a size-limit 400, if one
+  still happens, answers 502 "inconclusive" and saves nothing.
+- A failed test keeps the earlier record: stop the llama-swap server, run **Test**, and
+  confirm the Settings row still shows the previous outcome and date.
 - Record what the Gemini adapter drops (the entry's `structuredOutput.dropped` in
   `GET /api/analyzer/models`).
 - Change the endpoint's base URL: the record disappears from the catalog entry.
+- **Re-pulled Ollama model:** with a saved record for `qwen3.5:4b` (note its `digest`), pull a
+  different build of that tag so `ollama list` shows a new digest: the catalog entry loses the
+  record, and an analysis on that model starts instead of refusing on the old verdict.
 - Criteria: `docs/testing/openai-analyzer-onbox-acceptance.md` § "Live structured output".
 ```
 
@@ -4208,33 +6753,48 @@ Create `docs/testing/openai-analyzer-onbox-acceptance.md`:
 ```markdown
 # OpenAI-compatible analyzer — on-box acceptance run sheet (#3084)
 
-Register rows: ‹row-3c› (this PR; id minted from Group A's next-id marker); wave 3's last PR extends it and adds the eviction and
-long-prefill rows. Prerequisites: the GPU box, Ollama with `qwen3.5:4b`, a Gemini API key,
-llama-swap serving one model with a per-model unload endpoint.
+Register rows: ‹row-3c› (this PR; id minted from Group A's next-id marker); wave 3's last
+PR extends it and adds the eviction and long-prefill rows. Prerequisites: the GPU box,
+Ollama with `qwen3.5:4b`, a Gemini API key, llama-swap serving a Qwen3 model (thinking
+switchable) with a per-model unload endpoint, and either a vLLM endpoint started with a
+small `--max-model-len` or an OpenRouter key.
 
 ## Live structured output
 
 1. Advanced Settings → Analyzer rate limits. For each of `qwen3.5:4b`, one `gemma-*`,
    one `gemini-*`, and the llama-swap model (thinking on, then off): click **Test**, confirm
-   the request count (2; 1 for a model whose configured mode is `off`), run. Then **Test** with "Test every structured-output mode" (3: the off-mode control, `schema`, `json`).
+   the request count (2; 1 for a model whose configured mode is `off`), run. Then **Test**
+   with "Test every structured-output mode" (3: the off-mode control, `schema`, `json`).
    Result:
 2. For each `schema` outcome, send one request by hand in `schema` mode and note whether the
    reply contains `cw_probe_marker`. `enforced` ⇔ present, `ignored` ⇔ absent.
    Result:
-3. `GET /api/analyzer/models` → note each Gemini entry's `structuredOutput.dropped`.
+3. Thinking models: `gemini-3.6-flash` (default `json`) and the llama-swap Qwen3 model with
+   thinking on each end with a saved record, not 502 `finish=length`. Note the
+   `max_tokens` / `maxOutputTokens` every request carried; all requests of one test carry
+   the same value. Result:
+4. Small context: on the small-context vLLM endpoint (or an OpenRouter model whose output
+   cap exceeds its remaining context), **Test every mode**. No mode is recorded `rejected`
+   because of size; note any 502 "inconclusive" message verbatim. Result:
+5. Failed test keeps the record: stop llama-swap, **Test** its model → the 502 says the
+   control request failed; the Settings row still shows the earlier outcome. Result:
+6. `GET /api/analyzer/models` → note each Gemini entry's `structuredOutput.dropped`.
    Result:
-4. Change the llama-swap endpoint's base URL (e.g. `localhost` → `127.0.0.1`): the entry's
+7. Change the llama-swap endpoint's base URL (e.g. `localhost` → `127.0.0.1`): the entry's
    `capability` is gone and the label no longer says "not enforced".
    Result:
+7a. Re-pulled Ollama model: note the saved record's `digest` for `qwen3.5:4b`; pull a different
+   build of the tag (new digest in `ollama list`); the catalog entry has no `capability`, and an
+   analysis on it starts rather than refusing. Old digest ___ new digest ___ Result:
 ```
 
 Live view — after the A106 `</details>` (`:712` area), insert:
 
 ```html
     <details class="item">
-      <summary><span class="num">‹row-3c›</span><span class="iname">Live structured output — Test action records match real model behaviour</span><span class="risk">GPU box, Ollama + llama-swap endpoint on one card, Gemini key</span><span class="chev">›</span></summary>
+      <summary><span class="num">‹row-3c›</span><span class="iname">Live structured output — Test action records match real model behaviour</span><span class="risk">GPU box, Ollama + llama-swap endpoint on one card, Gemini key, small-context vLLM or OpenRouter</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>Run Test (configured, then every mode) on qwen3.5:4b, a gemma-* and a gemini-* model, and a llama-swap endpoint model with thinking on and off. Each <code>enforced</code>/<code>ignored</code> outcome must match a hand request (marker present/absent); record the Gemini adapter's <code>dropped</code> list; a base-URL change discards the record.</p>
+        <p>Run Test (configured, then every mode) on qwen3.5:4b, a gemma-* and a gemini-* model, and a llama-swap endpoint model with thinking on and off. Each <code>enforced</code>/<code>ignored</code> outcome must match a hand request (marker present/absent). Thinking models (gemini-3.6-flash default json, llama-swap Qwen3 thinking on) must save a record, not end <code>length</code>. A small-context vLLM or OpenRouter endpoint must never record <code>rejected</code> because of size. A failed test keeps the earlier record; record the Gemini adapter's <code>dropped</code> list; a base-URL change discards the record, and so does re-pulling an Ollama model to a new digest (the run then starts instead of refusing).</p>
         <p>Criteria: <code>docs/testing/openai-analyzer-onbox-acceptance.md</code> § Live structured output. #3084.</p>
       </div>
     </details>
@@ -4247,13 +6807,13 @@ Run `npm run register:build` and `npm run check:onbox-register`. Save the page c
 `docs/release-notes-next.md` (append):
 
 ```markdown
-- **Analyzer model catalog, per-model rate limits, and a model Test action** (#3084, W3c). New `GET /api/analyzer/models` lists Ollama tags, Gemini `models.list()` (with a key) and every saved OpenAI-compatible endpoint's `/v1/models` (served context from `max_model_len` → `meta.n_ctx` → `context_length`, never `n_ctx_train`), cached 30 s with `refresh=1`. The six `rate.{rpm,tpm,rpd}.gemma[26]` registry knobs are retired into the `analyzerRateLimitsByModel` user-settings map (saved overrides migrate on first read); `resolveLimits` is exported and engine-aware (endpoints unlimited unless set). `POST /api/analyzer/models/test` runs a control request plus a schema-marker probe and stores `analyzerCapabilitiesByModel`; runs refuse before their first call when a model's endpoint is missing, its key is bound to another host, or its configured structured-output mode was recorded `rejected`. Nine model-label sites now use one `modelLabel` resolver.
+- **Analyzer model catalog, per-model rate limits, and a model Test action** (#3084, W3c). New `GET /api/analyzer/models` lists Ollama tags, Gemini `models.list()` (with a key) and every saved OpenAI-compatible endpoint's `/v1/models` (served context from `max_model_len` → `meta.n_ctx` → `context_length`, never `n_ctx_train`), cached 30 s with `refresh=1`. The six `rate.{rpm,tpm,rpd}.gemma[26]` registry knobs are retired into the `analyzerRateLimitsByModel` user-settings map (saved overrides migrate on first read; unsafe or out-of-range values are dropped without resetting settings); `resolveLimits` is exported and engine-aware (endpoints unlimited unless set). `POST /api/analyzer/models/test` runs a request ladder — an `off`-mode control, then each structured-output mode with a schema marker — with one prompt and one output cap (the model's resolved Auto cap clamped to context minus input); a 400 naming a context/token/length limit, a 5xx, a timeout or a `length`/`blocked` finish is inconclusive, a failed control keeps the previous record, the client leaving cancels the test, and `analyzerCapabilitiesByModel` records are keyed by the reasoning level actually sent; an Ollama record carries the model's `/api/tags` digest, and a record for a digest no longer installed is ignored by the catalog and the pre-run checks, so re-pulling a fixed build never leaves a stale refusal. Endpoint served limits are warmed at run start through the transport's `prepare()` and cached per base URL, so a run's output cap no longer depends on the catalog having been opened. Runs refuse before their first call — on new-job creation only, so a reload rejoins a live job — when a model's endpoint is missing, its key is bound to another host, or its configured structured-output mode was recorded `rejected`; every check failure is reported with the same coded event W3b already sends for a selection failure, including a missing endpoint's `analyzer-endpoint-missing`, and the three book routes read settings from disk before checking, so a cold cache after a restart never reports a saved endpoint as missing. The Test confirmation states the maximum number of requests including the transport's retries. Nine model-label sites now use one `modelLabel` resolver.
 ```
 
 `RELEASE_NOTES.md` (in-progress section):
 
 ```markdown
-- **See every analyzer model you can use, set its limits, and test it.** Advanced Settings now lists the models your Ollama install, your Gemini key and your OpenAI-compatible servers actually offer, lets you set per-model request limits, and has a **Test** button that checks whether a model really follows Castwright's output format before you spend a whole book on it.
+- **See every analyzer model you can use, set its limits, and test it.** Advanced Settings now lists the models your Ollama install, your Gemini key and your OpenAI-compatible servers actually offer, lets you set per-model request limits, and has a **Test** button that checks whether a model really follows Castwright's output format before you spend a whole book on it — including thinking models, and without mistaking a too-small context for a missing feature.
 ```
 
 - [ ] **Step 4: Verify** — Run: `npm run verify:fast:branch`. Expected: green.
@@ -4264,7 +6824,17 @@ git add docs/release-notes-next.md RELEASE_NOTES.md docs/testing/onbox-acceptanc
 git commit -m "docs(docs): record W3c release notes and the live structured-output acceptance row"
 git push -u origin feat/server,openapi-3084-w3c-catalog-test
 ```
-PR title: `feat(server,openapi,frontend): analyzer catalog, per-model limits, model Test and pre-run checks`. Body: `## Summary` (the Delivers list), `## Test plan` (every test file above, the three mutation-proof red outputs per task, the captured label table, the printed stage-schema sizes), `Refs #3084`, and **Also fixed, found in passing:** the stale `direct-env-reader-guard.test.ts` comment that cited retired registry defaults; the hand-written `.env.example` rate-limit block now documents `0` as unlimited and the Settings tier; six label sites the scout inventory missed (all nine now use `modelLabel`). State that #3163's `rate-limit.ts` runtime-read trigger was removed with its guard entry.
+PR title: `feat(server,openapi,frontend): analyzer catalog, per-model limits, model Test and pre-run checks`. Body:
+- `## Summary`: the Delivers list.
+- `## Test plan`: every test file above, the mutation-proof red outputs per task, the captured label table, the printed stage-schema sizes.
+- `Refs #3084`.
+- **Also fixed, found in passing:**
+  - the stale `direct-env-reader-guard.test.ts` comment that cited retired registry defaults;
+  - the hand-written `.env.example` rate-limit block now documents `0` as unlimited and the Settings tier;
+  - six label sites the scout inventory missed (all nine now use `modelLabel`);
+  - `parseAndValidate`'s candidate list extracted into `jsonParseCandidates` instead of copied into the marker probe.
+
+State that #3163's `rate-limit.ts` runtime-read trigger was removed with its guard entry.
 
 - [ ] **Step 6: Review gate** — run the `pr-review-gate` skill at depth `high` (multi-scope `server,openapi,frontend`); fold findings; merge only with cloud `verify.yml` green.
 
@@ -4275,55 +6845,120 @@ PR title: `feat(server,openapi,frontend): analyzer catalog, per-model limits, mo
 **Branch:** `feat/server,frontend-3084-w3d-selectable` — `node scripts/wt-new.mjs feat/server,frontend-3084-w3d-selectable` off `main` after PR 3c merged.
 
 **Delivers:**
-- Endpoint calls on a GPU (`gpu !== 'none'`) count as analyzer calls in flight; TTS capacity eviction POSTs matching endpoints' unload URLs (same latch and in-flight gate as Ollama, not gated on Ollama's VRAM figure, capacity re-probed after an unload, a failure message that names the Unload URL setting).
+- Per-endpoint busy accounting (P1). An endpoint is busy while a call to it is in flight (for `gpu !== 'none'`) or while an analysis or script-review run that uses it is active, including the gap between chunk calls.
+- TTS capacity eviction POSTs matching endpoints' unload URLs:
+  - once per model whose request has been sent to the endpoint since server start (P3, N2);
+  - with each endpoint's busy state re-checked immediately before every POST, and one "busy; not unloading" log line per endpoint per admission;
+  - on its **own** latch, set only when at least one unload POST answered 2xx, and only reached on an iteration where Ollama was not evicted — so Ollama's lever keeps today's gate, read immediately before `evictOllama()`, on every poll;
+  - not gated on Ollama's VRAM figure; a 2xx unload retries admission at once, so the next denial re-measures free memory before either lever runs again;
+  - with a give-up message that names the Unload URL setting, and names a sharing endpoint that has no model to unload by name because nothing has run on it since Castwright started (N2).
+- `Layout` hydrates the config slice on mount, so the GPU guards know the TTS card without Advanced Settings having been opened (P13).
 - `FallbackAnalyzer` announces endpoint outages generically; `selectAnalyzer` builds `OpenAIAnalyzer` (with the Gemini fallback wrap under `allowCloudFallback`); `ANALYSIS_ENGINE_VALUES` and the `analysisEngine` OpenAPI enums accept `openai`; route engine branches classified and updated.
+- The P23 refusals of endpoint model ids are lifted (Tasks 3d.4 and 3d.4a). The general settings PUT, `PUT /api/config`'s phase-model knobs and the mock PUT accept them. Selection refuses only an id whose endpoint is not saved, naming its source.
 - Frontend: `defaultGpuForBaseUrl`, `endpointForModelId`, `analyzerSharesTtsDevice`; the forward and reverse guards and the generation hold compare cards; `activeStream.gpu` captured at every dispatch site; pickers list endpoint groups; the run label shows the structured-output mode.
-- Settings → Analyzer endpoints (list/add/edit/delete, required context with prefill + Detect + "may load the model" confirm, key field with host-change re-entry, GPU picker, unload URL with `{model}` hint, concurrency, ceiling, structured output), Playwright spec, two new on-box rows and the extension of the 3c "Live structured output" row.
+- Settings → Analyzer endpoints (list/add/edit/delete, required context with prefill + Detect + "may load the model" confirm, key field with host-change re-entry, GPU picker, unload URL with `{model}` hint and an all-models warning when `{model}` is absent (P12), concurrency, ceiling, structured output), Playwright spec, two new on-box rows and the extension of the 3c "Live structured output" row.
 
-**Must NOT change:** Ollama eviction when no endpoint shares the card (existing `capacity-retry.test.ts` and `sidecar.test.ts` cases stay byte-for-byte green); Ollama-only route branches (`analysis.ts:3203`, `:3625`; `script-review.ts:724`, `:780`); `buildCloudEscalationAnalyzer` stays Gemini; no reasoning or custom-payload controls (wave 5).
+**Must NOT change:** Ollama's eviction lever — `capacity-retry.ts:236-237` (the `isAnalysisInFlight` default) and its eviction block at `:278-282`, plus `sidecar.ts:193-194`, keep their text, and every existing `capacity-retry.test.ts` and `sidecar.test.ts` case stays unedited and green. The one thing that does change for Ollama is what an endpoint unload leaves on the card: its gate and VRAM check are re-read, fresh, on the iteration after one, so an Ollama eviction that is no longer needed no longer happens; Ollama-only route branches (`analysis.ts:3235`, `:3716`; `script-review.ts:748`, `:798`); `buildCloudEscalationAnalyzer` stays Gemini; no reasoning or custom-payload controls (wave 5).
 
 **Entry criteria:** PR 3c merged.
 **Exit criteria:** all task tests green; `npm run test:e2e -- e2e/analyzer-endpoints.spec.ts` green; `npm run verify:fast:branch` green; the 3c row extended and two new Group A rows recorded and the live view republished; `pr-review-gate` at depth `high` folded.
 
 ---
-### Task 3d.1: In-flight accounting for endpoint calls on a GPU
+### Task 3d.1: Busy accounting for endpoints — calls in flight and runs (P1)
 
 **Files:**
 - Modify: `server/src/analyzer/analyzer-concurrency.ts` (after `acquireAnalyzerSlot`, `:72`)
-- Modify: `server/src/analyzer/transports/openai-transport.ts` (3b) — `send()`: right after the endpoint semaphore acquisition, and in the `finally` that releases it
-- Modify: `server/src/gpu/capacity-retry.ts:20` (import), `:121-123` (doc), `:236-237` (default); `server/src/tts/sidecar.ts:162-164` (doc), `:193-194` (default) and its `getAnalyzerConcurrencyStats` import
-- Test: `server/src/analyzer/analyzer-concurrency.test.ts` (extend), Create `server/src/analyzer/transports/openai-transport.in-flight.test.ts`
+- Modify: `server/src/analyzer/transports/openai-transport.ts` (3b) — `send()`
+- Modify: `server/src/routes/analysis.ts` — imports; `AnalysisJob` (`:2627-2655`, one new field after `engine` at `:2655`); main POST job registration (after `inFlightAnalysisByManuscript.set(manuscriptId, job);` → `if (job.bookDir) markAnalysisBusy(job.bookDir);`, `:3475`); subset POST job registration (after `inFlightSubsetByManuscript.set(manuscriptId, job);` → `if (job.bookDir) markAnalysisBusy(job.bookDir);`, `:6703`); `endJob` (`:3063`; after its `if (job.bookDir) clearAnalysisBusy(job.bookDir);`, `:3224`)
+- Modify: `server/src/routes/script-review.ts` — imports; before `const pinnedLocal = selection.engine === 'local';` (`:798`), which is immediately followed by the review `try {` (`:799`); that `try`'s `finally {` (`:1040`), which releases `clearReviewBusy(located.bookDir)` inside `if (pinnedLocal) {` (`:1046-1047`)
+- Modify: `server/src/routes/annotate-emotion.ts` — imports; the first statement inside the chapter loop's `try {` (`:154`, after `const charsByChapter = buildCharsByChapter(chapterIds, byChapter);` at `:153`); that `try`'s `finally { clearInterval(keepAlive); }` (`:270-272`)
+- Modify: `server/src/routes/instruct-annotation.ts` — the same: `try {` at `:153` (after `buildCharsByChapter` at `:152`), `finally` at `:267-269`
+- Anchors are at `46e62a34` and each is located by the symbol quoted beside it: 3b Task 3b.1a and 3c Task 3c.10 insert blocks above several of these lines, so implement against the named statement, not the number. All six files are unchanged between `46e62a34` and `4a545750` except `script-review.ts` (planning facts §D), whose anchors are re-checked by symbol.
+- Modify: `server/src/routes/analyzer-models.ts` (3c Task 3c.6) — the `POST /models/test` handler: marked once `modelTestDepsFor` has succeeded, released in a `finally`
+- Test: `server/src/analyzer/analyzer-concurrency.test.ts` (extend), Create `server/src/analyzer/transports/openai-transport.in-flight.test.ts`, Create `server/src/routes/analysis.endpoint-run.test.ts`, extend `server/src/routes/script-review.test.ts`, `server/src/routes/annotate-emotion.test.ts`, `server/src/routes/instruct-annotation.test.ts`, `server/src/routes/analyzer-models.test.ts`
+
+**Not modified:** `server/src/gpu/capacity-retry.ts:236-237` and `server/src/tts/sidecar.ts:193-194`. Ollama eviction keeps today's per-call slot gate (`getAnalyzerConcurrencyStats().inFlight > 0`) with its text unchanged, and endpoint activity on any card never enters it — the endpoint registry below is a separate map, read only by `gpu/endpoint-eviction.ts` (P1, spec §4).
 
 **Interfaces:**
-- Consumes: `OpenAITransport` (3b) constructor `{ endpoint, apiKey, model, dispatcher? }`; `analyzerEndpointSchema` (3b); `TransportRequest` (W1).
-- Produces (contract): `registerEndpointCallInFlight(): () => void`, `isAnyAnalyzerCallInFlight(): boolean`.
+- Consumes: `OpenAITransport` (3b) constructor `{ endpoint, apiKey, model, dispatcher? }`; `analyzerEndpointSchema` (3b); `TransportRequest` (W1); `parseEndpointModelId` (3a); Task 3c.10's `preflight` targets in both analysis POSTs.
+- Produces: `registerEndpointCallInFlight(endpointId: string): () => void`; `markEndpointRunActive(endpointIds: readonly string[]): () => void`; `isEndpointBusy(endpointId: string): boolean`; `endpointIdsForModelIds(modelIds: readonly string[]): string[]`; `_resetEndpointBusyForTest(): void` (clears both maps — the sibling of 3b's `_resetEndpointRuntimeForTest`; used by every 3d.1 test file, Task 3d.2's eviction test and Task 3d.3's default-lever cases); `AnalysisJob.releaseEndpointRun?: () => void`.
+- Contract deviation (reported): the contract's `registerEndpointCallInFlight(): () => void` and `isAnyAnalyzerCallInFlight(): boolean` are process-wide. P1 needs per-endpoint busy state (a call on `cuda:1` must not block a `cuda:0` unload) plus a run-level mark. So the call registration takes an endpoint id, and `isAnyAnalyzerCallInFlight` is not added: with Ollama's gate unchanged, nothing would read a process-wide endpoint count.
 
-Planning interpretation (recorded in the brief): only endpoints with `gpu !== 'none'` register. Endpoint calls are counted separately from Ollama slots so `getAnalyzerConcurrencyStats().peak` keeps meaning "Ollama calls past the K limiter".
+Rules (P1, spec §4 "Busy accounting for endpoints"):
+- **Busy.** An endpoint is busy while any analyzer run using it is active, or while any call to it is in flight. The run-level mark is what covers the gap between two chunk calls, which a per-call count reads as idle.
+- **Cards.** The registry is keyed by endpoint id. `evictEndpointsOnDevice` (Task 3d.2) only considers endpoints whose current `gpu` is the denied card or `any`, so a busy endpoint blocks unloads on its own card (every card for `any`). A `gpu: 'none'` endpoint never takes part.
+- **Calls** are registered for endpoints with `gpu !== 'none'` for the whole of `send()`: the semaphore wait, every attempt, and the backoff between retries.
+- **Runs** are recorded when the work starts, from the model ids it will use. The analysis POSTs use Task 3c.10's `preflight` targets for both phases, the same resolution selection uses (P14). Script review, annotate-emotion and instruct-annotation use their own phase-1 selection's model id; the Test action uses the model being tested.
+- **Every run-shaped caller takes a run-level mark, not only the two job kinds** (spec §4 "Busy accounting", decision #3). Annotate-emotion and instruct-annotation call the analyzer once per chapter, minutes apart, and the Test action sends a ladder of requests with gaps between them — a call-level registration alone reads every one of those gaps as idle, which is exactly what the run mark exists to cover. `isAnyAnalyzerRunBusy` (`design-lock.ts:134`) is **not** the model for which callers get one: script review sets its own busy flag only for a `local` run (`pinnedLocal`, `script-review.ts:798`) and the two request-scoped passes set none at all, while an endpoint's card is at stake whatever the engine of any other flag. So the endpoint mark is taken for every engine and every one of these four callers.
+- **Release.** Each caller releases where its own work ends: `endJob` for an analysis (main or subset), the review's `finally` for script review, the handler's outer `finally` for annotate-emotion and instruct-annotation, and a `finally` in the Test handler. Every release is idempotent, so a path that ends twice cannot clear another run's mark.
 
-Keeps green: `analyzer-concurrency.test.ts`, 3b's `openai-transport.test.ts`, `capacity-retry.test.ts`, `sidecar.test.ts`.
+Keeps green: `analyzer-concurrency.test.ts`, 3b's `openai-transport.contract.test.ts`, `capacity-retry.test.ts`, `sidecar.test.ts`, `analysis.test.ts`, `analysis.preflight.test.ts`, `script-review.test.ts`, `annotate-emotion.test.ts`, `instruct-annotation.test.ts`, 3c's `analyzer-models.test.ts`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `server/src/analyzer/analyzer-concurrency.test.ts`:
+Append to `server/src/analyzer/analyzer-concurrency.test.ts` (merge the import with the file's existing one, and add `afterEach` to its `vitest` import if it is not there):
 
 ```ts
-import { registerEndpointCallInFlight, isAnyAnalyzerCallInFlight, acquireAnalyzerSlot } from './analyzer-concurrency.js';
+import {
+  _resetEndpointBusyForTest,
+  endpointIdsForModelIds,
+  getAnalyzerConcurrencyStats,
+  isEndpointBusy,
+  markEndpointRunActive,
+  registerEndpointCallInFlight,
+} from './analyzer-concurrency.js';
 
-describe('endpoint in-flight accounting (#3084)', () => {
-  it('a registered endpoint call counts until released; release is idempotent', () => {
-    expect(isAnyAnalyzerCallInFlight()).toBe(false);
-    const release = registerEndpointCallInFlight();
-    expect(isAnyAnalyzerCallInFlight()).toBe(true);
+describe('endpoint busy accounting (#3084 P1)', () => {
+  afterEach(() => _resetEndpointBusyForTest());
+
+  it('a registered call makes only its own endpoint busy until released; release is idempotent', () => {
+    expect(isEndpointBusy('lab')).toBe(false);
+    const release = registerEndpointCallInFlight('lab');
+    expect(isEndpointBusy('lab')).toBe(true);
+    expect(isEndpointBusy('other')).toBe(false);
     release();
     release();
-    expect(isAnyAnalyzerCallInFlight()).toBe(false);
+    expect(isEndpointBusy('lab')).toBe(false);
   });
 
-  it('an Ollama slot alone also counts', async () => {
-    const release = await acquireAnalyzerSlot('qwen3.5:4b', false);
-    expect(isAnyAnalyzerCallInFlight()).toBe(true);
+  it('a run marks each endpoint it uses busy for its whole life, with no call in flight (the gap between chunk calls)', () => {
+    const release = markEndpointRunActive(['lab', 'swap']);
+    expect(isEndpointBusy('lab')).toBe(true);
+    expect(isEndpointBusy('swap')).toBe(true);
     release();
-    expect(isAnyAnalyzerCallInFlight()).toBe(false);
+    expect(isEndpointBusy('lab')).toBe(false);
+    expect(isEndpointBusy('swap')).toBe(false);
+  });
+
+  it("a run's double release cannot clear another run's mark on the same endpoint", () => {
+    const first = markEndpointRunActive(['lab']);
+    const second = markEndpointRunActive(['lab']);
+    first();
+    first();
+    expect(isEndpointBusy('lab')).toBe(true);
+    second();
+    expect(isEndpointBusy('lab')).toBe(false);
+  });
+
+  it('endpoint calls and runs never touch the Ollama slot figures (Ollama eviction gate unchanged)', () => {
+    const before = getAnalyzerConcurrencyStats().inFlight;
+    const releaseCall = registerEndpointCallInFlight('lab');
+    const releaseRun = markEndpointRunActive(['lab']);
+    expect(getAnalyzerConcurrencyStats().inFlight).toBe(before);
+    releaseCall();
+    releaseRun();
+  });
+
+  it('endpointIdsForModelIds keeps endpoint ids only, once each', () => {
+    expect(endpointIdsForModelIds(['openai:lab::a', 'qwen3.5:4b', 'openai:lab::b', 'gemini-3.6-flash', 'openai:swap::c'])).toEqual(['lab', 'swap']);
+  });
+
+  it('_resetEndpointBusyForTest clears calls and runs', () => {
+    registerEndpointCallInFlight('lab');
+    markEndpointRunActive(['swap']);
+    _resetEndpointBusyForTest();
+    expect(isEndpointBusy('lab')).toBe(false);
+    expect(isEndpointBusy('swap')).toBe(false);
   });
 });
 ```
@@ -4331,18 +6966,19 @@ describe('endpoint in-flight accounting (#3084)', () => {
 Create `server/src/analyzer/transports/openai-transport.in-flight.test.ts`:
 
 ```ts
-/* #3084 — an endpoint call on a GPU is visible to TTS eviction's in-flight gate for
-   exactly as long as it runs. Real http server + real undici Agent (Global Constraints). */
+/* #3084 P1 — an endpoint call on a GPU keeps that endpoint busy for exactly as long as it
+   runs. Real http server + real undici Agent (Global Constraints). */
 import { describe, it, expect, afterEach } from 'vitest';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Agent } from 'undici';
 import { OpenAITransport } from './openai-transport.js';
 import { analyzerEndpointSchema } from '../../workspace/analyzer-endpoints.js';
-import { isAnyAnalyzerCallInFlight } from '../analyzer-concurrency.js';
+import { isEndpointBusy, _resetEndpointBusyForTest } from '../analyzer-concurrency.js';
 
 let server: Server | undefined;
 afterEach(async () => {
+  _resetEndpointBusyForTest();
   server?.closeAllConnections();
   await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
   server = undefined;
@@ -4378,22 +7014,23 @@ const REQUEST = {
   call: {},
 };
 
-describe('OpenAITransport in-flight registration (#3084)', () => {
-  it('a gpu endpoint call is in flight while streaming and not after', async () => {
+describe('OpenAITransport call registration (#3084 P1)', () => {
+  it('a gpu endpoint call keeps its own endpoint busy while streaming, and not after', async () => {
     const s = await heldServer();
-    const pending = transportFor(s.baseUrl, 'cuda:0').send(REQUEST);
+    const pending = transportFor(s.baseUrl, 'cuda:1').send(REQUEST);
     await s.received;
-    expect(isAnyAnalyzerCallInFlight()).toBe(true);
+    expect(isEndpointBusy('lab')).toBe(true);
+    expect(isEndpointBusy('other')).toBe(false);
     s.finish();
     await pending;
-    expect(isAnyAnalyzerCallInFlight()).toBe(false);
+    expect(isEndpointBusy('lab')).toBe(false);
   });
 
   it("a gpu 'none' endpoint never registers", async () => {
     const s = await heldServer();
     const pending = transportFor(s.baseUrl, 'none').send(REQUEST);
     await s.received;
-    expect(isAnyAnalyzerCallInFlight()).toBe(false);
+    expect(isEndpointBusy('lab')).toBe(false);
     s.finish();
     await pending;
   });
@@ -4404,65 +7041,435 @@ describe('OpenAITransport in-flight registration (#3084)', () => {
     await s.received;
     server!.closeAllConnections();
     await pending.catch(() => undefined);
-    expect(isAnyAnalyzerCallInFlight()).toBe(false);
+    expect(isEndpointBusy('lab')).toBe(false);
   });
 });
 ```
 
+Create `server/src/routes/analysis.endpoint-run.test.ts`:
+
+```ts
+/* #3084 P1 — an analysis run marks the endpoints it uses busy at job creation, and the mark
+   lasts until endJob, so TTS eviction never unloads the model between two chunk calls. The
+   analyzer is faked: every call rejects with AnalysisAbortedError, which the job loop ends
+   through endJob (analysis.ts:3063), so the SSE stream closes. */
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+import { putManuscript, removeManuscript, type ChapterHint } from '../store/manuscripts.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
+import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+import { AnalysisAbortedError } from '../analyzer/errors.js';
+
+const { marks, releases } = vi.hoisted(() => ({ marks: [] as string[][], releases: { count: 0 } }));
+
+vi.mock('../analyzer/analyzer-concurrency.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/analyzer-concurrency.js')>();
+  return {
+    ...actual,
+    markEndpointRunActive: (ids: readonly string[]) => {
+      marks.push([...ids]);
+      const release = actual.markEndpointRunActive(ids);
+      return () => {
+        releases.count += 1;
+        release();
+      };
+    },
+  };
+});
+
+vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/select-analyzer.js')>();
+  const stop = () => Promise.reject(new AnalysisAbortedError('fake analyzer: stop'));
+  const analyzer = {
+    runStage1: stop,
+    runStage1Chapter: stop,
+    runStage2Chapter: stop,
+    runEmotionChapter: stop,
+    runScriptReviewChapter: stop,
+    runStage3Chapter: stop,
+    runAttributionEscalation: stop,
+  };
+  return {
+    ...actual,
+    selectAnalyzerForPhase: () => ({ analyzer, engine: 'openai', model: 'openai:lab::qwen3-30b', fallbackModel: null }),
+  };
+});
+
+const { analysisRouter } = await import('./analysis.js');
+const { isEndpointBusy, _resetEndpointBusyForTest } = await import('../analyzer/analyzer-concurrency.js');
+
+const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+
+function makeApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/manuscripts', analysisRouter);
+  return app;
+}
+
+function seed() {
+  const chapterHints = [{ id: 1, title: 'Chapter One', body: 'The lamp guttered.' }] as unknown as ChapterHint[];
+  putManuscript({
+    manuscriptId: 'm_endpoint_run', format: 'plaintext', title: 'Stub', wordCount: 3, byteSize: 100,
+    uploadedAt: new Date().toISOString(), sourceText: 'The lamp guttered.', chapterHints,
+  });
+  _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {} });
+}
+
+afterEach(() => {
+  removeManuscript('m_endpoint_run');
+  _resetUserSettingsCache();
+  _resetEndpointBusyForTest();
+  marks.length = 0;
+  releases.count = 0;
+});
+
+describe('analysis runs hold their endpoints busy (#3084 P1)', () => {
+  it('the main POST marks the endpoints of both phases at job creation and releases them when the job ends', async () => {
+    seed();
+    await request(makeApp()).post('/api/manuscripts/m_endpoint_run/analysis').send({ model: 'openai:lab::qwen3-30b' });
+    expect(marks).toEqual([['lab']]);
+    expect(releases.count).toBe(1);
+    expect(isEndpointBusy('lab')).toBe(false);
+  }, 20_000);
+
+  it('the subset POST marks and releases the same way', async () => {
+    seed();
+    await request(makeApp()).post('/api/manuscripts/m_endpoint_run/analysis/chapters').send({ model: 'openai:lab::qwen3-30b', chapterIds: [1] });
+    expect(marks).toEqual([['lab']]);
+    expect(releases.count).toBe(1);
+    expect(isEndpointBusy('lab')).toBe(false);
+  }, 20_000);
+});
+```
+
+Append to `server/src/routes/script-review.test.ts`. Add `analyzerEndpointSchema` to its imports, and add this hoisted state and module mock beside the file's existing `vi.hoisted` block (`:46`) and `vi.mock` calls (`:56-102`):
+
+```ts
+const { reviewMarks, reviewReleases } = vi.hoisted(() => ({ reviewMarks: [] as string[][], reviewReleases: { count: 0 } }));
+
+vi.mock('../analyzer/analyzer-concurrency.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/analyzer-concurrency.js')>();
+  return {
+    ...actual,
+    markEndpointRunActive: (ids: readonly string[]) => {
+      reviewMarks.push([...ids]);
+      const release = actual.markEndpointRunActive(ids);
+      return () => {
+        reviewReleases.count += 1;
+        release();
+      };
+    },
+  };
+});
+```
+
+Inside its POST `describe`:
+
+```ts
+  it('#3084 P1 — a review on an endpoint marks it busy for the whole review and releases it at the end', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    /* Reuse the file's default fake selection (:69) and only name an endpoint model on it. */
+    const base = (selectAnalyzerForPhaseMock.getMockImplementation() as (o: unknown) => Record<string, unknown>)({ phase: 'phase1' });
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'openai', model: 'openai:lab::m' }));
+    reviewMarks.length = 0;
+    reviewReleases.count = 0;
+    try {
+      await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(reviewMarks).toEqual([['lab']]);
+      expect(reviewReleases.count).toBe(1);
+    } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest(); // add to the file's `../analyzer/analyzer-concurrency.js` import
+    }
+  });
+```
+
+Append to `server/src/routes/annotate-emotion.test.ts` (and the same to `instruct-annotation.test.ts`, with `instruct` in the title, its own path and `runStage3`). The file's hoisted selection state gains a model, so a test can name an endpoint model: `engineState: { engine: 'gemini' as 'gemini' | 'local', selectError: null as Error | null }` (3b Task 3b.1a) becomes `{ engine: …, selectError: …, model: 'test-model' as string }`, and the mock factory returns `model: emotionEngineState.model`. Add the hoisted state and module mock beside the file's existing ones:
+
+```ts
+const { emotionMarks, emotionReleases } = vi.hoisted(() => ({ emotionMarks: [] as string[][], emotionReleases: { count: 0 } }));
+
+vi.mock('../analyzer/analyzer-concurrency.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/analyzer-concurrency.js')>();
+  return {
+    ...actual,
+    markEndpointRunActive: (ids: readonly string[]) => {
+      emotionMarks.push([...ids]);
+      const release = actual.markEndpointRunActive(ids);
+      return () => {
+        emotionReleases.count += 1;
+        release();
+      };
+    },
+  };
+});
+```
+
+and, inside the POST `describe` (add `isEndpointBusy` to the file's `../analyzer/analyzer-concurrency.js` import, and `analyzerEndpointSchema` plus both user-settings test helpers if they are not there yet):
+
+```ts
+  it('#3084 P1 — an emotion pass on an endpoint holds it busy for the whole pass, including the gaps between chapter calls, and releases it at the end', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] }); // Task 3c.10's checks must pass
+    emotionEngineState.model = 'openai:lab::m';
+    emotionMarks.length = 0;
+    emotionReleases.count = 0;
+    try {
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(emotionMarks).toEqual([['lab']]);
+      expect(emotionReleases.count).toBe(1);
+      expect(isEndpointBusy('lab')).toBe(false);
+    } finally {
+      emotionEngineState.model = 'test-model';
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 A4 — a throw between selection and the chapter loop does not leak the endpoint mark', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    emotionEngineState.model = 'openai:lab::m';
+    /* The window A4 names: buildCharsByChapter runs after selection and before the try. */
+    const spy = vi.spyOn(chapterPacing, 'buildCharsByChapter').mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    try {
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(isEndpointBusy('lab')).toBe(false);
+    } finally {
+      spy.mockRestore();
+      emotionEngineState.model = 'test-model';
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+```
+
+(`chapterPacing` is the namespace the route imports `buildCharsByChapter` from — `import * as chapterPacing from '<that module>';` — add it with `_resetEndpointBusyForTest` to the file's imports. If the module's ESM export cannot be spied, `vi.mock` it with `importOriginal` and a hoisted throw flag instead, as the file already does for selection. With the mark inside the `try`, the throw now happens before the mark is taken, so the case passes; with the mark after the selection, `isEndpointBusy('lab')` stays true.)
+
+Append to 3c Task 3c.6's `server/src/routes/analyzer-models.test.ts`. Add the same hoisted wrapper (naming it `testMarks` / `testReleases`), `vi.mock('../analyzer/analyzer-concurrency.js', …)` exactly as above, and `import { isEndpointBusy } from '../analyzer/analyzer-concurrency.js';`. Inside `describe('POST /api/analyzer/models/test')`:
+
+```ts
+  it('#3084 P1 — a Test holds its endpoint busy for the whole ladder and releases it after', async () => {
+    const busyDuringRun: boolean[] = [];
+    h.modelTestDepsFor.mockReturnValue({ transport: {} });
+    h.runModelTest.mockImplementation(async () => {
+      busyDuringRun.push(isEndpointBusy('lab'));
+      return RECORD;
+    });
+    testMarks.length = 0;
+    testReleases.count = 0;
+    const res = await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:lab::m', scope: 'configured' });
+    expect(res.status).toBe(200);
+    expect(testMarks).toEqual([['lab']]);
+    expect(busyDuringRun).toEqual([true]);
+    expect(testReleases.count).toBe(1);
+    expect(isEndpointBusy('lab')).toBe(false);
+  });
+
+  it('#3084 P1 — a failed Test releases the mark, and a Gemini model marks nothing', async () => {
+    h.modelTestDepsFor.mockReturnValue({ transport: {} });
+    h.runModelTest.mockRejectedValue(new ModelTestControlFailedError('openai:lab::m', 'HTTP 503 loading model.'));
+    testMarks.length = 0;
+    testReleases.count = 0;
+    await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:lab::m', scope: 'configured' });
+    expect(testMarks).toEqual([['lab']]);
+    expect(testReleases.count).toBe(1);
+    expect(isEndpointBusy('lab')).toBe(false);
+    h.runModelTest.mockResolvedValue(RECORD);
+    testMarks.length = 0;
+    await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'gemini-3.6-flash', scope: 'configured' });
+    expect(testMarks).toEqual([[]]);
+    _resetEndpointBusyForTest(); // imported beside isEndpointBusy
+  });
+```
+
 - [ ] **Step 2: Run them and confirm they fail**
-Run: `npm --prefix server run test -- src/analyzer/analyzer-concurrency.test.ts src/analyzer/transports/openai-transport.in-flight.test.ts`
-Expected: FAIL — `registerEndpointCallInFlight is not a function` / `isAnyAnalyzerCallInFlight is not a function`.
+Run: `npm --prefix server run test -- src/analyzer/analyzer-concurrency.test.ts src/analyzer/transports/openai-transport.in-flight.test.ts src/routes/analysis.endpoint-run.test.ts src/routes/script-review.test.ts src/routes/annotate-emotion.test.ts src/routes/instruct-annotation.test.ts src/routes/analyzer-models.test.ts`
+Expected: FAIL. The two new modules report `registerEndpointCallInFlight is not a function` / `isEndpointBusy is not a function`. The route tests see `marks` (and `emotionMarks` / `testMarks`) equal to `[]`.
 
 - [ ] **Step 3: Implement**
 
-`server/src/analyzer/analyzer-concurrency.ts`, after `acquireAnalyzerSlot` (`:72`):
+`server/src/analyzer/analyzer-concurrency.ts`, add `import { parseEndpointModelId } from './model-id.js';` and, after `acquireAnalyzerSlot` (`:72`):
 
 ```ts
-/* #3084 — OpenAI-compatible endpoint calls on a GPU (endpoint.gpu !== 'none') register
-   here so TTS capacity eviction never unloads a model mid-call. Counted apart from the
-   Ollama K limiter so its peak stays an Ollama-only figure. */
-let endpointInFlightCount = 0;
+/* #3084 P1 — busy accounting for OpenAI-compatible endpoints, keyed by endpoint id. An
+   endpoint is busy while a call to it is in flight OR a run that uses it is active: the
+   run mark covers the gap between two chunk calls, which a per-call count reads as idle.
+   TTS eviction (gpu/endpoint-eviction.ts) re-checks it before every unload POST. Kept apart
+   from the Ollama K limiter, so Ollama's own eviction gate and peak stay Ollama-only. */
+const endpointCalls = new Map<string, number>();
+const endpointRuns = new Map<string, number>();
 
-export function registerEndpointCallInFlight(): () => void {
-  endpointInFlightCount++;
-  let released = false;
+function adjust(counts: Map<string, number>, id: string, delta: number): void {
+  const next = (counts.get(id) ?? 0) + delta;
+  if (next <= 0) counts.delete(id);
+  else counts.set(id, next);
+}
+
+function onceOnly(fn: () => void): () => void {
+  let done = false;
   return () => {
-    if (released) return;
-    released = true;
-    endpointInFlightCount--;
+    if (done) return;
+    done = true;
+    fn();
   };
 }
 
-/** True while any Ollama slot or any registered endpoint call is in flight. */
-export function isAnyAnalyzerCallInFlight(): boolean {
-  return inFlightCount > 0 || endpointInFlightCount > 0;
+/** One call to an endpoint on a GPU. Returns an idempotent release. */
+export function registerEndpointCallInFlight(endpointId: string): () => void {
+  adjust(endpointCalls, endpointId, 1);
+  return onceOnly(() => adjust(endpointCalls, endpointId, -1));
+}
+
+/** A run (analysis job or script review) that will use these endpoints, for its whole life.
+    Returns an idempotent release, so a second call cannot clear another run's mark. */
+export function markEndpointRunActive(endpointIds: readonly string[]): () => void {
+  const ids = [...new Set(endpointIds)];
+  for (const id of ids) adjust(endpointRuns, id, 1);
+  return onceOnly(() => {
+    for (const id of ids) adjust(endpointRuns, id, -1);
+  });
+}
+
+export function isEndpointBusy(endpointId: string): boolean {
+  return endpointCalls.has(endpointId) || endpointRuns.has(endpointId);
+}
+
+/** Test-only. A mark leaked by one case (a route that threw before its release) would make
+    every later case's endpoint read busy; each 3d test file resets in beforeEach/afterEach. */
+export function _resetEndpointBusyForTest(): void {
+  endpointCalls.clear();
+  endpointRuns.clear();
+}
+
+/** The endpoint ids named by a run's model ids (non-endpoint ids are ignored), once each. */
+export function endpointIdsForModelIds(modelIds: readonly string[]): string[] {
+  const ids = modelIds.map((id) => parseEndpointModelId(id)?.endpointId).filter((id): id is string => id !== undefined);
+  return [...new Set(ids)];
 }
 ```
 
-`openai-transport.ts` (3b) — import `registerEndpointCallInFlight` from `'../analyzer-concurrency.js'`; immediately after the line that awaits `endpointSemaphore(this.endpoint).acquire(...)`:
+`openai-transport.ts` (3b) — import `registerEndpointCallInFlight` from `'../analyzer-concurrency.js'` and wrap `send()`'s existing `return withTransportRetry(() => this.attempt(req), { … });` statement, keeping its options object unchanged:
 
 ```ts
-    const releaseInFlight = this.endpoint.gpu !== 'none' ? registerEndpointCallInFlight() : () => {};
+  async send(req: TransportRequest): Promise<TransportResult> {
+    /* P1: a call to an endpoint on a GPU keeps that endpoint busy for the whole call — the
+       semaphore wait, every attempt and the backoff between them — so TTS eviction skips it. */
+    const releaseInFlight = this.endpoint.gpu !== 'none' ? registerEndpointCallInFlight(this.endpoint.id) : () => {};
+    try {
+      return await withTransportRetry(() => this.attempt(req), {
+        /* …the existing options, unchanged… */
+      });
+    } finally {
+      releaseInFlight();
+    }
+  }
 ```
 
-and in the same `finally` that releases the semaphore, before that release: `releaseInFlight();`.
+(Copy the options object verbatim from 3b's `send()`; only the `const`, `try`, `await` and `finally` lines are new.)
 
-`capacity-retry.ts` — `:20` becomes `import { isAnyAnalyzerCallInFlight } from '../analyzer/analyzer-concurrency.js';`; the option doc at `:121-122` reads `/** Injected "is the analyzer mid-run" check — defaults to isAnyAnalyzerCallInFlight (Ollama slots + endpoint calls on a GPU). */`; `:236-237` becomes `const isAnalysisInFlight = opts.isAnalysisInFlight ?? isAnyAnalyzerCallInFlight;`.
+`server/src/routes/analysis.ts`:
+- Import: `import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';`.
+- `AnalysisJob`, after the `engine` field (`:2655`):
 
-`sidecar.ts` — replace its `getAnalyzerConcurrencyStats` import with `isAnyAnalyzerCallInFlight`; the doc at `:162-163` reads `/** Injected "is the analyzer mid-run" check — for testing only. Defaults to isAnyAnalyzerCallInFlight. */`; `:193-194` becomes `this.isAnalysisInFlight = opts.isAnalysisInFlight ?? isAnyAnalyzerCallInFlight;`.
+```ts
+  /** #3084 P1 — releases the run-level busy mark on the OpenAI-compatible endpoints this
+      job uses (analyzer-concurrency.ts markEndpointRunActive). Set at job creation, called by
+      endJob beside clearAnalysisBusy. Idempotent. */
+  releaseEndpointRun?: () => void;
+```
+
+- Main POST, right after `if (job.bookDir) markAnalysisBusy(job.bookDir);` (`:3475`, the line after `inFlightAnalysisByManuscript.set(manuscriptId, job);`), and the subset POST right after its `if (job.bookDir) markAnalysisBusy(job.bookDir);` (`:6703`, the line after `inFlightSubsetByManuscript.set(manuscriptId, job);`). Both are after job registration, so every later exit reaches `endJob`:
+
+```ts
+  /* #3084 P1 — the endpoints both phases will use (Task 3c.10's `preflight` targets, resolved
+     exactly as selection resolves them) stay busy for the whole run, gaps between chunk
+     calls included, so TTS eviction does not unload them mid-run. */
+  job.releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds(preflight.map((t) => t.modelId)));
+```
+
+- `endJob` (`:3063`), right after `if (job.bookDir) clearAnalysisBusy(job.bookDir);` (`:3224`, below the "KNOWN, ACCEPTED GAP" comment):
+
+```ts
+  job.releaseEndpointRun?.(); // #3084 P1 — this run no longer holds its endpoints
+```
+
+`server/src/routes/script-review.ts` — import `import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';`. Do **not** mark before `const pinnedLocal = selection.engine === 'local';` (`:798`): mark as the **first statement inside** the review `try {` (`:799`), before `if (pinnedLocal) markReviewBusy(located.bookDir);` (`:800`) — the same "marked INSIDE the try so a warm-step early-return can't leak the ref" rule the file's own comment at `:791-797` states for `markReviewBusy`. Declare the release above the `try` so the `finally` can reach it:
+
+```ts
+  /* #3084 P1 — a review on an endpoint keeps it busy for the whole review (reviews call the
+     analyzer minutes apart per chapter). Assigned as the first statement INSIDE the try below,
+     so nothing between the mark and the try can throw and leak it (A4). */
+  let releaseEndpointRun: () => void = () => {};
+```
+
+```ts
+    releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([selection.model]));
+```
+
+and make `releaseEndpointRun();` the first statement of that `try`'s `finally {` (`:1040`, the block whose `if (pinnedLocal) {` at `:1046` calls `clearReviewBusy(located.bookDir)` at `:1047`), outside any `pinnedLocal` condition — the mark is taken for every engine, while `clearReviewBusy`'s counterpart is only taken for a `local` run.
+
+`server/src/routes/annotate-emotion.ts` (and `instruct-annotation.ts`, identically) — import `import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';`. **The mark goes inside the protecting `try`, not after the selection (A4).** At `46e62a34` the selection is `:147` (`:146`), four `let` counters and `const charsByChapter = buildCharsByChapter(chapterIds, byChapter);` follow at `:149-153` (`:148-152`), and only then does the `try {` whose `finally` releases open at `:154` (`:153`). A mark placed right after the selection would leak if `buildCharsByChapter` threw. Above the `try`, declare:
+
+```ts
+    /* #3084 P1 — this pass calls the analyzer once per chapter, minutes apart, so the gaps
+       between those calls must not read as idle to TTS eviction. Assigned as the first
+       statement INSIDE the try below, whose finally every path reaches (A4). */
+    let releaseEndpointRun: () => void = () => {};
+```
+
+make this the first statement inside `try {` (`:154` / `:153`), before the `for (let i = 0; …)` loop:
+
+```ts
+      releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([selection.model]));
+```
+
+and make `releaseEndpointRun();` the first statement of that `try`'s `finally` (the one holding `clearInterval(keepAlive);`, `:270-272` in annotate-emotion, `:267-269` in instruct-annotation). The mark is still taken before the first analyzer call, which is inside the loop.
+
+`server/src/routes/analyzer-models.ts` (3c Task 3c.6) — import the same two names, and in `POST /models/test` wrap the run from just after `deps` is resolved:
+
+```ts
+  /* #3084 P1 — the P7 ladder sends several requests with gaps between them; the endpoint
+     stays busy for the whole Test, so TTS eviction cannot unload the model between steps. */
+  const releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([modelId]));
+  try {
+    …the existing abort wiring, runModelTest, write and answers, unchanged…
+  } finally {
+    releaseEndpointRun();
+  }
+```
 
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/analyzer/analyzer-concurrency.test.ts src/analyzer/transports/openai-transport.in-flight.test.ts src/analyzer/transports/openai-transport.test.ts src/gpu/capacity-retry.test.ts src/tts/sidecar.test.ts` then `npm run check:cycles`. Expected: PASS.
+Run: `npm --prefix server run test -- src/analyzer/analyzer-concurrency.test.ts src/analyzer/transports/openai-transport.in-flight.test.ts src/analyzer/transports/openai-transport.contract.test.ts src/routes/analysis.endpoint-run.test.ts src/routes/analysis.preflight.test.ts src/routes/analysis.test.ts src/routes/script-review.test.ts src/routes/annotate-emotion.test.ts src/routes/instruct-annotation.test.ts src/routes/analyzer-models.test.ts src/gpu/capacity-retry.test.ts src/tts/sidecar.test.ts` then `npm run check:cycles`. Expected: PASS; `capacity-retry.test.ts` and `sidecar.test.ts` are unchanged and green.
 
 - [ ] **Step 5: Mutation proof**
-1. `isAnyAnalyzerCallInFlight`: return `inFlightCount > 0` only → red: "a registered endpoint call counts…", "a gpu endpoint call is in flight while streaming…". Restore.
-2. Transport: change `this.endpoint.gpu !== 'none'` to `true` → red: "a gpu 'none' endpoint never registers". Restore.
-3. Transport: delete `releaseInFlight();` from `finally` → red: "a failed call releases its registration" and "…not after". Restore.
+1. `registerEndpointCallInFlight`: replace `endpointId` with the constant `'*'` in both `adjust` calls → red: "a registered call makes only its own endpoint busy…", "a gpu endpoint call keeps its own endpoint busy while streaming…". Restore.
+2. `markEndpointRunActive`: return the inner function without `onceOnly(…)` → red: "a run's double release cannot clear another run's mark on the same endpoint". Restore.
+3. `registerEndpointCallInFlight`: also `inFlightCount++` (and `inFlightCount--` on release) → red: "endpoint calls and runs never touch the Ollama slot figures…" and, in Task 3d.3, "an endpoint call on cuda:1 does not block Ollama eviction for a cuda:0 denial". Restore.
+4. Transport: change `this.endpoint.gpu !== 'none'` to `true` → red: "a gpu 'none' endpoint never registers". Restore.
+5. Transport: delete `releaseInFlight();` from the `finally` → red: "a failed call releases its registration" and "…and not after". Restore.
+6. `analysis.ts` main POST: delete the `job.releaseEndpointRun = markEndpointRunActive(…)` line → red: "the main POST marks the endpoints of both phases…". Restore. Repeat for the subset POST → red: "the subset POST marks and releases the same way". Restore.
+7. `endJob`: delete `job.releaseEndpointRun?.();` → red: both analysis route tests (`releases.count` 0). Restore.
+8. `script-review.ts`: delete `releaseEndpointRun();` from the `finally` → red: "#3084 P1 — a review on an endpoint marks it busy…". Restore.
+9. `annotate-emotion.ts`: delete the `markEndpointRunActive(…)` line → red: "#3084 P1 — an emotion pass on an endpoint holds it busy for the whole pass…". Restore. Then delete `releaseEndpointRun();` from its outer `finally` → red: the same case (`emotionReleases.count` 0, `isEndpointBusy('lab')` still true). Restore. Then move the mark out of the `try`, to just after the selection → red: "#3084 A4 — a throw between selection and the chapter loop does not leak the endpoint mark" (`isEndpointBusy('lab')` true). Restore. Repeat all three in `instruct-annotation.ts` → its own cases.
+9a. `script-review.ts`: move the mark above `const pinnedLocal` (outside the `try`) → no unit red (nothing between `:798` and `:799` can throw); this placement is kept for the same reason the file keeps `markReviewBusy` inside, and the diff is reviewed against the file's own `:791-797` comment.
+9b. Delete `endpointCalls.clear();` from `_resetEndpointBusyForTest` → red: "_resetEndpointBusyForTest clears calls and runs". Restore.
+10. `analyzer-models.ts`: delete the `markEndpointRunActive(…)` line → red: "#3084 P1 — a Test holds its endpoint busy for the whole ladder…" (`busyDuringRun` is `[false]`). Restore.
+11. `analyzer-models.ts`: move `releaseEndpointRun();` out of the `finally` onto the success path only → red: "#3084 P1 — a failed Test releases the mark, and a Gemini model marks nothing". Restore.
+12. `analyzer-models.ts`: mark before the `modelTestDepsFor` `try` instead of after it → red: "404 analyzer-endpoint-missing for a deleted endpoint" stays green, so this one is proved the other way: with the mark moved, `isEndpointBusy('gone')` is still true after that 404, which the case below asserts. Add that assertion to the 404 case (`expect(isEndpointBusy('gone')).toBe(false);`) as part of this task, so the mutation has a witness. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/analyzer-concurrency.ts server/src/analyzer/analyzer-concurrency.test.ts server/src/analyzer/transports/openai-transport.ts server/src/analyzer/transports/openai-transport.in-flight.test.ts server/src/gpu/capacity-retry.ts server/src/tts/sidecar.ts
-git commit -m "feat(server): count endpoint analyzer calls on a GPU as in flight"
+git add server/src/analyzer/analyzer-concurrency.ts server/src/analyzer/analyzer-concurrency.test.ts server/src/analyzer/transports/openai-transport.ts server/src/analyzer/transports/openai-transport.in-flight.test.ts server/src/routes/analysis.ts server/src/routes/analysis.endpoint-run.test.ts server/src/routes/script-review.ts server/src/routes/script-review.test.ts server/src/routes/annotate-emotion.ts server/src/routes/annotate-emotion.test.ts server/src/routes/instruct-annotation.ts server/src/routes/instruct-annotation.test.ts server/src/routes/analyzer-models.ts server/src/routes/analyzer-models.test.ts
+git commit -m "feat(server): endpoints on a GPU stay busy for their calls and runs"
 ```
 
 ---
@@ -4474,22 +7481,62 @@ git commit -m "feat(server): count endpoint analyzer calls on a GPU as in flight
 - Test: Create `server/src/gpu/endpoint-eviction.test.ts`
 
 **Interfaces:**
-- Consumes: `AnalyzerEndpoint`, `resolveUnloadUrl(endpoint, lastUsedModel)`, `keyOriginMatches` (3b); `lastUsedModel(endpointId)` (3b `endpoint-runtime.ts`); `getCachedUserSettings`.
-- Produces (contract): `endpointsSharingDevice(endpoints, deviceKey)`, `evictEndpointsOnDevice(deviceKey, deps?): Promise<{ attempted: number }>`; plus `endpointUnloadNotes(deviceKey, settings?): string[]`.
+- Consumes: `AnalyzerEndpoint`, `resolveUnloadUrl(endpoint, model)`, `keyOriginMatches` (3b); `servedModels(endpointId)` **and `forgetEndpointModel(endpointId, model?)`** (3b `endpoint-runtime.ts` — see "Owed from w3ab" below); `isEndpointBusy(endpointId)`, `markEndpointRunActive`, `_resetEndpointBusyForTest` (Task 3d.1); `getCachedUserSettings`; `redactKnownSecrets(text, secrets)` (3b Task 3b.1, the leaf `server/src/analyzer/redact.ts`) and `knownAnalyzerSecrets()` through the leaf `server/src/analyzer/known-secrets-gate.ts` (3b Tasks 3b.1/3b.6 — never by importing `user-settings.ts`, A9).
+- Produces: `endpointsSharingDevice(endpoints, deviceKey)`; `EndpointUnloadOutcome { freed: number; failed: number; busy: boolean }`; `evictEndpointsOnDevice(deviceKey, deps?: { fetch?; settings?; servedModels?: (endpointId: string) => readonly string[]; isEndpointBusy?: (endpointId: string) => boolean; loggedBusy?: Set<string>; attemptedEndpoints?: Set<string>; endpointOutcomes?: Map<string, EndpointUnloadOutcome>; forgetServedModel?: (endpointId: string, model: string | undefined) => void }): Promise<{ attempted: number; unloaded: number }>`; `endpointUnloadNotes(deviceKey, settings?, servedModels?, outcomes?): string[]`; `ENDPOINT_UNLOAD_TIMEOUT_MS` (10 000).
+- **Owed from w3ab (reported, not written here):** `endpoint-runtime.ts` must also export `forgetEndpointModel(endpointId: string, model: string | undefined): void` — removing one model from the endpoint's served set, or the whole set when `model` is `undefined` (an all-models unload URL). Without it the served set is append-only and eviction fan-out grows monotonically with session history; with it the set tracks what the server may still be holding. Until w3ab lands it, this task's `forgetServedModel` dep has no default to fall back on and the served-set tests cannot pass.
+- Contract deviation (reported): the contract's `deps.lastUsedModel` becomes `deps.servedModels` (P3); `deps.isEndpointBusy`, `deps.loggedBusy`, `deps.attemptedEndpoints`, `deps.endpointOutcomes` and `deps.forgetServedModel` are added (P1, A1, A6); and the result carries `unloaded` beside `attempted`, because only a POST that answered 2xx actually freed memory and so only a 2xx makes Task 3d.3 retry admission at once (N1).
+- **Contract deviation (reported): there is no eviction latch of any kind.** An earlier draft had one — a whole-admission `endpointsUnloaded` flag in Task 3d.3 — and a review pass found it nullified the very mechanism it sat beside: with the flag set by the first 2xx, an endpoint that was busy at poll 1 and idle at poll 10 was never asked again, and a `{model}` URL's models 2..N were abandoned. `deps.attemptedEndpoints` is now the **sole** bound, and it is keyed by **`(endpointId, model)`** rather than by endpoint, so the bound is per unload POST rather than per admission. Ollama's own `evicted` latch is untouched (Task 3d.3).
 
-Rules (spec §4 "Eviction"): an endpoint matches when `gpu === 'any'` or `gpu === deviceKey`; for each match with an unload URL, `{model}` is replaced by the endpoint's last-used model and an unload URL containing `{model}` with no model used since server start is skipped (brief's planning interpretation); the key is sent only under the origin rule, and an endpoint whose stored key no longer matches is skipped (no POST, not counted); POSTs are best-effort and sequential (llama-swap's unload blocks until the process stops, 06 fact 8), each bounded at 30 s. `attempted` counts POSTs actually sent. `endpointUnloadNotes` names every sharing endpoint without an unload URL, for the give-up message.
+Rules (spec §4 "Eviction", P1, P3):
+- **Match.** An endpoint matches when `gpu === 'any'` or `gpu === deviceKey`.
+- **`{model}`.** An unload URL containing it gets one POST per model in `servedModels(endpoint.id)`: every model whose request has been **sent** to that endpoint since server start and not unloaded since (P3, N2 — a Test request and a call that then failed both count, because either can leave the model loaded). None recorded → no POST, and `endpointUnloadNotes` names that endpoint so the give-up message says why. A URL without `{model}` gets exactly one POST (it unloads every model on that server; Task 3d.8 warns about that on save).
+- **The served set shrinks (A1 continued).** An unload POST that answers **2xx or 404** calls `forgetServedModel(endpoint.id, model)`: the server no longer holds that model (llama-swap answers 404 for a model it is not running), so it leaves the set. An all-models URL passes `model` `undefined`, which clears the endpoint's whole set. Any other status, or a thrown/timed-out POST, leaves the set as it is. The set therefore tracks what the server may still be holding, not the session's history, and a later admission's fan-out is only what is still loaded. Only a 2xx counts toward `unloaded` (it freed memory, so Task 3d.3 retries admission at once); a 404 freed nothing and does not.
+- **Busy re-check.** Immediately before **each** POST, the endpoint's busy state (run or call, Task 3d.1) is checked again. A busy endpoint gets no further POST, and the "busy; not unloading" line is logged **once per endpoint per admission** — `deps.loggedBusy` is a set Task 3d.3 creates per `withCapacityRetry` call, so a 30-poll wait behind a busy endpoint logs one line, not thirty.
+- **At most one unload attempt per (endpoint, model) per admission — the sole bound (A1).** `deps.attemptedEndpoints` is created and threaded exactly like `loggedBusy` (Task 3d.3 creates one per `withCapacityRetry` call, not per poll), but its keys are `attemptKey(endpoint.id, model)` — `model` is `undefined` for an all-models URL. Both the `has` check and the `add` sit **inside** the per-model loop: the key is checked immediately before that model's POST, and added immediately before the `fetch`, so a POST that hangs past the timeout still counts. A busy skip adds nothing and `break`s out of that endpoint's model loop, so every one of its models — not only the first — stays eligible on a later poll once the endpoint goes idle. Another endpoint on the card is never affected by this endpoint's slots. A fresh admission gets a fresh set, so a genuinely failed POST is tried again next time.
+- **The real worst case, stated plainly.** Within one admission the lever costs at most **Σ (served models on matching endpoints, plus one per matching all-models URL) × `ENDPOINT_UNLOAD_TIMEOUT_MS` (10 s)**, each POST once, however many polls `maxAttempts` allows. It is not "(matching endpoints) × 10 s": an endpoint serving four models can cost 40 s on its own. **An admission happens per synthesize call, not per chapter** — `SidecarTtsProvider.postWithCapacityRetry` (`sidecar.ts:422-441`) wraps every `/synthesize` (`:229`) and `/synthesize-batch` (`:357`) POST in its own `withCapacityRetry` call, so the bound is repaid by every synth op that is denied. Two things keep that from compounding: a successful or 404 unload removes the model from the served set, so the next admission does not POST it again; and a POST that fails leaves it in the set, so a server that is down costs up to 10 s per model per denied synth op until it answers — which is what the "every unload request failed" note (below) exists to surface.
+- **A run that starts during a blocking unload POST is Ollama's own race, unchanged.** llama-swap's unload blocks until the process stops (06 fact 8), so a run can start while an earlier POST is still out and lose its model mid-run. That is exactly what happens today when an analyzer call starts during `evictOllama()`: the next call reloads the model and TTS admission retries. Nothing here waits for the run — a wait would park the TTS request behind a whole chapter — so the cost stays one reload. The "mid-run" step of register row ‹A-new-2› (Task 3d.10) is what watches for it on the box.
+- **Key.** Sent only under the origin rule. An endpoint whose stored key no longer matches is skipped: no POST, not counted.
+- **POSTs.** Best-effort and sequential, each bounded at `ENDPOINT_UNLOAD_TIMEOUT_MS` (10 s — matches `SERVED_LIMITS_WARMUP_TIMEOUT_MS`'s shape, not its value; each is its own named constant). `attempted` counts POSTs actually sent; `unloaded` counts those that answered 2xx. A thrown POST and any other status count as attempted and not unloaded, so Task 3d.3 does not retry admission at once on a failure (N1) — and, per the attempt rule above, the same (endpoint, model) is not re-POSTed within the same admission. A 2xx or 404 logs one `console.info` line naming the endpoint and model; a failure logs one redacted `console.warn` line.
+- **Outcomes for the notes (A6).** `deps.endpointOutcomes` is a third per-admission map, threaded like the two sets, keyed by endpoint id: `{ freed, failed, busy }`. A 2xx or 404 adds one to `freed`; any other status or a thrown POST adds one to `failed`; a busy skip sets `busy`. It exists so the give-up message can say why each sharing endpoint is still holding the card, instead of dropping `attempted`/`unloaded`/`loggedBusy` at the call boundary.
+- **Notes (N2, A6).** `endpointUnloadNotes(deviceKey, settings?, servedModels?, outcomes?)` names **every** sharing endpoint that did not free the card, with its cause, in this precedence (the first that applies):
+  1. **No unload URL** — the setting to fill in.
+  2. **Busy throughout** — `busy` and nothing POSTed (`freed` and `failed` both 0): a run, review or Test was using it for the whole wait.
+  3. **Every POST failed** — `failed > 0` and `freed === 0`.
+  4. **Attempts spent** — `freed > 0`: Castwright unloaded what it could (N models) and the card was still short.
+  5. **`{model}` with nothing served** — no outcome and an empty served set: nothing has run on it since Castwright started. This comes **last** on purpose: a successful unload empties the set, and checking it first would tell a user whose models were just unloaded that "no model has run on it".
+  An endpoint with no outcome and a non-empty served set (never reached because Ollama or the idle-TTS lever won every iteration) gets no note. Case 5 is the common one right after a restart, when the endpoint still holds a model loaded by the previous process.
+- **Redaction (P22).** Every unload log line passes through `redactKnownSecrets` before it is written: a thrown error's message, and a non-2xx answer's status and body. The secrets are `knownAnalyzerSecrets()` plus every key in the settings this call read; an injected settings object is never in the cache. A body is redacted before it is truncated to 300 characters, so the cut cannot leave half a key. An unload server that echoes the `Authorization` header never puts the key in a log.
+- **Stop-the-run errors (P20).** The catch wraps only the unload `fetch`. No stage call reaches it, so no pass-through is owed.
+- **No unreachable state (P21, P22).** The unload POST is a plain undici `fetch`, with no SDK client. Every failure is logged redacted and counted, whatever it is: a thrown error of any class (an `AnalyzerTransportError` included) or a non-2xx answer. Nothing here classifies a failure as unreachable, retries it, or falls back. The capacity loop (Task 3d.3) reads only `attempted` and a fresh capacity probe, never the failure's class.
 
-Import-cycle note: `server/src/gpu/` may not import a route module (CLAUDE.md "leaf gate" rule). This file imports only `workspace/*` and `analyzer/transports/endpoint-runtime.ts`; `npm run check:cycles` proves no new cycle.
+Import-cycle note: `server/src/gpu/` may not import a route module (CLAUDE.md "leaf gate" rule). This file imports only `workspace/*`, the leaves `analyzer/redact.ts` and `analyzer/known-secrets-gate.ts`, `analyzer/transports/endpoint-runtime.ts` and `analyzer/analyzer-concurrency.ts`, which `capacity-retry.ts:20` already imports. `npm run check:cycles` proves no new cycle.
 
 Keeps green: `npm run check:cycles`.
 
 - [ ] **Step 1: Write the failing test** — create `server/src/gpu/endpoint-eviction.test.ts`:
 
 ```ts
-import { describe, it, expect, vi } from 'vitest';
-import { endpointsSharingDevice, evictEndpointsOnDevice, endpointUnloadNotes } from './endpoint-eviction.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import {
+  endpointsSharingDevice,
+  evictEndpointsOnDevice,
+  endpointUnloadNotes,
+  ENDPOINT_UNLOAD_TIMEOUT_MS,
+  type EndpointUnloadOutcome,
+} from './endpoint-eviction.js';
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
 import { DEFAULT_USER_SETTINGS, type UserSettings } from '../workspace/user-settings.js';
+import { markEndpointRunActive, _resetEndpointBusyForTest } from '../analyzer/analyzer-concurrency.js';
+import { noteEndpointModelUsed, servedModels, _resetEndpointRuntimeForTest } from '../analyzer/transports/endpoint-runtime.js';
+
+/* The busy registry and the served set are module state; a leaked mark or model from one case
+   would silently change the next case's answer. */
+beforeEach(() => {
+  _resetEndpointBusyForTest();
+  _resetEndpointRuntimeForTest();
+});
 
 const ep = (id: string, gpu: string, unloadUrl?: string) =>
   analyzerEndpointSchema.parse({ id, name: id.toUpperCase(), baseUrl: `http://127.0.0.1:8080/v1`, gpu, contextTokens: 8192, ...(unloadUrl ? { unloadUrl } : {}) });
@@ -4497,6 +7544,10 @@ const ep = (id: string, gpu: string, unloadUrl?: string) =>
 const settings = (endpoints: ReturnType<typeof ep>[], keys: UserSettings['analyzerEndpointKeys'] = {}): UserSettings => ({
   ...DEFAULT_USER_SETTINGS, analyzerEndpoints: endpoints, analyzerEndpointKeys: keys,
 });
+
+const idle = () => false;
+const PER_MODEL = 'http://127.0.0.1:8080/api/models/unload/{model}';
+const none = () => [] as string[];
 
 describe('endpointsSharingDevice (#3084)', () => {
   it("matches 'any' and the exact device key, never 'none' or another card", () => {
@@ -4509,52 +7560,383 @@ describe('endpointsSharingDevice (#3084)', () => {
 describe('evictEndpointsOnDevice (#3084)', () => {
   it('POSTs only matching endpoints with an unload URL, substituting {model}', async () => {
     const fetch = vi.fn(async () => new Response('OK'));
-    const s = settings([
-      ep('swap0', 'cuda:0', 'http://127.0.0.1:8080/api/models/unload/{model}'),
-      ep('swap1', 'cuda:1', 'http://127.0.0.1:8080/api/models/unload/{model}'),
-      ep('nourl', 'cuda:0'),
-    ]);
-    const out = await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, lastUsedModel: () => 'qwen3-30b' });
-    expect(out).toEqual({ attempted: 1 });
+    const s = settings([ep('swap0', 'cuda:0', PER_MODEL), ep('swap1', 'cuda:1', PER_MODEL), ep('nourl', 'cuda:0')]);
+    const out = await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: () => ['qwen3-30b'], isEndpointBusy: idle });
+    expect(out).toEqual({ attempted: 1, unloaded: 1 });
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe('http://127.0.0.1:8080/api/models/unload/qwen3-30b');
     expect((fetch.mock.calls[0][1] as { method: string }).method).toBe('POST');
   });
 
-  it('skips a {model} URL when no model has been used since server start', async () => {
+  it('POSTs once per model whose request has been sent to the endpoint (P3, N2: a phase-0/phase-1 split on one endpoint)', async () => {
     const fetch = vi.fn(async () => new Response('OK'));
-    const s = settings([ep('swap0', 'any', 'http://127.0.0.1:8080/api/models/unload/{model}')]);
-    expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, lastUsedModel: () => undefined })).toEqual({ attempted: 0 });
+    const s = settings([ep('swap', 'cuda:0', PER_MODEL)]);
+    const out = await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: () => ['qwen3-30b', 'gemma3:12b'], isEndpointBusy: idle });
+    expect(out).toEqual({ attempted: 2, unloaded: 2 });
+    expect(fetch.mock.calls.map((c) => c[0])).toEqual([
+      'http://127.0.0.1:8080/api/models/unload/qwen3-30b',
+      'http://127.0.0.1:8080/api/models/unload/gemma3%3A12b',
+    ]);
+  });
+
+  it('skips a {model} URL when no model has been sent to the endpoint since server start', async () => {
+    const fetch = vi.fn(async () => new Response('OK'));
+    const s = settings([ep('swap0', 'any', PER_MODEL)]);
+    expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: none, isEndpointBusy: idle })).toEqual({ attempted: 0, unloaded: 0 });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('an unload URL without {model} is POSTed exactly once, whether or not models have served', async () => {
+    const fetch = vi.fn(async () => new Response('OK'));
+    const s = settings([ep('all', 'cuda:0', 'http://127.0.0.1:8080/api/models/unload')]);
+    expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: none, isEndpointBusy: idle })).toEqual({ attempted: 1, unloaded: 1 });
+    expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: () => ['a', 'b'], isEndpointBusy: idle })).toEqual({ attempted: 1, unloaded: 1 });
   });
 
   it('sends the key as a Bearer token only when its origin matches, and skips a mismatched key', async () => {
     const fetch = vi.fn(async () => new Response('OK'));
     const url = 'http://127.0.0.1:8080/api/models/unload';
-    await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => settings([ep('a', 'any', url)], { a: { origin: 'http://127.0.0.1:8080', key: 'sk-a' } }), lastUsedModel: () => 'm' });
+    await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => settings([ep('a', 'any', url)], { a: { origin: 'http://127.0.0.1:8080', key: 'sk-a' } }), servedModels: () => ['m'], isEndpointBusy: idle });
     expect((fetch.mock.calls[0][1] as { headers: Record<string, string> }).headers.Authorization).toBe('Bearer sk-a');
     fetch.mockClear();
-    const out = await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => settings([ep('a', 'any', url)], { a: { origin: 'http://10.0.0.5:8080', key: 'sk-a' } }), lastUsedModel: () => 'm' });
-    expect(out).toEqual({ attempted: 0 });
+    const out = await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => settings([ep('a', 'any', url)], { a: { origin: 'http://10.0.0.5:8080', key: 'sk-a' } }), servedModels: () => ['m'], isEndpointBusy: idle });
+    expect(out).toEqual({ attempted: 0, unloaded: 0 });
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('a failing POST is best-effort: counted, logged, never thrown', async () => {
+  it('a failing POST is best-effort: counted as attempted, never as unloaded, logged, never thrown (N1)', async () => {
     const fetch = vi.fn(async () => { throw new Error('ECONNREFUSED'); });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const s = settings([ep('a', 'any', 'http://127.0.0.1:8080/unload'), ep('b', 'cuda:0', 'http://127.0.0.1:8080/unload')]);
-    await expect(evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, lastUsedModel: () => 'm' })).resolves.toEqual({ attempted: 2 });
+    /* `unloaded: 0` is what keeps Task 3d.3's latch clear, so the next denial tries again. */
+    await expect(evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: () => ['m'], isEndpointBusy: idle })).resolves.toEqual({ attempted: 2, unloaded: 0 });
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it('a non-2xx answer counts as attempted but not unloaded (N1)', async () => {
+    const fetch = vi.fn(async () => new Response('nope', { status: 503 }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const s = settings([ep('a', 'any', 'http://127.0.0.1:8080/unload')]);
+    expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: none, isEndpointBusy: idle })).toEqual({ attempted: 1, unloaded: 0 });
+    warn.mockRestore();
+  });
+
+  it('an unload endpoint that 500s echoing the key never logs it, even where the log truncates (P22)', async () => {
+    const KEY = 'sk-lab-unload-secret-0001';
+    /* A real server: the key travels in the real Authorization header and comes back in the 500 body.
+       280 characters of padding put the echoed key across the log's 300-character cut. */
+    const server = createServer((req, res) => {
+      res.writeHead(500, { 'content-type': 'text/plain' });
+      res.end(`${'x'.repeat(280)}${req.headers.authorization ?? ''}`);
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'LAB', baseUrl: `${origin}/v1`, gpu: 'cuda:0', contextTokens: 8192, unloadUrl: `${origin}/unload` });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const out = await evictEndpointsOnDevice('cuda:0', { settings: () => settings([lab], { lab: { origin, key: KEY } }), servedModels: none, isEndpointBusy: idle });
+      expect(out).toEqual({ attempted: 1, unloaded: 0 });
+      const logged = warn.mock.calls.flat().join('\n');
+      expect(logged).toContain('returned 500');
+      expect(logged).toContain('[redacted]');
+      expect(logged).not.toContain(KEY);
+      expect(logged).not.toContain(KEY.slice(0, 13));
+    } finally {
+      warn.mockRestore();
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it('a thrown unload error that carries the key is logged redacted (P22)', async () => {
+    const KEY = 'sk-lab-unload-secret-0002';
+    const fetch = vi.fn(async () => {
+      throw new Error(`connect failed while sending Bearer ${KEY}`);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const s = settings([ep('a', 'any', 'http://127.0.0.1:8080/unload')], { a: { origin: 'http://127.0.0.1:8080', key: KEY } });
+    await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: none, isEndpointBusy: idle });
+    const logged = warn.mock.calls.flat().join('\n');
+    expect(logged).toContain('[redacted]');
+    expect(logged).not.toContain(KEY);
+    warn.mockRestore();
+  });
+
+  it('a busy endpoint is skipped; an idle endpoint on the same card is still unloaded (P1)', async () => {
+    const fetch = vi.fn(async () => new Response('OK'));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const s = settings([ep('busy', 'cuda:0', 'http://127.0.0.1:8080/unload-busy'), ep('idle', 'any', 'http://127.0.0.1:8080/unload-idle')]);
+    const out = await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: none, isEndpointBusy: (id) => id === 'busy' });
+    expect(out).toEqual({ attempted: 1, unloaded: 1 });
+    expect(fetch.mock.calls.map((c) => c[0])).toEqual(['http://127.0.0.1:8080/unload-idle']);
+    info.mockRestore();
+  });
+
+  it('logs "busy; not unloading" once per endpoint per admission, however many polls ask (N1)', async () => {
+    const fetch = vi.fn(async () => new Response('OK'));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const s = settings([ep('busy', 'cuda:0', 'http://127.0.0.1:8080/unload-busy')]);
+    /* One set per withCapacityRetry call (Task 3d.3 creates it); the loop asks on every poll. */
+    const loggedBusy = new Set<string>();
+    const deps = { fetch: fetch as never, settings: () => s, servedModels: none, isEndpointBusy: () => true, loggedBusy };
+    for (let i = 0; i < 5; i += 1) expect(await evictEndpointsOnDevice('cuda:0', deps)).toEqual({ attempted: 0, unloaded: 0 });
+    const busyLines = info.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes('busy; not unloading'));
+    expect(busyLines).toHaveLength(1);
+    /* A later admission gets its own set, and so its own line. */
+    expect(await evictEndpointsOnDevice('cuda:0', { ...deps, loggedBusy: new Set<string>() })).toEqual({ attempted: 0, unloaded: 0 });
+    expect(info.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes('busy; not unloading'))).toHaveLength(2);
+    info.mockRestore();
+  });
+
+  it('re-checks the busy state immediately before each POST: a run that starts during the first POST skips the second', async () => {
+    let busy = false;
+    const fetch = vi.fn(async () => {
+      busy = true;
+      return new Response('OK');
+    });
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const s = settings([ep('swap', 'cuda:0', PER_MODEL)]);
+    const out = await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: () => ['qwen3-30b', 'gemma3:12b'], isEndpointBusy: () => busy });
+    expect(out).toEqual({ attempted: 1, unloaded: 1 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    info.mockRestore();
+  });
+
+  it('with the real busy registry, a run between two chunk calls (no call in flight) blocks the unload', async () => {
+    const fetch = vi.fn(async () => new Response('OK'));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const s = settings([ep('swap', 'cuda:0', PER_MODEL)]);
+    const release = markEndpointRunActive(['swap']);
+    try {
+      expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: () => ['qwen3-30b'] })).toEqual({ attempted: 0, unloaded: 0 });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      release();
+      info.mockRestore();
+    }
+    expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: () => ['qwen3-30b'] })).toEqual({ attempted: 1, unloaded: 1 });
+  });
+
+  /* A1 — the attempt bound is per (endpoint, model), not per endpoint and not per admission.
+     These cases drive what a real admission sees: several endpoints and several models over
+     several polls, sharing ONE set of per-admission state exactly as Task 3d.3 wires it. A
+     single-model, single-endpoint stub cannot tell the two keyings apart, which is how the
+     original defect passed every earlier case. */
+  const admission = () => ({ loggedBusy: new Set<string>(), attemptedEndpoints: new Set<string>(), endpointOutcomes: new Map<string, EndpointUnloadOutcome>() });
+
+  it('endpoint B, busy at the first poll and idle at a later one, is unloaded after A was already unloaded (A1)', async () => {
+    const fetch = vi.fn(async () => new Response('OK'));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const s = settings([ep('a', 'cuda:0', 'http://127.0.0.1:8080/unload-a/{model}'), ep('b', 'any', 'http://127.0.0.1:8080/unload-b/{model}')]);
+    const state = admission();
+    let bBusy = true;
+    const deps = { fetch: fetch as never, settings: () => s, servedModels: (id: string) => (id === 'a' ? ['qwen3-30b'] : ['gemma3:12b']), isEndpointBusy: (id: string) => id === 'b' && bBusy, forgetServedModel: () => {}, ...state };
+    /* Poll 1: A unloads, B is busy. */
+    expect(await evictEndpointsOnDevice('cuda:0', deps)).toEqual({ attempted: 1, unloaded: 1 });
+    /* Polls 2..9: B still busy; A's slot is spent, so nothing is sent. */
+    for (let i = 0; i < 8; i += 1) expect(await evictEndpointsOnDevice('cuda:0', deps)).toEqual({ attempted: 0, unloaded: 0 });
+    /* Poll 10: B goes idle and is asked — nothing latched it out. */
+    bBusy = false;
+    expect(await evictEndpointsOnDevice('cuda:0', deps)).toEqual({ attempted: 1, unloaded: 1 });
+    expect(fetch.mock.calls.map((c) => c[0])).toEqual([
+      'http://127.0.0.1:8080/unload-a/qwen3-30b',
+      'http://127.0.0.1:8080/unload-b/gemma3%3A12b',
+    ]);
+    info.mockRestore();
+  });
+
+  it('a busy break part-way through one endpoint\'s models leaves models 2..N eligible on a later poll (A1)', async () => {
+    let busy = false;
+    const fetch = vi.fn(async () => {
+      busy = true; // a chunk call starts while model 1's POST is out
+      return new Response('OK');
+    });
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const s = settings([ep('swap', 'cuda:0', PER_MODEL)]);
+    const deps = { fetch: fetch as never, settings: () => s, servedModels: () => ['m1', 'm2', 'm3'], isEndpointBusy: () => busy, forgetServedModel: () => {}, ...admission() };
+    expect(await evictEndpointsOnDevice('cuda:0', deps)).toEqual({ attempted: 1, unloaded: 1 });
+    /* The run ends; the same admission polls again. m2 and m3 were never attempted. */
+    busy = false;
+    fetch.mockImplementation(async () => new Response('OK'));
+    expect(await evictEndpointsOnDevice('cuda:0', deps)).toEqual({ attempted: 2, unloaded: 2 });
+    expect(fetch.mock.calls.map((c) => c[0])).toEqual([
+      'http://127.0.0.1:8080/api/models/unload/m1',
+      'http://127.0.0.1:8080/api/models/unload/m2',
+      'http://127.0.0.1:8080/api/models/unload/m3',
+    ]);
+    info.mockRestore();
+  });
+
+  it('a hung POST is never retried for that (endpoint, model) in the same admission, but the endpoint\'s other model still is (A1)', async () => {
+    const fetch = vi.fn(async (url: string) => {
+      if (url.endsWith('/hangs')) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      return new Response('OK');
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const s = settings([ep('swap', 'cuda:0', PER_MODEL)]);
+    const state = admission();
+    const deps = { fetch: fetch as never, settings: () => s, servedModels: () => ['hangs', 'ok'], isEndpointBusy: idle, forgetServedModel: () => {}, ...state };
+    expect(await evictEndpointsOnDevice('cuda:0', deps)).toEqual({ attempted: 2, unloaded: 1 });
+    /* The next 29 polls of the same admission send nothing: both slots are spent. */
+    for (let i = 0; i < 29; i += 1) expect(await evictEndpointsOnDevice('cuda:0', deps)).toEqual({ attempted: 0, unloaded: 0 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    /* A fresh admission tries the hung model again. */
+    expect(await evictEndpointsOnDevice('cuda:0', { ...deps, ...admission() })).toEqual({ attempted: 2, unloaded: 1 });
+    expect(fetch).toHaveBeenCalledTimes(4);
+    warn.mockRestore();
+    info.mockRestore();
+  });
+
+  it('a busy endpoint is not an attempt: it is still reconsidered later and then unloaded', async () => {
+    const fetch = vi.fn(async () => new Response('OK'));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const s = settings([ep('busy', 'cuda:0', 'http://127.0.0.1:8080/unload-busy')]);
+    let busy = true;
+    const deps = { fetch: fetch as never, settings: () => s, servedModels: none, isEndpointBusy: () => busy, forgetServedModel: () => {}, ...admission() };
+    /* Still busy on this poll: no attempt, so no slot is spent. */
+    expect(await evictEndpointsOnDevice('cuda:0', deps)).toEqual({ attempted: 0, unloaded: 0 });
+    expect(fetch).not.toHaveBeenCalled();
+    /* Goes idle on a later poll of the SAME admission (same set): now it is attempted and unloaded. */
+    busy = false;
+    expect(await evictEndpointsOnDevice('cuda:0', deps)).toEqual({ attempted: 1, unloaded: 1 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    info.mockRestore();
+  });
+
+  /* The served set, with the real endpoint-runtime module (w3ab's forgetEndpointModel). */
+  it('a 2xx unload removes that model from the served set; the next admission does not POST it again', async () => {
+    const fetch = vi.fn(async () => new Response('OK'));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    noteEndpointModelUsed('swap', 'qwen3-30b');
+    noteEndpointModelUsed('swap', 'gemma3:12b');
+    const s = settings([ep('swap', 'cuda:0', PER_MODEL)]);
+    expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, isEndpointBusy: idle, ...admission() })).toEqual({ attempted: 2, unloaded: 2 });
+    expect(servedModels('swap')).toEqual([]);
+    expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, isEndpointBusy: idle, ...admission() })).toEqual({ attempted: 0, unloaded: 0 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    info.mockRestore();
+  });
+
+  it('a 404 removes the model too (the server is not holding it) but does not count as unloaded; a 503 keeps it', async () => {
+    const fetch = vi.fn(async (url: string) => new Response('', { status: url.endsWith('/gone') ? 404 : 503 }));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    noteEndpointModelUsed('swap', 'gone');
+    noteEndpointModelUsed('swap', 'stuck');
+    const s = settings([ep('swap', 'cuda:0', PER_MODEL)]);
+    expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, isEndpointBusy: idle, ...admission() })).toEqual({ attempted: 2, unloaded: 0 });
+    expect(servedModels('swap')).toEqual(['stuck']);
+    /* A 404 is not a failure: it is logged as info, not warned. */
+    expect(warn.mock.calls.flat().join('\n')).not.toContain('returned 404');
+    info.mockRestore();
+    warn.mockRestore();
+  });
+
+  it('a 2xx from an all-models URL clears the endpoint\'s whole served set', async () => {
+    const fetch = vi.fn(async () => new Response('OK'));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    noteEndpointModelUsed('all', 'a');
+    noteEndpointModelUsed('all', 'b');
+    const s = settings([ep('all', 'cuda:0', 'http://127.0.0.1:8080/api/models/unload')]);
+    expect(await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, isEndpointBusy: idle, ...admission() })).toEqual({ attempted: 1, unloaded: 1 });
+    expect(servedModels('all')).toEqual([]);
+    info.mockRestore();
+  });
+
+  it('logs one info line per successful unload, naming the endpoint and model', async () => {
+    const fetch = vi.fn(async () => new Response('OK'));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const s = settings([ep('swap', 'cuda:0', PER_MODEL)]);
+    await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: () => ['qwen3-30b', 'gemma3:12b'], isEndpointBusy: idle, forgetServedModel: () => {}, ...admission() });
+    const lines = info.mock.calls.map((c) => c.join(' ')).filter((l) => l.includes('no longer holds'));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('"SWAP"');
+    expect(lines[0]).toContain('qwen3-30b');
+    info.mockRestore();
+  });
+
+  it('records per-endpoint outcomes for the notes: freed, failed, busy (A6)', async () => {
+    const fetch = vi.fn(async (url: string) => (url.includes('down') ? Promise.reject(new Error('ECONNREFUSED')) : new Response('OK')));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const s = settings([
+      ep('ok', 'cuda:0', 'http://127.0.0.1:8080/unload-ok'),
+      ep('down', 'cuda:0', 'http://127.0.0.1:8081/unload-down'),
+      ep('busy', 'cuda:0', 'http://127.0.0.1:8082/unload-busy'),
+    ]);
+    const state = admission();
+    await evictEndpointsOnDevice('cuda:0', { fetch: fetch as never, settings: () => s, servedModels: none, isEndpointBusy: (id) => id === 'busy', forgetServedModel: () => {}, ...state });
+    expect(Object.fromEntries(state.endpointOutcomes)).toEqual({
+      ok: { freed: 1, failed: 0, busy: false },
+      down: { freed: 0, failed: 1, busy: false },
+      busy: { freed: 0, failed: 0, busy: true },
+    });
+    warn.mockRestore();
+    info.mockRestore();
+  });
+
+  it('ENDPOINT_UNLOAD_TIMEOUT_MS is 10 s, not the 30 s a hanging endpoint used to be allowed', () => {
+    expect(ENDPOINT_UNLOAD_TIMEOUT_MS).toBe(10_000);
   });
 });
 
 describe('endpointUnloadNotes (#3084)', () => {
   it('names each sharing endpoint without an unload URL and the setting to fill in', () => {
-    const notes = endpointUnloadNotes('cuda:0', settings([ep('lab', 'cuda:0'), ep('other', 'cuda:1'), ep('ok', 'any', 'http://127.0.0.1:8080/unload')]));
+    const notes = endpointUnloadNotes(
+      'cuda:0',
+      settings([ep('lab', 'cuda:0'), ep('other', 'cuda:1'), ep('ok', 'any', 'http://127.0.0.1:8080/unload')]),
+      () => ['m'],
+    );
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain('"LAB"');
     expect(notes[0]).toContain('Unload URL');
+  });
+
+  it('names a {model} endpoint that has nothing to unload because no model has run on it since Castwright started (N2)', () => {
+    const notes = endpointUnloadNotes('cuda:0', settings([ep('swap', 'cuda:0', PER_MODEL), ep('other', 'cuda:1', PER_MODEL)]), none);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('"SWAP"');
+    expect(notes[0]).toContain('since Castwright started');
+    /* Once a model has run on it, the endpoint is unloadable and gets no note. */
+    expect(endpointUnloadNotes('cuda:0', settings([ep('swap', 'cuda:0', PER_MODEL)]), () => ['qwen3-30b'])).toEqual([]);
+  });
+
+  it('names every cause, one note per sharing endpoint, each naming the endpoint (A6)', () => {
+    const s = settings([
+      ep('nourl', 'cuda:0'),
+      ep('busy', 'cuda:0', PER_MODEL),
+      ep('down', 'cuda:0', PER_MODEL),
+      ep('spent', 'any', PER_MODEL),
+      ep('fresh', 'cuda:0', PER_MODEL),
+      ep('elsewhere', 'cuda:1', PER_MODEL),
+    ]);
+    const outcomes = new Map<string, EndpointUnloadOutcome>([
+      ['busy', { freed: 0, failed: 0, busy: true }],
+      ['down', { freed: 0, failed: 2, busy: false }],
+      ['spent', { freed: 2, failed: 0, busy: false }],
+    ]);
+    const notes = endpointUnloadNotes('cuda:0', s, (id) => (id === 'fresh' ? [] : ['m']), outcomes);
+    expect(notes).toHaveLength(5);
+    expect(notes[0]).toMatch(/"NOURL".*Unload URL/);
+    expect(notes[1]).toMatch(/"BUSY".*busy for the whole wait/);
+    expect(notes[2]).toMatch(/"DOWN".*every unload request .* failed/);
+    expect(notes[3]).toMatch(/"SPENT".*unloaded 2 model/);
+    expect(notes[4]).toMatch(/"FRESH".*since Castwright started/);
+  });
+
+  it('an endpoint whose models were all just unloaded is never told "no model has run on it" (A6 precedence)', () => {
+    const notes = endpointUnloadNotes('cuda:0', settings([ep('swap', 'cuda:0', PER_MODEL)]), none, new Map([['swap', { freed: 2, failed: 0, busy: false }]]));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('unloaded 2 model');
+    expect(notes[0]).not.toContain('since Castwright started');
+  });
+
+  it('busy at one poll and then POSTed is not "busy throughout" (A6)', () => {
+    const notes = endpointUnloadNotes('cuda:0', settings([ep('swap', 'cuda:0', PER_MODEL)]), () => ['m'], new Map([['swap', { freed: 0, failed: 1, busy: true }]]));
+    expect(notes[0]).toContain('every unload request');
+    expect(notes[0]).not.toContain('busy for the whole wait');
   });
 });
 ```
@@ -4567,14 +7949,50 @@ Run: `npm --prefix server run test -- src/gpu/endpoint-eviction.test.ts`  Expect
 ```ts
 /* #3084 W3 — TTS capacity eviction for OpenAI-compatible analyzer endpoints. When the
    sidecar denies admission on a card, endpoints assigned to that card (or to 'any') are
-   asked to unload through their saved Unload URL. No VRAM figure exists for endpoints,
-   so the caller does not gate this on analyzerEvictWouldHelp; it re-probes capacity after. */
+   asked to unload through their saved Unload URL: one POST per model that has served the
+   endpoint (P3), each re-checked against the endpoint's run/call busy state immediately
+   before it is sent (P1). No VRAM figure exists for endpoints, so the caller does not gate
+   this on analyzerEvictWouldHelp; it re-probes capacity after. */
 import { fetch as undiciFetch } from 'undici';
 import { getCachedUserSettings, type UserSettings } from '../workspace/user-settings.js';
+/* Known secrets through 3b's leaf gate, never from user-settings.ts (A9). */
+import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
 import { keyOriginMatches, resolveUnloadUrl, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
-import { lastUsedModel as defaultLastUsedModel } from '../analyzer/transports/endpoint-runtime.js';
+import { redactKnownSecrets } from '../analyzer/redact.js';
+import { forgetEndpointModel, servedModels as defaultServedModels } from '../analyzer/transports/endpoint-runtime.js';
+import { isEndpointBusy as defaultIsEndpointBusy } from '../analyzer/analyzer-concurrency.js';
 
-const UNLOAD_TIMEOUT_MS = 30_000;
+/** Test-only-visible-by-name; production always uses this. Matches SERVED_LIMITS_WARMUP_TIMEOUT_MS's
+    shape (a named, exported per-call bound), not its value — this is a POST, not a listing.
+    Was 30_000: a slow/hanging unload endpoint could be re-POSTed on every poll of one admission
+    at up to 30 s each (found in review). The per-(endpoint, model) attempt slot below is what stops
+    the re-POSTing; this bound only shortens each one. */
+export const ENDPOINT_UNLOAD_TIMEOUT_MS = 10_000;
+
+/** What one admission learned about one endpoint, read by endpointUnloadNotes (A6). */
+export interface EndpointUnloadOutcome {
+  /** POSTs answered 2xx or 404 — the server no longer holds that model. */
+  freed: number;
+  /** POSTs answered with any other status, or thrown (a timeout included). */
+  failed: number;
+  /** Skipped as busy at least once in this admission. */
+  busy: boolean;
+}
+
+/** One attempt slot per (endpoint, model) per admission. `model` is undefined for an all-models URL. */
+function attemptKey(endpointId: string, model: string | undefined): string {
+  return `${endpointId}::${model ?? ''}`;
+}
+
+function outcomeFor(outcomes: Map<string, EndpointUnloadOutcome> | undefined, endpointId: string): EndpointUnloadOutcome | undefined {
+  if (!outcomes) return undefined;
+  let outcome = outcomes.get(endpointId);
+  if (!outcome) {
+    outcome = { freed: 0, failed: 0, busy: false };
+    outcomes.set(endpointId, outcome);
+  }
+  return outcome;
+}
 
 export function endpointsSharingDevice(endpoints: AnalyzerEndpoint[], deviceKey: string): AnalyzerEndpoint[] {
   return endpoints.filter((e) => e.gpu === 'any' || e.gpu === deviceKey);
@@ -4585,41 +8003,132 @@ export async function evictEndpointsOnDevice(
   deps: {
     fetch?: typeof undiciFetch;
     settings?: () => UserSettings;
-    lastUsedModel?: (endpointId: string) => string | undefined;
+    servedModels?: (endpointId: string) => readonly string[];
+    isEndpointBusy?: (endpointId: string) => boolean;
+    /** Endpoints already logged as busy in THIS admission (one set per withCapacityRetry
+        call, Task 3d.3): a 30-poll wait behind a busy endpoint logs one line, not thirty. */
+    loggedBusy?: Set<string>;
+    /** Attempt slots already spent in THIS admission, keyed by attemptKey(endpoint, model)
+        (one set per withCapacityRetry call, Task 3d.3). The sole bound on the lever: at most
+        one POST per (endpoint, model) per admission. There is no latch (A1). */
+    attemptedEndpoints?: Set<string>;
+    /** Per-endpoint outcomes for the give-up notes (one map per withCapacityRetry call, A6). */
+    endpointOutcomes?: Map<string, EndpointUnloadOutcome>;
+    /** "The server no longer holds this model" — defaults to endpoint-runtime's
+        forgetEndpointModel (w3ab). `model` undefined clears the endpoint's whole set. */
+    forgetServedModel?: (endpointId: string, model: string | undefined) => void;
   } = {},
-): Promise<{ attempted: number }> {
+): Promise<{ attempted: number; unloaded: number }> {
   const doFetch = deps.fetch ?? undiciFetch;
   const settings = (deps.settings ?? getCachedUserSettings)();
-  const lastModel = deps.lastUsedModel ?? defaultLastUsedModel;
+  const served = deps.servedModels ?? defaultServedModels;
+  const isBusy = deps.isEndpointBusy ?? defaultIsEndpointBusy;
+  const forgetServed = deps.forgetServedModel ?? forgetEndpointModel;
+  const { loggedBusy, attemptedEndpoints, endpointOutcomes } = deps;
+  /* P22: an unload server may echo the Authorization header. Redact against every analyzer
+     credential this process holds AND every key in the settings this call read (an injected
+     settings object is never in the cache). */
+  const secrets = [...knownAnalyzerSecrets(), ...Object.values(settings.analyzerEndpointKeys).map((k) => k.key)];
+  const safe = (text: string): string => redactKnownSecrets(text, secrets);
   let attempted = 0;
+  /* N1: only a 2xx freed memory, so only a 2xx makes the capacity loop retry admission at once. */
+  let unloaded = 0;
   for (const endpoint of endpointsSharingDevice(settings.analyzerEndpoints, deviceKey)) {
     if (!endpoint.unloadUrl) continue;
-    const url = resolveUnloadUrl(endpoint, lastModel(endpoint.id));
-    if (!url) continue;
+    /* P3: `{model}` → one POST per served model; a URL without it unloads everything, once.
+       servedModels returns a copy (w3ab), so forgetServed below cannot change what this loop walks. */
+    const models: ReadonlyArray<string | undefined> = endpoint.unloadUrl.includes('{model}') ? served(endpoint.id) : [undefined];
     const stored = settings.analyzerEndpointKeys[endpoint.id];
-    if (stored && !keyOriginMatches(stored, url)) continue;
-    attempted++;
-    try {
-      await doFetch(url, {
-        method: 'POST',
-        headers: stored ? { Authorization: `Bearer ${stored.key}` } : {},
-        signal: AbortSignal.timeout(UNLOAD_TIMEOUT_MS),
-      });
-    } catch (err) {
-      console.warn(`[gpu] unload request for analyzer endpoint "${endpoint.name}" failed: ${(err as Error).message}`);
+    for (const model of models) {
+      /* A1: the slot is per (endpoint, model), and both the read and the write are INSIDE this
+         loop. A per-endpoint skip abandoned models 2..N of a {model} URL; a whole-admission
+         latch abandoned every other endpoint on the card. */
+      const key = attemptKey(endpoint.id, model);
+      if (attemptedEndpoints?.has(key)) continue;
+      const url = resolveUnloadUrl(endpoint, model);
+      if (!url) continue;
+      if (stored && !keyOriginMatches(stored, url)) continue;
+      const outcome = outcomeFor(endpointOutcomes, endpoint.id);
+      /* P1: re-checked immediately before EACH POST — a run or call may have started while
+         the previous POST was blocked on the server stopping a model. */
+      if (isBusy(endpoint.id)) {
+        if (outcome) outcome.busy = true;
+        if (!loggedBusy?.has(endpoint.id)) {
+          console.info(`[gpu] analyzer endpoint "${endpoint.name}" is busy; not unloading it`);
+          loggedBusy?.add(endpoint.id);
+        }
+        break; // no slot spent: this endpoint's remaining models stay eligible on a later poll
+      }
+      attempted++;
+      /* Marked BEFORE the fetch: a POST that hangs past the timeout must still spend its slot. */
+      attemptedEndpoints?.add(key);
+      try {
+        const res = await doFetch(url, {
+          method: 'POST',
+          headers: stored ? { Authorization: `Bearer ${stored.key}` } : {},
+          signal: AbortSignal.timeout(ENDPOINT_UNLOAD_TIMEOUT_MS),
+        });
+        if (res.ok || res.status === 404) {
+          /* 404: llama-swap is not running that model. Either way the server no longer holds it,
+             so it leaves the served set and later admissions stop POSTing it. */
+          forgetServed(endpoint.id, model);
+          if (outcome) outcome.freed += 1;
+          if (res.ok) unloaded++;
+          console.info(`[gpu] analyzer endpoint "${endpoint.name}" no longer holds ${model ?? 'any model'} (HTTP ${res.status})`);
+        } else {
+          if (outcome) outcome.failed += 1;
+          const body = await res.text().catch(() => '');
+          /* Redact BEFORE truncating, so a key the cut would halve cannot survive. */
+          console.warn(`[gpu] unload request for analyzer endpoint "${endpoint.name}" returned ${res.status}: ${safe(body).slice(0, 300)}`);
+        }
+      } catch (err) {
+        /* Only the unload fetch runs here: no stage call, so no stop-the-run error (P20) can reach it. */
+        if (outcome) outcome.failed += 1;
+        console.warn(safe(`[gpu] unload request for analyzer endpoint "${endpoint.name}" failed: ${err instanceof Error ? err.message : String(err)}`));
+      }
     }
   }
-  return { attempted };
+  return { attempted, unloaded };
 }
 
-/** Give-up notes for NoCapacityError: endpoints on this card that Castwright cannot unload. */
-export function endpointUnloadNotes(deviceKey: string, settings: UserSettings = getCachedUserSettings()): string[] {
-  return endpointsSharingDevice(settings.analyzerEndpoints, deviceKey)
-    .filter((e) => !e.unloadUrl)
-    .map(
-      (e) =>
+/** Give-up notes for NoCapacityError (A6): every sharing endpoint still holding the card, with its
+    cause, first match wins. The `{model}`-with-nothing-served case (N2 — the shape a restart
+    produces) is checked LAST, because a successful unload also empties the served set. */
+export function endpointUnloadNotes(
+  deviceKey: string,
+  settings: UserSettings = getCachedUserSettings(),
+  served: (endpointId: string) => readonly string[] = defaultServedModels,
+  outcomes?: ReadonlyMap<string, EndpointUnloadOutcome>,
+): string[] {
+  return endpointsSharingDevice(settings.analyzerEndpoints, deviceKey).flatMap((e) => {
+    const outcome = outcomes?.get(e.id);
+    if (!e.unloadUrl) {
+      return [
         `Analyzer endpoint "${e.name}" shares this card but has no Unload URL, so Castwright could not free it — set "Unload URL" for it in Model Manager → Analyzer endpoints.`,
-    );
+      ];
+    }
+    if (outcome && outcome.busy && outcome.freed === 0 && outcome.failed === 0) {
+      return [
+        `Analyzer endpoint "${e.name}" shares this card but was busy for the whole wait — an analysis, script review or Test was using it — so Castwright did not unload it. Let that finish, or move the endpoint to another card.`,
+      ];
+    }
+    if (outcome && outcome.failed > 0 && outcome.freed === 0) {
+      return [
+        `Analyzer endpoint "${e.name}" shares this card, but every unload request Castwright sent it failed — check its Unload URL and that the server is answering.`,
+      ];
+    }
+    if (outcome && outcome.freed > 0) {
+      return [
+        `Analyzer endpoint "${e.name}" shares this card; Castwright unloaded ${outcome.freed} model(s) on it and the card was still short of memory — free VRAM elsewhere or move the endpoint to another card.`,
+      ];
+    }
+    if (e.unloadUrl.includes('{model}') && served(e.id).length === 0) {
+      return [
+        `Analyzer endpoint "${e.name}" shares this card, but no model has run on it since Castwright started, so its Unload URL had no model name to use — unload it on the server, or use an Unload URL without "{model}" if that server unloads everything at once.`,
+      ];
+    }
+    return [];
+  });
 }
 ```
 
@@ -4628,12 +8137,34 @@ export function endpointUnloadNotes(deviceKey: string, settings: UserSettings = 
 - [ ] **Step 5: Mutation proof**
 1. `endpointsSharingDevice`: drop `e.gpu === 'any' ||` → red: "matches 'any' and the exact device key…". Restore.
 2. Delete `if (stored && !keyOriginMatches(stored, url)) continue;` → red: "…skips a mismatched key". Restore.
-3. Move `attempted++` below the `try` success path only (inside `try` after `await`) → red: "a failing POST is best-effort: counted…". Restore.
+3. Move `attempted++` inside the `try`, after the `await` → red: "a failing POST is best-effort: counted as attempted, never as unloaded…". Restore.
+3a. Replace `if (res.ok) unloaded++;` with `unloaded++;` → red: "a non-2xx answer counts as attempted but not unloaded (N1)" and "an unload endpoint that 500s echoing the key…" (its `unloaded` is 1). Restore.
+3b. Delete the `loggedBusy?.has(endpoint.id)` guard around the busy log → red: "logs \"busy; not unloading\" once per endpoint per admission…" (five lines). Restore. Then make the set module-level instead of a dep → red: the same test's second half (the later admission logs nothing). Restore.
+4. Delete the `if (isBusy(endpoint.id)) { … break; }` block → red: "a busy endpoint is skipped…", "re-checks the busy state immediately before each POST…", "with the real busy registry, a run between two chunk calls…". Restore.
+5. Move that busy block above `for (const model of models)` (one check per endpoint) → red: "re-checks the busy state immediately before each POST…". Restore.
+6. Replace `served(endpoint.id)` with `served(endpoint.id).slice(-1)` (a last-used model) → red: "POSTs once per model whose request has been sent to the endpoint…". Restore.
+7. Replace `[undefined]` with `served(endpoint.id)` → red: "an unload URL without {model} is POSTed exactly once…". Restore.
+8. Replace `safe(body).slice(0, 300)` with `body.slice(0, 300)` → red: "an unload endpoint that 500s echoing the key never logs it…". Restore.
+9. Replace `safe(body).slice(0, 300)` with `safe(body.slice(0, 300))` → red: the same test (`sk-lab-unload`, the part of the key before the cut, survives). Restore.
+10. Drop `safe(…)` around the catch's `console.warn` text → red: "a thrown unload error that carries the key is logged redacted". Restore.
+11. Build `secrets` from `knownAnalyzerSecrets()` alone → red: both P22 tests (the injected keys are not in the cache). Restore.
+12. Delete the `if (!res.ok) { … }` block → red: "…500s echoing the key…" (no `returned 500` line). Restore.
+13. In `endpointUnloadNotes`, delete the `e.unloadUrl.includes('{model}') && served(e.id).length === 0` branch → red: "names a {model} endpoint that has nothing to unload because no model has run on it since Castwright started (N2)". Restore. Then drop the `served(e.id).length === 0` condition (note every `{model}` endpoint) → red: the same test's last assertion. Restore.
+14. Delete `if (attemptedEndpoints?.has(key)) continue;` → red: "a hung POST is never retried for that (endpoint, model)…" (the second poll answers `{ attempted: 2, unloaded: 1 }`, not zeros, and `fetch` keeps climbing past 2). Restore. Then move `attemptedEndpoints?.add(key);` into the `if (res.ok || res.status === 404)` branch → red: the same test (the hung model is re-POSTed on every poll). Restore.
+14a. Key the slot by endpoint only — `const key = endpoint.id;` → red: "a busy break part-way through one endpoint's models leaves models 2..N eligible…" (m2 and m3 are never sent) and "a hung POST is never retried…" (the endpoint's `ok` model is never sent, `attempted` is 1). Restore.
+14b. Re-introduce a whole-admission latch — at the top of the endpoint loop, `if (attemptedEndpoints && attemptedEndpoints.size > 0 && unloaded === 0 && attempted === 0) return { attempted, unloaded };` (skip everything once any slot is spent) → red: "endpoint B, busy at the first poll and idle at a later one, is unloaded after A…" (poll 10 sends nothing). Restore.
+14c. Add the slot on the busy path (`attemptedEndpoints?.add(key);` before `break`) → red: "a busy endpoint is not an attempt…" and "a busy break part-way through…". Restore.
+14d. Delete `forgetServed(endpoint.id, model);` → red: "a 2xx unload removes that model from the served set…" and "a 404 removes the model too…". Restore. Then narrow the branch to `if (res.ok)` → red: "a 404 removes the model too…" (`servedModels` still holds `gone`, and a `returned 404` warn line appears). Restore. Then pass `model ?? ''` instead of `model` → red: "a 2xx from an all-models URL clears the endpoint's whole served set". Restore.
+14e. Replace `if (res.ok) unloaded++;` with `unloaded++;` → red: "a 404 removes the model too… but does not count as unloaded" (`unloaded` 1). Restore.
+14g. Delete `if (outcome) outcome.busy = true;` → red: "records per-endpoint outcomes…" (`busy: false`). Restore. Delete `outcome.failed += 1` in the `catch` → red: the same test (`down.failed` 0). Restore.
+14h. In `endpointUnloadNotes`, move the `{model}`-nothing-served branch to just after the no-URL branch → red: "an endpoint whose models were all just unloaded is never told \"no model has run on it\"". Restore. Drop `&& outcome.failed === 0` from the busy branch → red: "busy at one poll and then POSTed is not \"busy throughout\"". Restore. Delete the `freed > 0` branch → red: "names every cause…" (four notes). Restore.
+14i. Delete the `console.info(… no longer holds …)` line → red: "logs one info line per successful unload…". Restore.
+15. Replace `ENDPOINT_UNLOAD_TIMEOUT_MS = 10_000` with `30_000` → red: "ENDPOINT_UNLOAD_TIMEOUT_MS is 10 s, not the 30 s a hanging endpoint used to be allowed". Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
 git add server/src/gpu/endpoint-eviction.ts server/src/gpu/endpoint-eviction.test.ts
-git commit -m "feat(server): unload analyzer endpoints that share a card with TTS"
+git commit -m "feat(server): unload idle analyzer endpoints that share a card with TTS"
 ```
 
 ---
@@ -4641,21 +8172,24 @@ git commit -m "feat(server): unload analyzer endpoints that share a card with TT
 ### Task 3d.3: Wire endpoint eviction into `withCapacityRetry` and `SidecarTtsProvider`
 
 **Files:**
-- Modify: `server/src/gpu/capacity-retry.ts:109-160` (options), `:233-243` (defaults), `:278-282` (eviction block), `:295-300`, `:323-330`, `:363-368` (give-up sites)
+- Modify: `server/src/gpu/capacity-retry.ts:109-160` (options), `:233-246` (defaults and latches — `:236-237`, the Ollama gate, is not touched), a new block inserted **after** `:278-282` (Ollama's own lever is not edited at all), `:295-300`, `:323-330`, `:363-368` (give-up sites)
 - Modify: `server/src/tts/tts-errors.ts:15-36` (`NoCapacityError` gains `notes`)
-- Modify: `server/src/tts/sidecar.ts:147-171` (option), `:173-184` (field), `:186-197` (ctor), `:428-438` (pass-through)
+- Modify: `server/src/tts/sidecar.ts:147-171` (option), `:173-184` (field), `:186-197` (ctor), `:428-438` (pass-through). `:193-194`, the Ollama gate, is not touched.
 - Test: `server/src/gpu/capacity-retry.test.ts` (new `describe`), `server/src/tts/tts-errors.test.ts` (extend), `server/src/tts/sidecar.test.ts` (extend)
 
 **Interfaces:**
-- Consumes: Task 3d.1 `isAnyAnalyzerCallInFlight`, `registerEndpointCallInFlight`; Task 3d.2 `evictEndpointsOnDevice`, `endpointUnloadNotes`.
-- Produces: `CapacityRetryOpts.evictEndpoints?: (deviceKey: string) => Promise<{ attempted: number }>` and `endpointUnloadNotes?: (deviceKey: string) => string[]`; `SidecarOptions.evictEndpoints?`; `new NoCapacityError(engine, neededMb, deviceKey, blockers?, notes?)`.
+- Consumes: Task 3d.1 `registerEndpointCallInFlight` (tests); Task 3d.2 `evictEndpointsOnDevice`, `endpointUnloadNotes`.
+- Produces: `CapacityRetryOpts.evictEndpoints?: (deviceKey: string) => Promise<{ attempted: number; unloaded: number }>` and `endpointUnloadNotes?: (deviceKey: string) => string[]`; `SidecarOptions.evictEndpoints?`; `new NoCapacityError(engine, neededMb, deviceKey, blockers?, notes?)`.
 
-New block semantics (replacing `:278-282`):
-- Ollama-only path unchanged: when no endpoint unload is attempted, `wouldHelp → evictOllama → latch → immediate retry` exactly as today.
-- Shared latch and gate: endpoint unloads happen only on the first denial while `!isAnalysisInFlight()`, and set the same `evicted` latch.
-- Not gated on `analyzerEvictWouldHelp`.
-- After ≥1 unload POST the loop re-probes the card: enough free VRAM → retry at once; otherwise fall through to the idle-TTS lever and the poll wait (no immediate retry into the same denial).
-- Give-up messages append `endpointUnloadNotes(deviceKey)` (the Unload URL setting is named when a sharing endpoint has none).
+Two independent levers, in this order on every iteration (N1):
+- **Ollama's lever is not edited.** Its block (`:278-282`) and its gate default (`:236-237`) keep their text: `!evicted && !isAnalysisInFlight() && analyzerEvictWouldHelp(neededMb, freeMb)` → `evictOllama()` → `evicted = true` → immediate retry. The gate is therefore still read on **every** poll iteration, immediately before `evictOllama()`, against the `freeMb` that iteration measured. An endpoint unload never changes when Ollama's gate is read; it only changes what is on the card when the next iteration reads it.
+- **The endpoint lever runs only on an iteration where Ollama was not evicted.** Ollama's block `continue`s when it fires, so the two levers never act on one measurement. That is the N1 defect this order exists to avoid: reading `ollamaEvictable` before several sequential unload POSTs, and then evicting Ollama on a `freeMb` that the unloads have already made stale.
+- **The endpoint lever has no latch (A1).** It is asked on every iteration Ollama did not win. What bounds it is Task 3d.2's per-admission `attemptedEndpoints` set, keyed by (endpoint, model): each unload POST is sent at most once per admission, so on a later poll the lever sends only what it has not tried yet — an endpoint that was busy until now, or a model it never reached. An earlier draft also had a whole-admission `endpointsUnloaded` flag; review found it contradicted the attempt set — once the first 2xx set it, an endpoint idle only at a later poll was never asked, and a `{model}` URL's remaining models were abandoned — so it is deleted, not kept beside the set. The lever still never touches Ollama's `evicted` latch, so no endpoint outcome can spend Ollama's one chance.
+- **Consequence for the idle-TTS lever (A7).** The endpoint block sits between Ollama's block and `evictIdleTts` (`:284-290`), and its `continue` on a 2xx skips `evictIdleTts` for that iteration. Without a latch this can repeat — but only while some (endpoint, model) is still unattempted *and* answers 2xx, so it defers `evictIdleTts` by at most Σ (served models on matching endpoints) iterations, each of which freed memory. After that, `unloaded` is 0 and `evictIdleTts` runs as it does today.
+- **Endpoints never read Ollama's gate**, and are not gated on `analyzerEvictWouldHelp` (an endpoint reports no VRAM figure). `evictEndpointsOnDevice` re-checks each endpoint's own run/call busy state before every POST, and logs "busy; not unloading" once per endpoint per admission (Task 3d.2, `loggedBusy`).
+- **A 2xx unload retries admission at once** (`continue`). The unload blocked until the model was gone, and the retry re-probes the card, so Ollama's gate, `analyzerEvictWouldHelp` and the idle-TTS lever all see post-unload free memory on the next iteration instead of the figure read before the POST.
+- **Give-up messages** append `endpointUnloadNotes(deviceKey, settings, served, endpointOutcomes)` — the same per-call outcomes map the default `evictEndpoints` closure fills — so the message names every sharing endpoint still holding the card and why: no Unload URL; busy for the whole wait; every unload request failed; unloaded N models and the card was still short; or a `{model}` URL with nothing run on it since Castwright started (Task 3d.2's precedence). **`NoCapacityError` carries these as message text only** — its constructor takes `notes` and appends them to the message; no `notes` field is stored (Task 3d.3 Step 3, and master's contract line). An injected `evictEndpoints` has no outcomes, so its injected `endpointUnloadNotes` decides the text.
+- **Bounded worst case (A1).** The default `evictEndpoints` closure threads three per-call structures — `loggedBusy`, `attemptedEndpoints`, `endpointOutcomes` — created once here per `withCapacityRetry` call, never per poll. With no latch, `attemptedEndpoints` is the whole bound: each (endpoint, model) gets at most one POST per admission, so the lever costs at most **Σ (served models on matching endpoints, plus one per matching all-models URL) × `ENDPOINT_UNLOAD_TIMEOUT_MS` (10 s)** for the whole admission, however many polls `maxAttempts` allows — not "(matching endpoints) × 10 s", which dropped the per-model multiplication. **That cost is per synthesize call, not per chapter:** `SidecarTtsProvider.postWithCapacityRetry` (`sidecar.ts:422-441`) runs one `withCapacityRetry` for every `/synthesize` (`:229`) and `/synthesize-batch` (`:357`) POST, so every denied synth op builds its own fresh sets. Two things keep that from compounding across a chapter: a 2xx or 404 removes the model from the served set (Task 3d.2), so the next synth op's admission does not POST it again; and a busy skip spends no slot. What does repeat is a server that is down: its models stay in the set and cost up to 10 s each per denied synth op, which the "every unload request failed" note names.
 
 Keeps green: every existing case in `capacity-retry.test.ts` (a)–(f) and the design-budget suite, `sidecar.test.ts` (b)/(c), `tts-errors.test.ts`, `describe-vram-blockers.test.ts`.
 
@@ -4667,31 +8201,51 @@ Append to `server/src/gpu/capacity-retry.test.ts` (it already defines `noCapacit
 import { registerEndpointCallInFlight } from '../analyzer/analyzer-concurrency.js';
 
 describe('withCapacityRetry — analyzer endpoint eviction (#3084)', () => {
-  it('no unload POST while an endpoint call is in flight (default gate)', async () => {
-    const release = registerEndpointCallInFlight();
+  it('an endpoint call on cuda:1 does not block Ollama eviction for a cuda:0 denial (Ollama gate unchanged)', async () => {
+    const release = registerEndpointCallInFlight('other-card');
     try {
       let calls = 0;
       const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
-      const evictEndpoints = vi.fn(async () => ({ attempted: 1 }));
+      const evictOllama = vi.fn(async () => {});
       await withCapacityRetry(doPost, {
         engine: 'qwen',
         capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
-        evictOllama: vi.fn(async () => {}),
+        evictOllama,
         analyzerEvictWouldHelp: vi.fn(async () => true),
-        evictEndpoints,
+        // isAnalysisInFlight deliberately omitted: the default Ollama slot gate is under test
+        evictEndpoints: vi.fn(async () => ({ attempted: 0, unloaded: 0 })),
         pollMs: 1,
         maxAttempts: 5,
       });
-      expect(evictEndpoints).not.toHaveBeenCalled();
+      expect(evictOllama).toHaveBeenCalledTimes(1);
     } finally {
       release();
     }
   });
 
+  it('an Ollama call in flight blocks only Ollama eviction: endpoint unloads are still attempted', async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
+    const evictOllama = vi.fn(async () => {});
+    const evictEndpoints = vi.fn(async () => ({ attempted: 1, unloaded: 1 }));
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 3_000) },
+      evictOllama,
+      analyzerEvictWouldHelp: vi.fn(async () => true),
+      isAnalysisInFlight: () => true,
+      evictEndpoints,
+      pollMs: 1,
+      maxAttempts: 5,
+    });
+    expect(evictEndpoints).toHaveBeenCalledWith('cuda:0');
+    expect(evictOllama).not.toHaveBeenCalled();
+  });
+
   it('unloads endpoints for the denied card even when evicting Ollama would not help', async () => {
     let calls = 0;
     const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:1') : okResponse()));
-    const evictEndpoints = vi.fn(async () => ({ attempted: 1 }));
+    const evictEndpoints = vi.fn(async () => ({ attempted: 1, unloaded: 1 }));
     const evictOllama = vi.fn(async () => {});
     await withCapacityRetry(doPost, {
       engine: 'qwen',
@@ -4707,82 +8261,254 @@ describe('withCapacityRetry — analyzer endpoint eviction (#3084)', () => {
     expect(evictOllama).not.toHaveBeenCalled();
   });
 
-  it('endpoint and Ollama eviction share the once-per-call latch', async () => {
+  /* N1 — the two levers must never act on one measurement, and neither latch may spend the
+     other's chance. The three cases below use a realistic isAnalysisInFlight: the analyzer is
+     mid-call when the denial arrives and its call ends WHILE the unload POST is out (llama-swap
+     blocks until the model is gone), which is the sequence a shared latch got wrong. */
+  it("Ollama busy at the denial and idle at the next one is still evicted: the endpoint lever never spends Ollama's chance", async () => {
     let calls = 0;
     const doPost = vi.fn(async () => (++calls <= 2 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
-    const evictEndpoints = vi.fn(async () => ({ attempted: 1 }));
+    let ollamaBusy = true;
+    const isAnalysisInFlight = vi.fn(() => ollamaBusy);
     const evictOllama = vi.fn(async () => {});
+    /* The analyzer's chunk call finishes while this POST is out. */
+    const evictEndpoints = vi.fn(async () => {
+      ollamaBusy = false;
+      return { attempted: 1, unloaded: 1 };
+    });
     await withCapacityRetry(doPost, {
       engine: 'qwen',
       capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
       evictOllama,
       analyzerEvictWouldHelp: vi.fn(async () => true),
-      isAnalysisInFlight: () => false,
+      isAnalysisInFlight,
       evictEndpoints,
       pollMs: 1,
       maxAttempts: 5,
     });
     expect(evictEndpoints).toHaveBeenCalledTimes(1);
     expect(evictOllama).toHaveBeenCalledTimes(1);
+    /* Read once per iteration, immediately before evictOllama() — never once for two levers. */
+    expect(isAnalysisInFlight).toHaveBeenCalledTimes(2);
   });
 
-  it('re-probes capacity after an unload: enough free VRAM → immediate retry, no poll wait', async () => {
+  it('an endpoint unload alone frees the card: Ollama, busy when the denial arrived, is never evicted', async () => {
     let calls = 0;
     const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
+    let ollamaBusy = true;
+    const evictOllama = vi.fn(async () => {});
+    const evictEndpoints = vi.fn(async () => {
+      ollamaBusy = false; // the analyzer goes idle during the unload
+      return { attempted: 1, unloaded: 1 };
+    });
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+      evictOllama,
+      analyzerEvictWouldHelp: vi.fn(async () => true),
+      isAnalysisInFlight: () => ollamaBusy,
+      evictEndpoints,
+      pollMs: 1,
+      maxAttempts: 5,
+    });
+    expect(evictOllama).not.toHaveBeenCalled();
+    expect(doPost).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failed unload POST spends no Ollama chance: Ollama, idle at the second denial, is still evicted", async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => (++calls <= 3 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
+    let ollamaBusy = true;
+    const evictOllama = vi.fn(async () => {});
+    let unloadAttempts = 0;
+    const evictEndpoints = vi.fn(async () => {
+      unloadAttempts += 1;
+      ollamaBusy = false; // the analyzer's call ends while the refused POST is out
+      return { attempted: 1, unloaded: 0 }; // the server refused
+    });
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+      evictOllama,
+      analyzerEvictWouldHelp: vi.fn(async () => true),
+      isAnalysisInFlight: () => ollamaBusy,
+      evictEndpoints,
+      evictIdleTts: vi.fn(async () => false),
+      pollMs: 1,
+      maxAttempts: 6,
+    });
+    /* Denial 1: Ollama busy → endpoints asked, refused. Denial 2: Ollama idle → evicted.
+       Denial 3: Ollama's latch is spent → endpoints asked again (no endpoint latch). */
+    expect(unloadAttempts).toBe(2);
+    expect(evictOllama).toHaveBeenCalledTimes(1);
+  });
+
+  /* A1 — no latch: with the REAL evictEndpointsOnDevice behind the default closure, a realistic
+     two-endpoint, multi-model, multi-poll admission. This is the sequence the deleted
+     `endpointsUnloaded` latch got wrong, and no injected single-stub case can see it. */
+  it('the default lever asks an endpoint that goes idle only at a later poll, after another endpoint already unloaded', async () => {
+    const { _setUserSettingsCacheForTest, _resetUserSettingsCache } = await import('../workspace/user-settings.js');
+    const { analyzerEndpointSchema } = await import('../workspace/analyzer-endpoints.js');
+    const { noteEndpointModelUsed, _resetEndpointRuntimeForTest } = await import('../analyzer/transports/endpoint-runtime.js');
+    const { markEndpointRunActive, _resetEndpointBusyForTest } = await import('../analyzer/analyzer-concurrency.js');
+    _resetEndpointBusyForTest();
+    _resetEndpointRuntimeForTest();
+    /* A real unload server (Global Constraints: real sockets, not a stubbed fetch). */
+    const { createServer } = await import('node:http');
+    const sent: string[] = [];
+    const server = createServer((req, res) => {
+      sent.push(req.url ?? '');
+      res.writeHead(200);
+      res.end('OK');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const origin = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+    const mk = (id: string, path: string) =>
+      analyzerEndpointSchema.parse({ id, name: id.toUpperCase(), baseUrl: `${origin}/v1`, gpu: 'cuda:0', contextTokens: 8192, unloadUrl: `${origin}/${path}/{model}` });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [mk('a', 'ua'), mk('b', 'ub')], analyzerEndpointKeys: {} });
+    noteEndpointModelUsed('a', 'm1');
+    noteEndpointModelUsed('b', 'm2');
+    noteEndpointModelUsed('b', 'm3');
+    let releaseB = markEndpointRunActive(['b']); // B is mid-run when the first denial arrives
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 4) releaseB(); // B's run ends between polls 4 and 5
+      return calls <= 5 ? noCapacityResponse(2_000, 'cuda:0') : okResponse();
+    });
+    try {
+      await withCapacityRetry(doPost, {
+        engine: 'qwen',
+        capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+        evictOllama: vi.fn(async () => {}),
+        analyzerEvictWouldHelp: vi.fn(async () => false),
+        isAnalysisInFlight: () => false,
+        evictIdleTts: vi.fn(async () => false),
+        describeBlockers: async () => [],
+        isDesignResident: async () => false,
+        pollMs: 1,
+        maxAttempts: 10,
+      });
+      /* A once at poll 1; B's two models once each after its run ended — nothing latched B out,
+         and m3 was not abandoned behind m2. Never a second POST for any (endpoint, model). */
+      expect(sent).toEqual(['/ua/m1', '/ub/m2', '/ub/m3']);
+    } finally {
+      releaseB();
+      releaseB = () => {};
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+      info.mockRestore();
+      _resetUserSettingsCache();
+      _resetEndpointRuntimeForTest();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('the default give-up message names each sharing endpoint and its cause (A6)', async () => {
+    const { _setUserSettingsCacheForTest, _resetUserSettingsCache } = await import('../workspace/user-settings.js');
+    const { analyzerEndpointSchema } = await import('../workspace/analyzer-endpoints.js');
+    const { noteEndpointModelUsed, _resetEndpointRuntimeForTest } = await import('../analyzer/transports/endpoint-runtime.js');
+    const { markEndpointRunActive, _resetEndpointBusyForTest } = await import('../analyzer/analyzer-concurrency.js');
+    _resetEndpointBusyForTest();
+    _resetEndpointRuntimeForTest();
+    /* A real server that drops every unload connection, so each POST throws. */
+    const { createServer } = await import('node:http');
+    let downHits = 0;
+    const server = createServer((req) => {
+      if (req.url?.startsWith('/ud/')) downHits += 1;
+      req.socket.destroy();
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const origin = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+    const mk = (id: string, name: string, unloadUrl?: string) =>
+      analyzerEndpointSchema.parse({ id, name, baseUrl: `${origin}/v1`, gpu: 'cuda:0', contextTokens: 8192, ...(unloadUrl ? { unloadUrl } : {}) });
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [mk('busy', 'Busy lab', `${origin}/ub/{model}`), mk('down', 'Down lab', `${origin}/ud/{model}`), mk('nourl', 'No-URL lab')],
+      analyzerEndpointKeys: {},
+    });
+    noteEndpointModelUsed('busy', 'm');
+    noteEndpointModelUsed('down', 'm');
+    const release = markEndpointRunActive(['busy']);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      const err = await withCapacityRetry(vi.fn(async () => noCapacityResponse(2_000, 'cuda:0')), {
+        engine: 'qwen',
+        capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+        evictOllama: vi.fn(async () => {}),
+        analyzerEvictWouldHelp: vi.fn(async () => false),
+        isAnalysisInFlight: () => false,
+        evictIdleTts: vi.fn(async () => false),
+        describeBlockers: async () => [],
+        isDesignResident: async () => false,
+        pollMs: 1,
+        maxAttempts: 3,
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(NoCapacityError);
+      const message = (err as Error).message;
+      expect(message).toMatch(/"Busy lab".*busy for the whole wait/);
+      expect(message).toMatch(/"Down lab".*every unload request/);
+      expect(message).toMatch(/"No-URL lab".*Unload URL/);
+      expect(downHits).toBe(1); // "Down lab"'s one model, once, over three polls
+    } finally {
+      release();
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+      warn.mockRestore();
+      info.mockRestore();
+      _resetUserSettingsCache();
+      _resetEndpointRuntimeForTest();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it("a 2xx unload retries admission at once, and the next denial re-measures free memory before Ollama's lever", async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => (++calls <= 2 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
     let probes = 0;
     const read = vi.fn(async () => fakeDevices('cuda:0', ++probes === 1 ? 500 : 3_000));
+    const analyzerEvictWouldHelp = vi.fn(async () => false);
     const started = Date.now();
     await withCapacityRetry(doPost, {
       engine: 'qwen',
       capacityProbe: { read },
       evictOllama: vi.fn(async () => {}),
-      analyzerEvictWouldHelp: vi.fn(async () => false),
+      analyzerEvictWouldHelp,
       isAnalysisInFlight: () => false,
-      evictEndpoints: vi.fn(async () => ({ attempted: 1 })),
+      evictEndpoints: vi.fn(async () => ({ attempted: 1, unloaded: 1 })),
       evictIdleTts: vi.fn(async () => false),
       pollMs: 5_000,
       maxAttempts: 5,
     });
-    expect(read).toHaveBeenCalledTimes(2);
+    /* Immediate retry (no 5 s poll wait), and Ollama's VRAM check saw the post-unload figure. */
     expect(Date.now() - started).toBeLessThan(4_000);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(analyzerEvictWouldHelp.mock.calls).toEqual([
+      [2_000, 500],
+      [2_000, 3_000],
+    ]);
   });
 
-  it('re-probes capacity after an unload: still short → takes the poll wait instead of retrying at once', async () => {
-    let calls = 0;
-    const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
-    const evictIdleTts = vi.fn(async () => false);
-    await withCapacityRetry(doPost, {
-      engine: 'qwen',
-      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
-      evictOllama: vi.fn(async () => {}),
-      analyzerEvictWouldHelp: vi.fn(async () => false),
-      isAnalysisInFlight: () => false,
-      evictEndpoints: vi.fn(async () => ({ attempted: 1 })),
-      evictIdleTts,
-      pollMs: 1,
-      maxAttempts: 5,
-    });
-    expect(evictIdleTts).toHaveBeenCalledTimes(1);
-    expect(doPost).toHaveBeenCalledTimes(2);
-  });
-
-  it('no endpoint attempted → Ollama path exactly as before (immediate retry after evictOllama)', async () => {
+  it('Ollama idle and helpful → evicted first, exactly as before, and the endpoints are never asked', async () => {
     let calls = 0;
     const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
     const read = vi.fn(async () => fakeDevices('cuda:0', 500));
     const evictIdleTts = vi.fn(async () => false);
+    const evictEndpoints = vi.fn(async () => ({ attempted: 0, unloaded: 0 }));
     await withCapacityRetry(doPost, {
       engine: 'qwen',
       capacityProbe: { read },
       evictOllama: vi.fn(async () => {}),
       analyzerEvictWouldHelp: vi.fn(async () => true),
       isAnalysisInFlight: () => false,
-      evictEndpoints: vi.fn(async () => ({ attempted: 0 })),
+      evictEndpoints,
       evictIdleTts,
       pollMs: 1,
       maxAttempts: 5,
     });
     expect(read).toHaveBeenCalledTimes(1);
+    expect(evictEndpoints).not.toHaveBeenCalled();
     expect(evictIdleTts).not.toHaveBeenCalled();
   });
 
@@ -4794,7 +8520,7 @@ describe('withCapacityRetry — analyzer endpoint eviction (#3084)', () => {
       evictOllama: vi.fn(async () => {}),
       analyzerEvictWouldHelp: vi.fn(async () => false),
       isAnalysisInFlight: () => false,
-      evictEndpoints: vi.fn(async () => ({ attempted: 0 })),
+      evictEndpoints: vi.fn(async () => ({ attempted: 0, unloaded: 0 })),
       endpointUnloadNotes: () => ['Analyzer endpoint "Lab" shares this card but has no Unload URL — set "Unload URL".'],
       describeBlockers: async () => [],
       isDesignResident: async () => false,
@@ -4832,7 +8558,7 @@ Append to `server/src/tts/sidecar.test.ts`, beside case (b) (it already defines 
       calls += 1;
       return calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse();
     });
-    const evictEndpoints = vi.fn(async () => ({ attempted: 0 }));
+    const evictEndpoints = vi.fn(async () => ({ attempted: 0, unloaded: 0 }));
     const provider = new SidecarTtsProvider({
       url: 'http://localhost:6006/',
       engine: 'coqui',
@@ -4851,7 +8577,7 @@ Append to `server/src/tts/sidecar.test.ts`, beside case (b) (it already defines 
 
 - [ ] **Step 2: Run them and confirm they fail**
 Run: `npm --prefix server run test -- src/gpu/capacity-retry.test.ts src/tts/tts-errors.test.ts src/tts/sidecar.test.ts`
-Expected: FAIL — `evictEndpoints` never called; message lacks `Unload URL`; `NoCapacityError` message ignores notes.
+Expected: FAIL. `evictEndpoints` is never called (so every case that asserts on it fails, including the three N1 sequences), the message lacks `Unload URL`, and `NoCapacityError`'s message ignores notes. Two cases may already pass on unmodified code, because what they pin is today's behaviour: "an endpoint call on cuda:1 does not block Ollama eviction…" (Step 5 mutation 6 and Task 3d.1 mutation 3 prove it) and "Ollama idle and helpful → evicted first…" (Step 5 mutation 1).
 
 - [ ] **Step 3: Implement**
 
@@ -4877,66 +8603,91 @@ Expected: FAIL — `evictEndpoints` never called; message lacks `Unload URL`; `N
 ```
 
 `server/src/gpu/capacity-retry.ts`:
-- import `import { evictEndpointsOnDevice, endpointUnloadNotes as defaultEndpointUnloadNotes } from './endpoint-eviction.js';`
+- import `import { evictEndpointsOnDevice, endpointUnloadNotes as defaultEndpointUnloadNotes, type EndpointUnloadOutcome } from './endpoint-eviction.js';`
 - `CapacityRetryOpts`, after `isAnalysisInFlight?` (`:123`):
 
 ```ts
   /** #3084 — injected "unload analyzer endpoints on this card" action — defaults to
-      evictEndpointsOnDevice. Shares the `evicted` latch and in-flight gate with Ollama;
-      not gated on analyzerEvictWouldHelp (endpoints report no VRAM figure). */
-  evictEndpoints?: (deviceKey: string) => Promise<{ attempted: number }>;
-  /** #3084 — injected give-up notes naming sharing endpoints without an Unload URL. */
+      evictEndpointsOnDevice, bound to this call's own per-admission state. It has NO latch
+      (A1): it is asked on every iteration Ollama did not win, and Task 3d.2's per-(endpoint,
+      model) attempt set is what bounds it. It never reads Ollama's gate:
+      evictEndpointsOnDevice re-checks each endpoint's own run/call busy state immediately
+      before every POST (P1). Not gated on analyzerEvictWouldHelp either, because an endpoint
+      reports no VRAM figure. */
+  evictEndpoints?: (deviceKey: string) => Promise<{ attempted: number; unloaded: number }>;
+  /** #3084 — injected give-up notes naming sharing endpoints still holding the card, with the cause. */
   endpointUnloadNotes?: (deviceKey: string) => string[];
 ```
 
-- defaults, after `:237`:
+- defaults, after `:237` (leave `:236-237` exactly as it is):
 
 ```ts
-  const evictEndpoints = opts.evictEndpoints ?? evictEndpointsOnDevice;
-  const unloadNotes = opts.endpointUnloadNotes ?? ((deviceKey: string) => defaultEndpointUnloadNotes(deviceKey));
+  /* #3084 — per-admission state for the endpoint lever, one of each per withCapacityRetry call
+     (never per poll; every synthesize call is its own admission, sidecar.ts:422-441):
+     - loggedBusy: an endpoint busy at every poll is logged once (Task 3d.2);
+     - attemptedEndpoints: keyed by (endpoint, model) — the lever's SOLE bound (A1): each unload
+       POST is sent at most once per admission, so a hanging endpoint costs one 10 s timeout per
+       model, not one per poll;
+     - endpointOutcomes: what each endpoint did, so the give-up message can say why (A6). */
+  const loggedBusy = new Set<string>();
+  const attemptedEndpoints = new Set<string>();
+  const endpointOutcomes = new Map<string, EndpointUnloadOutcome>();
+  const evictEndpoints =
+    opts.evictEndpoints ??
+    ((deviceKey: string) => evictEndpointsOnDevice(deviceKey, { loggedBusy, attemptedEndpoints, endpointOutcomes }));
+  const unloadNotes =
+    opts.endpointUnloadNotes ??
+    ((deviceKey: string) => defaultEndpointUnloadNotes(deviceKey, undefined, undefined, endpointOutcomes));
 ```
 
-- replace `:278-282`:
+- `let evicted = false;` (`:244`) and every other latch are **not** touched, and no endpoint latch is added beside them.
+
+- **leave `:278-282` exactly as it is** (that is Ollama's lever, including its `continue`) and insert this block immediately after it:
 
 ```ts
-      if (!evicted && !isAnalysisInFlight()) {
-        const ollamaWouldHelp = await analyzerEvictWouldHelp(noCap.neededMb, freeMb);
-        const { attempted } = await evictEndpoints(noCap.deviceKey);
-        if (ollamaWouldHelp) await evictOllama();
-        if (ollamaWouldHelp || attempted > 0) {
-          evicted = true;
-          if (attempted === 0) continue; // Ollama only: immediate retry, exactly as before
-          /* An endpoint unload frees its card asynchronously from the sidecar's view:
-             re-probe before retrying rather than retrying into the same denial. */
-          const after = await capacityProbe.read({ fresh: true });
-          const freeAfter =
-            after.find((d) => d.kind !== 'cpu' && `${d.kind}:${d.index}` === noCap.deviceKey)?.freeMb ?? 0;
-          if (freeAfter >= noCap.neededMb) continue;
-        }
+      /* #3084 P1/N1/A1 — the endpoint lever. Reached only on an iteration where Ollama was NOT
+         evicted, because Ollama's block above `continue`s when it fires: so Ollama's gate is
+         always read fresh, immediately before evictOllama(), against the freeMb of that same
+         iteration. evictEndpointsOnDevice re-checks each endpoint's own run/call busy state
+         before every POST, so an Ollama call in flight blocks only Ollama, and an endpoint's
+         own run or call blocks only its own unload. No latch: on a later poll it sends only the
+         (endpoint, model) POSTs this admission has not tried, e.g. an endpoint that just went idle. */
+      const { unloaded } = await evictEndpoints(noCap.deviceKey);
+      if (unloaded > 0) {
+        /* Retry admission at once: the unload blocked until the model was gone, and the next
+           iteration re-probes the card, so Ollama's gate, analyzerEvictWouldHelp and the
+           idle-TTS lever all read post-unload free memory rather than the stale figure. */
+        continue;
       }
 ```
 
 - the three `new NoCapacityError(` sites (`:295-300`, `:323-330`, `:363-368`) gain a fifth argument: `unloadNotes(noCap.deviceKey)` at the first two and `unloadNotes(lastNoCap.deviceKey)` at the catch site.
 
 `server/src/tts/sidecar.ts`:
-- `SidecarOptions`, after `isAnalysisInFlight?` (`:164`): `/** #3084 — injected endpoint-unload action — for testing only. Defaults to evictEndpointsOnDevice (via withCapacityRetry). */ evictEndpoints?: (deviceKey: string) => Promise<{ attempted: number }>;`
-- field after `:180`: `private readonly evictEndpoints: ((deviceKey: string) => Promise<{ attempted: number }>) | undefined;`
+- `SidecarOptions`, after `isAnalysisInFlight?` (`:164`): `/** #3084 — injected endpoint-unload action — for testing only. Defaults to evictEndpointsOnDevice (via withCapacityRetry). */ evictEndpoints?: (deviceKey: string) => Promise<{ attempted: number; unloaded: number }>;`
+- field after `:180`: `private readonly evictEndpoints: ((deviceKey: string) => Promise<{ attempted: number; unloaded: number }>) | undefined;`
 - ctor after `:194`: `this.evictEndpoints = opts.evictEndpoints;`
 - pass-through after `isAnalysisInFlight: this.isAnalysisInFlight,` (`:434`): `evictEndpoints: this.evictEndpoints,`
 
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/gpu/capacity-retry.test.ts src/tts/tts-errors.test.ts src/tts/sidecar.test.ts src/gpu/describe-vram-blockers.test.ts src/gpu/endpoint-eviction.test.ts` then `npm run check:cycles`. Expected: PASS.
+Run: `npm --prefix server run test -- src/gpu/capacity-retry.test.ts src/tts/tts-errors.test.ts src/tts/sidecar.test.ts src/gpu/describe-vram-blockers.test.ts src/gpu/endpoint-eviction.test.ts src/analyzer/analyzer-concurrency.test.ts` then `npm run check:cycles`. Expected: PASS.
 
 - [ ] **Step 5: Mutation proof**
-1. Wrap the endpoint call as `const { attempted } = ollamaWouldHelp ? await evictEndpoints(noCap.deviceKey) : { attempted: 0 };` → red: "unloads endpoints for the denied card even when evicting Ollama would not help". Restore.
-2. Replace `if (freeAfter >= noCap.neededMb) continue;` with `continue;` → red: "…still short → takes the poll wait…". Restore.
-3. Delete `evicted = true;` → red: "endpoint and Ollama eviction share the once-per-call latch". Restore.
-4. Remove the fifth argument at the `:323-330` site → red: "the give-up message names the Unload URL setting…". Restore.
+1. Move the endpoint block **above** Ollama's block and delete its `continue` (the pass-1 shape: both levers on one `freeMb`, with `ollamaEvictable` read before the POSTs) → red: "an endpoint unload alone frees the card: Ollama, busy when the denial arrived, is never evicted" (Ollama is evicted on the stale figure once the unload makes it idle), "Ollama busy at the denial and idle at the next one is still evicted…" (`isAnalysisInFlight` is read once, not twice) and "Ollama idle and helpful → evicted first, … and the endpoints are never asked". Restore.
+2. Re-introduce the deleted latch — `let endpointsUnloaded = false;`, the block wrapped in `if (!endpointsUnloaded) { … }`, and `endpointsUnloaded = true;` before its `continue` → red: "the default lever asks an endpoint that goes idle only at a later poll…" (`sent` stops at `ua/m1`). Restore.
+2a. Build `attemptedEndpoints` inside the loop body (one per poll) instead of once per call → red: "the default give-up message names each sharing endpoint and its cause" (`downHits` is 3, once per poll). Restore.
+3. Set Ollama's latch from the endpoint lever (`evicted = true;` before the endpoint block's `continue`) → red: "Ollama busy at the denial and idle at the next one is still evicted…" (Ollama is never evicted). Restore.
+4. Delete the endpoint lever's `continue` → red: "a 2xx unload retries admission at once, and the next denial re-measures free memory before Ollama's lever" (the 5 s poll wait runs). Restore.
+5. Gate the endpoint lever on Ollama's VRAM check — `if (await analyzerEvictWouldHelp(noCap.neededMb, freeMb)) { …the endpoint block… }` → red: "unloads endpoints for the denied card even when evicting Ollama would not help" and "an Ollama call in flight blocks only Ollama eviction…". Restore.
+5a. Default `unloadNotes` without the outcomes — `defaultEndpointUnloadNotes(deviceKey)` → red: "the default give-up message names each sharing endpoint and its cause" (no "busy for the whole wait", no "every unload request"). Restore.
+6. Remove the fifth argument at the `:323-330` site → red: "the give-up message names the Unload URL setting…". Restore.
+7. Change the default at `:236-237` to also count endpoint calls — `opts.isAnalysisInFlight ?? (() => getAnalyzerConcurrencyStats().inFlight > 0 || isEndpointBusy('other-card'))` (the pre-P1 shape, hard-wired to the test's id) → red: "an endpoint call on cuda:1 does not block Ollama eviction for a cuda:0 denial…". Restore; `:236-237` ends unchanged from `main`.
+8. The default closure's wiring now has unit witnesses: "the default lever asks an endpoint that goes idle only at a later poll…" and "the default give-up message names each sharing endpoint and its cause" drive the real `evictEndpointsOnDevice` through `withCapacityRetry`'s own sets (rows 2, 2a, 5a). Drop `loggedBusy` from the closure → no unit red (Task 3d.2's own case injects its set); its witness stays the captured server log of register row ‹A-new-2›'s "mid-run" step — one busy line per admission, not one per poll — pasted into the PR body.
 
 - [ ] **Step 6: Commit**
 ```bash
 git add server/src/gpu/capacity-retry.ts server/src/gpu/capacity-retry.test.ts server/src/tts/tts-errors.ts server/src/tts/tts-errors.test.ts server/src/tts/sidecar.ts server/src/tts/sidecar.test.ts
-git commit -m "feat(server): evict same-card analyzer endpoints before failing TTS admission"
+git commit -m "feat(server): evict idle same-card analyzer endpoints before failing TTS admission"
 ```
 
 ---
@@ -4944,11 +8695,12 @@ git commit -m "feat(server): evict same-card analyzer endpoints before failing T
 
 **Files:**
 - Modify: `server/src/analyzer/index.ts` — replace 3a's refusing `if (engine === 'openai') { throw … }` branch (inserted before `:206`); the three `call.onFallback?.({ reason: 'Ollama unreachable' })` sites (`:289`, `:308`, `:343`)
-- Modify: `server/src/workspace/user-settings.ts:98` (`ANALYSIS_ENGINE_VALUES`), `getResolvedAnalysisEngine` body (3a's version of `:781-783`)
-- Modify: `server/src/config/registry.ts:1121-1129` (`analyzer.engine` `options`)
+- Modify: `server/src/workspace/user-settings.ts:98` (`ANALYSIS_ENGINE_VALUES`), `getResolvedAnalysisEngine` body (3a's version of `:975-977`)
 - Modify: `openapi.yaml:4628`, `:4831` (`analysisEngine` enums) + regenerate `src/lib/api-types.ts`
 - Modify: `src/components/model-settings-form.tsx:112`, `:490-503` (engine select); `src/components/setup/step-defaults.tsx` (3a's `if (engine === 'openai') return;` narrowing in `handleAnalysisModelChange`)
-- Test: 3a's `server/src/analyzer/select-analyzer-endpoint-id.test.ts` (the refusal case becomes the selection cases), `server/src/routes/user-settings.test.ts` (3a's "refuses analysisEngine "openai"…" case flips), Create `server/src/analyzer/fallback.endpoint-reason.test.ts`
+- Modify (text this task makes false; no behaviour change): `server/src/analyzer/errors.ts` — 3a Task 3a.2's `AnalyzerEndpointMissingError` doc comment, the only **source** line in `server/src` that calls an endpoint id one *this build cannot run* — and the 3b Task 3b.1a tests `server/src/routes/analysis.endpoint-missing.test.ts` (header comment), `annotate-emotion.test.ts`, `instruct-annotation.test.ts`, `script-review.test.ts` (one title each). 3b.1a's `analyzerSelectionErrorEvent` doc comment and the annotate-emotion / instruct-annotation selection-`catch` comments do **not** carry that wording (checked against w3ab's text), so they are not touched
+- No `server/src/config/registry.ts` edit: #3200 (PR #3201) removed the `analyzer.engine` knob before this wave (w3ab classification rows 4 and 48). Confirm with `git grep -n "analyzer.engine'" -- server/src src`, which must print nothing.
+- Test: 3a's `server/src/analyzer/select-analyzer-endpoint-id.test.ts` (3a's refusal cases `refuses an openai:<endpoint>::<model> id…` and `each phase source is named…` are deleted with the branch; the selection cases and a missing-endpoint source case replace them), `server/src/routes/user-settings.test.ts` (3a's "refuses analysisEngine "openai"…" case flips), Create `server/src/analyzer/fallback.endpoint-reason.test.ts`; extend Task 3c.10's `server/src/analyzer/preflight.test.ts` and `server/src/routes/analysis.preflight.test.ts` (P14: a saved `openai` engine can exist only from this task on)
 
 **Interfaces:**
 - Consumes: `OpenAIAnalyzer` (`server/src/analyzer/openai.ts`, 3b Task 3b.12); `resolveEndpointApiKey(state, endpoint, targetUrl)` (3b Task 3b.5); `AnalyzerEndpointMissingError`, `AnalyzerUnreachableError` (3b/W1); `parseEndpointModelId` (3a).
@@ -4956,11 +8708,20 @@ git commit -m "feat(server): evict same-card analyzer endpoints before failing T
 
 `AnalyzerSelection.model` stays the **full** `openai:<id>::<model>` id so SSE `model` fields, labels and snapshots can resolve the endpoint; `OpenAIAnalyzer` receives the bare model. The fallback wrap is exactly the `local` rule (`index.ts:216-225`): key present and `allowCloudFallback` on. The announced reason stays `'Ollama unreachable'` for Ollama (existing tests and UI copy) and is `'Analyzer endpoint unreachable'` for an endpoint; `FallbackAnalyzer` never names a transport it did not run.
 
-Keeps green: `select-analyzer.test.ts`, `fallback.test.ts`, `fallback-analyzer.test.ts`, `analysis.phase-model.test.ts`, `workspace/user-settings.test.ts`, `routes/user-settings.test.ts`, `src/components/model-settings-form.test.tsx`, `src/components/setup/step-defaults*.test.tsx`.
+**`AnalyzerTransportError` never falls back (P22 rule 7).** 3b's transport rebuilds an unrecognised error into `AnalyzerTransportError`, which is not an `AnalyzerUnreachableError`. `FallbackAnalyzer`'s three `if (err instanceof AnalyzerUnreachableError)` gates therefore let it through: an endpoint's rebuilt transport failure never reaches `fallbackReasonFor` or the Gemini fallback. This task changes no `instanceof` gate, and `fallbackReasonFor` takes only an `AnalyzerUnreachableError`. Pinned per method by `fallback.endpoint-reason.test.ts`'s `FallbackAnalyzer never falls back on AnalyzerTransportError (#3084 P22 rule 7)` over a wrapped `OpenAIAnalyzer`, and by mutation row 9.
+
+**Selection-error coding is kept (P23, 3b Task 3b.1a).** This task replaces only 3a's refusing branch. It does not touch `analyzerSelectionErrorEvent` or any selection call site that codes an `AnalyzerEndpointMissingError` with it. The replacement branch still throws that class for an id whose endpoint is not saved, never a `TypeError`, so every one of those call sites keeps reporting `analyzer-endpoint-missing`. Pinned by `a missing endpoint still reaches every selection call site as analyzer-endpoint-missing…` and mutation row 8.
+
+Keeps green: 3b Task 3b.1a's `routes/failure-taxonomy.test.ts`, `routes/analysis.endpoint-missing.test.ts`, `routes/annotate-emotion.test.ts`, `routes/instruct-annotation.test.ts` and `routes/script-review.test.ts`, and Task 3c.10's `routes/selection-error-coding.test.ts` (the selection-error coding this task must not remove), `select-analyzer.test.ts`, `fallback.test.ts`, `fallback-analyzer.test.ts`, `analysis.phase-model.test.ts`, `workspace/user-settings.test.ts`, `routes/user-settings.test.ts`, `src/components/model-settings-form.test.tsx`, `src/components/setup/step-defaults*.test.tsx`.
 
 - [ ] **Step 1: Write the failing tests**
 
-In 3a's `server/src/analyzer/select-analyzer-endpoint-id.test.ts`, delete the case `refuses an openai:<endpoint>::<model> id instead of handing it to Ollama` and add:
+This task replaces 3a's refusing selection branch (w3ab "What PR 3d lifts" item 6). Task 3d.4a lifts the route and mock-PUT refusals, items 1–5. In 3a's `server/src/analyzer/select-analyzer-endpoint-id.test.ts`:
+- Delete the cases `refuses an openai:<endpoint>::<model> id instead of handing it to Ollama` and `each phase source is named: env, run pick, saved phase model`.
+- Keep `a saved endpoint default is refused as settings-sourced, never run on Ollama's default model` and `still routes an Ollama tag that merely starts with "openai:" to Ollama` (item 7).
+- 3a already imports `selectAnalyzer`, `selectAnalyzerForPhase`, `AnalyzerEndpointMissingError`, `_resetUserSettingsCache` and `_setUserSettingsCacheForTest`, and defines `thrown`. Merge the imports below into the existing ones, adding only the missing names.
+
+Then add:
 
 ```ts
 import { selectAnalyzer, FallbackAnalyzer } from './index.js';
@@ -5014,15 +8775,56 @@ describe('selectAnalyzer — OpenAI-compatible endpoints (#3084 PR 3d)', () => {
     expect(() => selectAnalyzer({ model: 'openai:lab::m' })).toThrow(AnalyzerKeyOriginError);
   });
 
+  it('a missing endpoint names where its id came from: env, run pick, saved phase model', () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {} });
+    process.env.ANALYZER_PHASE1_MODEL = 'openai:gone::m';
+    expect(thrown(() => selectAnalyzerForPhase({ phase: 'phase1' }))).toMatchObject({ endpointId: 'gone', source: 'env' });
+    delete process.env.ANALYZER_PHASE1_MODEL;
+    expect(thrown(() => selectAnalyzerForPhase({ phase: 'phase1', model: 'openai:gone::m' }))).toMatchObject({
+      endpointId: 'gone',
+      source: 'run-pick',
+    });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, analyzerPhase1Model: 'openai:gone::m' });
+    expect(thrown(() => selectAnalyzerForPhase({ phase: 'phase1' }))).toMatchObject({ endpointId: 'gone', source: 'settings' });
+  });
+
+  it('a direct model with no modelSource is a run pick; the saved default is settings (P23)', () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {} });
+    expect(thrown(() => selectAnalyzer({ model: 'openai:gone::m' }))).toMatchObject({ endpointId: 'gone', source: 'run-pick' });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, analysisEngine: 'openai', defaultAnalysisModel: 'openai:gone::m' });
+    expect(thrown(() => selectAnalyzer({}))).toMatchObject({ endpointId: 'gone', source: 'settings' });
+  });
+
   it('an env phase model on an endpoint is selectable', () => {
     process.env.ANALYZER_PHASE1_MODEL = 'openai:lab::m';
     _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {} });
     expect(selectAnalyzerForPhase({ phase: 'phase1' }).engine).toBe('openai');
   });
+
+  it('a missing endpoint still reaches every selection call site as analyzer-endpoint-missing (3b Task 3b.1a, P23)', () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {} });
+    /* The helper every 3b.1a call site sends. It codes every class and never returns null,
+       so a TypeError here would not end a stream uncoded — it would go out as `unknown` at
+       all six sites, which is the silent regression this case exists to catch. */
+    expect(analyzerSelectionErrorEvent(thrown(() => selectAnalyzerForPhase({ phase: 'phase1', model: 'openai:gone::m' })))).toMatchObject({
+      kind: 'error',
+      code: 'analyzer-endpoint-missing',
+    });
+    expect(analyzerSelectionErrorEvent(thrown(() => selectAnalyzer({ model: 'openai:gone::m' })))).toMatchObject({
+      kind: 'error',
+      code: 'analyzer-endpoint-missing',
+    });
+  });
 });
 ```
 
-(Keep the file's existing `describe/it/expect/afterEach` import from `vitest`.)
+Also add `import { analyzerSelectionErrorEvent } from '../routes/failure-taxonomy.js';` to the file's imports. (Keep the file's existing `describe/it/expect/afterEach` import from `vitest`.)
+
+**The two default-source cases w3ab's "What PR 3d lifts" item 6 requires are both above:**
+- `selectAnalyzer({ model: 'openai:gone::m' })`, with no `modelSource` and no endpoint `gone` saved, throws with `source: 'run-pick'`. This is the first assertion of `a direct model with no modelSource is a run pick; the saved default is settings (P23)`.
+- A saved `analyzerPhase1Model: 'openai:gone::m'` through `selectAnalyzerForPhase({ phase: 'phase1' })` throws with `source: 'settings'`. This is the last assertion of `a missing endpoint names where its id came from: env, run pick, saved phase model`.
+
+w3ab's named mutation (`?? (opts.model ? 'run-pick' : 'settings')` → `?? 'settings'` turns the first case red) is Step 5 row 6.
 
 In `server/src/routes/user-settings.test.ts`, replace 3a's `refuses analysisEngine "openai" until endpoints are selectable (#3084 PR 3a)` with:
 
@@ -5039,8 +8841,10 @@ Create `server/src/analyzer/fallback.endpoint-reason.test.ts`:
 ```ts
 import { describe, it, expect, vi } from 'vitest';
 import { FallbackAnalyzer } from './index.js';
+import { OpenAIAnalyzer } from './openai.js';
 import type { Analyzer, StageCall } from './types.js'; // analyzer types come from the W1 leaf, never index.ts
-import { AnalyzerUnreachableError, LocalUnreachableError } from './errors.js';
+import { AnalyzerTransportError, AnalyzerUnreachableError, LocalUnreachableError } from './errors.js';
+import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
 
 function analyzer(runStage1Chapter: Analyzer['runStage1Chapter']): Analyzer {
   const unused = () => Promise.reject(new Error('unused'));
@@ -5072,11 +8876,87 @@ describe('FallbackAnalyzer reason text (#3084)', () => {
     expect(onFallback).toHaveBeenCalledWith({ reason: 'Ollama unreachable' });
   });
 });
+
+/* #3084 P22 rule 7 — 3b's OpenAI transport rebuilds an unrecognised failure into
+   AnalyzerTransportError, which is not an AnalyzerUnreachableError. Every FallbackAnalyzer
+   gate must let it through: no Gemini call, no announced switch. One row per wrapped method,
+   so any single gate widened to `instanceof Error` goes red on its own row. */
+describe('FallbackAnalyzer never falls back on AnalyzerTransportError (#3084 P22 rule 7)', () => {
+  const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 });
+  type Invoke = (a: Analyzer, call: StageCall) => Promise<unknown>;
+  const METHODS: Array<[keyof Analyzer, Invoke]> = [
+    ['runStage1', (a, call) => a.runStage1('m', 'p', call)],
+    ['runStage1Chapter', (a, call) => a.runStage1Chapter('m', 1, 'p', call)],
+    ['runStage2Chapter', (a, call) => a.runStage2Chapter('m', 1, 'p', call)],
+    ['runEmotionChapter', (a, call) => a.runEmotionChapter('m', 1, 'p', call)],
+    ['runScriptReviewChapter', (a, call) => a.runScriptReviewChapter('m', 1, 'p', call)],
+    ['runStage3Chapter', (a, call) => a.runStage3Chapter('m', 1, 'p', call)],
+    ['runAttributionEscalation', (a, call) => a.runAttributionEscalation('m', 1, 0, 'p', call)],
+    ['runNonStoryClassification', (a, call) => a.runNonStoryClassification!('m', 1, 'p', call)],
+  ];
+
+  it.each(METHODS)('%s: the error propagates, the fallback analyzer is never called, and no onFallback fires', async (method, invoke) => {
+    /* A real OpenAIAnalyzer: constructing it sends nothing. Only the method under test is
+       stubbed, rejecting with the error 3b's transport would rethrow. */
+    const primary = new OpenAIAnalyzer({ endpoint: lab, apiKey: null, model: 'qwen3-30b' });
+    const err = new AnalyzerTransportError(
+      'openai',
+      'qwen3-30b',
+      'Endpoint qwen3-30b request failed before a response (APIConnectionError <- TypeError).',
+      undefined,
+    );
+    const primaryCall = vi
+      .spyOn(primary as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>, method)
+      .mockRejectedValue(err);
+    const fallbackCall = vi.fn(async () => {
+      throw new Error('the fallback analyzer must not run');
+    });
+    const fallback = Object.fromEntries(METHODS.map(([name]) => [name, fallbackCall])) as unknown as Analyzer;
+    const onFallback = vi.fn();
+
+    await expect(invoke(new FallbackAnalyzer(primary, fallback), { onFallback } as unknown as StageCall)).rejects.toBe(err);
+    expect(primaryCall).toHaveBeenCalledTimes(1);
+    expect(fallbackCall).not.toHaveBeenCalled();
+    expect(onFallback).not.toHaveBeenCalled();
+  });
+});
+```
+
+Append to Task 3c.10's `server/src/analyzer/preflight.test.ts` (add `_setUserSettingsCacheForTest` to its user-settings import):
+
+```ts
+describe('P14 — the engine default is checked as selection builds it (#3084 PR 3d)', () => {
+  it('the engine default is checked as the saved engine builds it: a saved openai engine with a non-endpoint default fails as endpoint-missing', () => {
+    _setUserSettingsCacheForTest({ analysisEngine: 'openai', defaultAnalysisModel: 'qwen3.5:4b' });
+    const s = settings({ analysisEngine: 'openai', defaultAnalysisModel: 'qwen3.5:4b', analyzerPhase1Model: null });
+    const targets = preflightTargets(['phase1'], undefined, s);
+    expect(targets).toEqual([{ modelId: 'qwen3.5:4b', source: 'settings', engine: 'openai' }]);
+    const err = thrown(() => runAnalyzerPreflight(targets, s));
+    expect(err).toBeInstanceOf(AnalyzerEndpointMissingError);
+    expect(err).toMatchObject({ endpointId: 'qwen3.5:4b', source: 'settings' });
+  });
+});
+```
+
+Append inside the `describe` of Task 3c.10's `server/src/routes/analysis.preflight.test.ts`:
+
+```ts
+  it('a saved openai engine whose default model is not an endpoint id fails with a code before selection (P14)', async () => {
+    seedManuscript();
+    _setUserSettingsCacheForTest({ analysisEngine: 'openai', defaultAnalysisModel: 'qwen3.5:4b', analyzerEndpoints: [] });
+    const res = await request(makeApp()).post('/api/manuscripts/m_preflight/analysis').send({});
+    expect(parseSse(res.text)).toContainEqual(expect.objectContaining({ kind: 'error', code: 'analyzer-endpoint-missing' }));
+    expect(selectSpy).not.toHaveBeenCalled();
+  });
 ```
 
 - [ ] **Step 2: Run them and confirm they fail**
-Run: `npm --prefix server run test -- src/analyzer/select-analyzer-endpoint-id.test.ts src/analyzer/fallback.endpoint-reason.test.ts src/routes/user-settings.test.ts`
-Expected: FAIL — `selectAnalyzer` throws 3a's "cannot run yet" error; reason is `'Ollama unreachable'` for the endpoint; the PUT returns 400.
+Run: `npm --prefix server run test -- src/analyzer/select-analyzer-endpoint-id.test.ts src/analyzer/fallback.endpoint-reason.test.ts src/routes/user-settings.test.ts src/analyzer/preflight.test.ts src/routes/analysis.preflight.test.ts`
+Expected: FAIL.
+- `selectAnalyzer` throws 3a's refusal (`AnalyzerEndpointMissingError`) even for a saved endpoint, so the selection cases fail. `a missing endpoint names where its id came from…` already passes, because 3a's refusal names the same sources **and** Task 3c.10's extraction keeps `modelSource` threaded through `selectAnalyzerForPhase`; mutation row 5 is its proof here, and 3c.10's row 12 is what guards the threading itself. `a direct model with no modelSource is a run pick…` also passes already: 3a's refusal defaults to `run-pick`, and 3a's saved-default check names `settings`. Mutation rows 6 and 7 prove it. `a missing endpoint still reaches every selection call site as analyzer-endpoint-missing…` also passes already, since 3a's refusal throws the same class. Mutation row 8 proves it.
+- The reason is `'Ollama unreachable'` for the endpoint, and the PUT returns 400.
+- `FallbackAnalyzer never falls back on AnalyzerTransportError (#3084 P22 rule 7)` **passes** on all eight rows: the gates W1 left already key on `AnalyzerUnreachableError`. It pins P22 rule 7 before endpoints become selectable; mutation row 9 proves it can fail.
+- The two P14 cases fail: 3a's `getResolvedAnalysisEngine` still coerces `openai` to `local`, so the target is `engine: 'local'` and the check passes.
 
 - [ ] **Step 3: Implement**
 
@@ -5088,7 +8968,11 @@ Expected: FAIL — `selectAnalyzer` throws 3a's "cannot run yet" error; reason i
     const modelId = opts.model ?? settings.defaultAnalysisModel;
     const parsed = parseEndpointModelId(modelId);
     const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
-    if (!parsed || !endpoint) throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? modelId, 'settings');
+    /* Refused only when the endpoint is not saved. `modelSource` (3a) keeps an env-named id saying env.
+       Without it, an explicit model is a run pick (3a's contract); only the saved default is settings (P23). */
+    if (!parsed || !endpoint) {
+      throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? modelId, opts.modelSource ?? (opts.model ? 'run-pick' : 'settings'));
+    }
     const primary = new OpenAIAnalyzer({ endpoint, apiKey: resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl), model: parsed.model });
     /* Same gate as the local branch: fall back to Gemini only on AnalyzerUnreachableError,
        only with a key and cloud fallback on (spec decision 4). */
@@ -5126,7 +9010,7 @@ export function getResolvedAnalysisEngine(): AnalysisEngine {
 
 and delete 3a's trailing "#3084 PR 3a: …cannot yield 'openai' until PR 3d widens that enum." sentence from its doc comment (now false).
 
-`server/src/config/registry.ts:1121-1129` (`analyzer.engine`): `options: ['local', 'gemini', 'openai'],`.
+Keep 3a's saved-default check at the top of the `local` branch (`if (!opts.model) { … }`) and `SelectAnalyzerOptions.modelSource`: a `local` engine with an endpoint-id default must still never run on Ollama's default model.
 
 `openapi.yaml:4628` and `:4831`: `enum: [local, gemini, openai]`; run `npm run openapi:types`.
 
@@ -5138,18 +9022,241 @@ and delete 3a's trailing "#3084 PR 3a: …cannot yield 'openai' until PR 3d wide
 
 `src/components/setup/step-defaults.tsx` — delete 3a's comment and `if (engine === 'openai') return;` from `handleAnalysisModelChange` (the saved enum now accepts it).
 
+**Text this task makes false (chore; the coding itself is unchanged).** From here an endpoint id is refused only when its endpoint is not saved, so every "this build cannot run" line is wrong. On 3c's tip `git grep -n "this build cannot run" -- server/src` prints exactly four lines: one source comment and three test titles. The source line is fixed first, so the gate at the end of this list keeps covering the whole of `server/src` instead of being narrowed to the files this task happens to own:
+1. `server/src/analyzer/errors.ts` (3a Task 3a.2), `AnalyzerEndpointMissingError`'s doc comment:
+   - replace `/** A model id names an OpenAI-compatible endpoint this build cannot run: until` + newline + `    PR 3d every endpoint id (P23), from PR 3d an id whose endpoint is not in` + newline + `    saved settings.`
+   - with `/** A model id names an OpenAI-compatible endpoint that is not configured: from` + newline + `    PR 3d, an id whose endpoint is not in saved settings (P23; before 3d, every` + newline + `    endpoint id).`
+   The rest of that comment (what throws it, and its FailureCode) is unchanged.
+2. `server/src/routes/analysis.endpoint-missing.test.ts`, header comment:
+   - replace `` a request model `openai:gone::m` makes PR 3a's selection `` + newline + `   throw.`
+   - with `` a request model `openai:gone::m` makes selection `` + newline + `   throw, because no endpoint \`gone\` is saved.`.
+3. Test titles. In each, `an endpoint id this build cannot run` becomes `an endpoint that is not configured`; nothing else changes:
+   - `annotate-emotion.test.ts`: `an endpoint id this build cannot run ends the stream with analyzer-endpoint-missing, before any analyzer call (#3084 P23)`
+   - `instruct-annotation.test.ts`: `an endpoint id this build cannot run ends the instruct stream with analyzer-endpoint-missing, before any analyzer call (#3084 P23)`
+   - `script-review.test.ts`: `an endpoint id this build cannot run reports analyzer-endpoint-missing, not internal_error (#3084 P23)`
+
+Then `git grep -n "this build cannot run" -- server/src` must print nothing.
+
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/analyzer/select-analyzer-endpoint-id.test.ts src/analyzer/select-analyzer.test.ts src/analyzer/fallback.endpoint-reason.test.ts src/analyzer/fallback.test.ts src/analyzer/fallback-analyzer.test.ts src/routes/user-settings.test.ts src/workspace/user-settings.test.ts src/config/registry.test.ts`, `npx vitest run src/components/model-settings-form.test.tsx src/components/setup`, `npm run typecheck`. Expected: PASS.
+Run: `npm --prefix server run test -- src/analyzer/select-analyzer-endpoint-id.test.ts src/analyzer/select-analyzer.test.ts src/analyzer/fallback.endpoint-reason.test.ts src/analyzer/fallback.test.ts src/analyzer/fallback-analyzer.test.ts src/routes/user-settings.test.ts src/workspace/user-settings.test.ts src/analyzer/preflight.test.ts src/routes/analysis.preflight.test.ts src/routes/failure-taxonomy.test.ts src/routes/analysis.endpoint-missing.test.ts src/routes/annotate-emotion.test.ts src/routes/instruct-annotation.test.ts src/routes/script-review.test.ts`, `npx vitest run src/components/model-settings-form.test.tsx src/components/setup`, `npm run typecheck`. Expected: PASS.
 
 - [ ] **Step 5: Mutation proof**
 1. Replace `resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl)` with `settings.analyzerEndpointKeys[endpoint.id]?.key ?? null` → red: "a missing endpoint and a key bound to another host throw typed errors". Restore.
 2. Drop the `if (apiKey && getResolvedAllowCloudFallback())` wrap → red: "with a Gemini key and cloud fallback on, wraps the endpoint…". Restore.
 3. `fallbackReasonFor`: return `'Ollama unreachable'` always → red: "announces an unreachable endpoint generically…". Restore.
+4. `preflight.ts` (Task 3c.10) `preflightTargets`: for the engine default return `engine: inferEngineFromModelId(engineDefaultModelId(engine, settings))` → red: "the engine default is checked as the saved engine builds it…" and "a saved openai engine whose default model is not an endpoint id fails with a code before selection (P14)". Restore.
+5. `index.ts` openai branch: replace `opts.modelSource ?? (opts.model ? 'run-pick' : 'settings')` with `(opts.model ? 'run-pick' : 'settings')` → red: "a missing endpoint names where its id came from: env, run pick, saved phase model" (received `source: 'run-pick'` for env). Restore.
+6. Same line: replace it with `opts.modelSource ?? 'settings'` → red: "a direct model with no modelSource is a run pick; the saved default is settings (P23)" (received `source: 'settings'` for the direct model). Restore.
+7. Same line: replace it with `opts.modelSource ?? 'run-pick'` → red: the same test's saved-default assertion (received `source: 'run-pick'`). Restore.
+8. Delete the `if (!parsed || !endpoint) { throw new AnalyzerEndpointMissingError(…); }` block. An unsaved endpoint then reaches `resolveEndpointApiKey(settings, undefined, …)` and throws a `TypeError`. → red: "a missing endpoint still reaches every selection call site as analyzer-endpoint-missing…" (the helper codes the `TypeError` as `unknown`), "a missing endpoint and a key bound to another host throw typed errors", and the two source cases. Restore.
+9. In `FallbackAnalyzer.runStage2Chapter`'s `catch` (`index.ts`), replace `err instanceof AnalyzerUnreachableError` with `err instanceof Error` → red: `FallbackAnalyzer never falls back on AnalyzerTransportError (#3084 P22 rule 7) > runStage2Chapter: the error propagates, …` (the promise rejects with `the fallback analyzer must not run`, the fallback is called once, and `onFallback` fires). The other seven rows stay green, each pinning its own gate: repeat the change in any other method's `catch` and only that method's row goes red. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/index.ts server/src/analyzer/select-analyzer-endpoint-id.test.ts server/src/analyzer/fallback.endpoint-reason.test.ts server/src/workspace/user-settings.ts server/src/routes/user-settings.test.ts server/src/config/registry.ts openapi.yaml src/lib/api-types.ts src/components/model-settings-form.tsx src/components/setup/step-defaults.tsx
+git add server/src/analyzer/errors.ts server/src/routes/analysis.endpoint-missing.test.ts server/src/routes/annotate-emotion.test.ts server/src/routes/instruct-annotation.test.ts server/src/routes/script-review.test.ts server/src/analyzer/index.ts server/src/analyzer/select-analyzer-endpoint-id.test.ts server/src/analyzer/fallback.endpoint-reason.test.ts server/src/analyzer/preflight.test.ts server/src/routes/analysis.preflight.test.ts server/src/workspace/user-settings.ts server/src/routes/user-settings.test.ts openapi.yaml src/lib/api-types.ts src/components/model-settings-form.tsx src/components/setup/step-defaults.tsx
 git commit -m "feat(server,frontend): select OpenAI-compatible endpoints for analysis"
+```
+
+---
+
+### Task 3d.4a: Lift the P23 refusals of endpoint model ids in saved selections
+
+**Files:**
+- Modify: `server/src/workspace/user-settings.ts` — delete `ENDPOINT_ID_REFUSED_FIELDS`, `ENDPOINT_ID_REFUSED_KNOBS`, `ENDPOINT_ID_REFUSAL`, `endpointModelIdRefusals` and their comment (3a Task 3a.5, after `stripForbiddenKeys`)
+- Modify: `server/src/routes/user-settings.ts` — the refusal block at the top of `userSettingsRouter.put('/')`, and `endpointModelIdRefusals` in the `../workspace/user-settings.js` import
+- Modify: `server/src/routes/config.ts` — the refusal block in pass 1 of `configRouter.put('/')`, and its import
+- Modify: `src/lib/api.ts` — the refusal block at the top of `mockPutUserSettings`; `engineForModelId` in the `./model-id` import, only if nothing else in the file uses it
+- Test: `server/src/routes/user-settings.test.ts`, `server/src/routes/config.endpoint-ids.test.ts`, `src/lib/api-put-user-settings-endpoint-ids-mock.test.ts` (all from 3a Task 3a.5) — the refusal cases flip to "accepts"
+
+**Interfaces:**
+- Consumes: 3a Task 3a.5's three refusal sites and their tests; Task 3d.4's selection, where an endpoint id now builds `OpenAIAnalyzer`.
+- Produces: nothing new. `ENDPOINT_ID_REFUSED_FIELDS`, `ENDPOINT_ID_REFUSED_KNOBS`, `ENDPOINT_ID_REFUSAL` and `endpointModelIdRefusals` are gone.
+
+Rules (w3ab "What PR 3d lifts", P23):
+- **Lifted here:** the saved-selection refusals, which are w3ab items 1–5: the helper, the general PUT, `PUT /api/config` pass 1, the mock PUT, and their tests. Task 3d.4 already replaced the selection branch and deleted 3a's run-pick and source refusal cases (item 6).
+- **Kept (item 7):**
+  - 3a's saved-default check at the top of the `local` branch;
+  - `SelectAnalyzerOptions.modelSource`;
+  - selection's `AnalyzerEndpointMissingError` for an id whose endpoint is not saved (Task 3d.4);
+  - `analyzerSelectionErrorEvent` (3b Task 3b.1a) and every selection call site that codes an `AnalyzerEndpointMissingError` with it. w3ab's lift list names only refusals. This task deletes no import of, call to or test of that helper, and no `catch` that sends its event.
+- **Not lifted here:** the endpoint routes' `reasoning` refusal (PR 5a) and `extraParams` refusal (PR 5b) in `parseEndpointInput` and `mockEndpointFromInput` (3b Tasks 3b.5 / 3b.9).
+- **Import kept.** `inferEngineFromModelId` stays imported in `server/src/workspace/user-settings.ts`, because 3a Task 3a.4 imported it for its own use.
+- **Stop-the-run errors (P20):** no catch is added or changed.
+
+Tests kept green: `server/src/workspace/user-settings.test.ts`, `server/src/routes/config*.test.ts`, `src/lib/api-put-user-settings-mock.test.ts`, and 3a's `still saves an Ollama tag that starts with openai:` / `still saves an Ollama tag named openai:latest`.
+
+- [ ] **Step 1: Flip the refusal tests to "accepts"**
+
+In `server/src/routes/user-settings.test.ts`, replace 3a's `it.each([…])('refuses an endpoint model id in %s until endpoints are selectable (#3084 P23)', …)` and `it('refuses an endpoint model id in a phase-model override, and still saves an Ollama tag named openai:latest (#3084 P23)', …)` with:
+
+```ts
+  it.each(['defaultAnalysisModel', 'analyzerPhase0Model', 'analyzerPhase1Model'])(
+    'accepts an endpoint model id in %s now that endpoints are selectable (#3084 PR 3d)',
+    async (field) => {
+      const res = await request(app).put('/api/user/settings').send({ [field]: 'openai:lab::qwen3:30b' });
+      expect(res.status).toBe(200);
+      expect(res.body[field]).toBe('openai:lab::qwen3:30b');
+      const after = await request(app).get('/api/user/settings');
+      expect(after.body[field]).toBe('openai:lab::qwen3:30b');
+    },
+  );
+
+  it('accepts an endpoint model id in a phase-model override, and still saves an Ollama tag named openai:latest (#3084 PR 3d)', async () => {
+    const accepted = await request(app)
+      .put('/api/user/settings')
+      .send({ configOverrides: { 'analyzer.phase1.model': 'openai:lab::m' } });
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.configOverrides['analyzer.phase1.model']).toBe('openai:lab::m');
+    const ok = await request(app).put('/api/user/settings').send({ analyzerPhase0Model: 'openai:latest' });
+    expect(ok.status).toBe(200);
+    expect(ok.body.analyzerPhase0Model).toBe('openai:latest');
+  });
+```
+
+Replace `server/src/routes/config.endpoint-ids.test.ts` with:
+
+```ts
+/* #3084 — PUT /api/config saves an endpoint model id for the phase-model knobs. PR 3a
+   refused it (P23); PR 3d lifts that refusal. Real express + supertest over a temp
+   workspace, the same harness shape as routes/user-settings.test.ts. */
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import express, { type Express } from 'express';
+import request from 'supertest';
+
+let workspaceRoot: string;
+let app: Express;
+let settings: typeof import('../workspace/user-settings.js');
+
+beforeAll(async () => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-config-endpoint-ids-test-'));
+  process.env.WORKSPACE_DIR = workspaceRoot;
+  delete process.env.ANALYZER_PHASE0_MODEL;
+  delete process.env.ANALYZER_PHASE1_MODEL;
+  const [{ configRouter }, s] = await Promise.all([import('./config.js'), import('../workspace/user-settings.js')]);
+  settings = s;
+  settings._resetUserSettingsCache();
+  app = express();
+  app.use(express.json());
+  app.use('/api/config', configRouter);
+});
+
+afterAll(() => {
+  if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
+  delete process.env.WORKSPACE_DIR;
+  settings._resetUserSettingsCache();
+});
+
+describe('PUT /api/config — phase-model overrides (#3084 PR 3d)', () => {
+  it.each(['analyzer.phase0.model', 'analyzer.phase1.model'])(
+    'accepts an endpoint model id for %s and saves it',
+    async (key) => {
+      const res = await request(app).put('/api/config').send({ [key]: 'openai:lab::qwen3:30b' });
+      expect(res.status).toBe(200);
+      expect(res.body.applied).toEqual([key]);
+      expect((await settings.readUserSettings()).configOverrides[key]).toBe('openai:lab::qwen3:30b');
+    },
+  );
+
+  it('still saves an Ollama tag that starts with openai:', async () => {
+    const res = await request(app).put('/api/config').send({ 'analyzer.phase0.model': 'openai:latest' });
+    expect(res.status).toBe(200);
+    expect(res.body.applied).toEqual(['analyzer.phase0.model']);
+  });
+});
+```
+
+In `src/lib/api-put-user-settings-endpoint-ids-mock.test.ts`, replace the `describe` block with:
+
+```ts
+describe('mock PUT user settings — endpoint model ids (#3084 PR 3d)', () => {
+  it.each(['defaultAnalysisModel', 'analyzerPhase0Model', 'analyzerPhase1Model'] as const)(
+    'accepts an endpoint id in %s, as the server does',
+    async (field) => {
+      expect((await api.putUserSettings({ [field]: 'openai:lab::m' }))[field]).toBe('openai:lab::m');
+      expect((await api.getUserSettings())[field]).toBe('openai:lab::m');
+    },
+  );
+
+  it('still saves an Ollama tag named openai:latest', async () => {
+    expect((await api.putUserSettings({ analyzerPhase1Model: 'openai:latest' })).analyzerPhase1Model).toBe('openai:latest');
+  });
+});
+```
+
+- [ ] **Step 2: Run and confirm the right failures**
+
+```bash
+npm --prefix server run test -- src/routes/user-settings.test.ts src/routes/config.endpoint-ids.test.ts
+npx vitest run src/lib/api-put-user-settings-endpoint-ids-mock.test.ts
+```
+
+Expected:
+- **Route cases.** The three `accepts an endpoint model id in …` cases and `accepts an endpoint model id in a phase-model override…` FAIL: status 400, not 200.
+- **Config cases.** Both `accepts an endpoint model id for … and saves it` cases FAIL: status 400.
+- **Mock cases.** The three mock `accepts an endpoint id in …` cases FAIL: the promise rejects with `(400)`.
+- **Already passing.** Both `still saves an Ollama tag…` cases pass.
+
+- [ ] **Step 3: Implement**
+
+`server/src/workspace/user-settings.ts`: delete the whole block 3a Task 3a.5 inserted after `stripForbiddenKeys`, from `/* #3084 P23 — until PR 3d, no saved selection may name an OpenAI-compatible` through the closing `}` of `endpointModelIdRefusals`. That removes the comment, `ENDPOINT_ID_REFUSED_FIELDS`, `ENDPOINT_ID_REFUSED_KNOBS`, `ENDPOINT_ID_REFUSAL` and `endpointModelIdRefusals`.
+
+`server/src/routes/user-settings.ts`:
+1. Remove `endpointModelIdRefusals` from the `../workspace/user-settings.js` import.
+2. The PUT handler's head goes back to:
+
+```ts
+userSettingsRouter.put('/', async (req: Request, res: Response) => {
+  try {
+    const updated = await writeUserSettings(req.body);
+```
+
+`server/src/routes/config.ts`:
+1. Remove `endpointModelIdRefusals` from its `../workspace/user-settings.js` import. If 3a added `import { endpointModelIdRefusals } from '../workspace/user-settings.js';` as its own line, delete the line.
+2. In pass 1, delete:
+
+```ts
+    /* #3084 P23 — PR 3d deletes this refusal. */
+    if (endpointModelIdRefusals({ configOverrides: { [key]: raw } }).length > 0) {
+      res.status(400).json({ error: `${key}: OpenAI-compatible endpoint models cannot be selected in this build.` });
+      return;
+    }
+```
+
+`src/lib/api.ts`:
+1. In `mockPutUserSettings`, delete the block from `/* #3084 P23 — mirrors the server's refusal of an endpoint model id in a saved` through the closing `}` of `if (refusedFields.length > 0) { … }`.
+2. Run `git grep -n "engineForModelId" -- src/lib/api.ts`. If the only hit is the import line, change `import { engineForModelId, type AnalysisEngine } from './model-id';` back to `import type { AnalysisEngine } from './model-id';`.
+3. `_setMockUserSettingsForTest` stays.
+
+Then `git grep -n "endpointModelIdRefusals\|ENDPOINT_ID_REFUS\|cannot be selected in this build" -- server/src src` must print nothing.
+
+Run `git grep -n "analyzerSelectionErrorEvent" -- server/src` before Step 3 and again here. It must print the same lines both times: the lift removes refusals, never the selection-error coding (P23).
+
+- [ ] **Step 4: Run and confirm pass**
+
+```bash
+npm --prefix server run test -- src/routes/user-settings.test.ts src/routes/config.endpoint-ids.test.ts src/workspace/user-settings.test.ts
+npx vitest run src/lib/api-put-user-settings-endpoint-ids-mock.test.ts src/lib/api-put-user-settings-mock.test.ts
+npm run typecheck
+```
+Expected: PASS, and typecheck clean (no orphaned import).
+
+- [ ] **Step 5: Mutation proofs**
+
+Put one refusal back at a time, confirm the named test goes red, then remove it again:
+
+| Revert | Expected red test |
+|---|---|
+| Restore 3a's `endpointModelIdRefusals` and its refusal block at the top of `userSettingsRouter.put('/')` | `accepts an endpoint model id in defaultAnalysisModel…` (and the two other fields), `accepts an endpoint model id in a phase-model override…` |
+| Restore 3a's refusal block in `routes/config.ts` pass 1 | `accepts an endpoint model id for analyzer.phase0.model and saves it` |
+| Restore 3a's mock refusal block in `mockPutUserSettings` | `accepts an endpoint id in defaultAnalysisModel, as the server does` |
+
+- [ ] **Step 6: Commit**
+```bash
+git add server/src/workspace/user-settings.ts server/src/routes/user-settings.ts server/src/routes/user-settings.test.ts server/src/routes/config.ts server/src/routes/config.endpoint-ids.test.ts src/lib/api.ts src/lib/api-put-user-settings-endpoint-ids-mock.test.ts
+git commit -m "feat(server,frontend): accept endpoint model ids in saved analyzer selections"
 ```
 
 ---
@@ -5172,11 +9279,11 @@ Classification of every engine-branch site the spec lists (`03-code-map.md` §1)
 |---|---|---|
 | `routes/analysis.ts:561` `engineLabel` | label | endpoint → `<saved endpoint name> (<model>)`; endpoint id when the name is unknown |
 | `routes/analysis.ts:1218` `engineFallbackMsPerChar` | shares GPU (local ETA seed) | endpoint with `gpu !== 'none'` gets the local rate for the detected device; `gpu: 'none'` keeps the cloud rate |
-| `routes/analysis.ts:3203` run-end `unloadResidentOllama` | Ollama-specific | unchanged — endpoints unload only through capacity eviction (Task 3d.3) |
-| `routes/analysis.ts:3625` `usesLocalAnalyzer` → `detectOllamaDevice` | Ollama-specific | unchanged — it probes Ollama's device; an endpoint run seeds with `'unknown'` → CUDA rate |
+| `routes/analysis.ts:3235` run-end `unloadResidentOllama` | Ollama-specific | unchanged — endpoints unload only through capacity eviction (Task 3d.3) |
+| `routes/analysis.ts:3716` `usesLocalAnalyzer` → `detectOllamaDevice` | Ollama-specific | unchanged — it probes Ollama's device; an endpoint run seeds with `'unknown'` → CUDA rate |
 | `routes/analysis.ts:2182` `buildCloudEscalationAnalyzer` | Gemini-specific | unchanged (stays Gemini) |
-| `routes/script-review.ts:724` warm Ollama | Ollama-specific | unchanged |
-| `routes/script-review.ts:780` `pinnedLocal` keep-alive pin | Ollama-specific | unchanged |
+| `routes/script-review.ts:748` warm Ollama | Ollama-specific | unchanged |
+| `routes/script-review.ts:798` `pinnedLocal` keep-alive pin | Ollama-specific | unchanged |
 | `routes/diagnostics.ts:259`, `:299` | Ollama- / Gemini-specific rows | unchanged — an endpoint engine reads "not in use (engine: openai)" |
 | `routes/setup-diagnosis.ts:323` `diagnoseAnalyzer` | persisted-engine readiness gate | new `openai` branch: pass when the default model's endpoint is saved, else fail `endpoint-missing` (today it would demand Ollama) |
 | `routes/setup-readiness.ts:204` smoke analyzer check | persisted-engine readiness gate | `openai` → `analyzerOk` = the default model's endpoint is saved |
@@ -5356,16 +9463,24 @@ git commit -m "feat(server): endpoint-aware analysis labels, ETA seed and readin
 **Files:**
 - Create: `src/lib/analyzer-endpoints.ts`
 - Modify: `src/store/analysis-slice.ts:26-33` (`gpu?` on the snapshot)
+- Modify: `src/store/config-slice.ts` (`ttsReportedDevices` state + a `ttsDevicesReported` reducer), `src/lib/api.ts` (`SidecarHealth` stops omitting two fields the server already sends), `src/lib/use-tts-lifecycle.ts` (returns its last `/health` snapshot) — all three for N5
 - Modify: `src/hooks/use-local-analyzer-guard.tsx` (the Task 3c.8 gate), `src/hooks/use-reverse-local-analyzer-guard.tsx:71-84`
 - Modify: `src/store/generation-stream-middleware.ts:44-51` (root state type), `:97-106` (hold)
 - Modify: `src/views/analysing.tsx:340-344` (engine + gpu), `:448`, `:804`, `:935` (dispatch payloads); `src/views/generation.tsx:288` (selector), `:422-428`, `:591-597`
-- Test: Create `src/lib/analyzer-endpoints.test.ts`; extend `src/hooks/use-local-analyzer-guard.test.tsx`, `src/hooks/use-reverse-local-analyzer-guard.test.tsx`, `src/store/generation-stream-middleware.test.ts`
+- Modify: `src/components/layout.tsx:9` (imports), `:498-505` (the account hydration effect) — P13
+- Test: Create `src/lib/analyzer-endpoints.test.ts`; extend `src/hooks/use-local-analyzer-guard.test.tsx`, `src/hooks/use-reverse-local-analyzer-guard.test.tsx`, `src/store/generation-stream-middleware.test.ts`, `src/components/layout.test.tsx`
+
+**Config hydration (P13).** The guards and the hold read the TTS card from the `config` slice, which today loads only when Advanced Settings mounts (`advanced.tsx:256`). Without it every GPU endpoint prompts, because an unknown card fails closed. `Layout` therefore dispatches `fetchConfig()` in the same mount effect that already hydrates account settings (`layout.tsx:501-505`), once per app boot. Advanced's own dispatch stays; on that view a second fetch is harmless.
+
+**The resolved device for an `auto` engine (N5).** Every `tts.<engine>.device` knob ships as `auto`, so the knob alone leaves the TTS card unknown on a default install — and unknown fails closed, which means every endpoint on a GPU prompts forever. The server already reports what it resolved, on a route the frontend already polls: `GET /api/sidecar/health` carries `qwenDeviceKey`, the concrete `cuda:N` a resident Qwen sits on (`routes/sidecar-health.ts:540`), and `devices`, the per-engine device **family** (`'cuda' | 'cpu' | …`, `:548`). No new route and no second poll: the frontend's `SidecarHealth` type stops omitting those two fields, and `Layout`'s single `useTtsLifecycle` poll (`layout.tsx:1136`) puts them into the `config` slice, so the forward guard, the reverse guard and the generation hold all read one value.
+- **What it resolves.** A knob pinned to `cuda:N` (or `cpu`) still wins. For `auto` — or before the config slice has hydrated — the sidecar answers: Qwen's `qwenDeviceKey`, and `cpu` for any engine whose reported family is `cpu`. Kokoro is the common case (#2631: Kokoro never runs on the GPU), and `cpu` means TTS holds no card at all, so an endpoint run must not prompt.
+- **What stays unknown, deliberately.** The sidecar reports a family, not a card index, for Kokoro and Coqui, and `qwenDeviceKey` is `null` while Qwen is not resident. A `cuda`-family engine with no card named therefore stays unknown and keeps failing closed: on a two-card box the alternative is guessing which card the next load lands on. That is the one case where an endpoint on a GPU still prompts, and it is the right answer rather than a gap.
 
 **Interfaces:**
 - Consumes: `engineForModelId`, `parseEndpointModelId`, `AnalysisEngine` (3a `src/lib/model-id.ts`); `AnalyzerEndpoint` type (3b `src/lib/types.ts`); `engineForModelKey` (`src/lib/tts-models.ts:173`); `ConfigValues` / `KnobValue.effective` (`src/lib/types.ts:926-940`); `config` slice (`src/store/index.ts:208`).
-- Produces (contract, with one type deviation): `defaultGpuForBaseUrl(baseUrl)`; `endpointForModelId(settings: Pick<UserSettings, 'analyzerEndpoints'>, id)` (the contract's `AccountSettings` type does not exist; `AccountState` and `UserSettings` are both assignable to this `Pick`); `analyzerSharesTtsDevice({ engine, endpointGpu, ttsDeviceKey })`; plus `ttsDeviceKeyFor(modelKey, values)`, `snapshotGpuFor(modelIds, settings)`, `AnalysisStreamSnapshot.gpu?: string`.
+- Produces (contract, with one type deviation): `defaultGpuForBaseUrl(baseUrl)`; `endpointForModelId(settings: Pick<UserSettings, 'analyzerEndpoints'>, id)` (the contract's `AccountSettings` type does not exist; `AccountState` and `UserSettings` are both assignable to this `Pick`); `analyzerSharesTtsDevice({ engine, endpointGpu, ttsDeviceKey })`; plus `ttsDeviceKeyFor(modelKey, values, reported?)`, `reportedTtsDevicesFrom(health)`, `type TtsReportedDevices`, `snapshotGpuFor(modelIds, settings)`, `AnalysisStreamSnapshot.gpu?: string`, `ConfigState.ttsReportedDevices`, `configSlice.actions.ttsDevicesReported`, `TtsLifecycle.sidecarHealth`.
 
-Rules (spec §4): Ollama shares as today; Gemini never; an endpoint shares when its `gpu` is `any` or equals the TTS target card; an endpoint id missing from settings counts as `any` (fail closed); `gpu: 'none'` never shares. **TTS target card:** the pinned `tts.<engine>.device` value (`cuda:N`) for the generation's TTS model key, read from the `config` slice; `auto`, `cpu`, an un-hydrated config slice or an unknown engine → unknown, and an unknown card counts as shared by any endpoint on a GPU (fail closed). The forward guard reads the active generation's `modelKey`; the reverse guard and the generation hold read the account's effective TTS model key (`resolvedTtsModelKey ?? defaultTtsModelKey`). **Snapshot `gpu`:** for a run with endpoint models, one distinct non-`none` card → that card; several → `any`; all `none` → `none`; no endpoint model → omitted. `layout.tsx:865`'s cold-boot rehydration has no model id in `AnalysisStateResponse` (`src/lib/types.ts:591-611`), so it stays without `gpu`, and an `openai` snapshot without `gpu` is treated as `any` — the reverse guard prompts rather than guesses.
+Rules (spec §4): Ollama shares as today; Gemini never; an endpoint shares when its `gpu` is `any` or equals the TTS target card; an endpoint id missing from settings counts as `any` (fail closed); `gpu: 'none'` never shares. **TTS target card:** for a given TTS model key, the pinned `tts.<engine>.device` value (`cuda:N`, or `cpu`) from the `config` slice; when that knob is `auto` or the slice has no value yet, the device the sidecar reported for that engine (N5: a resident Qwen's `cuda:N`, or `cpu` for an engine whose reported family is `cpu`); otherwise unknown. `cpu` means TTS holds no card, so no endpoint shares it, not even one on `any`; unknown still counts as shared by any endpoint on a GPU (fail closed). **The forward guard compares every live generation stream, not only the first** (N8): each stream can be on its own card, so it prompts when the endpoint shares any of them. The reverse guard and the generation hold read the account's effective TTS model key (`resolvedTtsModelKey ?? defaultTtsModelKey`). **Snapshot `gpu`:** for a run with endpoint models, one distinct non-`none` card → that card; several → `any`; all `none` → `none`; no endpoint model → omitted. `layout.tsx:865`'s cold-boot rehydration has no model id in `AnalysisStateResponse` (`src/lib/types.ts:591-611`), so it stays without `gpu`, and an `openai` snapshot without `gpu` is treated as `any` — the reverse guard prompts rather than guesses.
 
 Keeps green: the existing cases of all three guard/middleware test files; `src/views/analysing.test.tsx`; `src/views/generation*.test.tsx`; `src/components/layout*.test.tsx`.
 
@@ -5375,7 +9490,7 @@ Create `src/lib/analyzer-endpoints.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { defaultGpuForBaseUrl, endpointForModelId, analyzerSharesTtsDevice, ttsDeviceKeyFor, snapshotGpuFor } from './analyzer-endpoints';
+import { defaultGpuForBaseUrl, endpointForModelId, analyzerSharesTtsDevice, ttsDeviceKeyFor, reportedTtsDevicesFrom, snapshotGpuFor } from './analyzer-endpoints';
 import type { AnalyzerEndpoint, ConfigValues } from './types';
 
 const ep = (id: string, gpu: string): AnalyzerEndpoint =>
@@ -5406,18 +9521,49 @@ describe('analyzerSharesTtsDevice (#3084)', () => {
     ['endpoint none', { engine: 'openai', endpointGpu: 'none', ttsDeviceKey: undefined }, false],
     ['endpoint missing from settings fails closed', { engine: 'openai', endpointGpu: undefined, ttsDeviceKey: 'cuda:0' }, true],
     ['TTS card unknown fails closed', { engine: 'openai', endpointGpu: 'cuda:1', ttsDeviceKey: undefined }, true],
+    /* N5 — an engine the sidecar runs on CPU holds no card, so nothing shares it. */
+    ['TTS on cpu shares nothing, even with an any endpoint', { engine: 'openai', endpointGpu: 'any', ttsDeviceKey: 'cpu' }, false],
+    ['TTS on cpu, endpoint pinned to a card', { engine: 'openai', endpointGpu: 'cuda:0', ttsDeviceKey: 'cpu' }, false],
+    ['Ollama still shares while TTS is on cpu (unchanged)', { engine: 'local', endpointGpu: undefined, ttsDeviceKey: 'cpu' }, true],
   ] as const)('%s', (_n, input, expected) => {
     expect(analyzerSharesTtsDevice(input)).toBe(expected);
   });
 });
 
-describe('ttsDeviceKeyFor / endpointForModelId / snapshotGpuFor (#3084)', () => {
+describe('ttsDeviceKeyFor / reportedTtsDevicesFrom / endpointForModelId / snapshotGpuFor (#3084)', () => {
   const values: ConfigValues = { 'tts.kokoro.device': knob('tts.kokoro.device', 'cuda:1'), 'tts.qwen.device': knob('tts.qwen.device', 'auto') };
+  const reported = { qwenDeviceKey: 'cuda:0', families: { qwen: 'cuda', kokoro: 'cpu', coqui: 'cuda' } };
   it('reads a pinned cuda:N for the TTS engine, unknown otherwise', () => {
     expect(ttsDeviceKeyFor('kokoro-v1', values)).toBe('cuda:1');
     expect(ttsDeviceKeyFor('qwen3-tts-0.6b', values)).toBeUndefined();
     expect(ttsDeviceKeyFor('kokoro-v1', undefined)).toBeUndefined();
     expect(ttsDeviceKeyFor(undefined, values)).toBeUndefined();
+  });
+
+  it('N5 — an auto knob takes the device the sidecar resolved; a pinned knob still wins', () => {
+    /* tts.qwen.device is `auto`, and the sidecar says the resident Qwen sits on cuda:0. */
+    expect(ttsDeviceKeyFor('qwen3-tts-0.6b', values, reported)).toBe('cuda:0');
+    /* Kokoro is pinned to cuda:1, so its reported `cpu` family does not override the knob. */
+    expect(ttsDeviceKeyFor('kokoro-v1', values, reported)).toBe('cuda:1');
+    /* With no knob value at all, the reported family answers: Kokoro is on no card. */
+    expect(ttsDeviceKeyFor('kokoro-v1', undefined, reported)).toBe('cpu');
+    /* A cuda FAMILY with no card index stays unknown, so the guards keep failing closed. */
+    expect(ttsDeviceKeyFor('coqui-xtts-v2', undefined, reported)).toBeUndefined();
+    /* Qwen not resident → no card reported → unknown. */
+    expect(ttsDeviceKeyFor('qwen3-tts-0.6b', values, { ...reported, qwenDeviceKey: null })).toBeUndefined();
+  });
+
+  it('N5 — reportedTtsDevicesFrom reads a reachable /health snapshot only', () => {
+    expect(reportedTtsDevicesFrom(null)).toBeNull();
+    expect(reportedTtsDevicesFrom({ status: 'unreachable', url: '' })).toBeNull();
+    expect(
+      reportedTtsDevicesFrom({
+        status: 'reachable',
+        url: '',
+        qwenDeviceKey: 'cuda:1',
+        devices: { qwen: 'cuda', kokoro: 'cpu', coqui: null },
+      }),
+    ).toEqual({ qwenDeviceKey: 'cuda:1', families: { qwen: 'cuda', kokoro: 'cpu', coqui: null } });
   });
   it('finds the endpoint of an endpoint id only', () => {
     const settings = { analyzerEndpoints: [ep('lab', 'cuda:0')] };
@@ -5442,12 +9588,22 @@ Append to `src/hooks/use-local-analyzer-guard.test.tsx` (the Task 3c.8 `Harness`
 import { accountSlice } from '../store/account-slice';
 import { configSlice, fetchConfig } from '../store/config-slice';
 
-function makeStore(opts: { selectedModel: string; activeStream: ActiveStreamSnapshot | null; endpoints?: unknown[]; ttsDevice?: string }) {
+function makeStore(opts: {
+  selectedModel: string;
+  activeStream: ActiveStreamSnapshot | null;
+  /** N8 — further live generations, each able to sit on its own card. */
+  extraStreams?: ActiveStreamSnapshot[];
+  endpoints?: unknown[];
+  ttsDevice?: string;
+  /** N5 — what the sidecar's last /health reported. */
+  reported?: TtsReportedDevices;
+}) {
   const store = configureStore({
     reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, library: librarySlice.reducer, account: accountSlice.reducer, config: configSlice.reducer },
   });
   store.dispatch(uiSlice.actions.setSelectedModel(opts.selectedModel));
   if (opts.activeStream) store.dispatch(chaptersSlice.actions.setActiveStream(opts.activeStream));
+  for (const extra of opts.extraStreams ?? []) store.dispatch(chaptersSlice.actions.setActiveStream(extra));
   if (opts.endpoints) store.dispatch({ type: 'account/fetch/fulfilled', payload: { analyzerEndpoints: opts.endpoints } });
   if (opts.ttsDevice) {
     store.dispatch(
@@ -5458,6 +9614,7 @@ function makeStore(opts: { selectedModel: string; activeStream: ActiveStreamSnap
       ),
     );
   }
+  if (opts.reported) store.dispatch(configSlice.actions.ttsDevicesReported(opts.reported));
   return store;
 }
 ```
@@ -5497,7 +9654,52 @@ function makeStore(opts: { selectedModel: string; activeStream: ActiveStreamSnap
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
     expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
   });
+
+  it('#3084 N5 — an auto TTS engine uses the card the sidecar reported: an endpoint on the other card passes through', () => {
+    /* No tts.qwen.device override at all; the sidecar says the resident Qwen is on cuda:1. */
+    const store = makeStore({
+      selectedModel: 'gemini-2.5-flash',
+      activeStream: { ...liveSnapshot, modelKey: 'qwen3-tts-0.6b' },
+      endpoints: lab('cuda:0'),
+      reported: { qwenDeviceKey: 'cuda:1', families: { qwen: 'cuda' } },
+    });
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} modelId="openai:lab::m" /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it('#3084 N5 — a TTS engine the sidecar runs on CPU shares no card, so even an any endpoint passes through', () => {
+    const store = makeStore({
+      selectedModel: 'gemini-2.5-flash',
+      activeStream: { ...liveSnapshot, modelKey: 'kokoro-v1' },
+      endpoints: lab('any'),
+      reported: { qwenDeviceKey: null, families: { kokoro: 'cpu' } },
+    });
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} modelId="openai:lab::m" /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it("#3084 N8 — compares every live generation, not only the first: a second book on the endpoint's card prompts", () => {
+    /* Stream 1: Kokoro, reported on CPU. Stream 2: Coqui, pinned to cuda:0 — the card this
+       endpoint shares. Reading only the first stream would let the analysis start. */
+    const store = makeStore({
+      selectedModel: 'gemini-2.5-flash',
+      activeStream: { ...liveSnapshot, streamKey: 'b1::1', bookId: 'b1', modelKey: 'kokoro-v1' },
+      extraStreams: [{ ...liveSnapshot, streamKey: 'b2::1', bookId: 'b2', modelKey: 'coqui-xtts-v2' }],
+      endpoints: lab('cuda:0'),
+      ttsDevice: 'cuda:0', // tts.coqui.device
+      reported: { qwenDeviceKey: null, families: { kokoro: 'cpu' } },
+    });
+    render(<Provider store={store}><Harness onProceed={vi.fn()} modelId="openai:lab::m" /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
+  });
 ```
+
+(Add `import type { TtsReportedDevices } from '../lib/analyzer-endpoints';` to this file's imports.)
 
 Append to `src/hooks/use-reverse-local-analyzer-guard.test.tsx` (add `account` and `config` reducers to its `makeStore`, `:22-27`):
 
@@ -5551,8 +9753,68 @@ Append to `src/store/generation-stream-middleware.test.ts`, beside the local/gem
   });
 ```
 
+Extend `src/components/layout.test.tsx`:
+- In its `vi.mock('../lib/api', …)` factory's `api` object, after `getTourStatus`, add `getConfig: vi.fn(async () => ({ groups: [], descriptors: [], values: {}, restartPending: false, cudaEnvShadow: false, envCleanupCandidates: [] })),`.
+- In `makeStore`'s reducer map (`:183-208`), add `config: configSlice.reducer,`.
+- Add `import { configSlice } from '../store/config-slice';` and `import { ttsDeviceKeyFor } from '../lib/analyzer-endpoints';` beside the other imports.
+- Append:
+
+```tsx
+describe('Layout — config hydration on mount (#3084 P13)', () => {
+  it('loads the config slice without Advanced Settings being opened, so the GPU guards know the TTS card', async () => {
+    vi.mocked(api.getConfig).mockResolvedValueOnce({
+      groups: [],
+      descriptors: [],
+      values: { 'tts.kokoro.device': { key: 'tts.kokoro.device', effective: 'cuda:0', source: 'override', locked: false, overridden: true } },
+      restartPending: false,
+      cudaEnvShadow: false,
+      envCleanupCandidates: [],
+    } as never);
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => expect(ttsDeviceKeyFor('kokoro-v1', store.getState().config.values)).toBe('cuda:0'));
+  });
+
+  it('#3084 N5 — the same mount poll feeds the guards the device the sidecar resolved for an auto engine', async () => {
+    vi.mocked(api.getSidecarHealth).mockResolvedValue({
+      status: 'reachable',
+      url: '(test)',
+      qwenDeviceKey: 'cuda:1',
+      devices: { qwen: 'cuda', kokoro: 'cpu', coqui: null },
+    } as never);
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() =>
+      expect(store.getState().config.ttsReportedDevices).toEqual({
+        qwenDeviceKey: 'cuda:1',
+        families: { qwen: 'cuda', kokoro: 'cpu', coqui: null },
+      }),
+    );
+    expect(ttsDeviceKeyFor('qwen3-tts-0.6b', store.getState().config.values, store.getState().config.ttsReportedDevices)).toBe('cuda:1');
+    /* getSidecarHealth is sticky in this file (see its own note), so put the default back. */
+    vi.mocked(api.getSidecarHealth).mockResolvedValue({ status: 'unreachable', url: '(test)' });
+  });
+});
+```
+
 - [ ] **Step 2: Run them and confirm they fail**
-Run: `npx vitest run src/lib/analyzer-endpoints.test.ts src/hooks/use-local-analyzer-guard.test.tsx src/hooks/use-reverse-local-analyzer-guard.test.tsx src/store/generation-stream-middleware.test.ts`
+Run: `npx vitest run src/lib/analyzer-endpoints.test.ts src/hooks/use-local-analyzer-guard.test.tsx src/hooks/use-reverse-local-analyzer-guard.test.tsx src/store/generation-stream-middleware.test.ts src/components/layout.test.tsx`
 Expected: FAIL — `Failed to resolve import "./analyzer-endpoints"`; the other-card and gpu-none endpoint cases prompt (3c fails every endpoint closed); the reverse guard and hold ignore `openai` snapshots.
 
 - [ ] **Step 3: Implement**
@@ -5565,6 +9827,7 @@ Create `src/lib/analyzer-endpoints.ts`:
    card tag captured on the analysis snapshot. Unknown always fails closed. */
 import { engineForModelId, parseEndpointModelId, type AnalysisEngine } from './model-id';
 import { engineForModelKey } from './tts-models';
+import type { SidecarHealth } from './api';
 import type { AnalyzerEndpoint, ConfigValues, TtsModelKey, UserSettings } from './types';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -5588,13 +9851,17 @@ export function endpointForModelId(
 
 export function analyzerSharesTtsDevice(input: {
   engine: AnalysisEngine;
+  /** 'none' | 'any' | 'cuda:N'; undefined = the endpoint is not in settings (fail closed). */
   endpointGpu: string | undefined;
+  /** 'cuda:N' | 'cpu' | undefined (unknown → fail closed). */
   ttsDeviceKey: string | undefined;
 }): boolean {
   if (input.engine === 'local') return true;
   if (input.engine === 'gemini') return false;
   const gpu = input.endpointGpu ?? 'any';
   if (gpu === 'none') return false;
+  /* N5 — TTS on the CPU holds no card at all, so nothing shares it, `any` included. */
+  if (input.ttsDeviceKey === 'cpu') return false;
   if (gpu === 'any' || input.ttsDeviceKey === undefined) return true;
   return gpu === input.ttsDeviceKey;
 }
@@ -5605,12 +9872,38 @@ const DEVICE_KNOB: Partial<Record<ReturnType<typeof engineForModelKey>, string>>
   coqui: 'tts.coqui.device',
 };
 
-/** The card a TTS model is pinned to (`cuda:N`), or undefined when auto/cpu/unknown. */
-export function ttsDeviceKeyFor(modelKey: TtsModelKey | undefined, values: ConfigValues | undefined): string | undefined {
-  if (!modelKey || !values) return undefined;
-  const knob = DEVICE_KNOB[engineForModelKey(modelKey)];
-  const effective = knob ? values[knob]?.effective : undefined;
-  return typeof effective === 'string' && /^cuda:\d+$/.test(effective) ? effective : undefined;
+/** #3084 N5 — what the sidecar's last reachable /health said about where TTS runs:
+    `qwenDeviceKey` is a concrete card (a resident Qwen only), `families` is per-engine and
+    coarse ('cuda' | 'cpu' | …), which is all the sidecar reports for Kokoro and Coqui. */
+export interface TtsReportedDevices {
+  qwenDeviceKey: string | null;
+  families: Partial<Record<ReturnType<typeof engineForModelKey>, string | null>>;
+}
+
+/** Reads a /health snapshot into that shape; null for no snapshot or an unreachable one. */
+export function reportedTtsDevicesFrom(health: SidecarHealth | null): TtsReportedDevices | null {
+  if (!health || health.status !== 'reachable') return null;
+  return { qwenDeviceKey: health.qwenDeviceKey ?? null, families: { ...(health.devices ?? {}) } };
+}
+
+/** Where a TTS model runs: the pinned `tts.<engine>.device` value (`cuda:N` or `cpu`), else
+    what the sidecar resolved for that engine (N5), else undefined = unknown (fail closed). */
+export function ttsDeviceKeyFor(
+  modelKey: TtsModelKey | undefined,
+  values: ConfigValues | undefined,
+  reported?: TtsReportedDevices | null,
+): string | undefined {
+  if (!modelKey) return undefined;
+  const engine = engineForModelKey(modelKey);
+  const knob = DEVICE_KNOB[engine];
+  const effective = knob && values ? values[knob]?.effective : undefined;
+  if (typeof effective === 'string' && (/^cuda:\d+$/.test(effective) || effective === 'cpu')) return effective;
+  /* `auto` (or a config slice that has not hydrated yet): ask what the sidecar resolved. */
+  if (!reported) return undefined;
+  if (reported.families[engine] === 'cpu') return 'cpu';
+  /* Only Qwen's concrete card is reported; a 'cuda' family without an index stays unknown. */
+  if (engine === 'qwen' && reported.qwenDeviceKey && /^cuda:\d+$/.test(reported.qwenDeviceKey)) return reported.qwenDeviceKey;
+  return undefined;
 }
 
 /** The gpu tag an analysis snapshot carries for the run's model ids. */
@@ -5637,23 +9930,41 @@ export function snapshotGpuFor(
   gpu?: string;
 ```
 
-`src/hooks/use-local-analyzer-guard.tsx` — add imports `import { analyzerSharesTtsDevice, endpointForModelId, ttsDeviceKeyFor } from '../lib/analyzer-endpoints';`; after the existing selectors add:
+`src/hooks/use-local-analyzer-guard.tsx` — add imports `import { analyzerSharesTtsDevice, endpointForModelId, ttsDeviceKeyFor } from '../lib/analyzer-endpoints';` and `import type { TtsModelKey } from '../lib/types';`; after the existing selectors add:
 
 ```tsx
   const analyzerEndpoints = useAppSelector((s) => s.account?.analyzerEndpoints);
   const configValues = useAppSelector((s) => s.config?.values);
-  const generatingModelKey = useAppSelector((s) => Object.values(s.chapters.activeStreams)[0]?.modelKey);
+  const reportedTtsDevices = useAppSelector((s) => s.config?.ttsReportedDevices ?? null);
+  /* N8 — every live generation, not just the first: two books can generate on two cards, and
+     the endpoint has to be compared with each. A joined string keeps the selector's result
+     stable across progress ticks (the same reason the book-title selector reads a string). */
+  const generatingModelKeysKey = useAppSelector((s) =>
+    Object.values(s.chapters.activeStreams)
+      .map((stream) => stream.modelKey)
+      .join('|'),
+  );
 ```
 
 and replace 3c.8's engine + gate with:
 
 ```tsx
   const targetModel = modelId ?? selectedModel;
-  const shares = analyzerSharesTtsDevice({
-    engine: engineForModelId(targetModel),
-    endpointGpu: endpointForModelId({ analyzerEndpoints: analyzerEndpoints ?? [] }, targetModel)?.gpu,
-    ttsDeviceKey: ttsDeviceKeyFor(generatingModelKey, configValues),
-  });
+  const engine = engineForModelId(targetModel);
+  const endpointGpu = endpointForModelId({ analyzerEndpoints: analyzerEndpoints ?? [] }, targetModel)?.gpu;
+  const generatingModelKeys = generatingModelKeysKey.length > 0 ? generatingModelKeysKey.split('|') : [];
+  /* Shares if it shares with ANY live generation (N8). With none live the card is unknown, so
+     the rule falls back to its fail-closed answer; `anyActiveStream` below still gates. */
+  const shares =
+    generatingModelKeys.length === 0
+      ? analyzerSharesTtsDevice({ engine, endpointGpu, ttsDeviceKey: undefined })
+      : generatingModelKeys.some((key) =>
+          analyzerSharesTtsDevice({
+            engine,
+            endpointGpu,
+            ttsDeviceKey: ttsDeviceKeyFor(key as TtsModelKey, configValues, reportedTtsDevices),
+          }),
+        );
 
   const guard: GuardResult['guard'] = (proceed) => {
     if (!shares || !anyActiveStream) {
@@ -5671,6 +9982,7 @@ and replace 3c.8's engine + gate with:
   const libraryBooks = useAppSelector((s) => s.library?.books ?? []);
   const ttsModelKey = useAppSelector((s) => s.account?.resolvedTtsModelKey ?? s.account?.defaultTtsModelKey);
   const configValues = useAppSelector((s) => s.config?.values);
+  const reportedTtsDevices = useAppSelector((s) => s.config?.ttsReportedDevices ?? null); // N5
 
   const [pending, setPending] = useState<(() => void) | null>(null);
 
@@ -5681,7 +9993,7 @@ and replace 3c.8's engine + gate with:
     analyzerSharesTtsDevice({
       engine: activeStream.engine,
       endpointGpu: activeStream.gpu,
-      ttsDeviceKey: ttsDeviceKeyFor(ttsModelKey, configValues),
+      ttsDeviceKey: ttsDeviceKeyFor(ttsModelKey, configValues, reportedTtsDevices),
     });
 
   const guard: GuardResult['guard'] = (proceed) => {
@@ -5695,7 +10007,7 @@ and replace 3c.8's engine + gate with:
 
 (import `analyzerSharesTtsDevice`, `ttsDeviceKeyFor` from `../lib/analyzer-endpoints`.)
 
-`src/store/generation-stream-middleware.ts` — `StreamableRootState` (`:44-51`) gains `account?: { resolvedTtsModelKey?: TtsModelKey; defaultTtsModelKey?: TtsModelKey };` and `config?: { values: ConfigValues };` (import the two types from `../lib/types`, and the two helpers from `../lib/analyzer-endpoints`). `:99-106`:
+`src/store/generation-stream-middleware.ts` — `StreamableRootState` (`:44-51`) gains `account?: { resolvedTtsModelKey?: TtsModelKey; defaultTtsModelKey?: TtsModelKey };` and `config?: { values: ConfigValues; ttsReportedDevices: TtsReportedDevices | null };` (import the two value types from `../lib/types`, and the helpers plus `TtsReportedDevices` from `../lib/analyzer-endpoints`). `:99-106`:
 
 ```ts
       const analysisSnap = after.analysis?.activeStream ?? null;
@@ -5705,7 +10017,11 @@ and replace 3c.8's engine + gate with:
         analyzerSharesTtsDevice({
           engine: analysisSnap.engine,
           endpointGpu: analysisSnap.gpu,
-          ttsDeviceKey: ttsDeviceKeyFor(after.account?.resolvedTtsModelKey ?? after.account?.defaultTtsModelKey, after.config?.values),
+          ttsDeviceKey: ttsDeviceKeyFor(
+            after.account?.resolvedTtsModelKey ?? after.account?.defaultTtsModelKey,
+            after.config?.values,
+            after.config?.ttsReportedDevices ?? null,
+          ),
         }) &&
         analysisSnap.bookId === stageBookId &&
         analysisSnap.state !== 'paused' &&
@@ -5734,18 +10050,102 @@ and update the `:48-50` comment to "honours the same card rule the reverse-local
 
 `src/views/generation.tsx` — after `:288` add `const analyzerEndpoints = useAppSelector((s) => s.account.analyzerEndpoints);`; after `:422` and after `:591` add `const gpu = snapshotGpuFor([selectedAnalyzerModelId], { analyzerEndpoints: analyzerEndpoints ?? [] });`; in both payloads add `gpu,` after `engine,` (`:428`, `:597`).
 
+`src/lib/api.ts` — `SidecarHealth` (`:6665-6727`), after `asrDevice`:
+
+```ts
+  /* #3084 N5 — both are already on the wire (server/src/routes/sidecar-health.ts:540, :548);
+     the frontend type simply stopped omitting them. `qwenDeviceKey` is the concrete "cuda:N" a
+     resident QwenEngine sits on (null when none is resident, or on an older sidecar);
+     `devices` is the per-engine device FAMILY, never a card index. */
+  qwenDeviceKey?: string | null;
+  devices?: { kokoro: string | null; coqui: string | null; qwen: string | null } | null;
+```
+
+`src/lib/use-tts-lifecycle.ts` — `TtsLifecycle` gains, beside `gpuQueueDepth`:
+
+```ts
+  /** #3084 N5 — the last /health snapshot this hook read, so Layout can put the resolved TTS
+      devices into the config slice. Optional so existing LayoutContext fixtures still type-check;
+      no second poll is added — the pills already read this snapshot. */
+  sidecarHealth?: SidecarHealth | null;
+```
+
+and the returned object (`:420` area) gains `sidecarHealth,`.
+
+`src/store/config-slice.ts`:
+- `ConfigState` (`:12-21`) gains, after `envCleanupCandidates`:
+
+```ts
+  /** #3084 N5 — where the sidecar says each TTS engine runs (a resident Qwen's card, and the
+      per-engine family). `null` until the first reachable /health poll. The guards read it only
+      when a `tts.<engine>.device` knob is `auto`. */
+  ttsReportedDevices: TtsReportedDevices | null;
+```
+
+- `initialState` gains `ttsReportedDevices: null,`, and the slice's empty `reducers: {}` (`:105`) becomes:
+
+```ts
+  reducers: {
+    ttsDevicesReported(s, a: PayloadAction<TtsReportedDevices | null>) {
+      s.ttsReportedDevices = a.payload;
+    },
+  },
+```
+
+(import `type PayloadAction` from `@reduxjs/toolkit` and `type TtsReportedDevices` from `../lib/analyzer-endpoints`.)
+
+`src/components/layout.tsx` — beside `const ttsLifecycle = useTtsLifecycle();` (`:1136`), add:
+
+```tsx
+  /* #3084 N5 — the one /health poll also tells the GPU guards where an `auto` TTS engine
+     actually runs (a resident Qwen's card, or CPU). Keyed on the serialised value, so a poll
+     that reports the same devices dispatches nothing. */
+  const reportedTtsDevices = reportedTtsDevicesFrom(ttsLifecycle.sidecarHealth ?? null);
+  const reportedTtsDevicesKey = JSON.stringify(reportedTtsDevices);
+  useEffect(() => {
+    dispatch(configSlice.actions.ttsDevicesReported(reportedTtsDevices));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportedTtsDevicesKey]);
+```
+
+(import `reportedTtsDevicesFrom` from `../lib/analyzer-endpoints`, and `configSlice` beside `fetchConfig`.)
+
+`src/components/layout.tsx` — add `import { configSlice, fetchConfig } from '../store/config-slice';` beside `fetchAccountSettings` (`:9`), and change the account hydration effect (`:498-505`) to:
+
+```tsx
+  /* Account hydration — fetch user-level account settings once on mount so
+     the avatar can show the persisted display name and book hydration can
+     read defaults from the account slice. Fires once per app boot.
+     #3084 P13 — the config slice is hydrated here too, so the GPU guards and the
+     generation hold know the TTS card (tts.<engine>.device) in every session, not only
+     after Advanced Settings was opened. */
+  useEffect(() => {
+    void dispatch(fetchAccountSettings());
+    void dispatch(fetchTourStatus());
+    void dispatch(fetchConfig());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+```
+
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npx vitest run src/lib/analyzer-endpoints.test.ts src/hooks/use-local-analyzer-guard.test.tsx src/hooks/use-reverse-local-analyzer-guard.test.tsx src/store/generation-stream-middleware.test.ts src/views/analysing.test.tsx src/views` then `npm run typecheck`. Expected: PASS.
+Run: `npx vitest run src/lib/analyzer-endpoints.test.ts src/lib/use-tts-lifecycle.test.ts src/hooks/use-local-analyzer-guard.test.tsx src/hooks/use-reverse-local-analyzer-guard.test.tsx src/store/generation-stream-middleware.test.ts src/components/layout.test.tsx src/views/analysing.test.tsx src/views src/test/a11y.test.tsx` then `npm run typecheck`. Expected: PASS — `use-tts-lifecycle.test.ts` renders the hook without a Provider, which is why the dispatch lives in Layout and not in the hook.
 
 - [ ] **Step 5: Mutation proof**
 1. `analyzerSharesTtsDevice`: change `input.endpointGpu ?? 'any'` to `?? 'none'` → red: "endpoint missing from settings fails closed", forward "fails closed for an endpoint id missing from settings". Restore.
 2. `analyzerSharesTtsDevice`: delete `|| input.ttsDeviceKey === undefined` → red: "TTS card unknown fails closed", reverse "an endpoint run on a GPU prompts…". Restore.
 3. Middleware: revert to `analysisSnap.engine === 'local'` → red: "#3084 — holds on explicit start while an endpoint analysis on a GPU is alive…". Restore.
 4. `snapshotGpuFor`: return `sharing[0]` for several cards → red: "collapses a run to one gpu tag". Restore.
+5. `layout.tsx`: delete `void dispatch(fetchConfig());` → red: "loads the config slice without Advanced Settings being opened…" (and, in Task 3d.9, the GPU-guard e2e spec). Restore.
+6. `ttsDeviceKeyFor`: delete the `reported` fallback (`return undefined;` once the knob names no device) → red: "N5 — an auto knob takes the device the sidecar resolved…", both forward-guard N5 cases and the Layout N5 case. Restore.
+7. `ttsDeviceKeyFor`: drop the `engine === 'qwen'` condition on the reported card → red: "N5 — an auto knob takes the device the sidecar resolved…" (Kokoro answers `cuda:0`). Restore.
+8. `analyzerSharesTtsDevice`: delete `if (input.ttsDeviceKey === 'cpu') return false;` → red: "TTS on cpu shares nothing, even with an any endpoint", "TTS on cpu, endpoint pinned to a card" and the forward guard's CPU case. Restore.
+9. Forward guard: read only the first stream again (`Object.values(s.chapters.activeStreams)[0]?.modelKey`) → red: "#3084 N8 — compares every live generation, not only the first…". Restore.
+10. `reportedTtsDevicesFrom`: drop the `status !== 'reachable'` check → red: "N5 — reportedTtsDevicesFrom reads a reachable /health snapshot only". Restore.
+11. `layout.tsx`: delete the `ttsDevicesReported` effect → red: "#3084 N5 — the same mount poll feeds the guards the device the sidecar resolved…". Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add src/lib/analyzer-endpoints.ts src/lib/analyzer-endpoints.test.ts src/store/analysis-slice.ts src/hooks/use-local-analyzer-guard.tsx src/hooks/use-local-analyzer-guard.test.tsx src/hooks/use-reverse-local-analyzer-guard.tsx src/hooks/use-reverse-local-analyzer-guard.test.tsx src/store/generation-stream-middleware.ts src/store/generation-stream-middleware.test.ts src/views/analysing.tsx src/views/generation.tsx
+git add src/lib/analyzer-endpoints.ts src/lib/analyzer-endpoints.test.ts src/lib/api.ts src/lib/use-tts-lifecycle.ts src/store/config-slice.ts src/store/analysis-slice.ts src/hooks/use-local-analyzer-guard.tsx src/hooks/use-local-analyzer-guard.test.tsx src/hooks/use-reverse-local-analyzer-guard.tsx src/hooks/use-reverse-local-analyzer-guard.test.tsx src/store/generation-stream-middleware.ts src/store/generation-stream-middleware.test.ts src/views/analysing.tsx src/views/generation.tsx src/components/layout.tsx src/components/layout.test.tsx
 git commit -m "feat(frontend): GPU guards compare the endpoint's card with the TTS card"
 ```
 
@@ -5778,7 +10178,7 @@ import { buildAnalyzerPickerGroups, buildModelOptionGroups, MODEL_OPTIONS } from
 import type { AnalyzerCatalog, AnalyzerCatalogEntry } from './types';
 
 const e = (id: string, engine: AnalyzerCatalogEntry['engine'], model = id): AnalyzerCatalogEntry => ({
-  id, label: model, engine, model, structuredOutput: { mode: 'schema', dropped: [], label: 'schema' }, testPlan: { configured: 2, all: 3 },
+  id, label: model, engine, model, structuredOutput: { mode: 'schema', dropped: [], label: 'schema' }, testPlan: { configured: 2, all: 3, attempts: 3 },
 });
 
 const catalog: AnalyzerCatalog = {
@@ -5835,7 +10235,7 @@ const CATALOG: AnalyzerCatalog = {
   groups: [
     {
       kind: 'endpoint', id: 'lab', label: 'Lab server', status: 'ok',
-      models: [{ id: 'openai:lab::qwen3-30b', label: 'qwen3-30b', engine: 'openai', model: 'qwen3-30b', structuredOutput: { mode: 'schema', dropped: [], label: 'schema (not enforced)' }, testPlan: { configured: 2, all: 3 } }],
+      models: [{ id: 'openai:lab::qwen3-30b', label: 'qwen3-30b', engine: 'openai', model: 'qwen3-30b', structuredOutput: { mode: 'schema', dropped: [], label: 'schema (not enforced)' }, testPlan: { configured: 2, all: 3, attempts: 3 } }],
     },
   ],
 };
@@ -5989,13 +10389,13 @@ git commit -m "feat(frontend): analyzer pickers list endpoint models and show th
 
 **Interfaces:**
 - Consumes (3b): thunks `createAnalyzerEndpoint(input)`, `updateAnalyzerEndpoint({ endpointId, input })`, `deleteAnalyzerEndpoint(endpointId)`, `saveAnalyzerEndpointKey({ endpointId, key })`; `AnalyzerEndpointError { status, code, message, details }`; standalone `detectAnalyzerEndpointContext({ baseUrl, flavor: 'llama.cpp' | 'llama-swap', model?, apiKey?, endpointId?, allowModelLoad? })` → `{ contextTokens, source }`; types `AnalyzerEndpoint`, `AnalyzerEndpointInput`; GET field `analyzerEndpointKeyStatus: Record<string, 'set' | 'unset' | 'origin-mismatch'>`. From 3c/3d: `api.previewAnalyzerEndpointModels`, `api.getGpuDevices` (`api.ts:8914`), `fetchAnalyzerCatalog`, `ModelTestButton`, `modelLabel`, `defaultGpuForBaseUrl`, `saveAccountSettings`, `endpointModelId`.
-- Produces: `AnalyzerEndpointsSection()`; exported helpers `slugifyEndpointId(name, taken)`, `validateEndpointDraft(draft, original, keyStatus)`; the test ids Task 3d.9 uses: `add-endpoint`, `endpoint-name`, `endpoint-base-url`, `endpoint-key`, `endpoint-no-key`, `endpoint-key-reentry`, `endpoint-gpu`, `endpoint-unload-url`, `endpoint-concurrency`, `endpoint-ceiling-minutes`, `endpoint-structured-output`, `endpoint-max-output-tokens`, `endpoint-context-tokens`, `endpoint-context-error`, `endpoint-max-input-tokens`, `endpoint-list-models`, `endpoint-detect-flavor`, `endpoint-detect-model`, `endpoint-detect`, `endpoint-save`, `endpoint-cancel`, `endpoint-save-error`, `endpoint-row-<id>`, `endpoint-edit-<id>`, `endpoint-delete-<id>`, `endpoint-row-error-<id>`, `endpoint-free-model-<id>`, `endpoint-use-free-model-<id>`.
+- Produces: `AnalyzerEndpointsSection()`; exported helpers `slugifyEndpointId(name, taken)`, `validateEndpointDraft(draft, original, keyStatus)`; the test ids Task 3d.9 uses: `add-endpoint`, `endpoint-name`, `endpoint-base-url`, `endpoint-key`, `endpoint-no-key`, `endpoint-key-reentry`, `endpoint-gpu`, `endpoint-unload-url`, `endpoint-unload-all-warning`, `endpoint-concurrency`, `endpoint-ceiling-minutes`, `endpoint-structured-output`, `endpoint-max-output-tokens`, `endpoint-context-tokens`, `endpoint-context-error`, `endpoint-max-input-tokens`, `endpoint-list-models`, `endpoint-detect-flavor`, `endpoint-detect-model`, `endpoint-detect`, `endpoint-save`, `endpoint-cancel`, `endpoint-save-error`, `endpoint-row-<id>`, `endpoint-edit-<id>`, `endpoint-delete-<id>`, `endpoint-row-error-<id>`, `endpoint-free-model-<id>`, `endpoint-use-free-model-<id>`.
 
 Behaviour (spec §3, §4, decisions 3b/3c/4):
 - **Context size is required.** Save refuses without an integer ≥ 512 and shows `endpoint-context-error`. **List models** calls the preview route and prefills the smallest served context only when the field is empty. **Detect** reads llama.cpp `/props` directly; with flavor `llama-swap` and a model chosen it first confirms "Detecting may load <model> on the server" and then sends `allowModelLoad: true`. Nothing probes automatically.
 - **Key.** Password field; typed keys are written through `saveAnalyzerEndpointKey` after the endpoint write, so the key binds to the saved base URL's origin. When editing changes the origin and a key is saved (`set` or `origin-mismatch`), `endpoint-key-reentry` explains the key is only sent to the old host and Save is blocked until a key is typed or "This server needs no key" (`endpoint-no-key`) is ticked (which clears the saved key).
 - **GPU.** Options `none`, `any` and each device from `GET /api/gpu/devices` as `cuda:<idx>`; new endpoints follow `defaultGpuForBaseUrl(baseUrl)` until the user picks.
-- **Unload URL.** Optional; the hint shows `{model}` substitution with a llama-swap example; a different origin from the base URL is refused client-side (the server refuses too).
+- **Unload URL.** Optional. The hint shows `{model}` substitution with a llama-swap example; the server POSTs it once per model that has served the endpoint. A different origin from the base URL is refused client-side, and the server refuses it too. A URL without `{model}` saves normally, but shows `endpoint-unload-all-warning`: it unloads every model on that server, including one another card or app is using (P12). Blocking it would break the single-model server case.
 - **Delete.** A 409 `referenced` refusal shows its message and details under the row.
 - **Free-text model.** Each saved endpoint row takes a model id and sets `defaultAnalysisModel` to `openai:<id>::<model>` — the path when listing fails.
 - **Test.** Each catalog model of the endpoint gets `ModelTestButton` (forward GPU guard included).
@@ -6139,6 +10539,22 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
     fireEvent.click(screen.getByTestId('endpoint-save'));
     expect(await screen.findByText(/must use the same host and port as the base URL/i)).toBeInTheDocument();
     expect(api.createAnalyzerEndpoint).not.toHaveBeenCalled();
+  });
+
+  it('an unload URL without {model} saves, with a warning that it unloads every model on that server (P12)', async () => {
+    vi.mocked(api.createAnalyzerEndpoint).mockResolvedValue(settingsWith([{ ...LAB, unloadUrl: 'http://127.0.0.1:8080/api/models/unload' }]));
+    renderSection();
+    fireEvent.click(screen.getByTestId('add-endpoint'));
+    fireEvent.change(screen.getByTestId('endpoint-name'), { target: { value: 'Lab' } });
+    fireEvent.change(screen.getByTestId('endpoint-base-url'), { target: { value: 'http://127.0.0.1:8080/v1' } });
+    fireEvent.change(screen.getByTestId('endpoint-context-tokens'), { target: { value: '32768' } });
+    fireEvent.change(screen.getByTestId('endpoint-unload-url'), { target: { value: 'http://127.0.0.1:8080/api/models/unload/{model}' } });
+    expect(screen.queryByTestId('endpoint-unload-all-warning')).toBeNull();
+    fireEvent.change(screen.getByTestId('endpoint-unload-url'), { target: { value: 'http://127.0.0.1:8080/api/models/unload' } });
+    expect(screen.getByTestId('endpoint-unload-all-warning')).toHaveTextContent(/every model on that server/i);
+    fireEvent.click(screen.getByTestId('endpoint-save'));
+    await waitFor(() => expect(api.createAnalyzerEndpoint).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.createAnalyzerEndpoint).mock.calls[0][0]).toMatchObject({ unloadUrl: 'http://127.0.0.1:8080/api/models/unload' });
   });
 
   it('List models prefills the smallest served context only when the field is empty', async () => {
@@ -6525,9 +10941,14 @@ export function AnalyzerEndpointsSection() {
               ))}
             </select>
           </FieldRow>
-          <FieldRow label="Unload URL" sublabel="Optional, same host as the base URL. Castwright POSTs it to free the card for a voice model. {model} is replaced by the last model used, e.g. http://127.0.0.1:8080/api/models/unload/{model} for llama-swap.">
+          <FieldRow label="Unload URL" sublabel="Optional, same host as the base URL. Castwright POSTs it to free the card for a voice model, once for each model that has answered a request from this endpoint since the server started; {model} is replaced by that model, e.g. http://127.0.0.1:8080/api/models/unload/{model} for llama-swap.">
             <input data-testid="endpoint-unload-url" value={draft.unloadUrl} onChange={(e) => set('unloadUrl', e.target.value)} className={INPUT} />
             {errors.unloadUrl && <p className="mt-1 text-xs text-rose-700">{errors.unloadUrl}</p>}
+            {draft.unloadUrl.trim() !== '' && !draft.unloadUrl.includes('{model}') && (
+              <p data-testid="endpoint-unload-all-warning" className="mt-1 text-xs text-amber-800">
+                Without {'{model}'} this URL unloads every model on that server, including one that another card or another app is using. That is fine for a single-model server; on a shared llama-swap, add {'{model}'}.
+              </p>
+            )}
           </FieldRow>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <FieldRow label="Concurrent requests" sublabel="1–16. Match your server's parallel slots.">
@@ -6607,6 +11028,8 @@ Run: `npx vitest run src/components/settings/analyzer-endpoints-section.test.tsx
 3. `onDetect`: call `runDetect(true)` without the confirm → red: "a llama-swap Detect for a model asks before it may load the model…". Restore.
 4. `set`: remove the `!d.gpuTouched` default → red: "GPU defaults to any for a loopback host and none for a remote host…". Restore.
 5. `save`: write the key before the endpoint write → red: "creates the endpoint, then writes the typed key bound to the saved base URL". Restore.
+6. The warning: drop `&& !draft.unloadUrl.includes('{model}')` (warn for every URL) → red: "an unload URL without {model} saves, with a warning…" (`queryByTestId` is not null). Restore.
+7. `validateEndpointDraft`: add `if (d.unloadUrl.trim() !== '' && !d.unloadUrl.includes('{model}')) errors.unloadUrl = 'Add {model}.';` (block the save instead of warning) → red: "an unload URL without {model} saves, with a warning…" (`createAnalyzerEndpoint` never called). Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -6687,7 +11110,7 @@ test('add an endpoint (context required), pick its model, and the label shows "s
         serverUrl: 'http://127.0.0.1:8080/v1',
         testedAt: '2026-09-11T10:00:00.000Z',
         control: { ok: true },
-        structuredOutput: { schema: { configured: 'ignored' } },
+        structuredOutput: { schema: { 'model-default': 'ignored' } },
         reasoning: {},
       },
     };
@@ -6721,9 +11144,8 @@ test('the GPU guard prompts for an endpoint on the TTS card and not for one on a
     };
     w.__SEED_ENDPOINT_MODELS__ = { 'same-card': ['m0'], 'other-card': ['m1'] };
   });
-  await page.goto('/#/advanced');
-  await waitForRouteReady(page);
-  await expect(page.getByRole('button', { name: 'Reset all' })).toBeVisible();
+  /* P13: Layout hydrates the config slice on mount, so the TTS card is known here without
+     visiting Advanced Settings first. */
   await page.goto('/#/models');
   await waitForRouteReady(page);
 
@@ -6789,6 +11211,7 @@ Run: `npx vitest run src/lib/api.config.test.ts`, `npx playwright test --project
 1. `analyzerSharesTtsDevice` (Task 3d.6): return `true` for every `openai` input → red: "the GPU guard prompts for an endpoint on the TTS card and not for one on another card". Restore.
 2. `AnalyzerEndpointsSection` `hostChanged`: return `false` → red: "editing the host of an endpoint with a saved key asks for the key again". Restore.
 3. `model-settings-form.tsx`: render `analyzerModelLabel(defaultAnalysisModel, account.analyzerCatalog)` without `runLabelSuffixes` → red: the first spec ("schema (not enforced)"). Restore.
+4. `src/components/layout.tsx`: delete `void dispatch(fetchConfig());` (Task 3d.6) → red: "the GPU guard prompts for an endpoint on the TTS card and not for one on another card" (the TTS card is unknown, so the other-card Test prompts). Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -6805,17 +11228,22 @@ git commit -m "test(e2e): analyzer endpoints — add, pick, card-aware guard, ke
 - Modify: `docs/testing/openai-analyzer-onbox-acceptance.md` (created in 3c)
 - Modify: `docs/testing/onbox-acceptance-register-live-view.html`
 
-Row ids are minted at ship time from Group A's `<!-- next-id: A… -->` marker (bump it once per row in the same commit); below, `‹row-3c›` is the id PR 3c minted, `‹A-new-1›`/`‹A-new-2›` the two ids minted here.
+Row ids are minted at ship time from Group A's `<!-- next-id: A… -->` marker; bump it once per row in the same commit. Below, `‹row-3c›` is the id PR 3c minted, and `‹A-new-1›`/`‹A-new-2›` are the two ids minted here.
 
 - [ ] **Step 1: Extend the 3c row** — append to `### ‹row-3c› · Live structured output — Test action`:
 
 ```markdown
 **Extended by PR #NNNN (#3084 W3d — endpoints selectable).** Also run a real chapter in
 `schema` mode on the llama-swap endpoint (thinking on, then off), on a `gemma-*` and on a
-`gemini-*` model, and record: conformance of each response against the Test record
-(`enforced` runs must never need the validation retry for missing required keys), Gemini
-`schema` attribution quality against `json` on the same chapter. This row gates Gemini's
-`schema` default.
+`gemini-*` model, and record:
+- conformance of each response against the Test record: `enforced` runs must never need the
+  validation retry for missing required keys;
+- Gemini `schema` attribution quality against `json` on the same chapter;
+- for the thinking-on llama-swap model and `gemini-3.6-flash`, that the record the Test saved
+  predicted the run: no `analyzer-reasoning-overflow` in `json`/`schema` where the Test
+  recorded `enforced`/`accepted`.
+
+This row gates Gemini's `schema` default.
 ```
 
 - [ ] **Step 2: Add two rows to Group A**
@@ -6836,32 +11264,76 @@ fallback fires before the first token.
 
 ### ‹A-new-2› · Same-card eviction of an endpoint for a Qwen load ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #NNNN) · **2-card boot (8 GB + 16 GB), llama-swap with a per-model unload URL, Qwen TTS**
 
-`withCapacityRetry` POSTs the unload URL of every endpoint on the denied card (or `any`),
-with the same once-per-call latch and in-flight gate as Ollama. Unit tests inject the
-eviction; only real VRAM shows the card actually frees.
+`withCapacityRetry` POSTs the unload URL of every idle endpoint on the denied card (or
+`any`): once per model whose request was sent to the endpoint and not unloaded since, with
+the endpoint's busy state (a run using it, or a call in flight) re-checked before every POST.
+The endpoint lever has no latch: Ollama keeps its own once-per-call latch and gate, and the
+endpoint lever is bounded instead by one POST per (endpoint, model) per admission, 10 s each
+— a worst case of Σ (served models on matching endpoints) × 10 s. An admission is one
+synthesize call, not one chapter. A 2xx or 404 removes the model from the served set. Unit
+tests use fake servers; only real VRAM and a real run show that the card frees when idle and
+is never unloaded under a live run.
 
-- Endpoint `gpu` = `cuda:N` (the card Qwen targets), unload URL
-  `http://127.0.0.1:<port>/api/models/unload/{model}`, one analysis call made first (so a
-  last-used model exists). With analysis idle, load Qwen on that card: the log shows the
-  unload POST, capacity is re-probed, Qwen loads — no out-of-memory.
-- Pin Qwen to the other card: no unload POST.
-- Start an analysis on the endpoint, then trigger a Qwen load on its card: no unload POST;
-  the reverse guard prompts on Resume/Regenerate.
-- Remove the unload URL and repeat step 1: the failure message names "Unload URL".
+- **Idle, one served model.** Endpoint `gpu` = `cuda:N` (the card Qwen targets), unload URL
+  `http://127.0.0.1:<port>/api/models/unload/{model}`. One analysis call must have completed
+  first, so the endpoint has a served model. With no analysis running, load Qwen on that
+  card: the log shows one unload POST, capacity is re-probed, and Qwen loads without
+  running out of memory.
+- **Other card.** Pin Qwen to the other card: no unload POST.
+- **Mid-run, between chunk calls.** Start an analysis on the endpoint. Watch the server log
+  for a completed chunk call, then trigger a Qwen load on the endpoint's card **before the
+  next chunk call starts** (no request in flight, run still active). Expect no unload POST:
+  the Qwen load waits or fails with the capacity message. The next chunk call succeeds
+  without a model reload (no llama-swap load line). Resume/Regenerate also prompts.
+- **Two served models.** Run phase 0 and phase 1 on two different models of the same
+  llama-swap endpoint, let the run finish, then load Qwen on the card: two unload POSTs,
+  one per model, both models gone from `GET /running` (llama-swap). Unload Qwen and load it
+  again without analysing: no unload POST this time (both models left the served set).
+- **Two endpoints on one card, one busy.** Two llama-swap endpoints (two ports) on the same
+  card, both with served models. Start an analysis on endpoint B only, then trigger a Qwen
+  load: endpoint A is unloaded at once and B logs one "busy; not unloading" line. Let B's run
+  finish while the admission is still polling: B is then unloaded within the same admission
+  (its POST appears after A's, before the give-up). If the admission gives up first, the
+  failure names B as "busy for the whole wait".
+- **All-models URL.** Edit the unload URL to drop `{model}` (e.g. `/api/models/unload`):
+  Settings shows the "unloads every model on that server" warning, and the save succeeds.
+- **No URL.** Remove the unload URL and repeat the idle case: the failure message names
+  "Unload URL".
+- **A run that starts while the unload POST is out.** As the mid-run case, but time the Qwen
+  load so the analyzer's next chunk call starts **while** the unload POST is still blocked on
+  llama-swap stopping the model. Expect what an Ollama eviction does today: the chapter
+  continues, the endpoint reloads the model on that call (one llama-swap load line), and TTS
+  admission retries. Record both timestamps and whether the chapter failed. Also confirm the
+  log holds ONE "busy; not unloading" line for that admission, not one per poll.
+- **After a restart, with nothing run yet.** Restart Castwright while the endpoint still holds a
+  model, and load Qwen on its card without analysing first: no unload POST is sent (Castwright
+  has no model name for `{model}`), and the capacity failure names that endpoint and says no
+  model has run on it since Castwright started.
+- **A slow or unresponsive unload endpoint (found in review).** Point the unload URL at a
+  server that never answers (or answers past 10 s), with two served models, then load Qwen on
+  its card and let the admission poll several times before giving up. Expect exactly ONE
+  unload POST per model for the whole admission — two, not one per poll — and the lever's
+  share of the wait bounded near 2 × 10 s (Σ served models × 10 s), not `maxAttempts` × 10 s.
+  The failure names the endpoint and says every unload request failed. Then queue a chapter
+  render against the same card: each denied synthesize call repeats that cost (the models stay
+  in the served set while the server is down) — record how many synth ops were denied and
+  the total time lost, because this is the per-synth-op multiplication the unit bound hides.
 - Criteria: `docs/testing/openai-analyzer-onbox-acceptance.md` § "Same-card eviction".
 ```
 
-Update the glance table's Group A count (+2), prepend a `> **Last change: <date> (#3084 W3d), <owed> → <owed + 2>.**` note naming both rows and the extension, bump the marker twice, run `npm run register:build` and copy its owed total into the `**NN owed.**` line if it differs.
+Update the glance table's Group A count (+2). Prepend a `> **Last change: <date> (#3084 W3d), <owed> → <owed + 2>.**` note naming both rows and the extension. Bump the marker twice. Run `npm run register:build`, and copy its owed total into the `**NN owed.**` line if it differs.
 
 - [ ] **Step 3: Run sheet** — append to `docs/testing/openai-analyzer-onbox-acceptance.md`:
 
 ```markdown
 ## Live structured output — real chapters (added in W3d)
 
-5. Pick the llama-swap model as the per-run model; analyse one chapter with thinking on,
+8. Pick the llama-swap model as the per-run model; analyse one chapter with thinking on,
    then off (`chat_template_kwargs` / server config). Result:
-6. Same chapter on `gemma-4-31b-it` and `gemini-3.6-flash` in `schema`, then `json`
+9. Same chapter on `gemma-4-31b-it` and `gemini-3.6-flash` in `schema`, then `json`
    (Advanced → `analyzer.gemini.structuredOutput`). Compare attributions. Result:
+10. For the thinking-on llama-swap model and `gemini-3.6-flash`: did any call end
+    `analyzer-reasoning-overflow` in a mode the Test recorded `enforced`/`accepted`? Result:
 
 ## Long silent prefill
 
@@ -6871,10 +11343,31 @@ Update the glance table's Group A count (+2), prepend a `> **Last change: <date>
 
 ## Same-card eviction
 
-1. Qwen on the endpoint's card, analysis idle → unload POST logged, Qwen loaded. Result:
+1. Idle, one served model: Qwen on the endpoint's card → one unload POST logged, Qwen loaded. Result:
 2. Qwen on the other card → no unload POST. Result:
-3. Analysis running on the endpoint → no unload POST; Resume prompts. Result:
-4. Unload URL removed → NoCapacityError text names "Unload URL". Result:
+3. Mid-run, between two chunk calls (log shows a finished chunk, the next not yet sent): Qwen
+   load on the endpoint's card → no unload POST; the next chunk call needs no model reload;
+   Resume prompts. Timestamps of chunk end / Qwen request / next chunk start: ___ Result:
+4. Two served models (phase 0 and phase 1 on different models of the endpoint), run finished →
+   two unload POSTs, both models unloaded. Unload Qwen, load it again without analysing → no
+   unload POST (the models left the served set). Result:
+5. Unload URL without `{model}` → the Settings warning shows; the save succeeds. Result:
+6. Unload URL removed → NoCapacityError text names "Unload URL" and the endpoint. Result:
+7. Run starts during a blocking unload POST (time the Qwen load so the next chunk call begins
+   while the POST is out): chapter continues, one model reload, admission retries, and exactly
+   one "busy; not unloading" line for that admission. Timestamps: ___ Result:
+8. Restart with the endpoint still holding a model, no analysis yet, then load Qwen on its card:
+   no unload POST, and the failure names the endpoint and "since Castwright started". Result:
+9. Unload URL points at a server that never answers (or answers past 10 s), two served models:
+   load Qwen on its card and let the admission poll several times before giving up. Exactly ONE
+   unload POST per model across the whole admission (two), the lever's share of the wait near
+   2 × 10 s (Σ served models × 10 s), not `maxAttempts` × 10 s, and the failure says every unload
+   request to that endpoint failed. Then render a chapter on that card: number of denied synth
+   ops ___, time lost ___ (each denied synthesize call repays the bound). Result:
+10. Two endpoints on one card, analysis running on B only: Qwen load → A unloaded at once, one
+   "busy; not unloading" line for B. B's run ends while the admission polls → B unloaded within
+   the same admission; or, if it gave up first, the failure names B as busy for the whole wait.
+   Timestamps of A's POST / B's run end / B's POST: ___ Result:
 ```
 
 - [ ] **Step 4: Live view** — after the 3c row's `</details>`, insert one block per new row, same markup:
@@ -6890,13 +11383,13 @@ Update the glance table's Group A count (+2), prepend a `> **Last change: <date>
     <details class="item">
       <summary><span class="num">‹A-new-2›</span><span class="iname">Same-card eviction of an endpoint for a Qwen load</span><span class="risk">2-card boot, llama-swap per-model unload URL, Qwen TTS</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>With analysis idle, a Qwen load on the endpoint's card POSTs its unload URL and succeeds; a load on the other card does not; during a run nothing is unloaded and the guard prompts; without an unload URL the failure names the setting.</p>
+        <p>With the endpoint idle, a Qwen load on its card POSTs its unload URL once per model that has been sent to it and succeeds; a load on the other card does not. Mid-run, with the Qwen load timed between two chunk calls, nothing is unloaded and the next chunk needs no reload. Two models get two POSTs. An unload URL without <code>{model}</code> saves with a warning. Without an unload URL the failure names the setting. A run that starts while an unload POST is still out behaves as an Ollama eviction does today: one model reload, admission retries. Right after a restart, with no model run on the endpoint yet, nothing is POSTed and the failure says so. The endpoint lever has no latch — Ollama keeps its own — so of two endpoints on one card, one busy, the idle one unloads at once and the busy one is still unloaded later in the same admission once its run ends. Each (endpoint, model) gets at most one POST per admission, 10&nbsp;s each: a worst case of Σ served models × 10&nbsp;s, repaid per denied synthesize call, not per chapter. A 2xx or 404 removes the model from the served set. A slow or unresponsive unload endpoint is POSTed once per model, not on every poll, and the failure says every request failed.</p>
         <p>Criteria: <code>docs/testing/openai-analyzer-onbox-acceptance.md</code> § Same-card eviction. #3084.</p>
       </div>
     </details>
 ```
 
-and append the W3d paragraph to the 3c row's `<div class="body">`. Run `npm run register:build`, `npm run check:onbox-register`, save the live page from the register header's URL and run `npm run check:onbox-register -- --against-published <file>`; publish `docs/testing/onbox-acceptance-register-live-view.html` to that URL (Artifact tool, `url` set) only when it passes.
+Also append the W3d paragraph to the 3c row's `<div class="body">`. Run `npm run register:build` and `npm run check:onbox-register`. Save the live page from the register header's URL and run `npm run check:onbox-register -- --against-published <file>`. Publish `docs/testing/onbox-acceptance-register-live-view.html` to that URL (Artifact tool, `url` set) only when it passes.
 
 - [ ] **Step 5: Commit**
 ```bash
@@ -6908,14 +11401,14 @@ git commit -m "docs(docs): on-box rows for endpoint prefill, same-card eviction 
 
 ### Task 3d.11: Ship PR 3d
 
-- [ ] **Step 1: Derived artifacts** — `npm run openapi:types` (commit any diff), `npm run typecheck`, `npm run check:cycles`, `npm run config:check` (Task 3d.4 changed the `analyzer.engine` options; run `npm run config:sync` if the managed block changed).
+- [ ] **Step 1: Derived artifacts** — `npm run openapi:types` (commit any diff), `npm run typecheck`, `npm run check:cycles`, `npm run config:check` (PR 3d changes no registry knob; #3201 removed `analyzer.engine` before this wave).
 
 - [ ] **Step 2: Release notes**
 
 `docs/release-notes-next.md`:
 
 ```markdown
-- **OpenAI-compatible analyzer endpoints are selectable** (#3084, W3d). Model Manager → Analyzer endpoints adds, edits and deletes named servers (llama.cpp / llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter) with a required served context size (List models prefill from `max_model_len` / `meta.n_ctx` / `context_length`; on-demand Detect with a "may load the model" confirmation for llama-swap), an origin-bound API key that must be re-entered when the host changes, a GPU card (`none` / `any` / `cuda:N`, loopback hosts default to `any`), an optional same-origin unload URL with `{model}` substitution, concurrency, request ceiling and structured-output mode. `selectAnalyzer` builds `OpenAIAnalyzer` (Gemini fallback only on unreachable, under `allowCloudFallback`); `analysisEngine` accepts `openai`. Endpoint calls on a GPU count as analyzer calls in flight; TTS capacity admission unloads endpoints on the denied card (same latch and in-flight gate as Ollama, capacity re-probed after the POST, the failure message names the Unload URL setting). The forward/reverse GPU guards and the generation hold compare the endpoint's card with the TTS card and fail closed when either is unknown; pickers list endpoint models and run labels show the structured-output mode.
+- **OpenAI-compatible analyzer endpoints are selectable** (#3084, W3d). Model Manager → Analyzer endpoints adds, edits and deletes named servers (llama.cpp / llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter) with a required served context size (List models prefill from `max_model_len` / `meta.n_ctx` / `context_length`; on-demand Detect with a "may load the model" confirmation for llama-swap), an origin-bound API key that must be re-entered when the host changes, a GPU card (`none` / `any` / `cuda:N`, loopback hosts default to `any`), an optional same-origin unload URL with `{model}` substitution (one POST per model that has served the endpoint; a URL without `{model}` saves with an all-models warning), concurrency, request ceiling and structured-output mode. `selectAnalyzer` builds `OpenAIAnalyzer` (Gemini fallback only on unreachable, under `allowCloudFallback`); `analysisEngine` accepts `openai`, and a saved `openai` engine whose default model is not an endpoint id fails before the run with `analyzer-endpoint-missing`. An endpoint is busy while a call to it is in flight or an analysis/script-review run using it is active; TTS capacity admission unloads idle endpoints on the denied card, re-checking each endpoint's busy state before every unload POST and logging one "busy; not unloading" line per endpoint per admission (Ollama's lever is untouched and keeps its own gate and latch; the endpoint lever has no latch and is reached only on an iteration where Ollama was not evicted, so a 2xx unload retries admission and the next denial re-measures free memory before either lever runs again; it is bounded by one unload POST per (endpoint, model) per admission at 10 s each — Σ served models × 10 s at worst, and an admission is one synthesize call, not one chapter — so an endpoint that goes idle mid-wait is still unloaded and a slow or hanging unload server is not re-POSTed on every poll; a model counts as unloadable once a request has been sent to it, Tests included, and leaves that set once an unload answers 2xx or 404; the failure message names every sharing endpoint still holding the card and why — no Unload URL, busy for the whole wait, every unload request failed, unloaded what it could and still short, or no model run on it since Castwright started). `Layout` now loads the config on mount and feeds the guards the device the sidecar reports for an `auto` TTS engine (a resident Qwen's own card, or CPU for an engine the sidecar runs on CPU), so the forward/reverse GPU guards and the generation hold know the TTS card in every session; they compare every live generation's card with the endpoint's and fail closed only when neither the knob nor the sidecar names one. Pickers list endpoint models and run labels show the structured-output mode.
 ```
 
 `RELEASE_NOTES.md`:
@@ -6932,6 +11425,6 @@ git add docs/release-notes-next.md RELEASE_NOTES.md
 git commit -m "docs(docs): release notes for selectable analyzer endpoints"
 git push -u origin feat/server,frontend-3084-w3d-selectable
 ```
-PR title: `feat(server,frontend): OpenAI-compatible analyzer endpoints become selectable`. Body: `## Summary` (the Delivers list), `## Test plan` (every test file, each task's mutation-proof red output, the e2e run, the three on-box rows), `Refs #3084`, **Also fixed, found in passing:** 3a's compile-forced `step-defaults.tsx` narrowing removed; `getResolvedAnalysisEngine`'s stale "cannot yield openai" comment; `NoCapacityError` gained notes rather than mislabelling an endpoint as a loaded blocker; the seven `<optgroup key={g.engine}>` keys that would collide with two endpoint groups.
+PR title: `feat(server,frontend): OpenAI-compatible analyzer endpoints become selectable`. Body: `## Summary` (the Delivers list), `## Test plan` (every test file, each task's mutation-proof red output, the e2e run, the three on-box rows), `Refs #3084`, **Also fixed, found in passing:** 3a's compile-forced `step-defaults.tsx` narrowing removed; `getResolvedAnalysisEngine`'s stale "cannot yield openai" comment; `NoCapacityError` gained notes rather than mislabelling an endpoint as a loaded blocker; the seven `<optgroup key={g.engine}>` keys that would collide with two endpoint groups; 3a's `AnalyzerEndpointMissingError` doc comment and 3b Task 3b.1a's three test titles, all saying "this build cannot run", false once endpoints are selectable (Task 3d.4). **Found in final plan review, fixed here:** a whole-admission endpoint eviction latch that contradicted the per-admission attempt set (deleted; attempts keyed by endpoint and model, Tasks 3d.2/3d.3); an append-only served-model set whose eviction fan-out grew with session history (a 2xx or 404 unload now removes the model); give-up notes that named only two of five causes; an endpoint run mark in annotate-emotion / instruct-annotation taken outside the `try` that releases it, and no test reset for the busy registry (`_resetEndpointBusyForTest`, Task 3d.1).
 
 - [ ] **Step 5: Review gate** — `pr-review-gate` at depth `high` (multi-scope `server,frontend`); fold findings; merge only with cloud `verify.yml` green. Suggest `/compact` after merge.

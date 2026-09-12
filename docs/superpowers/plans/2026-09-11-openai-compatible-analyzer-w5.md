@@ -1,10 +1,10 @@
 # OpenAI-compatible analyzer — Wave 5 plan
 
-> Part of the [OpenAI-compatible analyzer implementation plan](2026-09-11-openai-compatible-analyzer.md). Read that file first: its Global Constraints, planning decisions (P1–P11) and interface contract bind every task below. Spec: [2026-09-10-openai-compatible-analyzer-design.md](../specs/2026-09-10-openai-compatible-analyzer-design.md).
+> Part of the [OpenAI-compatible analyzer implementation plan](2026-09-11-openai-compatible-analyzer.md). Read that file first: its Global Constraints, planning decisions (P1–P29) and interface contract bind every task below. Spec: [2026-09-10-openai-compatible-analyzer-design.md](../specs/2026-09-10-openai-compatible-analyzer-design.md).
 
 ## Wave 5 — Reasoning controls (D8, §8) and custom payload (D9, §9)
 
-**Preconditions for the whole wave.** Waves 1–4 are merged. Before editing, re-read every `file:line` below against `main`; the wave 1–4 files (`runner/*`, `transports/*`, `capabilities.ts`, `analyzer-endpoints.ts`, `routes/analyzer-models.ts`, `routes/analyzer-endpoints.ts`, W3d's endpoint form) are cited by the **contract name**, because they do not exist at `2b63b451`. Where this wave edits a wave 1–4 function whose body the contract does not pin, the step names the symbol to find (`git grep -n '<symbol>'`) and gives the full replacement text.
+**Preconditions for the whole wave.** Waves 1–4 are merged. Before editing, re-read every `file:line` below against `main`; the wave 1–4 files (`runner/*`, `transports/*`, `capabilities.ts`, `analyzer-endpoints.ts`, `routes/analyzer-models.ts`, `routes/analyzer-endpoints.ts`, W3d's endpoint form) are cited by the **contract name**, because they do not exist at `46e62a34`. Where this wave edits a wave 1–4 function whose body the contract does not pin, the step names the symbol to find (`git grep -n '<symbol>'`) and gives the full replacement text.
 
 **Conventions used by every task below.**
 - Commands run from the worktree root. Server single file: `npm --prefix server run test -- <path relative to server/>`. Frontend single file: `npm test -- <path>`. None of this wave's test files are in `server/vitest.config.slow.ts` `SLOW_FILES`; do not add assertions to `server/src/analyzer/gemini.test.ts` (slow lane).
@@ -17,7 +17,7 @@
 ### PR 5a — Reasoning levels, control styles, and their Test coverage
 
 - **Branch:** `feat/server,frontend-3084-w5a-reasoning` — `node scripts/wt-new.mjs feat/server,frontend-3084-w5a-reasoning`.
-- **Delivers:** `server/src/analyzer/reasoning.ts` (levels per engine family and endpoint control style, Gemini per-model table, wire fragments, control descriptions); `analyzerReasoningByEngine` user setting and endpoint `reasoning` validation; every transport sends the resolved level; the Test action probes reasoning levels, keys schema probes by level, and the pre-run check refuses a `rejected` level; catalog entries carry `offeredReasoningLevels`; the reasoning-overflow message names the actual control; Advanced Settings and the endpoint form offer only offered levels.
+- **Delivers:** `server/src/analyzer/reasoning.ts` (levels per engine family and endpoint control style, Gemini per-model table, wire fragments, control descriptions); `analyzerReasoningByEngine` user setting (Ollama and Gemini, each keyed by model id; P18) and endpoint `reasoning` validation; every transport sends the resolved level, with `includeThoughts` beside any Gemini level that thinks (P19); the Test action adds P7's level step (acceptance only) and keys schema probes by level; the pre-run check refuses a `rejected` level, or a stored level the rules no longer offer (P17), for analysis runs and persona generation; catalog entries carry `offeredReasoningLevels`; the reasoning-overflow message names the actual control; Advanced Settings and the endpoint form offer only offered levels.
 - **Must NOT change:** today's wire defaults — Ollama still sends `think: false` for an untouched install; Gemini and endpoints send no reasoning field for an untouched install. No new `FailureCode`. No custom-payload code (PR 5b). No structured-output default change.
 - **Entry:** waves 1–4 merged; `git grep -n -E "ReasoningLevel|extraParams" server/src/analyzer/runner` prints nothing (wave 1 declared neither; Task 5.1 adds them); W3c's `runModelTest`, `plannedTestRequestCount`, `assertConfiguredCapabilitiesAllowed` and the catalog route exist.
 - **Exit:** all tasks' tests green; `npm run typecheck`, `npm run check:cycles`, `npm run verify:fast:branch` green; `pr-review-gate` pass at **high** depth (multi-scope `feat`); on-box rows added.
@@ -27,19 +27,28 @@
 **Files:**
 - Create: `server/src/analyzer/reasoning.ts`
 - Create: `server/src/analyzer/__fixtures__/reasoning-style-levels.json`
+- Create: `server/src/analyzer/ollama-tag.ts` — `normalizeModelTag` moved from W1's `server/src/analyzer/ollama-settings.ts` (body unchanged), plus `entryForModelTag` (N7)
+- Create: `server/src/analyzer/__fixtures__/ollama-tag-cases.json` (shared with the frontend in Task 5.6)
+- Modify: `server/src/analyzer/ollama-settings.ts` (W1 Task 1.8) — its `normalizeModelTag` definition becomes a re-export from `./ollama-tag.js`
 - Modify: `server/src/analyzer/runner/transport.ts` — `TransportRequest` gains `reasoning?` and `extraParams?`
-- Modify: `server/src/analyzer/runner/stage-runner.ts` — `EngineRequestSettings` gains `reasoning?` and `extraParams?`; the private `send` helper (W1 Task 1.11) and `runFreeText` (W4 Task 4.1) forward both
-- Test: `server/src/analyzer/reasoning.test.ts`, `server/src/analyzer/runner/stage-runner.request-controls.test.ts`
+- Modify: `server/src/analyzer/runner/stage-runner.ts` — `EngineRequestSettings` gains `reasoning?` and `extraParams?`; the private `send` helper (W1 Task 1.11, with wave 2's warm-up) and `runFreeText` (W4 Task 4.1) forward both
+- Test: `server/src/analyzer/reasoning.test.ts`, `server/src/analyzer/ollama-tag.test.ts`, `server/src/analyzer/runner/stage-runner.request-controls.test.ts`
 
 **Interfaces:**
-- Consumes: `AnalysisEngine` (`server/src/analyzer/model-id.ts`, W3); `TransportKind` (`server/src/analyzer/errors.ts`, W1); `REASONING_STYLES` (`server/src/workspace/analyzer-endpoints.ts`, W3 — test-only import, see cycle note); `TransportRequest` (W1 Task 1.7, plus W4's `freeText` / optional `temperature`); `EngineRequestSettings`, `StageRunner` and its private `send(system, messages, temperature, structuredOutput, call, withEvalTiming)` helper (W1 Task 1.11); `StageRunner.runFreeText` (W4 Task 4.1).
+- Consumes: `AnalysisEngine` (`server/src/analyzer/model-id.ts`, W3); `TransportKind` (`server/src/analyzer/errors.ts`, W1); `REASONING_STYLES` (`server/src/workspace/analyzer-endpoints.ts`, W3 — test-only import, see cycle note); `TransportRequest` (W1 Task 1.7, plus W4's `freeText` / optional `temperature`); `EngineRequestSettings`, `StageRunner` and its private `send(system, messages, temperature, structuredOutput, call, withEvalTiming)` helper (W1 Task 1.11), whose first two statements wave 2 made `await this.transport.prepare?.(call.signal);` and `const settings = this.settings();`, with `maxOutputTokens: settings.maxOutputTokens,` in its request literal (there is no `resolveSettings()` method); `StageRunner.runFreeText` (W4 Task 4.1), whose first statement is `await this.transport.prepare?.(input.signal);`; `geminiModelThinks(model)` (W2, `server/src/analyzer/catalog/gemini-catalog.ts`, the static id rule); `normalizeModelTag` (W1 moved it to `server/src/analyzer/ollama-settings.ts`).
 - Produces (contract names, plus the additions marked **new**):
   - `ReasoningLevel`, declared here for the first time (wave 1 did not declare it), plus `offeredReasoningLevels`, `reasoningWireFragment`, `GEMINI_REASONING_TABLE` (contract);
-  - the contract fields `TransportRequest.reasoning?: ReasoningLevel`, `TransportRequest.extraParams?: Record<string, unknown>`, `EngineRequestSettings.reasoning?: ReasoningLevel` and `EngineRequestSettings.extraParams?: Record<string, unknown>`. Wave 1 added none of them, and wave 4 forwards neither. Here they are optional, so every wave 1–4 settings closure and request literal compiles unchanged; an omitted value is the pre-W5 wire. No wave 1–4 code sets either field: W3b's `OpenAIAnalyzer` settings closure (`server/src/analyzer/openai.ts`) and its OpenAI transport contract-suite `request()` helper set neither, and its `OpenAITransport` params object sends neither. Task 5.3 adds `reasoning` to all three `settings` closures and to the OpenAI params. Task 5.10 adds `extraParams` the same way. The contract-suite helper needs no edit, because both fields are optional;
+  - the contract fields `TransportRequest.reasoning?: ReasoningLevel`, `TransportRequest.extraParams?: Record<string, unknown>`, `EngineRequestSettings.reasoning?: ReasoningLevel` and `EngineRequestSettings.extraParams?: Record<string, unknown>`. Wave 1 added none of them, and wave 4 forwards neither. Here they are optional, so every wave 1–4 settings closure and request literal compiles unchanged; an omitted value is the pre-W5 wire. No wave 1–4 code sets either field: W3b's `openAIRequestSettings` (`server/src/analyzer/openai.ts`, which `OpenAIAnalyzer`'s settings closure calls) and its OpenAI transport contract-suite `request()` helper set neither, and its `OpenAITransport` params object sends neither. Task 5.3 adds `reasoning` to the Ollama and Gemini `settings` closures, to `openAIRequestSettings`, and to the OpenAI params. Task 5.10 adds `extraParams` the same way. The contract-suite helper needs no edit, because both fields are optional;
   - runner forwarding of both fields on every transport request: `runStage` (both attempts), `runSingleAttempt` and `runFreeText`;
-  - **new** `REASONING_LEVELS`, `ReasoningStyle`, `levelsForReasoningStyle(style)`, `OLLAMA_NAMED_LEVELS`, `testableReasoningLevels(sel)`, `defaultReasoningLevel(engine)`, `geminiReasoningRow(model)`, `GEMINI_THINKING_BUDGETS`, `resolveReasoningSetting(settings, sel)`, `reasoningControlDescription(kind, sel)`.
+  - contract `defaultReasoningLevel(engine: AnalysisEngine)` and `geminiRequestThinks(model, level)` (P27);
+  - **new** `REASONING_LEVELS`, `ReasoningStyle`, `levelsForReasoningStyle(style)`, `OLLAMA_NAMED_LEVELS`, `testableReasoningLevels(sel)`, `geminiReasoningRow(model)`, `GEMINI_THINKING_BUDGETS`, `resolveReasoningSetting(settings, sel)` (Ollama entries read through `normalizeModelTag`, N7), `reasoningControlDescription(kind, sel)`;
+  - **new** leaf `server/src/analyzer/ollama-tag.ts`: `normalizeModelTag(tag)` (moved, body unchanged; `ollama-settings.ts` re-exports it) and `entryForModelTag(map, model)` (N7: one Ollama model id for every per-model map).
 
 **Cycle note (why the types are structural).** `workspace/user-settings.ts` (Task 5.2) and `workspace/analyzer-request-controls.ts` import values from this file, and CLAUDE.md records that even `import type` closes a madge cycle. So `reasoning.ts` imports **no** workspace or capabilities module: the endpoint, record and settings parameters are structural types that `AnalyzerEndpoint`, `ModelCapabilityRecord` and `UserSettings` satisfy. The contract's `endpoint?: AnalyzerEndpoint` / `record?: ModelCapabilityRecord` call sites type-check unchanged. `runner/transport.ts` and `runner/stage-runner.ts` add an `import type { ReasoningLevel } from '../reasoning.js'` edge; `reasoning.ts` imports nothing from `runner/`, so no cycle closes.
+
+`reasoning.ts` has exactly two value imports, both from import-free leaves:
+- `geminiModelThinks` from `catalog/gemini-catalog.ts`, which imports only `node:crypto` and `@google/genai` (W2).
+- `normalizeModelTag` and `entryForModelTag` from the new `ollama-tag.ts`, which imports nothing. `normalizeModelTag` cannot be imported from W1's `ollama-settings.ts`: that module imports `workspace/user-settings.ts`, which imports `workspace/analyzer-endpoints.ts` (W3b), which imports `reasoning.ts` (Task 5.2). That closes a cycle. So this task moves the function, body unchanged, into the leaf. `ollama-settings.ts` re-exports it, so every existing importer (the keep-alive resolvers, `ollama.ts`'s re-export) compiles unchanged.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -52,17 +61,58 @@
 }
 ```
 
+`server/src/analyzer/__fixtures__/ollama-tag-cases.json` (N7; the frontend mirror in Task 5.6 is pinned to the same table):
+```json
+[
+  { "tag": "qwen3:latest", "normalized": "qwen3" },
+  { "tag": "qwen3", "normalized": "qwen3" },
+  { "tag": "qwen3.5:9b", "normalized": "qwen3.5:9b" },
+  { "tag": "gemma4-e4b-8gb:latest", "normalized": "gemma4-e4b-8gb" },
+  { "tag": "hf.co/org/model:latest", "normalized": "hf.co/org/model" },
+  { "tag": "latest", "normalized": "latest" }
+]
+```
+
+`server/src/analyzer/ollama-tag.test.ts`:
+```ts
+import { describe, it, expect } from 'vitest';
+import cases from './__fixtures__/ollama-tag-cases.json' with { type: 'json' };
+import { entryForModelTag, normalizeModelTag } from './ollama-tag.js';
+import { normalizeModelTag as reExported } from './ollama-settings.js';
+
+describe('normalizeModelTag — moved to a leaf, body unchanged (#3084 wave 5, N7)', () => {
+  it.each(cases)('$tag → $normalized', ({ tag, normalized }) => {
+    expect(normalizeModelTag(tag)).toBe(normalized);
+  });
+  it('ollama-settings re-exports the same function, so keep-alive and ollama.ts are unchanged', () => {
+    expect(reExported).toBe(normalizeModelTag);
+  });
+});
+
+describe('entryForModelTag — one Ollama model id per map (N7)', () => {
+  it('finds an entry saved under either tag form, preferring the normalised key', () => {
+    expect(entryForModelTag({ qwen3: 'a' }, 'qwen3:latest')).toBe('a');
+    expect(entryForModelTag({ 'qwen3:latest': 'b' }, 'qwen3')).toBe('b');
+    expect(entryForModelTag({ qwen3: 'a', 'qwen3:latest': 'b' }, 'qwen3:latest')).toBe('a');
+    expect(entryForModelTag({ 'qwen3.5:4b': 'c' }, 'qwen3.5:9b')).toBeUndefined();
+    expect(entryForModelTag(undefined, 'qwen3')).toBeUndefined();
+  });
+});
+```
+
 `server/src/analyzer/reasoning.test.ts`:
 ```ts
 import { describe, it, expect, expectTypeOf } from 'vitest';
 import styleLevels from './__fixtures__/reasoning-style-levels.json' with { type: 'json' };
 import { REASONING_STYLES } from '../workspace/analyzer-endpoints.js';
+import { geminiModelThinks } from './catalog/gemini-catalog.js';
 import {
   GEMINI_REASONING_TABLE,
   GEMINI_THINKING_BUDGETS,
   REASONING_LEVELS,
   defaultReasoningLevel,
   geminiReasoningRow,
+  geminiRequestThinks,
   levelsForReasoningStyle,
   offeredReasoningLevels,
   reasoningControlDescription,
@@ -132,21 +182,56 @@ describe('GEMINI_REASONING_TABLE (02-gemini-facts §2)', () => {
   });
 
   it('maps levels to the documented wire values', () => {
-    expect(reasoningWireFragment('gemini', { model: 'gemini-3.6-flash' }, 'minimal')).toEqual({ thinkingConfig: { thinkingLevel: 'MINIMAL' } });
-    expect(reasoningWireFragment('gemini', { model: 'gemini-3.6-flash' }, 'high')).toEqual({ thinkingConfig: { thinkingLevel: 'HIGH' } });
+    expect(reasoningWireFragment('gemini', { model: 'gemini-3.6-flash' }, 'minimal')).toEqual({ thinkingConfig: { thinkingLevel: 'MINIMAL', includeThoughts: true } });
+    expect(reasoningWireFragment('gemini', { model: 'gemini-3.6-flash' }, 'high')).toEqual({ thinkingConfig: { thinkingLevel: 'HIGH', includeThoughts: true } });
     expect(reasoningWireFragment('gemini', { model: 'gemini-2.5-flash' }, 'off')).toEqual({ thinkingConfig: { thinkingBudget: 0 } });
-    expect(reasoningWireFragment('gemini', { model: 'gemini-2.5-flash-lite' }, 'low')).toEqual({ thinkingConfig: { thinkingBudget: 1024 } });
-    expect(reasoningWireFragment('gemini', { model: 'gemini-2.5-pro' }, 'high')).toEqual({ thinkingConfig: { thinkingBudget: 24576 } });
+    expect(reasoningWireFragment('gemini', { model: 'gemini-2.5-flash-lite' }, 'low')).toEqual({ thinkingConfig: { thinkingBudget: 1024, includeThoughts: true } });
+    expect(reasoningWireFragment('gemini', { model: 'gemini-2.5-pro' }, 'high')).toEqual({ thinkingConfig: { thinkingBudget: 24576, includeThoughts: true } });
     expect(GEMINI_THINKING_BUDGETS).toEqual({ off: 0, low: 1024, medium: 8192, high: 24576 });
-    expect(reasoningWireFragment('gemini', { model: 'gemma-4-31b-it' }, 'on')).toEqual({ thinkingConfig: { thinkingLevel: 'HIGH' } });
+    expect(reasoningWireFragment('gemini', { model: 'gemma-4-31b-it' }, 'on')).toEqual({ thinkingConfig: { thinkingLevel: 'HIGH', includeThoughts: true } });
     expect(reasoningWireFragment('gemini', { model: 'gemma-4-31b-it' }, 'off')).toEqual({ thinkingConfig: { thinkingLevel: 'MINIMAL' } });
     expect(reasoningWireFragment('gemini', { model: 'gemini-3.6-flash' }, 'model-default')).toEqual({});
+  });
+
+  it('every Gemini level that thinks carries includeThoughts; off never does (P19)', () => {
+    for (const model of ['gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro', 'gemma-4-31b-it']) {
+      for (const level of offeredReasoningLevels({ engine: 'gemini', model })) {
+        const cfg = reasoningWireFragment('gemini', { model }, level).thinkingConfig as Record<string, unknown> | undefined;
+        if (level === 'model-default') expect(cfg, `${model} ${level}`).toBeUndefined();
+        else if (level === 'off') expect(cfg !== undefined && 'includeThoughts' in cfg, `${model} ${level}`).toBe(false);
+        else expect(cfg?.includeThoughts, `${model} ${level}`).toBe(true);
+      }
+    }
   });
 
   it('refuses a level the model does not offer instead of downgrading it', () => {
     expect(() => reasoningWireFragment('gemini', { model: 'gemini-3.8-flash' }, 'minimal')).toThrow(/"minimal" is not available/);
     expect(() => reasoningWireFragment('gemini', { model: 'gemini-2.5-pro' }, 'off')).toThrow(/"off" is not available/);
     expect(() => reasoningWireFragment('gemini', { model: 'gemini-9-ultra' }, 'low')).toThrow(/"low" is not available/);
+  });
+});
+
+describe('geminiRequestThinks — per request (P27)', () => {
+  it('the id rule decides the default; a level that turns thinking on or off decides the request', () => {
+    expect(geminiRequestThinks('gemini-3.6-flash', undefined)).toBe(true);
+    expect(geminiRequestThinks('gemini-3.6-flash', 'model-default')).toBe(true);
+    expect(geminiRequestThinks('gemma-4-31b-it', undefined)).toBe(false);
+    expect(geminiRequestThinks('gemma-4-31b-it', 'on')).toBe(true);
+    expect(geminiRequestThinks('gemma-4-31b-it', 'off')).toBe(false);
+    expect(geminiRequestThinks('gemini-2.5-flash', 'model-default')).toBe(true);
+    expect(geminiRequestThinks('gemini-2.5-flash', 'off')).toBe(false);
+    expect(geminiRequestThinks('gemini-2.5-flash-lite', 'model-default')).toBe(false);
+    expect(geminiRequestThinks('gemini-2.5-flash-lite', 'low')).toBe(true);
+  });
+
+  it('agrees with the wire for every offered level: a level thinks exactly when its fragment carries includeThoughts', () => {
+    for (const model of ['gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro', 'gemma-4-31b-it', 'gemini-9-ultra']) {
+      for (const level of offeredReasoningLevels({ engine: 'gemini', model })) {
+        const cfg = reasoningWireFragment('gemini', { model }, level).thinkingConfig as Record<string, unknown> | undefined;
+        const expected = level === 'model-default' ? geminiModelThinks(model) : cfg?.includeThoughts === true;
+        expect(geminiRequestThinks(model, level), `${model} ${level}`).toBe(expected);
+      }
+    }
   });
 });
 
@@ -197,12 +282,29 @@ describe('defaults preserve today', () => {
     expect(resolveReasoningSetting({}, { engine: 'gemini', model: 'gemini-3.6-flash' })).toBe('model-default');
     expect(resolveReasoningSetting({}, { engine: 'openai', model: 'm', endpoint: { reasoning: 'model-default' } })).toBe('model-default');
   });
-  it('reads the saved setting per engine, per Gemini model, and per endpoint', () => {
-    const s = { analyzerReasoningByEngine: { ollama: 'on' as const, gemini: { 'gemini-3.6-flash': 'low' as const } } };
+  it('reads the saved setting per Ollama model, per Gemini model, and per endpoint (P18)', () => {
+    const s = { analyzerReasoningByEngine: { ollama: { 'q:4b': 'on' as const }, gemini: { 'gemini-3.6-flash': 'low' as const } } };
     expect(resolveReasoningSetting(s, { engine: 'local', model: 'q:4b' })).toBe('on');
+    expect(resolveReasoningSetting(s, { engine: 'local', model: 'q:9b' })).toBe('off'); // model A's level is never model B's
     expect(resolveReasoningSetting(s, { engine: 'gemini', model: 'gemini-3.6-flash' })).toBe('low');
     expect(resolveReasoningSetting(s, { engine: 'gemini', model: 'gemini-3.5-flash' })).toBe('model-default');
     expect(resolveReasoningSetting(s, { engine: 'openai', model: 'm', endpoint: { reasoning: 'none' } })).toBe('none');
+  });
+});
+
+describe('stored values (N7, N10)', () => {
+  it('reads an Ollama entry through normalizeModelTag, so a bare tag and its :latest form share one level (N7)', () => {
+    const bare = { analyzerReasoningByEngine: { ollama: { qwen3: 'on' } } };
+    expect(resolveReasoningSetting(bare, { engine: 'local', model: 'qwen3:latest' })).toBe('on');
+    expect(resolveReasoningSetting(bare, { engine: 'local', model: 'qwen3' })).toBe('on');
+    const latest = { analyzerReasoningByEngine: { ollama: { 'qwen3:latest': 'high' } } };
+    expect(resolveReasoningSetting(latest, { engine: 'local', model: 'qwen3' })).toBe('high');
+  });
+
+  it('returns an unknown stored value as saved, so the pre-run check can refuse it (N10, P17)', () => {
+    const s = { analyzerReasoningByEngine: { gemini: { 'gemini-3.6-flash': 'xhigh' } } };
+    expect(resolveReasoningSetting(s, { engine: 'gemini', model: 'gemini-3.6-flash' })).toBe('xhigh');
+    expect(offeredReasoningLevels({ engine: 'gemini', model: 'gemini-3.6-flash' })).not.toContain('xhigh');
   });
 });
 
@@ -251,6 +353,7 @@ class RecordingTransport implements ChatTransport {
   readonly kind = 'ollama' as const;
   readonly model = 'q:4b';
   readonly requests: TransportRequest[] = [];
+  prepare?: (signal?: AbortSignal) => Promise<void>;
   constructor(private readonly texts: string[]) {}
   async send(req: TransportRequest): Promise<TransportResult> {
     this.requests.push(req);
@@ -291,6 +394,26 @@ describe('StageRunner forwards the configured reasoning level and custom payload
     expect(t.requests[0].extraParams).toEqual(PAYLOAD);
   });
 
+  it('the free-text path reads settings AFTER prepare(signal), and hands prepare the caller signal (P26)', async () => {
+    const t = new RecordingTransport(['A voice.']);
+    let level: 'low' | 'high' = 'low';
+    const seen: Array<AbortSignal | undefined> = [];
+    t.prepare = async (signal) => {
+      seen.push(signal);
+      level = 'high'; // a warm-up that changes what the settings resolve to, as the catalog warm-up does
+    };
+    const runner = new StageRunner({
+      transport: t,
+      policy: OLLAMA_RETRY_POLICY,
+      settings: () => ({ structuredOutput: 'json', maxOutputTokens: undefined, reasoning: level }),
+      adaptSchema: (s) => ({ schema: s, dropped: [] }),
+    });
+    const ac = new AbortController();
+    await runner.runFreeText({ prompt: 'persona please', signal: ac.signal });
+    expect(t.requests[0].reasoning).toBe('high');
+    expect(seen).toEqual([ac.signal]);
+  });
+
   it('settings that omit both fields leave them undefined on every request (the pre-W5 wire)', async () => {
     const t = new RecordingTransport(['{"ok":true}', 'A voice.']);
     const runner = new StageRunner({
@@ -310,10 +433,10 @@ describe('StageRunner forwards the configured reasoning level and custom payload
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
-Run: `npm --prefix server run test -- src/analyzer/reasoning.test.ts src/analyzer/runner/stage-runner.request-controls.test.ts`
+Run: `npm --prefix server run test -- src/analyzer/reasoning.test.ts src/analyzer/ollama-tag.test.ts src/analyzer/runner/stage-runner.request-controls.test.ts`
 Expected: FAIL.
-- `reasoning.test.ts` fails with `Failed to resolve import "./reasoning.js"`.
-- `stage-runner.request-controls.test.ts`: the first three cases fail, for example `expected [ undefined, undefined ] to deeply equal [ 'high', 'high' ]`. The runner does not forward either field yet, and vitest does not typecheck. The fourth case passes; it pins the default.
+- `reasoning.test.ts` fails with `Failed to resolve import "./reasoning.js"`, and `ollama-tag.test.ts` with `Failed to resolve import "./ollama-tag.js"`.
+- `stage-runner.request-controls.test.ts`: the first four cases fail, for example `expected [ undefined, undefined ] to deeply equal [ 'high', 'high' ]` and `expected undefined to be 'high'`. The runner does not forward either field yet, and vitest does not typecheck. The last case passes; it pins the default.
 
 - [ ] **Step 3: Implement**
 
@@ -323,9 +446,10 @@ Expected: FAIL.
 ```ts
 /* #3084 wave 5 (D8, spec §8) — reasoning levels per engine family and per
    endpoint control style. Pure: no settings, capabilities or workspace import
-   (those modules import THIS one; see the plan's cycle note). Every parameter
-   type below is structural so AnalyzerEndpoint / ModelCapabilityRecord /
-   UserSettings satisfy it.
+   (those modules import THIS one; see the plan's cycle note). Its two value
+   imports are import-free leaves (catalog/gemini-catalog.ts, ollama-tag.ts).
+   Every parameter type below is structural so AnalyzerEndpoint /
+   ModelCapabilityRecord / UserSettings satisfy it.
 
    Sources:
    - Gemini levels per model: ai.google.dev/gemini-api/docs/generate-content/thinking
@@ -345,6 +469,8 @@ Expected: FAIL.
 
 import type { AnalysisEngine } from './model-id.js';
 import type { TransportKind } from './errors.js';
+import { geminiModelThinks } from './catalog/gemini-catalog.js';
+import { entryForModelTag } from './ollama-tag.js';
 
 export const REASONING_LEVELS = ['model-default', 'off', 'on', 'none', 'minimal', 'low', 'medium', 'high'] as const;
 export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
@@ -428,6 +554,9 @@ export function testableReasoningLevels(sel: ReasoningSelection): ReasoningLevel
   return sel.engine === 'local' ? [...OLLAMA_BASE_LEVELS, ...OLLAMA_NAMED_LEVELS] : offeredReasoningLevels(sel);
 }
 
+/* The last-resort guard: a level only reaches it when a value slipped past every save rule and the
+   pre-run check. Task 5.4 replaces this body so that throw is the coded AnalyzerReasoningUnavailableError
+   marked `mid-run` (N10) — the class does not exist until that task, so PR 5a lands it in two steps. */
 function unavailable(kind: TransportKind, model: string, level: ReasoningLevel): Error {
   return new Error(
     `Reasoning level "${level}" is not available for ${kind} model ${model}. ` +
@@ -452,13 +581,16 @@ export function reasoningWireFragment(
       const row = geminiReasoningRow(sel.model);
       if (!(row?.levels ?? ['model-default']).includes(level)) throw unavailable(kind, sel.model, level);
       if (level === 'model-default' || !row) return {};
+      /* P19: every request that thinks asks for thought summaries (they feed the heartbeat and never
+         enter the answer). `off` (budget 0, or Gemma's MINIMAL) does not think, so it carries none. */
+      const thoughts = level === 'off' ? {} : { includeThoughts: true };
       if (row.control === 'gemmaOnOff') {
-        return { thinkingConfig: { thinkingLevel: level === 'on' ? 'HIGH' : 'MINIMAL' } };
+        return { thinkingConfig: { thinkingLevel: level === 'on' ? 'HIGH' : 'MINIMAL', ...thoughts } };
       }
       if (row.control === 'thinkingBudget') {
-        return { thinkingConfig: { thinkingBudget: GEMINI_THINKING_BUDGETS[level as keyof typeof GEMINI_THINKING_BUDGETS] } };
+        return { thinkingConfig: { thinkingBudget: GEMINI_THINKING_BUDGETS[level as keyof typeof GEMINI_THINKING_BUDGETS], ...thoughts } };
       }
-      return { thinkingConfig: { thinkingLevel: level.toUpperCase() } };
+      return { thinkingConfig: { thinkingLevel: level.toUpperCase(), ...thoughts } };
     }
     case 'openai': {
       const style = sel.endpoint?.reasoningStyle ?? 'not_controllable';
@@ -470,8 +602,25 @@ export function reasoningWireFragment(
   }
 }
 
+/** P27 — whether ONE Gemini request thinks. The static id rule (W2's geminiModelThinks) decides the
+    model's default; a level that turns thinking on (Gemma `on`, a 2.5 budget above 0, any 3.x level)
+    makes the request a thinking request, and a level that turns it off (`off`: budget 0, Gemma's
+    MINIMAL) makes it a non-thinking one. Settings alone decide it, never the catalog. It agrees with
+    reasoningWireFragment's includeThoughts for every offered level (reasoning.test.ts). A level the
+    model does not offer falls back to the id rule: reasoningWireFragment refuses that request, and the
+    pre-run check refuses the run (P17), before anything is sent. One function feeds both
+    `includeThoughts` and the thinking window (Task 5.3). */
+export function geminiRequestThinks(model: string, level: ReasoningLevel | undefined): boolean {
+  if (level === undefined || level === 'model-default') return geminiModelThinks(model);
+  const row = geminiReasoningRow(model);
+  if (!row || !row.levels.includes(level)) return geminiModelThinks(model);
+  return level !== 'off';
+}
+
+/* N10 — stored values are plain strings: a value this version does not know (e.g. `xhigh`) loads,
+   and the pre-run check refuses it as stale (P17). */
 interface ReasoningSettingsView {
-  analyzerReasoningByEngine?: { ollama?: ReasoningLevel; gemini?: Record<string, ReasoningLevel> };
+  analyzerReasoningByEngine?: { ollama?: Record<string, string>; gemini?: Record<string, string> };
 }
 
 export function resolveReasoningSetting(
@@ -480,9 +629,10 @@ export function resolveReasoningSetting(
 ): ReasoningLevel {
   switch (sel.engine) {
     case 'local':
-      return settings.analyzerReasoningByEngine?.ollama ?? defaultReasoningLevel('local');
+      /* P18: per model. N7: one Ollama model id — a bare tag and its `:latest` form are the same model. */
+      return (entryForModelTag(settings.analyzerReasoningByEngine?.ollama, sel.model) as ReasoningLevel | undefined) ?? defaultReasoningLevel('local');
     case 'gemini':
-      return settings.analyzerReasoningByEngine?.gemini?.[sel.model] ?? defaultReasoningLevel('gemini');
+      return (settings.analyzerReasoningByEngine?.gemini?.[sel.model] as ReasoningLevel | undefined) ?? defaultReasoningLevel('gemini');
     case 'openai':
       return (sel.endpoint?.reasoning as ReasoningLevel | undefined) ?? defaultReasoningLevel('openai');
   }
@@ -524,6 +674,34 @@ export function reasoningControlDescription(
 }
 ```
 
+`server/src/analyzer/ollama-tag.ts` (new, import-free). Cut `normalizeModelTag` and its doc comment out of `server/src/analyzer/ollama-settings.ts` (W1 moved it there verbatim from `ollama.ts:201-205`; find it with `git grep -n "export function normalizeModelTag" -- server/src`), paste them here unchanged, and add `entryForModelTag`:
+```ts
+/* #3084 wave 5 (N7) — Ollama model tag identity. A leaf with no imports, so reasoning.ts, capabilities.ts,
+   workspace/analyzer-request-controls.ts and user-settings.ts can all use the one normaliser without a cycle. */
+
+/** Strip a trailing ':latest' only (Ollama treats bare == :latest). Leaves real
+    tags like 'qwen3.5:9b' untouched. */
+export function normalizeModelTag(tag: string): string {
+  return tag.endsWith(':latest') ? tag.slice(0, -':latest'.length) : tag;
+}
+
+/** N7 — the entry a per-model map holds for an Ollama model, whichever tag form it was saved under.
+    The normalised key wins when both forms are present. */
+export function entryForModelTag<T>(map: Readonly<Record<string, T>> | undefined, model: string): T | undefined {
+  if (!map) return undefined;
+  const key = normalizeModelTag(model);
+  if (Object.hasOwn(map, key)) return map[key];
+  const hit = Object.entries(map).find(([saved]) => normalizeModelTag(saved) === key);
+  return hit?.[1];
+}
+```
+In `server/src/analyzer/ollama-settings.ts`, where the definition was, add:
+```ts
+import { normalizeModelTag } from './ollama-tag.js';
+export { normalizeModelTag } from './ollama-tag.js';
+```
+Nothing else in `ollama-settings.ts` changes: `resolveKeepAliveSeconds` and `hasKeepAliveOverride` keep calling `normalizeModelTag`.
+
 `server/src/analyzer/runner/transport.ts`. Add `import type { ReasoningLevel } from '../reasoning.js';` below the existing type imports. In `TransportRequest`, directly after `maxOutputTokens?: number;`, add:
 ```ts
   /** #3084 wave 5 — the resolved reasoning level. undefined = the pre-W5 wire
@@ -547,24 +725,31 @@ export interface EngineRequestSettings {
   extraParams?: Record<string, unknown>;
 }
 ```
-- **Stage requests.** `runStage`'s two attempts and `runSingleAttempt` reach the transport only through the private `send(system, messages, temperature, structuredOutput, call, withEvalTiming)` helper, so its one `this.transport.send({ … })` literal covers all three calls.
-  - Make `const s = this.settings();` the helper's first statement.
-  - In the literal, change the `maxOutputTokens:` entry to read `s.maxOutputTokens`, keeping whatever wrapper wave 2 put around it.
-  - Directly after that entry, add:
+- **Stage requests.** `runStage`'s two attempts and `runSingleAttempt` reach the transport only through the private `send(system, messages, temperature, structuredOutput, call, withEvalTiming)` helper, so its one `this.transport.send({ … })` literal covers all three calls. There is no `resolveSettings()` method. Wave 2 already made the helper's first two statements:
 ```ts
-      reasoning: s.reasoning,
-      extraParams: s.extraParams,
+    await this.transport.prepare?.(call.signal);
+    const settings = this.settings();
 ```
-- **Free text.** In `runFreeText` (W4 Task 4.1), make `const s = this.settings();` the first statement, and directly after its `maxOutputTokens: undefined,` entry add:
+  and its literal reads `maxOutputTokens: settings.maxOutputTokens,`. Leave both statements as they are. Directly after that `maxOutputTokens` entry, add:
 ```ts
-      reasoning: s.reasoning,
-      extraParams: s.extraParams,
+      reasoning: settings.reasoning,
+      extraParams: settings.extraParams,
 ```
-  Free text still ignores `s.maxOutputTokens`. W4's mutation proof pins that.
+- **Free text.** In `runFreeText` (W4 Task 4.1), leave its first statement, `await this.transport.prepare?.(input.signal);`, as it is. It passes the caller's own signal, so a pause releases a stalled warm-up (P26). Directly after it, add:
+```ts
+    const settings = this.settings();
+```
+  Then, directly after the request literal's `maxOutputTokens: undefined,` entry, add:
+```ts
+      reasoning: settings.reasoning,
+      extraParams: settings.extraParams,
+```
+  Free text still ignores `settings.maxOutputTokens`. W4's mutation proof pins that. Replace W4's comment above the `prepare` line, which says wave 5 adds this read, with `/* The runner awaits prepare(signal) before it reads settings, as wave 2's private send does (P26). */`.
 
 - [ ] **Step 4: Run and confirm it passes**
-Run: `npm --prefix server run test -- src/analyzer/reasoning.test.ts src/analyzer/runner/stage-runner.request-controls.test.ts src/analyzer/runner src/analyzer/transports`, then `npm run typecheck` and `npm run check:cycles`.
-Expected: PASS. Keeps green:
+Run: `npm --prefix server run test -- src/analyzer/reasoning.test.ts src/analyzer/ollama-tag.test.ts src/analyzer/runner/stage-runner.request-controls.test.ts src/analyzer/runner src/analyzer/transports src/analyzer/ollama.test.ts`, then `npm run typecheck` and `npm run check:cycles`.
+Expected: PASS, and `check:cycles` prints its `OK` line with the count unchanged. If it reports a cycle through `catalog/gemini-catalog.ts` or `ollama-tag.ts`, stop and report it: both must stay import-free leaves for `reasoning.ts`. Keeps green:
+- `ollama.test.ts`, whose keep-alive cases call `normalizeModelTag` through `ollama-settings.ts`'s re-export;
 - W1's `stage-runner.test.ts`, whose settings closures omit both fields;
 - W4's `stage-runner.free-text.test.ts`;
 - every W1–W4 transport suite;
@@ -575,32 +760,56 @@ Expected: PASS. Keeps green:
 2. In the `gemmaOnOff` branch swap `'HIGH' : 'MINIMAL'` → `'MINIMAL' : 'HIGH'`. Expected red: `maps levels to the documented wire values`. Restore.
 3. Delete `(?!-lite)` from the 3.x Flash row (`/^gemini-3(?:\.(?:5|6))?-flash(?!-lite)(?:$|-)/` → `/^gemini-3(?:\.(?:5|6))?-flash(?:$|-)/`). Expected red: `gemini-3.6-flash-lite → undefined` (the Flash row now claims an unknown Flash-Lite id). Restore.
 4. In `offeredReasoningLevels` `'local'` branch replace the filter with `...OLLAMA_NAMED_LEVELS`. Expected red: `offers model-default/off/on, plus named levels only when the Test record accepted them`. Restore.
-5. In the private `send` helper delete `reasoning: s.reasoning,`. Expected red: `first attempt and the validation retry both carry them` and `the escalation single attempt carries them`. Restore.
-6. In `runFreeText` delete `extraParams: s.extraParams,`. Expected red: `the persona free-text path carries them`. Restore.
-Paste the six red outputs into the PR body.
+5. In the private `send` helper delete `reasoning: settings.reasoning,`. Expected red: `first attempt and the validation retry both carry them` and `the escalation single attempt carries them`. Restore.
+6. In `runFreeText` delete `extraParams: settings.extraParams,`. Expected red: `the persona free-text path carries them`. Restore.
+7. In the `gemmaOnOff` branch drop `...thoughts`. Expected red: `maps levels to the documented wire values` and `every Gemini level that thinks carries includeThoughts; off never does (P19)`. Restore.
+8. In `resolveReasoningSetting`'s `'local'` branch replace `entryForModelTag(settings.analyzerReasoningByEngine?.ollama, sel.model)` with `settings.analyzerReasoningByEngine?.ollama?.[Object.keys(settings.analyzerReasoningByEngine?.ollama ?? {})[0]]` (any saved Ollama entry). Expected red: `reads the saved setting per Ollama model, per Gemini model, and per endpoint (P18)` (`q:9b` resolves `on`). Restore.
+9. In the same branch replace `entryForModelTag(settings.analyzerReasoningByEngine?.ollama, sel.model)` with `settings.analyzerReasoningByEngine?.ollama?.[sel.model]` (a raw lookup). Expected red: `reads an Ollama entry through normalizeModelTag, so a bare tag and its :latest form share one level (N7)`. Restore.
+10. In `entryForModelTag` delete the `Object.entries(map).find(…)` fallback (`return map[key];` only). Expected red: `finds an entry saved under either tag form, preferring the normalised key` (`qwen3:latest` saved, `qwen3` asked). Restore.
+11. In `geminiRequestThinks` replace `return level !== 'off';` with `return geminiModelThinks(model);`. Expected red: `the id rule decides the default; a level that turns thinking on or off decides the request` (Gemma `on`) and `agrees with the wire for every offered level…`. Restore.
+12. In `runFreeText` move `const settings = this.settings();` above `await this.transport.prepare?.(input.signal);`. Expected red: `the free-text path reads settings AFTER prepare(signal)…` (`expected 'low' to be 'high'`). Restore.
+Paste the twelve red outputs into the PR body.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/reasoning.ts server/src/analyzer/reasoning.test.ts server/src/analyzer/__fixtures__/reasoning-style-levels.json server/src/analyzer/runner/transport.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/runner/stage-runner.request-controls.test.ts
+git add server/src/analyzer/reasoning.ts server/src/analyzer/reasoning.test.ts server/src/analyzer/__fixtures__/reasoning-style-levels.json server/src/analyzer/ollama-tag.ts server/src/analyzer/ollama-tag.test.ts server/src/analyzer/__fixtures__/ollama-tag-cases.json server/src/analyzer/ollama-settings.ts server/src/analyzer/runner/transport.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/runner/stage-runner.request-controls.test.ts
 git commit -m "feat(server): reasoning levels per engine and request-control fields on the stage runner"
 ```
 
 ### Task 5.2: Settings storage and write validation (`analyzerReasoningByEngine`, endpoint `reasoning`), OpenAPI, mocks
 
 **Files:**
-- Modify: `server/src/workspace/user-settings.ts:253` (schema, after `analyzerKeepAliveByModel`), `:334` (defaults, after `analyzerKeepAliveByModel: {}`), `:402-404` (`writeUserSettings` validation)
+- Modify: `server/src/workspace/user-settings.ts:253` (schema, after `analyzerKeepAliveByModel`) and `:334` (defaults, after `analyzerKeepAliveByModel: {}`)
+- Modify: `server/src/routes/user-settings.ts:84-86` (the `PUT /` handler: write validation, inside its existing `try`)
 - Create: `server/src/workspace/analyzer-request-controls.ts`
-- Modify: `server/src/routes/analyzer-endpoints.ts` (W3b — the create and update handlers' schema parse)
-- Modify: `openapi.yaml` — `components.schemas` (new `ReasoningLevel`, `AnalyzerReasoningByEngine`), `UserSettings` (after `analyzerKeepAliveByModel`, `openapi.yaml:4758-4762` at `2b63b451`), `UserSettingsPatch` (after `:4865-4869`), W3's `AnalyzerEndpoint.reasoning`, W3c's catalog model entry schema, W3c's `ModelCapabilityRecord.reasoning`
+- Modify: `server/src/workspace/analyzer-endpoints.ts` (W3b Task 3b.5) — `parseEndpointInput`: delete P23's `reasoning` refusal (the `notYet` push) and run the 5a level rule in its place
+- Modify: `openapi.yaml` — `components.schemas` (new `ReasoningLevel`, `AnalyzerReasoningByEngine`), `UserSettings` (after `analyzerKeepAliveByModel`, `openapi.yaml:4758-4762` at `46e62a34` — `openapi.yaml` is unchanged across `2b63b451..46e62a34`, so these numbers still hold), `UserSettingsPatch` (after `:4865-4869`), W3's `AnalyzerEndpoint.reasoning`, W3c's catalog model entry schema, W3c's `ModelCapabilityRecord.reasoning`
 - Regenerate: `src/lib/api-types.ts`
-- Modify: `src/lib/api.ts:6939` (`MOCK_USER_SETTINGS`), `:7312-7342` (`mockPutUserSettings` whitelist)
-- Test: `server/src/workspace/analyzer-request-controls.test.ts`, `server/src/routes/user-settings.test.ts` (append), W3b's `server/src/routes/analyzer-endpoints.test.ts` (append)
+- Modify: `src/lib/api.ts:6939` (`MOCK_USER_SETTINGS`), `:7312-7342` (`mockPutUserSettings` whitelist), W3b Task 3b.9's `mockEndpointFromInput` (delete its `reasoning` `notYet` push, mirror the 5a level rule), W3c's `mockGetAnalyzerModels`
+- Test: `server/src/workspace/analyzer-request-controls.test.ts`, `server/src/routes/user-settings.test.ts` (append), W3b's `server/src/routes/analyzer-endpoints.test.ts` (append, and flip its P23 case), W3b's `server/src/workspace/analyzer-endpoints.test.ts` (flip its P23 case), W3b's `src/lib/api-analyzer-endpoints-mock.test.ts` (flip its P23 case)
 
 **Interfaces:**
-- Consumes: Task 5.1 `REASONING_LEVELS`, `offeredReasoningLevels`, `testableReasoningLevels`, `levelsForReasoningStyle`; `inferEngineFromModelId` (W3); `analyzerEndpointSchema` (W3).
-- Produces: `UserSettings.analyzerReasoningByEngine: { ollama?: ReasoningLevel; gemini?: Record<string, ReasoningLevel> }` (contract); `analyzerRequestControlsPatchSchema` (**new**, extended by PR 5b); `analyzerEndpointWriteSchema` (**new**, extended by PR 5b); OpenAPI `ReasoningLevel`.
+- Consumes: Task 5.1 `REASONING_LEVELS`, `offeredReasoningLevels`, `testableReasoningLevels`, `levelsForReasoningStyle`, and the leaf's `normalizeModelTag` / `entryForModelTag`; `inferEngineFromModelId` (W3); `parseEndpointInput`, `AnalyzerEndpointRefusal` (W3b Task 3b.5); `capabilityRecordFor` (W3c, route only); `readUserSettings` and `getResolvedOllamaUrl` (`user-settings.ts`).
+- Produces:
+  - `UserSettings.analyzerReasoningByEngine: { ollama?: Record<string, string>; gemini?: Record<string, string> }`, both keyed by model id (P18). Stored values are strings (N10): the contract's `ReasoningLevel` is what a save accepts and what a run may send, and an unknown stored value is stale (P17).
+  - `RequestControlsContext` and `analyzerRequestControlsPatchSchemaFor(ctx)` (**new**, extended by PR 5b), plus `analyzerRequestControlsPatchSchema`, the same rules with no Test records.
+  - **new** `StoredRequestControls`, `changedRequestControls(patch, stored)` (N6) and `withNormalizedOllamaReasoningKeys(body)` (N7).
+  - The endpoint level rule inside `parseEndpointInput` (extended by PR 5b); `MOCK_STYLE_LEVELS` in `src/lib/api.ts`; OpenAPI `ReasoningLevel`.
+  - `parseEndpointInput(input: unknown, stored?: AnalyzerEndpoint)` — a second parameter `applyUpdate` passes (A7).
 
-**Why validation is NOT on the stored schema.** `readUserSettings` (`user-settings.ts:375-376`) falls back to **all defaults** when the stored JSON fails `userSettingsSchema`. A per-model refinement there would wipe every setting the day the Gemini table changes. The stored shape only checks the eight-value enum; the offered-level rules run on writes (`writeUserSettings`, endpoint create/update). The same applies to endpoints stored inside `analyzerEndpoints`.
+**Lifting P23's `reasoning` refusal.** W3b's endpoint routes never parse a schema themselves: `POST /` and `PUT /:endpointId` call `applyCreate` / `applyUpdate`, which call `parseEndpointInput` (w3ab Task 3b.5). Until this PR that function refuses any `reasoning` other than `model-default`, naming PR 5a. This task deletes that push and runs the offered-level rule in the same place, so both routes (and the mock) accept a level its control style offers. The rule lives in `analyzer-endpoints.ts` itself, not in `analyzer-request-controls.ts`: that module would import `analyzer-endpoints.ts` back, a cycle. `analyzer-endpoints.ts` → `analyzer/reasoning.ts` closes none, because `reasoning.ts` imports only types (`model-id.ts`, `errors.ts`). The `extraParams` refusal stays until PR 5b (Task 5.9).
+
+**Why validation is NOT on the stored schema.** `readUserSettings` (`user-settings.ts:522-525`) falls back to **all defaults** when the stored JSON parses but fails `userSettingsSchema`. An unparseable file takes a different path and does not reject: it is recovered from its `.bak.N` backups, else it returns in-memory defaults with a corruption flag (`:479-498`). This argument rests on the schema case — the risk being avoided is a per-model refinement wiping a *valid* JSON file. A per-model refinement there would wipe every setting the day the Gemini table changes. The stored shape accepts any string for a level (N10). A value this version does not know, such as `xhigh` saved by a newer release before a rollback, loads, and the pre-run check refuses it as stale (P17, Task 5.4). The offered-level rules run on writes (the PUT route, endpoint create/update). The same applies to endpoints stored inside `analyzerEndpoints`.
+
+**No migration (P18).** No release has stored a single-value `analyzerReasoningByEngine.ollama`. This PR introduces the field, keyed by model id from its first commit, so there is no legacy shape to read or convert. The frontend mocks need no data change either: `MOCK_USER_SETTINGS.analyzerReasoningByEngine` stays `{}`.
+
+**Why the rule runs in the route.** A named Ollama level may be saved only for a model whose own Test record accepted it. The record lookup is W3c's `capabilityRecordFor`, and `capabilities.ts` imports `user-settings.ts`, so the check cannot run inside `writeUserSettings` without a cycle. It runs in the `PUT /api/user/settings` handler, before `writeUserSettings`, through `analyzerRequestControlsPatchSchemaFor(ctx)`. The schema module stays structural and imports neither.
+
+**Judge only what the save changes (N6).** The Settings UI sends whole maps (Task 5.6 saves every Ollama and Gemini entry at once), `writeUserSettings` replaces each sent key wholesale, and a Test record is bound to its server URL. So after an Ollama URL change, re-judging every sent entry would refuse every later save while one stale entry remains. The route therefore judges `changedRequestControls(req.body, stored)`: only the reasoning entries whose value differs from the stored settings. An unchanged stale entry is saved back as it was, and the pre-run check still refuses a run that would send it (P17). `stored` comes from `await readUserSettings()`, never `getCachedUserSettings()`: the boot warm is not awaited — since #3174 it is `void bootWarmUserSettings()` (`server/src/index.ts:188`, which awaits `readUserSettings()` inside its own try/catch at `:135-144`) — so an early save can find the cache cold and judge against defaults with no Test records. **No new handling for a bad settings file.** A malformed file does not reject (`:479-498`: backup recovery, else defaults with a corruption flag), and a schema failure returns defaults (`:522-525`). The only rejection left is a locked or unreadable file, or a failed legacy migration — and the analysis POST already awaits `readUserSettings()` on `46e62a34`, so that outcome is today's behaviour for a route that reads settings, not something this PR defines. Nothing is written either way, so the PUT fails closed.
+
+**An endpoint update judges only what it changes (A7).** `parseEndpointInput` runs on every create and update, so on an update it re-judges a level that is already stored — which would refuse every later edit of an endpoint whose saved level a newer rule no longer offers (a level saved before its `reasoningStyle` changed, a table change), exactly the failure N6 avoids for the settings PUT. `applyUpdate` therefore passes the stored endpoint, and the level rule runs only when this save changes `reasoning`, or changes the `reasoningStyle` that decides which levels are offered. A create has no stored endpoint and is always judged. The run-time refusal (P17) still catches an unchanged stale level before the first call. `mockEndpointFromInput` mirrors the rule for parity but cannot exercise it: every mock write goes through the same check, so no mock endpoint can hold a stale level.
+
+**One Ollama model id (N7).** Ollama reasoning keys are stored through `normalizeModelTag`, so `qwen3` and `qwen3:latest` are one entry. The route writes `withNormalizedOllamaReasoningKeys(req.body)`, and every read goes through `entryForModelTag` (Task 5.1).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -608,26 +817,48 @@ git commit -m "feat(server): reasoning levels per engine and request-control fie
 ```ts
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { analyzerRequestControlsPatchSchema, analyzerEndpointWriteSchema } from './analyzer-request-controls.js';
+import {
+  analyzerRequestControlsPatchSchema,
+  analyzerRequestControlsPatchSchemaFor,
+  changedRequestControls,
+  withNormalizedOllamaReasoningKeys,
+} from './analyzer-request-controls.js';
 import { userSettingsSchema, DEFAULT_USER_SETTINGS } from './user-settings.js';
 
-const baseEndpoint = { id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'any', contextTokens: 32768 };
 const messages = (fn: () => unknown) => {
   try { fn(); } catch (e) { if (e instanceof z.ZodError) return e.issues.map((i) => i.message); throw e; }
   return [];
 };
 
-describe('analyzerRequestControlsPatchSchema — reasoning', () => {
-  it('accepts every Ollama level a Test can probe', () => {
-    for (const ollama of ['model-default', 'off', 'on', 'low', 'medium', 'high'] as const) {
-      expect(messages(() => analyzerRequestControlsPatchSchema.parse({ analyzerReasoningByEngine: { ollama } }))).toEqual([]);
+describe('analyzerRequestControlsPatchSchemaFor — Ollama reasoning, per model (P18)', () => {
+  const withRecords = (records: Record<string, Partial<Record<string, 'accepted' | 'rejected'>>>) =>
+    analyzerRequestControlsPatchSchemaFor({ ollamaRecord: (model) => (records[model] ? { reasoning: records[model] } : undefined) });
+  it('accepts model-default, off and on for any Ollama model with no Test record', () => {
+    for (const level of ['model-default', 'off', 'on'] as const) {
+      expect(messages(() => analyzerRequestControlsPatchSchema.parse({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': level } } }))).toEqual([]);
     }
   });
-  it('refuses Ollama levels that only endpoints have', () => {
-    expect(messages(() => analyzerRequestControlsPatchSchema.parse({ analyzerReasoningByEngine: { ollama: 'none' } }))).toEqual([
-      'Ollama reasoning "none" is not an Ollama level (model-default, off, on, low, medium, high).',
+  it("refuses a named level without that model's accepted Test record, naming model and level", () => {
+    expect(messages(() => analyzerRequestControlsPatchSchema.parse({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } } }))).toEqual([
+      'Ollama reasoning "low" for qwen3.5:4b needs a Test of that model that accepted it (offered now: model-default, off, on).',
     ]);
   });
+  it("accepts a named level the model's own Test accepted, and refuses it for another model", () => {
+    expect(
+      messages(() => withRecords({ 'qwen3.5:4b': { low: 'accepted' } }).parse({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low', 'qwen3.5:9b': 'low' } } })),
+    ).toEqual(['Ollama reasoning "low" for qwen3.5:9b needs a Test of that model that accepted it (offered now: model-default, off, on).']);
+  });
+  it('refuses Ollama levels that only endpoints have, and endpoint model ids as keys', () => {
+    expect(
+      messages(() => analyzerRequestControlsPatchSchema.parse({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'none', 'openai:lab::m': 'off' } } })),
+    ).toEqual([
+      'Ollama reasoning "none" for qwen3.5:4b is not an Ollama level (model-default, off, on, low, medium, high).',
+      'Ollama reasoning map key "openai:lab::m" is an endpoint model id; endpoints carry their own Reasoning setting.',
+    ]);
+  });
+});
+
+describe('analyzerRequestControlsPatchSchema — Gemini reasoning', () => {
   it('refuses a Gemini level the model does not offer, naming model and level', () => {
     expect(
       messages(() => analyzerRequestControlsPatchSchema.parse({ analyzerReasoningByEngine: { gemini: { 'gemini-3.8-flash': 'minimal', 'gemini-2.5-flash': 'off' } } })),
@@ -643,22 +874,59 @@ describe('analyzerRequestControlsPatchSchema — reasoning', () => {
   });
 });
 
-describe('analyzerEndpointWriteSchema — reasoning', () => {
-  it('requires reasoning to be one of its control style levels', () => {
-    expect(messages(() => analyzerEndpointWriteSchema.parse({ ...baseEndpoint, reasoningStyle: 'enable_thinking', reasoning: 'off' }))).toEqual([]);
-    expect(messages(() => analyzerEndpointWriteSchema.parse({ ...baseEndpoint, reasoningStyle: 'enable_thinking', reasoning: 'none' }))).toEqual([
-      'Reasoning "none" is not offered by the enable_thinking control style (offered: model-default, off, on).',
-    ]);
-    expect(messages(() => analyzerEndpointWriteSchema.parse({ ...baseEndpoint, reasoning: 'high' }))).toEqual([
-      'Reasoning "high" is not offered by the not_controllable control style (offered: model-default).',
+describe('changedRequestControls — judge only what a save changes (N6)', () => {
+  const stored = { analyzerReasoningByEngine: { ollama: { qwen3: 'low', 'q:9b': 'on' }, gemini: { 'gemini-3.8-flash': 'minimal' } } };
+  it('keeps only reasoning entries whose value differs from the stored settings, comparing Ollama tags through normalizeModelTag', () => {
+    expect(
+      changedRequestControls(
+        {
+          displayName: 'x',
+          analyzerReasoningByEngine: {
+            ollama: { 'qwen3:latest': 'low', 'q:9b': 'off' },
+            gemini: { 'gemini-3.8-flash': 'minimal', 'gemini-3.6-flash': 'low' },
+          },
+        },
+        stored,
+      ),
+    ).toEqual({ displayName: 'x', analyzerReasoningByEngine: { ollama: { 'q:9b': 'off' }, gemini: { 'gemini-3.6-flash': 'low' } } });
+  });
+  it('returns a patch without reasoning maps as the same object', () => {
+    const patch = { displayName: 'x' };
+    expect(changedRequestControls(patch, stored)).toBe(patch);
+  });
+  it('an unchanged stale entry no longer blocks the rules; the same entry, changed, still does', () => {
+    const body = { analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' }, gemini: { 'gemini-3.6-flash': 'low' } } };
+    const staleStored = { analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } } };
+    expect(messages(() => analyzerRequestControlsPatchSchema.parse(changedRequestControls(body, staleStored)))).toEqual([]);
+    expect(messages(() => analyzerRequestControlsPatchSchema.parse(changedRequestControls(body, {})))).toEqual([
+      'Ollama reasoning "low" for qwen3.5:4b needs a Test of that model that accepted it (offered now: model-default, off, on).',
     ]);
   });
 });
 
+describe('withNormalizedOllamaReasoningKeys — one stored key per Ollama model (N7)', () => {
+  it('rewrites Ollama reasoning keys through normalizeModelTag and leaves everything else as sent', () => {
+    expect(
+      withNormalizedOllamaReasoningKeys({
+        displayName: 'x',
+        analyzerReasoningByEngine: { ollama: { 'qwen3:latest': 'on', 'q:4b': 'off' }, gemini: { 'gemini-3.6-flash': 'low' } },
+      }),
+    ).toEqual({ displayName: 'x', analyzerReasoningByEngine: { ollama: { qwen3: 'on', 'q:4b': 'off' }, gemini: { 'gemini-3.6-flash': 'low' } } });
+    const patch = { displayName: 'x' };
+    expect(withNormalizedOllamaReasoningKeys(patch)).toBe(patch);
+  });
+});
+
 describe('stored schema stays lenient', () => {
-  it('loads a stored Gemini level the table no longer offers instead of resetting settings', () => {
-    const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, analyzerReasoningByEngine: { gemini: { 'gemini-3.8-flash': 'minimal' } } });
+  it('loads a stored level the rules no longer offer, or one this version does not know (xhigh), without resetting settings (N10)', () => {
+    const parsed = userSettingsSchema.safeParse({
+      ...DEFAULT_USER_SETTINGS,
+      displayName: 'Kept',
+      analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'high' }, gemini: { 'gemini-3.8-flash': 'minimal', 'gemini-3.6-flash': 'xhigh' } },
+    });
     expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.displayName).toBe('Kept');
+    expect(parsed.success && parsed.data.analyzerReasoningByEngine.gemini?.['gemini-3.6-flash']).toBe('xhigh');
   });
   it('defaults to an empty map', () => {
     expect(DEFAULT_USER_SETTINGS.analyzerReasoningByEngine).toEqual({});
@@ -666,7 +934,7 @@ describe('stored schema stays lenient', () => {
 });
 ```
 
-Append to `server/src/routes/user-settings.test.ts` inside `describe('user-settings router', …)`:
+Append to `server/src/routes/user-settings.test.ts` inside `describe('user-settings router', …)`. Import `_setUserSettingsCacheForTest` and `getResolvedOllamaUrl` from `../workspace/user-settings.js`, `mkdirSync` and `writeFileSync` from `node:fs`, and `dirname` from `node:path`, where the file does not already:
 ```ts
   it('PUT refuses a Gemini reasoning level the model does not offer and writes nothing', async () => {
     const res = await request(app)
@@ -683,11 +951,85 @@ Append to `server/src/routes/user-settings.test.ts` inside `describe('user-setti
   it('PUT persists analyzerReasoningByEngine and GET returns it', async () => {
     const put = await request(app)
       .put('/api/user/settings')
-      .send({ analyzerReasoningByEngine: { ollama: 'on', gemini: { 'gemini-3.6-flash': 'low' } } });
+      .send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'on' }, gemini: { 'gemini-3.6-flash': 'low' } } });
     expect(put.status).toBe(200);
     resetCache();
     const get = await request(app).get('/api/user/settings');
-    expect(get.body.analyzerReasoningByEngine).toEqual({ ollama: 'on', gemini: { 'gemini-3.6-flash': 'low' } });
+    expect(get.body.analyzerReasoningByEngine).toEqual({ ollama: { 'qwen3.5:4b': 'on' }, gemini: { 'gemini-3.6-flash': 'low' } });
+  });
+
+  it("PUT refuses a named Ollama level until that model's own Test accepted it (P18)", async () => {
+    const refused = await request(app).put('/api/user/settings').send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } } });
+    expect(refused.status).toBe(400);
+    expect(refused.body.issues.map((i: { message: string }) => i.message)).toEqual([
+      'Ollama reasoning "low" for qwen3.5:4b needs a Test of that model that accepted it (offered now: model-default, off, on).',
+    ]);
+    expect(existsSync(userSettingsPath)).toBe(false);
+    _setUserSettingsCacheForTest({
+      analyzerCapabilitiesByModel: {
+        'qwen3.5:4b': { serverUrl: getResolvedOllamaUrl(), testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: { low: 'accepted' } },
+      },
+    });
+    const accepted = await request(app).put('/api/user/settings').send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } } });
+    expect(accepted.status).toBe(200);
+  });
+
+  it('PUT judges only what the save changes: a Gemini level saves while an unchanged stale Ollama entry stays (N6)', async () => {
+    /* The record that accepted `low` was taken on another Ollama server, so capabilityRecordFor discards
+       it for the current URL and the saved `low` is stale. The Settings UI still sends the whole map. */
+    _setUserSettingsCacheForTest({
+      analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } },
+      analyzerCapabilitiesByModel: {
+        'qwen3.5:4b': { serverUrl: 'http://old-ollama.invalid:11434', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: { low: 'accepted' } },
+      },
+    });
+    const saved = await request(app)
+      .put('/api/user/settings')
+      .send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' }, gemini: { 'gemini-3.6-flash': 'low' } } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.analyzerReasoningByEngine).toEqual({ ollama: { 'qwen3.5:4b': 'low' }, gemini: { 'gemini-3.6-flash': 'low' } });
+    /* An entry the save changes is still judged. */
+    const changed = await request(app)
+      .put('/api/user/settings')
+      .send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low', 'qwen3.5:9b': 'low' } } });
+    expect(changed.status).toBe(400);
+  });
+
+  it('PUT reads the stored Test records before judging, even when the save arrives before the boot read (N6)', async () => {
+    /* The boot read (server/src/index.ts) is not awaited, so an early PUT can find the cache cold. The
+       record exists only on disk here: a check against the cold cache would refuse this save. */
+    resetCache();
+    const serverUrl = getResolvedOllamaUrl();
+    mkdirSync(dirname(userSettingsPath), { recursive: true });
+    writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        analyzerCapabilitiesByModel: {
+          'qwen3.5:4b': { serverUrl, testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: { low: 'accepted' } },
+        },
+      }),
+    );
+    const res = await request(app).put('/api/user/settings').send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } } });
+    expect(res.status).toBe(200);
+  });
+
+  it('PUT stores an Ollama reasoning level under the normalised tag (N7)', async () => {
+    const put = await request(app).put('/api/user/settings').send({ analyzerReasoningByEngine: { ollama: { 'qwen3:latest': 'on' } } });
+    expect(put.status).toBe(200);
+    resetCache();
+    expect((await request(app).get('/api/user/settings')).body.analyzerReasoningByEngine).toEqual({ ollama: { qwen3: 'on' } });
+  });
+
+  it('PUT replaces the whole analyzerReasoningByEngine map: an engine left out of the save loses its entries', async () => {
+    /* `writeUserSettings` replaces each sent top-level key wholesale, which is what the OpenAPI
+       description promises clients; a partial map is a removal, not a patch. */
+    await request(app)
+      .put('/api/user/settings')
+      .send({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'on' }, gemini: { 'gemini-3.6-flash': 'low' } } });
+    const put = await request(app).put('/api/user/settings').send({ analyzerReasoningByEngine: { gemini: { 'gemini-3.6-flash': 'low' } } });
+    expect(put.status).toBe(200);
+    resetCache();
+    expect((await request(app).get('/api/user/settings')).body.analyzerReasoningByEngine).toEqual({ gemini: { 'gemini-3.6-flash': 'low' } });
   });
 ```
 
@@ -703,42 +1045,167 @@ Append to W3b's `server/src/routes/analyzer-endpoints.test.ts` (reuse its app/su
   });
 ```
 
-- [ ] **Step 2: Run them and confirm they fail**
-Run: `npm --prefix server run test -- src/workspace/analyzer-request-controls.test.ts src/routes/user-settings.test.ts src/routes/analyzer-endpoints.test.ts`  Expected: FAIL — `Failed to resolve import "./analyzer-request-controls.js"`; the route tests fail with `expected 200 to be 400`.
+**Flip W3b's P23 refusal tests (PR 5a lifts the `reasoning` half).** Each W3b case below refuses both a level and a payload. Replace it with a payload-only case, kept until PR 5b, and an acceptance case for the 5a rule. Keep every other case in those files.
+
+In W3b's `server/src/workspace/analyzer-endpoints.test.ts`, inside `describe('create / update / delete / key decisions', …)`, replace the case `until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload, naming the PR that enables each (P23)` with:
+```ts
+  it('until PR 5b, refuses a non-empty payload, naming the PR that enables it (P23)', () => {
+    const payload = refusal(() => applyUpdate(applyCreate(empty, base), 'lab', { ...base, extraParams: { top_k: 20 } }));
+    expect(payload).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(payload.details).toEqual(['extraParams: custom request parameters cannot be saved until PR 5b enables them']);
+    expect(applyCreate(empty, { ...base, extraParams: {} }).analyzerEndpoints).toHaveLength(1);
+  });
+  it('accepts a reasoning level its control style offers, and refuses one it does not, naming the style (5a rules)', () => {
+    expect(applyCreate(empty, { ...base, reasoningStyle: 'enable_thinking', reasoning: 'off' }).analyzerEndpoints[0].reasoning).toBe('off');
+    expect(applyCreate(empty, { ...base, reasoningStyle: 'reasoning_effort', reasoning: 'none' }).analyzerEndpoints[0].reasoning).toBe('none');
+    expect(applyCreate(empty, { ...base, reasoning: 'model-default' }).analyzerEndpoints[0].reasoning).toBe('model-default');
+    const wrongStyle = refusal(() => applyCreate(empty, { ...base, reasoningStyle: 'enable_thinking', reasoning: 'none' }));
+    expect(wrongStyle).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(wrongStyle.details).toEqual([
+      'reasoning: Reasoning "none" is not offered by the enable_thinking control style (offered: model-default, off, on).',
+    ]);
+    const notControllable = refusal(() => applyUpdate(applyCreate(empty, base), 'lab', { ...base, reasoning: 'high' }));
+    expect(notControllable.details).toEqual([
+      'reasoning: Reasoning "high" is not offered by the not_controllable control style (offered: model-default).',
+    ]);
+  });
+  it('an update judges the level only when it changes: an unchanged stale level saves, a changed one is refused (A7)', () => {
+    /* A level whose style changed under it (or a table change): stored, and no longer offered. */
+    const created = applyCreate(empty, { ...base, reasoningStyle: 'reasoning_effort', reasoning: 'high' });
+    const stale = { ...created, analyzerEndpoints: [{ ...created.analyzerEndpoints[0], reasoningStyle: 'not_controllable' as const }] };
+    /* The same level sent back with a new name: not judged, so the edit saves. */
+    expect(applyUpdate(stale, 'lab', { ...base, name: 'Lab renamed', reasoningStyle: 'not_controllable', reasoning: 'high' }).analyzerEndpoints[0]).toMatchObject({
+      name: 'Lab renamed',
+      reasoning: 'high',
+    });
+    /* Changing the level is judged. */
+    expect(refusal(() => applyUpdate(stale, 'lab', { ...base, reasoningStyle: 'not_controllable', reasoning: 'low' })).details).toEqual([
+      'reasoning: Reasoning "low" is not offered by the not_controllable control style (offered: model-default).',
+    ]);
+    /* So is changing the style that decides which levels are offered. */
+    expect(refusal(() => applyUpdate(stale, 'lab', { ...base, reasoningStyle: 'enable_thinking', reasoning: 'high' })).details).toEqual([
+      'reasoning: Reasoning "high" is not offered by the enable_thinking control style (offered: model-default, off, on).',
+    ]);
+  });
+```
+
+In W3b's `server/src/routes/analyzer-endpoints.test.ts`, inside `describe('POST /api/analyzer/endpoints', …)`, replace the case `until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload, on create and update (P23)` with:
+```ts
+  it('until PR 5b, refuses a non-empty payload on update (P23)', async () => {
+    await request(app).post('/api/analyzer/endpoints').send(lab);
+    const payload = await request(app).put('/api/analyzer/endpoints/lab').send({ ...lab, extraParams: { top_k: 20 } });
+    expect(payload.status).toBe(400);
+    expect(payload.body.details).toEqual(['extraParams: custom request parameters cannot be saved until PR 5b enables them']);
+    expect(JSON.parse(readFileSync(userSettingsPath, 'utf8')).analyzerEndpoints[0]).not.toHaveProperty('extraParams');
+  });
+
+  it('accepts a reasoning level its control style offers on create and update, validated by the 5a rules', async () => {
+    const created = await request(app).post('/api/analyzer/endpoints').send({ ...lab, reasoningStyle: 'reasoning_effort', reasoning: 'high' });
+    expect(created.status).toBe(201);
+    expect(created.body.analyzerEndpoints[0]).toMatchObject({ reasoningStyle: 'reasoning_effort', reasoning: 'high' });
+    const updated = await request(app).put('/api/analyzer/endpoints/lab').send({ ...lab, reasoningStyle: 'enable_thinking', reasoning: 'off' });
+    expect(updated.status).toBe(200);
+    expect(JSON.parse(readFileSync(userSettingsPath, 'utf8')).analyzerEndpoints[0]).toMatchObject({ reasoningStyle: 'enable_thinking', reasoning: 'off' });
+  });
+```
+
+In W3b's `src/lib/api-analyzer-endpoints-mock.test.ts`, add `import styleLevels from '../../server/src/analyzer/__fixtures__/reasoning-style-levels.json';` below its `vitest` import. Inside `describe('mock analyzer endpoint API', …)`, replace the case `until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload, as the server does` with the two cases below. The mock ids stay inside `^[a-z0-9-]{1,40}$` (the longest is 36 characters):
+```ts
+  it('until PR 5b, refuses a non-empty payload, as the server does', async () => {
+    const p = await refusal(api.createAnalyzerEndpoint({ ...input('m-payload'), extraParams: { top_k: 20 } }));
+    expect(p.details).toEqual(['extraParams: custom request parameters cannot be saved until PR 5b enables them']);
+  });
+
+  it('accepts a reasoning level its control style offers and refuses one it does not, as the server does', async () => {
+    const r = await refusal(api.createAnalyzerEndpoint({ ...input('m-reasoning'), reasoning: 'high' }));
+    expect(r).toMatchObject({
+      code: 'invalid',
+      details: ['reasoning: Reasoning "high" is not offered by the not_controllable control style (offered: model-default).'],
+    });
+    /* The same table as the server (reasoning.ts, pinned to this fixture by reasoning.test.ts). */
+    for (const [style, levels] of Object.entries(styleLevels)) {
+      for (const level of ['model-default', 'off', 'on', 'none', 'minimal', 'low', 'medium', 'high']) {
+        const id = `m-lvl-${style.replace(/_/g, '-')}-${level}`;
+        const outcome = await api
+          .createAnalyzerEndpoint({ ...input(id), reasoningStyle: style, reasoning: level } as never)
+          .then(() => 'accepted', () => 'refused');
+        expect([style, level, outcome]).toEqual([style, level, levels.includes(level) ? 'accepted' : 'refused']);
+      }
+    }
+  });
+```
+
+- [ ] **Step 2: Run them and confirm they fail** (per-test outcomes corrected by A9)
+Run: `npm --prefix server run test -- src/workspace/analyzer-request-controls.test.ts src/routes/user-settings.test.ts src/routes/analyzer-endpoints.test.ts src/workspace/analyzer-endpoints.test.ts` and `npm test -- src/lib/api-analyzer-endpoints-mock.test.ts`
+Expected: FAIL.
+- `analyzer-request-controls.test.ts`: every case fails at `Failed to resolve import "./analyzer-request-controls.js"`.
+- In `server/src/routes/user-settings.test.ts`, where nothing judges the body yet and the stored schema still drops the field:
+  - `PUT refuses a Gemini reasoning level the model does not offer and writes nothing` and `PUT refuses a named Ollama level until that model's own Test accepted it (P18)`: `expected 200 to be 400`;
+  - `PUT persists analyzerReasoningByEngine and GET returns it`, `PUT stores an Ollama reasoning level under the normalised tag (N7)` and `PUT replaces the whole analyzerReasoningByEngine map…`: `expected undefined to deeply equal …` — the GET carries no such field;
+  - `PUT judges only what the save changes: a Gemini level saves while an unchanged stale Ollama entry stays (N6)`: it cannot pass either — the saved body lacks the unstored field, and its second save is not refused (`expected 200 to be 400`);
+  - **the one case that PASSES** is `PUT reads the stored Test records before judging, even when the save arrives before the boot read (N6)`: it expects 200, and nothing judges the body yet. Mutation 5 shows it can fail.
+- `create refuses a reasoning level its control style does not offer` fails: the body carries P23's `only "model-default" can be saved until PR 5a` detail, not the 5a rule's.
+- `accepts a reasoning level its control style offers…` fails in all three files: the workspace case throws `AnalyzerEndpointRefusal`, the route case gets `expected 400 to be 201`, and the mock case refuses `enable_thinking`/`off`.
+- `an update judges the level only when it changes… (A7)` fails at its first assertion: P23 refuses the unchanged `high` outright (`AnalyzerEndpointRefusal`).
+- The three `until PR 5b, refuses a non-empty payload…` cases PASS: they lock the payload refusal this PR keeps.
 
 - [ ] **Step 3: Implement**
 
 `server/src/workspace/analyzer-request-controls.ts`:
 ```ts
 /* #3084 wave 5 — WRITE-time validation for analyzer request controls. Kept off
-   userSettingsSchema on purpose: a failed read-parse resets every setting to
-   defaults (user-settings.ts readUserSettings), so rules that depend on tables
-   that change (Gemini levels, protected keys) run only when a client writes. */
+   userSettingsSchema on purpose: a SCHEMA failure on read resets every setting to
+   defaults (user-settings.ts readUserSettings, :522-525; an unparseable file is recovered
+   from backups or falls back with a corruption flag, :479-498), so rules that depend on
+   tables that change (Gemini levels, protected keys)
+   run only when a client writes. */
 import { z } from 'zod';
-import { REASONING_LEVELS, levelsForReasoningStyle, offeredReasoningLevels, testableReasoningLevels } from '../analyzer/reasoning.js';
+import { REASONING_LEVELS, offeredReasoningLevels, testableReasoningLevels } from '../analyzer/reasoning.js';
 import { inferEngineFromModelId } from '../analyzer/model-id.js';
-import { analyzerEndpointSchema } from './analyzer-endpoints.js';
+import { entryForModelTag, normalizeModelTag } from '../analyzer/ollama-tag.js';
 
 const OLLAMA_WRITABLE = testableReasoningLevels({ engine: 'local', model: '' });
 
+/** What the write check needs from saved Test records. Structural: this module imports no
+    capabilities or user-settings code (either would close a cycle through user-settings.ts). */
+export interface RequestControlsContext {
+  /** The Ollama model's Test record for the CURRENT Ollama URL (W3c's capabilityRecordFor), or undefined. */
+  ollamaRecord(model: string): { reasoning?: Partial<Record<string, 'accepted' | 'rejected'>> } | undefined;
+}
+
 const reasoningByEngineInput = z
   .object({
-    ollama: z.enum(REASONING_LEVELS).optional(),
+    ollama: z.record(z.string(), z.enum(REASONING_LEVELS)).optional(),
     gemini: z.record(z.string(), z.enum(REASONING_LEVELS)).optional(),
   })
   .optional();
 
-export const analyzerRequestControlsPatchSchema = z
-  .object({ analyzerReasoningByEngine: reasoningByEngineInput })
-  .superRefine((patch, ctx) => {
+export function analyzerRequestControlsPatchSchemaFor(records: RequestControlsContext) {
+  return z
+    .object({ analyzerReasoningByEngine: reasoningByEngineInput })
+    .superRefine((patch, ctx) => {
     const r = patch.analyzerReasoningByEngine;
     if (!r) return;
-    if (r.ollama !== undefined && !OLLAMA_WRITABLE.includes(r.ollama)) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['analyzerReasoningByEngine', 'ollama'],
-        message: `Ollama reasoning "${r.ollama}" is not an Ollama level (${OLLAMA_WRITABLE.join(', ')}).`,
-      });
+    /* P18: one level per Ollama model. model-default/off/on are always writable; low/medium/high
+       only for a model whose own Test record accepted that level. */
+    for (const [model, level] of Object.entries(r.ollama ?? {})) {
+      const path = ['analyzerReasoningByEngine', 'ollama', model];
+      if (inferEngineFromModelId(model) === 'openai') {
+        ctx.addIssue({ code: 'custom', path, message: `Ollama reasoning map key "${model}" is an endpoint model id; endpoints carry their own Reasoning setting.` });
+        continue;
+      }
+      if (!OLLAMA_WRITABLE.includes(level)) {
+        ctx.addIssue({ code: 'custom', path, message: `Ollama reasoning "${level}" for ${model} is not an Ollama level (${OLLAMA_WRITABLE.join(', ')}).` });
+        continue;
+      }
+      const offered = offeredReasoningLevels({ engine: 'local', model, record: records.ollamaRecord(model) });
+      if (!offered.includes(level)) {
+        ctx.addIssue({
+          code: 'custom',
+          path,
+          message: `Ollama reasoning "${level}" for ${model} needs a Test of that model that accepted it (offered now: ${offered.join(', ')}).`,
+        });
+      }
     }
     for (const [model, level] of Object.entries(r.gemini ?? {})) {
       if (inferEngineFromModelId(model) !== 'gemini') {
@@ -755,35 +1222,69 @@ export const analyzerRequestControlsPatchSchema = z
       }
     }
   });
+}
 
-export const analyzerEndpointWriteSchema = analyzerEndpointSchema.superRefine((endpoint, ctx) => {
-  const offered = levelsForReasoningStyle(endpoint.reasoningStyle);
-  if (!(offered as readonly string[]).includes(endpoint.reasoning)) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['reasoning'],
-      message: `Reasoning "${endpoint.reasoning}" is not offered by the ${endpoint.reasoningStyle} control style (offered: ${offered.join(', ')}).`,
-    });
+/** The same rules with no Test records: every named Ollama level is refused. */
+export const analyzerRequestControlsPatchSchema = analyzerRequestControlsPatchSchemaFor({ ollamaRecord: () => undefined });
+
+/** What changedRequestControls reads from the stored settings. Structural: no user-settings import. */
+export interface StoredRequestControls {
+  analyzerReasoningByEngine?: { ollama?: Record<string, string>; gemini?: Record<string, string> };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** N6 — the part of a PUT body the rules judge: only reasoning entries whose value differs from the
+    stored settings. The UI sends whole maps and Test records are bound to their server URL, so
+    re-judging an unchanged stored entry would let one stale entry (an Ollama URL change, a Gemini table
+    change, an unknown stored value) block every later save. Ollama keys compare through
+    normalizeModelTag (N7). A patch without reasoning maps is returned as the same object. */
+export function changedRequestControls(patch: unknown, stored: StoredRequestControls): unknown {
+  if (!isRecord(patch) || !isRecord(patch.analyzerReasoningByEngine)) return patch;
+  const sent = patch.analyzerReasoningByEngine;
+  const judged: Record<string, unknown> = { ...sent };
+  for (const engine of ['ollama', 'gemini'] as const) {
+    const entries = sent[engine];
+    if (!isRecord(entries)) continue;
+    const before = stored.analyzerReasoningByEngine?.[engine];
+    judged[engine] = Object.fromEntries(
+      Object.entries(entries).filter(
+        ([model, level]) => (engine === 'ollama' ? entryForModelTag(before, model) : before?.[model]) !== level,
+      ),
+    );
   }
-});
+  return { ...patch, analyzerReasoningByEngine: judged };
+}
+
+/** N7 — the body the route writes: Ollama reasoning keys through normalizeModelTag, so one model has one
+    stored key (a later sent key wins when two normalise alike). Everything else is as sent; a body with
+    no Ollama reasoning map is returned as the same object. */
+export function withNormalizedOllamaReasoningKeys(body: unknown): unknown {
+  if (!isRecord(body) || !isRecord(body.analyzerReasoningByEngine) || !isRecord(body.analyzerReasoningByEngine.ollama)) {
+    return body;
+  }
+  const ollama = Object.fromEntries(
+    Object.entries(body.analyzerReasoningByEngine.ollama).map(([model, level]) => [normalizeModelTag(model), level]),
+  );
+  return { ...body, analyzerReasoningByEngine: { ...body.analyzerReasoningByEngine, ollama } };
+}
 ```
 
-`server/src/workspace/user-settings.ts` — add the import next to the existing imports (`:12-24`):
+`server/src/workspace/user-settings.ts` — no new import. After `analyzerKeepAliveByModel: z.record(z.string(), z.number().int()).default({}),` (`:253`):
 ```ts
-import { REASONING_LEVELS } from '../analyzer/reasoning.js';
-import { analyzerRequestControlsPatchSchema } from './analyzer-request-controls.js';
-```
-After `analyzerKeepAliveByModel: z.record(z.string(), z.number().int()).default({}),` (`:253`):
-```ts
-  /* #3084 wave 5 — per-engine reasoning level. Ollama: one level for every
-     Ollama model (absent = 'off', today's think:false). Gemini: per model id
-     (absent = 'model-default', no thinking field). Endpoints carry their own
-     `reasoning`. Lenient on read (enum only); offered-level rules run on write
-     in analyzer-request-controls.ts. General PUT is the write path. */
+  /* #3084 wave 5 — per-engine reasoning level, keyed by model id (P18; Ollama keys
+     stored through normalizeModelTag, N7). Ollama: absent = 'off', today's
+     think:false. Gemini: absent = 'model-default', no thinking field. Endpoints
+     carry their own `reasoning`. Lenient on read: any string (N10), so a value
+     this version does not know never resets the file; the pre-run check refuses
+     it (P17). Offered-level rules run on write in the PUT handler
+     (routes/user-settings.ts, via analyzer-request-controls.ts). */
   analyzerReasoningByEngine: z
     .object({
-      ollama: z.enum(REASONING_LEVELS).optional(),
-      gemini: z.record(z.string(), z.enum(REASONING_LEVELS)).optional(),
+      ollama: z.record(z.string(), z.string()).optional(),
+      gemini: z.record(z.string(), z.string()).optional(),
     })
     .default({}),
 ```
@@ -792,23 +1293,61 @@ After `analyzerKeepAliveByModel: {},` in `DEFAULT_USER_SETTINGS` (`:334`):
   /* #3084 wave 5 — empty = today's behaviour (Ollama off, Gemini model-default). */
   analyzerReasoningByEngine: {},
 ```
-In `writeUserSettings` replace `:403-404`:
+`writeUserSettings` is unchanged. In `server/src/routes/user-settings.ts`:
+- add `import { analyzerRequestControlsPatchSchemaFor, changedRequestControls, withNormalizedOllamaReasoningKeys } from '../workspace/analyzer-request-controls.js';` and `import { capabilityRecordFor } from '../analyzer/capabilities.js';`;
+- add `getResolvedOllamaUrl` to its `../workspace/user-settings.js` import (it already imports `readUserSettings`, `:20`);
+- make the `PUT /` handler's `try` (`:79-81`) begin:
 ```ts
-  const sanitised = stripForbiddenKeys(patch);
-  const validated = patchSchema.parse(sanitised);
-```
-with:
-```ts
-  const sanitised = stripForbiddenKeys(patch);
-  const validated = patchSchema.parse(sanitised);
-  /* #3084 wave 5 — offered-level (and, from PR 5b, custom-payload) rules.
-     Throws ZodError, which the PUT route already maps to 400 + issues. */
-  analyzerRequestControlsPatchSchema.parse(sanitised);
+  try {
+    /* #3084 wave 5 — offered-level (and, from PR 5b, custom-payload) rules. They read the current Test
+       records, so they run here rather than in writeUserSettings. N6: they judge only what this save
+       changes, against the settings as stored. They read readUserSettings(), never the cache: the boot
+       read (server/src/index.ts:188, `void bootWarmUserSettings()`) is not awaited, so an early save can
+       find the cache cold. A ZodError
+       maps to 400 + issues in the catch below, and nothing is written. N7: Ollama keys are written
+       normalised. */
+    const stored = await readUserSettings();
+    analyzerRequestControlsPatchSchemaFor({
+      /* No digest here (A3), deliberately: resolving one would add a network read to a settings save,
+         which is worse than the lenience it would buy. capabilityRecordFor keeps a record when the
+         digest is unknown, and the run-time check (runAnalyzerPreflight, Task 5.4) is the one that
+         actually decides whether a re-pulled model's record still applies. */
+      ollamaRecord: (model) => capabilityRecordFor(stored, model, getResolvedOllamaUrl()),
+    }).parse(changedRequestControls(req.body ?? {}, stored));
+    const updated = await writeUserSettings(withNormalizedOllamaReasoningKeys(req.body));
 ```
 
-`server/src/routes/analyzer-endpoints.ts` (W3b): run `git grep -n "analyzerEndpointSchema\." server/src/routes/analyzer-endpoints.ts`. In the `POST /` and `PUT /:endpointId` handlers replace each `analyzerEndpointSchema.parse(` / `analyzerEndpointSchema.safeParse(` with `analyzerEndpointWriteSchema.parse(` / `analyzerEndpointWriteSchema.safeParse(`, and add `import { analyzerEndpointWriteSchema } from '../workspace/analyzer-request-controls.js';`. The handler's existing ZodError → 400 branch carries the issue messages.
+`server/src/workspace/analyzer-endpoints.ts` (W3b Task 3b.5) — add `import { levelsForReasoningStyle } from '../analyzer/reasoning.js';`. In `parseEndpointInput`, replace W3b's P23 block with the block below. The replaced text runs from the comment `/* #3084 P23 — until wave 5 exists, nothing validates a reasoning level or a` through `if (notYet.length > 0) { throw new AnalyzerEndpointRefusal(400, 'invalid', 'Invalid analyzer endpoint.', notYet); }`. The `unloadUrl` origin check after it is unchanged. `ep.reasoning` is `z.string()` in W3b's schema, hence the `readonly string[]` widening. Give the function a second parameter, `stored?: AnalyzerEndpoint` (A7), and in `applyUpdate` change `parseEndpointInput(isRecord(input) ? { ...input, id: endpointId } : input)` to `parseEndpointInput(isRecord(input) ? { ...input, id: endpointId } : input, state.analyzerEndpoints[idx])`. `applyCreate` passes nothing.
+```ts
+  /* #3084 PR 5a — a reasoning level must be one its control style offers. This
+     replaces P23's "model-default only" refusal. It runs here because both endpoint
+     routes and the mock reach every create and update through this function. The
+     `extraParams` refusal stays until PR 5b replaces it with validateExtraParams. */
+  const problems: string[] = [];
+  /* A7 — judge the level only when this save changes it, or changes the style that decides which
+     levels are offered. Re-judging an unchanged stored level would refuse every later edit of an
+     endpoint whose saved level a newer rule no longer offers; P17 still refuses the run itself. */
+  const levelChanged = !stored || stored.reasoning !== ep.reasoning || stored.reasoningStyle !== ep.reasoningStyle;
+  const offeredLevels = levelsForReasoningStyle(ep.reasoningStyle);
+  if (levelChanged && !(offeredLevels as readonly string[]).includes(ep.reasoning)) {
+    problems.push(
+      `reasoning: Reasoning "${ep.reasoning}" is not offered by the ${ep.reasoningStyle} control style (offered: ${offeredLevels.join(', ')}).`,
+    );
+  }
+  if (ep.extraParams !== undefined && Object.keys(ep.extraParams).length > 0) {
+    problems.push('extraParams: custom request parameters cannot be saved until PR 5b enables them');
+  }
+  if (problems.length > 0) {
+    throw new AnalyzerEndpointRefusal(400, 'invalid', 'Invalid analyzer endpoint.', problems);
+  }
+```
+`routes/analyzer-endpoints.ts` needs no change: its existing `AnalyzerEndpointRefusal` → `{ error, code, details }` branch carries the message.
 
-Cycle check: `analyzer-request-controls.ts` imports `analyzer-endpoints.ts`, `reasoning.ts`, `model-id.ts`; `user-settings.ts` imports it. If W3's `analyzer-endpoints.ts` imports `user-settings.ts` (for `findEndpointReferences(settings: UserSettings, …)`), that import must be `import type` **and** the cycle must not appear in `npm run check:cycles`. If madge reports a new cycle, move the `analyzerRequestControlsPatchSchema.parse` call out of `writeUserSettings` into the PUT handler in `server/src/routes/user-settings.ts:78-80` (`analyzerRequestControlsPatchSchema.parse(req.body)` before `writeUserSettings(req.body)`) and drop the import from `user-settings.ts`; the route tests above cover both placements.
+Cycle check:
+- `analyzer-request-controls.ts` imports `reasoning.ts`, `model-id.ts` and the import-free leaf `ollama-tag.ts`, and only `routes/user-settings.ts` imports it, alongside `capabilities.ts`. A route is a leaf, so it closes no cycle.
+- `user-settings.ts` gains no import: its stored reasoning values are plain strings (N10).
+- `analyzer-endpoints.ts` → `reasoning.ts` closes none either: `reasoning.ts` imports only types.
+- `npm run check:cycles` confirms both.
 
 `openapi.yaml` — add under `components.schemas` (alphabetical placement is not enforced; put them directly above `UserSettings`):
 ```yaml
@@ -825,14 +1364,23 @@ Cycle check: `analyzer-request-controls.ts` imports `analyzer-endpoints.ts`, `re
       type: object
       properties:
         ollama:
-          $ref: '#/components/schemas/ReasoningLevel'
+          type: object
+          additionalProperties:
+            type: string
         gemini:
           type: object
           additionalProperties:
-            $ref: '#/components/schemas/ReasoningLevel'
+            type: string
       description: |
-        #3084 — per-engine reasoning. Ollama: one level for every Ollama model
-        (absent = 'off'). Gemini: keyed by model id (absent = 'model-default').
+        #3084 — per-engine reasoning, keyed by model id. Ollama: absent = 'off';
+        low / medium / high only for a model whose own Test accepted them; keys are
+        stored through normalizeModelTag (`qwen3` and `qwen3:latest` are one model).
+        Gemini: absent = 'model-default'. Values are strings: a save accepts only a
+        ReasoningLevel the model offers, and a stored value this version no longer
+        offers or does not know is returned as saved and refuses a run before it
+        starts. A PUT replaces this map, and each engine map inside it, as a whole:
+        send every engine's entries, because an engine left out of a sent map loses
+        them.
 ```
 In `UserSettings.properties` after `analyzerKeepAliveByModel` and in `UserSettingsPatch.properties` after `analyzerKeepAliveByModel`:
 ```yaml
@@ -861,20 +1409,56 @@ Run `npm run openapi:types`.
   analyzerReasoningByEngine: {},
 ```
 In `mockPutUserSettings` add `analyzerReasoningByEngine,` to the destructuring list after `analyzerKeepAliveByModel,` (`:7324`) and to the object literal after `analyzerKeepAliveByModel,` (`:7341`).
-In W3c's `mockGetAnalyzerModels` (`src/lib/api.ts`, Task 3c.6), extend its local `entry(id, engine, model, mode, droppedIfSchema)` helper so it gives every model entry `offeredReasoningLevels` so the Settings editor has something to offer in mock mode and e2e: Ollama entries `['model-default', 'off', 'on']`; `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3-flash-preview`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite` → `['model-default', 'minimal', 'low', 'medium', 'high']`; `gemini-2.5-flash` → `['model-default', 'off', 'low', 'medium', 'high']`; `gemma-4-31b-it`, `gemma-4-26b-a4b-it` → `['model-default', 'off', 'on']`; endpoint entries → `levelsForEndpointStyle(endpoint.reasoningStyle)` from `src/lib/reasoning-levels.ts` (Task 5.6 creates it; in this task write the literal arrays from `reasoning-style-levels.json`, and Task 5.6 swaps them for the import).
+In W3c's `mockGetAnalyzerModels` (`src/lib/api.ts`, Task 3c.6), extend its local `entry(id, engine, model, mode, droppedIfSchema)` helper so it gives every model entry `offeredReasoningLevels` so the Settings editor has something to offer in mock mode and e2e: Ollama entries `['model-default', 'off', 'on']`; `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3-flash-preview`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite` → `['model-default', 'minimal', 'low', 'medium', 'high']`; `gemini-2.5-flash` → `['model-default', 'off', 'low', 'medium', 'high']`; `gemma-4-31b-it`, `gemma-4-26b-a4b-it` → `['model-default', 'off', 'on']`; endpoint entries → `MOCK_STYLE_LEVELS[endpoint.reasoningStyle]`, the map below.
+
+`src/lib/api.ts` — directly below W3b's `mockOrigin` helper, add the control-style table. The mock endpoint rule and the mock catalog both read it. The mock test's table loop pins it to the server fixture.
+```ts
+/* #3084 PR 5a — the server's endpoint control-style levels (reasoning.ts levelsForReasoningStyle;
+   fixture server/src/analyzer/__fixtures__/reasoning-style-levels.json). */
+const MOCK_STYLE_LEVELS: Record<'reasoning_effort' | 'enable_thinking' | 'not_controllable', readonly string[]> = {
+  reasoning_effort: ['model-default', 'none', 'minimal', 'low', 'medium', 'high'],
+  enable_thinking: ['model-default', 'off', 'on'],
+  not_controllable: ['model-default'],
+};
+```
+In W3b Task 3b.9's `mockEndpointFromInput`, replace its P23 block with the block below. The replaced text runs from the comment `/* #3084 P23 — mirrors the server's parseEndpointInput until PRs 5a/5b. */` through `if (notYet.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', notYet);`. The `unloadUrl` check after it is unchanged.
+```ts
+  /* #3084 — mirrors the server's parseEndpointInput: PR 5a's level rule, and P23's
+     payload refusal until PR 5b. */
+  const controlProblems: string[] = [];
+  const style = input.reasoningStyle ?? 'not_controllable';
+  const level = input.reasoning ?? 'model-default';
+  if (!MOCK_STYLE_LEVELS[style].includes(level)) {
+    controlProblems.push(
+      `reasoning: Reasoning "${level}" is not offered by the ${style} control style (offered: ${MOCK_STYLE_LEVELS[style].join(', ')}).`,
+    );
+  }
+  if (input.extraParams !== undefined && Object.keys(input.extraParams).length > 0) {
+    controlProblems.push('extraParams: custom request parameters cannot be saved until PR 5b enables them');
+  }
+  if (controlProblems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', controlProblems);
+```
 
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/workspace/analyzer-request-controls.test.ts src/routes/user-settings.test.ts src/routes/analyzer-endpoints.test.ts src/workspace/user-settings.test.ts`  Expected: PASS.
+Run: `npm --prefix server run test -- src/workspace/analyzer-request-controls.test.ts src/routes/user-settings.test.ts src/routes/analyzer-endpoints.test.ts src/workspace/analyzer-endpoints.test.ts src/workspace/user-settings.test.ts` and `npm test -- src/lib/api-analyzer-endpoints-mock.test.ts`  Expected: PASS.
 Then: `npm run typecheck` and `npm run check:cycles`  Expected: PASS, no new cycle.
 Keeps green: `src/workspace/user-settings.test.ts` (writeUserSettings merge behaviour), `src/routes/user-settings.test.ts` (existing cases), `npm test -- src/store/account-slice.test.ts`.
 
 - [ ] **Step 5: Mutation proof**
-1. In `writeUserSettings` delete the `analyzerRequestControlsPatchSchema.parse(sanitised);` line. Expected red: `PUT refuses a Gemini reasoning level the model does not offer and writes nothing`. Restore.
-2. In `analyzerEndpointWriteSchema` replace `!(offered as readonly string[]).includes(endpoint.reasoning)` with `false`. Expected red: `requires reasoning to be one of its control style levels`. Restore.
+1. In the `PUT /` handler delete the whole `analyzerRequestControlsPatchSchemaFor({ ollamaRecord: … }).parse(changedRequestControls(req.body ?? {}, stored));` statement (and, if the compiler complains, the now-unused `stored` read). Expected red: `PUT refuses a Gemini reasoning level the model does not offer and writes nothing` and `PUT refuses a named Ollama level until that model's own Test accepted it (P18)`. Restore.
+2. In `parseEndpointInput` replace `!(offeredLevels as readonly string[]).includes(ep.reasoning)` with `ep.reasoning !== 'model-default'` (P23's old rule). Expected red: `accepts a reasoning level its control style offers, and refuses one it does not, naming the style (5a rules)` and `accepts a reasoning level its control style offers on create and update, validated by the 5a rules`. Then replace it with `false` instead. Expected red: the same workspace case (its refusals), and `create refuses a reasoning level its control style does not offer`. Restore.
+2c. In `parseEndpointInput` replace `levelChanged &&` with nothing (always judge). Expected red: `an update judges the level only when it changes… (A7)` at its first assertion. Then restore it and drop `|| stored.reasoningStyle !== ep.reasoningStyle`. Expected red: the same case's last assertion — a style change to `enable_thinking` saves a level that style does not offer. Restore.
+2b. In `mockEndpointFromInput` replace `!MOCK_STYLE_LEVELS[style].includes(level)` with `level !== 'model-default'`. Expected red: `accepts a reasoning level its control style offers and refuses one it does not, as the server does`. Then change `MOCK_STYLE_LEVELS.enable_thinking` to `['model-default', 'on']`. Expected red: the same case, at `enable_thinking`/`off`. Restore.
+3. In `analyzerRequestControlsPatchSchemaFor`, replace `offeredReasoningLevels({ engine: 'local', model, record: records.ollamaRecord(model) })` with `OLLAMA_WRITABLE`. Expected red: `refuses a named level without that model's accepted Test record…` and `accepts a named level the model's own Test accepted, and refuses it for another model`. Restore.
+4. In the `PUT /` handler replace `changedRequestControls(req.body ?? {}, stored)` with `req.body ?? {}`. Expected red: `PUT judges only what the save changes: a Gemini level saves while an unchanged stale Ollama entry stays (N6)` (`expected 400 to be 200`). Restore.
+5. In the `PUT /` handler replace `const stored = await readUserSettings();` with `const stored = getCachedUserSettings();` (importing it). Expected red: `PUT reads the stored Test records before judging, even when the save arrives before the boot read (N6)` (`expected 400 to be 200`). Restore.
+6. In `changedRequestControls` replace `(engine === 'ollama' ? entryForModelTag(before, model) : before?.[model])` with `before?.[model]`. Expected red: `keeps only reasoning entries whose value differs…` (`qwen3:latest` survives). Restore.
+7. In the `PUT /` handler write `req.body` instead of `withNormalizedOllamaReasoningKeys(req.body)`. Expected red: `PUT stores an Ollama reasoning level under the normalised tag (N7)`. Restore.
+8. In `user-settings.ts` change both stored `z.record(z.string(), z.string())` back to `z.record(z.string(), z.enum(REASONING_LEVELS))` (importing it). Expected red: `loads a stored level the rules no longer offer, or one this version does not know (xhigh)…` (`success` false). Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/workspace/analyzer-request-controls.ts server/src/workspace/analyzer-request-controls.test.ts server/src/workspace/user-settings.ts server/src/routes/user-settings.test.ts server/src/routes/analyzer-endpoints.ts server/src/routes/analyzer-endpoints.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts
+git add server/src/workspace/analyzer-request-controls.ts server/src/workspace/analyzer-request-controls.test.ts server/src/workspace/user-settings.ts server/src/routes/user-settings.ts server/src/routes/user-settings.test.ts server/src/workspace/analyzer-endpoints.ts server/src/workspace/analyzer-endpoints.test.ts server/src/routes/analyzer-endpoints.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts src/lib/api-analyzer-endpoints-mock.test.ts
 git commit -m "feat(server,openapi,mocks): store and validate analyzer reasoning levels"
 ```
 
@@ -882,14 +1466,21 @@ git commit -m "feat(server,openapi,mocks): store and validate analyzer reasoning
 
 **Files:**
 - Modify: `server/src/analyzer/transports/ollama-transport.ts` — the streaming request-body literal (W1 moved it from `server/src/analyzer/ollama.ts:631-674`; the line to change is the moved `think: false,` from `ollama.ts:648-651`) **and** W4's non-streaming `sendFreeText` body literal (the persona branch moved from `ollama.ts:950-1027`, which also hard-codes `think: false,`)
-- Modify: `server/src/analyzer/transports/gemini-transport.ts` — the `config` literal (W1 moved it from `gemini.ts:728-734`; W2 added `thinkingConfig.includeThoughts`)
+- Modify: `server/src/analyzer/transports/gemini-transport.ts` — the `config` literal (W1 moved it from `gemini.ts:728-734`; W2 added `thinkingConfig.includeThoughts`), and (N1, P27, A3) W4 Task 4.3's `includeThoughts` local in `generate` (`!req.freeText && geminiModelThinks(this.model)`, which gates both the wire and W2's `reasoningTokens`), its exported `resolveGeminiThinkingIdleTimeoutMs` and its private `geminiThinkingWindowApplies`, found by symbol
 - Modify: `server/src/analyzer/transports/openai-transport.ts` — the chat-completions params object (W3b)
-- Modify: the `settings: () => …` closure in the constructors of `OllamaAnalyzer` (`server/src/analyzer/ollama.ts`), `GeminiAnalyzer` (`server/src/analyzer/gemini.ts`), `OpenAIAnalyzer` (`server/src/analyzer/openai.ts`)
-- Test: `server/src/analyzer/transports/reasoning-wire.test.ts`, `server/src/analyzer/gemini-reasoning-wiring.test.ts` (the runner's forwarding is Task 5.1's `stage-runner.request-controls.test.ts`)
+- Modify: the `settings: () => …` closure in the constructors of `OllamaAnalyzer` (`server/src/analyzer/ollama.ts`) and `GeminiAnalyzer` (`server/src/analyzer/gemini.ts`)
+- Modify: W3b Task 3b.12's `openAIRequestSettings(endpoint, servedOutputLimit?)` (`server/src/analyzer/openai.ts`). `OpenAIAnalyzer`'s closure calls it, and W3c Task 3c.9 passes the served output limit into it. The closure itself is not edited.
+- Test: `server/src/analyzer/transports/reasoning-wire.test.ts`, `server/src/analyzer/transports/gemini-request-thinks.test.ts`, `server/src/analyzer/gemini-reasoning-wiring.test.ts`, `server/src/analyzer/voice-style.test.ts` (append; the runner's forwarding is Task 5.1's `stage-runner.request-controls.test.ts`), W3b's `server/src/analyzer/openai-analyzer.test.ts` (update one assertion, append one case)
 
 **Interfaces:**
-- Consumes: Task 5.1 `reasoningWireFragment`, `resolveReasoningSetting`, `TransportRequest.reasoning` and `EngineRequestSettings.reasoning` (declared and forwarded by Task 5.1); `getCachedUserSettings` (`user-settings.ts:385`); `_setUserSettingsCacheForTest` (`user-settings.ts:946`).
-- Produces: `mergeGeminiThinkingConfig(config, fragment)` (**new** export of `gemini-transport.ts`); wire behaviour — `req.reasoning === undefined` keeps pre-W5 wire (Ollama `think:false`, others nothing); a defined level sends exactly `reasoningWireFragment(...)`.
+- Consumes: Task 5.1 `reasoningWireFragment`, `resolveReasoningSetting`, `TransportRequest.reasoning` and `EngineRequestSettings.reasoning` (declared and forwarded by Task 5.1); `getCachedUserSettings` (`user-settings.ts:537`); `_setUserSettingsCacheForTest` (`user-settings.ts:1155`).
+- Produces:
+  - `mergeGeminiThinkingConfig(config, fragment)` (**new** export of `gemini-transport.ts`; the fragment's `includeThoughts` decides whether the merged `thinkingConfig` carries one, P19);
+  - wire behaviour: `req.reasoning === undefined` keeps the pre-W5 wire (Ollama `think:false`, others nothing); a defined level sends exactly `reasoningWireFragment(...)`;
+  - **request thinking (N1, P27):** W2's `resolveGeminiThinkingIdleTimeoutMs(model)` becomes `resolveGeminiThinkingIdleTimeoutMs(model, level?)`, and W2's private `geminiThinkingWindowApplies` gains the same optional level. Both ask Task 5.1's `geminiRequestThinks(model, req.reasoning)`. Gemma 4 at `on` and a 2.5 budget above 0 get the thinking window and thought summaries; `off` gets today's idle window and none. With no level the id rule decides, exactly as in wave 2.
+  - **the evidence gate (A3, P27):** the `includeThoughts` local that gates W2's `reasoningTokens` is read from the `thinkingConfig` the request actually sends, so the wire and the count can never disagree. A free-text (persona) request at `model-default` sends none and counts none; a level that thinks sends `includeThoughts` and counts its `thoughtsTokenCount`.
+  - **Gemma at `on` (G1, P27 as amended):** it is a thinking request, so its thought tokens are reasoning evidence and an empty `MAX_TOKENS` finish there is a reasoning overflow (P6, P20) — the run stops, as for any thinking model. At Gemma's default level and at `off`, nothing asks for thoughts, no count is evidence, and the same finish still splits, keeping the #528 recovery. **Owed fact (A8):** `includeThoughts` on Gemma is unconfirmed; wave 5a's Group E row checks the `on` Test step. If the API refuses the pair, the `on` fragment drops `includeThoughts` and keeps `thinkingLevel: HIGH` (the thinking window still applies) — and record on that row that Gemma `on` then has no evidence source, so its truncations split like its default level, which is a decision to revisit rather than a silent change.
+- Consumes (N1): Task 5.1's `geminiRequestThinks`; W2's `GEMINI_THINKING_IDLE_TIMEOUT_MS`, `resolveStreamIdleTimeoutMs`, `configValue('analyzer.gemini.thinkingIdleTimeoutMs')`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1034,13 +1625,248 @@ describe('Gemini wire', () => {
     await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client: fakeClient(b) }).send(req('model-default'));
     expect(b[0].config.thinkingConfig).toEqual(a[0].config.thinkingConfig);
   });
-  it('mergeGeminiThinkingConfig keeps includeThoughts, drops it only for a zero budget', () => {
-    expect(mergeGeminiThinkingConfig({ temperature: 0.2, thinkingConfig: { includeThoughts: true } }, { thinkingConfig: { thinkingLevel: 'LOW' } }))
+  it('mergeGeminiThinkingConfig: the fragment decides includeThoughts (P19)', () => {
+    expect(mergeGeminiThinkingConfig({ temperature: 0.2, thinkingConfig: { includeThoughts: true } }, { thinkingConfig: { thinkingLevel: 'LOW', includeThoughts: true } }))
       .toEqual({ temperature: 0.2, thinkingConfig: { includeThoughts: true, thinkingLevel: 'LOW' } });
+    /* A model wave 2 does not treat as thinking (Gemma 4, 2.5 Flash-Lite) gains summaries from its level. */
+    expect(mergeGeminiThinkingConfig({ temperature: 0.2 }, { thinkingConfig: { thinkingLevel: 'HIGH', includeThoughts: true } }))
+      .toEqual({ temperature: 0.2, thinkingConfig: { thinkingLevel: 'HIGH', includeThoughts: true } });
     expect(mergeGeminiThinkingConfig({ thinkingConfig: { includeThoughts: true } }, { thinkingConfig: { thinkingBudget: 0 } }))
       .toEqual({ thinkingConfig: { thinkingBudget: 0 } });
+    /* A model the catalog marks as thinking, turned off with Gemma's MINIMAL: nothing to summarise. */
+    expect(mergeGeminiThinkingConfig({ thinkingConfig: { includeThoughts: true } }, { thinkingConfig: { thinkingLevel: 'MINIMAL' } }))
+      .toEqual({ thinkingConfig: { thinkingLevel: 'MINIMAL' } });
     const same = { temperature: 0.2 };
     expect(mergeGeminiThinkingConfig(same, {})).toBe(same);
+  });
+
+  it('Gemma 4 on and 2.5 Flash-Lite low carry includeThoughts; Gemma 4 off does not (P19)', async () => {
+    const cap: Array<{ config: Record<string, unknown> }> = [];
+    await new GeminiTransport({ apiKey: 'k', model: 'gemma-4-31b-it', client: fakeClient(cap) }).send(req('on'));
+    await new GeminiTransport({ apiKey: 'k', model: 'gemini-2.5-flash-lite', client: fakeClient(cap) }).send(req('low'));
+    await new GeminiTransport({ apiKey: 'k', model: 'gemma-4-31b-it', client: fakeClient(cap) }).send(req('off'));
+    expect(cap[0].config.thinkingConfig).toEqual({ thinkingLevel: 'HIGH', includeThoughts: true });
+    expect(cap[1].config.thinkingConfig).toEqual({ thinkingBudget: 1024, includeThoughts: true });
+    expect(cap[2].config.thinkingConfig).toEqual({ thinkingLevel: 'MINIMAL' });
+  });
+
+  it('a free-text request sends no thinkingConfig at model-default, and only the level fragment otherwise', async () => {
+    const cap: Array<{ config: Record<string, unknown> }> = [];
+    const t = new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client: fakeClient(cap) });
+    const free = (reasoning: ReasoningLevel | undefined): TransportRequest => ({ ...req(reasoning), system: '', temperature: undefined, freeText: {} });
+    await t.send(free(undefined));
+    await t.send(free('model-default'));
+    await t.send(free('low'));
+    expect('thinkingConfig' in cap[0].config).toBe(false);
+    expect('thinkingConfig' in cap[1].config).toBe(false);
+    expect(cap[2].config.thinkingConfig).toEqual({ thinkingLevel: 'LOW', includeThoughts: true });
+  });
+});
+```
+
+`server/src/analyzer/transports/gemini-request-thinks.test.ts` (N1, P27; the helpers are copied verbatim from W2's `transports/gemini-transport.test.ts`):
+```ts
+/* #3084 wave 5 (P27, N1) — a Gemini request thinks when its level says so, not only when its id does.
+   One function, geminiRequestThinks, decides both includeThoughts and the thinking window, so a Gemma 4
+   request at `on` is not killed mid-think by the 45 s idle window, and a 2.5 Flash request at `off` does
+   not wait 240 s on a request that never thinks. */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+/* Zero retry backoffs, set before the transport module loads (W2's suite does the same). */
+vi.hoisted(() => {
+  process.env.GEMINI_RETRY_BACKOFFS_MS = '0,0';
+});
+
+import type { GoogleGenAI } from '@google/genai';
+import { GeminiTransport, GEMINI_THINKING_IDLE_TIMEOUT_MS, resolveGeminiThinkingIdleTimeoutMs } from './gemini-transport.js';
+import { mapFinish } from '../runner/finish.js';
+import { AnalyzerReasoningOverflowError, AnalyzerTruncatedError } from '../errors.js';
+import { geminiRateLimiter } from '../rate-limit.js';
+import { _resetGeminiCatalogForTest } from '../catalog/gemini-catalog.js';
+import type { TransportRequest } from '../runner/transport.js';
+
+type Part = { text?: string; thought?: boolean };
+function chunk(parts: Part[], extra: { finishReason?: string; thoughtsTokenCount?: number } = {}) {
+  const answer = parts.filter((p) => p.thought !== true).map((p) => p.text ?? '').join('');
+  return {
+    text: answer === '' ? undefined : answer,
+    candidates: [{ content: { parts }, ...(extra.finishReason ? { finishReason: extra.finishReason } : {}) }],
+    ...(extra.thoughtsTokenCount !== undefined ? { usageMetadata: { thoughtsTokenCount: extra.thoughtsTokenCount } } : {}),
+  };
+}
+function clientWith(generateContentStream: ReturnType<typeof vi.fn>): GoogleGenAI {
+  return {
+    models: { generateContentStream, list: vi.fn(async () => { throw new Error('offline'); }) },
+  } as unknown as GoogleGenAI;
+}
+const request = (over: Partial<TransportRequest> = {}): TransportRequest => ({
+  system: 'system instruction',
+  messages: [{ role: 'user', content: 'chapter' }],
+  structuredOutput: { mode: 'json' },
+  temperature: 0.2,
+  maxOutputTokens: 8192,
+  estimatedInputTokens: 50,
+  call: {},
+  ...over,
+});
+const ANSWER = '{"ok":true}';
+/** Chunks arrive at fixed offsets from the stream call; the timers are registered synchronously at call time. */
+const timedStream = (schedule: Array<{ atMs: number; item: unknown }>) => () => {
+  const ready = schedule.map(({ atMs }) => new Promise<void>((resolve) => setTimeout(resolve, atMs)));
+  return Promise.resolve(
+    (async function* () {
+      for (const [i, { item }] of schedule.entries()) {
+        await ready[i];
+        yield item;
+      }
+    })(),
+  );
+};
+const answerAfter = (atMs: number) => timedStream([{ atMs, item: chunk([{ text: ANSWER }], { finishReason: 'STOP' }) }]);
+const transport = (model: string, gen: ReturnType<typeof vi.fn>) =>
+  new GeminiTransport({ apiKey: 'test-key', model, client: clientWith(gen), requestCeilingMs: 1_800_000 });
+
+beforeEach(() => {
+  geminiRateLimiter._reset();
+  _resetGeminiCatalogForTest();
+});
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  delete process.env.GEMINI_STREAM_IDLE_MS;
+  delete process.env.GEMINI_THINKING_IDLE_MS;
+});
+
+describe('a Gemini request thinks per its level (P27, N1)', () => {
+  it('resolves the window per request: Gemma 4 at on thinks, 2.5 Flash at off does not, 3.6 Flash at model-default does', () => {
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemma-4-31b-it', 'on')).toBe(GEMINI_THINKING_IDLE_TIMEOUT_MS);
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemma-4-31b-it', 'off')).toBe(45_000);
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemini-2.5-flash', 'off')).toBe(45_000);
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemini-2.5-flash', 'low')).toBe(GEMINI_THINKING_IDLE_TIMEOUT_MS);
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemini-3.6-flash', 'model-default')).toBe(GEMINI_THINKING_IDLE_TIMEOUT_MS);
+    /* No level: wave 2's id rule, unchanged. */
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemma-4-31b-it')).toBe(45_000);
+    expect(resolveGeminiThinkingIdleTimeoutMs('gemini-2.5-flash')).toBe(GEMINI_THINKING_IDLE_TIMEOUT_MS);
+  });
+
+  it('Gemma 4 at on: the request asks for thought summaries, and a 60 s silent think is not killed (fake clock)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const gen = vi.fn().mockImplementation(answerAfter(60_000));
+    let text: string | undefined;
+    const sent = transport('gemma-4-31b-it', gen)
+      .send(request({ reasoning: 'on' }))
+      .then((r) => {
+        text = r.text;
+      });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gen).toHaveBeenCalledTimes(1);
+    expect(gen.mock.calls[0][0].config.thinkingConfig).toEqual({ thinkingLevel: 'HIGH', includeThoughts: true });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(gen).toHaveBeenCalledTimes(1); // no watchdog kill, so no second attempt
+    expect(text).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    await sent;
+    expect(text).toBe(ANSWER);
+  });
+
+  it('gemini-3.6-flash at model-default keeps the thinking window: a 60 s silence is not killed (fake clock)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const gen = vi.fn().mockImplementation(answerAfter(60_000));
+    let text: string | undefined;
+    const sent = transport('gemini-3.6-flash', gen)
+      .send(request({ reasoning: 'model-default' }))
+      .then((r) => {
+        text = r.text;
+      });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gen.mock.calls[0][0].config.thinkingConfig).toEqual({ includeThoughts: true });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await sent;
+    expect(gen).toHaveBeenCalledTimes(1);
+    expect(text).toBe(ANSWER);
+  });
+
+  it("gemini-2.5-flash at off gets today's idle window and no thought summaries: a 60 s silence is killed at 45 s and retried (fake clock)", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const gen = vi.fn().mockImplementation(answerAfter(60_000));
+    const sent = transport('gemini-2.5-flash', gen)
+      .send(request({ reasoning: 'off' }))
+      .catch((err: unknown) => err);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gen.mock.calls[0][0].config.thinkingConfig).toEqual({ thinkingBudget: 0 });
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(gen).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(gen.mock.calls.length).toBeGreaterThan(1); // killed by the 45 s idle window, then retried
+    await vi.advanceTimersByTimeAsync(600_000);
+    await sent;
+  });
+
+  it('a Gemma 4 request at on reports thoughtsTokenCount as reasoning tokens; at off it does not (its request asked for no thoughts)', async () => {
+    const withThoughts = () =>
+      Promise.resolve(
+        (async function* () {
+          yield chunk([{ text: ANSWER }], { finishReason: 'STOP', thoughtsTokenCount: 321 });
+        })(),
+      );
+    const on = await transport('gemma-4-31b-it', vi.fn().mockImplementation(withThoughts)).send(request({ reasoning: 'on' }));
+    const off = await transport('gemma-4-31b-it', vi.fn().mockImplementation(withThoughts)).send(request({ reasoning: 'off' }));
+    expect(on.usage?.reasoningTokens).toBe(321);
+    expect(off.usage?.reasoningTokens).toBeUndefined();
+  });
+
+  it('a free-text request counts thoughtsTokenCount only when its own wire asked for thoughts (A3)', async () => {
+    const withThoughts = () =>
+      Promise.resolve(
+        (async function* () {
+          yield chunk([{ text: ANSWER }], { finishReason: 'STOP', thoughtsTokenCount: 321 });
+        })(),
+      );
+    const free = (reasoning: 'model-default' | 'low') =>
+      request({ system: '', structuredOutput: { mode: 'off' }, temperature: undefined, maxOutputTokens: undefined, freeText: {}, reasoning });
+    const gen = vi.fn().mockImplementation(withThoughts);
+    const t = transport('gemini-3.6-flash', gen);
+    const atDefault = await t.send(free('model-default'));
+    const atLow = await t.send(free('low'));
+    /* A persona request at model-default sends no thinkingConfig (W4), so its count is not evidence… */
+    expect('thinkingConfig' in (gen.mock.calls[0][0].config as Record<string, unknown>)).toBe(false);
+    expect(atDefault.usage?.reasoningTokens).toBeUndefined();
+    /* …while a level that thinks sends includeThoughts, and then it is. */
+    expect(gen.mock.calls[1][0].config.thinkingConfig).toEqual({ thinkingLevel: 'LOW', includeThoughts: true });
+    expect(atLow.usage?.reasoningTokens).toBe(321);
+  });
+});
+
+describe('an empty MAX_TOKENS finish: Gemma at on overflows, Gemma at off or its default splits (G1, P27 as amended)', () => {
+  /* One stream for all three: an empty answer cut off at the cap, with thought tokens reported and no
+     thought parts. Only the request's own level decides whether that count is reasoning evidence. */
+  const truncatedAfterThinking = () =>
+    Promise.resolve(
+      (async function* () {
+        yield chunk([], { finishReason: 'MAX_TOKENS', thoughtsTokenCount: 900 });
+      })(),
+    );
+  const thrownFinish = async (reasoning: 'on' | 'off' | undefined): Promise<unknown> => {
+    const result = await transport('gemma-4-31b-it', vi.fn().mockImplementation(truncatedAfterThinking)).send(request({ reasoning }));
+    try {
+      mapFinish(result, { kind: 'gemini', model: 'gemma-4-31b-it' });
+    } catch (e) {
+      return e;
+    }
+    return undefined;
+  };
+
+  it('at on the thought tokens are evidence, so the finish is a reasoning overflow that stops the run (P6, P20)', async () => {
+    const err = await thrownFinish('on');
+    expect(err).toBeInstanceOf(AnalyzerReasoningOverflowError);
+    expect((err as AnalyzerReasoningOverflowError).reasoningTokens).toBe(900);
+  });
+
+  it.each([['off'], [undefined]] as const)('at %s the request asked for no thoughts, so the same finish splits (#528 recovery)', async (reasoning) => {
+    const err = await thrownFinish(reasoning);
+    expect(err).toBeInstanceOf(AnalyzerTruncatedError);
+    expect(err).not.toBeInstanceOf(AnalyzerReasoningOverflowError);
   });
 });
 ```
@@ -1096,7 +1922,7 @@ describe('saved reasoning settings reach the wire', () => {
     expect((captured[1].config.thinkingConfig as Record<string, unknown> | undefined)?.thinkingLevel).toBeUndefined();
   });
 
-  it('Ollama: default install still sends think:false; a saved "on" sends think:true', async () => {
+  it('Ollama: default install still sends think:false; a level saved for one model is sent for that model only (P18)', async () => {
     server = createServer((req, res) => {
       let raw = '';
       req.on('data', (c) => (raw += c));
@@ -1110,17 +1936,90 @@ describe('saved reasoning settings reach the wire', () => {
     const url = `http://127.0.0.1:${(server!.address() as AddressInfo).port}`;
     _setUserSettingsCacheForTest({});
     await new OllamaAnalyzer({ url, model: 'q:4b' }).runAttributionEscalation('m1', 1, 0, 'prompt', {});
-    _setUserSettingsCacheForTest({ analyzerReasoningByEngine: { ollama: 'on' } });
+    _setUserSettingsCacheForTest({ analyzerReasoningByEngine: { ollama: { 'q:4b': 'on' } } });
     await new OllamaAnalyzer({ url, model: 'q:4b' }).runAttributionEscalation('m1', 1, 1, 'prompt', {});
-    expect(ollamaBodies.map((b) => b.think)).toEqual([false, true]);
+    await new OllamaAnalyzer({ url, model: 'q:9b' }).runAttributionEscalation('m1', 1, 2, 'prompt', {});
+    expect(ollamaBodies.map((b) => b.think)).toEqual([false, true, false]);
+  });
+
+  it('Ollama, one model id (N7): a level saved under qwen3:latest reaches a run on qwen3, and one saved under qwen3 a run on qwen3:latest', async () => {
+    server = createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        ollamaBodies.push(JSON.parse(raw) as Record<string, unknown>);
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+        res.end(JSON.stringify({ message: { role: 'assistant', content: '{}' }, done: true, done_reason: 'stop' }) + '\n');
+      });
+    });
+    await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${(server!.address() as AddressInfo).port}`;
+    _setUserSettingsCacheForTest({ analyzerReasoningByEngine: { ollama: { 'qwen3:latest': 'on' } } });
+    await new OllamaAnalyzer({ url, model: 'qwen3' }).runAttributionEscalation('m1', 1, 3, 'prompt', {});
+    _setUserSettingsCacheForTest({ analyzerReasoningByEngine: { ollama: { qwen3: 'high' } } });
+    await new OllamaAnalyzer({ url, model: 'qwen3:latest' }).runAttributionEscalation('m1', 1, 4, 'prompt', {});
+    expect(ollamaBodies.map((b) => b.think)).toEqual([true, 'high']);
   });
 });
 ```
 (`runAttributionEscalation` is used because it is one call with no skill file; its `null` result on `'{}'` is irrelevant — only the captured request is asserted.)
 
+Append to `server/src/analyzer/voice-style.test.ts`. It reuses W4 Task 4.5's module mocks, `mockSettingsPatch` and `CHAR`:
+```ts
+describe("persona generation reads its own model's reasoning entry (#3084 wave 5, P18)", () => {
+  afterEach(() => {
+    delete process.env.PERSONA_GEN_ENGINE;
+    delete process.env.PERSONA_GEN_LOCAL_MODEL;
+    mockSettingsPatch = {};
+    vi.restoreAllMocks();
+  });
+
+  it("the persona local model sends its own entry, not another model's", async () => {
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    mockSettingsPatch = { analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'on', 'qwen3.5:9b': 'model-default' } } };
+    const { OllamaTransport } = await import('./transports/ollama-transport.js');
+    const send = vi
+      .spyOn(OllamaTransport.prototype, 'send')
+      .mockResolvedValue({ text: 'A voice.', reasoningSeen: false, finish: 'stop', receivedBytes: 8 });
+    process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:9b';
+    await generateVoiceStylePersona(CHAR);
+    process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:4b';
+    await generateVoiceStylePersona(CHAR);
+    expect(send.mock.calls.map(([sent]) => sent.reasoning)).toEqual(['model-default', 'on']);
+  });
+});
+```
+
+In W3b's `server/src/analyzer/openai-analyzer.test.ts`, inside `describe('OpenAIAnalyzer (#3084 PR 3b)', …)`, reuse its `start`, `streamText`, `VALID`, `ID`, `bodies` and `endpoint(baseUrl, over)` helpers:
+- In the case `resolves a numeric output cap for Auto and manual endpoints — never undefined (P24)`, change the first assertion to `expect(openAIRequestSettings(endpoint('http://127.0.0.1:8080/v1'))).toEqual({ structuredOutput: 'schema', maxOutputTokens: 29_491, reasoning: 'model-default' });`.
+- Append:
+```ts
+  it("openAIRequestSettings resolves the endpoint's own reasoning level, and a stage sends it (#3084 wave 5)", async () => {
+    expect(openAIRequestSettings(endpoint('http://127.0.0.1:8080/v1')).reasoning).toBe('model-default');
+    expect(
+      openAIRequestSettings(endpoint('http://127.0.0.1:8080/v1', { reasoningStyle: 'enable_thinking', reasoning: 'off' }), 8_192).reasoning,
+    ).toBe('off');
+    const url = await start((_n, res) => streamText(res, VALID));
+    await new OpenAIAnalyzer({ endpoint: endpoint(url, { reasoningStyle: 'reasoning_effort', reasoning: 'none' }), apiKey: null, model: 'qwen3:30b' })
+      .runStage1Chapter(ID, 1, '# p', {});
+    expect((bodies[bodies.length - 1] as unknown as Record<string, unknown>).reasoning_effort).toBe('none');
+  });
+```
+
 - [ ] **Step 2: Run them and confirm they fail**
-Run: `npm --prefix server run test -- src/analyzer/transports/reasoning-wire.test.ts src/analyzer/gemini-reasoning-wiring.test.ts`
-Expected: FAIL — `does not provide an export named 'mergeGeminiThinkingConfig'`; Ollama `on sends think=true` fails with `expected false to deeply equal true`.
+Run: `npm --prefix server run test -- src/analyzer/transports/reasoning-wire.test.ts src/analyzer/transports/gemini-request-thinks.test.ts src/analyzer/gemini-reasoning-wiring.test.ts src/analyzer/openai-analyzer.test.ts`
+Expected: FAIL.
+- `does not provide an export named 'mergeGeminiThinkingConfig'`.
+- `gemini-request-thinks.test.ts`:
+  - `resolves the window per request…` fails with `expected 45000 to be 240000` (Gemma at `on`; W2's resolver ignores the level);
+  - the Gemma `on` fake-clock case fails on its `thinkingConfig` (no level is sent yet) and on a second attempt at 45 s;
+  - the 2.5 Flash `off` case fails with one call at 46 s (the 240 s window), and the evidence case with `expected undefined to be 321`;
+  - the 3.6 Flash `model-default` case passes: it pins wave 2's behaviour;
+  - `a free-text request counts thoughtsTokenCount only when its own wire asked for thoughts (A3)` fails on the level's wire (`expected undefined to deeply equal { thinkingLevel: 'LOW', includeThoughts: true }`); its `model-default` half already holds, because W4's flag is false on every free-text request;
+  - `at on the thought tokens are evidence…` (G1) fails with an `AnalyzerTruncatedError`: no level reaches the wire yet, so Gemma reports no reasoning tokens. Its two `off` / default rows pass — they pin the #528 split.
+- The `Ollama, one model id (N7)…` case fails with `expected [ false, false ] to deeply equal [ true, 'high' ]` (no closure sets `reasoning` yet).
+- Ollama `on sends think=true` fails with `expected false to deeply equal true`.
+- In `openai-analyzer.test.ts`, the P24 case fails `toEqual` (no `reasoning` key), and the new case gets `undefined` for both the setting and `reasoning_effort`.
 
 - [ ] **Step 3: Implement**
 
@@ -1149,15 +2048,17 @@ Same file, W4's `sendFreeText` (the non-streaming persona branch): delete the `t
       Object.assign(body, reasoningWireFragment('ollama', { model: this.model }, req.reasoning));
     }
 ```
-The Gemini and OpenAI free-text requests need no separate change: W4 routes them through the same `config` literal / params object that the reasoning merge above already covers.
+The Gemini and OpenAI free-text requests need no separate change: W4 routes them through the same `config` literal / params object. On Gemini, W4 leaves a free-text `baseConfig` with no `thinkingConfig`. So `model-default` (an empty fragment) keeps the persona request's shape, and a non-default level adds exactly its fragment, `includeThoughts` included (test: `a free-text request sends no thinkingConfig at model-default…`).
 
 `gemini-transport.ts` — add the exported helper and import:
 ```ts
 import { reasoningWireFragment } from '../reasoning.js';
 
 /** Merge a reasoning fragment's thinkingConfig into the request config built by
-    W2 (which may already carry includeThoughts). A zero thinking budget has no
-    thoughts to include, so includeThoughts is dropped there. The fragment never
+    W2 (which may already carry includeThoughts). The fragment decides
+    includeThoughts (P19): reasoningWireFragment adds it to every level that
+    thinks and leaves it off `off` (budget 0, Gemma's MINIMAL), so it accompanies
+    any request that thinks and never one that does not. The fragment never
     carries both thinkingLevel and thinkingBudget (reasoning.test.ts pins it). */
 export function mergeGeminiThinkingConfig(
   config: Record<string, unknown>,
@@ -1169,17 +2070,64 @@ export function mergeGeminiThinkingConfig(
     ...((config.thinkingConfig as Record<string, unknown> | undefined) ?? {}),
     ...add,
   };
-  if (merged.thinkingBudget === 0) delete merged.includeThoughts;
+  if (add.includeThoughts !== true) delete merged.includeThoughts;
   return { ...config, thinkingConfig: merged };
 }
 ```
-Where the transport passes `config: { responseMimeType…, thinkingConfig… }` to `this.client.models.generateContentStream({ model, contents, config })`, hoist the literal into `const baseConfig: Record<string, unknown> = { …unchanged… };` and pass:
+Where the transport passes `config: { responseMimeType…, thinkingConfig… }` to `this.client.models.generateContentStream({ model, contents, config })`, hoist the literal into `const baseConfig: Record<string, unknown> = { …unchanged… };`, bind the merged config to a local (Task 5.10 merges the payload into the same request object), and pass it:
 ```ts
-        config: (req.reasoning === undefined
+        const configWithReasoning = (req.reasoning === undefined
           ? baseConfig
-          : mergeGeminiThinkingConfig(baseConfig, reasoningWireFragment('gemini', { model: this.model }, req.reasoning))) as GenerateContentConfig,
+          : mergeGeminiThinkingConfig(baseConfig, reasoningWireFragment('gemini', { model: this.model }, req.reasoning))) as GenerateContentConfig;
+```
+```ts
+        config: configWithReasoning,
 ```
 (`import type { GenerateContentConfig } from '@google/genai';` if not already imported.)
+
+**Request thinking (N1, P27).** Wave 2 decides two things from the model id alone: whether a request asks for thought summaries, and which window bounds its silence before answer text. A level can turn thinking on for a model outside the id rule (Gemma 4 `on`, a 2.5 Flash-Lite budget) or off for one inside it (2.5 Flash `off`). So both now ask one function, `geminiRequestThinks(this.model, req.reasoning)` (Task 5.1). The shape chosen is to **modify W2's resolver by symbol, adding an optional level**, rather than to wrap it. That keeps one resolver and one window rule, and W2's own calls and tests are unchanged, because `geminiRequestThinks(model, undefined)` is `geminiModelThinks(model)`. In `gemini-transport.ts`:
+1. **Whether the request thinks.** In `generate(req)`, replace W4 Task 4.3's `const includeThoughts = !req.freeText && geminiModelThinks(this.model);` with:
+```ts
+    /* #3084 P27 — decided once per request from its settings, never the catalog: the id rule by default,
+       or a level that turns thinking on or off (N1). */
+    const requestThinks = geminiRequestThinks(this.model, req.reasoning);
+```
+2. **The config spread.** In the `baseConfig` literal, replace W4's `...(includeThoughts ? { thinkingConfig: { includeThoughts: true } } : {}),` with `...(!req.freeText && requestThinks ? { thinkingConfig: { includeThoughts: true } } : {}),`. At `model-default` the value is the same as W4's. At any other level `mergeGeminiThinkingConfig` then sets `includeThoughts` from the fragment.
+2b. **The evidence gate (A3).** Directly after `configWithReasoning` (the hoist above), add the local W2's usage block reads:
+```ts
+    /* #3084 P27, A3 — one flag, read from the thinkingConfig this request actually sends: a
+       thoughtsTokenCount is reasoning evidence only when the wire asked for thoughts. So a free-text
+       (persona) request at model-default counts none, Gemma at `on` counts its own, and the wire and the
+       count can never disagree (Task 5.1's `agrees with the wire…` case pins the fragment side). */
+    const includeThoughts =
+      (configWithReasoning.thinkingConfig as { includeThoughts?: unknown } | undefined)?.includeThoughts === true;
+```
+W2's `reasoningTokens: includeThoughts ? thoughtsTokenCount : undefined` keeps reading that name and needs no edit.
+3. **W2's resolver.** Replace `resolveGeminiThinkingIdleTimeoutMs` with:
+```ts
+/** P5 — the silence allowed before a Gemini request's answer text starts: the
+    wait for the first chunk and each gap between thought parts.
+    analyzer.gemini.thinkingIdleTimeoutMs = 0 (the default) is automatic per
+    request: 240 s for a request that thinks (P27: the static id rule by default,
+    or a level that turns thinking on; geminiRequestThinks), otherwise the stream
+    idle window. A positive value applies to every request. */
+export function resolveGeminiThinkingIdleTimeoutMs(model: string, level?: ReasoningLevel): number {
+  const configured = configValue<number>('analyzer.gemini.thinkingIdleTimeoutMs');
+  if (configured > 0) return configured;
+  return geminiRequestThinks(model, level) ? GEMINI_THINKING_IDLE_TIMEOUT_MS : resolveStreamIdleTimeoutMs();
+}
+```
+4. **W2's private helper.** Replace `geminiThinkingWindowApplies` with:
+```ts
+/** P5 — whether a timeout before answer text is a thinking-window timeout
+    (AnalyzerTimeoutError, not retried) rather than today's idle timeout
+    (GeminiStreamIdleError, retried): a request that thinks (P27), or a positive knob. */
+function geminiThinkingWindowApplies(model: string, level?: ReasoningLevel): boolean {
+  return configValue<number>('analyzer.gemini.thinkingIdleTimeoutMs') > 0 || geminiRequestThinks(model, level);
+}
+```
+5. **The call sites.** In `generate`'s watchdog block, pass the request's level at wave 2's two calls: `const thinkingIdleTimeoutMs = resolveGeminiThinkingIdleTimeoutMs(this.model, req.reasoning);` and `const thinkingWindowApplies = geminiThinkingWindowApplies(this.model, req.reasoning);`.
+6. **Imports.** Import `geminiRequestThinks` and `type ReasoningLevel` from `../reasoning.js`, in the same statement as `reasoningWireFragment`. The three sites above were `geminiModelThinks`'s only uses in this file, so remove it from the `../catalog/gemini-catalog.js` import. `npm run typecheck` flags a leftover use.
 
 `openai-transport.ts` — where W3b builds the params object for `client.chat.completions.create(params, { signal })`, after the object literal add:
 ```ts
@@ -1189,74 +2137,167 @@ Where the transport passes `config: { responseMimeType…, thinkingConfig… }` 
 ```
 with `import { reasoningWireFragment } from '../reasoning.js';`, typing `params` as `Record<string, unknown>` at declaration and casting at the `create(` call site (`params as unknown as ChatCompletionCreateParamsStreaming`) if W3b typed it as the SDK type.
 
-`stage-runner.ts` needs no change here: Task 5.1 already forwards `reasoning: s.reasoning` on every transport request.
+`stage-runner.ts` needs no change here: Task 5.1 already forwards `reasoning: settings.reasoning` on every transport request.
 
-Settings closures — in each analyzer constructor's `new StageRunner({ … settings: () => ({ … }) })`, add a `reasoning:` entry. No wave 1–4 closure sets the field, W3b's `OpenAIAnalyzer` included; it is optional since Task 5.1.
+Settings closures — in the `OllamaAnalyzer` and `GeminiAnalyzer` constructors' `new StageRunner({ … settings: () => ({ … }) })`, add a `reasoning:` entry. No wave 1–4 closure sets the field; it is optional since Task 5.1.
 - `OllamaAnalyzer` (`ollama.ts`): `reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'local', model: opts.model }),`
 - `GeminiAnalyzer` (`gemini.ts`): `reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'gemini', model: opts.model }),`
-- `OpenAIAnalyzer`: `reasoning: resolveReasoningSetting(getCachedUserSettings(), { engine: 'openai', model: opts.model, endpoint: opts.endpoint }),`
 (`opts` = the constructor parameter; import `resolveReasoningSetting` from `./reasoning.js` and `getCachedUserSettings` from `../workspace/user-settings.js` where missing.) If W4 built a separate settings closure for persona generation, apply the line matching its engine there too.
 
+`OpenAIAnalyzer` — W3b's closure is `settings: () => openAIRequestSettings(opts.endpoint, …)`, and W3c Task 3c.9 fills the second argument. Leave the closure alone and extend the function in `server/src/analyzer/openai.ts`. Replace W3b's two-line `/* No reasoning / extraParams: EngineRequestSettings has neither field until … */` comment with a `reasoning` entry, so the function reads:
+```ts
+export function openAIRequestSettings(endpoint: AnalyzerEndpoint, servedOutputLimit?: number): EngineRequestSettings {
+  return {
+    structuredOutput: endpoint.structuredOutput,
+    maxOutputTokens: resolveEndpointMaxOutputTokens(endpoint, servedOutputLimit),
+    /* #3084 wave 5 — an endpoint carries its own level. resolveReasoningSetting reads neither the
+       settings file nor the model for engine 'openai', so neither is passed. Task 5.10 adds extraParams. */
+    reasoning: resolveReasoningSetting({}, { engine: 'openai', model: '', endpoint }),
+  };
+}
+```
+Add `import { resolveReasoningSetting } from './reasoning.js';`. The function's doc comment stays.
+
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/analyzer/transports/reasoning-wire.test.ts src/analyzer/runner/stage-runner.request-controls.test.ts src/analyzer/gemini-reasoning-wiring.test.ts src/analyzer/ollama.test.ts src/analyzer/ollama-timeout.test.ts src/analyzer/voice-style.test.ts src/analyzer/transports src/analyzer/runner`
+Run: `npm --prefix server run test -- src/analyzer/transports/reasoning-wire.test.ts src/analyzer/transports/gemini-request-thinks.test.ts src/analyzer/runner/stage-runner.request-controls.test.ts src/analyzer/gemini-reasoning-wiring.test.ts src/analyzer/openai-analyzer.test.ts src/analyzer/ollama.test.ts src/analyzer/ollama-timeout.test.ts src/analyzer/voice-style.test.ts src/analyzer/transports src/analyzer/runner`
 Then: `npm --prefix server run test:slow -- src/analyzer/gemini.test.ts`
-Expected: PASS. Keeps green: W1's transport and runner suites (default settings resolve to today's wire), `ollama.test.ts:386-410` (format body), W3's OpenAI transport contract suite, W4's persona tests.
+Expected: PASS. Keeps green: W1's transport and runner suites (default settings resolve to today's wire), `ollama.test.ts:386-410` (format body), W3's OpenAI transport contract suite, W4's persona tests (including `reports no reasoning tokens…`, whose free-text request still sends no `thinkingConfig`), W2's `transports/gemini-transport.test.ts` thinking-window and thought-summary cases, and the slow lane's `a Gemma empty MAX_TOKENS response WITH thoughtsTokenCount but no thought parts still splits` — all of them send no level, so the id rule still decides.
 
 - [ ] **Step 5: Mutation proof**
 1. In `ollama-transport.ts` delete `(body as Record<string, unknown>).think = false;`. Expected red: `undefined reasoning keeps think:false (pre-W5 behaviour)`. Restore.
 1b. In `sendFreeText` delete the `Object.assign(body, reasoningWireFragment(…))` line (leaving the `else` empty). Expected red: `a saved level reaches the persona call; model-default omits think`. Restore. Also delete `body.think = false;` there. Expected red: `undefined reasoning keeps think:false on the persona call` (and W4's own free-text test that asserts `body.think === false`). Restore.
 2. Runner forwarding is proven by Task 5.1's mutation proofs 5–6; it is not repeated here.
-3. In `mergeGeminiThinkingConfig` delete `if (merged.thinkingBudget === 0) delete merged.includeThoughts;`. Expected red: `mergeGeminiThinkingConfig keeps includeThoughts, drops it only for a zero budget`. Restore.
-4. In `OllamaAnalyzer`'s closure replace the resolver with `reasoning: 'off',`. Expected red: `Ollama: default install still sends think:false; a saved "on" sends think:true`. Restore.
+3. In `mergeGeminiThinkingConfig` replace `if (add.includeThoughts !== true) delete merged.includeThoughts;` with `if (merged.thinkingBudget === 0) delete merged.includeThoughts;`. Expected red: `mergeGeminiThinkingConfig: the fragment decides includeThoughts (P19)` (the MINIMAL case keeps `includeThoughts`). Restore.
+4. In `OllamaAnalyzer`'s closure replace the resolver with `reasoning: 'off',`. Expected red: `Ollama: default install still sends think:false; a level saved for one model is sent for that model only (P18)`. Restore.
+5. In `reasoning.ts`'s `thinkingBudget` branch drop `...thoughts`. Expected red: `Gemma 4 on and 2.5 Flash-Lite low carry includeThoughts; Gemma 4 off does not (P19)`. Restore.
+6. In `OllamaAnalyzer`'s closure replace `model: opts.model` with `model: 'qwen3.5:4b'`. Expected red: `the persona local model sends its own entry, not another model's`. Restore.
+7. In `openAIRequestSettings` delete the `reasoning:` entry. Expected red: `openAIRequestSettings resolves the endpoint's own reasoning level, and a stage sends it` (both halves) and `resolves a numeric output cap for Auto and manual endpoints — never undefined (P24)` (`toEqual`). Restore. Then, in `OpenAIAnalyzer`'s closure, replace `openAIRequestSettings(…)` with `{ structuredOutput: opts.endpoint.structuredOutput, maxOutputTokens: undefined }`. Expected red: the wire half of the same case (`reasoning_effort` is `undefined`). Restore.
+8. In `generate`, drop `req.reasoning` from both watchdog calls (`resolveGeminiThinkingIdleTimeoutMs(this.model)`, `geminiThinkingWindowApplies(this.model)`). Expected red: `Gemma 4 at on: the request asks for thought summaries, and a 60 s silent think is not killed` (a second attempt at 45 s) and `gemini-2.5-flash at off gets today's idle window…` (one call at 46 s). Restore.
+9. In `resolveGeminiThinkingIdleTimeoutMs` replace `geminiRequestThinks(model, level)` with `geminiModelThinks(model)`. Expected red: `resolves the window per request…`. Restore.
+10. Replace the `includeThoughts` local's expression with `geminiModelThinks(this.model)`. Expected red: `a Gemma 4 request at on reports thoughtsTokenCount as reasoning tokens…` (`expected undefined to be 321`) and `at on the thought tokens are evidence…` (an `AnalyzerTruncatedError`). Restore.
+10b. Replace the same local with `requestThinks` (the request's level, not its wire). Expected red: `a free-text request counts thoughtsTokenCount only when its own wire asked for thoughts (A3)` (`expected 321 to be undefined`). Restore.
+11. Task 5.1's mutation 9 (a raw Ollama lookup in `resolveReasoningSetting`) also turns `Ollama, one model id (N7)…` red here (`expected [ false, false ]…`); run it once against this suite.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/transports server/src/analyzer/ollama.ts server/src/analyzer/gemini.ts server/src/analyzer/openai.ts server/src/analyzer/gemini-reasoning-wiring.test.ts
-git add $(git grep -l "class OpenAIAnalyzer" server/src)
+git add server/src/analyzer/transports server/src/analyzer/ollama.ts server/src/analyzer/gemini.ts server/src/analyzer/openai.ts server/src/analyzer/gemini-reasoning-wiring.test.ts server/src/analyzer/voice-style.test.ts
+git add server/src/analyzer/openai-analyzer.test.ts
 git commit -m "feat(server): send the configured reasoning level on every analyzer transport"
 ```
 
-### Task 5.4: Test action reasoning coverage, level-keyed schema probes, pre-run refusal, catalog `offeredReasoningLevels`
+### Task 5.4: Test action level step, level-keyed records, pre-run refusal of a stale level, catalog `offeredReasoningLevels`
 
 **Files:**
-- Modify: `server/src/analyzer/capabilities.ts` (W3c Tasks 3c.3–3c.4). Add the reasoning half. Change `ModelTestDeps`, `capabilityRecordFor`, `assertConfiguredCapabilitiesAllowed`, `plannedTestRequestCount` and `runModelTest`, and the private `isHttp400`, `sendProbe` and `checkMode`.
+- Modify: `server/src/analyzer/capabilities.ts` (W3c Tasks 3c.3–3c.4):
+  - add the level step at `runModelTest`'s marked step-2 hook;
+  - add two `ModelTestDeps` fields;
+  - replace `plannedTestRequestCount`;
+  - give the private `sendStep` and `modeStep` a reasoning level;
+  - rename the private `isHttp400` to the exported `isProbeRejected`;
+  - delete `defaultReasoningKey`, replaced by reasoning.ts `defaultReasoningLevel`.
 - Modify: `server/src/analyzer/model-test-deps.ts` (W3c Task 3c.6, `modelTestDepsFor`) — the Test deps
-- Modify: `server/src/analyzer/catalog/analyzer-catalog.ts` (W3c Task 3c.5, `toEntry` and `endpointGroup`) — catalog entry assembly: `offeredReasoningLevels`, the level-keyed label, the test plan
-- Modify: `server/src/analyzer/preflight.ts` (W3c Task 3c.10, `runAnalyzerPreflight`) — its three `assertConfiguredCapabilitiesAllowed(` calls (`git grep -n "assertConfiguredCapabilitiesAllowed(" server/src -- ':!*.test.ts'` must list only these)
-- Test: Create `server/src/analyzer/capabilities.reasoning.test.ts` and `server/src/routes/analyzer-models.reasoning.test.ts`. Update W3c's `server/src/analyzer/capabilities.run-model-test.test.ts`, `server/src/analyzer/capabilities.test.ts`, `server/src/analyzer/model-test-deps.test.ts` and `server/src/analyzer/catalog/analyzer-catalog.test.ts`.
+- Modify: `server/src/analyzer/catalog/analyzer-catalog.ts` (W3c Task 3c.5, `toEntry` and `endpointGroup`) — `offeredReasoningLevels`, the level-keyed label, the test plan
+- Modify: `server/src/analyzer/preflight.ts` (W3c Task 3c.10, `runAnalyzerPreflight`) — its three `assertConfiguredCapabilitiesAllowed(` calls
+- Modify: `server/src/analyzer/errors.ts` — new `AnalyzerReasoningUnavailableError` (P17), with a `when` discriminator for the mid-run throw (N10)
+- Modify: `server/src/analyzer/reasoning.ts` (Task 5.1) — `unavailable()` throws that coded error instead of a plain `Error` (N10)
+- Modify: `server/src/analyzer/reasoning.test.ts` (Task 5.1) — the five `is not available` assertions, plus the mid-run case
+- Create: `server/src/analyzer/capability-record-merge.ts` — import-free leaf: `sameServer` moved from W3c's `capabilities.ts` (body unchanged) and `mergeCapabilityRecords` (N14, A2)
+- Modify: `openapi.yaml` — W3c's `ModelCapabilityRecord` already carries `digest` (3c, A3); this task adds `verdictTestedAt` (A2); regenerate `src/lib/api-types.ts`
+- Modify: `server/src/workspace/user-settings.ts` (W3c Task 3c.3, `writeAnalyzerCapabilityRecord`) — merge a Test's verdicts into the model's record for the same server (N14)
+- Modify: `server/src/routes/analyzer-models.ts` (W3c Task 3c.6, `POST /models/test`) — write the record under `capabilityRecordKey(modelId)` (N7)
+- Modify: `server/src/analyzer/voice-style.ts` (W4 Task 4.5, `generateVoiceStylePersona`) and `server/src/routes/cast-design.ts` (W4 Task 4.6, `runPersonaPrePass`'s rethrow condition) — the persona pre-run refusal
+- Test:
+  - Create `server/src/analyzer/capabilities.reasoning.test.ts`, `server/src/routes/analyzer-models.reasoning.test.ts` and `server/src/analyzer/preflight.reasoning.test.ts`.
+  - Append to `server/src/analyzer/voice-style.test.ts` and `server/src/routes/cast-design.test.ts`.
+  - Create `server/src/analyzer/capability-record-merge.test.ts`.
+  - Update W3c's `server/src/analyzer/capabilities.run-model-test.test.ts`, `server/src/analyzer/capabilities.test.ts`, `server/src/analyzer/model-test-deps.test.ts` and `server/src/analyzer/catalog/analyzer-catalog.test.ts`.
 
 **Interfaces:**
-- Consumes: Task 5.1 `defaultReasoningLevel`, `testableReasoningLevels`, `offeredReasoningLevels`, `resolveReasoningSetting`, `ReasoningSelection`. Contract `ModelCapabilityRecord`, `capabilityRecordFor`, `assertConfiguredCapabilitiesAllowed`, `runModelTest`, `plannedTestRequestCount`, `structuredOutputLabel(mode, dropped, record, reasoningKey)`, `AnalyzerCapabilityRejectedError`, `AnalyzerHttpError`, `AnalysisAbortedError`, `inferEngineFromModelId`, `parseEndpointModelId`. W3c's (Task 3c.4) `ModelTestDeps` fields `transport`, `serverUrl`, `configuredMode`, `offeredModes`, `offeredLevels`, `adaptSchema`, `now`, `markerValue`, `redact`. W3c's private `isHttp400(err)`, `sendProbe(transport, structuredOutput, prompt, maxOutputTokens)` and `checkMode(modelId, mode, deps)`, and its `CONTROL_PROMPT`, `CONTROL_MAX_OUTPUT_TOKENS`, `requireStop` and `ModelTestInconclusiveError`. W3c's `analyzerModelsRouter`, mounted at `/api/analyzer`, with routes `/models`, `/models/test` and `/models/preview`.
-- Produces (**new** exports of `capabilities.ts`): `isProbeRejected(err)` (W3c's `isHttp400`, renamed and exported), `reasoningLevelsToProbe(scope, sel, configured)`, `plannedReasoningProbeCount(levels, controlLevel)`, `probeReasoningLevels(levels, deps)`, `normaliseCapabilityRecord(record, engine)`, `reasoningSelectionFor(settings, modelId)`, `configuredReasoningFor(settings, modelId)`.
-- `ModelTestDeps` loses W3c's `offeredLevels` (the pre-W5 `[CONFIGURED_LEVEL_KEY]` stand-in) and gains `reasoningSelection` and `configuredReasoning`. `plannedTestRequestCount`'s deps become `Pick<ModelTestDeps, 'configuredMode' | 'offeredModes' | 'reasoningSelection' | 'configuredReasoning'>`.
-- Record semantics: `record.reasoning[level]` is `accepted | rejected`, written only when the control succeeded. `record.structuredOutput[mode][<reasoning level>]` replaces W3's `'configured'` key.
+- Consumes:
+  - Task 5.1: `defaultReasoningLevel`, `testableReasoningLevels`, `offeredReasoningLevels`, `resolveReasoningSetting`, `ReasoningSelection`.
+  - W3c Tasks 3c.3–3c.4:
+    - `ModelTestDeps` (`transport`, `serverUrl`, `configuredMode`, `offeredModes`, `adaptSchema`, `probeLimits`, `signal?`, `now?`, `markerValue?`, `redact?`, `modelDigest?`);
+    - `ModelCapabilityRecord` (already carrying 3c's `digest?`), `capabilityRecordFor(settings, modelId, serverUrl, currentDigest?)`, and `assertConfiguredCapabilitiesAllowed(record, { structuredOutput, reasoning }, modelId)`, which this task leaves unchanged (it already keys by the level a run sends);
+    - `plannedTestRequestCount`, and `runModelTest` with its step-2 hook comment — its return already stamps `digest` from `deps.modelDigest` (3c A3);
+    - the private `sendStep(deps, format, maxOutputTokens)`, `modeStep(modelId, mode, format, marker, cap, deps, redact)`, `isHttp400`, `providerText` and `throwIfAborted`;
+    - the exported `namesContextOrTokenLimit`, `LIMIT_400_PATTERNS`, `ModelTestInconclusiveError(modelId, step, detail)`, `ModelTestControlFailedError`, `probeOutputCap`, `PROBE_PROMPT` and `defaultReasoningKey`.
+  - W3c Task 3c.10: `runAnalyzerPreflight(targets, settings, digests?: ReadonlyMap<string, string | undefined>)` — this task reads its existing `digests` parameter (A3) rather than adding one; it does not touch `resolvePreflightDigests` or any call site's digest resolution.
+  - W3b: `structuredOutputLabel(mode, dropped, record, reasoningKey)`.
+  - Errors and ids: `AnalyzerCapabilityRejectedError`, `AnalyzerHttpError`, `AnalysisAbortedError`, `inferEngineFromModelId`, `parseEndpointModelId`.
+  - W3c's `analyzerModelsRouter`, mounted at `/api/analyzer`.
+- Produces:
+  - **New** exports of `capabilities.ts`: `isProbeRejected(err)`, `reasoningLevelsToProbe(scope, sel, configured)`, `plannedReasoningProbeCount(levels, controlLevel)`, `probeReasoningLevels(levels, deps)`, `ReasoningLevelTestInconclusiveError`, `reasoningSelectionFor(settings, modelId, engine?, currentDigest?)`, `configuredReasoningFor(settings, modelId, engine?, currentDigest?)`, `assertConfiguredReasoningOffered(settings, modelId, engine?, currentDigest?)` (P17). `currentDigest` (A3) mirrors `capabilityRecordFor`'s own trailing parameter and passes through to it for the `local` engine only; `runAnalyzerPreflight` is the only pre-run caller and passes `digests?.get(target.modelId)` from the map W3c's `resolvePreflightDigests` already resolved (no new network read). Every other caller — `modelTestDepsFor`, the catalog's `toEntry`, persona generation — omits it and keeps `capabilityRecordFor`'s existing fail-open rule.
+  - **New** in `errors.ts`: `AnalyzerReasoningUnavailableError(modelId, level, engine)` (contract).
+  - **New** in `capabilities.ts`: `capabilityRecordKey(modelId)` (N7); `sameCapabilityRecordModel(a, b)` and `verdictTestedAtFor(record, cell)` (A2); `capabilityRecordFor` now also looks Ollama records up through `entryForModelTag` (N7), keeping 3c's `currentDigest` parameter and discard rule unchanged underneath.
+  - **New** leaf `capability-record-merge.ts`: `sameServer(a, b)` (moved from `capabilities.ts`) and `mergeCapabilityRecords(previous, next)` (N14, A2).
+  - `ModelCapabilityRecord` gains `verdictTestedAt?` (`digest?` already added by 3c); `writeAnalyzerCapabilityRecord` gains a `sameModel` predicate (A2).
+  - **Removed:** `defaultReasoningKey`.
+- `ModelTestDeps` gains `reasoningSelection` and `configuredReasoning`. `plannedTestRequestCount`'s deps become `Pick<ModelTestDeps, 'configuredMode' | 'offeredModes' | 'reasoningSelection' | 'configuredReasoning'>`.
+- Record semantics: `record.reasoning[level]` is `accepted | rejected`, written only after the control succeeded. `record.structuredOutput[mode]` is keyed by the configured level the mode steps sent.
+- **Merged, not replaced (N14).** A Test merges the verdicts it probed into the model's existing record for the same server URL. It replaces only the probed `reasoning` levels and the probed `structuredOutput[mode][level]` cells, and `testedAt` becomes the latest. So a `configured` Test, which probes one level, keeps the level verdicts an earlier `all` Test recorded. A record for another server URL is replaced whole, as `capabilityRecordFor` would discard it anyway.
+- **Per-verdict dates (A2).** Because a merged record carries verdicts from more than one Test, each verdict keeps its own date in `verdictTestedAt`, and the pre-run refusal cites the date of the Test that recorded *that* verdict (`verdictTestedAtFor`), not the record's newest date. A verdict from a record written before this field existed takes that record's `testedAt`.
+- **Model identity (A2).** 3c already stamps an Ollama record with the model's `digest` from `/api/tags` (verified against a live daemon: every entry has one) and discards a stored record outright when the digest no longer matches the installed model (`capabilityRecordFor`). This task adds the merge-time counterpart: a Test whose digest differs from the stored record's replaces the record instead of merging, so a tag re-pulled under the same name keeps no verdict that was never probed for the new build. A digest present on one side only proves nothing and also replaces; two records with no digest at all (endpoints, Gemini) merge on the server URL alone, as before. Endpoints expose no digest: a model remapped behind the same name is caught on the first call the new model refuses (`analyzer-request-rejected`), and the same holds for an Ollama tag re-pulled without a new Test.
+- **One record per model (A2, N7).** The write looks the earlier record up through `normalizeModelTag` and removes every other key that names the same model, so a record W3c filed under `qwen3:latest` is found, merged into and rewritten under `qwen3`.
+- **One Ollama model id (N7).** A record is saved under `capabilityRecordKey(modelId)` (an Ollama tag through `normalizeModelTag`; an endpoint id as is) and looked up through `entryForModelTag`, so a Test of `qwen3:latest` answers for a run on `qwen3`.
 
-**Decisions this task encodes** (from the brief; recorded so review does not re-litigate):
-- **Level probes copy the control.** W3c's control request uses no structured output (`off` mode, spec §2 / P7), a trivial prompt and the 256-token cap. A level probe is that request with only `reasoning` changed, so a 400 is attributable to the level alone. A level equal to the control's level is recorded `accepted` without a second request.
-- **Which levels and modes.** `scope: 'configured'` probes the configured level; `scope: 'all'` probes every `testableReasoningLevels` entry. Structured-output modes are probed **at the configured level only** in both scopes (no mode × level cross product). A mode record under another level is simply absent, so the label never claims "not enforced" for an untested level. W3c's `off` check still sends nothing, because its request is the configured level's own probe (or the control).
-- **A rejected configured level** skips the mode probes: nothing could be attributed.
-- **Inconclusive probes (P7).** A level probe that fails with anything but a 400 (a 5xx after the transport's retries, a timeout, an unreachable server), or finishes other than `stop`, is inconclusive. It propagates, nothing is recorded, and the route answers 502, the same as W3c's mode probes. An abort rethrows.
-- **Pre-W5 records.** W3 records keyed `'configured'` were taken at the engine's pre-W5 default level (Ollama `off`, others `model-default`), so they are re-keyed to that level on read instead of discarded.
+**Decisions this task encodes** (recorded so review does not re-litigate):
+- **One default-level rule.** W3c's `defaultReasoningKey(kind)` and Task 5.1's `defaultReasoningLevel(engine)` return the same values: Ollama `off`, others `model-default`. This task deletes the former and uses the latter at every call site (`runModelTest`, `toEntry`, the preflight), so exactly one rule remains. `reasoning.test.ts`'s `defaults preserve today` pins the values.
+- **The level step is W3c's marked step 2.** The ladder becomes three steps:
+  1. control: `off` mode at the engine's default level;
+  2. level step: `off` mode at the configured level, differing from the control only in `reasoning`;
+  3. mode steps: the configured mode at the configured level.
+
+  Every step goes through W3c's `sendStep`, so all of them share one prompt, one cap and the client's abort signal. A level equal to the control's level is recorded `accepted` without a second request.
+- **Which levels and modes.** `scope: 'configured'` probes the configured level, and `scope: 'all'` probes every `testableReasoningLevels` entry. Mode steps run at the configured level only, in both scopes (no mode × level cross product). A mode record under another level is simply absent, so the label never claims "not enforced" for an untested level.
+- **A rejected configured level** skips the mode steps: nothing could be attributed to them.
+- **Level steps prove acceptance only (P7).** Any finish records `accepted`, `length` and `blocked` included. A thinking model spends the cap reasoning, so a `length` stop is the expected shape here. Only W3c's mode steps treat a `length` / `blocked` finish as inconclusive.
+- **Failures on a level step (P7)** mirror W3c's `modeStep`:
+  - A 400 records the level `rejected`, unless `namesContextOrTokenLimit(providerText(err))`. That case throws `ReasoningLevelTestInconclusiveError`, whose copy names the level ("The reasoning level "high" check…") and never says "The off check".
+  - Any other failure (a 5xx after the transport's retries, a timeout, an unreachable server) throws the same class with the redacted message. It is a `ModelTestInconclusiveError`, so nothing is recorded and the route answers 502.
+  - An abort rethrows.
+- **Stop-the-run errors (P20).** Every catch this task adds passes `AnalyzerReasoningOverflowError` exactly where it passes `GeminiContentBlockedError`:
+  - **The level step's catch** treats the two alike, as W3c's `modeStep` does: inconclusive, nothing recorded. Test: `a content block and a reasoning overflow from a probe are handled alike…`. Neither normally reaches this catch: a transport returns `blocked` / `length` as a finish, and only the runner's `mapFinish` raises these errors. A Test is not a run, so there is no run to stop.
+  - **The pre-run stale-level check adds no catch.** `assertConfiguredReasoningOffered` throws before the first call, and W3c's new-job `try` in `routes/analysis.ts` classifies the error. No overflow can exist before a call.
+  - **`runPersonaPrePass`** gains only `AnalyzerReasoningUnavailableError`. P20 keeps a pre-pass persona overflow a per-character failure, as a pre-pass content block is. On the lazy path a persona error is a **per-character** failure, as on `main` since `6222e483` (#3027 second half): it does not reach the design route's backstop, so W4 codes only the pre-pass's wholesale rethrows. A lazy `AnalyzerReasoningUnavailableError` therefore fails that one character and the job continues.
+- **A failed control** is unchanged: W3c's `ModelTestControlFailedError`, and nothing is written.
+- **A stored level no longer offered (P17).** A stored level that `offeredReasoningLevels` no longer offers refuses the run before its first call. Examples: a Gemini table change; an Ollama named level whose Test record is gone or was taken on another server; an endpoint `reasoning` saved before its style changed.
+  - It throws `AnalyzerReasoningUnavailableError`, which Task 5.5 maps to `analyzer-request-rejected`.
+  - It runs in `runAnalyzerPreflight` beside W3c's `rejected` check, with the target's own engine (`target.engine`, N5: a bare Ollama tag such as `llama2` infers as Gemini from its id), and in `generateVoiceStylePersona` right after `personaRunner`: after the missing-endpoint and key-origin refusals, before the prompt is built.
+  - An unknown stored value (N10: stored levels are strings, e.g. `xhigh` from a newer release) is never offered, so it is refused the same way.
+  - The design pre-pass ends the job once on it.
+- **A level that reaches a call anyway (N10).** `reasoningWireFragment` is the last-resort guard, and it throws the same coded class with `when: 'mid-run'` instead of a plain `Error`, so a hand-edited value that slips past every save and the pre-run check still fails with a code and copy rather than an uncoded mid-run throw. Settings are read per call, so this is the only way a run reaches a call with an unoffered level: every save is validated, and a level saved mid-run is offered. Its `modelId` is the model the transport holds (for an endpoint, the bare model name), which is data for the log; the user-facing copy names the setting and the run's model label (Task 5.5).
+
+**Entry check — W3c's ladder surface.** Before Step 1, run the command below. Every name must be found, with the shape W3c Tasks 3c.3–3c.4 give it (quoted in Step 3 wherever this task edits it). A symbol that moved is followed; one that changed shape is reported to the coordinator before editing.
+```bash
+git grep -n -E "export interface ModelTestDeps|probeLimits: \(\)|function sendStep|function modeStep|function isHttp400|function providerText|export function namesContextOrTokenLimit|class ModelTestInconclusiveError|class ModelTestControlFailedError|export function defaultReasoningKey|WAVE 5 \(Task 5a\) INSERTS THE LEVEL STEP HERE" -- server/src/analyzer/capabilities.ts
+git grep -n "defaultReasoningKey" -- server/src src
+```
+The second command lists every use of `defaultReasoningKey`: `capabilities.ts` (the definition and `runModelTest`), `catalog/analyzer-catalog.ts` (`toEntry`), `preflight.ts` (three calls), `capabilities.test.ts` (its describe), and any comment that names it. This task removes every use, rewording a comment to name `defaultReasoningLevel`.
 
 - [ ] **Step 1: Write the failing tests**
 
 `server/src/analyzer/capabilities.reasoning.test.ts`:
 ```ts
 import { describe, it, expect, vi } from 'vitest';
+import { DEFAULT_USER_SETTINGS, type UserSettings } from '../workspace/user-settings.js';
 import {
+  ALL_STRUCTURED_OUTPUT_MODES,
   assertConfiguredCapabilitiesAllowed,
+  capabilityRecordFor,
+  capabilityRecordKey,
   isProbeRejected,
   ModelTestInconclusiveError,
-  normaliseCapabilityRecord,
   plannedReasoningProbeCount,
   plannedTestRequestCount,
   probeReasoningLevels,
+  ReasoningLevelTestInconclusiveError,
   reasoningLevelsToProbe,
   runModelTest,
+  verdictTestedAtFor,
   type ModelCapabilityRecord,
   type ModelTestDeps,
 } from './capabilities.js';
-import { AnalysisAbortedError, AnalyzerCapabilityRejectedError, AnalyzerHttpError } from './errors.js';
+import { AnalysisAbortedError, AnalyzerHttpError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from './errors.js';
 import { structuredOutputLabel } from './runner/schema-adapters.js';
 import type { ChatTransport, TransportRequest, TransportResult } from './runner/transport.js';
 import type { ReasoningLevel } from './reasoning.js';
@@ -1267,6 +2308,36 @@ const rec = (over: Partial<ModelCapabilityRecord> = {}): ModelCapabilityRecord =
 });
 const http400 = () => new AnalyzerHttpError('ollama', 400, '"q:4b" does not support thinking', 'Ollama returned 400');
 const stop = (): TransportResult => ({ text: '{"ok":true}', reasoningSeen: false, finish: 'stop', receivedBytes: 11 });
+const lengthStop = (): TransportResult => ({ text: '', reasoningSeen: true, finish: 'length', receivedBytes: 0, usage: { reasoningTokens: 900 } });
+
+function recording(respond: (req: TransportRequest) => TransportResult) {
+  const calls: TransportRequest[] = [];
+  const transport: ChatTransport = {
+    kind: 'ollama',
+    model: 'q:4b',
+    send: vi.fn(async (req: TransportRequest) => {
+      calls.push(req);
+      return respond(req);
+    }),
+  };
+  return { calls, transport };
+}
+
+function ollamaDeps(transport: ChatTransport, over: Partial<ModelTestDeps> = {}): ModelTestDeps {
+  return {
+    transport,
+    serverUrl: 'http://127.0.0.1:11434',
+    configuredMode: 'off',
+    offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
+    adaptSchema: (s) => ({ schema: s, dropped: [] }),
+    probeLimits: () => ({ contextTokens: 32768, maxOutputTokens: null }),
+    reasoningSelection: () => ({ engine: 'local', model: 'q:4b' }),
+    configuredReasoning: () => 'off',
+    now: () => new Date('2026-09-11T10:00:00.000Z'),
+    markerValue: () => 'mk-fixed',
+    ...over,
+  };
+}
 
 describe('isProbeRejected', () => {
   it('is true only for a 400 from any transport', () => {
@@ -1277,7 +2348,7 @@ describe('isProbeRejected', () => {
   });
 });
 
-describe('probeReasoningLevels', () => {
+describe('probeReasoningLevels — the level step (P7)', () => {
   it('records accepted / rejected and skips the control level', async () => {
     const send = vi.fn(async (level: ReasoningLevel): Promise<TransportResult> => {
       if (level === 'on' || level === 'low') throw http400();
@@ -1287,68 +2358,145 @@ describe('probeReasoningLevels', () => {
     expect(out).toEqual({ 'model-default': 'accepted', off: 'accepted', on: 'rejected', low: 'rejected', medium: 'accepted', high: 'accepted' });
     expect(send.mock.calls.map(([level]) => level)).toEqual(['model-default', 'on', 'low', 'medium', 'high']);
   });
-  it('a non-400 failure propagates instead of being recorded (P7)', async () => {
-    const send = vi.fn(async (): Promise<TransportResult> => { throw new AnalyzerHttpError('ollama', 500, '', 'boom'); });
-    await expect(probeReasoningLevels(['on'], { modelId: 'q:4b', controlLevel: 'off', send })).rejects.toBeInstanceOf(AnalyzerHttpError);
+  it('a thinking model that hits length on a level probe records the level accepted (acceptance only)', async () => {
+    const send = vi.fn(async (level: ReasoningLevel): Promise<TransportResult> =>
+      level === 'high' ? lengthStop() : { text: '', reasoningSeen: false, finish: 'blocked', blockReason: 'SAFETY', receivedBytes: 0 },
+    );
+    await expect(probeReasoningLevels(['high', 'low'], { modelId: 'qwen3.5:4b', controlLevel: 'off', send })).resolves.toEqual({
+      high: 'accepted',
+      low: 'accepted',
+    });
   });
-  it('a length finish is inconclusive, not accepted (P7)', async () => {
-    const send = vi.fn(async (): Promise<TransportResult> => ({ text: '', reasoningSeen: true, finish: 'length', receivedBytes: 0 }));
-    await expect(probeReasoningLevels(['on'], { modelId: 'q:4b', controlLevel: 'off', send })).rejects.toBeInstanceOf(ModelTestInconclusiveError);
+  it('a 400 naming a context or token limit is inconclusive, with copy that names the level', async () => {
+    const send = vi.fn(async (): Promise<TransportResult> => {
+      throw new AnalyzerHttpError(
+        'openai',
+        400,
+        "This model's maximum context length is 8192 tokens",
+        "Endpoint m returned 400: This model's maximum context length is 8192 tokens",
+      );
+    });
+    const err = await probeReasoningLevels(['high'], { modelId: 'openai:lab::m', controlLevel: 'model-default', send }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ReasoningLevelTestInconclusiveError);
+    expect(err).toBeInstanceOf(ModelTestInconclusiveError);
+    expect((err as Error).message).toContain('The reasoning level "high" check for openai:lab::m was inconclusive');
+    expect((err as Error).message).not.toContain('The off check');
+  });
+  it('a non-400 failure is inconclusive with the level named, never recorded', async () => {
+    const send = vi.fn(async (): Promise<TransportResult> => {
+      throw new AnalyzerHttpError('ollama', 500, '', 'boom');
+    });
+    const err = await probeReasoningLevels(['on'], { modelId: 'q:4b', controlLevel: 'off', send }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ReasoningLevelTestInconclusiveError);
+    expect((err as Error).message).toContain('The reasoning level "on" check for q:4b was inconclusive (boom)');
   });
   it('rethrows an abort', async () => {
-    const send = vi.fn(async (): Promise<TransportResult> => { throw new AnalysisAbortedError('gone'); });
+    const send = vi.fn(async (): Promise<TransportResult> => {
+      throw new AnalysisAbortedError('gone');
+    });
     await expect(probeReasoningLevels(['on'], { modelId: 'q:4b', controlLevel: 'off', send })).rejects.toBeInstanceOf(AnalysisAbortedError);
+  });
+  it('a content block and a reasoning overflow from a probe are handled alike: inconclusive, nothing recorded (P20)', async () => {
+    const thrown = [
+      new GeminiContentBlockedError('gemini-3.6-flash', 'SAFETY'),
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 900),
+    ];
+    for (const failure of thrown) {
+      const send = vi.fn(async (): Promise<TransportResult> => {
+        throw failure;
+      });
+      const err = await probeReasoningLevels(['low'], { modelId: 'gemini-3.6-flash', controlLevel: 'model-default', send }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ReasoningLevelTestInconclusiveError);
+      expect((err as Error).message).toContain('The reasoning level "low" check for gemini-3.6-flash was inconclusive');
+    }
   });
 });
 
-describe('runModelTest — level probes are the off-mode control with only reasoning changed', () => {
-  it('sends the control at the engine default, the configured level as a copy of it, and nothing for the off check', async () => {
-    const calls: TransportRequest[] = [];
-    const transport: ChatTransport = {
-      kind: 'ollama',
-      model: 'q:4b',
-      send: vi.fn(async (req: TransportRequest) => {
-        calls.push(req);
-        return stop();
-      }),
-    };
-    const deps: ModelTestDeps = {
-      transport,
-      serverUrl: 'http://127.0.0.1:11434',
-      configuredMode: 'off',
-      offeredModes: ['schema', 'json', 'off'],
-      adaptSchema: (s) => ({ schema: s, dropped: [] }),
-      reasoningSelection: () => ({ engine: 'local', model: 'q:4b' }),
-      configuredReasoning: () => 'on',
-      now: () => new Date('2026-09-11T10:00:00.000Z'),
-    };
+describe("runModelTest — the level step at W3c's step-2 hook", () => {
+  it('the level step is the control request with only reasoning changed; mode steps run at the configured level', async () => {
+    const { calls, transport } = recording(() => stop());
+    const deps = ollamaDeps(transport, { configuredMode: 'json', configuredReasoning: () => 'on' });
     const record = await runModelTest({ modelId: 'q:4b', scope: 'configured' }, deps);
     expect(calls).toHaveLength(plannedTestRequestCount({ modelId: 'q:4b', scope: 'configured' }, deps));
-    expect(calls).toHaveLength(2);
-    const { reasoning: controlLevel, ...control } = calls[0];
-    const { reasoning: probeLevel, ...probe } = calls[1];
-    expect([controlLevel, probeLevel]).toEqual(['off', 'on']);
-    expect(control.structuredOutput).toEqual({ mode: 'off' });
+    expect(calls.map((c) => [c.structuredOutput.mode, c.reasoning])).toEqual([
+      ['off', 'off'],
+      ['off', 'on'],
+      ['json', 'on'],
+    ]);
+    const { reasoning: _controlLevel, ...control } = calls[0];
+    const { reasoning: _probeLevel, ...probe } = calls[1];
     expect(probe).toEqual(control);
     expect(record.reasoning).toEqual({ on: 'accepted' });
-    expect(record.structuredOutput).toEqual({ off: { on: 'accepted' } });
+    expect(record.structuredOutput).toEqual({ json: { on: 'accepted' } });
+  });
+
+  it('scope all on a thinking model: every level probe that stops with length is recorded accepted', async () => {
+    const { transport } = recording((req) => (req.reasoning === 'off' ? stop() : lengthStop()));
+    const record = await runModelTest({ modelId: 'q:4b', scope: 'all' }, ollamaDeps(transport, { offeredModes: ['off'] }));
+    expect(record.control).toEqual({ ok: true });
+    expect(record.reasoning).toEqual({ 'model-default': 'accepted', off: 'accepted', on: 'accepted', low: 'accepted', medium: 'accepted', high: 'accepted' });
+  });
+
+  it('a rejected configured level skips the mode steps: nothing could be attributed', async () => {
+    const { calls, transport } = recording((req) => {
+      if (req.reasoning === 'on') throw http400();
+      return stop();
+    });
+    const record = await runModelTest({ modelId: 'q:4b', scope: 'configured' }, ollamaDeps(transport, { configuredMode: 'json', configuredReasoning: () => 'on' }));
+    expect(record.reasoning).toEqual({ on: 'rejected' });
+    expect(record.structuredOutput).toEqual({});
+    expect(calls.map((c) => c.structuredOutput.mode)).toEqual(['off', 'off']);
   });
 });
 
 describe('levels to probe and counts', () => {
-  it('configured probes one level; all probes every testable level', () => {
+  it('configured probes one level; all probes every testable level; the plan counts the level step', () => {
     expect(reasoningLevelsToProbe('configured', { engine: 'local', model: 'q:4b' }, 'on')).toEqual(['on']);
     expect(reasoningLevelsToProbe('all', { engine: 'local', model: 'q:4b' }, 'off')).toEqual(['model-default', 'off', 'on', 'low', 'medium', 'high']);
     expect(plannedReasoningProbeCount(['model-default', 'off', 'on', 'low', 'medium', 'high'], 'off')).toBe(5);
     expect(plannedReasoningProbeCount(['model-default'], 'model-default')).toBe(0);
+    const planDeps = {
+      configuredMode: 'schema' as const,
+      offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
+      reasoningSelection: () => ({ engine: 'local' as const, model: 'q:4b' }),
+      configuredReasoning: () => 'off' as const,
+    };
+    expect(plannedTestRequestCount({ modelId: 'q:4b', scope: 'configured' }, planDeps)).toBe(2);
+    expect(plannedTestRequestCount({ modelId: 'q:4b', scope: 'all' }, planDeps)).toBe(8);
   });
 });
 
-describe('normaliseCapabilityRecord', () => {
-  it('re-keys a pre-W5 "configured" probe to the engine default level', () => {
-    const legacy = rec({ structuredOutput: { schema: { configured: 'ignored' } as Record<string, 'ignored'> } });
-    expect(normaliseCapabilityRecord(legacy, 'local').structuredOutput).toEqual({ schema: { off: 'ignored' } });
-    expect(normaliseCapabilityRecord(legacy, 'gemini').structuredOutput).toEqual({ schema: { 'model-default': 'ignored' } });
+describe('one Ollama model id for Test records (N7)', () => {
+  it('a record saved under either tag form answers for the other; an endpoint id is looked up exactly', () => {
+    const s = { ...DEFAULT_USER_SETTINGS, analyzerCapabilitiesByModel: { 'qwen3:latest': rec(), 'openai:lab::m': rec() } } as UserSettings;
+    expect(capabilityRecordFor(s, 'qwen3', 'http://127.0.0.1:11434')).toEqual(rec());
+    expect(capabilityRecordFor(s, 'qwen3:latest', 'http://127.0.0.1:11434')).toEqual(rec());
+    expect(capabilityRecordFor(s, 'openai:lab::m:latest', 'http://127.0.0.1:11434')).toBeUndefined();
+    expect(capabilityRecordKey('qwen3:latest')).toBe('qwen3');
+    expect(capabilityRecordKey('qwen3.5:4b')).toBe('qwen3.5:4b');
+    expect(capabilityRecordKey('openai:lab::qwen3:latest')).toBe('openai:lab::qwen3:latest');
+  });
+});
+
+describe("a refusal cites the verdict's own Test date (A2)", () => {
+  it('reads verdictTestedAt for the rejected verdict, and the record date when it has none', () => {
+    const dated = rec({
+      testedAt: '2026-09-12T09:00:00.000Z',
+      reasoning: { on: 'rejected' },
+      verdictTestedAt: { reasoning: { on: '2026-09-10T08:00:00.000Z' } },
+    });
+    expect(verdictTestedAtFor(dated, { setting: 'reasoning', reasoning: 'on' })).toBe('2026-09-10T08:00:00.000Z');
+    let thrown: unknown;
+    try {
+      assertConfiguredCapabilitiesAllowed(dated, { structuredOutput: 'off', reasoning: 'on' }, 'q:4b');
+    } catch (e) {
+      thrown = e;
+    }
+    expect((thrown as { testedAt: string }).testedAt).toBe('2026-09-10T08:00:00.000Z');
+    /* A record written before per-verdict dates existed: its own testedAt stands in. */
+    expect(verdictTestedAtFor(rec({ testedAt: '2026-09-12T09:00:00.000Z', reasoning: { on: 'rejected' } }), { setting: 'reasoning', reasoning: 'on' })).toBe(
+      '2026-09-12T09:00:00.000Z',
+    );
   });
 });
 
@@ -1360,31 +2508,9 @@ describe('label reflects the configured level', () => {
     expect(structuredOutputLabel('schema', [], r, 'low')).toBe('schema');
   });
 });
-
-describe('assertConfiguredCapabilitiesAllowed', () => {
-  it('refuses a rejected reasoning level', () => {
-    const r = rec({ reasoning: { on: 'rejected', off: 'accepted' } });
-    expect(() => assertConfiguredCapabilitiesAllowed(r, { structuredOutput: 'schema', reasoning: 'on' }, 'q:4b')).toThrow(AnalyzerCapabilityRejectedError);
-    try {
-      assertConfiguredCapabilitiesAllowed(r, { structuredOutput: 'schema', reasoning: 'on' }, 'q:4b');
-    } catch (e) {
-      expect((e as AnalyzerCapabilityRejectedError).setting).toBe('reasoning');
-      expect((e as AnalyzerCapabilityRejectedError).value).toBe('on');
-      expect((e as AnalyzerCapabilityRejectedError).testedAt).toBe('2026-09-11T10:00:00.000Z');
-    }
-    expect(() => assertConfiguredCapabilitiesAllowed(r, { structuredOutput: 'schema', reasoning: 'off' }, 'q:4b')).not.toThrow();
-    expect(() => assertConfiguredCapabilitiesAllowed(r, { structuredOutput: 'schema', reasoning: 'low' }, 'q:4b')).not.toThrow();
-    expect(() => assertConfiguredCapabilitiesAllowed(undefined, { structuredOutput: 'schema', reasoning: 'on' }, 'q:4b')).not.toThrow();
-  });
-  it('checks the structured-output record under the configured level', () => {
-    const r = rec({ structuredOutput: { json: { on: 'rejected' } } });
-    expect(() => assertConfiguredCapabilitiesAllowed(r, { structuredOutput: 'json', reasoning: 'on' }, 'q:4b')).toThrow(/json|structuredOutput/i);
-    expect(() => assertConfiguredCapabilitiesAllowed(r, { structuredOutput: 'json', reasoning: 'off' }, 'q:4b')).not.toThrow();
-  });
-});
 ```
 
-`server/src/routes/analyzer-models.reasoning.test.ts` (black-box through W3c's routes, against a real Ollama-shaped server that 400s on thinking exactly like Ollama does for a non-thinking model — research 06 §16):
+`server/src/routes/analyzer-models.reasoning.test.ts` goes black-box through W3c's routes. Its real Ollama-shaped server returns 400 on thinking, exactly as Ollama does for a non-thinking model (research 06 §16):
 ```ts
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
@@ -1401,6 +2527,8 @@ let server: Server;
 let ollamaUrl: string;
 let settings: typeof import('../workspace/user-settings.js');
 const thinkValues: unknown[] = [];
+/* A2 — the model build /api/tags reports; a test flips it to stand for a re-pulled tag. */
+let tagDigest = 'sha256-build-a';
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'w5a-models-test-'));
@@ -1410,7 +2538,15 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     if (req.method === 'GET' && req.url?.startsWith('/api/tags')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ models: [{ name: 'q:4b', model: 'q:4b' }] }));
+      /* A real /api/tags entry carries the build's digest (checked against a live daemon). */
+      res.end(
+        JSON.stringify({
+          models: [
+            { name: 'q:4b', model: 'q:4b', digest: tagDigest },
+            { name: 'qwen3:latest', model: 'qwen3:latest', digest: tagDigest },
+          ],
+        }),
+      );
       return;
     }
     let raw = '';
@@ -1443,6 +2579,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   thinkValues.length = 0;
+  tagDigest = 'sha256-build-a';
   settings._resetUserSettingsCache();
   await settings.writeUserSettings({ ollamaUrl, defaultAnalysisModel: 'q:4b' });
 });
@@ -1467,7 +2604,7 @@ describe('Test action — reasoning', () => {
   });
 
   it('keys the schema probe by the configured level', async () => {
-    await settings.writeUserSettings({ analyzerReasoningByEngine: { ollama: 'model-default' } });
+    await settings.writeUserSettings({ analyzerReasoningByEngine: { ollama: { 'q:4b': 'model-default' } } });
     const res = await request(app).post('/api/analyzer/models/test').send({ modelId: 'q:4b', scope: 'configured' });
     expect(res.status).toBe(200);
     expect(Object.keys(res.body.structuredOutput.schema ?? {})).toEqual(['model-default']);
@@ -1485,19 +2622,341 @@ describe('Test action — reasoning', () => {
     const after = await request(app).get('/api/analyzer/models?refresh=1');
     expect(findModelEntry(after.body, 'q:4b')?.offeredReasoningLevels).toEqual(['model-default', 'off', 'on', 'low']);
   });
+
+  it('a configured Test merges its verdicts into the record an earlier all Test wrote for the same server (N14)', async () => {
+    settings._setUserSettingsCacheForTest({ ...settings.getCachedUserSettings(), analyzerCapabilitiesByModel: {} });
+    await settings.writeUserSettings({ analyzerReasoningByEngine: {} }); // configured level = Ollama's default, off
+    expect((await request(app).post('/api/analyzer/models/test').send({ modelId: 'q:4b', scope: 'all' })).status).toBe(200);
+    const configured = await request(app).post('/api/analyzer/models/test').send({ modelId: 'q:4b', scope: 'configured' });
+    expect(configured.status).toBe(200);
+    expect(configured.body.reasoning).toEqual({ off: 'accepted' });
+    const stored = (await settings.readUserSettings()).analyzerCapabilitiesByModel['q:4b'];
+    expect(stored.reasoning).toEqual({ 'model-default': 'accepted', off: 'accepted', on: 'rejected', low: 'rejected', medium: 'rejected', high: 'rejected' });
+    expect(stored.testedAt).toBe(configured.body.testedAt);
+  });
+
+  it('a Test record is saved under the normalised Ollama tag (N7)', async () => {
+    settings._setUserSettingsCacheForTest({ ...settings.getCachedUserSettings(), analyzerCapabilitiesByModel: {} });
+    const res = await request(app).post('/api/analyzer/models/test').send({ modelId: 'qwen3:latest', scope: 'configured' });
+    expect(res.status).toBe(200);
+    const records = (await settings.readUserSettings()).analyzerCapabilitiesByModel;
+    expect(Object.keys(records)).toEqual(['qwen3']);
+  });
+
+  it('a Test whose digest (3c) differs from the stored record replaces it instead of merging, dropping verdicts never probed for the new build (A2)', async () => {
+    settings._setUserSettingsCacheForTest({
+      ...settings.getCachedUserSettings(),
+      analyzerCapabilitiesByModel: {
+        'q:4b': {
+          serverUrl: ollamaUrl, testedAt: '2026-09-10T10:00:00.000Z', control: { ok: true }, structuredOutput: {},
+          reasoning: { on: 'rejected', low: 'rejected' }, digest: 'sha256-build-old',
+        },
+      },
+    });
+    await settings.writeUserSettings({ analyzerReasoningByEngine: {} }); // configured level = Ollama's default, off
+    const res = await request(app).post('/api/analyzer/models/test').send({ modelId: 'q:4b', scope: 'configured' });
+    expect(res.status).toBe(200);
+    expect(res.body.digest).toBe('sha256-build-a');
+    const stored = (await settings.readUserSettings()).analyzerCapabilitiesByModel['q:4b'];
+    /* The re-pulled build keeps no verdict it was never probed for. */
+    expect(stored.reasoning).toEqual({ off: 'accepted' });
+  });
+
+  it('a record W3c saved under :latest is found, merged into and rewritten under the canonical tag, each verdict keeping its own date (A2, N7)', async () => {
+    settings._setUserSettingsCacheForTest({
+      ...settings.getCachedUserSettings(),
+      analyzerCapabilitiesByModel: {
+        'qwen3:latest': {
+          serverUrl: ollamaUrl, testedAt: '2026-09-10T10:00:00.000Z', control: { ok: true }, structuredOutput: {},
+          reasoning: { on: 'rejected' }, digest: 'sha256-build-a',
+        },
+      },
+    });
+    await settings.writeUserSettings({ analyzerReasoningByEngine: {} });
+    expect((await request(app).post('/api/analyzer/models/test').send({ modelId: 'qwen3', scope: 'configured' })).status).toBe(200);
+    const records = (await settings.readUserSettings()).analyzerCapabilitiesByModel;
+    expect(Object.keys(records)).toEqual(['qwen3']);
+    expect(records.qwen3.reasoning).toEqual({ on: 'rejected', off: 'accepted' });
+    expect(records.qwen3.verdictTestedAt?.reasoning?.on).toBe('2026-09-10T10:00:00.000Z');
+  });
 });
 ```
 
+`server/src/analyzer/capability-record-merge.test.ts`:
+```ts
+import { describe, it, expect } from 'vitest';
+import { mergeCapabilityRecords, sameServer } from './capability-record-merge.js';
+
+const record = (over: Record<string, unknown> = {}) => ({
+  serverUrl: 'http://127.0.0.1:11434',
+  testedAt: '2026-09-11T10:00:00.000Z',
+  control: { ok: true as const },
+  structuredOutput: {} as Record<string, Record<string, string>>,
+  reasoning: {} as Record<string, string>,
+  ...over,
+});
+
+describe('mergeCapabilityRecords (N14)', () => {
+  it('a configured Test keeps the verdicts an earlier all Test recorded, replacing only what it probed', () => {
+    const all = record({
+      reasoning: { 'model-default': 'accepted', off: 'accepted', on: 'rejected', low: 'accepted' },
+      structuredOutput: { schema: { off: 'enforced', low: 'ignored' }, json: { off: 'accepted' } },
+    });
+    const configured = record({
+      testedAt: '2026-09-12T09:00:00.000Z',
+      reasoning: { low: 'rejected' },
+      structuredOutput: { schema: { low: 'enforced' } },
+    });
+    expect(mergeCapabilityRecords(all, configured)).toEqual(
+      record({
+        testedAt: '2026-09-12T09:00:00.000Z',
+        reasoning: { 'model-default': 'accepted', off: 'accepted', on: 'rejected', low: 'rejected' },
+        structuredOutput: { schema: { off: 'enforced', low: 'enforced' }, json: { off: 'accepted' } },
+      }),
+    );
+  });
+
+  it('testedAt is the latest of the two', () => {
+    const newer = record({ testedAt: '2026-09-12T09:00:00.000Z' });
+    const older = record({ testedAt: '2026-09-11T08:00:00.000Z' });
+    expect(mergeCapabilityRecords(newer, older).testedAt).toBe('2026-09-12T09:00:00.000Z');
+  });
+
+  it('a record for another server URL is replaced, not merged; with no earlier record the new one is kept as is', () => {
+    const elsewhere = record({ serverUrl: 'http://old-host:11434', reasoning: { on: 'rejected' } });
+    const next = record({ reasoning: { off: 'accepted' } });
+    expect(mergeCapabilityRecords(elsewhere, next)).toBe(next);
+    expect(mergeCapabilityRecords(undefined, next)).toBe(next);
+  });
+
+  it('a digest that differs replaces the record; the same digest merges (A2)', () => {
+    const built = (digest: string | undefined, over: Record<string, unknown> = {}) => record({ digest, ...over });
+    const previous = built('sha256-a', { reasoning: { on: 'rejected' } });
+    expect(mergeCapabilityRecords(previous, built('sha256-b', { reasoning: { off: 'accepted' } })).reasoning).toEqual({ off: 'accepted' });
+    expect(mergeCapabilityRecords(previous, built('sha256-a', { reasoning: { off: 'accepted' } })).reasoning).toEqual({ on: 'rejected', off: 'accepted' });
+    /* A digest on one side only (a record written before A2, or a listing that failed) proves nothing. */
+    expect(mergeCapabilityRecords(built(undefined, { reasoning: { on: 'rejected' } }), built('sha256-a', { reasoning: { off: 'accepted' } })).reasoning).toEqual({
+      off: 'accepted',
+    });
+    /* Two records with no digest (endpoints, Gemini) merge on the server URL alone, as before. */
+    expect(mergeCapabilityRecords(built(undefined, { reasoning: { on: 'rejected' } }), built(undefined, { reasoning: { off: 'accepted' } })).reasoning).toEqual({
+      on: 'rejected',
+      off: 'accepted',
+    });
+  });
+
+  it("every kept verdict keeps its own date; one with none takes its record's testedAt (A2)", () => {
+    const previous = record({
+      testedAt: '2026-09-10T10:00:00.000Z',
+      reasoning: { on: 'rejected', low: 'accepted' },
+      structuredOutput: { schema: { off: 'enforced' } },
+    });
+    const next = record({
+      testedAt: '2026-09-12T09:00:00.000Z',
+      reasoning: { low: 'rejected' },
+      structuredOutput: { schema: { low: 'ignored' } },
+      verdictTestedAt: { reasoning: { low: '2026-09-12T09:00:00.000Z' }, structuredOutput: { schema: { low: '2026-09-12T09:00:00.000Z' } } },
+    });
+    expect(mergeCapabilityRecords(previous, next).verdictTestedAt).toEqual({
+      reasoning: { on: '2026-09-10T10:00:00.000Z', low: '2026-09-12T09:00:00.000Z' },
+      structuredOutput: { schema: { off: '2026-09-10T10:00:00.000Z', low: '2026-09-12T09:00:00.000Z' } },
+    });
+  });
+
+  it('sameServer ignores trailing slashes only (moved from capabilities.ts, body unchanged)', () => {
+    expect(sameServer('http://127.0.0.1:11434/', 'http://127.0.0.1:11434')).toBe(true);
+    expect(sameServer('http://127.0.0.1:11434', 'http://127.0.0.1:11435')).toBe(false);
+  });
+});
+```
+
+`server/src/analyzer/preflight.reasoning.test.ts`:
+```ts
+import { describe, it, expect } from 'vitest';
+import { preflightTargets, runAnalyzerPreflight } from './preflight.js';
+import { AnalyzerReasoningUnavailableError } from './errors.js';
+import { DEFAULT_USER_SETTINGS, getResolvedOllamaUrl, userSettingsSchema, type UserSettings } from '../workspace/user-settings.js';
+import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+
+const settings = (over: Partial<UserSettings>): UserSettings => ({ ...DEFAULT_USER_SETTINGS, ...over });
+const thrown = (fn: () => void): unknown => {
+  try {
+    fn();
+  } catch (e) {
+    return e;
+  }
+  return undefined;
+};
+
+describe('runAnalyzerPreflight — stored reasoning level no longer offered (#3084 wave 5, P17)', () => {
+  it('a Gemini level the table does not offer refuses the run, naming the model, the level and the engine', () => {
+    const s = settings({ analyzerReasoningByEngine: { gemini: { 'gemini-3.8-flash': 'minimal' } } });
+    const err = thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'gemini-3.8-flash', s), s));
+    expect(err).toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    expect(err).toMatchObject({ modelId: 'gemini-3.8-flash', level: 'minimal', engine: 'gemini' });
+  });
+
+  it('classifies by the target engine: a bare Ollama default tag with a stale named level is refused (N5)', () => {
+    /* A bare tag (no ':') infers as Gemini from its id, but selection builds it as local (e.g. OLLAMA_MODEL=llama2). */
+    const s = settings({ analyzerReasoningByEngine: { ollama: { llama2: 'low' } } });
+    const err = thrown(() => runAnalyzerPreflight([{ modelId: 'llama2', source: 'env', engine: 'local' }], s));
+    expect(err).toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    expect(err).toMatchObject({ modelId: 'llama2', level: 'low', engine: 'local' });
+  });
+
+  it('an unknown stored value (xhigh) loads without resetting settings and refuses the run before its first call (N10)', () => {
+    const s = settings({ analyzerReasoningByEngine: { gemini: { 'gemini-3.6-flash': 'xhigh' } } });
+    expect(userSettingsSchema.safeParse(s).success).toBe(true);
+    const err = thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'gemini-3.6-flash', s), s));
+    expect(err).toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    expect(err).toMatchObject({ modelId: 'gemini-3.6-flash', level: 'xhigh', engine: 'gemini' });
+  });
+
+  it('one Ollama model id (N7): a named level saved under qwen3 passes for runs on qwen3 and qwen3:latest, with the Test record saved under qwen3:latest', () => {
+    const s = settings({
+      analyzerReasoningByEngine: { ollama: { qwen3: 'low' } },
+      analyzerCapabilitiesByModel: {
+        'qwen3:latest': { serverUrl: getResolvedOllamaUrl(), testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: {}, reasoning: { low: 'accepted' } },
+      },
+    });
+    expect(() => runAnalyzerPreflight([{ modelId: 'qwen3:latest', source: 'settings', engine: 'local' }], s)).not.toThrow();
+    expect(() => runAnalyzerPreflight([{ modelId: 'qwen3', source: 'env', engine: 'local' }], s)).not.toThrow();
+  });
+
+  it('an Ollama named level with no accepted Test record refuses; a base level passes', () => {
+    const stale = settings({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } } });
+    expect(thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'qwen3.5:4b', stale), stale))).toBeInstanceOf(
+      AnalyzerReasoningUnavailableError,
+    );
+    const ok = settings({ analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'on' } } });
+    expect(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'qwen3.5:4b', ok), ok)).not.toThrow();
+  });
+
+  it('an installed digest that differs from the stored record discards it here too, agreeing with the structured-output check (A3)', () => {
+    const stale = settings({
+      analyzerReasoningByEngine: { ollama: { 'qwen3.5:4b': 'low' } },
+      analyzerCapabilitiesByModel: {
+        'qwen3.5:4b': {
+          serverUrl: getResolvedOllamaUrl(),
+          digest: 'sha256:old',
+          testedAt: '2026-09-11T10:00:00.000Z',
+          control: { ok: true },
+          structuredOutput: {},
+          reasoning: { low: 'accepted' },
+        },
+      },
+    });
+    const targets = preflightTargets(['phase0'], 'qwen3.5:4b', stale);
+    /* The installed model was re-pulled: the record's digest no longer matches. Discarded, so `low` is
+       no longer offered — the same discard W3c's structured-output check already applies for this
+       reason, so the two checks agree on one run rather than one trusting a record the other drops. */
+    expect(thrown(() => runAnalyzerPreflight(targets, stale, new Map([['qwen3.5:4b', 'sha256:new']])))).toBeInstanceOf(
+      AnalyzerReasoningUnavailableError,
+    );
+    /* Same digest: the record is kept. */
+    expect(() => runAnalyzerPreflight(targets, stale, new Map([['qwen3.5:4b', 'sha256:old']]))).not.toThrow();
+    /* No digest resolved (resolvePreflightDigests came back empty, or wasn't called): fail-open (A3), matching capabilityRecordFor's own rule. */
+    expect(() => runAnalyzerPreflight(targets, stale)).not.toThrow();
+  });
+
+  it('an endpoint level saved under another control style refuses', () => {
+    const endpoint = {
+      ...analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'none', contextTokens: 32768 }),
+      reasoning: 'high' as const,
+    };
+    const s = settings({ analyzerEndpoints: [endpoint] });
+    expect(thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'openai:lab::m', s), s))).toMatchObject({
+      level: 'high',
+      engine: 'openai',
+    });
+  });
+});
+```
+
+Append to `server/src/analyzer/voice-style.test.ts` (W4 Task 4.5's mocks, `mockSettingsPatch`, `ENDPOINT` and `CHAR`):
+```ts
+describe('persona generation refuses a stored reasoning level no longer offered (#3084 wave 5, P17)', () => {
+  afterEach(() => {
+    delete process.env.PERSONA_GEN_ENGINE;
+    delete process.env.PERSONA_GEN_LOCAL_MODEL;
+    mockSettingsPatch = {};
+    vi.restoreAllMocks();
+  });
+
+  it('a named Ollama level with no accepted Test record refuses before any call', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:9b';
+    mockSettingsPatch = { analyzerReasoningByEngine: { ollama: { 'qwen3.5:9b': 'low' } } };
+    const { OllamaTransport } = await import('./transports/ollama-transport.js');
+    const { AnalyzerReasoningUnavailableError } = await import('./errors.js');
+    const send = vi.spyOn(OllamaTransport.prototype, 'send');
+    const err = await generateVoiceStylePersona(CHAR).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    expect(err).toMatchObject({ modelId: 'qwen3.5:9b', level: 'low', engine: 'local' });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('an endpoint persona whose saved level its control style does not offer refuses before any call', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'openai:lab::qwen3';
+    mockSettingsPatch = { analyzerEndpoints: [ENDPOINT({ reasoning: 'high' })] };
+    const { OpenAITransport } = await import('./transports/openai-transport.js');
+    const { AnalyzerReasoningUnavailableError } = await import('./errors.js');
+    const send = vi.spyOn(OpenAITransport.prototype, 'send');
+    await expect(generateVoiceStylePersona(CHAR)).rejects.toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+```
+
+Append to `server/src/routes/cast-design.test.ts`, inside `describe('cast-design persona pre-pass', …)` (W4 Task 4.6's mocks and helpers):
+```ts
+  it('a stored persona reasoning level no longer offered ends the design job once (#3084 wave 5, P17)', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalyzerReasoningUnavailableError } = await import('../analyzer/errors.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockRejectedValue(
+      new AnalyzerReasoningUnavailableError('qwen3.5:9b', 'low', 'local'),
+    );
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const extraChar = { id: 'nova', name: 'Nova', role: 'supporting', color: 'blue', voiceUuid: 'nova' };
+    writeBookOnDisk([...characters, extraChar]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'nova'] });
+
+    const events = parseSse(res.text);
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    expect(events.some((e) => e.type === 'character_failed')).toBe(false);
+    expect(designSpy).not.toHaveBeenCalled();
+
+    writeBookOnDisk(characters);
+  });
+```
+
 - [ ] **Step 2: Run them and confirm they fail**
-Run: `npm --prefix server run test -- src/analyzer/capabilities.reasoning.test.ts src/routes/analyzer-models.reasoning.test.ts`
-Expected: FAIL — `does not provide an export named 'probeReasoningLevels'`; route test `expected {} to deeply equal { 'model-default': 'accepted', … }` (W3c leaves `reasoning` empty) and `offeredReasoningLevels` `undefined`.
+Run: `npm --prefix server run test -- src/analyzer/capabilities.reasoning.test.ts src/routes/analyzer-models.reasoning.test.ts src/analyzer/preflight.reasoning.test.ts src/analyzer/voice-style.test.ts src/routes/cast-design.test.ts`
+Expected: FAIL.
+- `capabilities.reasoning.test.ts`: `does not provide an export named 'probeReasoningLevels'`.
+- The preflight, persona and cast-design cases: `… 'AnalyzerReasoningUnavailableError'`.
+- The route test: `expected {} to deeply equal { 'model-default': 'accepted', … }`, because W3c returns `reasoning: {}`; and `offeredReasoningLevels` is `undefined`. The N14 case fails on `stored.reasoning` (the configured Test replaced the record), and the N7 record-key case with `expected [ 'qwen3:latest' ] to deeply equal [ 'qwen3' ]`. The digest-replace case's own `res.body.digest` assertion already passes (3c stamps it pre-existing), but it still fails on `expected {} to deeply equal { off: 'accepted' }` (the reasoning ladder this task adds does not exist yet); the `:latest` merge case fails with `expected [ 'qwen3:latest', 'qwen3' ] to deeply equal [ 'qwen3' ]`.
+- `capability-record-merge.test.ts`: `Failed to resolve import "./capability-record-merge.js"`. The N7 records case in `capabilities.reasoning.test.ts` fails on the import of `capabilityRecordKey`, and the A2 refusal-date case on the import of `verdictTestedAtFor`.
+- `reasoning.test.ts`'s mid-run case (N10) fails on the import of `AnalyzerReasoningUnavailableError`; once that resolves, it fails because `unavailable()` still throws a plain `Error`.
 
 - [ ] **Step 3: Implement**
 
-`capabilities.ts` — W3c already imports `AnalysisAbortedError, AnalyzerCapabilityRejectedError, AnalyzerHttpError` from `./errors.js` and `ChatTransport, StructuredOutputMode, TransportRequest, TransportResult` from `./runner/transport.js`. Add these imports:
+`capabilities.ts` — imports. Add `AnalyzerReasoningUnavailableError` to W3c's `./errors.js` import, and add these, merging with any import of the same module W3c already has:
 ```ts
 import {
   defaultReasoningLevel,
+  offeredReasoningLevels,
   resolveReasoningSetting,
   testableReasoningLevels,
   type ReasoningLevel,
@@ -1506,8 +2965,192 @@ import {
 import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
 import { getResolvedOllamaUrl } from '../workspace/user-settings.js';
 import type { AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
+import { entryForModelTag, normalizeModelTag } from './ollama-tag.js';
+import { sameServer } from './capability-record-merge.js';
 ```
-Rename W3c's private `isHttp400` (Task 3c.4) to the exported `isProbeRejected` (same body), and change its one call in `checkMode`. Do not add a second copy:
+
+`assertConfiguredCapabilitiesAllowed` (W3c Task 3c.3) — A2: its two `AnalyzerCapabilityRejectedError` throws pass `record.testedAt`. Replace that argument with the rejected verdict's own date: `verdictTestedAtFor(record, { setting: 'reasoning', reasoning: configured.reasoning })` in the reasoning branch, and `verdictTestedAtFor(record, { setting: 'structuredOutput', structuredOutput: configured.structuredOutput, reasoning: configured.reasoning })` in the structured-output branch. Nothing else in the function changes.
+
+`capabilityRecordFor` and `sameServer` (W3c Task 3c.3) — delete W3c's private `sameServer` (it moves to the leaf below, body unchanged), and replace `capabilityRecordFor` with the version below, adding `capabilityRecordKey` beside it. **This keeps 3c's fourth parameter, `currentDigest`, and its discard rule (A3) unchanged — this task only widens the lookup itself to N7's `entryForModelTag`; it does not touch what happens once a record is found:**
+```ts
+/** N7 — the key a Test record is saved under: an Ollama tag through normalizeModelTag, so `qwen3` and
+    `qwen3:latest` are one model; any other id (an endpoint id, a Gemini id) as is. */
+export function capabilityRecordKey(modelId: string): string {
+  return inferEngineFromModelId(modelId) === 'openai' ? modelId : normalizeModelTag(modelId);
+}
+
+/** A2 — whether two record keys name the same model, so the write can merge into the record saved under
+    the other tag form and leave one key behind (an endpoint id is compared exactly; capabilityRecordKey
+    leaves it as is). */
+export function sameCapabilityRecordModel(a: string, b: string): boolean {
+  return capabilityRecordKey(a) === capabilityRecordKey(b);
+}
+
+/** A2 — the date of the Test that recorded one verdict: its own `verdictTestedAt` entry, else the
+    record's `testedAt` (a record written before per-verdict dates existed). The pre-run refusal cites
+    this, never a newer date a later Test of another verdict brought in. */
+export function verdictTestedAtFor(
+  record: ModelCapabilityRecord,
+  cell:
+    | { setting: 'reasoning'; reasoning: string }
+    | { setting: 'structuredOutput'; structuredOutput: StructuredOutputMode; reasoning: string },
+): string {
+  const own =
+    cell.setting === 'reasoning'
+      ? record.verdictTestedAt?.reasoning?.[cell.reasoning]
+      : record.verdictTestedAt?.structuredOutput?.[cell.structuredOutput]?.[cell.reasoning];
+  return own ?? record.testedAt;
+}
+
+export function capabilityRecordFor(
+  settings: UserSettings,
+  modelId: string,
+  currentServerUrl: string,
+  currentDigest?: string,
+): ModelCapabilityRecord | undefined {
+  /* N7 — an Ollama record saved under either tag form answers for the other; an endpoint id is exact. */
+  const stored =
+    inferEngineFromModelId(modelId) === 'openai'
+      ? settings.analyzerCapabilitiesByModel[modelId]
+      : entryForModelTag(settings.analyzerCapabilitiesByModel, modelId);
+  if (!stored || !sameServer(stored.serverUrl, currentServerUrl)) return undefined;
+  /* 3c (A3), unchanged — a record whose digest differs from the model installed now is discarded, unless
+     either digest is unknown: an unknown current digest never invents a discard it cannot see a reason for. */
+  if (stored.digest !== undefined && currentDigest !== undefined && stored.digest !== currentDigest) return undefined;
+  return stored;
+}
+```
+
+`server/src/analyzer/capability-record-merge.ts` (new, import-free, so `user-settings.ts` can use it without the `capabilities.ts` ↔ `user-settings.ts` cycle):
+```ts
+/* #3084 wave 5 (N14, A2) — pure Test-record helpers. Structural types: this module imports nothing. */
+
+interface CapabilityRecordShape {
+  serverUrl: string;
+  testedAt: string;
+  structuredOutput: object;
+  reasoning: object;
+  /** 3c (A3) — Ollama only: the model build's /api/tags digest when the Test ran. Mirrored here
+      structurally, not imported, since this leaf imports nothing. */
+  digest?: string;
+  /** A2 — each verdict's own Test date, keyed like the verdicts. */
+  verdictTestedAt?: { reasoning?: Record<string, string>; structuredOutput?: Record<string, Record<string, string>> };
+}
+
+/** Moved from capabilities.ts (W3c), body unchanged: a record belongs to the server it was taken on. */
+export function sameServer(a: string, b: string): boolean {
+  return a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+}
+
+/** A2 — the dates a record's verdicts carry: its own `verdictTestedAt`, with every verdict it does not
+    name (a record written before that field existed) taking the record's own `testedAt`. */
+function verdictDates(record: CapabilityRecordShape): {
+  reasoning: Record<string, string>;
+  structuredOutput: Record<string, Record<string, string>>;
+} {
+  const reasoning: Record<string, string> = {};
+  for (const level of Object.keys(record.reasoning)) {
+    reasoning[level] = record.verdictTestedAt?.reasoning?.[level] ?? record.testedAt;
+  }
+  const structuredOutput: Record<string, Record<string, string>> = {};
+  for (const [mode, byLevel] of Object.entries(record.structuredOutput as Record<string, Record<string, string> | undefined>)) {
+    structuredOutput[mode] = {};
+    for (const level of Object.keys(byLevel ?? {})) {
+      structuredOutput[mode][level] = record.verdictTestedAt?.structuredOutput?.[mode]?.[level] ?? record.testedAt;
+    }
+  }
+  return { reasoning, structuredOutput };
+}
+
+/** N14 — a Test merges the verdicts it probed into the model's record for the same server URL: only the
+    probed `reasoning` levels and `structuredOutput[mode][level]` cells are replaced, `testedAt` is the
+    latest, and every kept verdict keeps its own date (A2). A record for another server, or one whose
+    `digest` (3c) differs from this Test's (A2 — a re-pulled Ollama build; a digest present on one side
+    only proves nothing), or none at all, is replaced by `next` as is. */
+export function mergeCapabilityRecords<R extends CapabilityRecordShape>(previous: R | undefined, next: R): R {
+  if (!previous || !sameServer(previous.serverUrl, next.serverUrl) || previous.digest !== next.digest) return next;
+  const before = previous.structuredOutput as Record<string, Record<string, string> | undefined>;
+  const structuredOutput: Record<string, Record<string, string>> = { ...(before as Record<string, Record<string, string>>) };
+  for (const [mode, byLevel] of Object.entries(next.structuredOutput as Record<string, Record<string, string>>)) {
+    structuredOutput[mode] = { ...(before[mode] ?? {}), ...byLevel };
+  }
+  const dates = { previous: verdictDates(previous), next: verdictDates(next) };
+  const modeDates: Record<string, Record<string, string>> = { ...dates.previous.structuredOutput };
+  for (const [mode, byLevel] of Object.entries(dates.next.structuredOutput)) {
+    modeDates[mode] = { ...(dates.previous.structuredOutput[mode] ?? {}), ...byLevel };
+  }
+  return {
+    ...next,
+    testedAt: Date.parse(previous.testedAt) > Date.parse(next.testedAt) ? previous.testedAt : next.testedAt,
+    structuredOutput,
+    reasoning: { ...previous.reasoning, ...next.reasoning },
+    verdictTestedAt: { reasoning: { ...dates.previous.reasoning, ...dates.next.reasoning }, structuredOutput: modeDates },
+  } as R;
+}
+```
+
+`server/src/workspace/user-settings.ts` — first extend W3c's `modelCapabilityRecordSchema` (Task 3c.3), which already carries `digest: z.string().optional()` (3c A3), or the new field below is stripped on write. After its `digest:` entry add:
+```ts
+  /* #3084 wave 5 (A2) — each verdict's own Test date, keyed like the verdicts, because a merged record
+     carries verdicts from more than one Test. A verdict with no entry takes the record's testedAt. */
+  verdictTestedAt: z
+    .object({
+      reasoning: z.record(z.string(), z.string()).optional(),
+      structuredOutput: z.record(z.string(), z.record(z.string(), z.string())).optional(),
+    })
+    .optional(),
+```
+Then replace W3c's `writeAnalyzerCapabilityRecord` with the version below, adding `import { mergeCapabilityRecords } from '../analyzer/capability-record-merge.js';` and `import { normalizeModelTag } from '../analyzer/ollama-tag.js';` (the import-free leaf). The read of the earlier record stays inside `mutateUserSettings`, so a merge never races another write:
+```ts
+/** #3084 — persist one Test-action record, merging the verdicts this Test probed into the model's earlier
+    record for the same server and the same model build (N14, A2; mergeCapabilityRecords). Goes through
+    mutateUserSettings so it serialises with endpoint and key writes. Only a completed test calls it: a
+    failed control or an inconclusive step writes nothing, so the previous record stays (P7). Callers pass
+    capabilityRecordKey(modelId) (N7) and `sameModel`, which accepts every saved key naming this same
+    model — an Ollama tag in its other form (`qwen3` / `qwen3:latest`), an endpoint id exactly. Those keys
+    are merged into and then removed, so one model keeps one record, under the canonical key. */
+export async function writeAnalyzerCapabilityRecord(
+  modelId: string,
+  record: z.infer<typeof modelCapabilityRecordSchema>,
+  sameModel: (savedKey: string) => boolean = (savedKey) => normalizeModelTag(savedKey) === normalizeModelTag(modelId),
+): Promise<UserSettings> {
+  const validated = modelCapabilityRecordSchema.parse(record);
+  return mutateUserSettings((current) => {
+    const stored = current.analyzerCapabilitiesByModel;
+    const alias = Object.keys(stored).find((key) => key !== modelId && sameModel(key));
+    const previous = stored[modelId] ?? (alias !== undefined ? stored[alias] : undefined);
+    const kept = Object.fromEntries(Object.entries(stored).filter(([key]) => key !== modelId && !sameModel(key)));
+    return { analyzerCapabilitiesByModel: { ...kept, [modelId]: mergeCapabilityRecords(previous, validated) } };
+  });
+}
+```
+
+`server/src/routes/analyzer-models.ts` (W3c Task 3c.6, `POST /models/test`) — replace `await writeAnalyzerCapabilityRecord(modelId, record);` with `await writeAnalyzerCapabilityRecord(capabilityRecordKey(modelId), record, (savedKey) => sameCapabilityRecordModel(savedKey, modelId));`, adding `capabilityRecordKey` and `sameCapabilityRecordModel` to its `../analyzer/capabilities.js` import. The response still returns the probed `record`.
+
+`openapi.yaml` — W3c Task 3c.6's `components.schemas.ModelCapabilityRecord` already has a `digest` property (3c, A3); this task adds, under `properties` (not `required`):
+```yaml
+        verdictTestedAt:
+          type: object
+          properties:
+            reasoning:
+              type: object
+              additionalProperties:
+                type: string
+                format: date-time
+            structuredOutput:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties:
+                  type: string
+                  format: date-time
+          description: '#3084 — each verdict''s own Test date, keyed like the verdicts. A verdict with no entry was recorded by the Test the record''s testedAt names.'
+```
+Then run `npm run openapi:types`.
+
+`defaultReasoningKey` — delete the function and its doc comment (W3c Task 3c.3). Its uses go in the `runModelTest`, `toEntry` and preflight edits below.
+
+`isHttp400` — rename W3c's private function to the exported `isProbeRejected` (same body) and change its call in `modeStep`. Do not add a second copy:
 ```ts
 /** A probe is `rejected` only on a 400 (AnalyzerHttpError from Ollama/OpenAI, or
     the Gemini SDK's ApiError status 400). */
@@ -1516,9 +3159,25 @@ export function isProbeRejected(err: unknown): boolean {
   return (err as { status?: unknown } | null)?.status === 400; // @google/genai ApiError
 }
 ```
-Then add the new exports:
-```ts
 
+Directly below W3c's `ModelTestInconclusiveError` (a class must be declared before it is extended):
+```ts
+/** P7 — an inconclusive LEVEL step. It runs in `off` mode, but its copy names the level, never "The off check". */
+export class ReasoningLevelTestInconclusiveError extends ModelTestInconclusiveError {
+  constructor(
+    modelId: string,
+    readonly level: ReasoningLevel,
+    detail: string,
+  ) {
+    super(modelId, 'off', detail);
+    this.message = `The reasoning level "${level}" check for ${modelId} was inconclusive (${detail}). Nothing was recorded; any earlier test result is kept. Run the test again.`;
+    this.name = 'ReasoningLevelTestInconclusiveError';
+  }
+}
+```
+
+Below `modeStep`, add:
+```ts
 export function reasoningLevelsToProbe(
   scope: 'configured' | 'all',
   sel: ReasoningSelection,
@@ -1531,164 +3190,113 @@ export function plannedReasoningProbeCount(levels: readonly ReasoningLevel[], co
   return levels.filter((l) => l !== controlLevel).length;
 }
 
-/** Level probes (spec §2): `send(level)` must send W3c's off-mode control request with
-    only `reasoning` changed (runModelTest passes `sendProbe(…, { mode: 'off' }, CONTROL_PROMPT,
-    CONTROL_MAX_OUTPUT_TOKENS, level)`). */
+/** The level step (spec §2, P7): `send(level)` sends the control request with only `reasoning`
+    changed (runModelTest passes `sendStep(deps, { mode: 'off' }, cap, level)`). It proves
+    acceptance only, and classifies failures exactly as W3c's modeStep does. */
 export async function probeReasoningLevels(
   levels: readonly ReasoningLevel[],
   deps: {
     modelId: string;
     controlLevel: ReasoningLevel;
     send: (level: ReasoningLevel) => Promise<TransportResult>;
+    redact?: (text: string) => string;
   },
 ): Promise<Partial<Record<ReasoningLevel, 'accepted' | 'rejected'>>> {
+  const redact = deps.redact ?? ((t: string) => t);
   const out: Partial<Record<ReasoningLevel, 'accepted' | 'rejected'>> = {};
   for (const level of levels) {
     if (level === deps.controlLevel) {
       out[level] = 'accepted'; // the control request already ran at this level
       continue;
     }
-    let result: TransportResult;
     try {
-      result = await deps.send(level);
+      await deps.send(level);
     } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
+      /* P20 — a GeminiContentBlockedError and an AnalyzerReasoningOverflowError are handled alike here,
+         as W3c's modeStep handles them: inconclusive, below. A transport returns `blocked` / `length` as a
+         finish (only the runner's mapFinish raises either error), and a Test is not a run to stop. */
       if (isProbeRejected(err)) {
-        out[level] = 'rejected';
-        continue;
+        if (!namesContextOrTokenLimit(providerText(err))) {
+          out[level] = 'rejected';
+          continue;
+        }
+        /* P7: a 400 naming a context, token or length limit is about the request size, not the level. */
+        throw new ReasoningLevelTestInconclusiveError(deps.modelId, level, 'the provider refused the request size, not the level');
       }
-      /* P7: an abort, a 5xx after the transport's retries, a timeout or an unreachable
-         server proves nothing about the level. Propagate, so nothing is recorded. */
-      throw err;
+      /* P7: a 5xx after the transport's retries, a timeout or an unreachable server proves nothing about
+         the level. Inconclusive: nothing is recorded and the route answers 502. */
+      throw new ReasoningLevelTestInconclusiveError(deps.modelId, level, redact(err instanceof Error ? err.message : String(err)).slice(0, 300));
     }
-    /* P7: a length/blocked finish is inconclusive too, never `accepted`. */
-    requireStop(result, deps.modelId, 'off');
+    /* P7: the provider accepted the request. Any finish counts, `length` and `blocked` included:
+       a thinking model spends the cap reasoning, which is the shape a level step expects. */
     out[level] = 'accepted';
   }
   return out;
 }
-
-/** Pre-W5 records keyed mode probes 'configured'; they ran at the engine's
-    default level, so re-key them to it. */
-export function normaliseCapabilityRecord(record: ModelCapabilityRecord, engine: AnalysisEngine): ModelCapabilityRecord {
-  const structuredOutput: ModelCapabilityRecord['structuredOutput'] = {};
-  for (const [mode, byLevel] of Object.entries(record.structuredOutput) as Array<[keyof ModelCapabilityRecord['structuredOutput'], Record<string, ProbeOutcome> | undefined]>) {
-    if (!byLevel) continue;
-    if (!('configured' in byLevel)) {
-      structuredOutput[mode] = byLevel;
-      continue;
-    }
-    const { configured, ...rest } = byLevel;
-    structuredOutput[mode] = { [defaultReasoningLevel(engine)]: configured, ...rest };
-  }
-  return { ...record, structuredOutput, reasoning: record.reasoning ?? {} };
-}
 ```
 
-`capabilityRecordFor` — replace W3c's last line, `return stored && sameServer(stored.serverUrl, currentServerUrl) ? stored : undefined;`, with:
+`ModelTestDeps` — add two fields directly after W3c's `probeLimits` (3c already added `modelDigest?` beside it; this task does not touch that field):
 ```ts
-  return stored && sameServer(stored.serverUrl, currentServerUrl)
-    ? normaliseCapabilityRecord(stored, inferEngineFromModelId(modelId))
-    : undefined;
-```
-
-`assertConfiguredCapabilitiesAllowed` — replace W3c's function with the version below. `configured.reasoning` narrows to `ReasoningLevel`. The structured-output lookup is keyed by that level, falling back to W3's `CONFIGURED_LEVEL_KEY` for a caller that passes none. W3c's guard (`!record || !record.control.ok`) is kept.
-```ts
-export function assertConfiguredCapabilitiesAllowed(
-  record: ModelCapabilityRecord | undefined,
-  configured: { structuredOutput: StructuredOutputMode; reasoning: ReasoningLevel | undefined },
-  modelId: string,
-): void {
-  if (!record || !record.control.ok) return;
-  const level = configured.reasoning;
-  if (level !== undefined && record.reasoning[level] === 'rejected') {
-    throw new AnalyzerCapabilityRejectedError(modelId, 'reasoning', level, record.testedAt);
-  }
-  if (record.structuredOutput[configured.structuredOutput]?.[level ?? CONFIGURED_LEVEL_KEY] === 'rejected') {
-    throw new AnalyzerCapabilityRejectedError(modelId, 'structuredOutput', configured.structuredOutput, record.testedAt);
-  }
-}
-```
-
-`sendProbe` — W3c's private `sendProbe(transport, structuredOutput, prompt, maxOutputTokens)` gains a fifth parameter, `reasoning: ReasoningLevel`, and sends it as `TransportRequest.reasoning` (Task 5.1):
-```ts
-function sendProbe(
-  transport: ChatTransport,
-  structuredOutput: TransportRequest['structuredOutput'],
-  prompt: string,
-  maxOutputTokens: number,
-  reasoning: ReasoningLevel,
-): Promise<TransportResult> {
-  const approxChars = PROBE_SYSTEM.length + prompt.length + JSON.stringify(structuredOutput).length;
-  return transport.send({
-    system: PROBE_SYSTEM,
-    messages: [{ role: 'user', content: prompt }],
-    structuredOutput,
-    temperature: 0,
-    maxOutputTokens,
-    estimatedInputTokens: Math.ceil(approxChars / 4) + 50,
-    call: {},
-    reasoning,
-  });
-}
-```
-
-`checkMode` — W3c's `checkMode(modelId, mode, deps)` becomes `checkMode(modelId, mode, level: ReasoningLevel, deps)`. Its two `sendProbe(…)` calls pass `level` as the fifth argument, and its `isHttp400(err)` becomes `isProbeRejected(err)`. Its first statement, `if (mode === 'off') return 'accepted';`, stays. An off-mode check at `level` is exactly the request that level's probe already sent, or the control when `level` is the control's level.
-
-`ModelTestDeps` — replace W3c's interface with the one below. W3c's `offeredLevels` is removed: modes are probed at the configured level only, so nothing multiplies by a level list.
-```ts
-export interface ModelTestDeps {
-  transport: ChatTransport;
-  serverUrl: string;
-  configuredMode: StructuredOutputMode;
-  offeredModes: readonly StructuredOutputMode[];
-  adaptSchema: (draft07: Record<string, unknown>) => AdaptedSchema;
-  /** Engine, bare model, endpoint and Test record for the id (reasoning.ts shape). */
+  /** #3084 wave 5 — engine, bare model, endpoint and Test record for the id (reasoning.ts shape). */
   reasoningSelection: (modelId: string) => ReasoningSelection;
-  /** The level the next run would send (resolveReasoningSetting). */
+  /** #3084 wave 5 — the level the next run of this model would send (resolveReasoningSetting). */
   configuredReasoning: (modelId: string) => ReasoningLevel;
-  now?: () => Date;
-  markerValue?: () => string;
-  redact?: (text: string) => string;
-}
 ```
 
-`runModelTest` — replace W3c's function with:
+`sendStep` — W3c's `sendStep(deps, format, maxOutputTokens)` gains a fourth parameter, `reasoning: ReasoningLevel`, and its `transport.send({ … })` literal gains `reasoning,` directly after `signal: deps.signal,`. `modeStep` gains a `level: ReasoningLevel` parameter directly after `cap`, and passes it as `sendStep`'s fourth argument. Its stop rule and its size-limit handling stay: a mode step is the only ladder step that treats a `length` / `blocked` finish as inconclusive.
+
+`runModelTest` — three edits to W3c's function; everything else in it stays:
+1. Replace `/* P7: a record is keyed by the level its requests actually sent. */` and `const level = defaultReasoningKey(deps.transport.kind);` with:
 ```ts
-export async function runModelTest(
-  input: { modelId: string; scope: 'configured' | 'all' },
-  deps: ModelTestDeps,
-): Promise<ModelCapabilityRecord> {
-  const redact = deps.redact ?? ((t: string) => t);
+  /* P7: the control runs at the engine's default level; the level step and the mode steps at the
+     configured level. Every record is keyed by the level its requests actually sent. */
   const sel = deps.reasoningSelection(input.modelId);
   const controlLevel = defaultReasoningLevel(sel.engine);
   const configuredLevel = deps.configuredReasoning(input.modelId);
-  const base = {
-    serverUrl: deps.serverUrl,
-    testedAt: (deps.now ?? (() => new Date()))().toISOString(),
-  };
-  try {
-    /* Control: no structured output (P7), at the engine's pre-W5 default level. */
-    await sendProbe(deps.transport, { mode: 'off' }, CONTROL_PROMPT, CONTROL_MAX_OUTPUT_TOKENS, controlLevel);
-  } catch (err) {
-    if (err instanceof AnalysisAbortedError) throw err;
-    const text = err instanceof Error ? err.message : String(err);
-    return { ...base, control: { ok: false, error: redact(text).slice(0, 500) }, structuredOutput: {}, reasoning: {} };
-  }
+```
+2. In step 1, `await sendStep(deps, control, cap);` becomes `await sendStep(deps, control, cap, controlLevel);`.
+3. Replace the `/* Step 2 — WAVE 5 (Task 5a) INSERTS THE LEVEL STEP HERE: … */` comment, the step-3 loop and the `return` with:
+```ts
+  /* Step 2 — the level step (P7): `off` mode, differing from the control only in `reasoning`. */
   const reasoning = await probeReasoningLevels(reasoningLevelsToProbe(input.scope, sel, configuredLevel), {
     modelId: input.modelId,
     controlLevel,
-    send: (level) => sendProbe(deps.transport, { mode: 'off' }, CONTROL_PROMPT, CONTROL_MAX_OUTPUT_TOKENS, level),
+    redact,
+    send: (level) => sendStep(deps, control, cap, level),
   });
+
+  /* Step 3 — one mode step per tested mode, at the configured level. An `off` step is the level
+     step (or the control), already sent. A rejected configured level leaves nothing to attribute. */
   const structuredOutput: ModelCapabilityRecord['structuredOutput'] = {};
-  /* A rejected configured level leaves nothing a mode probe could be attributed to. */
   if (reasoning[configuredLevel] !== 'rejected') {
-    const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
     for (const mode of modes) {
-      structuredOutput[mode] = { [configuredLevel]: await checkMode(input.modelId, mode, configuredLevel, deps) };
+      const format = stepFormats.get(mode);
+      structuredOutput[mode] = {
+        [configuredLevel]:
+          format && mode !== 'off' ? await modeStep(input.modelId, mode, format, marker, cap, configuredLevel, deps, redact) : 'accepted',
+      };
     }
   }
-  return { ...base, control: { ok: true }, structuredOutput, reasoning };
-}
+  /* 3c (A3) already computes `digest` from `deps.modelDigest` here; kept as is below only because this
+     task replaces the whole return statement. This task's own addition is `verdictTestedAt`, each
+     verdict's own date, so a later merge can keep a verdict without claiming this Test measured it. */
+  const digest = await deps.modelDigest?.().catch(() => undefined);
+  const verdictTestedAt = {
+    reasoning: Object.fromEntries(Object.keys(reasoning).map((level) => [level, testedAt])),
+    structuredOutput: Object.fromEntries(
+      Object.entries(structuredOutput).map(([mode, byLevel]) => [mode, Object.fromEntries(Object.keys(byLevel ?? {}).map((level) => [level, testedAt]))]),
+    ),
+  };
+  return {
+    serverUrl: deps.serverUrl,
+    testedAt,
+    control: { ok: true },
+    structuredOutput,
+    reasoning,
+    ...(digest !== undefined ? { digest } : {}),
+    verdictTestedAt,
+  };
 ```
 
 `plannedTestRequestCount` — replace W3c's function with:
@@ -1700,104 +3308,249 @@ export function plannedTestRequestCount(
   const sel = deps.reasoningSelection(input.modelId);
   const levels = reasoningLevelsToProbe(input.scope, sel, deps.configuredReasoning(input.modelId));
   const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
-  /* The off-mode control; level probes other than the control's level; schema/json checks at
-     the configured level (an off check sends nothing). A configured level the probes reject
-     skips the checks, so this is the upper bound the confirmation shows. */
+  /* P7 ladder: the control; the level step's requests (every level other than the control's); one
+     mode step per `schema` / `json` mode. A rejected configured level skips the mode steps, so this
+     is the upper bound the confirmation shows. */
   return 1 + plannedReasoningProbeCount(levels, defaultReasoningLevel(sel.engine)) + modes.filter((mode) => mode !== 'off').length;
 }
 ```
 
 Selection helpers — add to `capabilities.ts`:
 ```ts
-/** Engine, bare model, saved endpoint and Test record for a model id. */
-export function reasoningSelectionFor(settings: UserSettings, modelId: string): ReasoningSelection & { endpoint?: AnalyzerEndpoint } {
-  const engine = inferEngineFromModelId(modelId);
+/** Engine, bare model, saved endpoint and Test record for a model id. `engine` defaults to the id
+    inference; persona generation passes it, because a bare local tag (`llama2`) infers as Gemini.
+    `currentDigest` (A3) is the local engine's installed-model digest, threaded to `capabilityRecordFor`
+    exactly as W3c's own structured-output check already threads it, so the two checks discard the same
+    stale record instead of disagreeing about which one applies. Only `runAnalyzerPreflight` has a digest
+    to pass — it already resolved one per target before either check runs. Every other caller
+    (`modelTestDepsFor`, the catalog's `toEntry`, persona generation) omits it, which is `capabilityRecordFor`'s
+    own fail-open rule (kept when either digest is unknown), unchanged from 3c. Gemini and endpoints carry
+    no digest, so `currentDigest` is passed to `capabilityRecordFor` only when `engine === 'local'`. */
+export function reasoningSelectionFor(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+  currentDigest?: string,
+): ReasoningSelection & { endpoint?: AnalyzerEndpoint } {
   if (engine !== 'openai') {
-    return { engine, model: modelId, record: capabilityRecordFor(settings, modelId, engine === 'local' ? getResolvedOllamaUrl() : 'gemini') };
+    return {
+      engine,
+      model: modelId,
+      record: capabilityRecordFor(
+        settings,
+        modelId,
+        engine === 'local' ? getResolvedOllamaUrl() : 'gemini',
+        engine === 'local' ? currentDigest : undefined,
+      ),
+    };
   }
   const parsed = parseEndpointModelId(modelId);
   const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
   return { engine, model: parsed?.model ?? modelId, endpoint, record: endpoint ? capabilityRecordFor(settings, modelId, endpoint.baseUrl) : undefined };
 }
 
-/** The reasoning level the next run of this model would send. */
-export function configuredReasoningFor(settings: UserSettings, modelId: string): ReasoningLevel {
-  const sel = reasoningSelectionFor(settings, modelId);
+/** The reasoning level the next run of this model would send. `currentDigest` passes through to
+    `reasoningSelectionFor` (A3); every existing caller omits it, so this adds no new argument at any
+    call site until Task 5.4's `runAnalyzerPreflight` change below needs one. */
+export function configuredReasoningFor(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+  currentDigest?: string,
+): ReasoningLevel {
+  const sel = reasoningSelectionFor(settings, modelId, engine, currentDigest);
   return resolveReasoningSetting(settings, { engine: sel.engine, model: sel.model, endpoint: sel.endpoint });
+}
+
+/** P17 — the level the next run sends, refused before the first call when the current rules no
+    longer offer it for this model (Gemini table, Ollama Test record, endpoint control style).
+    `currentDigest` (A3) is the one pre-run caller's (`runAnalyzerPreflight`'s) way of keeping this
+    check's Ollama record in step with the structured-output check's: both must discard a record
+    stamped for a build the daemon no longer serves. Persona generation calls this with no digest and
+    keeps today's fail-open behaviour, unchanged by this task. */
+export function assertConfiguredReasoningOffered(
+  settings: UserSettings,
+  modelId: string,
+  engine: AnalysisEngine = inferEngineFromModelId(modelId),
+  currentDigest?: string,
+): ReasoningLevel {
+  const sel = reasoningSelectionFor(settings, modelId, engine, currentDigest);
+  const level = resolveReasoningSetting(settings, { engine: sel.engine, model: sel.model, endpoint: sel.endpoint });
+  /* N10: an unknown stored value (e.g. `xhigh`) is never offered, so it is refused here too. */
+  if (!offeredReasoningLevels(sel).includes(level)) throw new AnalyzerReasoningUnavailableError(modelId, level, sel.engine);
+  return level;
 }
 ```
 
-`model-test-deps.ts` (`modelTestDepsFor`, W3c Task 3c.6) — replace `const offered = { offeredModes: ALL_STRUCTURED_OUTPUT_MODES, offeredLevels: [CONFIGURED_LEVEL_KEY] };` with:
+`model-test-deps.ts` (`modelTestDepsFor`, W3c Task 3c.6) — replace `const offered = { offeredModes: ALL_STRUCTURED_OUTPUT_MODES, redact };` with the block below, keeping `redact`, and add `configuredReasoningFor, reasoningSelectionFor` to its `./capabilities.js` import. Each of its three returned objects spreads `offered`, so all three gain the fields. `routes/analyzer-models.ts` needs no change.
 ```ts
   const offered = {
     offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
+    redact,
     reasoningSelection: (id: string) => reasoningSelectionFor(settings, id),
     configuredReasoning: (id: string) => configuredReasoningFor(settings, id),
   };
 ```
-Change its capabilities import to `import { ALL_STRUCTURED_OUTPUT_MODES, configuredReasoningFor, reasoningSelectionFor, type ModelTestDeps } from './capabilities.js';`. `routes/analyzer-models.ts` needs no change: its `POST /models/test` handler already passes `modelTestDepsFor(modelId, await readUserSettings())` to `runModelTest`.
+3c already wires `modelDigest: () => ollamaModelDigest(url, modelId)` into this function's Ollama branch, importing `ollamaModelDigest` from `./ollama-digest.js` — this task does not touch that wiring.
+
+`catalog/analyzer-catalog.ts` (W3c Task 3c.5) — 3c's `listOllamaTags` already returns each tag's `digest` alongside its name (via the leaf `ollama-digest.ts`); this task adds no second `/api/tags` reader on top of it.
 
 `catalog/analyzer-catalog.ts` (W3c Task 3c.5):
 - **ctx.** `toEntry`'s `ctx` parameter type gains `endpoint?: AnalyzerEndpoint`, and `endpointGroup` passes `endpoint` in its `toEntry` ctx literal.
-- **New locals.** In `toEntry`, replace W3c's `const planDeps = { ...OFFERED, configuredMode: ctx.mode };` with:
+- **Locals.** In `toEntry`, replace these three lines with the block below:
+  - `const planDeps = { ...OFFERED, configuredMode: ctx.mode };`
+  - `/* P7: label from the record filed under the level a run of this model sends. */`
+  - `const level = defaultReasoningKey(ctx.kind === 'endpoint' ? 'openai' : ctx.kind);`
 ```ts
   const sel = { engine: ctx.engine, model: raw.model, endpoint: ctx.endpoint, record: capability };
-  const configuredLevel = resolveReasoningSetting(ctx.settings, sel);
+  /* P7: label from the record filed under the level a run of this model sends. */
+  const level = resolveReasoningSetting(ctx.settings, sel);
   const planDeps = {
     configuredMode: ctx.mode,
     offeredModes: ALL_STRUCTURED_OUTPUT_MODES,
     reasoningSelection: () => sel,
-    configuredReasoning: () => configuredLevel,
+    configuredReasoning: () => level,
   };
 ```
-- **Return object.**
-  - The label becomes `structuredOutputLabel(ctx.mode, dropped, capability, configuredLevel)` instead of `CONFIGURED_LEVEL_KEY`.
-  - Add `offeredReasoningLevels: offeredReasoningLevels(sel),`.
-  - Both `testPlan` counts keep passing `planDeps` (now the reasoning-aware one).
-- **Clean-up.** Delete the now-unused `OFFERED` constant and the `CONFIGURED_LEVEL_KEY` import. Import `offeredReasoningLevels, resolveReasoningSetting` from `../reasoning.js`.
+- **Return object.** Add `offeredReasoningLevels: offeredReasoningLevels(sel),`. The label call and both `testPlan` counts keep their W3c text; they now read the configured `level` and the reasoning-aware `planDeps`.
+- **Clean-up.** Delete the now-unused `OFFERED` constant and the `defaultReasoningKey` import. Import `offeredReasoningLevels, resolveReasoningSetting` from `../reasoning.js`.
 
-Pre-run call sites — `runAnalyzerPreflight` (`server/src/analyzer/preflight.ts`, W3c Task 3c.10) has three `assertConfiguredCapabilitiesAllowed(` calls, each passing `reasoning: undefined`. Replace each with `reasoning: configuredReasoningFor(settings, target.modelId)`, using the `settings` and `target` already in scope there.
+`preflight.ts` (`runAnalyzerPreflight`, W3c Task 3c.10) — its three `assertConfiguredCapabilitiesAllowed(` calls pass `reasoning: defaultReasoningKey('openai')`, `defaultReasoningKey('gemini')` and `defaultReasoningKey('ollama')`. Replace the openai and Gemini calls with `reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine)`, using the `settings` and `target` already in scope; neither branch has a digest, matching its own `capabilityRecordFor` call two lines above (endpoints and Gemini carry none). Replace the Ollama call with `reasoning: assertConfiguredReasoningOffered(settings, target.modelId, target.engine, digests?.get(target.modelId))` — `digests` is W3c's own third parameter, already in scope in this function and already read the same way by its neighbouring `capabilityRecordFor(settings, target.modelId, getResolvedOllamaUrl(), digests?.get(target.modelId))` call (A3): without this fourth argument, a record W3c's structured-output check discards for a re-pulled model would still be trusted by this reasoning check on the very same run. `target.engine` is the engine selection builds (N5): without it a bare Ollama tag such as `llama2` would infer as Gemini and resolve Gemini's level. In its `./capabilities.js` import, replace `defaultReasoningKey` with `assertConfiguredReasoningOffered`. The call returns the level the run sends, and first throws `AnalyzerReasoningUnavailableError` when that level is no longer offered (P17).
+
+`errors.ts` — append:
+```ts
+/** #3084 wave 5 (P17) — a stored reasoning level the current rules no longer offer for this model
+    (a Gemini table change, an Ollama named level without its accepted Test record, an endpoint level
+    saved under another control style), or a stored value this version does not know (N10). Normally
+    thrown before the run's first call; `reasoningWireFragment` throws it with `when: 'mid-run'` for a
+    value that reached a call anyway (a hand-edited file), so that throw is coded too. Task 5.5 maps it
+    to `analyzer-request-rejected`, and `engine` names where the setting lives. `level` and `when` are
+    plain strings and `engine` spells out AnalysisEngine, so errors.ts imports nothing. */
+export class AnalyzerReasoningUnavailableError extends Error {
+  constructor(
+    readonly modelId: string,
+    readonly level: string,
+    readonly engine: 'local' | 'gemini' | 'openai',
+    readonly when: 'before-start' | 'mid-run' = 'before-start',
+  ) {
+    super(`Reasoning level "${level}" is not offered for ${modelId}.`);
+    this.name = 'AnalyzerReasoningUnavailableError';
+  }
+}
+```
+
+`reasoning.ts` (Task 5.1) — N10: replace `unavailable`'s body so the last-resort guard throws the coded class instead of a plain `Error`, and change its return type to that class:
+```ts
+/* N10 — the guard `reasoningWireFragment` falls back on. A level only reaches it when a value slipped
+   past every save rule AND the pre-run check (a hand-edited user-settings.json), so it is reported as
+   the same coded refusal, marked `mid-run`: the failure taxonomy then names the setting instead of
+   surfacing an uncoded throw from inside a request. `modelId` is the model the transport holds (for an
+   endpoint, its bare model name). */
+function unavailable(kind: TransportKind, model: string, level: ReasoningLevel): AnalyzerReasoningUnavailableError {
+  return new AnalyzerReasoningUnavailableError(model, level, kind === 'ollama' ? 'local' : kind, 'mid-run');
+}
+```
+Change its `./errors.js` import from a type-only import to one that also imports the class value. `errors.ts` imports nothing, so `analyzer-endpoints.ts` → `reasoning.ts` still closes no cycle (Task 5.2's cycle note); Step 4's `check:cycles` confirms it.
+
+In Task 5.1's `server/src/analyzer/reasoning.test.ts`, the five `toThrow(/"<level>" is not available/)` assertions (three in `refuses a level the model does not offer instead of downgrading it`, one in `wire fragments`, one in `not_controllable refuses anything but model-default`) become `toThrow(AnalyzerReasoningUnavailableError)`, importing the class from `./errors.js`. Append this case:
+```ts
+describe('a level that reaches a call anyway is coded, not a bare Error (N10)', () => {
+  it('reasoningWireFragment throws AnalyzerReasoningUnavailableError marked mid-run, with the engine of its transport', () => {
+    const err = (() => {
+      try {
+        reasoningWireFragment('ollama', { model: 'q:4b' }, 'xhigh' as ReasoningLevel);
+      } catch (e) {
+        return e;
+      }
+      return undefined;
+    })();
+    expect(err).toBeInstanceOf(AnalyzerReasoningUnavailableError);
+    expect(err).toMatchObject({ modelId: 'q:4b', level: 'xhigh', engine: 'local', when: 'mid-run' });
+    expect(() => reasoningWireFragment('gemini', { model: 'gemini-2.5-pro' }, 'off')).toThrow(
+      expect.objectContaining({ engine: 'gemini', when: 'mid-run' }),
+    );
+  });
+});
+```
+
+Persona — `server/src/analyzer/voice-style.ts` (W4 Task 4.5):
+- add `import { assertConfiguredReasoningOffered } from './capabilities.js';`;
+- add `endpointModelId` to the `./model-id.js` import;
+- in `generateVoiceStylePersona`, directly after `const runner = personaRunner(selection);`, add:
+```ts
+  /* P17 — refuse a stored reasoning level the rules no longer offer, before the prompt is built or any
+     request exists (after personaRunner, so a missing endpoint or a foreign key reports first). */
+  assertConfiguredReasoningOffered(
+    getCachedUserSettings(),
+    selection.engine === 'openai' ? endpointModelId(selection.endpointId, selection.model) : selection.model,
+    selection.engine,
+  );
+```
+`voice-style.ts` → `capabilities.ts` is a new import edge; Step 4's `npm run check:cycles` covers it.
+
+Design pre-pass — in `server/src/routes/cast-design.ts`, `runPersonaPrePass`'s rethrow condition (W4 Task 4.6) gains `err instanceof AnalyzerReasoningUnavailableError ||`, imported from `../analyzer/errors.js`. Every character would be refused identically, so the job ends once.
 
 Updates to W3c's tests (the behaviour this task changes):
-- **`capabilities.run-model-test.test.ts`.**
-  - In its `deps()` helper, remove `offeredLevels: [CONFIGURED_LEVEL_KEY],`.
-  - Add `reasoningSelection: () => ({ engine: 'openai', model: 'qwen3-30b', endpoint: { id: 'lab', name: 'Lab', reasoningStyle: 'not_controllable' } }),` and `configuredReasoning: () => 'model-default',`.
-  - Drop `CONFIGURED_LEVEL_KEY` from its import.
-  - Change every `configured:` key in its expected `structuredOutput` records to `'model-default':`.
-  - Request counts do not change: `not_controllable` offers only `model-default`, which is the control's level.
-- **`capabilities.test.ts`.** In `describe('plannedTestRequestCount')`, replace `deps` with `{ configuredMode: 'schema' as const, offeredModes: ALL_STRUCTURED_OUTPUT_MODES, reasoningSelection: () => ({ engine: 'local' as const, model: 'q:4b' }), configuredReasoning: () => 'off' as const }`. The expectations become 2 for configured and 8 for all: the control, the five testable levels other than `off`, and the schema and json checks. The `off` case stays 1.
-- **`model-test-deps.test.ts`.** Replace `expect(d.offeredLevels).toEqual(['configured']);` with `expect(d.configuredReasoning('openai:lab::qwen3-30b')).toBe('model-default');` and `expect(d.reasoningSelection('openai:lab::qwen3-30b')).toMatchObject({ engine: 'openai', model: 'qwen3-30b', endpoint: { id: 'lab' } });`.
-- **`catalog/analyzer-catalog.test.ts`.** In "attaches a Test record only while its serverUrl matches, and labels from it":
-  - Replace `expect(entry.capability).toEqual(rec);` with `expect(entry.capability).toEqual({ ...rec, structuredOutput: { schema: { 'model-default': 'ignored' } } });`. The record is re-keyed on read, and the label still reads "schema (not enforced)".
-  - Add `expect(entry.offeredReasoningLevels).toEqual(['model-default']);`.
+- **`capabilities.run-model-test.test.ts`.** Its `deps(transport, over)` helper gains two entries: `reasoningSelection: () => ({ engine: 'openai', model: 'm', endpoint: { id: 'lab', name: 'Lab', reasoningStyle: 'not_controllable' } }),` and `configuredReasoning: () => 'model-default',`.
+  - `not_controllable` offers only `model-default`, which is the control's level. So no level request is added, and every request count and record in the file stays as written.
+  - A case whose transport `kind` is `'ollama'` passes `reasoningSelection: () => ({ engine: 'local', model: 'm' })` and `configuredReasoning: () => 'off'` in `over`, which keeps its `off` key.
+- **`capabilities.test.ts`.**
+  - In `describe('plannedTestRequestCount')`, its `deps` gains `reasoningSelection: () => ({ engine: 'openai' as const, model: 'm', endpoint: { id: 'lab', name: 'Lab', reasoningStyle: 'not_controllable' as const } })` and `configuredReasoning: () => 'model-default' as const`. Its expectations (2, 3 and the `off` case's 1) stay; the Ollama count is pinned in `capabilities.reasoning.test.ts`.
+  - Delete `describe('defaultReasoningKey …')` and `defaultReasoningKey` from its import. `reasoning.test.ts`'s `defaults preserve today` pins the same values on `defaultReasoningLevel`.
+- **`model-test-deps.test.ts`.** In its endpoint case, add `expect(d.configuredReasoning('openai:lab::qwen3-30b')).toBe('model-default');` and `expect(d.reasoningSelection('openai:lab::qwen3-30b')).toMatchObject({ engine: 'openai', model: 'qwen3-30b', endpoint: { id: 'lab' } });`.
+- **`catalog/analyzer-catalog.test.ts`.** In its endpoint-group case (the `lab` endpoint fixture, `not_controllable` by default), add `expect(entry.offeredReasoningLevels).toEqual(['model-default']);`. The route test above pins the Ollama shape. Its Ollama-group cases stub `listOllamaTags` through `CatalogDeps`, whose signature is unchanged, so they stay green.
+- **`analyzer-models.test.ts`.** It mocks `writeAnalyzerCapabilityRecord` and asserts `toHaveBeenCalledWith('openai:lab::m', RECORD)`; the route now passes a third argument, so that becomes `toHaveBeenCalledWith('openai:lab::m', RECORD, expect.any(Function))`.
 
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/analyzer/capabilities.reasoning.test.ts src/routes/analyzer-models.reasoning.test.ts src/analyzer/capabilities.test.ts src/analyzer/capabilities.run-model-test.test.ts src/analyzer/model-test-deps.test.ts src/analyzer/catalog/analyzer-catalog.test.ts src/routes/analyzer-models.test.ts src/analyzer/preflight.test.ts`, then `npm run typecheck` and `npm run check:cycles`.
-Expected: PASS. Keeps green: W3c's `analyzer-models.test.ts` (it mocks `runModelTest` and `modelTestDepsFor`) and `preflight.test.ts` (its records carry no reasoning, so `configuredReasoningFor` changes no outcome).
+Run: `npm --prefix server run test -- src/analyzer/capabilities.reasoning.test.ts src/analyzer/capability-record-merge.test.ts src/routes/analyzer-models.reasoning.test.ts src/analyzer/preflight.reasoning.test.ts src/analyzer/reasoning.test.ts src/analyzer/voice-style.test.ts src/routes/cast-design.test.ts src/analyzer/capabilities.test.ts src/analyzer/capabilities.run-model-test.test.ts src/analyzer/model-test-deps.test.ts src/analyzer/catalog/analyzer-catalog.test.ts src/routes/analyzer-models.test.ts src/analyzer/preflight.test.ts src/workspace/user-settings.test.ts`, then `npm run openapi:types` and `git diff --exit-code src/lib/api-types.ts` (commit the regenerated file with this task). `capabilityRecordKey` leaves an endpoint id as is, so the route's key is unchanged; only its third argument is new (see the test updates above). Then run `npm run typecheck`, `npm run check:cycles` and `git grep -n defaultReasoningKey -- server/src src`.
+Expected: PASS, and the grep finds nothing. Keeps green:
+- W3c's `analyzer-models.test.ts` (it mocks `runModelTest` and `modelTestDepsFor`);
+- `preflight.test.ts` (its settings store no reasoning level, so every target resolves its engine default, which is always offered and is the key W3c filed under).
 
 - [ ] **Step 5: Mutation proof**
-1. In `probeReasoningLevels` replace the `if (isProbeRejected(err)) { out[level] = 'rejected'; continue; }` block with `out[level] = 'rejected'; continue;`. Expected red: `a non-400 failure propagates instead of being recorded (P7)`. Restore.
-2. In `probeReasoningLevels` delete `requireStop(result, deps.modelId, 'off');`. Expected red: `a length finish is inconclusive, not accepted (P7)`. Restore.
-3. In `runModelTest` change the level probe's `{ mode: 'off' }` (inside `send: (level) => …`) to `{ mode: 'json' }`. Expected red: `sends the control at the engine default, the configured level as a copy of it, and nothing for the off check`. Restore.
-4. In `runModelTest` move the `probeReasoningLevels` call before the control request. Expected red: `scope all records named levels rejected … only after a successful control` (first think value is no longer `false`). Restore.
-5. In `assertConfiguredCapabilitiesAllowed` delete the reasoning `throw`. Expected red: `refuses a rejected reasoning level`. Restore.
-6. In `toEntry` replace `offeredReasoningLevels(sel)` with `offeredReasoningLevels({ engine: ctx.engine, model: raw.model })`. Expected red: `the catalog offers named Ollama levels only after a Test accepted them`. Restore.
+1. In `probeReasoningLevels` replace `if (!namesContextOrTokenLimit(providerText(err))) { … }` with `out[level] = 'rejected'; continue;`. Expected red: `a 400 naming a context or token limit is inconclusive, with copy that names the level`. Restore.
+2. In `probeReasoningLevels` replace `await deps.send(level);` with `const r = await deps.send(level); if (r.finish !== 'stop') throw new ReasoningLevelTestInconclusiveError(deps.modelId, level, 'finish=' + r.finish);`. Expected red: `a thinking model that hits length on a level probe records the level accepted (acceptance only)` and `scope all on a thinking model: every level probe that stops with length is recorded accepted`. Restore.
+3. In `probeReasoningLevels` replace the final `throw new ReasoningLevelTestInconclusiveError(… redact(…) …)` with `out[level] = 'rejected'; continue;`. Expected red: `a non-400 failure is inconclusive with the level named, never recorded`. Restore.
+4. In `ReasoningLevelTestInconclusiveError` delete the `this.message = …` line. Expected red: `a 400 naming a context or token limit is inconclusive…` (the message reads "The off check…"). Restore.
+5. In `runModelTest`'s level step replace `sendStep(deps, control, cap, level)` with `sendStep(deps, { mode: 'json' }, cap, level)`. Expected red: `the level step is the control request with only reasoning changed…`. Restore.
+6. In `runModelTest` pass `controlLevel` instead of `configuredLevel` to `modeStep`. Expected red: `the level step is the control request with only reasoning changed; mode steps run at the configured level`. Restore.
+7. In `runModelTest` drop the `if (reasoning[configuredLevel] !== 'rejected')` guard (keep its loop). Expected red: `a rejected configured level skips the mode steps…`. Restore.
+8. In `runModelTest` move the level step above step 1. Expected red: `scope all records named levels rejected … only after a successful control` (the first think value is no longer `false`). Restore.
+9. In `plannedTestRequestCount` drop the `plannedReasoningProbeCount(…)` term. Expected red: `configured probes one level; all probes every testable level; the plan counts the level step` (3, not 8) and `the level step is the control request…` (`toHaveLength`). Restore.
+10. In `toEntry` replace `offeredReasoningLevels(sel)` with `offeredReasoningLevels({ engine: ctx.engine, model: raw.model })`. Expected red: `the catalog offers named Ollama levels only after a Test accepted them`. Restore.
+11. In `assertConfiguredReasoningOffered` delete the `throw`. Expected red: every refusal case in `runAnalyzerPreflight — stored reasoning level no longer offered…` (the Gemini, Ollama, endpoint, N5 and N10 cases) and both persona refusal cases. Restore.
+12. In `runAnalyzerPreflight`'s Gemini branch replace `assertConfiguredReasoningOffered(settings, target.modelId, target.engine)` with `defaultReasoningLevel('gemini')`. Expected red: `a Gemini level the table does not offer refuses the run, naming the model, the level and the engine`. Restore.
+13. In `generateVoiceStylePersona` delete the `assertConfiguredReasoningOffered(…)` statement. Expected red: `a named Ollama level with no accepted Test record refuses before any call` (`send` called). Restore.
+14. In `runPersonaPrePass` delete the `AnalyzerReasoningUnavailableError` alternative. Expected red: `a stored persona reasoning level no longer offered ends the design job once` (`character_failed` present). Restore.
+15. In `probeReasoningLevels` add `if (err instanceof AnalyzerReasoningOverflowError) throw err;` directly after the abort rethrow (an overflow handled differently from a content block). Expected red: `a content block and a reasoning overflow from a probe are handled alike: inconclusive, nothing recorded (P20)`. Restore.
+16. In `runAnalyzerPreflight`'s Ollama branch replace `target.engine` with `undefined` (`assertConfiguredReasoningOffered(settings, target.modelId, undefined, digests?.get(target.modelId))`). Expected red: `classifies by the target engine: a bare Ollama default tag with a stale named level is refused (N5)` (no throw: `llama2` infers as Gemini). Restore.
+17. In `capabilityRecordFor` replace the `stored` ternary with `settings.analyzerCapabilitiesByModel[modelId]`. Expected red: `a record saved under either tag form answers for the other…` and `one Ollama model id (N7): a named level saved under qwen3 passes…` (the `qwen3` run is refused). Restore.
+18. In `writeAnalyzerCapabilityRecord` store `validated` instead of `mergeCapabilityRecords(…)`. Expected red: `a configured Test merges its verdicts into the record an earlier all Test wrote for the same server (N14)`. Restore.
+19. In `mergeCapabilityRecords` replace `reasoning: { ...previous.reasoning, ...next.reasoning }` with `reasoning: next.reasoning`. Expected red: `a configured Test keeps the verdicts an earlier all Test recorded…`. Restore. Then replace the `testedAt` ternary with `next.testedAt`. Expected red: `testedAt is the latest of the two`. Restore.
+20. In `POST /models/test` write under `modelId` instead of `capabilityRecordKey(modelId)`. Expected red: `a Test record is saved under the normalised Ollama tag (N7)`. Restore.
+21. In `mergeCapabilityRecords` drop `|| previous.digest !== next.digest`. Expected red: `a digest that differs replaces the record; the same digest merges (A2)` and `a Test whose digest (3c) differs from the stored record replaces it instead of merging, dropping verdicts never probed for the new build (A2)` (the old verdicts survive). Restore. (Digest itself — the `deps.modelDigest` call in `runModelTest` and the field in `modelTestDepsFor`'s Ollama branch — is 3c's own code and 3c's own mutation proof; this task's proof starts here, at the merge that reads it.)
+22. In `writeAnalyzerCapabilityRecord` replace the `alias` / `kept` lookup with W3c's `current.analyzerCapabilitiesByModel[modelId]` and `{ ...current.analyzerCapabilitiesByModel }`. Expected red: `a record W3c saved under :latest is found, merged into and rewritten under the canonical tag… (A2, N7)` (two keys, and `on` is gone). Restore.
+23. In `runModelTest` drop the `verdictTestedAt` entry. Expected red: the same `:latest` case (`verdictTestedAt?.reasoning?.on` is `undefined`). Then restore it and, in `verdictDates`, replace `?? record.testedAt` with `?? ''`. Expected red: `every kept verdict keeps its own date…`. Restore.
+24. In `assertConfiguredCapabilitiesAllowed` pass `record.testedAt` again in the reasoning branch. Expected red: `reads verdictTestedAt for the rejected verdict, and the record date when it has none`. Restore.
+25. In `reasoning.ts` make `unavailable` return a plain `new Error(...)` again. Expected red: `reasoningWireFragment throws AnalyzerReasoningUnavailableError marked mid-run…`. Then restore and pass no fourth argument to the constructor. Expected red: the same case (`when` is `before-start`). Restore.
+26. In `runAnalyzerPreflight`'s Ollama branch drop the `digests?.get(target.modelId)` argument (`assertConfiguredReasoningOffered(settings, target.modelId, target.engine)`). Expected red: `an installed digest that differs from the stored record discards it here too, agreeing with the structured-output check (A3)` (the stale record is kept: no throw where one is expected). Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/capabilities.ts server/src/analyzer/capabilities.reasoning.test.ts server/src/analyzer/capabilities.test.ts server/src/analyzer/capabilities.run-model-test.test.ts server/src/analyzer/model-test-deps.ts server/src/analyzer/model-test-deps.test.ts server/src/analyzer/catalog/analyzer-catalog.ts server/src/analyzer/catalog/analyzer-catalog.test.ts server/src/analyzer/preflight.ts server/src/routes/analyzer-models.reasoning.test.ts
-git commit -m "feat(server): Test action probes reasoning levels and pre-run refuses a rejected level"
+git add server/src/analyzer/capability-record-merge.ts server/src/analyzer/capability-record-merge.test.ts server/src/analyzer/reasoning.ts server/src/analyzer/reasoning.test.ts openapi.yaml src/lib/api-types.ts server/src/workspace/user-settings.ts server/src/routes/analyzer-models.ts server/src/analyzer/capabilities.ts server/src/analyzer/capabilities.reasoning.test.ts server/src/analyzer/capabilities.test.ts server/src/analyzer/capabilities.run-model-test.test.ts server/src/analyzer/model-test-deps.ts server/src/analyzer/model-test-deps.test.ts server/src/analyzer/catalog/analyzer-catalog.ts server/src/analyzer/catalog/analyzer-catalog.test.ts server/src/analyzer/preflight.ts server/src/routes/analyzer-models.reasoning.test.ts server/src/analyzer/preflight.reasoning.test.ts server/src/analyzer/errors.ts server/src/analyzer/voice-style.ts server/src/analyzer/voice-style.test.ts server/src/routes/cast-design.ts server/src/routes/cast-design.test.ts
+git commit -m "feat(server): Test action level step, and pre-run refusal of a rejected or stale reasoning level"
 ```
 
 ### Task 5.5: Failure copy names the actual reasoning control
 
 **Files:**
-- Modify: `server/src/routes/failure-taxonomy.ts` — W2's `AnalyzerReasoningOverflowError` branch in `classifyAnalysisFailure` (`:492` onward at `2b63b451`; W2 inserted it next to the `AnalyzerTruncatedError` branch at `:526-534`), and, only if Step 2 shows it red, W3's `AnalyzerCapabilityRejectedError` branch
+- Modify: `server/src/routes/failure-taxonomy.ts` — W2's `AnalyzerReasoningOverflowError` branch in `classifyAnalysisFailure` (`:492` onward at `46e62a34` — `failure-taxonomy.ts` is unchanged across `2b63b451..46e62a34`; W2 inserted it next to the `AnalyzerTruncatedError` branch at `:526-534`), and, only if Step 2 shows it red, W3's `AnalyzerCapabilityRejectedError` branch
+- Modify: `server/src/routes/failure-taxonomy.ts` — a branch for Task 5.4's `AnalyzerReasoningUnavailableError` (P17)
 - Test: `server/src/routes/failure-taxonomy.reasoning.test.ts`
 
 **Interfaces:**
 - Consumes: Task 5.1 `reasoningControlDescription`; `parseEndpointModelId` (W3); `getCachedUserSettings`, `_setUserSettingsCacheForTest`; `AnalyzerReasoningOverflowError(transport, model, reasoningTokens)` (W2); `AnalyzerCapabilityRejectedError` (W3).
-- Produces: copy only. No new `FailureCode`.
+- Produces: copy, and the `AnalyzerReasoningUnavailableError` → `analyzer-request-rejected` mapping (Task 5.4). No new `FailureCode`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1805,7 +3558,7 @@ git commit -m "feat(server): Test action probes reasoning levels and pre-run ref
 ```ts
 import { describe, it, expect, beforeEach } from 'vitest';
 import { classifyAnalysisFailure } from './failure-taxonomy.js';
-import { AnalyzerCapabilityRejectedError, AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
+import { AnalyzerCapabilityRejectedError, AnalyzerReasoningOverflowError, AnalyzerReasoningUnavailableError } from '../analyzer/errors.js';
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 
@@ -1847,16 +3600,41 @@ describe('a pre-run refusal names the reasoning setting', () => {
     expect(f.userMessage).toContain('2026-09-11');
   });
 });
+
+describe('a level that reached a call mid-run is coded too (N10)', () => {
+  it('names the setting and says the run stopped, not that it never started', () => {
+    const f = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('q:4b', 'xhigh', 'local', 'mid-run'), 'Ollama (q:4b)');
+    expect(f.code).toBe('analyzer-request-rejected');
+    expect(f.userMessage).toContain('stopped');
+    expect(f.userMessage).not.toContain('was not started');
+    expect(f.userMessage).toContain('"xhigh"');
+    expect(f.userMessage).toContain('Advanced settings → Analyzer request controls');
+  });
+});
+
+describe('a stored level no longer offered is refused before start (P17)', () => {
+  it('maps a stored level no longer offered to analyzer-request-rejected before start, naming where the setting lives', () => {
+    const f = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('gemini-3.8-flash', 'minimal', 'gemini'), 'Gemini 3.8 Flash');
+    expect(f.code).toBe('analyzer-request-rejected');
+    expect(f.userMessage).toContain('was not started');
+    expect(f.userMessage).toContain('"minimal"');
+    expect(f.userMessage).toContain('Advanced settings → Analyzer request controls');
+    const endpoint = classifyAnalysisFailure(new AnalyzerReasoningUnavailableError('openai:lab::m', 'xhigh', 'openai'), 'Lab · m');
+    expect(endpoint.code).toBe('analyzer-request-rejected');
+    expect(endpoint.userMessage).toContain("the endpoint's Reasoning setting");
+    expect(endpoint.userMessage).not.toContain('Analyzer request controls');
+  });
+});
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
-Run: `npm --prefix server run test -- src/routes/failure-taxonomy.reasoning.test.ts`  Expected: the five overflow cases FAIL (`expected '<W2 message>' to contain 'the Ollama reasoning setting …'`). The pre-run refusal case may already PASS on W3's copy; if it does, leave W3's branch untouched in Step 3.
+Run: `npm --prefix server run test -- src/routes/failure-taxonomy.reasoning.test.ts`  Expected: the five overflow cases FAIL (`expected '<W2 message>' to contain 'the Ollama reasoning setting …'`). The pre-run refusal case may already PASS on W3's copy; if it does, leave W3's branch untouched in Step 3. The stale-level case FAILS: its code is not `analyzer-request-rejected`.
 
 - [ ] **Step 3: Implement**
 
 Add imports to `failure-taxonomy.ts` (after `:27`):
 ```ts
-import { AnalyzerReasoningOverflowError, AnalyzerCapabilityRejectedError } from '../analyzer/errors.js';
+import { AnalyzerReasoningOverflowError, AnalyzerCapabilityRejectedError, AnalyzerReasoningUnavailableError } from '../analyzer/errors.js';
 import { reasoningControlDescription } from '../analyzer/reasoning.js';
 import { parseEndpointModelId } from '../analyzer/model-id.js';
 import { getCachedUserSettings } from '../workspace/user-settings.js';
@@ -1886,12 +3664,30 @@ Only if the pre-run refusal test is red, replace W3's `AnalyzerCapabilityRejecte
   }
 ```
 
+Add this branch beside W3's `AnalyzerCapabilityRejectedError` branch (always, not only when a test is red):
+```ts
+  if (err instanceof AnalyzerReasoningUnavailableError) {
+    const where =
+      err.engine === 'openai' ? "the endpoint's Reasoning setting" : 'Advanced settings → Analyzer request controls';
+    /* N10 — the same refusal can arrive from the pre-run check or, for a value no save could produce,
+       from the call itself. The copy must not claim a run never started when it did. */
+    const outcome = err.when === 'mid-run' ? 'stopped' : 'was not started';
+    return withCopy(
+      'analyzer-request-rejected',
+      `${modelLabel} ${outcome}: its saved reasoning level "${err.level}" is not offered for this model. Choose an offered level in ${where}, or run Test again.`,
+      `setting=reasoning value=${err.level} engine=${err.engine} when=${err.when}`,
+    );
+  }
+```
+
 - [ ] **Step 4: Run and confirm it passes**
 Run: `npm --prefix server run test -- src/routes/failure-taxonomy.reasoning.test.ts src/routes/failure-taxonomy.test.ts`  Then: `npm run check:cycles`
-Expected: PASS; no new cycle (if madge reports `failure-taxonomy → user-settings → …`, pass the endpoints in instead: give `classifyAnalysisFailure` no new import, and have `reasoningControlFor` take `endpoints` from a module-level `setFailureTaxonomySettingsReader(() => getCachedUserSettings())` registered in `server/src/index.ts` at boot — the test then registers it in `beforeEach`). Keeps green: `failure-taxonomy.test.ts` (sorted key list, W2/W3 cases).
+Expected: PASS; no new cycle (if madge reports `failure-taxonomy → user-settings → …`, pass the endpoints in instead: give `classifyAnalysisFailure` no new import, and have `reasoningControlFor` take `endpoints` from a module-level `setFailureTaxonomySettingsReader(() => getCachedUserSettings())` registered in `server/src/index.ts` at boot — the test then registers it in `beforeEach`). Keeps green: `failure-taxonomy.test.ts` (sorted key list unchanged, W2/W3 cases), and `npm test -- src/data/help-failures.test.ts src/data/help-categories.test.ts`, still at W3b's **28 / 54**. `AnalyzerReasoningUnavailableError` maps to the existing `analyzer-request-rejected`, and wave 5 adds no `FailureCode`, so none of the Global Constraints' six code places changes.
 
 - [ ] **Step 5: Mutation proof**
 Replace `${reasoningControlFor(err)}` with W2's original fixed phrase. Expected red: all five `analyzer-reasoning-overflow names the reasoning control` cases. Restore.
+Delete the `AnalyzerReasoningUnavailableError` branch. Expected red: `maps a stored level no longer offered to analyzer-request-rejected before start` and `names the setting and says the run stopped, not that it never started`. Restore.
+Replace `const outcome = err.when === 'mid-run' ? 'stopped' : 'was not started';` with `const outcome = 'was not started';`. Expected red: the mid-run case only. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -1909,8 +3705,9 @@ git commit -m "fix(server): name the actual reasoning control in reasoning-overf
 - Test: `src/lib/reasoning-levels.test.ts`, `src/lib/settings-issues.test.ts`, `src/components/settings/analyzer-request-controls.test.tsx`, `src/components/settings/analyzer-endpoints-section.test.tsx` (W3d Task 3d.8, append)
 
 **Interfaces:**
-- Consumes: `api.getAnalyzerModels` (W3c mock + real, operationId `getAnalyzerModels`); `saveAccountSettings` (`src/store/account-slice.ts:53-58`); `useAppDispatch`/`useAppSelector` (`src/store`); `engineForModelId` (`src/lib/model-id.ts`, W3a); generated `components['schemas']['ReasoningLevel']`; server fixture `server/src/analyzer/__fixtures__/reasoning-style-levels.json`.
-- Produces: `levelsForEndpointStyle`, `REASONING_LEVEL_LABELS`, `REASONING_STYLE_LABELS`, `REASONING_HELP`, `collectCatalogModels` (`src/lib/reasoning-levels.ts`); `settingsIssueMessages` (`src/lib/settings-issues.ts`); `AnalyzerRequestControls` (PR 5b adds the payload half to the same component).
+- Consumes: `api.getAnalyzerModels` (W3c mock + real, operationId `getAnalyzerModels`); the account slice's `defaultAnalysisModel` (the current analysis model, `src/store/account-slice.ts`); `saveAccountSettings` (`src/store/account-slice.ts:53-58`); `useAppDispatch`/`useAppSelector` (`src/store`); `engineForModelId` (`src/lib/model-id.ts`, W3a); generated `components['schemas']['ReasoningLevel']`; server fixture `server/src/analyzer/__fixtures__/reasoning-style-levels.json`.
+- Produces: `levelsForEndpointStyle`, `REASONING_LEVEL_LABELS`, `REASONING_STYLE_LABELS`, `REASONING_HELP`, `collectCatalogModels`, `ollamaReasoningRows` / `OllamaReasoningRow` (P18), `normalizeOllamaTag` and `normalizeOllamaReasoningMap` (N7: the frontend mirror of the server's `normalizeModelTag`, pinned to `server/src/analyzer/__fixtures__/ollama-tag-cases.json`) (`src/lib/reasoning-levels.ts`); `settingsIssueMessages` (`src/lib/settings-issues.ts`); `AnalyzerRequestControls` (PR 5b adds the payload half to the same component).
+- Types (N10): the generated `UserSettings.analyzerReasoningByEngine` maps are `Record<string, string>` (Task 5.2), so the editor keeps saved values as strings and labels an unknown one with its raw value.
 
 **Placement decision.** Advanced settings' sections are generated from `GET /api/config` registry groups (`advanced.tsx:498-636`), and neither setting is a registry knob. The editor therefore renders as its own card above the generated sections, not inside the `analyzer-models` group (which, in mock mode, is not guaranteed to exist). It reads the catalog through `collectCatalogModels`, typed on W3c's `AnalyzerCatalog` (master-contract shape: `groups[].{kind, id, label, status, error?, models[].{id, label, …, offeredReasoningLevels?}}`).
 
@@ -1920,7 +3717,17 @@ git commit -m "fix(server): name the actual reasoning control in reasoning-overf
 ```ts
 import { describe, it, expect } from 'vitest';
 import styleLevels from '../../server/src/analyzer/__fixtures__/reasoning-style-levels.json';
-import { collectCatalogModels, levelsForEndpointStyle, REASONING_LEVEL_LABELS, type ReasoningStyle } from './reasoning-levels';
+import tagCases from '../../server/src/analyzer/__fixtures__/ollama-tag-cases.json';
+import {
+  collectCatalogModels,
+  levelsForEndpointStyle,
+  normalizeOllamaReasoningMap,
+  normalizeOllamaTag,
+  ollamaReasoningRows,
+  REASONING_LEVEL_LABELS,
+  type ReasoningLevel,
+  type ReasoningStyle,
+} from './reasoning-levels';
 import type { AnalyzerCatalog } from './types';
 
 describe('levelsForEndpointStyle', () => {
@@ -1943,9 +3750,48 @@ describe('collectCatalogModels', () => {
     } as unknown as AnalyzerCatalog;
     expect(collectCatalogModels(null)).toEqual([]);
     expect(collectCatalogModels(body)).toEqual([
-      { id: 'q:4b', label: 'Qwen 4B', offeredReasoningLevels: ['model-default', 'off', 'on'] },
-      { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', offeredReasoningLevels: ['model-default', 'minimal'] },
+      { id: 'q:4b', label: 'Qwen 4B', kind: 'ollama', offeredReasoningLevels: ['model-default', 'off', 'on'] },
+      { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', kind: 'gemini', offeredReasoningLevels: ['model-default', 'minimal'] },
     ]);
+  });
+});
+
+describe('ollamaReasoningRows (P18)', () => {
+  const models = [
+    { id: 'q:4b', label: 'Qwen 4B', kind: 'ollama' as const, offeredReasoningLevels: ['model-default', 'off', 'on', 'low'] as ReasoningLevel[] },
+    { id: 'q:9b', label: 'Qwen 9B', kind: 'ollama' as const, offeredReasoningLevels: ['model-default', 'off', 'on'] as ReasoningLevel[] },
+    { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', kind: 'gemini' as const, offeredReasoningLevels: ['model-default', 'minimal'] as ReasoningLevel[] },
+  ];
+  it('current model first, each model its own levels, and a saved model the catalog no longer lists keeps a row', () => {
+    expect(ollamaReasoningRows(models, 'q:9b', { 'old:1b': 'on' })).toEqual([
+      { id: 'q:9b', label: 'Qwen 9B', levels: ['model-default', 'off', 'on'], isCurrent: true },
+      { id: 'q:4b', label: 'Qwen 4B', levels: ['model-default', 'off', 'on', 'low'], isCurrent: false },
+      { id: 'old:1b', label: 'old:1b', levels: ['model-default', 'off', 'on'], isCurrent: false },
+    ]);
+  });
+  it('a saved level stays visible on its own row even when that model no longer offers it', () => {
+    expect(ollamaReasoningRows(models, undefined, { 'q:9b': 'low' }).find((r) => r.id === 'q:9b')?.levels).toEqual(['model-default', 'off', 'on', 'low']);
+  });
+  it('one row per Ollama model id: a catalog qwen3:latest, a saved qwen3 and a current qwen3:latest share one row (N7)', () => {
+    const catalog = [
+      { id: 'qwen3:latest', label: 'qwen3:latest', kind: 'ollama' as const, offeredReasoningLevels: ['model-default', 'off', 'on', 'low'] as ReasoningLevel[] },
+    ];
+    expect(ollamaReasoningRows(catalog, 'qwen3:latest', { qwen3: 'low' })).toEqual([
+      { id: 'qwen3', label: 'qwen3:latest', levels: ['model-default', 'off', 'on', 'low'], isCurrent: true },
+    ]);
+  });
+  it('a saved value this version does not know stays visible after the known levels (N10)', () => {
+    expect(ollamaReasoningRows([], undefined, { 'q:4b': 'xhigh' })[0].levels).toEqual(['model-default', 'off', 'on', 'xhigh']);
+  });
+});
+
+describe('Ollama tag identity (N7)', () => {
+  it.each(tagCases)('normalizeOllamaTag: $tag → $normalized, as the server normaliser does', ({ tag, normalized }) => {
+    expect(normalizeOllamaTag(tag)).toBe(normalized);
+  });
+  it('normalizeOllamaReasoningMap folds a :latest key into its bare tag, the bare key winning', () => {
+    expect(normalizeOllamaReasoningMap({ 'qwen3:latest': 'on', qwen3: 'low', 'q:4b': 'off' })).toEqual({ qwen3: 'low', 'q:4b': 'off' });
+    expect(normalizeOllamaReasoningMap(undefined)).toEqual({});
   });
 });
 ```
@@ -1986,7 +3832,16 @@ const mockPut = vi.mocked(api.putUserSettings);
 
 const CATALOG = {
   groups: [
-    { kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [{ id: 'q:4b', label: 'Qwen 4B', offeredReasoningLevels: ['model-default', 'off', 'on', 'low'] }] },
+    {
+      kind: 'ollama',
+      id: 'ollama',
+      label: 'Local Ollama',
+      status: 'ok',
+      models: [
+        { id: 'q:4b', label: 'Qwen 4B', offeredReasoningLevels: ['model-default', 'off', 'on', 'low'] },
+        { id: 'q:9b', label: 'Qwen 9B', offeredReasoningLevels: ['model-default', 'off', 'on'] },
+      ],
+    },
     {
       kind: 'gemini',
       id: 'gemini',
@@ -2001,8 +3856,11 @@ const CATALOG = {
   ],
 };
 
-function renderControls() {
-  const store = configureStore({ reducer: { account: accountSlice.reducer } });
+function renderControls(account: Record<string, unknown> = {}) {
+  const store = configureStore({
+    reducer: { account: accountSlice.reducer },
+    preloadedState: { account: { ...accountSlice.reducer(undefined, { type: '@@INIT' }), ...account } } as never,
+  });
   render(<Provider store={store}><AnalyzerRequestControls /></Provider>);
   return store;
 }
@@ -2015,26 +3873,30 @@ beforeEach(() => {
 });
 
 describe('AnalyzerRequestControls — reasoning', () => {
-  it('offers only levels the catalog says each engine/model can take', async () => {
-    renderControls();
+  it('offers each model only its own levels, the current analysis model first (P18)', async () => {
+    renderControls({ defaultAnalysisModel: 'q:9b' });
     await waitFor(() => expect(screen.getByTestId('analyzer-reasoning-gemini-gemini-3.8-flash')).toBeInTheDocument());
-    expect(optionValues('analyzer-reasoning-ollama')).toEqual(['model-default', 'off', 'on', 'low']);
+    expect(screen.getAllByTestId(/^analyzer-reasoning-ollama-/).map((el) => el.getAttribute('data-model-id'))).toEqual(['q:9b', 'q:4b']);
+    expect(optionValues('analyzer-reasoning-ollama-q:4b')).toEqual(['model-default', 'off', 'on', 'low']);
+    expect(optionValues('analyzer-reasoning-ollama-q:9b')).toEqual(['model-default', 'off', 'on']); // low was accepted for q:4b only
     expect(optionValues('analyzer-reasoning-gemini-gemini-3.8-flash')).toEqual(['model-default', 'low', 'medium', 'high']);
     expect(optionValues('analyzer-reasoning-gemini-gemma-4-31b-it')).toEqual(['model-default', 'off', 'on']);
     expect(screen.queryByTestId('analyzer-reasoning-gemini-gemini-9-ultra')).toBeNull();
-    expect((screen.getByTestId('analyzer-reasoning-ollama') as HTMLSelectElement).value).toBe('off');
+    expect((screen.getByTestId('analyzer-reasoning-ollama-q:9b') as HTMLSelectElement).value).toBe('off');
     expect(screen.getByText(/A server may accept a level and still ignore it/)).toBeInTheDocument();
   });
 
-  it('saves the Ollama level and non-default Gemini levels only', async () => {
+  it('saves non-default Ollama and Gemini levels per model only', async () => {
     mockPut.mockResolvedValue({} as never);
-    renderControls();
+    renderControls({ analyzerReasoningByEngine: { ollama: { 'q:9b': 'on' } } });
     await waitFor(() => expect(screen.getByTestId('analyzer-reasoning-gemini-gemini-3.8-flash')).toBeInTheDocument());
-    fireEvent.change(screen.getByTestId('analyzer-reasoning-ollama'), { target: { value: 'on' } });
+    fireEvent.change(screen.getByTestId('analyzer-reasoning-ollama-q:4b'), { target: { value: 'low' } });
+    fireEvent.change(screen.getByTestId('analyzer-reasoning-ollama-q:9b'), { target: { value: 'off' } });
     fireEvent.change(screen.getByTestId('analyzer-reasoning-gemini-gemini-3.8-flash'), { target: { value: 'low' } });
     fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
     await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
-    expect(mockPut.mock.calls[0][0]).toEqual({ analyzerReasoningByEngine: { ollama: 'on', gemini: { 'gemini-3.8-flash': 'low' } } });
+    /* Per model (P18). `off` is the Ollama default, so q:9b, set back to off, is not saved. */
+    expect(mockPut.mock.calls[0][0]).toEqual({ analyzerReasoningByEngine: { ollama: { 'q:4b': 'low' }, gemini: { 'gemini-3.8-flash': 'low' } } });
   });
 
   it('shows the server validation messages when the save is refused', async () => {
@@ -2042,7 +3904,7 @@ describe('AnalyzerRequestControls — reasoning', () => {
       new Error('User settings save failed (400): {"error":"Invalid user settings.","issues":[{"message":"Gemini reasoning \\"minimal\\" is not available for gemini-3.8-flash (offered: model-default, low, medium, high)."}]}'),
     );
     renderControls();
-    await waitFor(() => expect(screen.getByTestId('analyzer-reasoning-ollama')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('analyzer-reasoning-ollama-q:4b')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
     expect(await screen.findByTestId('analyzer-request-controls-errors')).toHaveTextContent(
       'Gemini reasoning "minimal" is not available for gemini-3.8-flash (offered: model-default, low, medium, high).',
@@ -2084,6 +3946,7 @@ Expected: FAIL with `Failed to resolve import "./reasoning-levels"` / `"./settin
    to the server's table by reasoning-levels.test.ts via the shared fixture. */
 import type { components } from './api-types';
 import type { AnalyzerCatalog } from './types';
+import { engineForModelId } from './model-id';
 
 export type ReasoningLevel = components['schemas']['ReasoningLevel'];
 export type ReasoningStyle = 'reasoning_effort' | 'enable_thinking' | 'not_controllable';
@@ -2121,6 +3984,8 @@ export const REASONING_HELP =
 export interface CatalogModelReasoning {
   id: string;
   label: string;
+  /** The catalog group the entry came from; an Ollama tag without ":" would infer as Gemini from its id. */
+  kind: AnalyzerCatalog['groups'][number]['kind'];
   offeredReasoningLevels: ReasoningLevel[];
 }
 
@@ -2130,10 +3995,72 @@ export function collectCatalogModels(catalog: Pick<AnalyzerCatalog, 'groups'> | 
   return (catalog?.groups ?? []).flatMap((group) =>
     group.models.flatMap((m) =>
       m.offeredReasoningLevels
-        ? [{ id: m.id, label: m.label, offeredReasoningLevels: m.offeredReasoningLevels as ReasoningLevel[] }]
+        ? [{ id: m.id, label: m.label, kind: group.kind, offeredReasoningLevels: m.offeredReasoningLevels as ReasoningLevel[] }]
         : [],
     ),
   );
+}
+
+const OLLAMA_BASE_LEVELS: ReasoningLevel[] = ['model-default', 'off', 'on'];
+const LEVEL_ORDER: string[] = ['model-default', 'off', 'on', 'none', 'minimal', 'low', 'medium', 'high'];
+
+/** N7 — the server's normalizeModelTag (server/src/analyzer/ollama-tag.ts): Ollama treats a bare tag and
+    its `:latest` form as one model. Pinned to the server by the shared ollama-tag-cases.json fixture. */
+export function normalizeOllamaTag(tag: string): string {
+  return tag.endsWith(':latest') ? tag.slice(0, -':latest'.length) : tag;
+}
+
+/** N7 — a saved Ollama reasoning map keyed by normalised tag. The server stores it that way; a key saved
+    before normalisation, or by hand, is folded in, and the normalised key wins. */
+export function normalizeOllamaReasoningMap(saved: Record<string, string> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [tag, level] of Object.entries(saved ?? {})) {
+    const key = normalizeOllamaTag(tag);
+    if (tag === key || !(key in out)) out[key] = level;
+  }
+  return out;
+}
+
+export interface OllamaReasoningRow {
+  id: string;
+  label: string;
+  levels: string[];
+  isCurrent: boolean;
+}
+
+/** P18 — one row per Ollama model: the current analysis model first, then every other model the
+    catalog lists, then any model a saved level names that neither covers. Each row offers ITS OWN
+    model's levels (the catalog's `offeredReasoningLevels`, else model-default/off/on) plus its saved
+    value, so a level accepted for one model is never offered for another, and a stale saved level
+    stays visible (the pre-run check refuses it, naming the model). N7: rows are keyed by the
+    normalised tag, so `qwen3` and `qwen3:latest` are one row. N10: a saved value this version does not
+    know stays visible after the known levels. */
+export function ollamaReasoningRows(
+  models: CatalogModelReasoning[],
+  currentModelId: string | undefined,
+  saved: Record<string, string>,
+): OllamaReasoningRow[] {
+  const listed = models.filter((m) => m.kind === 'ollama');
+  const savedByTag = normalizeOllamaReasoningMap(saved);
+  const current = currentModelId === undefined ? undefined : normalizeOllamaTag(currentModelId);
+  const currentIsOllama =
+    currentModelId !== undefined &&
+    (listed.some((m) => normalizeOllamaTag(m.id) === current) || engineForModelId(currentModelId) === 'local');
+  const ids = [
+    ...(currentIsOllama && current !== undefined ? [current] : []),
+    ...listed.map((m) => normalizeOllamaTag(m.id)),
+    ...Object.keys(savedByTag),
+  ].filter((id, i, all) => all.indexOf(id) === i);
+  return ids.map((id) => {
+    const entry = listed.find((m) => normalizeOllamaTag(m.id) === id);
+    const levels = new Set<string>([...(entry?.offeredReasoningLevels ?? OLLAMA_BASE_LEVELS), ...(savedByTag[id] ? [savedByTag[id]] : [])]);
+    return {
+      id,
+      label: entry?.label ?? id,
+      levels: [...LEVEL_ORDER.filter((l) => levels.has(l)), ...[...levels].filter((l) => !LEVEL_ORDER.includes(l))],
+      isCurrent: id === current,
+    };
+  });
 }
 ```
 
@@ -2161,17 +4088,18 @@ export function settingsIssueMessages(message: string): string[] {
 `src/components/settings/analyzer-request-controls.tsx`:
 ```tsx
 /* #3084 wave 5 — Advanced settings → Analyzer request controls. Reasoning per
-   engine (Ollama: one level; Gemini: per model). Saves a PARTIAL patch through
+   engine and model (Ollama and Gemini both per model, P18). Saves a PARTIAL patch through
    the account save thunk; server-side validation messages are shown verbatim. */
 import { useEffect, useMemo, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { saveAccountSettings } from '../../store/account-slice';
 import { api } from '../../lib/api';
-import { engineForModelId } from '../../lib/model-id';
 import {
   REASONING_HELP,
   REASONING_LEVEL_LABELS,
   collectCatalogModels,
+  normalizeOllamaReasoningMap,
+  ollamaReasoningRows,
   type CatalogModelReasoning,
   type ReasoningLevel,
 } from '../../lib/reasoning-levels';
@@ -2179,25 +4107,19 @@ import { settingsIssueMessages } from '../../lib/settings-issues';
 
 const SELECT_CLASS =
   'w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] fine-pointer:min-h-0';
-const OLLAMA_BASE: ReasoningLevel[] = ['model-default', 'off', 'on'];
-
-function unionLevels(base: ReasoningLevel[], models: CatalogModelReasoning[], current: ReasoningLevel): ReasoningLevel[] {
-  const order: ReasoningLevel[] = ['model-default', 'off', 'on', 'none', 'minimal', 'low', 'medium', 'high'];
-  const set = new Set<ReasoningLevel>([...base, current, ...models.flatMap((m) => m.offeredReasoningLevels)]);
-  return order.filter((l) => set.has(l));
-}
-
 export function AnalyzerRequestControls() {
   const dispatch = useAppDispatch();
+  const currentModel = useAppSelector((s) => s.account.defaultAnalysisModel);
   const savedOllama = useAppSelector((s) => s.account.analyzerReasoningByEngine?.ollama);
   const savedGemini = useAppSelector((s) => s.account.analyzerReasoningByEngine?.gemini);
   const [models, setModels] = useState<CatalogModelReasoning[]>([]);
-  const [ollama, setOllama] = useState<ReasoningLevel>(savedOllama ?? 'off');
-  const [gemini, setGemini] = useState<Record<string, ReasoningLevel>>(savedGemini ?? {});
+  /* N10: saved levels are strings; N7: Ollama rows and their state are keyed by the normalised tag. */
+  const [ollama, setOllama] = useState<Record<string, string>>(normalizeOllamaReasoningMap(savedOllama));
+  const [gemini, setGemini] = useState<Record<string, string>>(savedGemini ?? {});
   const [errors, setErrors] = useState<string[]>([]);
   const [showSaved, setShowSaved] = useState(false);
 
-  useEffect(() => setOllama(savedOllama ?? 'off'), [savedOllama]);
+  useEffect(() => setOllama(normalizeOllamaReasoningMap(savedOllama)), [savedOllama]);
   useEffect(() => setGemini(savedGemini ?? {}), [savedGemini]);
   useEffect(() => {
     let cancelled = false;
@@ -2214,17 +4136,18 @@ export function AnalyzerRequestControls() {
     };
   }, []);
 
-  const ollamaModels = useMemo(() => models.filter((m) => engineForModelId(m.id) === 'local'), [models]);
+  /* P18: one row per Ollama model, each offering only ITS OWN levels; the current analysis model first. */
+  const ollamaRows = useMemo(() => ollamaReasoningRows(models, currentModel, ollama), [models, currentModel, ollama]);
   const geminiModels = useMemo(
-    () => models.filter((m) => engineForModelId(m.id) === 'gemini' && m.offeredReasoningLevels.length > 1),
+    () => models.filter((m) => m.kind === 'gemini' && m.offeredReasoningLevels.length > 1),
     [models],
   );
-  const ollamaLevels = unionLevels(OLLAMA_BASE, ollamaModels, ollama);
 
   const onSave = async () => {
     setErrors([]);
+    const ollamaPatch = Object.fromEntries(Object.entries(ollama).filter(([, level]) => level !== 'off'));
     const geminiPatch = Object.fromEntries(Object.entries(gemini).filter(([, level]) => level !== 'model-default'));
-    const action = await dispatch(saveAccountSettings({ analyzerReasoningByEngine: { ollama, gemini: geminiPatch } }));
+    const action = await dispatch(saveAccountSettings({ analyzerReasoningByEngine: { ollama: ollamaPatch, gemini: geminiPatch } }));
     if (saveAccountSettings.rejected.match(action)) {
       setErrors(settingsIssueMessages(action.error.message ?? ''));
       return;
@@ -2243,24 +4166,33 @@ export function AnalyzerRequestControls() {
         <p className="mt-1 text-xs text-ink/55">{REASONING_HELP}</p>
       </div>
 
-      <label className="block">
-        <span className="block text-sm font-medium text-ink">Ollama reasoning</span>
-        <span className="block text-xs text-ink/55 mt-0.5">
-          One level for every Ollama model, sent as &quot;think&quot;. Off is today&apos;s default. Low / Medium / High appear once a model&apos;s Test accepted them; a model that doesn&apos;t think rejects On and every level.
+      <div className="space-y-3">
+        <span className="block text-sm font-medium text-ink">Ollama reasoning, per model</span>
+        <span className="block text-xs text-ink/55">
+          Sent as &quot;think&quot;. Off is today&apos;s default. Low / Medium / High appear for a model once that model&apos;s own Test accepted them; a model that doesn&apos;t think rejects On and every level.
         </span>
-        <select
-          data-testid="analyzer-reasoning-ollama"
-          value={ollama}
-          onChange={(e) => setOllama(e.target.value as ReasoningLevel)}
-          className={`mt-2 ${SELECT_CLASS}`}
-        >
-          {ollamaLevels.map((l) => (
-            <option key={l} value={l}>
-              {REASONING_LEVEL_LABELS[l]}
-            </option>
-          ))}
-        </select>
-      </label>
+        {ollamaRows.map((row) => (
+          <label key={row.id} className="block">
+            <span className="block text-xs text-ink/70">
+              {row.label}
+              {row.isCurrent ? ' (current analysis model)' : ''}
+            </span>
+            <select
+              data-testid={`analyzer-reasoning-ollama-${row.id}`}
+              data-model-id={row.id}
+              value={ollama[row.id] ?? 'off'}
+              onChange={(e) => setOllama((o) => ({ ...o, [row.id]: e.target.value }))}
+              className={`mt-1 ${SELECT_CLASS}`}
+            >
+              {row.levels.map((l) => (
+                <option key={l} value={l}>
+                  {REASONING_LEVEL_LABELS[l as ReasoningLevel] ?? l}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
 
       {geminiModels.length > 0 && (
         <div className="space-y-3">
@@ -2271,7 +4203,7 @@ export function AnalyzerRequestControls() {
               <select
                 data-testid={`analyzer-reasoning-gemini-${m.id}`}
                 value={gemini[m.id] ?? 'model-default'}
-                onChange={(e) => setGemini((g) => ({ ...g, [m.id]: e.target.value as ReasoningLevel }))}
+                onChange={(e) => setGemini((g) => ({ ...g, [m.id]: e.target.value }))}
                 className={`mt-1 ${SELECT_CLASS}`}
               >
                 {m.offeredReasoningLevels.map((l) => (
@@ -2364,9 +4296,13 @@ Then: `npx playwright test --project=chromium e2e/advanced-settings.spec.ts e2e/
 Expected: PASS. Keeps green: `advanced.test.tsx` (group/OverrideRow cases), `a11y.test.tsx` (axe on AdvancedView — the new selects are labelled by their wrapping `<label>`), both Advanced e2e specs, W3d's `analyzer-endpoints-section.test.tsx` cases and `e2e/analyzer-endpoints.spec.ts` (a new endpoint still saves `not_controllable` / `model-default` by default).
 
 - [ ] **Step 5: Mutation proof**
-1. In `AnalyzerRequestControls` replace `m.offeredReasoningLevels.map` with `(['model-default','minimal','low','medium','high'] as ReasoningLevel[]).map`. Expected red: `offers only levels the catalog says each engine/model can take`. Restore.
+1. In `AnalyzerRequestControls` replace `m.offeredReasoningLevels.map` with `(['model-default','minimal','low','medium','high'] as ReasoningLevel[]).map`. Expected red: `offers each model only its own levels, the current analysis model first (P18)`. Restore.
 2. In `onSave` replace `setErrors(settingsIssueMessages(action.error.message ?? ''))` with `setErrors([])`. Expected red: `shows the server validation messages when the save is refused`. Restore.
 3. In `AnalyzerEndpointsSection`'s `endpoint-reasoning-style` `onChange`, replace the `levelsForEndpointStyle(reasoningStyle).includes(d.reasoning) ? d.reasoning : 'model-default'` ternary with `d.reasoning`. Expected red: `offers only the selected control style levels and resets an orphaned level`. Restore.
+4. In `ollamaReasoningRows` replace `entry?.offeredReasoningLevels ?? OLLAMA_BASE_LEVELS` with `listed.flatMap((m) => m.offeredReasoningLevels)` (a union across models). Expected red: `current model first, each model its own levels…` and `offers each model only its own levels, the current analysis model first (P18)`. Restore.
+5. In `onSave` drop the `level !== 'off'` filter from `ollamaPatch`. Expected red: `saves non-default Ollama and Gemini levels per model only` (`'q:9b': 'off'` appears). Restore.
+6. In `normalizeOllamaTag` return `tag` unchanged. Expected red: `normalizeOllamaTag: qwen3:latest → qwen3…` and `one row per Ollama model id…` (two rows). Restore.
+7. In `ollamaReasoningRows` drop `...[...levels].filter((l) => !LEVEL_ORDER.includes(l))`. Expected red: `a saved value this version does not know stays visible after the known levels (N10)`. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -2383,28 +4319,39 @@ git commit -m "feat(frontend): offer only takeable reasoning levels in Advanced 
 - Modify: `docs/features/284-openai-compatible-analyzer.md` (the #3084 regression plan created in an earlier wave) — add the reasoning invariants
 
 - [ ] **Step 1: Regenerate and check derived artifacts**
-Run: `npm run openapi:types` then `git diff --exit-code src/lib/api-types.ts` — Expected: exit 0 (committed in Task 5.2). No registry knob is added in this PR, so `npm run config:check` must pass unchanged — run it.
+Run: `npm run openapi:types` then `git diff --exit-code src/lib/api-types.ts` — Expected: exit 0 (committed in Task 5.2). No registry knob is added in this PR, so `npm run config:check` must pass unchanged — run it. No `FailureCode` is added either: `git diff --exit-code main -- src/data/help-failures.ts` exits 0, and `npm test -- src/data/help-failures.test.ts src/data/help-categories.test.ts` passes at 28 / 54.
 
 - [ ] **Step 2: Release notes (both files)**
 Append to `docs/release-notes-next.md` under `## 🗣️ Analyzer, script review & manuscript`:
 ```markdown
-- **Reasoning controls for every analyzer engine (#3084, wave 5a).** New `analyzerReasoningByEngine` setting (Ollama: one level, default `off` = today's `think:false`; Gemini: per model, default `model-default`) and per-endpoint `reasoningStyle` / `reasoning`. Levels are offered per Gemini model (`thinkingLevel` for 3.x, `thinkingBudget` 0/1024/8192/24576 for 2.5, Gemma 4 on/off via HIGH/MINIMAL; never both fields), per endpoint style (`reasoning_effort` none…high, `chat_template_kwargs.enable_thinking`, not controllable), and for Ollama (`low`/`medium`/`high` only after a Test accepted them). The Test action probes reasoning levels (`accepted`/`rejected`, rejected only after a successful control), keys schema probes by level, and a `rejected` level refuses the run before its first call. Reasoning-overflow and pre-run refusal copy name the actual control. (#PR)
+- **Reasoning controls for every analyzer engine (#3084, wave 5a).** New `analyzerReasoningByEngine` setting, keyed by model id for both engines (Ollama default `off` = today's `think:false`; Gemini default `model-default`) and per-endpoint `reasoningStyle` / `reasoning`. Levels are offered per Gemini model (`thinkingLevel` for 3.x, `thinkingBudget` 0/1024/8192/24576 for 2.5, Gemma 4 on/off via HIGH/MINIMAL; never both fields), per endpoint style (`reasoning_effort` none…high, `chat_template_kwargs.enable_thinking`, not controllable), and for each Ollama model (`low`/`medium`/`high` only after that model's own Test accepted them). Gemini levels that think carry `includeThoughts`. The Test action adds a level step to its ladder: acceptance only, so a thinking model's `length` stop counts as `accepted`, and `rejected` only after a successful control. It also keys schema probes by level. A `rejected` level, or a stored level the rules no longer offer, refuses the run and persona generation before the first call. Stored levels are strings, so a value this version does not know loads without resetting settings and refuses the run too. Reasoning-overflow and pre-run refusal copy name the actual control. A Gemini request thinks per its level as well as its model id (P27): a level that turns thinking on (Gemma 4 `on`, a 2.5 budget above 0) gets thought summaries and the 240 s thinking window, and `off` gets neither. Because Gemma 4 at `on` is then a thinking request, its thought tokens are reasoning evidence and an empty `MAX_TOKENS` answer there fails as `analyzer-reasoning-overflow` instead of splitting the chunk; at Gemma's default level and at `off` nothing asks for thoughts and the #528 split recovery is unchanged. A `thoughtsTokenCount` counts only on a request whose wire sent `includeThoughts`, so a persona (free-text) request at `model-default` counts none. A stored level that reaches a call anyway (a hand-edited settings file) fails that call with the same coded refusal, whose copy says the run stopped rather than that it never started. Saving request controls judges only the entries that change, against the stored settings, so one stale entry never blocks a save; an endpoint update likewise judges its level only when the level or its control style changes. Ollama reasoning keys and Test records use one model id through `normalizeModelTag` (`qwen3` = `qwen3:latest`). A Test merges the verdicts it probed into the model's record for the same server instead of replacing it, each verdict keeping the date of the Test that recorded it; a Test of a re-pulled Ollama tag replaces the record instead of merging into it, so it keeps no verdict that was never probed for the new build. A record W3c filed under `:latest` is found, merged into and rewritten under the canonical tag. (#PR)
 ```
 Add to the top section of `RELEASE_NOTES.md`:
 ```markdown
-- **You can now tell each analyzer how hard to think.** Thinking models spend part of their answer budget reasoning before they write a word, and on a long chapter that can leave nothing for the answer. Advanced settings now has an analyzer reasoning control for Ollama and for each Gemini model, and every OpenAI-compatible endpoint has one too — offering only the levels that model or server can actually take. Nothing changes until you pick something: Ollama stays with thinking off, and everything else keeps its own default. The Test button now checks which levels a model accepts, and a level it refused stops a run before it starts instead of failing a chapter in. One honest caveat, shown right next to the setting: a server can accept a level and quietly ignore it, and Castwright has no way to see that.
+- **You can now tell each analyzer how hard to think.** Thinking models spend part of their answer budget reasoning before they write a word, and on a long chapter that can leave nothing for the answer. Advanced settings now has an analyzer reasoning control for each Ollama and Gemini model, and every OpenAI-compatible endpoint has one too — offering only the levels that model or server can actually take. Nothing changes until you pick something: Ollama stays with thinking off, and everything else keeps its own default. The Test button now checks which levels a model accepts, and a level it refused stops a run before it starts instead of failing a chapter in. One honest caveat, shown right next to the setting: a server can accept a level and quietly ignore it, and Castwright has no way to see that. And when a model spends its whole answer budget thinking and writes nothing, Castwright says so and stops, instead of cutting the chapter into ever smaller pieces that fail the same way.
 ```
 Replace `(#PR)` with the PR number once opened.
 
 - [ ] **Step 3: On-box acceptance rows (CLAUDE.md Before-shipping step 3)**
 Allocate each ID from its group's `<!-- next-id: … -->` marker **at ship time** (never a hard-coded number) and bump the marker in the same commit. Add one row per group:
-- **Group E** (no GPU box; needs a Gemini API key): *"#3084 5a — Gemini reasoning levels take effect."* Observe: Test (`scope: all`) on `gemini-3.6-flash`, `gemini-2.5-flash` and `gemma-4-31b-it` records every offered level `accepted`; a stage-2 chapter on `gemini-2.5-flash` at `off` reports `thoughtsTokenCount` 0 or absent in the server log's usage line, and at `high` reports > 0; `gemma-4-31b-it` at `off` vs `on` differs in thought tokens. Criteria: this plan Task 5.1 table + spec §8.
-- **Group B** (local Ollama only): *"#3084 5a — Ollama reasoning levels and Test attribution."* Observe: on a non-thinking tag, Test `scope: all` records `on`/`low`/`medium`/`high` `rejected` and `off`/`model-default` `accepted`; on a thinking tag (e.g. `qwen3.5:4b`), `low` is `accepted` and then appears in Advanced settings' Ollama reasoning list; a run with a `rejected` level fails before the first chapter with the refusal copy naming the level and Test date.
+- **Group E** (no GPU box; needs a Gemini API key): *"#3084 5a — Gemini reasoning levels take effect."* Observe: Test (`scope: all`) on `gemini-3.6-flash`, `gemini-2.5-flash` and `gemma-4-31b-it` records every offered level `accepted` (a `length` stop on a level step still counts); a stage-2 chapter on `gemini-2.5-flash` at `off` reports `thoughtsTokenCount` 0 or absent in the server log's usage line, and at `high` reports > 0; `gemma-4-31b-it` at `off` vs `on` differs in thought tokens. **A8 — the owed fact:** record whether the Gemma `on` step is `accepted`, i.e. whether the API takes `thinkingLevel: HIGH` together with `includeThoughts` (unconfirmed; planning facts §C.2). If it is `rejected`, the `on` fragment must drop `includeThoughts` and keep `thinkingLevel: HIGH` — record that Gemma `on` then reports no thought tokens, so its truncations split like its default level (G1's overflow no longer applies there), which is a decision to reopen rather than a silent change. **G1:** on a chapter long enough to exhaust the cap, record what Gemma `on` does with an empty `MAX_TOKENS` answer (expected: `analyzer-reasoning-overflow`, the run stops) against the same chapter at Gemma's default level (expected: the chunk splits and recovers, #528). Criteria: this plan Task 5.1 table + spec §8.
+- **Group B** (local Ollama only): *"#3084 5a — Ollama reasoning levels and Test attribution."* Observe: on a non-thinking tag, Test `scope: all` records `on`/`low`/`medium`/`high` `rejected` and `off`/`model-default` `accepted`; on a thinking tag (e.g. `qwen3.5:4b`), `low` is `accepted` and then appears in that model's own row of Advanced settings' Ollama reasoning list, and not in the non-thinking tag's row; a run with a `rejected` level fails before the first chapter with the refusal copy naming the level and the date of the Test that recorded that verdict. **A2 — the merge-replaces-on-digest-change rule on a real daemon:** after a Test (`scope: all`), re-pull the same tag so its build changes (`ollama pull <tag>`; confirm `ollama list` shows a new digest), then Test `scope: configured` and record that the stored record keeps only the verdict this Test probed — the earlier levels are gone rather than carried onto a different build.
 - **Group A** (GPU box with llama-swap): *"#3084 5a — endpoint reasoning styles on llama-swap."* Observe: a `reasoning_effort` endpoint at `none` streams no `reasoning_content` deltas for a Qwen3.6 model and at `high` streams them (visible as `reasoningSeen` / the route heartbeat continuing before answer text); an `enable_thinking` endpoint at `off`/`on` shows the same split; the schema probe at `on` records `enforced` or `ignored` and the run label shows "schema (not enforced)" only for the level recorded `ignored`.
 Update the At-a-glance `Rows` counts for A, B and E (+1 each), then run `npm run register:build` and `npm run check:onbox-register` (both must pass). Edit `docs/testing/onbox-acceptance-register-live-view.html` with the same three rows, then follow the register's "Live view" four-step procedure: save the page live at the recorded URL, run `npm run check:onbox-register -- --against-published <saved file>`, and publish **this html file** with that recorded `url` (never without it, never the `.md`).
 
 - [ ] **Step 4: Plan doc**
-In `docs/features/284-openai-compatible-analyzer.md`, add to its invariants section: levels offered per family/style (Task 5.1 table), defaults preserve today's wire, never both `thinkingLevel` and `thinkingBudget`, `rejected` only after a successful control, pre-run refusal of a `rejected` level, and the three register row IDs. Status stays `active`.
+In `docs/features/284-openai-compatible-analyzer.md`, add to its invariants section:
+- levels offered per family/style (Task 5.1 table) and per Ollama model (P18);
+- defaults preserve today's wire;
+- never both `thinkingLevel` and `thinkingBudget`, and `includeThoughts` beside every Gemini level that thinks (P19);
+- level steps accept any finish (P7), and `rejected` is recorded only after a successful control;
+- pre-run refusal of a `rejected` level or of a stored level no longer offered or unknown (P17, N10), for runs and personas, classified by the target's engine (N5);
+- a Gemini request's thought summaries and thinking window follow `geminiRequestThinks(model, level)` (P27), and a `thoughtsTokenCount` is evidence only when that request's wire sent `includeThoughts` — so Gemma at `on` overflows where Gemma at its default level splits (G1, A3);
+- a save judges only the request-control entries it changes, against `readUserSettings()` (N6), and an endpoint update only the level (and, from 5b, the payload) it changes (A7);
+- one Ollama model id (`normalizeModelTag`) for reasoning keys, rows, record lookups and the persona model (N7);
+- a Test merges its verdicts into the model's record for the same server (N14) and the same model build, each verdict keeping its own date, with a differing `digest` replacing the record (A2);
+- a stored level that reaches a call anyway is the same coded refusal, marked `mid-run` (N10);
+- the three register row IDs. Status stays `active`.
 
 - [ ] **Step 5: Verify**
 Run: `npm run typecheck`, `npm run check:cycles`, `npm run verify:fast:branch`  Expected: all PASS.
@@ -2422,16 +4369,17 @@ PR title: `feat(server,frontend,openapi): reasoning controls for every analyzer 
 ### PR 5b — Custom request payload
 
 - **Branch:** `feat/server,frontend-3084-w5b-payload` — `node scripts/wt-new.mjs feat/server,frontend-3084-w5b-payload`, cut after PR 5a merges.
-- **Delivers:** `server/src/analyzer/runner/extra-params.ts` (validation, merge, temperature precedence, output-cap detection, redaction); `analyzerExtraParamsByEngine` (Ollama, Gemini) and endpoint `extraParams` validated on save; every transport merges the payload last; a payload temperature sets attempt 1 only; a payload output cap disables Auto and the label says so; payload string values ≥ 8 chars redacted from Ollama/OpenAI/Gemini error text and `formatErrorDetail`; payload never logged or persisted; editors in Advanced settings and the endpoint form; run label "+ custom params" with the e2e assertion; `Closes #3084`.
+- **Delivers:** `server/src/analyzer/runner/extra-params.ts` (validation, merge, temperature precedence, output-cap detection, redaction); `analyzerExtraParamsByEngine` (Ollama, Gemini) and endpoint `extraParams` validated on save, an update judging its payload only when the payload or the reasoning style changes (A7); a persona (free-text) request carrying the payload without its output-cap keys (A4); every transport merges the payload last; a payload temperature sets attempt 1 only; a payload output cap (llama.cpp `n_predict` included) disables Auto, the label says so and overflow copy names the key; Gemini `safetySettings` shape and prototype keys (`__proto__`, `constructor`, `prototype`) validated at save and filtered at merge; payload string values ≥ 8 chars redacted from the errors of the request that carried them, in all three transports (P29), never through the global known secrets; payload never logged or persisted; editors in Advanced settings and the endpoint form; run label "+ custom params" with the e2e assertion; `Closes #3084`.
 - **Must NOT change:** any request for a user with no payload (byte-identical bodies); reasoning or structured-output behaviour; the retry policies' own temperatures; persisted analyzer file formats.
 - **Entry:** PR 5a merged.
 - **Exit:** all tasks green; `npm run typecheck`, `npm run check:cycles`, `npm run verify:fast:branch`, `npx playwright test --project=chromium e2e/analyzer-endpoints.spec.ts` green; `pr-review-gate` at **high** depth; on-box rows added; issue #3084 closes on merge.
 
 **Spec gaps this PR resolves (recorded, not re-litigated):**
-- **Gemini top level.** Spec §9 lists protected keys only inside `config`. The SDK request's other top-level keys are `model` and `contents` (both pipeline-owned), and nothing else is a Gemini request field, so a Gemini payload may contain only `config`; any other top-level key is refused naming it.
+- **Gemini top level and `config` (P16).** The SDK request's top-level keys are `model` and `contents` (both pipeline-owned) and `config`. So a Gemini payload may contain only `config`, and any other top-level key is refused, naming it. Inside `config` the payload is an allowlist (spec §9, `GEMINI_CONFIG_ALLOWLIST`).
 - **`chat_template_kwargs` is merged key by key.** With `reasoningStyle: enable_thinking` the transport owns `chat_template_kwargs.enable_thinking` (a protected key). A top-level replace would silently delete it when a payload sets another template kwarg, so the OpenAI transport treats `chat_template_kwargs` as its owned container (merged key by key; `null` on the container refused), exactly like Ollama `options` / Gemini `config`.
 - **Payload output cap on endpoints.** When a payload sets or nulls `max_tokens` or `max_completion_tokens`, the transport's own `max_tokens` is dropped before the merge — otherwise an OpenAI reasoning model receives both fields. For Ollama and Gemini the key-by-key merge already replaces or removes the native key.
 - **Temperature precedence** is implemented by the runner removing the payload's temperature key from the attempt-2 request (`stripPayloadTemperature`), so the transport's native temperature — the retry policy's — stands. `TransportRequest` is unchanged.
+- **Persona requests and the payload output cap (A4).** Free text takes the model's own length (W4), so a payload cap chosen for chapter work would silently truncate a voice description. `runFreeText` sends the payload through `withoutPayloadOutputCap`, which drops exactly the keys `payloadOutputCapKey` names, and keeps every other key. A persona length stop keeps today's behaviour: text is kept, and an empty answer with reasoning evidence is the overflow.
 
 ### Task 5.8: `extra-params.ts` — validation, merge, temperature, output cap, redaction
 
@@ -2441,8 +4389,20 @@ PR title: `feat(server,frontend,openapi): reasoning controls for every analyzer 
 - Test: `server/src/analyzer/runner/extra-params.test.ts`
 
 **Interfaces:**
-- Consumes: `TransportKind` (`errors.ts`).
-- Produces: contract `validateExtraParams`, `mergeExtraParams`, `payloadControlsOutputCap`, `redactPayloadValues`, `PROTECTED_KEYS`; **new** `OWNED_CONTAINERS`, `stripPayloadTemperature(kind, params)`, `requestControlsLabelParts(kind, params)`, `configuredPayloadsForRedaction(settings)`, `resolveExtraParamsSetting(settings, sel)`, `REDACTION_MIN_LENGTH`, `REDACTED`.
+- Consumes:
+  - `TransportKind` (`errors.ts`);
+  - W3b's `redactKnownSecrets` and `REDACTED` (`server/src/analyzer/redact.ts`, Task 3b.1). Payload values go through that one redaction function (same marker, same 8-character floor), passed per request (P29, Task 5.11), never through the global known-secrets list.
+- Produces:
+  - Contract:
+    - `validateExtraParams`;
+    - `mergeExtraParams(kind, native, params, ctx?)` — **contract extension**: an optional `ctx: { reasoningStyle? }`, so the merge can re-apply the `enable_thinking` rule;
+    - `payloadControlsOutputCap`, `redactPayloadValues`;
+    - `PROTECTED_KEYS` — Gemini lists only `model` and `contents`, because its `config` is an allowlist.
+  - **New:**
+    - `GEMINI_CONFIG_ALLOWLIST` (P16), `filterStoredPayload(kind, params, ctx?): { value, dropped }` (P17; `params` and `value` may be `undefined`, per the contract), `payloadOutputCap(kind, params): number | null | undefined` (P19; endpoints also recognise llama.cpp's `n_predict`, N9), `payloadSecretValues(params)` (P22, passed per request, P29);
+    - `OWNED_CONTAINERS`, `stripPayloadTemperature(kind, params)`, `requestControlsLabelParts(kind, params)`, `resolveExtraParamsSetting(settings, sel)`, `payloadOutputCapKey(kind, params)` (N13: the payload key that sets the cap);
+  - Save-time and merge-time rules added this round: a Gemini `config.safetySettings` must be an array of `{ category, threshold }` strings (N11), and `__proto__`, `constructor` and `prototype` keys are refused at save and dropped at merge at any depth (N12).
+    - a re-export of W3b's `REDACTED`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2456,21 +4416,26 @@ PR title: `feat(server,frontend,openapi): reasoning controls for every analyzer 
   { "kind": "ollama", "params": { "options": { "min_p": 0.05 }, "top_k": 40 }, "controlsOutputCap": false, "labelParts": ["+ custom params"] },
   { "kind": "gemini", "params": { "config": { "maxOutputTokens": null } }, "controlsOutputCap": true, "labelParts": ["+ custom params", "max output set by custom params"] },
   { "kind": "gemini", "params": { "config": { "topK": 40 } }, "controlsOutputCap": false, "labelParts": ["+ custom params"] },
+  { "kind": "openai", "params": { "n_predict": 1024 }, "controlsOutputCap": true, "labelParts": ["+ custom params", "max output set by custom params"] },
   { "kind": "ollama", "params": {}, "controlsOutputCap": false, "labelParts": [] }
 ]
 ```
 
 `server/src/analyzer/runner/extra-params.test.ts`:
 ```ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import cases from '../__fixtures__/extra-params-cases.json' with { type: 'json' };
 import {
+  GEMINI_CONFIG_ALLOWLIST,
   OWNED_CONTAINERS,
   PROTECTED_KEYS,
   REDACTED,
-  configuredPayloadsForRedaction,
+  filterStoredPayload,
   mergeExtraParams,
   payloadControlsOutputCap,
+  payloadOutputCap,
+  payloadOutputCapKey,
+  payloadSecretValues,
   redactPayloadValues,
   requestControlsLabelParts,
   resolveExtraParamsSetting,
@@ -2479,11 +4444,18 @@ import {
 } from './extra-params.js';
 import type { TransportKind } from '../errors.js';
 
-describe('PROTECTED_KEYS is exactly spec §9 (plus Gemini model/contents)', () => {
+const geminiRefusal = (paths: string) =>
+  `Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: ${paths}.`;
+
+describe('protected keys are exactly spec §9; Gemini config is an allowlist (P16)', () => {
   it('per transport', () => {
-    expect(PROTECTED_KEYS.openai).toEqual(['model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'tools', 'tool_choice', 'response_format', 'reasoning_effort', 'grammar', 'json_schema']);
-    expect(PROTECTED_KEYS.ollama).toEqual(['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'options.num_ctx', 'options.num_gpu', 'options.stop']);
-    expect(PROTECTED_KEYS.gemini).toEqual(['model', 'contents', 'config.systemInstruction', 'config.abortSignal', 'config.responseMimeType', 'config.responseJsonSchema', 'config.responseSchema', 'config.thinkingConfig', 'config.tools', 'config.toolConfig', 'config.candidateCount', 'config.responseModalities']);
+    expect(PROTECTED_KEYS.openai).toEqual([
+      'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
+      'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'include_reasoning',
+    ]);
+    expect(PROTECTED_KEYS.ollama).toEqual(['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu', 'options.stop']);
+    expect(PROTECTED_KEYS.gemini).toEqual(['model', 'contents']);
+    expect(GEMINI_CONFIG_ALLOWLIST).toEqual(['temperature', 'topP', 'topK', 'maxOutputTokens', 'presencePenalty', 'frequencyPenalty', 'seed', 'safetySettings']);
     expect(OWNED_CONTAINERS).toEqual({ ollama: ['options'], gemini: ['config'], openai: ['chat_template_kwargs'] });
   });
 });
@@ -2502,7 +4474,34 @@ describe('validateExtraParams', () => {
       ok: false, errors: ['These keys are controlled by Castwright and cannot be set here: think, options.num_ctx.'],
     });
     expect(validateExtraParams('gemini', { config: { thinkingConfig: {}, topK: 40 } }, {})).toEqual({
-      ok: false, errors: ['These keys are controlled by Castwright and cannot be set here: config.thinkingConfig.'],
+      ok: false, errors: [geminiRefusal('config.thinkingConfig')],
+    });
+  });
+  it('Gemini config is an allowlist: httpOptions (and everything nested in it) and stopSequences are refused by name (P16)', () => {
+    expect(
+      validateExtraParams(
+        'gemini',
+        { config: { httpOptions: { baseUrl: 'http://evil', headers: { 'x-goog-api-key': 'k' }, extraBody: { contents: [] }, retryOptions: { attempts: 5 }, timeout: 1 } } },
+        {},
+      ),
+    ).toEqual({ ok: false, errors: [geminiRefusal('config.httpOptions')] });
+    expect(validateExtraParams('gemini', { config: { stopSequences: ['}'] } }, {})).toEqual({ ok: false, errors: [geminiRefusal('config.stopSequences')] });
+    const allowed = {
+      config: {
+        temperature: 0.4, topP: 0.9, topK: 40, maxOutputTokens: 2048, presencePenalty: 0.1, frequencyPenalty: 0.1, seed: 7,
+        safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }],
+      },
+    };
+    expect(validateExtraParams('gemini', allowed, {})).toEqual({ ok: true, value: allowed });
+  });
+  it('refuses every endpoint reasoning key and the added Ollama keys (A8)', () => {
+    expect(
+      validateExtraParams('openai', { reasoning: { effort: 'high' }, reasoning_format: 'none', reasoning_budget_tokens: 0, thinking_budget_tokens: 0, include_reasoning: false, top_k: 40 }, {}),
+    ).toEqual({
+      ok: false, errors: ['These keys are controlled by Castwright and cannot be set here: reasoning, reasoning_format, reasoning_budget_tokens, thinking_budget_tokens, include_reasoning.'],
+    });
+    expect(validateExtraParams('ollama', { tools: [], options: { main_gpu: 1, min_p: 0.05 } }, {})).toEqual({
+      ok: false, errors: ['These keys are controlled by Castwright and cannot be set here: tools, options.main_gpu.'],
     });
   });
   it('protects chat_template_kwargs.enable_thinking only for the enable_thinking style', () => {
@@ -2524,6 +4523,62 @@ describe('validateExtraParams', () => {
   it('accepts the reporter payloads unchanged', () => {
     const p = { top_k: 20, min_p: 0.05, presence_penalty: 1.5 };
     expect(validateExtraParams('openai', p, {})).toEqual({ ok: true, value: p });
+  });
+});
+
+describe('Gemini safetySettings shape (N11)', () => {
+  const REFUSAL = '"config.safetySettings" must be an array of objects with only a string "category" and a string "threshold".';
+  it('refuses an entry with any other field, such as method, naming the key', () => {
+    expect(
+      validateExtraParams('gemini', { config: { safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE', method: 'SEVERITY' }] } }, {}),
+    ).toEqual({ ok: false, errors: [REFUSAL] });
+  });
+  it('refuses a non-array and a non-string threshold, naming the key', () => {
+    expect(validateExtraParams('gemini', { config: { safetySettings: { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' } } }, {})).toEqual({
+      ok: false,
+      errors: [REFUSAL],
+    });
+    expect(validateExtraParams('gemini', { config: { safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 4 }] } }, {})).toEqual({
+      ok: false,
+      errors: [REFUSAL],
+    });
+  });
+  it('accepts an empty list, and null (which removes the key)', () => {
+    expect(validateExtraParams('gemini', { config: { safetySettings: [] } }, {}).ok).toBe(true);
+    expect(validateExtraParams('gemini', { config: { safetySettings: null } }, {}).ok).toBe(true);
+  });
+  it('drops a stored invalid safetySettings at merge and reports its path', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = mergeExtraParams(
+      'gemini',
+      { model: 'g', config: { temperature: 0.2 } },
+      { config: { safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE', method: 'SEVERITY' }], topK: 40 } },
+    );
+    expect(out).toEqual({ model: 'g', config: { temperature: 0.2, topK: 40 } });
+    expect(String(warn.mock.calls[0][0])).toContain('config.safetySettings');
+    warn.mockRestore();
+  });
+});
+
+describe('prototype keys (N12)', () => {
+  const poisoned = () =>
+    JSON.parse('{"__proto__":{"polluted":true},"top_k":1,"nested":{"constructor":{"x":1},"ok":2},"list":[{"prototype":3,"k":4}]}') as Record<string, unknown>;
+  it('filterStoredPayload drops them at any depth, reports each path, and never sets a prototype', () => {
+    const { value, dropped } = filterStoredPayload('openai', poisoned());
+    expect(dropped).toEqual(['__proto__', 'nested.constructor', 'list[0].prototype']);
+    expect(JSON.stringify(value)).toBe('{"top_k":1,"nested":{"ok":2},"list":[{"k":4}]}');
+    expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+    expect((value as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+  });
+  it('validateExtraParams refuses them, naming each path', () => {
+    expect(validateExtraParams('openai', poisoned(), {})).toEqual({
+      ok: false,
+      errors: ['Keys named __proto__, constructor or prototype are not allowed: __proto__, nested.constructor, list[0].prototype.'],
+    });
+  });
+  it('filterStoredPayload of no payload is no payload', () => {
+    expect(filterStoredPayload('openai', undefined)).toEqual({ value: undefined, dropped: [] });
   });
 });
 
@@ -2551,10 +4606,95 @@ describe('mergeExtraParams', () => {
   it('drops the native max_tokens when the payload controls the endpoint output cap', () => {
     expect(mergeExtraParams('openai', { max_tokens: 8192 }, { max_completion_tokens: 4096 })).toEqual({ max_completion_tokens: 4096 });
     expect(mergeExtraParams('openai', { max_tokens: 8192 }, { max_tokens: null })).toEqual({});
+    /* N9 — llama.cpp's n_predict is an output cap too, so the transport's max_tokens gives way to it. */
+    expect(mergeExtraParams('openai', { max_tokens: 8192 }, { n_predict: 1024 })).toEqual({ n_predict: 1024 });
   });
   it('returns the native request unchanged with no payload', () => {
     const native = { model: 'm' };
     expect(mergeExtraParams('openai', native, undefined)).toBe(native);
+  });
+});
+
+describe('mergeExtraParams re-applies the rules to a stored payload (P16, P17)', () => {
+  it('drops protected keys and logs their names, never their values', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const native = { model: 'q', think: false, keep_alive: -1, options: { num_ctx: 32768, num_gpu: 0, temperature: 0.2 } };
+    const out = mergeExtraParams('ollama', native, {
+      think: true,
+      keep_alive: 'stored-secret-keepalive',
+      tools: [{ type: 'function' }],
+      options: { num_ctx: 2048, num_gpu: 99, main_gpu: 1, min_p: 0.05 },
+    });
+    expect(out).toEqual({ model: 'q', think: false, keep_alive: -1, options: { num_ctx: 32768, num_gpu: 0, temperature: 0.2, min_p: 0.05 } });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0][0]);
+    for (const name of ['think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu']) expect(line).toContain(name);
+    expect(line).not.toContain('stored-secret-keepalive');
+    warn.mockRestore();
+  });
+  it('a stored null on an owned container is ignored: options keeps num_ctx and num_gpu 0', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(mergeExtraParams('ollama', { options: { num_ctx: 32768, num_gpu: 0 } }, { options: null })).toEqual({ options: { num_ctx: 32768, num_gpu: 0 } });
+    expect(mergeExtraParams('gemini', { model: 'g', config: { temperature: 0.2 } }, { config: null })).toEqual({ model: 'g', config: { temperature: 0.2 } });
+    expect(mergeExtraParams('openai', { chat_template_kwargs: { enable_thinking: false } }, { chat_template_kwargs: null })).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    vi.restoreAllMocks();
+  });
+  it('Gemini: only allowlisted config keys survive; httpOptions, stopSequences and other top-level keys never do', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = mergeExtraParams(
+      'gemini',
+      { model: 'g', contents: [], config: { temperature: 0.2 } },
+      { model: 'evil', labels: { a: 'b' }, config: { httpOptions: { baseUrl: 'http://evil' }, stopSequences: ['}'], topK: 40 } },
+    );
+    expect(out).toEqual({ model: 'g', contents: [], config: { temperature: 0.2, topK: 40 } });
+    expect(JSON.stringify(out)).not.toContain('evil');
+    vi.restoreAllMocks();
+  });
+  it('drops endpoint reasoning keys, and enable_thinking only under the enable_thinking style', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(mergeExtraParams('openai', { reasoning_effort: 'none' }, { reasoning_effort: 'high', reasoning_budget_tokens: 9000, include_reasoning: true, top_k: 40 })).toEqual({
+      reasoning_effort: 'none',
+      top_k: 40,
+    });
+    const native = { chat_template_kwargs: { enable_thinking: false } };
+    expect(mergeExtraParams('openai', native, { chat_template_kwargs: { enable_thinking: true } }, { reasoningStyle: 'enable_thinking' })).toEqual(native);
+    expect(mergeExtraParams('openai', native, { chat_template_kwargs: { enable_thinking: true } }, { reasoningStyle: 'reasoning_effort' })).toEqual({
+      chat_template_kwargs: { enable_thinking: true },
+    });
+    vi.restoreAllMocks();
+  });
+});
+
+describe('payloadOutputCap (P19)', () => {
+  it.each<[TransportKind, Record<string, unknown> | undefined, number | null | undefined]>([
+    ['ollama', { options: { num_predict: 512 } }, 512],
+    ['ollama', { options: { num_predict: -1 } }, null],
+    ['ollama', { options: { min_p: 0.05 } }, undefined],
+    ['openai', { max_completion_tokens: 4096 }, 4096],
+    ['openai', { max_tokens: 8192, max_completion_tokens: 4096 }, 4096],
+    ['openai', { max_tokens: null }, null],
+    ['openai', { n_predict: 1024 }, 1024],
+    ['openai', { n_predict: -1 }, null],
+    ['gemini', { config: { maxOutputTokens: 2048 } }, 2048],
+    ['gemini', undefined, undefined],
+  ])('%s %j → %s', (kind, params, cap) => {
+    expect(payloadOutputCap(kind, params)).toBe(cap);
+  });
+});
+
+describe('payloadOutputCapKey (N13)', () => {
+  it.each<[TransportKind, Record<string, unknown> | undefined, string | undefined]>([
+    ['ollama', { options: { num_predict: 512 } }, 'options.num_predict'],
+    ['gemini', { config: { maxOutputTokens: 2048 } }, 'config.maxOutputTokens'],
+    ['openai', { max_tokens: 8192, max_completion_tokens: 4096 }, 'max_completion_tokens'],
+    ['openai', { n_predict: 1024 }, 'n_predict'],
+    ['openai', { max_tokens: null }, 'max_tokens'],
+    ['openai', { top_k: 40 }, undefined],
+    ['openai', undefined, undefined],
+  ])('%s %j → %s', (kind, params, key) => {
+    expect(payloadOutputCapKey(kind, params)).toBe(key);
   });
 });
 
@@ -2601,17 +4741,12 @@ describe('redactPayloadValues', () => {
   it('is a no-op without a payload', () => {
     expect(redactPayloadValues('text', undefined)).toBe('text');
   });
+  it("payloadSecretValues lists every string value and its escaped form (the 8-character floor is W3b's)", () => {
+    expect(payloadSecretValues({ a: 'json', b: { c: ['say "hi" there'] } })).toEqual(['json', 'say "hi" there', 'say \\"hi\\" there']);
+  });
 });
 
 describe('settings helpers', () => {
-  it('collects every configured payload for redaction', () => {
-    expect(
-      configuredPayloadsForRedaction({
-        analyzerExtraParamsByEngine: { ollama: { a: 1 }, gemini: { config: { b: 2 } } },
-        analyzerEndpoints: [{ extraParams: { c: 3 } }, {}],
-      }),
-    ).toEqual({ ollama: { a: 1 }, gemini: { config: { b: 2 } }, endpoints: [{ c: 3 }, {}] });
-  });
   it('resolves the payload per engine and per endpoint', () => {
     const s = { analyzerExtraParamsByEngine: { ollama: { top_k: 1 }, gemini: { config: { topK: 2 } } } };
     expect(resolveExtraParamsSetting(s, { engine: 'local' })).toEqual({ top_k: 1 });
@@ -2629,21 +4764,26 @@ Run: `npm --prefix server run test -- src/analyzer/runner/extra-params.test.ts` 
 
 `server/src/analyzer/runner/extra-params.ts`:
 ```ts
-/* #3084 wave 5 (D9, spec §9) — custom request payload. Pure: no settings,
-   logging or I/O. Every structural parameter type is satisfied by UserSettings
+/* #3084 wave 5 (D9, spec §9) — custom request payload. No settings or I/O
+   (the one log line is noted below). Every structural parameter type is satisfied by UserSettings
    / AnalyzerEndpoint without importing them (workspace/analyzer-request-controls
    imports this module).
 
    Privacy contract (spec §9, plan Global Constraints): callers never log a
-   payload and never write one to an analyzer file; every upstream error text
-   passes through redactPayloadValues before it is logged, thrown or displayed. */
+   payload and never write one to an analyzer file; the error text a transport
+   builds for a request is redacted against THAT request's payload values
+   (payloadSecretValues, P29) before it is logged, thrown or displayed.
+   The one log line: mergeExtraParams logs the NAMES of stored keys it drops
+   (P17), never their values. */
 import type { TransportKind } from '../errors.js';
+import { redactKnownSecrets } from '../redact.js';
+
+/* P22, P29: payload values are redacted by W3b's one mechanism (same marker, same 8-character floor), from the
+   errors of the request that carried them only; they never join the global known-secrets list. */
+export { REDACTED } from '../redact.js';
 
 type ReasoningStyle = 'reasoning_effort' | 'enable_thinking' | 'not_controllable';
 type Json = Record<string, unknown>;
-
-export const REDACTION_MIN_LENGTH = 8;
-export const REDACTED = '[redacted]';
 
 /** The one container per transport that is merged key by key (never replaced). */
 export const OWNED_CONTAINERS: Record<TransportKind, readonly string[]> = {
@@ -2653,19 +4793,38 @@ export const OWNED_CONTAINERS: Record<TransportKind, readonly string[]> = {
 };
 
 export const PROTECTED_KEYS: Record<TransportKind, readonly string[]> = {
-  openai: ['model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'tools', 'tool_choice', 'response_format', 'reasoning_effort', 'grammar', 'json_schema'],
-  ollama: ['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'options.num_ctx', 'options.num_gpu', 'options.stop'],
-  gemini: [
-    'model', 'contents',
-    'config.systemInstruction', 'config.abortSignal', 'config.responseMimeType', 'config.responseJsonSchema',
-    'config.responseSchema', 'config.thinkingConfig', 'config.tools', 'config.toolConfig', 'config.candidateCount',
-    'config.responseModalities',
+  openai: [
+    'model', 'messages', 'stream', 'stream_options', 'n', 'stop', 'tools', 'tool_choice', 'response_format', 'grammar', 'json_schema',
+    'reasoning_effort', 'reasoning', 'reasoning_format', 'reasoning_budget_tokens', 'thinking_budget_tokens', 'include_reasoning',
   ],
+  ollama: ['model', 'messages', 'stream', 'format', 'think', 'keep_alive', 'tools', 'options.num_ctx', 'options.num_gpu', 'options.main_gpu', 'options.stop'],
+  /* Gemini's top level holds only these two; its `config` is an ALLOWLIST (GEMINI_CONFIG_ALLOWLIST, P16). */
+  gemini: ['model', 'contents'],
 };
+
+/** P16 — the only `config` keys a Gemini payload may set. Everything else is refused, including
+    `httpOptions` (the installed SDK applies its baseUrl / headers / extraBody / retryOptions / timeout
+    per request, so it could send the API key to another host or reinject any owned field) and
+    `stopSequences` (the parser owns where an answer ends). */
+export const GEMINI_CONFIG_ALLOWLIST = [
+  'temperature', 'topP', 'topK', 'maxOutputTokens', 'presencePenalty', 'frequencyPenalty', 'seed', 'safetySettings',
+] as const;
 const ENABLE_THINKING_KEY = 'chat_template_kwargs.enable_thinking';
 
+function protectedKeySet(kind: TransportKind, ctx: { reasoningStyle?: ReasoningStyle }): Set<string> {
+  const set = new Set<string>(PROTECTED_KEYS[kind]);
+  if (kind === 'openai' && ctx.reasoningStyle === 'enable_thinking') set.add(ENABLE_THINKING_KEY);
+  return set;
+}
+
+function geminiConfigAllows(key: string): boolean {
+  return (GEMINI_CONFIG_ALLOWLIST as readonly string[]).includes(key);
+}
+
+/* N9 — llama.cpp's native `n_predict` is an endpoint output cap too: a payload that sets it disables Auto
+   and feeds capacity, like `max_tokens` / `max_completion_tokens`. */
 const OUTPUT_CAP: Record<TransportKind, { container: string | null; keys: readonly string[] }> = {
-  openai: { container: null, keys: ['max_tokens', 'max_completion_tokens'] },
+  openai: { container: null, keys: ['max_tokens', 'max_completion_tokens', 'n_predict'] },
   ollama: { container: 'options', keys: ['num_predict'] },
   gemini: { container: 'config', keys: ['maxOutputTokens'] },
 };
@@ -2679,6 +4838,49 @@ function isPlainObject(v: unknown): v is Json {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/* N12 — keys that would reach an object's prototype instead of the object when assigned. */
+const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/** N12 — an own data property, never a setter: `target['__proto__'] = v` would set the prototype instead. */
+function setOwn(target: Json, key: string, value: unknown): void {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/** N12 — a copy of a payload value with `__proto__` / `constructor` / `prototype` keys removed at every
+    depth; each removed key path is appended to `dropped` (array items as `list[0]`). */
+function withoutPrototypeKeys(value: unknown, path: string, dropped: string[]): unknown {
+  if (Array.isArray(value)) return value.map((item, i) => withoutPrototypeKeys(item, `${path}[${i}]`, dropped));
+  if (!isPlainObject(value)) return value;
+  const out: Json = {};
+  for (const [key, inner] of Object.entries(value)) {
+    const innerPath = path === '' ? key : `${path}.${key}`;
+    if (PROTOTYPE_KEYS.has(key)) {
+      dropped.push(innerPath);
+      continue;
+    }
+    setOwn(out, key, withoutPrototypeKeys(inner, innerPath, dropped));
+  }
+  return out;
+}
+
+const SAFETY_SETTINGS_REFUSAL =
+  '"config.safetySettings" must be an array of objects with only a string "category" and a string "threshold".';
+
+/** N11 — the SDK sends each safetySettings entry as given, and an unknown field (e.g. `method`) or a
+    non-array makes every request fail. Only an array of { category, threshold } strings is accepted. */
+function isSafetySettings(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        isPlainObject(entry) &&
+        Object.keys(entry).every((k) => k === 'category' || k === 'threshold') &&
+        typeof entry.category === 'string' &&
+        typeof entry.threshold === 'string',
+    )
+  );
+}
+
 export function validateExtraParams(
   kind: TransportKind,
   params: unknown,
@@ -2687,10 +4889,13 @@ export function validateExtraParams(
   if (!isPlainObject(params)) {
     return { ok: false, errors: ['Custom parameters must be a JSON object, for example {"top_k": 40}.'] };
   }
-  const protectedSet = new Set(PROTECTED_KEYS[kind]);
-  if (kind === 'openai' && ctx.reasoningStyle === 'enable_thinking') protectedSet.add(ENABLE_THINKING_KEY);
+  const protectedSet = protectedKeySet(kind, ctx);
   const hits: string[] = [];
+  const notAllowed: string[] = [];
   const errors: string[] = [];
+  /* N12 — refused at save by path, at any depth; mergeExtraParams drops the same keys from a stored payload. */
+  const prototypePaths: string[] = [];
+  withoutPrototypeKeys(params, '', prototypePaths);
   for (const [key, value] of Object.entries(params)) {
     if (protectedSet.has(key)) {
       hits.push(key);
@@ -2706,11 +4911,27 @@ export function validateExtraParams(
         continue;
       }
       for (const inner of Object.keys(value)) {
-        if (protectedSet.has(`${key}.${inner}`)) hits.push(`${key}.${inner}`);
+        const path = `${key}.${inner}`;
+        if (kind === 'gemini') {
+          if (!geminiConfigAllows(inner)) notAllowed.push(path);
+          else if (inner === 'safetySettings' && value[inner] !== null && !isSafetySettings(value[inner])) {
+            errors.push(SAFETY_SETTINGS_REFUSAL); // N11
+          }
+        } else if (protectedSet.has(path)) {
+          hits.push(path);
+        }
       }
       continue;
     }
-    if (kind === 'gemini') errors.push(`"${key}" is not a Gemini request field — put generation options inside "config".`);
+    if (kind === 'gemini' && !PROTOTYPE_KEYS.has(key)) {
+      errors.push(`"${key}" is not a Gemini request field — put generation options inside "config".`);
+    }
+  }
+  if (prototypePaths.length > 0) {
+    errors.push(`Keys named __proto__, constructor or prototype are not allowed: ${prototypePaths.join(', ')}.`);
+  }
+  if (notAllowed.length > 0) {
+    errors.unshift(`Gemini "config" accepts only ${GEMINI_CONFIG_ALLOWLIST.join(', ')}. Refused: ${notAllowed.join(', ')}.`);
   }
   if (hits.length > 0) errors.unshift(`These keys are controlled by Castwright and cannot be set here: ${hits.join(', ')}.`);
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: params };
@@ -2723,28 +4944,110 @@ export function payloadControlsOutputCap(kind: TransportKind, params: Json | und
   return isPlainObject(scope) && keys.some((k) => Object.hasOwn(scope, k));
 }
 
-/** Merged LAST into the native request. Top-level keys replace; the owned
-    container merges key by key; `null` removes a key (validation refuses `null`
-    on the container itself). Never mutates `native`. */
-export function mergeExtraParams(kind: TransportKind, native: Json, params: Json | undefined): Json {
+/** P19 — the output cap a payload imposes: the smallest positive integer it sets; `null` when it
+    controls the cap without one (it removes the key, or Ollama's -1); `undefined` when it does not
+    control the cap. */
+export function payloadOutputCap(kind: TransportKind, params: Json | undefined): number | null | undefined {
+  if (!params || !payloadControlsOutputCap(kind, params)) return undefined;
+  const { container, keys } = OUTPUT_CAP[kind];
+  const scope = (container === null ? params : params[container]) as Json;
+  const caps = keys.map((k) => scope[k]).filter((v): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0);
+  return caps.length > 0 ? Math.min(...caps) : null;
+}
+
+/** N13 — the payload key that sets the output cap (`options.num_predict`, `config.maxOutputTokens`,
+    `max_completion_tokens`, `n_predict`, …), for failure copy: the key whose value is the cap, else the
+    first cap key present (a `null` that removes the cap). `undefined` when the payload controls no cap. */
+export function payloadOutputCapKey(kind: TransportKind, params: Json | undefined): string | undefined {
+  if (!params || !payloadControlsOutputCap(kind, params)) return undefined;
+  const { container, keys } = OUTPUT_CAP[kind];
+  const scope = (container === null ? params : params[container]) as Json;
+  const present = keys.filter((k) => Object.hasOwn(scope, k));
+  const cap = payloadOutputCap(kind, params);
+  const key = (cap === null ? undefined : present.find((k) => scope[k] === cap)) ?? present[0];
+  return container === null ? key : `${container}.${key}`;
+}
+
+/** P17 — split a stored payload into what may reach the wire and the key paths that may not. Save-time
+    validation refuses the same paths; this re-applies the rules to a payload stored before a rule
+    existed, or written straight to user-settings.json. A non-object (e.g. a stored `null`) on an owned
+    container is dropped, so it never removes the container. N11: a Gemini `config.safetySettings` that
+    is not an array of { category, threshold } strings is dropped. N12: `__proto__`, `constructor` and
+    `prototype` keys are dropped at any depth, and every kept key is defined as an own data property. */
+export function filterStoredPayload(
+  kind: TransportKind,
+  params: Json | undefined,
+  ctx: { reasoningStyle?: ReasoningStyle } = {},
+): { value: Json | undefined; dropped: string[] } {
+  if (!params) return { value: undefined, dropped: [] };
+  const dropped: string[] = [];
+  const clean = withoutPrototypeKeys(params, '', dropped) as Json;
+  const protectedSet = protectedKeySet(kind, ctx);
+  const value: Json = {};
+  for (const [key, entry] of Object.entries(clean)) {
+    if (protectedSet.has(key)) {
+      dropped.push(key);
+      continue;
+    }
+    if (OWNED_CONTAINERS[kind].includes(key)) {
+      if (!isPlainObject(entry)) {
+        dropped.push(key);
+        continue;
+      }
+      const inner: Json = {};
+      for (const [innerKey, innerValue] of Object.entries(entry)) {
+        const path = `${key}.${innerKey}`;
+        const allowed =
+          kind === 'gemini'
+            ? geminiConfigAllows(innerKey) &&
+              (innerKey !== 'safetySettings' || innerValue === null || isSafetySettings(innerValue))
+            : !protectedSet.has(path);
+        if (allowed) setOwn(inner, innerKey, innerValue);
+        else dropped.push(path);
+      }
+      setOwn(value, key, inner);
+      continue;
+    }
+    if (kind === 'gemini') {
+      dropped.push(key);
+      continue;
+    }
+    setOwn(value, key, entry);
+  }
+  return { value, dropped };
+}
+
+/** Merged LAST into the native request, after filterStoredPayload (P17). Top-level keys replace;
+    the owned container merges key by key; `null` removes a key inside it. Never mutates `native`. */
+export function mergeExtraParams(
+  kind: TransportKind,
+  native: Json,
+  params: Json | undefined,
+  ctx: { reasoningStyle?: ReasoningStyle } = {},
+): Json {
   if (!params) return native;
+  const { value: allowed = {}, dropped } = filterStoredPayload(kind, params, ctx);
+  if (dropped.length > 0) {
+    /* P17: names only — a payload value never reaches a log. */
+    console.warn(`[extra-params] ${kind}: ignored stored custom parameters Castwright controls or does not allow: ${dropped.join(', ')}`);
+  }
   const out: Json = { ...native };
-  if (kind === 'openai' && payloadControlsOutputCap(kind, params)) {
+  if (kind === 'openai' && payloadControlsOutputCap(kind, allowed)) {
     delete out.max_tokens;
     delete out.max_completion_tokens;
   }
-  for (const [key, value] of Object.entries(params)) {
-    if (OWNED_CONTAINERS[kind].includes(key) && isPlainObject(value)) {
+  for (const [key, value] of Object.entries(allowed)) {
+    if (OWNED_CONTAINERS[kind].includes(key)) {
       const base: Json = isPlainObject(out[key]) ? { ...(out[key] as Json) } : {};
-      for (const [innerKey, innerValue] of Object.entries(value)) {
+      for (const [innerKey, innerValue] of Object.entries(value as Json)) {
         if (innerValue === null) delete base[innerKey];
-        else base[innerKey] = innerValue;
+        else setOwn(base, innerKey, innerValue); // N12: never a prototype setter
       }
-      out[key] = base;
+      setOwn(out, key, base);
       continue;
     }
     if (value === null) delete out[key];
-    else out[key] = value;
+    else setOwn(out, key, value);
   }
   return out;
 }
@@ -2772,11 +5075,10 @@ export function requestControlsLabelParts(kind: TransportKind, params: Json | un
 
 function collectRedactable(value: unknown, out: string[]): void {
   if (typeof value === 'string') {
-    if (value.length >= REDACTION_MIN_LENGTH) {
-      out.push(value);
-      const escaped = JSON.stringify(value).slice(1, -1);
-      if (escaped !== value) out.push(escaped);
-    }
+    /* W3b's redactKnownSecrets applies the 8-character floor, so short values ("json", "auto") survive. */
+    out.push(value);
+    const escaped = JSON.stringify(value).slice(1, -1);
+    if (escaped !== value) out.push(escaped);
     return;
   }
   if (Array.isArray(value)) {
@@ -2788,26 +5090,18 @@ function collectRedactable(value: unknown, out: string[]): void {
   }
 }
 
-export function redactPayloadValues(text: string, params: unknown): string {
-  if (!text || params === undefined || params === null) return text;
+/** Every string value in a payload, plus its JSON-escaped form. Each transport adds the values of the
+    payload ITS OWN request carried to the secrets W3b redacts that request's errors against (P22, scoped
+    per request by P29, Task 5.11). They never join the global knownAnalyzerSecrets() list. */
+export function payloadSecretValues(params: unknown): string[] {
   const values: string[] = [];
   collectRedactable(params, values);
-  let out = text;
-  for (const v of [...new Set(values)].sort((a, b) => b.length - a.length)) {
-    out = out.split(v).join(REDACTED);
-  }
-  return out;
+  return [...new Set(values)];
 }
 
-export function configuredPayloadsForRedaction(settings: {
-  analyzerExtraParamsByEngine?: { ollama?: Json; gemini?: Json };
-  analyzerEndpoints?: Array<{ extraParams?: Json }>;
-}): Json {
-  return {
-    ollama: settings.analyzerExtraParamsByEngine?.ollama,
-    gemini: settings.analyzerExtraParamsByEngine?.gemini,
-    endpoints: (settings.analyzerEndpoints ?? []).map((e) => e.extraParams ?? {}),
-  };
+export function redactPayloadValues(text: string, params: unknown): string {
+  if (!text || params === undefined || params === null) return text;
+  return redactKnownSecrets(text, payloadSecretValues(params));
 }
 
 export function resolveExtraParamsSetting(
@@ -2824,17 +5118,26 @@ export function resolveExtraParamsSetting(
   }
 }
 ```
-(`configuredPayloadsForRedaction` is typed so its `toEqual` in the test sees `undefined`-valued keys; `toEqual` treats them as absent.)
-
 - [ ] **Step 4: Run and confirm it passes**
 Run: `npm --prefix server run test -- src/analyzer/runner/extra-params.test.ts`  Expected: PASS.
 
 - [ ] **Step 5: Mutation proof**
 1. In `validateExtraParams` delete `if (kind === 'openai' && ctx.reasoningStyle === 'enable_thinking') protectedSet.add(ENABLE_THINKING_KEY);`. Expected red: `protects chat_template_kwargs.enable_thinking only for the enable_thinking style`. Restore.
-2. In `mergeExtraParams` change `OWNED_CONTAINERS[kind].includes(key) && isPlainObject(value)` to `false`. Expected red: `merges the owned container key by key` and `keeps the reasoning-owned enable_thinking …`. Restore.
-3. In `redactPayloadValues` remove `.sort((a, b) => b.length - a.length)`. Expected red: `replaces the longest value first …`. Restore.
-4. Change `REDACTION_MIN_LENGTH = 8` to `4`. Expected red: `redacts string values of 8+ characters anywhere in the payload, not shorter ones` (`json`/`auto` get blanked). Restore.
+2. In `mergeExtraParams` change `if (OWNED_CONTAINERS[kind].includes(key))` to `if (false)`. Expected red: `merges the owned container key by key` and `keeps the reasoning-owned enable_thinking …`. Restore.
+3. In W3b's `redactKnownSecrets` (`server/src/analyzer/redact.ts`) remove `.sort((a, b) => b.length - a.length)`. Expected red: `replaces the longest value first …` (and W3b's own redaction test). Restore.
+4. In W3b's `redactKnownSecrets` change `s.length >= 8` to `s.length >= 4`. Expected red: `redacts string values of 8+ characters anywhere in the payload, not shorter ones` (`json`/`auto` get blanked). Restore.
 5. In `mergeExtraParams` delete the `payloadControlsOutputCap` block. Expected red: `drops the native max_tokens when the payload controls the endpoint output cap`. Restore.
+6. Add `'httpOptions'` to `GEMINI_CONFIG_ALLOWLIST`. Expected red: `Gemini config is an allowlist: httpOptions … refused by name (P16)` and `Gemini: only allowlisted config keys survive…`. Restore.
+7. In `mergeExtraParams` iterate `params` instead of `allowed` (both in the loop and in the `payloadControlsOutputCap` check). Expected red: `drops protected keys and logs their names, never their values`, `a stored null on an owned container is ignored…` and `Gemini: only allowlisted config keys survive…`. Restore.
+8. In `filterStoredPayload` replace `if (!isPlainObject(entry)) { dropped.push(key); continue; }` with `if (!isPlainObject(entry)) { setOwn(value, key, entry); continue; }`. Expected red: `a stored null on an owned container is ignored…` (the merge then deletes `options`). Restore.
+9. Remove `'options.main_gpu'` from `PROTECTED_KEYS.ollama`, then (separately) `'reasoning_budget_tokens'` from `PROTECTED_KEYS.openai`. Expected red each time: `refuses every endpoint reasoning key and the added Ollama keys (A8)`. Restore.
+10. Append `${JSON.stringify(params)}` to the `console.warn` line. Expected red: `drops protected keys and logs their names, never their values`. Restore.
+11. In `payloadOutputCap` return `undefined` instead of `null`. Expected red: `ollama {"options":{"num_predict":-1}} → null` and `openai {"max_tokens":null} → null`. Restore.
+12. Remove `'n_predict'` from `OUTPUT_CAP.openai.keys`. Expected red: `openai {"n_predict":1024} → 1024`, the `openai {"n_predict":1024}` case-table row, and `drops the native max_tokens when the payload controls the endpoint output cap` (N9). Restore.
+13. In `validateExtraParams` delete the `else if (inner === 'safetySettings' …) { … }` branch. Expected red: `refuses an entry with any other field, such as method, naming the key` and `refuses a non-array and a non-string threshold, naming the key` (N11). Restore.
+14. In `filterStoredPayload` replace the Gemini `allowed` expression with `geminiConfigAllows(innerKey)`. Expected red: `drops a stored invalid safetySettings at merge and reports its path` (N11). Restore.
+15. In `withoutPrototypeKeys` delete the `if (PROTOTYPE_KEYS.has(key)) { … }` block. Expected red: `filterStoredPayload drops them at any depth…` and `validateExtraParams refuses them, naming each path` (N12). Restore.
+16. In `payloadOutputCapKey` return `present[0]` for every payload (drop the `find`). Expected red: `openai {"max_tokens":8192,"max_completion_tokens":4096} → max_completion_tokens` (N13). Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -2846,13 +5149,20 @@ git commit -m "feat(server): custom payload validation, merge, temperature prece
 
 **Files:**
 - Modify: `server/src/workspace/user-settings.ts` (schema after PR 5a's `analyzerReasoningByEngine`; `DEFAULT_USER_SETTINGS`)
-- Modify: `server/src/workspace/analyzer-request-controls.ts` (both schemas from Task 5.2)
+- Modify: `server/src/workspace/analyzer-request-controls.ts` (the patch schema from Task 5.2)
+- Modify: `server/src/workspace/analyzer-endpoints.ts` (W3b Task 3b.5) — `parseEndpointInput`: delete P23's `extraParams` refusal and validate the payload in its place
 - Modify: `openapi.yaml` (`AnalyzerExtraParamsByEngine`; `UserSettings`, `UserSettingsPatch`; W3's `AnalyzerEndpoint.extraParams`); regenerate `src/lib/api-types.ts`
-- Modify: `src/lib/api.ts` (`MOCK_USER_SETTINGS`, `mockPutUserSettings` whitelist)
-- Test: `server/src/workspace/analyzer-request-controls.test.ts` (append), `server/src/routes/user-settings.test.ts` (append), `server/src/routes/analyzer-endpoints.test.ts` (append)
+- Modify: `src/lib/api.ts` (`MOCK_USER_SETTINGS`, `mockPutUserSettings` whitelist, W3b Task 3b.9's `mockEndpointFromInput`: delete its `extraParams` push)
+- Test: `server/src/workspace/analyzer-request-controls.test.ts` (append), `server/src/routes/user-settings.test.ts` (append), `server/src/routes/analyzer-endpoints.test.ts` (append, and flip the payload case), `server/src/workspace/analyzer-endpoints.test.ts` (flip the payload case), `src/lib/api-analyzer-endpoints-mock.test.ts` (flip the payload case)
 
 **Interfaces:**
-- Consumes: Task 5.8 `validateExtraParams`; Task 5.2 schemas.
+- Consumes: Task 5.8 `validateExtraParams`; Task 5.2's patch schema, `StoredRequestControls` and `changedRequestControls` (N6), and the level rule it put in `parseEndpointInput` / `mockEndpointFromInput`.
+
+**Judge only changed payloads (N6).** The Settings UI sends both engine payloads on every save (Task 5.12). A stored payload that a newer rule refuses, such as a `safetySettings` saved before N11, must not block every later save. `changedRequestControls` therefore also leaves out a sent engine payload whose JSON equals the stored one. `mergeExtraParams` still drops the refused keys at run time (P17).
+
+**The same rule for an endpoint update (A7).** `parseEndpointInput` received the stored endpoint in Task 5.2 for the level rule. The payload rule uses it the same way: on an update, validate `extraParams` only when this save changes the payload, or changes the `reasoningStyle` that decides whether `chat_template_kwargs.enable_thinking` is protected. A create is always judged, and `mergeExtraParams` still filters a stale stored payload at run time (P17).
+
+**Lifting P23's `extraParams` refusal.** After PR 5a, `parseEndpointInput` and `mockEndpointFromInput` still refuse any non-empty payload, naming PR 5b. This task deletes those pushes. The server validates the payload with `validateExtraParams` under the endpoint's reasoning style, in the same place. `analyzer-endpoints.ts` → `analyzer/runner/extra-params.ts` closes no cycle: that module imports only `errors.ts` types and `analyzer/redact.ts`. The mock accepts a payload without checking protected keys: those are refused by the server only (Task 5.12's `src/lib/extra-params.ts` notes the same split).
 - Produces: `UserSettings.analyzerExtraParamsByEngine: { ollama?: Record<string, unknown>; gemini?: Record<string, unknown> }` (contract); save-time refusal with messages naming keys.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2873,20 +5183,23 @@ describe('analyzerRequestControlsPatchSchema — custom payload', () => {
   });
 });
 
-describe('analyzerEndpointWriteSchema — custom payload', () => {
-  it('validates extraParams against the endpoint reasoning style', () => {
-    expect(messages(() => analyzerEndpointWriteSchema.parse({ ...baseEndpoint, reasoningStyle: 'enable_thinking', reasoning: 'off', extraParams: { chat_template_kwargs: { enable_thinking: true } } }))).toEqual([
-      'Custom parameters: These keys are controlled by Castwright and cannot be set here: chat_template_kwargs.enable_thinking.',
-    ]);
-    expect(messages(() => analyzerEndpointWriteSchema.parse({ ...baseEndpoint, extraParams: { top_k: 20, min_p: 0.05, presence_penalty: 1.5 } }))).toEqual([]);
-  });
-});
-
 describe('stored schema stays lenient for payloads', () => {
   it('loads a stored payload that a newer protected-key list would refuse', () => {
     const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, analyzerExtraParamsByEngine: { ollama: { think: true } } });
     expect(parsed.success).toBe(true);
     expect(DEFAULT_USER_SETTINGS.analyzerExtraParamsByEngine).toEqual({});
+  });
+});
+
+describe('changedRequestControls — payloads (N6)', () => {
+  it('leaves out a sent engine payload identical to the stored one, and keeps a changed one', () => {
+    const stored = { analyzerExtraParamsByEngine: { gemini: { config: { safetySettings: { category: 'X' } } } } };
+    expect(
+      changedRequestControls(
+        { analyzerExtraParamsByEngine: { gemini: { config: { safetySettings: { category: 'X' } } }, ollama: { top_k: 1 } } },
+        stored,
+      ),
+    ).toEqual({ analyzerExtraParamsByEngine: { ollama: { top_k: 1 } } });
   });
 });
 ```
@@ -2899,11 +5212,33 @@ Append to `server/src/routes/user-settings.test.ts`:
       'Ollama custom parameters: These keys are controlled by Castwright and cannot be set here: keep_alive.',
     ]);
   });
+  it('PUT refuses a Gemini payload that sets config.httpOptions, naming it (P16)', async () => {
+    const res = await request(app)
+      .put('/api/user/settings')
+      .send({ analyzerExtraParamsByEngine: { gemini: { config: { httpOptions: { baseUrl: 'http://evil' } } } } });
+    expect(res.status).toBe(400);
+    expect(res.body.issues.map((i: { message: string }) => i.message)).toEqual([
+      'Gemini custom parameters: Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: config.httpOptions.',
+    ]);
+    expect(existsSync(userSettingsPath)).toBe(false);
+  });
   it('PUT persists a valid payload and GET returns it', async () => {
     const payload = { ollama: { options: { min_p: 0.05 } }, gemini: { config: { topK: 40 } } };
     expect((await request(app).put('/api/user/settings').send({ analyzerExtraParamsByEngine: payload })).status).toBe(200);
     resetCache();
     expect((await request(app).get('/api/user/settings')).body.analyzerExtraParamsByEngine).toEqual(payload);
+  });
+  it('PUT: an unchanged stored payload a newer rule refuses does not block saving a reasoning level (N6)', async () => {
+    _setUserSettingsCacheForTest({
+      analyzerExtraParamsByEngine: { gemini: { config: { safetySettings: { category: 'HARM_CATEGORY_HARASSMENT' } } } },
+    });
+    const res = await request(app)
+      .put('/api/user/settings')
+      .send({
+        analyzerReasoningByEngine: { gemini: { 'gemini-3.6-flash': 'low' } },
+        analyzerExtraParamsByEngine: { gemini: { config: { safetySettings: { category: 'HARM_CATEGORY_HARASSMENT' } } } },
+      });
+    expect(res.status).toBe(200);
   });
 ```
 Append to `server/src/routes/analyzer-endpoints.test.ts`:
@@ -2918,8 +5253,68 @@ Append to `server/src/routes/analyzer-endpoints.test.ts`:
   });
 ```
 
+**Flip the payload refusal tests Task 5.2 kept.**
+
+In `server/src/workspace/analyzer-endpoints.test.ts`, inside `describe('create / update / delete / key decisions', …)`, replace the case `until PR 5b, refuses a non-empty payload, naming the PR that enables it (P23)` with:
+```ts
+  it('accepts a custom payload and refuses a protected key, validated by validateExtraParams', () => {
+    expect(
+      applyUpdate(applyCreate(empty, base), 'lab', { ...base, extraParams: { top_k: 20, min_p: 0.05, presence_penalty: 1.5 } }).analyzerEndpoints[0]
+        .extraParams,
+    ).toEqual({ top_k: 20, min_p: 0.05, presence_penalty: 1.5 });
+    const refused = refusal(() =>
+      applyCreate(empty, { ...base, reasoningStyle: 'enable_thinking', reasoning: 'off', extraParams: { chat_template_kwargs: { enable_thinking: true } } }),
+    );
+    expect(refused).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(refused.details).toEqual([
+      'extraParams: These keys are controlled by Castwright and cannot be set here: chat_template_kwargs.enable_thinking.',
+    ]);
+    /* The key is protected only under the enable_thinking style, so the reasoning style reaches the check. */
+    expect(applyCreate(empty, { ...base, extraParams: { chat_template_kwargs: { enable_thinking: true } } }).analyzerEndpoints).toHaveLength(1);
+  });
+  it('an update judges the payload only when it changes: an unchanged stale payload saves, a changed one is refused (A7)', () => {
+    /* A payload stored before a rule existed (or written straight into user-settings.json). */
+    const created = applyCreate(empty, { ...base, extraParams: { top_k: 20 } });
+    const stale = {
+      ...created,
+      analyzerEndpoints: [{ ...created.analyzerEndpoints[0], extraParams: { response_format: { type: 'text' } } }],
+    };
+    expect(
+      applyUpdate(stale, 'lab', { ...base, name: 'Lab renamed', extraParams: { response_format: { type: 'text' } } }).analyzerEndpoints[0],
+    ).toMatchObject({ name: 'Lab renamed' });
+    expect(refusal(() => applyUpdate(stale, 'lab', { ...base, extraParams: { response_format: { type: 'json_object' } } })).details).toEqual([
+      'extraParams: These keys are controlled by Castwright and cannot be set here: response_format.',
+    ]);
+  });
+```
+
+In `server/src/routes/analyzer-endpoints.test.ts`, inside `describe('POST /api/analyzer/endpoints', …)`, replace the case `until PR 5b, refuses a non-empty payload on update (P23)` with:
+```ts
+  it('accepts a custom payload on create and update, validated by validateExtraParams', async () => {
+    const created = await request(app).post('/api/analyzer/endpoints').send({ ...lab, extraParams: { top_k: 20 } });
+    expect(created.status).toBe(201);
+    const updated = await request(app).put('/api/analyzer/endpoints/lab').send({ ...lab, extraParams: { top_k: 20, min_p: 0.05 } });
+    expect(updated.status).toBe(200);
+    expect(JSON.parse(readFileSync(userSettingsPath, 'utf8')).analyzerEndpoints[0].extraParams).toEqual({ top_k: 20, min_p: 0.05 });
+  });
+```
+
+In `src/lib/api-analyzer-endpoints-mock.test.ts`, inside `describe('mock analyzer endpoint API', …)`, replace the case `until PR 5b, refuses a non-empty payload, as the server does` with:
+```ts
+  it('accepts a custom payload and returns it; protected keys are refused by the server only', async () => {
+    const s = await api.createAnalyzerEndpoint({ ...input('m-payload'), extraParams: { top_k: 20 } });
+    expect(s.analyzerEndpoints?.find((e) => e.id === 'm-payload')?.extraParams).toEqual({ top_k: 20 });
+  });
+```
+
 - [ ] **Step 2: Run them and confirm they fail**
-Run: `npm --prefix server run test -- src/workspace/analyzer-request-controls.test.ts src/routes/user-settings.test.ts src/routes/analyzer-endpoints.test.ts`  Expected: FAIL — new cases get `[]` messages / `expected 200 to be 400`; the lenient-read case fails with `expected undefined to deeply equal {}`.
+Run: `npm --prefix server run test -- src/workspace/analyzer-request-controls.test.ts src/routes/user-settings.test.ts src/routes/analyzer-endpoints.test.ts src/workspace/analyzer-endpoints.test.ts` and `npm test -- src/lib/api-analyzer-endpoints-mock.test.ts`
+Expected: FAIL.
+- The new patch-schema cases get `[]` messages, or `expected 200 to be 400`.
+- The lenient-read case fails with `expected undefined to deeply equal {}`.
+- The three flipped cases fail on P23's refusal: an `AnalyzerEndpointRefusal` naming PR 5b, `expected 400 to be 201`, and an `AnalyzerEndpointError`.
+- `update refuses a protected endpoint payload key` fails `toContain`: the body names PR 5b, not `response_format`.
+- `an update judges the payload only when it changes… (A7)` fails at its first assertion: P23 refuses the unchanged stale payload outright.
 
 - [ ] **Step 3: Implement**
 
@@ -2941,15 +5336,14 @@ Run: `npm --prefix server run test -- src/workspace/analyzer-request-controls.te
   analyzerExtraParamsByEngine: {},
 ```
 
-`analyzer-request-controls.ts` — add `import { validateExtraParams } from '../analyzer/runner/extra-params.js';`. Replace the patch schema's object with:
+`analyzer-request-controls.ts` — add `import { validateExtraParams } from '../analyzer/runner/extra-params.js';`. In `analyzerRequestControlsPatchSchemaFor` (Task 5.2), replace its `.object({ analyzerReasoningByEngine: reasoningByEngineInput })` with:
 ```ts
-export const analyzerRequestControlsPatchSchema = z
-  .object({
-    analyzerReasoningByEngine: reasoningByEngineInput,
-    analyzerExtraParamsByEngine: z
-      .object({ ollama: z.unknown().optional(), gemini: z.unknown().optional() })
-      .optional(),
-  })
+    .object({
+      analyzerReasoningByEngine: reasoningByEngineInput,
+      analyzerExtraParamsByEngine: z
+        .object({ ollama: z.unknown().optional(), gemini: z.unknown().optional() })
+        .optional(),
+    })
 ```
 and append inside its `superRefine`, after the reasoning checks:
 ```ts
@@ -2966,15 +5360,81 @@ and append inside its `superRefine`, after the reasoning checks:
     }
 ```
 (The first `if (!r) return;` in the reasoning half becomes `if (r) { …existing reasoning checks… }` so the payload checks still run when reasoning is absent.)
-Append inside `analyzerEndpointWriteSchema`'s `superRefine`:
+
+In the same file, replace Task 5.2's `StoredRequestControls` and `changedRequestControls` with the versions below, which also leave out an unchanged payload (N6):
 ```ts
-  if (endpoint.extraParams !== undefined) {
-    const result = validateExtraParams('openai', endpoint.extraParams, { reasoningStyle: endpoint.reasoningStyle });
-    if (!result.ok) {
-      for (const error of result.errors) ctx.addIssue({ code: 'custom', path: ['extraParams'], message: `Custom parameters: ${error}` });
+/** What changedRequestControls reads from the stored settings. Structural: no user-settings import. */
+export interface StoredRequestControls {
+  analyzerReasoningByEngine?: { ollama?: Record<string, string>; gemini?: Record<string, string> };
+  analyzerExtraParamsByEngine?: { ollama?: Record<string, unknown>; gemini?: Record<string, unknown> };
+}
+
+/** N6 — the part of a PUT body the rules judge: only reasoning entries whose value differs from the
+    stored settings, and only engine payloads whose JSON differs from the stored payload. The UI sends
+    whole maps and both payloads, and Test records are bound to their server URL, so re-judging unchanged
+    stored values would let one stale entry block every later save. Ollama keys compare through
+    normalizeModelTag (N7). A patch with neither map is returned as the same object. */
+export function changedRequestControls(patch: unknown, stored: StoredRequestControls): unknown {
+  if (!isRecord(patch)) return patch;
+  let judged: Record<string, unknown> = patch;
+  if (isRecord(patch.analyzerReasoningByEngine)) {
+    const sent = patch.analyzerReasoningByEngine;
+    const reasoning: Record<string, unknown> = { ...sent };
+    for (const engine of ['ollama', 'gemini'] as const) {
+      const entries = sent[engine];
+      if (!isRecord(entries)) continue;
+      const before = stored.analyzerReasoningByEngine?.[engine];
+      reasoning[engine] = Object.fromEntries(
+        Object.entries(entries).filter(
+          ([model, level]) => (engine === 'ollama' ? entryForModelTag(before, model) : before?.[model]) !== level,
+        ),
+      );
     }
+    judged = { ...judged, analyzerReasoningByEngine: reasoning };
+  }
+  if (isRecord(patch.analyzerExtraParamsByEngine)) {
+    const payloads: Record<string, unknown> = { ...patch.analyzerExtraParamsByEngine };
+    for (const engine of ['ollama', 'gemini'] as const) {
+      if (engine in payloads && JSON.stringify(payloads[engine]) === JSON.stringify(stored.analyzerExtraParamsByEngine?.[engine])) {
+        delete payloads[engine];
+      }
+    }
+    judged = { ...judged, analyzerExtraParamsByEngine: payloads };
+  }
+  return judged;
+}
+```
+The route (Task 5.2) already judges `changedRequestControls(req.body ?? {}, stored)`, and `stored` is a `UserSettings`, which satisfies the widened interface.
+`analyzer-endpoints.ts` (W3b Task 3b.5, as Task 5.2 left `parseEndpointInput`) — add `import { validateExtraParams } from '../analyzer/runner/extra-params.js';`. Replace Task 5.2's payload refusal:
+```ts
+  if (ep.extraParams !== undefined && Object.keys(ep.extraParams).length > 0) {
+    problems.push('extraParams: custom request parameters cannot be saved until PR 5b enables them');
   }
 ```
+with:
+```ts
+  /* #3084 PR 5b — P23's payload refusal, lifted: a payload must pass validateExtraParams under this
+     endpoint's reasoning style (chat_template_kwargs.enable_thinking is protected only under
+     enable_thinking). A7: on an update, only when this save changes the payload or that style; an
+     unchanged stale payload must not block every later edit, and mergeExtraParams still filters it. */
+  const payloadChanged =
+    !stored ||
+    stored.reasoningStyle !== ep.reasoningStyle ||
+    JSON.stringify(stored.extraParams) !== JSON.stringify(ep.extraParams);
+  if (ep.extraParams !== undefined && payloadChanged) {
+    const payload = validateExtraParams('openai', ep.extraParams, { reasoningStyle: ep.reasoningStyle });
+    if (!payload.ok) for (const error of payload.errors) problems.push(`extraParams: ${error}`);
+  }
+```
+In the comment above the block, delete its last sentence (`The \`extraParams\` refusal stays until PR 5b replaces it with validateExtraParams.`).
+
+`src/lib/api.ts` — in `mockEndpointFromInput` (as Task 5.2 left it), delete:
+```ts
+  if (input.extraParams !== undefined && Object.keys(input.extraParams).length > 0) {
+    controlProblems.push('extraParams: custom request parameters cannot be saved until PR 5b enables them');
+  }
+```
+and change its comment to `/* #3084 — mirrors the server's parseEndpointInput level rule (PR 5a). A payload is accepted as sent: protected keys are refused by the server only. */`. W3b's mock returns `{ ...input, … }`, so `extraParams` is stored and returned as sent.
 
 `openapi.yaml` — add next to `AnalyzerReasoningByEngine`:
 ```yaml
@@ -2988,12 +5448,17 @@ Append inside `analyzerEndpointWriteSchema`'s `superRefine`:
         gemini:
           type: object
           additionalProperties: true
-          description: Only `config` is allowed; it merges key by key into the Gemini request config.
+          description: Only `config` is allowed, and inside it only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed and safetySettings (P16); safetySettings must be an array of objects with only a string category and a string threshold (N11). It merges key by key into the Gemini request config.
       description: |
-        #3084 — custom request parameters per engine. Protected keys are refused
-        on save with a message naming them; `null` removes a key but never an
-        owned container. Never logged; string values of 8+ characters are
-        redacted from upstream error text.
+        #3084 — custom request parameters per engine. Protected keys, and keys
+        named __proto__, constructor or prototype at any depth, are refused on
+        save with a message naming them; `null` removes a key but never an
+        owned container. A PUT replaces this map, and each engine's payload
+        inside it, as a whole: send both engines' payloads, because one left
+        out of a sent map loses its payload. Not a place for credentials: an
+        endpoint key belongs in its API key field (P29). Never logged; string
+        values of 8+ characters are redacted from the errors of the request
+        that carried them.
 ```
 In `UserSettings.properties` and `UserSettingsPatch.properties`, after `analyzerReasoningByEngine`:
 ```yaml
@@ -3002,17 +5467,22 @@ In `UserSettings.properties` and `UserSettingsPatch.properties`, after `analyzer
 ```
 Confirm W3's `AnalyzerEndpoint.extraParams` is `type: object` + `additionalProperties: true`; if not, set it to exactly that with description `Custom request parameters merged last; protected keys refused on save.` Run `npm run openapi:types`.
 
-`src/lib/api.ts` — `MOCK_USER_SETTINGS`: add `analyzerExtraParamsByEngine: {},` after `analyzerReasoningByEngine: {},`; `mockPutUserSettings`: add `analyzerExtraParamsByEngine,` to both the destructuring and the object literal after `analyzerReasoningByEngine,`. Confirm W3's mock endpoint create/update copies the whole request object (including `extraParams`); if it whitelists fields, add `extraParams`.
+`src/lib/api.ts` — `MOCK_USER_SETTINGS`: add `analyzerExtraParamsByEngine: {},` after `analyzerReasoningByEngine: {},`; `mockPutUserSettings`: add `analyzerExtraParamsByEngine,` to both the destructuring and the object literal after `analyzerReasoningByEngine,`. (The mock endpoint half is above.)
 
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/workspace/analyzer-request-controls.test.ts src/routes/user-settings.test.ts src/routes/analyzer-endpoints.test.ts src/workspace/user-settings.test.ts` then `npm run typecheck`  Expected: PASS.
+Run: `npm --prefix server run test -- src/workspace/analyzer-request-controls.test.ts src/routes/user-settings.test.ts src/routes/analyzer-endpoints.test.ts src/workspace/analyzer-endpoints.test.ts src/workspace/user-settings.test.ts` and `npm test -- src/lib/api-analyzer-endpoints-mock.test.ts`, then `npm run typecheck` and `npm run check:cycles`  Expected: PASS, no new cycle.
 
 - [ ] **Step 5: Mutation proof**
-In the patch schema's payload loop replace `if (!result.ok)` with `if (false)`. Expected red: `PUT refuses a protected payload key and names it`. Restore.
+1. In the patch schema's payload loop replace `if (!result.ok)` with `if (false)`. Expected red: `PUT refuses a protected payload key and names it` and `PUT refuses a Gemini payload that sets config.httpOptions, naming it (P16)`. Restore.
+2. In `parseEndpointInput` replace `if (!payload.ok)` with `if (false)`. Expected red: `accepts a custom payload and refuses a protected key, validated by validateExtraParams` and `update refuses a protected endpoint payload key`. Restore.
+3. In `parseEndpointInput` pass `{}` instead of `{ reasoningStyle: ep.reasoningStyle }`. Expected red: `accepts a custom payload and refuses a protected key…` (`enable_thinking` is no longer protected under its style). Restore.
+3b. In `parseEndpointInput` replace `&& payloadChanged` with nothing (always judge). Expected red: `an update judges the payload only when it changes… (A7)` at its first assertion. Then restore it and drop `stored.reasoningStyle !== ep.reasoningStyle ||` from `payloadChanged`. Expected red: `accepts a custom payload and refuses a protected key…` is unaffected, and the A7 case stays green, so add the style-change row from Task 5.2's level case as the proof instead: an update that only switches `reasoningStyle` to `enable_thinking` while keeping `extraParams: { chat_template_kwargs: { enable_thinking: true } }` is then accepted. Restore.
+4. Restore Task 5.2's `extraParams` refusal push in `parseEndpointInput`. Expected red: `accepts a custom payload on create and update, validated by validateExtraParams`. Restore it in `mockEndpointFromInput` instead. Expected red: `accepts a custom payload and returns it; protected keys are refused by the server only`. Remove both.
+5. In `changedRequestControls` delete the `if (isRecord(patch.analyzerExtraParamsByEngine)) { … }` block. Expected red: `leaves out a sent engine payload identical to the stored one…` and `PUT: an unchanged stored payload a newer rule refuses does not block saving a reasoning level (N6)` (`expected 400 to be 200`). Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/workspace/user-settings.ts server/src/workspace/analyzer-request-controls.ts server/src/workspace/analyzer-request-controls.test.ts server/src/routes/user-settings.test.ts server/src/routes/analyzer-endpoints.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts
+git add server/src/workspace/user-settings.ts server/src/workspace/analyzer-request-controls.ts server/src/workspace/analyzer-request-controls.test.ts server/src/workspace/analyzer-endpoints.ts server/src/workspace/analyzer-endpoints.test.ts server/src/routes/user-settings.test.ts server/src/routes/analyzer-endpoints.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts src/lib/api-analyzer-endpoints-mock.test.ts
 git commit -m "feat(server,openapi,mocks): store and validate custom analyzer request payloads"
 ```
 
@@ -3020,13 +5490,23 @@ git commit -m "feat(server,openapi,mocks): store and validate custom analyzer re
 
 **Files:**
 - Modify: `server/src/analyzer/transports/ollama-transport.ts` (streaming body **and** W4's non-streaming `sendFreeText` body), `gemini-transport.ts`, `openai-transport.ts` (request construction, after PR 5a's reasoning block)
-- Modify: `server/src/analyzer/runner/stage-runner.ts` (the private `send` helper's `extraParams` entry, added by Task 5.1, plus a `stripTemperature` parameter)
-- Modify: the settings closures in `OllamaAnalyzer`, `GeminiAnalyzer`, `OpenAIAnalyzer` (`server/src/analyzer/openai.ts`) (add an `extraParams:` entry)
-- Test: `server/src/analyzer/transports/extra-params-wire.test.ts`, `server/src/analyzer/runner/payload-temperature.test.ts`
+- Modify: `server/src/analyzer/runner/stage-runner.ts` (the private `send` helper's `extraParams` entry, added by Task 5.1, plus a `stripTemperature` parameter; and `runFreeText`'s `extraParams` entry, which drops the payload's output-cap keys, A4)
+- Modify: `server/src/analyzer/runner/extra-params.ts` (Task 5.8) — new `withoutPayloadOutputCap` (A4)
+- Modify: the settings closures in `OllamaAnalyzer` and `GeminiAnalyzer`, and W3b's `openAIRequestSettings` (`server/src/analyzer/openai.ts`, as Task 5.3 left it). Each gains an `extraParams:` entry and a payload output cap (P19). `OpenAIAnalyzer`'s closure is not edited.
+- Modify: `server/src/analyzer/capacity.ts` (W2 `resolveCapacity`, widened by W3c Task 3c.9) — a payload output cap becomes `EngineCapacity.maxOutputTokens` (P19)
+- Modify: `server/src/analyzer/capabilities.ts` (`ModelTestDeps`, `sendStep`) and `server/src/analyzer/model-test-deps.ts` (`modelTestDepsFor`) — Test probes carry the configured payload and size against its output cap (P19)
+- Modify: `server/src/routes/failure-taxonomy.ts` — W2's `AnalyzerReasoningOverflowError` branch (as Task 5.5 left it): the copy names the payload key when a payload set the output cap (N13)
+- Test: `server/src/analyzer/transports/extra-params-wire.test.ts`, `server/src/analyzer/runner/payload-temperature.test.ts`, `server/src/analyzer/payload-output-cap.test.ts`, `server/src/analyzer/gemini-payload-allowlist.test.ts`, `server/src/analyzer/capabilities.payload.test.ts`, `server/src/routes/failure-taxonomy.payload-cap.test.ts`; extend W3c's `server/src/analyzer/model-test-deps.test.ts` and W3b's `server/src/analyzer/openai-analyzer.test.ts`
 
 **Interfaces:**
-- Consumes: Task 5.8 `mergeExtraParams`, `stripPayloadTemperature`, `resolveExtraParamsSetting`; `OLLAMA_RETRY_POLICY`, `OPENAI_RETRY_POLICY` (contract); `parseAndValidate` (`runner/parse.ts`).
-- Produces: wire behaviour — payload merged after the native request and the reasoning fragment; attempt 2 of a validation retry sends the payload without its temperature key.
+- Consumes: Task 5.8 `mergeExtraParams`, `stripPayloadTemperature`, `resolveExtraParamsSetting`, `payloadOutputCap`; W3b Task 3b.12's `openAIRequestSettings(endpoint, servedOutputLimit?)` and Task 3b.11's `resolveEndpointMaxOutputTokens`; `OLLAMA_RETRY_POLICY`, `OPENAI_RETRY_POLICY`, `GEMINI_RETRY_POLICY` (contract); `parseAndValidate` (`runner/parse.ts`); W3c's `ModelTestDeps`, `sendStep`, `modelTestDepsFor`, and `resolveCapacity` as Task 3c.9 left it.
+- Produces:
+  - wire behaviour — the payload is merged after the native request and the reasoning fragment, and attempt 2 of a validation retry sends it without its temperature key;
+  - a stored protected key never reaches the wire;
+  - the payload's output cap is `EngineCapacity.maxOutputTokens` and the request's `maxOutputTokens`;
+  - Test probes carry the payload;
+  - a persona (free-text) request carries the payload **without its output-cap keys**, so a payload cap meant for chapter work never shortens a voice description (A4, P19);
+  - **new** `requestMaxOutputTokens(kind, extraParams, resolve)` in `capacity.ts`, and **new** `withoutPayloadOutputCap(kind, params)` in `runner/extra-params.ts`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3104,12 +5584,46 @@ describe('Ollama payload merge', () => {
     expect(options.temperature).toBe(0.7); // single attempt: the payload temperature applies
   });
 
+  it('the persona (free-text) call drops the payload output cap and keeps every other key (A4)', async () => {
+    const url = await startCapture('application/json', JSON.stringify({ message: { role: 'assistant', content: 'A warm voice.' }, done: true, done_reason: 'stop' }));
+    /* runFreeText strips the cap keys; what reaches the transport is the rest of the payload. */
+    await new OllamaTransport({ url, model: 'q:4b', dispatcher: dispatcher() }).send({
+      ...req({ top_k: 40, options: { min_p: 0.05 } }),
+      maxOutputTokens: undefined,
+      freeText: { onCpu: false, keepAlive: 0 },
+    });
+    const options = bodies[0].options as Record<string, unknown>;
+    expect(bodies[0].top_k).toBe(40);
+    expect(options.min_p).toBe(0.05);
+    expect('num_predict' in options).toBe(false);
+  });
+
   it('a request with no payload is byte-identical to one with an empty payload', async () => {
     const url = await startCapture('application/x-ndjson', OLLAMA_OK);
     const t = new OllamaTransport({ url, model: 'q:4b', dispatcher: dispatcher() });
     await t.send(req(undefined));
     await t.send(req({}));
     expect(JSON.stringify(bodies[1])).toBe(JSON.stringify(bodies[0]));
+  });
+
+  it('a stored options:null is ignored: pipeline-owned options stay (P17)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const url = await startCapture('application/x-ndjson', OLLAMA_OK);
+    await new OllamaTransport({ url, model: 'q:4b', dispatcher: dispatcher() }).send(req({ options: null }));
+    const options = bodies[0].options as Record<string, unknown>;
+    expect(typeof options.num_ctx).toBe('number');
+    expect(options.temperature).toBe(0.2);
+    vi.restoreAllMocks();
+  });
+
+  it('the persona call ignores a stored options:null and a stored options.num_gpu, and keeps num_gpu 0 (P17)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const url = await startCapture('application/json', JSON.stringify({ message: { role: 'assistant', content: 'A warm voice.' }, done: true, done_reason: 'stop' }));
+    const t = new OllamaTransport({ url, model: 'q:4b', dispatcher: dispatcher() });
+    await t.send({ ...req({ options: null }), freeText: { onCpu: true, keepAlive: 0 } });
+    await t.send({ ...req({ options: { num_gpu: 99 } }), freeText: { onCpu: true, keepAlive: 0 } });
+    expect(bodies.map((b) => (b.options as Record<string, unknown>).num_gpu)).toEqual([0, 0]);
+    vi.restoreAllMocks();
   });
 });
 
@@ -3128,6 +5642,14 @@ describe('OpenAI-compatible payload merge', () => {
     await new OpenAITransport({ endpoint: endpointAt(base, 'enable_thinking'), apiKey: null, model: 'm', dispatcher: dispatcher() })
       .send(req({ chat_template_kwargs: { add_generation_prompt: true } }, 'off'));
     expect(bodies[0].chat_template_kwargs).toEqual({ enable_thinking: false, add_generation_prompt: true });
+  });
+  it('drops a stored chat_template_kwargs.enable_thinking under the enable_thinking style (P17)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const base = await startCapture('text/event-stream', OPENAI_OK);
+    await new OpenAITransport({ endpoint: endpointAt(base, 'enable_thinking'), apiKey: null, model: 'm', dispatcher: dispatcher() })
+      .send(req({ chat_template_kwargs: { enable_thinking: true } }, 'off'));
+    expect(bodies[0].chat_template_kwargs).toEqual({ enable_thinking: false });
+    vi.restoreAllMocks();
   });
 });
 
@@ -3159,10 +5681,13 @@ import type { AddressInfo } from 'node:net';
 import { Agent } from 'undici';
 import { z } from 'zod';
 import { StageRunner } from './stage-runner.js';
-import { OLLAMA_RETRY_POLICY, OPENAI_RETRY_POLICY, type ValidationRetryPolicy } from './retry-policy.js';
+import { GEMINI_RETRY_POLICY, OLLAMA_RETRY_POLICY, OPENAI_RETRY_POLICY, type ValidationRetryPolicy } from './retry-policy.js';
 import { parseAndValidate } from './parse.js';
 import { OllamaTransport } from '../transports/ollama-transport.js';
 import { OpenAITransport } from '../transports/openai-transport.js';
+import { GeminiTransport } from '../transports/gemini-transport.js';
+import { geminiRateLimiter } from '../rate-limit.js';
+import type { GoogleGenAI } from '@google/genai';
 import { analyzerEndpointSchema } from '../../workspace/analyzer-endpoints.js';
 import type { ChatTransport } from './transport.js';
 
@@ -3189,6 +5714,12 @@ const bodies: Array<Record<string, unknown>> = [];
 
 async function startSequence(contentType: string, responses: string[]): Promise<string> {
   server = createServer((r, res) => {
+    if (r.method === 'GET') {
+      /* #3084 P15 — the runner awaits OpenAITransport.prepare(), which lists the served models first. */
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [] }));
+      return;
+    }
     let raw = '';
     r.on('data', (c) => (raw += c));
     r.on('end', () => {
@@ -3248,16 +5779,316 @@ describe('a payload temperature sets attempt 1 only', () => {
     expect(bodies[1].temperature).not.toBe(0.95);
     expect(bodies[1].top_k).toBe(20);
   });
+
+  it('Gemini policy: attempt 2 uses the retry policy temperature, other payload config keys survive', async () => {
+    const captured: Array<{ config: Record<string, unknown> }> = [];
+    const texts = ['not json', '{"ok":true}'];
+    const client = {
+      models: {
+        generateContentStream: vi.fn(async (params: { config: Record<string, unknown> }) => {
+          captured.push(params);
+          const text = texts[captured.length - 1];
+          return (async function* () {
+            yield { text, candidates: [{ finishReason: 'STOP' }] };
+          })();
+        }),
+      },
+    } as unknown as GoogleGenAI;
+    geminiRateLimiter._reset();
+    await runWith(new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client }), GEMINI_RETRY_POLICY, { config: { temperature: 0.95, topK: 40 } });
+    expect(captured[0].config.temperature).toBe(0.95);
+    expect(captured[1].config.temperature).toBe(expectedRetryTemperature(GEMINI_RETRY_POLICY));
+    expect(captured[1].config.temperature).not.toBe(0.95);
+    expect(captured[1].config.topK).toBe(40);
+  });
+});
+
+```
+
+`server/src/analyzer/runner/free-text-payload.test.ts` (A4 — the strip itself, per transport kind):
+```ts
+/* #3084 wave 5 (A4) — a persona request carries the engine's payload, minus the keys that set the
+   output cap: a cap chosen for chapter work must not shorten a voice description. P19 keeps every
+   other key, and the stage path (the control below) keeps the cap. */
+import { describe, it, expect } from 'vitest';
+import { StageRunner } from './stage-runner.js';
+import { OLLAMA_RETRY_POLICY } from './retry-policy.js';
+import { withoutPayloadOutputCap } from './extra-params.js';
+import type { TransportKind } from '../errors.js';
+import type { ChatTransport, TransportRequest, TransportResult } from './transport.js';
+
+class Recording implements ChatTransport {
+  readonly requests: TransportRequest[] = [];
+  constructor(readonly kind: TransportKind, readonly model = 'm') {}
+  async send(req: TransportRequest): Promise<TransportResult> {
+    this.requests.push(req);
+    return { text: 'A warm voice.', reasoningSeen: false, finish: 'stop', receivedBytes: 13 };
+  }
+}
+const runnerFor = (transport: ChatTransport, extraParams: Record<string, unknown>) =>
+  new StageRunner({
+    transport,
+    policy: OLLAMA_RETRY_POLICY,
+    settings: () => ({ structuredOutput: 'off', maxOutputTokens: 4096, extraParams }),
+    adaptSchema: (s) => ({ schema: s, dropped: [] }),
+  });
+
+describe('withoutPayloadOutputCap', () => {
+  it('drops every cap key of that kind and nothing else', () => {
+    expect(withoutPayloadOutputCap('openai', { max_tokens: 64, max_completion_tokens: 64, n_predict: 64, top_k: 20 })).toEqual({ top_k: 20 });
+    expect(withoutPayloadOutputCap('ollama', { top_k: 40, options: { num_predict: 64, min_p: 0.05 } })).toEqual({ top_k: 40, options: { min_p: 0.05 } });
+    expect(withoutPayloadOutputCap('gemini', { config: { maxOutputTokens: 64, topK: 40 } })).toEqual({ config: { topK: 40 } });
+    /* A cap the payload removes (`null`) is a cap key too. */
+    expect(withoutPayloadOutputCap('openai', { max_tokens: null, top_k: 20 })).toEqual({ top_k: 20 });
+  });
+  it('returns the same object when the payload sets no cap, and undefined for none', () => {
+    const params = { top_k: 20 };
+    expect(withoutPayloadOutputCap('openai', params)).toBe(params);
+    expect(withoutPayloadOutputCap('ollama', undefined)).toBeUndefined();
+  });
+});
+
+describe('runFreeText and the payload output cap (A4)', () => {
+  it('sends the payload without its cap keys, and still no engine output cap of its own', async () => {
+    const transport = new Recording('ollama');
+    await runnerFor(transport, { top_k: 40, options: { num_predict: 64, min_p: 0.05 } }).runFreeText({ prompt: 'persona please' });
+    expect(transport.requests[0].extraParams).toEqual({ top_k: 40, options: { min_p: 0.05 } });
+    expect(transport.requests[0].maxOutputTokens).toBeUndefined();
+  });
+
+  it('the escalation single attempt keeps the payload cap (CONTROL: only free text strips it)', async () => {
+    const transport = new Recording('ollama');
+    await runnerFor(transport, { options: { num_predict: 64, min_p: 0.05 } }).runSingleAttempt({
+      system: '',
+      messages: [{ role: 'user', content: 'p' }],
+      call: {},
+    });
+    expect((transport.requests[0].extraParams as { options: Record<string, unknown> }).options.num_predict).toBe(64);
+  });
+});
+```
+(`runSingleAttempt` is the control because it is the runner's other single-attempt path and writes no handoff file, so this suite needs no `handoff/protocol.js` mock. Match its real W1 signature when writing the call; the stage path's cap is pinned separately by Task 5.10's `payload-output-cap.test.ts` and `extra-params-wire.test.ts`.)
+
+`server/src/analyzer/payload-output-cap.test.ts`:
+```ts
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+vi.mock('../handoff/protocol.js', async (orig) => {
+  const actual = await orig<typeof import('../handoff/protocol.js')>();
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { mkdir } = await import('node:fs/promises');
+  const dir = join(tmpdir(), `castwright-w5b-cap-${process.pid}`);
+  await mkdir(dir, { recursive: true });
+  return { ...actual, writeInbox: async () => join(dir, 'inbox.md'), outboxPath: () => join(dir, 'out.json'), errorPath: () => join(dir, 'err.json'), rawAttemptPath: () => join(dir, 'raw.txt') };
+});
+
+import { resolveCapacity, TODAY_LOCAL_CAPACITY } from './capacity.js';
+import { OllamaAnalyzer } from './ollama.js';
+import { OllamaTransport } from './transports/ollama-transport.js';
+import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
+
+beforeEach(() => _resetUserSettingsCache());
+afterEach(() => vi.restoreAllMocks());
+
+describe('a payload output cap is the cap every consumer uses (#3084 wave 5, P19)', () => {
+  it('options.num_predict 512: capacity reports 512, and the request the overflow rule judges carries 512', async () => {
+    _setUserSettingsCacheForTest({ analyzerExtraParamsByEngine: { ollama: { options: { num_predict: 512 } } } });
+    /* Chunk sizing (W2 Task 2.3), the catalog's outputTokens and the Test probe cap receive this EngineCapacity. */
+    expect(resolveCapacity({ engine: 'local', model: 'q:4b' })).toEqual({ ...TODAY_LOCAL_CAPACITY(), maxOutputTokens: 512 });
+    const send = vi
+      .spyOn(OllamaTransport.prototype, 'send')
+      .mockResolvedValue({ text: '{}', reasoningSeen: false, finish: 'stop', receivedBytes: 2 });
+    await new OllamaAnalyzer({ url: 'http://ollama.test', model: 'q:4b' }).runAttributionEscalation('m1', 1, 0, 'prompt', {});
+    expect(send.mock.calls[0][0].maxOutputTokens).toBe(512);
+  });
+
+  it('an endpoint payload max_completion_tokens replaces the saved cap', () => {
+    const lab = analyzerEndpointSchema.parse({
+      id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'none', contextTokens: 32768, maxOutputTokens: 8192,
+      extraParams: { max_completion_tokens: 4096 },
+    });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    expect(resolveCapacity({ engine: 'openai', model: 'openai:lab::m' }).maxOutputTokens).toBe(4096);
+  });
+
+  it('no payload leaves capacity exactly as W2 resolves it', () => {
+    _setUserSettingsCacheForTest({});
+    expect(resolveCapacity({ engine: 'local', model: 'q:4b' })).toEqual(TODAY_LOCAL_CAPACITY());
+  });
+});
+```
+
+`server/src/analyzer/gemini-payload-allowlist.test.ts` injects a refused payload straight into settings. The save-time half is Task 5.9's `PUT refuses a Gemini payload that sets config.httpOptions, naming it (P16)`:
+```ts
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const captured: Array<Record<string, unknown>> = [];
+vi.mock('@google/genai', async (orig) => {
+  const actual = await orig<typeof import('@google/genai')>();
+  class FakeGoogleGenAI {
+    models = {
+      generateContentStream: async (params: Record<string, unknown>) => {
+        captured.push(params);
+        return (async function* () {
+          yield { text: '{}', candidates: [{ finishReason: 'STOP' }] };
+        })();
+      },
+    };
+  }
+  return { ...actual, GoogleGenAI: FakeGoogleGenAI };
+});
+vi.mock('../handoff/protocol.js', async (orig) => {
+  const actual = await orig<typeof import('../handoff/protocol.js')>();
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { mkdir } = await import('node:fs/promises');
+  const dir = join(tmpdir(), `castwright-w5b-allowlist-${process.pid}`);
+  await mkdir(dir, { recursive: true });
+  return { ...actual, writeInbox: async () => join(dir, 'inbox.md'), outboxPath: () => join(dir, 'out.json'), errorPath: () => join(dir, 'err.json'), rawAttemptPath: () => join(dir, 'raw.txt') };
+});
+
+import { GeminiAnalyzer } from './gemini.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
+import { geminiRateLimiter } from './rate-limit.js';
+
+beforeEach(() => {
+  captured.length = 0;
+  geminiRateLimiter._reset();
+  _resetUserSettingsCache();
+});
+
+describe('a stored Gemini httpOptions payload never reaches generateContentStream (#3084 wave 5, P16)', () => {
+  it('is dropped at merge when injected straight into settings, while allowlisted keys still apply', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    _setUserSettingsCacheForTest({
+      analyzerExtraParamsByEngine: { gemini: { config: { httpOptions: { baseUrl: 'http://evil', headers: { 'x-evil': '1' } }, topK: 40 } } },
+    });
+    await new GeminiAnalyzer({ apiKey: 'k', model: 'gemini-3.6-flash' }).runAttributionEscalation('m1', 1, 0, 'prompt', {});
+    const params = captured[0] as { config: Record<string, unknown> };
+    expect(params.config).not.toHaveProperty('httpOptions');
+    expect(params.config.topK).toBe(40);
+    expect(JSON.stringify(params)).not.toContain('evil');
+    expect(String(warn.mock.calls[0][0])).toContain('config.httpOptions');
+    warn.mockRestore();
+  });
+});
+```
+
+`server/src/analyzer/capabilities.payload.test.ts`:
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { runModelTest } from './capabilities.js';
+import type { ChatTransport, TransportRequest, TransportResult } from './runner/transport.js';
+
+describe('Test probes carry the configured payload (#3084 wave 5, P19)', () => {
+  it('every ladder request sends the payload a run would send', async () => {
+    const calls: TransportRequest[] = [];
+    const transport: ChatTransport = {
+      kind: 'ollama',
+      model: 'q:4b',
+      send: vi.fn(async (req: TransportRequest): Promise<TransportResult> => {
+        calls.push(req);
+        return { text: '{"ok":true}', reasoningSeen: false, finish: 'stop', receivedBytes: 11 };
+      }),
+    };
+    const payload = { options: { min_p: 0.05 } };
+    await runModelTest(
+      { modelId: 'q:4b', scope: 'all' },
+      {
+        transport,
+        serverUrl: 'http://127.0.0.1:11434',
+        configuredMode: 'json',
+        offeredModes: ['json', 'off'],
+        adaptSchema: (s) => ({ schema: s, dropped: [] }),
+        probeLimits: () => ({ contextTokens: 32768, maxOutputTokens: null }),
+        reasoningSelection: () => ({ engine: 'local', model: 'q:4b' }),
+        configuredReasoning: () => 'off',
+        extraParams: payload,
+        now: () => new Date('2026-09-11T10:00:00.000Z'),
+      },
+    );
+    expect(calls.length).toBeGreaterThan(2);
+    expect(calls.every((c) => c.extraParams === payload)).toBe(true);
+  });
+});
+```
+
+In W3c's `server/src/analyzer/model-test-deps.test.ts`, add a case to its endpoint describe. Give the file's `lab` endpoint fixture `extraParams: { max_completion_tokens: 2048 }` in that case's settings, then assert `expect(d.extraParams).toEqual({ max_completion_tokens: 2048 });` and `expect(d.probeLimits().maxOutputTokens).toBe(2048);`.
+
+In W3b's `server/src/analyzer/openai-analyzer.test.ts`, append inside `describe('OpenAIAnalyzer (#3084 PR 3b)', …)`. It reuses the file's `start`, `streamText`, `VALID`, `ID`, `bodies` and `endpoint(baseUrl, over)` helpers. `29_491` is W3b's own Auto value for this fixture, from its P24 case.
+```ts
+  it('openAIRequestSettings carries the endpoint payload, whose output cap replaces Auto and the served limit (#3084 wave 5, P19)', async () => {
+    const lab = 'http://127.0.0.1:8080/v1';
+    expect(openAIRequestSettings(endpoint(lab, { extraParams: { top_k: 20 } }))).toEqual({
+      structuredOutput: 'schema',
+      maxOutputTokens: 29_491,
+      reasoning: 'model-default',
+      extraParams: { top_k: 20 },
+    });
+    expect(
+      openAIRequestSettings(endpoint(lab, { maxOutputTokens: 8_192, extraParams: { max_completion_tokens: 4_096 } }), 16_384).maxOutputTokens,
+    ).toBe(4_096);
+    expect(openAIRequestSettings(endpoint(lab, { extraParams: { max_tokens: null } }), 16_384).maxOutputTokens).toBeUndefined();
+    const url = await start((_n, res) => streamText(res, VALID));
+    await new OpenAIAnalyzer({ endpoint: endpoint(url, { extraParams: { top_k: 20 } }), apiKey: null, model: 'qwen3:30b' }).runStage1Chapter(ID, 1, '# p', {});
+    expect((bodies[bodies.length - 1] as unknown as Record<string, unknown>).top_k).toBe(20);
+  });
+```
+
+`server/src/routes/failure-taxonomy.payload-cap.test.ts` (N13):
+```ts
+import { describe, it, expect, beforeEach } from 'vitest';
+import { classifyAnalysisFailure } from './failure-taxonomy.js';
+import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
+import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
+
+beforeEach(() => _resetUserSettingsCache());
+
+describe('analyzer-reasoning-overflow names a payload key that set the output cap (#3084 wave 5, N13)', () => {
+  it('Ollama: options.num_predict in the Ollama custom parameters, not num_ctx', () => {
+    _setUserSettingsCacheForTest({ analyzerExtraParamsByEngine: { ollama: { options: { num_predict: 512 } } } });
+    const f = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', 400), 'Ollama (qwen3.5:4b)');
+    expect(f.code).toBe('analyzer-reasoning-overflow');
+    expect(f.userMessage).toContain('Raise the custom parameter "options.num_predict" in the Ollama custom parameters');
+    expect(f.userMessage).not.toContain('num_ctx');
+  });
+
+  it("an endpoint: the payload key in that endpoint's custom parameters, not its max output tokens", () => {
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [
+        analyzerEndpointSchema.parse({
+          id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'any', contextTokens: 32768,
+          extraParams: { max_completion_tokens: 4096 },
+        }),
+      ],
+    });
+    const f = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('openai', 'openai:lab::qwen3-30b', undefined), 'Lab box · qwen3-30b');
+    expect(f.userMessage).toContain('Raise the custom parameter "max_completion_tokens" in the "Lab box" endpoint\'s custom parameters');
+    expect(f.userMessage).not.toContain("this endpoint's max output tokens");
+  });
+
+  it('a payload that sets no output cap keeps the max-output setting in the copy', () => {
+    _setUserSettingsCacheForTest({ analyzerExtraParamsByEngine: { gemini: { config: { topK: 40 } } } });
+    const f = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('gemini', 'gemini-2.5-flash', 8192), 'Gemini 2.5 Flash');
+    expect(f.userMessage).toContain("'Gemini max output tokens'");
+  });
 });
 ```
 
 - [ ] **Step 2: Run them and confirm they fail**
-Run: `npm --prefix server run test -- src/analyzer/transports/extra-params-wire.test.ts src/analyzer/runner/payload-temperature.test.ts`
-Expected: FAIL — `expected undefined to be 40` (payload not merged); temperature tests `expected 0.2 to be 0.95`.
+Run: `npm --prefix server run test -- src/analyzer/transports/extra-params-wire.test.ts src/analyzer/runner/payload-temperature.test.ts src/analyzer/runner/free-text-payload.test.ts`
+Expected: FAIL — `expected undefined to be 40` (payload not merged); temperature tests `expected 0.2 to be 0.95`; `free-text-payload.test.ts` fails at `does not provide an export named 'withoutPayloadOutputCap'`, and (once it exists) `sends the payload without its cap keys…` fails with `expected { top_k: 40, options: { num_predict: 64, min_p: 0.05 } } to deeply equal { top_k: 40, options: { min_p: 0.05 } }`. Its CONTROL case passes from the start. Also run `npm --prefix server run test -- src/analyzer/payload-output-cap.test.ts src/analyzer/gemini-payload-allowlist.test.ts src/analyzer/capabilities.payload.test.ts src/analyzer/model-test-deps.test.ts src/analyzer/openai-analyzer.test.ts`. Those FAIL with `maxOutputTokens` `null` / `-1`, `httpOptions` present, and `extraParams` `undefined`. The new `openai-analyzer.test.ts` case fails `toEqual`: `extraParams` is missing. Also run `npm --prefix server run test -- src/routes/failure-taxonomy.payload-cap.test.ts`: its first two cases FAIL with `expected '…' to contain 'Raise the custom parameter …'`, and its third passes (it pins the unchanged copy).
 
 - [ ] **Step 3: Implement**
 
-`ollama-transport.ts` — immediately after PR 5a's reasoning block, change the `body:` passed to `undiciFetch` from `JSON.stringify(body)` to `JSON.stringify(mergeExtraParams('ollama', body as Record<string, unknown>, req.extraParams))`, with `import { mergeExtraParams } from '../runner/extra-params.js';`. Make the identical change to the `undiciFetch(`${url}/api/chat`, { … body: JSON.stringify(body) … })` call inside W4's `sendFreeText` (the persona branch); its `options.num_gpu: 0` for `onCpu` survives because `options` merges key by key and `options.num_gpu` is a protected key no saved payload can contain.
+`ollama-transport.ts` — immediately after PR 5a's reasoning block, change the `body:` passed to `undiciFetch` from `JSON.stringify(body)` to `JSON.stringify(mergeExtraParams('ollama', body as Record<string, unknown>, req.extraParams))`, with `import { mergeExtraParams } from '../runner/extra-params.js';`. Make the identical change to the `undiciFetch(`${url}/api/chat`, { … body: JSON.stringify(body) … })` call inside W4's `sendFreeText` (the persona branch); its `options.num_gpu: 0` for `onCpu` survives for two reasons:
+- `options` merges key by key;
+- `mergeExtraParams` drops `options.num_gpu`, a protected key, from any payload that still carries it (one saved before the rule existed, or written straight to `user-settings.json`), and ignores a stored `options: null` (Task 5.8, P17).
+
+`the persona call ignores a stored options:null and a stored options.num_gpu, and keeps num_gpu 0` pins it.
 
 `gemini-transport.ts` — build the SDK request object and merge it:
 ```ts
@@ -3270,53 +6101,202 @@ Expected: FAIL — `expected undefined to be 40` (payload not merged); temperatu
 ```
 where `configWithReasoning` is the expression PR 5a passed as `config:`; import `mergeExtraParams` and `type GenerateContentParameters` (`@google/genai`).
 
-`openai-transport.ts` — after PR 5a's reasoning `Object.assign`, pass `mergeExtraParams('openai', params, req.extraParams)` to `client.chat.completions.create(…, { signal })` instead of `params`.
+`openai-transport.ts` — after PR 5a's reasoning `Object.assign`, pass `mergeExtraParams('openai', params, req.extraParams, { reasoningStyle: this.endpoint.reasoningStyle })` to `client.chat.completions.create(…, { signal })` instead of `params`. The `ctx` lets the merge drop a stored `chat_template_kwargs.enable_thinking` under the `enable_thinking` style.
 
-`stage-runner.ts` — Task 5.1 already forwards `extraParams: s.extraParams` in two places. One is the private `send` helper, which `runStage`'s two attempts and `runSingleAttempt` share; the other is `runFreeText`. Only the validation retry must strip the payload temperature:
+`stage-runner.ts` — Task 5.1 already forwards `extraParams: settings.extraParams` in two places. One is the private `send` helper, which `runStage`'s two attempts and `runSingleAttempt` share; the other is `runFreeText`. Only the validation retry must strip the payload temperature:
 - give the helper a seventh parameter, `stripTemperature = false`;
 - change its `extraParams` entry to:
 ```ts
       /* D9: a payload temperature sets attempt 1 only; on the validation retry
          the retry policy's temperature (req.temperature, applied natively) must win. */
-      extraParams: stripTemperature ? stripPayloadTemperature(this.transport.kind, s.extraParams) : s.extraParams,
+      extraParams: stripTemperature ? stripPayloadTemperature(this.transport.kind, settings.extraParams) : settings.extraParams,
 ```
 - pass `true` as the seventh argument only at `runStage`'s validation-retry call: `this.send(system, retry.messages, retry.temperature, structuredOutput, call, true, true)`.
 
-`runSingleAttempt` and `runFreeText` are single attempts, so they keep the full payload. Import `stripPayloadTemperature` from `./extra-params.js`.
+`runSingleAttempt` is a single attempt, so it keeps the full payload. `runFreeText` (W4 Task 4.1) is a single attempt too, but its `extraParams` entry (Task 5.1) becomes:
+```ts
+      /* A4 — a persona request carries the engine's payload WITHOUT its output-cap keys: free text
+         takes the model's own length (W4), and a cap chosen for chapter work would truncate a voice
+         description. Every other payload key applies (P19). */
+      extraParams: withoutPayloadOutputCap(this.transport.kind, settings.extraParams),
+```
+Import `stripPayloadTemperature` and `withoutPayloadOutputCap` from `./extra-params.js`.
 
-Settings closures: add an `extraParams:` entry to each. No wave 1–4 closure sets it, W3b's `OpenAIAnalyzer` included.
+`extra-params.ts` (Task 5.8) — add beside `payloadOutputCapKey`, reusing the same `OUTPUT_CAP` table, so the keys the copy names and the keys a persona drops can never diverge:
+```ts
+/** A4 — `params` without the keys that set the output cap (`payloadOutputCapKey`'s table): what a
+    persona (free-text) request sends. The same object when the payload sets no cap; `undefined` for
+    no payload. Never mutates `params`. */
+export function withoutPayloadOutputCap(kind: TransportKind, params: Json | undefined): Json | undefined {
+  if (!params || !payloadControlsOutputCap(kind, params)) return params;
+  const { container, keys } = OUTPUT_CAP[kind];
+  if (container === null) return Object.fromEntries(Object.entries(params).filter(([key]) => !keys.includes(key))) as Json;
+  const inner = params[container] as Json;
+  return {
+    ...params,
+    [container]: Object.fromEntries(Object.entries(inner).filter(([key]) => !keys.includes(key))),
+  };
+}
+```
+
+Settings closures: add an `extraParams:` entry to each. No wave 1–4 closure sets it, and neither does W3b's `openAIRequestSettings`.
 - `OllamaAnalyzer`: `extraParams: resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'local' }),`
 - `GeminiAnalyzer`: `extraParams: resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'gemini' }),`
-- `OpenAIAnalyzer`: `extraParams: resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'openai', endpoint: opts.endpoint }),`
+- `OpenAIAnalyzer`: no closure edit. `openAIRequestSettings` gains the entry (see **Closures** below).
 (import `resolveExtraParamsSetting` from `./runner/extra-params.js`).
 
+**Payload output cap (P19).** The wire already carries a payload cap, because the merge replaces or removes the native key. These edits make every budget agree with it.
+
+`capacity.ts`:
+- Rename W2's `resolveCapacity` (as W3c Task 3c.9 widened it) to a private `resolveEngineCapacity`, body unchanged.
+- Add `import { payloadOutputCap, resolveExtraParamsSetting } from './runner/extra-params.js';` and `import type { TransportKind } from './errors.js';`.
+- Export:
+```ts
+/** P19 — a custom payload that sets or removes the output cap is the cap every consumer sizes against:
+    chunk sizing, the catalog's `outputTokens` and the Test action's probe cap. An endpoint request's own
+    cap is openAIRequestSettings', which applies the same rule through requestMaxOutputTokens.
+    No payload → W2/W3c's value. */
+export function resolveCapacity(sel: { engine: AnalysisEngine; model: string; endpoint?: AnalyzerEndpoint }): EngineCapacity {
+  const capacity = resolveEngineCapacity(sel);
+  const settings = getCachedUserSettings();
+  const endpoint =
+    sel.engine === 'openai'
+      ? (sel.endpoint ?? settings.analyzerEndpoints.find((e) => e.id === parseEndpointModelId(sel.model)?.endpointId))
+      : undefined;
+  const cap = payloadOutputCap(sel.engine === 'local' ? 'ollama' : sel.engine, resolveExtraParamsSetting(settings, { engine: sel.engine, endpoint }));
+  return cap === undefined ? capacity : { ...capacity, maxOutputTokens: cap };
+}
+
+/** P19 — a request's maxOutputTokens: the payload's cap when the payload controls it (`null`, a removed
+    key, becomes `undefined`, the transport default the merge then strips), else the engine's resolver. */
+export function requestMaxOutputTokens(
+  kind: TransportKind,
+  extraParams: Record<string, unknown> | undefined,
+  resolve: () => number | undefined,
+): number | undefined {
+  const cap = payloadOutputCap(kind, extraParams);
+  return cap === undefined ? resolve() : (cap ?? undefined);
+}
+```
+W2's pinning test and W3c's capacity tests set no payload, so they stay green.
+
+Closures:
+- **`OllamaAnalyzer` and `GeminiAnalyzer`.** Make each closure's first statement the `extraParams` read above (`() => ({ … })` becomes `() => { const extraParams = resolveExtraParamsSetting(…); return { … }; }`), set `extraParams,`, and replace wave 2's output cap entry:
+  - Ollama: `maxOutputTokens: requestMaxOutputTokens('ollama', extraParams, resolveNumPredict),`
+  - Gemini: `maxOutputTokens: requestMaxOutputTokens('gemini', extraParams, () => resolveGeminiMaxOutputTokens(opts.model)),`
+- **`OpenAIAnalyzer`.** Its closure calls W3b's `openAIRequestSettings(opts.endpoint, <served output limit>)`; W3c Task 3c.9 supplies the second argument from `getEndpointServedLimits`. Leave the closure alone. In `server/src/analyzer/openai.ts`, replace the function as Task 5.3 left it with:
+```ts
+export function openAIRequestSettings(endpoint: AnalyzerEndpoint, servedOutputLimit?: number): EngineRequestSettings {
+  const extraParams = resolveExtraParamsSetting({}, { engine: 'openai', endpoint });
+  return {
+    structuredOutput: endpoint.structuredOutput,
+    /* P19 — a payload that sets or removes max_tokens / max_completion_tokens is the request's cap and
+       the overflow rule's budget; otherwise P24's manual value or Auto. */
+    maxOutputTokens: requestMaxOutputTokens('openai', extraParams, () => resolveEndpointMaxOutputTokens(endpoint, servedOutputLimit)),
+    /* #3084 wave 5 — an endpoint carries its own level. resolveReasoningSetting reads neither the
+       settings file nor the model for engine 'openai', so neither is passed. */
+    reasoning: resolveReasoningSetting({}, { engine: 'openai', model: '', endpoint }),
+    /* The payload as saved. mergeExtraParams filters it again at send time (P17). */
+    extraParams,
+  };
+}
+```
+  Add `import { resolveExtraParamsSetting } from './runner/extra-params.js';` and `import { requestMaxOutputTokens } from './capacity.js';`.
+
+**Test probes carry the payload (P19, spec §9 "Test action").**
+- `capabilities.ts` (W3c/Task 5.4):
+  - `ModelTestDeps` gains `extraParams?: Record<string, unknown>;` directly after `configuredReasoning`.
+  - The `sendStep` literal gains `extraParams: deps.extraParams,` directly after `reasoning,`.
+- `model-test-deps.ts`, in `modelTestDepsFor`:
+  - Make `const extraParams = resolveExtraParamsSetting(settings, reasoningSelectionFor(settings, modelId));` its first statement, and add `extraParams,` to the `offered` object.
+  - Wrap each of the three returned `probeLimits` closures as `probeLimits: withPayloadCap('<kind>', extraParams, <W3c's closure>)`, where `<kind>` is `'openai'`, `'gemini'` or `'ollama'` for that branch.
+  - Import `payloadOutputCap, resolveExtraParamsSetting` from `./runner/extra-params.js`, and add in the same file:
+```ts
+/** P19 — Test probes size against the payload's output cap when it sets or removes one. */
+function withPayloadCap(
+  kind: 'openai' | 'gemini' | 'ollama',
+  extraParams: Record<string, unknown> | undefined,
+  limits: () => { contextTokens: number; maxOutputTokens: number | null },
+): () => { contextTokens: number; maxOutputTokens: number | null } {
+  return () => {
+    const base = limits();
+    const cap = payloadOutputCap(kind, extraParams);
+    return cap === undefined ? base : { ...base, maxOutputTokens: cap };
+  };
+}
+```
+
+**Overflow copy names a payload cap key (N13).** In `server/src/routes/failure-taxonomy.ts`, add `import { payloadOutputCapKey, resolveExtraParamsSetting } from '../analyzer/runner/extra-params.js';` (a pure module: no cycle) and this helper beside Task 5.5's `reasoningControlFor`:
+```ts
+/* #3084 wave 5 (N13) — when a custom payload key set the output cap, that key is the setting to raise: the
+   engine's max-output setting is overridden by it (P19), so naming the setting would send the user to a
+   control that changes nothing. */
+function payloadCapSettingFor(err: AnalyzerReasoningOverflowError): string | undefined {
+  const settings = getCachedUserSettings();
+  const parsed = err.transport === 'openai' ? parseEndpointModelId(err.model) : null;
+  const endpoint = parsed ? settings.analyzerEndpoints?.find((e) => e.id === parsed.endpointId) : undefined;
+  const engine = err.transport === 'ollama' ? ('local' as const) : err.transport;
+  const key = payloadOutputCapKey(err.transport, resolveExtraParamsSetting(settings, { engine, endpoint }));
+  if (!key) return undefined;
+  const where =
+    err.transport === 'openai'
+      ? endpoint
+        ? `the "${endpoint.name}" endpoint's custom parameters`
+        : "this endpoint's custom parameters"
+      : `the ${err.transport === 'ollama' ? 'Ollama' : 'Gemini'} custom parameters (Advanced settings → Analyzer request controls)`;
+  return `the custom parameter "${key}" in ${where}`;
+}
+```
+In W2's `AnalyzerReasoningOverflowError` branch, change `const outputSetting =` to `const outputSetting = payloadCapSettingFor(err) ??`, keeping W2's three-way ternary as the right-hand operand (wrap it in parentheses). The copy then reads `Raise ${outputSetting}, …` with the payload key when one set the cap.
+
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/analyzer/transports src/analyzer/runner src/analyzer/ollama.test.ts src/analyzer/voice-style.test.ts` and `npm --prefix server run test:slow -- src/analyzer/gemini.test.ts`  Expected: PASS. Keeps green: every W1–W4 transport/runner suite (no payload → `mergeExtraParams` returns the native object), PR 5a's `reasoning-wire.test.ts`.
+Run: `npm --prefix server run test -- src/routes/failure-taxonomy.payload-cap.test.ts src/routes/failure-taxonomy.reasoning.test.ts src/routes/failure-taxonomy.test.ts src/analyzer/transports src/analyzer/runner src/analyzer/ollama.test.ts src/analyzer/voice-style.test.ts src/analyzer/payload-output-cap.test.ts src/analyzer/gemini-payload-allowlist.test.ts src/analyzer/capabilities.payload.test.ts src/analyzer/model-test-deps.test.ts src/analyzer/capacity.test.ts src/analyzer/capacity-pinning.test.ts src/analyzer/openai-analyzer.test.ts` and `npm --prefix server run test:slow -- src/analyzer/gemini.test.ts`, then `npm run check:cycles`  Expected: PASS; no new cycle. `capacity.ts` → `runner/extra-params.ts` is safe, because that module imports only `errors.ts` types and `redact.ts`. `openai.ts` → `capacity.ts` is a new edge. If madge reports a cycle through it, move `requestMaxOutputTokens` into `runner/extra-params.ts` (it needs only `payloadOutputCap`), import it from there in `capacity.ts` and `openai.ts`, and re-run. Keeps green: every W1–W4 transport/runner suite (no payload → `mergeExtraParams` returns the native object), PR 5a's `reasoning-wire.test.ts`.
 
 - [ ] **Step 5: Mutation proof**
-1. In `stage-runner.ts` pass `false` instead of `true` as the seventh argument at `runStage`'s validation-retry `this.send(…)` call. Expected red: both `a payload temperature sets attempt 1 only` cases. Restore.
+1. In `stage-runner.ts` pass `false` instead of `true` as the seventh argument at `runStage`'s validation-retry `this.send(…)` call. Expected red: all three `a payload temperature sets attempt 1 only` cases (Ollama, OpenAI, Gemini). Restore.
 2. In `ollama-transport.ts` pass `JSON.stringify(body)` again in the streaming call. Expected red: `merges options key by key and keeps pipeline-owned options`. Restore.
 2b. Same revert in `sendFreeText` only. Expected red: `the persona (free-text) call merges the payload too, keeping its own num_gpu and stream:false`. Restore.
+2c. In `runFreeText` replace `withoutPayloadOutputCap(this.transport.kind, settings.extraParams)` with `settings.extraParams`. Expected red: `sends the payload without its cap keys, and still no engine output cap of its own` and `the persona (free-text) call drops the payload output cap and keeps every other key (A4)`. Restore.
+2d. In `withoutPayloadOutputCap` drop the `payloadControlsOutputCap` guard and always rebuild. Expected red: `returns the same object when the payload sets no cap, and undefined for none` (`toBe`). Restore. Then make it filter only `keys[0]`. Expected red: `drops every cap key of that kind and nothing else` (openai keeps `max_completion_tokens`). Restore.
 3. In `extra-params.ts` change `OWNED_CONTAINERS.openai` to `[]` (so `chat_template_kwargs` is replaced wholesale). Expected red: `keeps enable_thinking from the reasoning level when the payload adds template kwargs`. Restore.
+4. In `openai-transport.ts` drop the `{ reasoningStyle: this.endpoint.reasoningStyle }` argument. Expected red: `drops a stored chat_template_kwargs.enable_thinking under the enable_thinking style (P17)`. Restore.
+5. In `resolveCapacity` return `capacity` unconditionally. Expected red: `options.num_predict 512: capacity reports 512…` and `an endpoint payload max_completion_tokens replaces the saved cap`. Restore.
+6. In `OllamaAnalyzer`'s closure replace `requestMaxOutputTokens('ollama', extraParams, resolveNumPredict)` with `resolveNumPredict()`. Expected red: `options.num_predict 512…` (the request carries W2's value). Restore.
+7. In `sendStep` delete `extraParams: deps.extraParams,`. Expected red: `every ladder request sends the payload a run would send`. Restore.
+8. In `modelTestDepsFor` pass W3c's endpoint closure without `withPayloadCap(…)`. Expected red: the `model-test-deps.test.ts` payload case (`probeLimits().maxOutputTokens`). Restore.
+9. In `gemini-transport.ts` build the request as `{ model: this.model, contents, config: { ...configWithReasoning, ...((req.extraParams?.config as object) ?? {}) } }` instead of `mergeExtraParams(…)`. Expected red: `is dropped at merge when injected straight into settings, while allowlisted keys still apply`. Restore.
+10. In `openAIRequestSettings` replace the `requestMaxOutputTokens('openai', extraParams, () => …)` call with `resolveEndpointMaxOutputTokens(endpoint, servedOutputLimit)`. Expected red: `openAIRequestSettings carries the endpoint payload, whose output cap replaces Auto and the served limit…` (8_192, not 4_096). Restore.
+11. In `openAIRequestSettings` delete the `extraParams,` entry. Expected red: the same case (its `toEqual`, and the wire's `top_k` is `undefined`). Restore.
+12. In the overflow branch replace `payloadCapSettingFor(err) ?? (…)` with W2's ternary alone. Expected red: `Ollama: options.num_predict in the Ollama custom parameters, not num_ctx` and `an endpoint: the payload key in that endpoint's custom parameters…` (N13). Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/transports server/src/analyzer/runner/stage-runner.ts server/src/analyzer/runner/payload-temperature.test.ts server/src/analyzer/ollama.ts server/src/analyzer/gemini.ts server/src/analyzer/openai.ts
+git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy.payload-cap.test.ts server/src/analyzer/transports server/src/analyzer/runner/stage-runner.ts server/src/analyzer/runner/extra-params.ts server/src/analyzer/runner/extra-params.test.ts server/src/analyzer/runner/free-text-payload.test.ts server/src/analyzer/runner/payload-temperature.test.ts server/src/analyzer/ollama.ts server/src/analyzer/gemini.ts server/src/analyzer/openai.ts server/src/analyzer/capacity.ts server/src/analyzer/capabilities.ts server/src/analyzer/model-test-deps.ts server/src/analyzer/model-test-deps.test.ts server/src/analyzer/payload-output-cap.test.ts server/src/analyzer/gemini-payload-allowlist.test.ts server/src/analyzer/capabilities.payload.test.ts server/src/analyzer/openai-analyzer.test.ts
 git commit -m "feat(server): merge the custom payload last on every transport; retry temperature wins on attempt 2"
 ```
 
 ### Task 5.11: Redact payload values from upstream error text; prove the payload is never logged or persisted
 
 **Files:**
-- Modify: `server/src/analyzer/transports/ollama-transport.ts` — the streaming non-OK branch (moved from `ollama.ts:709-716`), the in-stream `parsed.error` branch (moved from `ollama.ts:792-794`), and W4's `sendFreeText` non-OK branch (the persona call's `if (!response.ok)`)
-- Modify: `server/src/analyzer/transports/openai-transport.ts` — every `new AnalyzerHttpError(` (classification steps 4 and 5, research 04 "Consequences")
-- Modify: `server/src/analyzer/transports/gemini-transport.ts` — the generic `catch` logging block (moved from `gemini.ts:844-861`)
-- Modify: `server/src/routes/failure-taxonomy.ts:410-427` (`formatErrorDetail`, both `return` statements)
+- Modify: `server/src/analyzer/transports/ollama-transport.ts` — W3b Task 3b.6a's construction-time redaction in the streaming non-OK branch, the same line W4 Task 4.2 put in `sendFreeText`'s non-OK branch, and the in-stream `parsed.error` branch (moved from `ollama.ts:792-794`)
+- Modify: `server/src/analyzer/transports/gemini-transport.ts` — W3b Task 3b.6a's `redactGeminiError(err, …)` call in `generate`'s `catch`
+- Modify: `server/src/analyzer/transports/openai-transport.ts` — W3b Task 3b.11's per-attempt `secrets` array in `send()`, which feeds `classifyOpenAIOutcome`'s `OutcomeContext.secrets`
+- No change: `server/src/workspace/user-settings.ts` (`knownAnalyzerSecrets()`), `server/src/analyzer/known-secrets-gate.ts` (how the failure taxonomy reaches that list), `server/src/routes/failure-taxonomy.ts`, `server/src/analyzer/transports/allowlisted-fetch.ts`, and W3b's Detect (`server/src/analyzer/endpoint-detect.ts`). See Step 3.
 - Test: `server/src/analyzer/runner/extra-params-privacy.test.ts`
 
+**Scope (P29, N15).** Payload values are redacted only from the errors of the request that carried that payload. Each transport adds `payloadSecretValues(req.extraParams)` to the secrets W3b already builds for that request, on every path W3b redacts:
+- Ollama and Gemini: Task 3b.6a's construction-time redaction;
+- OpenAI: the excerpt, the unreachable error's `causeCode`, and rule 7's `AnalyzerTransportError` rebuild through `sanitizeCauseCode`.
+
+The values never join `knownAnalyzerSecrets()`, which the failure taxonomy reads through `known-secrets-gate.ts` for every engine's errors. There, a Gemini payload's `BLOCK_NONE` would blank that word in an unrelated Ollama or endpoint error.
+
 **Interfaces:**
-- Consumes: Task 5.8 `redactPayloadValues`, `configuredPayloadsForRedaction`, `REDACTED`; `classifyAnalysisFailure` (`failure-taxonomy.ts:492`); `getCachedUserSettings`, `_setUserSettingsCacheForTest`.
-- Produces: the privacy guarantee — no payload value (≥ 8 chars) in any `console.*` call, thrown error message, `AnalyzerHttpError.bodyExcerpt`, failure `userMessage`/`detail`, or file the analyzer writes.
+- Consumes:
+  - Task 5.8's `payloadSecretValues` and `REDACTED` (its `redactPayloadValues` is not used here: every site appends to the secrets list W3b already builds, rather than redacting against the payload alone);
+  - W3b's `redactKnownSecrets` (`analyzer/redact.ts`), `loadKnownAnalyzerSecrets` and `knownAnalyzerSecrets` (`user-settings.ts`; the taxonomy reaches the latter through `known-secrets-gate.ts`), `redactGeminiError` (Task 3b.6a), `classifyOpenAIOutcome`, `sanitizeCauseCode` and `AnalyzerTransportError(transport, model, message, causeCode)` (Tasks 3b.1, 3b.11). All are unchanged here;
+  - `ApiError` (`@google/genai`), `classifyAnalysisFailure` (`failure-taxonomy.ts:492`), `_setUserSettingsCacheForTest`.
+- Produces the privacy guarantee. For the request that carried it, no payload value (≥ 8 chars) appears in any of these: a `console.*` call, a thrown error's message or stack, `AnalyzerHttpError.bodyExcerpt`, a `causeCode`, a failure's `userMessage`/`detail`, or a file the analyzer writes. And no payload value is redacted from any other request's error.
+- Rebuilt errors: this task rebuilds and wraps no error of its own. The Gemini rebuild stays W3b's `redactGeminiError` (an `ApiError` rebuilt as an `ApiError` with its status, no `cause`). The OpenAI rebuild stays rule 7's `AnalyzerTransportError`, with a names-only message and no `cause`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -3325,12 +6305,12 @@ git commit -m "feat(server): merge the custom payload last on every transport; r
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent } from 'undici';
 import { z } from 'zod';
-import type { GoogleGenAI } from '@google/genai';
+import { ApiError, type GoogleGenAI } from '@google/genai';
 import { StageRunner } from './stage-runner.js';
 import { OLLAMA_RETRY_POLICY, OPENAI_RETRY_POLICY } from './retry-policy.js';
 import { REDACTED } from './extra-params.js';
@@ -3340,7 +6320,7 @@ import { GeminiTransport } from '../transports/gemini-transport.js';
 import { AnalyzerHttpError } from '../errors.js';
 import { geminiRateLimiter } from '../rate-limit.js';
 import { analyzerEndpointSchema } from '../../workspace/analyzer-endpoints.js';
-import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../../workspace/user-settings.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest, knownAnalyzerSecrets } from '../../workspace/user-settings.js';
 import { classifyAnalysisFailure } from '../../routes/failure-taxonomy.js';
 import type { ChatTransport, TransportRequest } from './transport.js';
 
@@ -3410,6 +6390,9 @@ beforeEach(() => {
   _resetUserSettingsCache();
   geminiRateLimiter._reset();
   rmSync(HANDOFF_DIR, { recursive: true, force: true });
+  /* The mock created this directory once, at import. Recreate it per test, or a stage case fails in
+     writeInbox (ENOENT) before it ever reaches the transport it is meant to exercise. */
+  mkdirSync(HANDOFF_DIR, { recursive: true });
   consoleSpies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
 });
 afterEach(async () => {
@@ -3430,8 +6413,8 @@ describe('the custom payload is never logged or persisted', () => {
 
   it('Ollama: a 400 that echoes the request is redacted in the error, the log, and the failure copy', async () => {
     const url = await startServer((raw) => ({ status: 400, type: 'application/json', body: JSON.stringify({ error: `invalid options in ${raw}` }) }));
+    /* No saved settings: the values reach the redaction from this request's own payload (P29). */
     const payload = { user_tag: SENTINEL };
-    _setUserSettingsCacheForTest({ analyzerExtraParamsByEngine: { ollama: payload } });
     const err = await runnerFor(new OllamaTransport({ url, model: 'q:4b', dispatcher: dispatcher() }), OLLAMA_RETRY_POLICY, payload)
       .runStage(spec, {})
       .catch((e: unknown) => e);
@@ -3458,12 +6441,35 @@ describe('the custom payload is never logged or persisted', () => {
     expect(everythingLogged()).not.toContain(SENTINEL);
   });
 
+  it("Ollama in-stream error: the daemon's echo is redacted against the payload AND the saved secrets (P22, P29)", async () => {
+    const SAVED = 'AIzaSy-privacy-saved-secret-1';
+    _setUserSettingsCacheForTest({ geminiApiKey: SAVED });
+    /* An error line inside an open 200 stream, echoing the request body and a saved key. */
+    const url = await startServer((raw) => ({
+      status: 200,
+      type: 'application/x-ndjson',
+      body: `${JSON.stringify({ error: `bad options ${raw} for key ${SAVED}` })}\n`,
+    }));
+    const req: TransportRequest = {
+      system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' },
+      temperature: 0.2, extraParams: { user_tag: SENTINEL }, estimatedInputTokens: 5, call: {},
+    };
+    const err = await new OllamaTransport({ url, model: 'q:4b', dispatcher: dispatcher() }).send(req).catch((e: unknown) => e);
+    expect((err as Error).message).toContain('stream error:');
+    expect((err as Error).message).not.toContain(SENTINEL); // this task adds the payload values
+    expect((err as Error).message).not.toContain(SAVED); // PR 3b's known secrets are still redacted
+    expect((err as Error).message).toContain(REDACTED);
+    expect(everythingLogged()).not.toContain(SENTINEL);
+  });
+
   it('OpenAI-compatible: a 400 naming the parameter value is redacted', async () => {
     const base = await startServer(() => ({
       status: 400, type: 'application/json',
       body: JSON.stringify({ error: { message: `unsupported parameter user_tag=${SENTINEL}`, type: 'invalid_request_error' } }),
     }));
     const endpoint = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: `${base}/v1`, gpu: 'none', contextTokens: 32768, extraParams: { user_tag: SENTINEL } });
+    /* No saved settings: this request's payload values join the attempt's secrets (P29), which W3b's
+       classifyOpenAIOutcome applies to the excerpt, the causeCode and rule 7's rebuild alike. */
     const req: TransportRequest = { system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' }, temperature: 0.2, extraParams: { user_tag: SENTINEL }, estimatedInputTokens: 5, call: {} };
     const err = await new OpenAITransport({ endpoint, apiKey: null, model: 'm', dispatcher: dispatcher() }).send(req).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AnalyzerHttpError);
@@ -3472,92 +6478,166 @@ describe('the custom payload is never logged or persisted', () => {
     void OPENAI_RETRY_POLICY;
   });
 
-  it('Gemini: the SDK error message is redacted before it is logged or rethrown', async () => {
+  it('Gemini: the SDK error is rebuilt with a redacted message AND stack before it is logged or rethrown', async () => {
     const client = {
       models: {
         generateContentStream: vi.fn(async () => {
-          throw Object.assign(new Error(`got status: 400 INVALID_ARGUMENT. {"error":{"code":400,"message":"Unknown label ${SENTINEL}","status":"INVALID_ARGUMENT"}}`), { status: 400 });
+          throw new ApiError({
+            status: 400,
+            message: `got status: 400 INVALID_ARGUMENT. {"error":{"code":400,"message":"Invalid value at 'safety_settings[0].category' (${SENTINEL})","status":"INVALID_ARGUMENT"}}`,
+          });
         }),
       },
     } as unknown as GoogleGenAI;
-    const req: TransportRequest = { system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' }, temperature: 0.2, extraParams: { config: { labels: { run: SENTINEL } } }, estimatedInputTokens: 5, call: {} };
+    const req: TransportRequest = {
+      system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' }, temperature: 0.2,
+      extraParams: { config: { safetySettings: [{ category: SENTINEL, threshold: 'BLOCK_NONE' }] } }, estimatedInputTokens: 5, call: {},
+    };
     const err = await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client }).send(req).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError); // W3b's redactGeminiError rebuilds an ApiError as an ApiError
+    expect((err as { status?: number }).status).toBe(400); // the retry classifier and the taxonomy still read it
     expect((err as Error).message).not.toContain(SENTINEL);
     expect((err as Error).message).toContain(REDACTED);
+    expect((err as Error).stack ?? '').not.toContain(SENTINEL);
     expect(everythingLogged()).not.toContain(SENTINEL);
   });
 
-  it('formatErrorDetail redacts configured payload values from the raw fallback and from details', () => {
-    _setUserSettingsCacheForTest({ analyzerExtraParamsByEngine: { gemini: { config: { labels: { run: SENTINEL } } } } });
-    const rawFallback = classifyAnalysisFailure(new Error(`${SENTINEL} got status: 400. {"error":{"code":400,"message":"bad request"}}`), 'Gemini 3.6 Flash');
-    expect(rawFallback.detail).toContain(REDACTED);
-    expect(rawFallback.detail).not.toContain(SENTINEL);
-    const withDetails = classifyAnalysisFailure(
-      new Error(`got status: 400. {"error":{"code":400,"message":"bad","status":"INVALID_ARGUMENT","details":[{"note":"${SENTINEL}"}]}}`),
-      'Gemini 3.6 Flash',
-    );
-    expect(withDetails.detail).not.toContain(SENTINEL);
+  it("a Gemini error from a payload-carrying request stays redacted through classifyAnalysisFailure's envelope detail", async () => {
+    const client = {
+      models: {
+        generateContentStream: vi.fn(async () => {
+          throw new ApiError({
+            status: 400,
+            message: `got status: 400 INVALID_ARGUMENT. {"error":{"code":400,"message":"bad","status":"INVALID_ARGUMENT","details":[{"note":"${SENTINEL}"}]}}`,
+          });
+        }),
+      },
+    } as unknown as GoogleGenAI;
+    const req: TransportRequest = {
+      system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' }, temperature: 0.2,
+      extraParams: { config: { safetySettings: [{ category: SENTINEL, threshold: 'BLOCK_NONE' }] } }, estimatedInputTokens: 5, call: {},
+    };
+    const err = await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client }).send(req).catch((e: unknown) => e);
+    const failure = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(`${failure.userMessage}\n${failure.detail ?? ''}`).not.toContain(SENTINEL);
+  });
+
+  it('OpenAI-compatible: a value straddling the 500-character excerpt cut leaves no fragment', async () => {
+    const LONG = `cw-straddle-${'x'.repeat(40)}`;
+    const base = await startServer(() => ({
+      status: 400, type: 'application/json',
+      body: JSON.stringify({ error: { message: `${'p'.repeat(470)}${LONG}`, type: 'invalid_request_error' } }),
+    }));
+    const endpoint = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: `${base}/v1`, gpu: 'none', contextTokens: 32768, extraParams: { user_tag: LONG } });
+    /* This request's payload feeds the attempt's secrets, which classifyOpenAIOutcome applies to the whole body before it slices. */
+    const req: TransportRequest = { system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' }, temperature: 0.2, extraParams: { user_tag: LONG }, estimatedInputTokens: 5, call: {} };
+    const err = await new OpenAITransport({ endpoint, apiKey: null, model: 'm', dispatcher: dispatcher() }).send(req).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerHttpError);
+    /* Sliced first, the excerpt ends inside the value, and a partial value matches no redaction. */
+    expect(`${(err as AnalyzerHttpError).message}\n${(err as AnalyzerHttpError).bodyExcerpt}`).not.toContain('cw-');
+  });
+
+  it("payload values are redacted only from their own request's errors: BLOCK_NONE stays in an unrelated engine's error (N15, P29)", async () => {
+    _setUserSettingsCacheForTest({
+      analyzerExtraParamsByEngine: { gemini: { config: { safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }] } } },
+    });
+    expect(knownAnalyzerSecrets()).not.toContain('BLOCK_NONE');
+    const url = await startServer(() => ({ status: 400, type: 'application/json', body: JSON.stringify({ error: 'unsupported safety threshold BLOCK_NONE' }) }));
+    const req: TransportRequest = {
+      system: 's', messages: [{ role: 'user', content: 'p' }], structuredOutput: { mode: 'json' }, temperature: 0.2, estimatedInputTokens: 5, call: {},
+    };
+    const err = await new OllamaTransport({ url, model: 'q:4b', dispatcher: dispatcher() }).send(req).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerHttpError);
+    expect((err as AnalyzerHttpError).message).toContain('BLOCK_NONE');
+    expect((err as AnalyzerHttpError).message).not.toContain(REDACTED);
   });
 });
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
 Run: `npm --prefix server run test -- src/analyzer/runner/extra-params-privacy.test.ts`
-Expected: the first case PASSES (nothing in the runner logs or persists request bodies today — it is the lock against a future regression); the Ollama, OpenAI, Gemini and `formatErrorDetail` cases FAIL with `expected '… cw-sentinel-9f3a7c21 …' not to contain 'cw-sentinel-9f3a7c21'`.
+Expected:
+- The first case PASSES: nothing in the runner logs or persists request bodies today, so it is the lock against a future regression.
+- The Ollama, Ollama persona, Ollama in-stream, OpenAI, Gemini and Gemini-through-the-taxonomy cases FAIL with `expected '… cw-sentinel-9f3a7c21 …' not to contain 'cw-sentinel-9f3a7c21'`. W3b redacts only the known secrets, and no payload value is among them. In the in-stream case the `not.toContain(SAVED)` assertion already holds: it pins 3b's redaction, which this task must keep.
+- The straddle case FAILS too.
+- The N15 case PASSES: payload values are not global today. It locks the scope; mutation 4 shows it can fail.
+
+Every stage case reaches its transport: the directory is recreated after `rmSync`, so none fails in `writeInbox` with ENOENT.
 
 - [ ] **Step 3: Implement**
 
-`ollama-transport.ts` — in the non-OK branch, redact the whole body before anything slices or embeds it:
+`ollama-transport.ts` — W3b Task 3b.6a built the streaming non-OK excerpt as `redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500)`. Replace that line with the one below, which adds this request's payload values to the list and still redacts before slicing:
 ```ts
-        const text = redactPayloadValues(await response.text().catch(() => ''), req.extraParams);
+        const bodyExcerpt = redactKnownSecrets(text, [...(await loadKnownAnalyzerSecrets()), ...payloadSecretValues(req.extraParams)]).slice(0, 500);
 ```
-(replacing W1's `const text = await response.text().catch(() => '');`; the following `new AnalyzerHttpError(…text.slice(0, 500)…)` is unchanged). Make the identical replacement of `const text = await response.text().catch(() => '');` inside W4's `sendFreeText` `if (!response.ok)` branch. In the in-stream error branch wrap the value W1 embeds: `redactPayloadValues(String(parsed.error), req.extraParams)`. Import `redactPayloadValues` from `../runner/extra-params.js`.
+Make the identical replacement in W4's `sendFreeText` `if (!response.ok)` branch, where W4 Task 4.2 carried that same 3b line through the move.
 
-`openai-transport.ts` — for every `new AnalyzerHttpError('openai', status, bodyExcerpt, message)` in the classifier, pass `redactPayloadValues(bodyExcerpt, req.extraParams)` and `redactPayloadValues(message, req.extraParams)` (compute the unredacted strings first exactly as W3b does, then wrap them at the constructor call).
+In the in-stream error branch, PR 3b already redacts the daemon's echo (Task 3b.6a built `const streamError = redactKnownSecrets(String(parsed.error), await loadKnownAnalyzerSecrets());`). Append this request's payload values to 3b's list there too, rather than replacing that call:
+```ts
+              const streamError = redactKnownSecrets(String(parsed.error), [
+                ...(await loadKnownAnalyzerSecrets()),
+                ...payloadSecretValues(req.extraParams),
+              ]);
+```
+**All three Ollama sites keep 3b's `loadKnownAnalyzerSecrets()` term; this task only appends to the list.** Dropping it would trade one leak for another: a saved key echoed back would stop being redacted. Import `payloadSecretValues` from `../runner/extra-params.js` (`redactPayloadValues` is not needed here — it would replace 3b's list instead of extending it).
 
-`gemini-transport.ts` — as the first statement after the abort/idle/truncation early-exits in the generic `catch (err)` block (i.e. directly before `const status = (err as { status?: number })?.status;`):
+`gemini-transport.ts` — in `generate`'s `catch`, W3b Task 3b.6a's tail reads `const safe = redactGeminiError(err, await loadKnownAnalyzerSecrets());`. Replace that statement with:
 ```ts
-      /* D9 — the SDK embeds the upstream body in `.message`; redact payload
-         values before the structured log below and before the rethrow that the
-         failure taxonomy reads. */
-      if (err instanceof Error && req.extraParams) {
-        err.message = redactPayloadValues(err.message, req.extraParams);
-      }
+        /* #3084 P22, P29 — redacted before it is logged or rethrown: every known analyzer secret, plus the values
+           of the payload THIS request carried (never another request's). */
+        const safe = redactGeminiError(err, [...(await loadKnownAnalyzerSecrets()), ...payloadSecretValues(req.extraParams)]);
 ```
+W3b's `redactGeminiError` already does the rebuilding, so do not add a second rebuilder:
+- it rebuilds an `ApiError` as an `ApiError` with its status and the redacted message, so the new stack is built from the redacted text;
+- it attaches no `cause`;
+- it returns an error with nothing to redact as the same object.
 
-`failure-taxonomy.ts` — add `import { configuredPayloadsForRedaction, redactPayloadValues } from '../analyzer/runner/extra-params.js';` (PR 5a already imports `getCachedUserSettings`). In `formatErrorDetail` replace the two returns:
+Import `payloadSecretValues` from `../runner/extra-params.js`.
+
+`openai-transport.ts` — in `send()`, W3b Task 3b.11 builds each attempt's secrets as `const secrets = [...(this.apiKey ? [this.apiKey] : []), ...(await loadKnownAnalyzerSecrets())];` and passes them as `OutcomeContext.secrets`. Replace it with:
 ```ts
-    return trimmed.trim() || undefined;
+    /* P22, P29 — every error this attempt builds is redacted against this endpoint's key, every saved
+       analyzer secret, and the values of the payload THIS request carries. */
+    const secrets = [
+      ...(this.apiKey ? [this.apiKey] : []),
+      ...(await loadKnownAnalyzerSecrets()),
+      ...payloadSecretValues(req.extraParams),
+    ];
 ```
-→
-```ts
-    const fallback = trimmed.trim();
-    return fallback ? redactPayloadValues(fallback, configuredPayloadsForRedaction(getCachedUserSettings())) : undefined;
-```
-and
-```ts
-  return lines.join('\n');
-```
-→
-```ts
-  return redactPayloadValues(lines.join('\n'), configuredPayloadsForRedaction(getCachedUserSettings()));
-```
+That one array feeds every redaction path `classifyOpenAIOutcome` has:
+- the `AnalyzerHttpError` excerpt, redacted before it is sliced;
+- the unreachable error's `causeCode`, through `sanitizeCauseCode(unreachableCode, ctx.secrets)`;
+- rule 7's `AnalyzerTransportError(transport, model, message, causeCode)`, through `sanitizeCauseCode(codes[0], ctx.secrets)`.
+
+Rule 7's rebuild keeps its names-only message (`chainClassNames`) and attaches no `cause`, and this task changes neither. `req` is `send`'s request parameter. Import `payloadSecretValues` from `../runner/extra-params.js`. The transport's `fetch` stays W3b's `allowlistedFetch` from `transports/allowlisted-fetch.ts`, untouched.
+
+**No change elsewhere.**
+- **Global secrets.** `knownAnalyzerSecrets()` (`user-settings.ts`) and the taxonomy's `known-secrets-gate.ts` stay payload-free (P29). A transport has already redacted the error it builds for its own request, so `classifyAnalysisFailure`'s `raw` and detail blob carry no payload value. An error that never passed through a transport did not come from a request that carried a payload.
+- **Detect.** W3b's Detect (`detectServedContext`, Task 3b.8) sends a bare `GET /props`, with no request body and no payload. No payload value can reach its error text, so P29 gives it nothing to redact. It keeps `secrets: await loadKnownAnalyzerSecrets()`.
+
 
 - [ ] **Step 4: Run and confirm it passes**
 Run: `npm --prefix server run test -- src/analyzer/runner/extra-params-privacy.test.ts src/routes/failure-taxonomy.test.ts src/analyzer/transports` then `npm run check:cycles`
-Expected: PASS; no new cycle. Keeps green: `failure-taxonomy.test.ts` detail-blob cases (no payload configured → `redactPayloadValues` returns the text unchanged), W1/W3 transport error-classification suites.
+Expected: PASS; no new cycle. Keeps green:
+- `failure-taxonomy.test.ts` detail-blob cases: `knownAnalyzerSecrets()` is unchanged;
+- W3b's `transport-redaction.test.ts` (Task 3b.6a): with no payload on the request, the secrets list is W3b's own;
+- the W1/W3 transport error-classification suites;
+- W3b's OpenAI transport contract suite, including its redaction and "no raw cause" cases.
 
 - [ ] **Step 5: Mutation proof**
-1. Revert the Ollama `const text = redactPayloadValues(…)` line in the streaming branch. Expected red: `Ollama: a 400 that echoes the request is redacted …`. Restore.
-1b. Revert the same line in `sendFreeText`. Expected red: `Ollama persona (free-text) call: a 400 that echoes the request is redacted`. Restore.
-2. Delete the Gemini `err.message = redactPayloadValues(…)` block. Expected red: `Gemini: the SDK error message is redacted …`. Restore.
-3. Revert either `formatErrorDetail` return. Expected red: `formatErrorDetail redacts configured payload values …`. Restore.
-4. Unwrap the OpenAI `bodyExcerpt` argument. Expected red: `OpenAI-compatible: a 400 naming the parameter value is redacted`. Restore.
-5. In `stage-runner.ts`, add a temporary `console.debug('[runner] request', JSON.stringify(s.extraParams));` before the first send. Expected red: `a stage with a validation retry sends the payload but writes and logs none of it`. Remove.
+1. In the Ollama streaming non-OK line drop `...payloadSecretValues(req.extraParams)`. Expected red: `Ollama: a 400 that echoes the request is redacted …`. Restore.
+1b. Drop the same term in `sendFreeText`. Expected red: `Ollama persona (free-text) call: a 400 that echoes the request is redacted`. Restore.
+1c. Drop the same term from the in-stream `streamError` list. Expected red: `Ollama in-stream error: the daemon's echo is redacted against the payload AND the saved secrets`. Restore.
+1d. At each of the three Ollama sites in turn, replace 3b's list with `payloadSecretValues(req.extraParams)` alone (dropping `await loadKnownAnalyzerSecrets()`). Expected red each time: W3b's own `transport-redaction.test.ts` cases (a 500 body, an in-stream line, the persona body echoing a saved secret), and for the in-stream site also this task's `not.toContain(SAVED)` assertion. Restore.
+2. In the Gemini `catch`, drop `...payloadSecretValues(req.extraParams)` from `redactGeminiError`'s list. Expected red: `Gemini: the SDK error is rebuilt with a redacted message AND stack…` and `a Gemini error from a payload-carrying request stays redacted through classifyAnalysisFailure's envelope detail`. Restore.
+3. In `OpenAITransport.send()` drop `...payloadSecretValues(req.extraParams)` from `secrets`. Expected red: `OpenAI-compatible: a 400 naming the parameter value is redacted` and `OpenAI-compatible: a value straddling the 500-character excerpt cut leaves no fragment`. Restore.
+3a. In W3b's `classifyOpenAIOutcome`, slice before redacting: `redactKnownSecrets(JSON.stringify(err.error ?? err.message).slice(0, 500), ctx.secrets)`. Expected red: `OpenAI-compatible: a value straddling the 500-character excerpt cut leaves no fragment` (the cut leaves an 18-character fragment that matches no secret). Restore.
+4. Make payload values global: in W3b's `knownAnalyzerSecrets()` add `out.push(...payloadSecretValues(cached?.analyzerExtraParamsByEngine?.gemini));` before `return out;` (importing `payloadSecretValues`). Expected red: `payload values are redacted only from their own request's errors: BLOCK_NONE stays in an unrelated engine's error (N15, P29)` (`knownAnalyzerSecrets()` contains `BLOCK_NONE`, and the Ollama error reads `[redacted]`). Remove.
+5. In `stage-runner.ts`, add a temporary `console.debug('[runner] request', JSON.stringify(settings.extraParams));` before the first send. Expected red: `a stage with a validation retry sends the payload but writes and logs none of it`. Remove.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/transports server/src/routes/failure-taxonomy.ts server/src/analyzer/runner/extra-params-privacy.test.ts
+git add server/src/analyzer/transports server/src/analyzer/runner/extra-params-privacy.test.ts
 git commit -m "feat(server): redact custom payload values from upstream error text and lock payload privacy"
 ```
 
@@ -3618,7 +6698,7 @@ describe('AnalyzerRequestControls — custom payload', () => {
     fireEvent.click(screen.getByTestId('analyzer-request-controls-save'));
     await waitFor(() => expect(mockPut).toHaveBeenCalledTimes(1));
     expect(mockPut.mock.calls[0][0]).toEqual({
-      analyzerReasoningByEngine: { ollama: 'off', gemini: {} },
+      analyzerReasoningByEngine: { ollama: {}, gemini: {} },
       analyzerExtraParamsByEngine: { ollama: { options: { min_p: 0.05 } }, gemini: { config: { topK: 40 } } },
     });
   });
@@ -3635,6 +6715,8 @@ describe('AnalyzerRequestControls — custom payload', () => {
     await waitFor(() => expect(screen.getByTestId('analyzer-extra-params-gemini')).toBeInTheDocument());
     fireEvent.change(screen.getByTestId('analyzer-extra-params-gemini'), { target: { value: '{"config":{"maxOutputTokens":2048}}' } });
     expect(screen.getByTestId('analyzer-extra-params-gemini-cap-note')).toHaveTextContent('Max output tokens (Auto) is not used');
+    /* P29 — both payload editors say a payload is not a place for credentials. */
+    expect(screen.getAllByText(/Not a place for credentials/)).toHaveLength(2);
   });
 });
 ```
@@ -3650,6 +6732,7 @@ describe('endpoint form — custom payload', () => {
     expect(screen.getByTestId('endpoint-max-output-controlled')).toHaveTextContent('set by custom parameters');
     fireEvent.change(payload, { target: { value: '{bad' } });
     expect(screen.getByTestId('endpoint-extra-params-error')).toHaveTextContent('Not valid JSON.');
+    expect(screen.getByText(/Not a place for credentials: put this endpoint key in the API key field/)).toBeInTheDocument(); // P29
   });
 });
 ```
@@ -3715,11 +6798,15 @@ test.describe('#3084 wave 5 — Analyzer request controls (Advanced settings)', 
     await waitForRouteReady(page);
     const controls = page.getByTestId('analyzer-request-controls');
     await expect(controls).toBeVisible();
-    await page.getByTestId('analyzer-reasoning-ollama').selectOption('on');
+    /* P18: one select per Ollama model; set the first one the mock catalog lists. */
+    const ollamaReasoning = page.locator('[data-testid^="analyzer-reasoning-ollama-"]').first();
+    const modelId = await ollamaReasoning.getAttribute('data-model-id');
+    expect(modelId).toBeTruthy();
+    await ollamaReasoning.selectOption('on');
     await page.getByTestId('analyzer-extra-params-ollama').fill('{"options": {"min_p": 0.05}}');
     await page.getByTestId('analyzer-request-controls-save').click();
     await expect(controls.getByText(/^saved\.$/i)).toBeVisible({ timeout: 5_000 });
-    await expect.poll(async () => (await readAccount(page)).analyzerReasoningByEngine).toEqual({ ollama: 'on', gemini: {} });
+    await expect.poll(async () => (await readAccount(page)).analyzerReasoningByEngine).toEqual({ ollama: { [modelId!]: 'on' }, gemini: {} });
     await expect.poll(async () => (await readAccount(page)).analyzerExtraParamsByEngine).toEqual({ ollama: { options: { min_p: 0.05 } } });
   });
 
@@ -3766,7 +6853,7 @@ export function parseExtraParamsText(text: string): { ok: true; value: Json | un
 }
 
 const OUTPUT_CAP: Record<PayloadKind, { container: string | null; keys: readonly string[] }> = {
-  openai: { container: null, keys: ['max_tokens', 'max_completion_tokens'] },
+  openai: { container: null, keys: ['max_tokens', 'max_completion_tokens', 'n_predict'] }, // N9: llama.cpp's n_predict
   ollama: { container: 'options', keys: ['num_predict'] },
   gemini: { container: 'config', keys: ['maxOutputTokens'] },
 };
@@ -3822,7 +6909,7 @@ Replace `onSave`'s body so the patch carries both halves and invalid JSON blocks
     setTimeout(() => setShowSaved(false), 2400);
   };
 ```
-Update the Task 5.6 RTL expectation `saves the Ollama level and non-default Gemini levels only` to include `analyzerExtraParamsByEngine: {}` in the expected patch (the patch now always carries both halves). Render the two editors between the Gemini reasoning block and the errors list:
+Update the Task 5.6 RTL expectation `saves non-default Ollama and Gemini levels per model only` to include `analyzerExtraParamsByEngine: {}` in the expected patch (the patch now always carries both halves). Render the two editors between the Gemini reasoning block and the errors list:
 ```tsx
       {(['ollama', 'gemini'] as const).map((engine) => {
         const kind: PayloadKind = engine;
@@ -3834,8 +6921,8 @@ Update the Task 5.6 RTL expectation `saves the Ollama level and non-default Gemi
             <span className="block text-xs text-ink/55 mt-0.5">
               {engine === 'ollama'
                 ? 'JSON merged last into every Ollama request, e.g. {"options": {"min_p": 0.05}}. "options" merges key by key; null removes a key. A temperature here sets the first attempt only.'
-                : 'JSON with a "config" object merged key by key into every Gemini request, e.g. {"config": {"topK": 40}}. A temperature here sets the first attempt only.'}{' '}
-              Keys Castwright controls are refused on save. Never logged; long string values are hidden in provider errors.
+                : 'JSON with a "config" object merged key by key into every Gemini request, e.g. {"config": {"topK": 40}}. Only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed and safetySettings are accepted. A temperature here sets the first attempt only.'}{' '}
+              Keys Castwright controls are refused on save. Never logged; long string values are hidden in provider errors. Not a place for credentials: keys belong in their own fields (the endpoint API key field, or the Gemini API key).
             </span>
             <textarea
               data-testid={`analyzer-extra-params-${engine}`}
@@ -3869,7 +6956,7 @@ W3d endpoint form, `src/components/settings/analyzer-endpoints-section.tsx` (Tas
 - **`validateEndpointDraft`, input.** In the `input` literal, replace `...(original?.extraParams ? { extraParams: original.extraParams } : {}),` with `...(payload.ok && payload.value ? { extraParams: payload.value } : {}),`. `extraParamsText` is never sent.
 - **Render.** Directly after the "Reasoning" `FieldRow` from Task 5.6, render:
 ```tsx
-        <FieldRow label="Custom parameters" sublabel='JSON merged last into every request to this endpoint, e.g. {"top_k": 20, "min_p": 0.05, "presence_penalty": 1.5}. chat_template_kwargs merges key by key; null removes a key. A temperature here sets the first attempt only. Keys Castwright controls are refused on save. Never logged; long string values are hidden in provider errors. OpenAI reasoning models need max_completion_tokens instead of max_tokens.'>
+        <FieldRow label="Custom parameters" sublabel='JSON merged last into every request to this endpoint, e.g. {"top_k": 20, "min_p": 0.05, "presence_penalty": 1.5}. chat_template_kwargs merges key by key; null removes a key. A temperature here sets the first attempt only. Keys Castwright controls are refused on save. Never logged; long string values are hidden in provider errors. Not a place for credentials: put this endpoint key in the API key field above. OpenAI reasoning models need max_completion_tokens instead of max_tokens; llama.cpp n_predict also sets the output cap.'>
           <textarea
             data-testid="endpoint-extra-params"
             value={draft.extraParamsText}
@@ -3934,6 +7021,8 @@ Expected: PASS. Keeps green: Task 5.6 RTL cases (with the updated patch expectat
 1a. In `runLabelSuffixes` (`src/lib/model-label.ts`) drop `...(entry.requestControlLabelParts ?? [])`. Expected red: `runLabelSuffixes appends the server-sent request-control parts after the structured-output label (#3084 wave 5)` and the e2e `toContainText('+ custom params')`. Restore.
 2. In `analyzer-request-controls.tsx` `onSave`, delete `if (!parsedPayloads.ollama.ok || !parsedPayloads.gemini.ok) return;`. Expected red: `blocks the save on invalid JSON and says why`. Restore.
 3. In the endpoint form remove `disabled={payloadCapsOutput}`'s companion note block. Expected red: `disables the max output field when the payload sets the cap, and shows JSON errors`. Restore.
+4. Delete the `Not a place for credentials…` sentence from the Ollama/Gemini editor help. Expected red: `notes when the payload takes over the output cap` (`toHaveLength(2)`). Delete it from the endpoint form's sublabel instead. Expected red: `disables the max output field when the payload sets the cap, and shows JSON errors`. Restore both (P29).
+5. Remove `'n_predict'` from the frontend `OUTPUT_CAP.openai.keys`. Expected red: `frontend payload helpers match the server case table` at the `openai {"n_predict":1024}` row (N9). Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -3951,26 +7040,26 @@ git commit -m "feat(frontend,server,e2e): custom payload editors and the + custo
 - Modify: `CLAUDE.md` — **no change**: this PR adds no new un-mocked frontend→local-machine call (Detect was added to the exception list in W3b).
 
 - [ ] **Step 1: Derived artifacts**
-Run: `npm run openapi:types` → `git diff --exit-code src/lib/api-types.ts` (exit 0); `npm run config:check` (no knobs added — must pass unchanged).
+Run: `npm run openapi:types` → `git diff --exit-code src/lib/api-types.ts` (exit 0); `npm run config:check` (no knobs added — must pass unchanged); no `FailureCode` added, so `git diff --exit-code main -- src/data/help-failures.ts` exits 0 and `npm test -- src/data/help-failures.test.ts src/data/help-categories.test.ts` passes at 28 / 54.
 
 - [ ] **Step 2: Release notes (both files)**
 `docs/release-notes-next.md`:
 ```markdown
-- **Custom request parameters for every analyzer engine (#3084, wave 5b — closes #3084).** New `analyzerExtraParamsByEngine` (Ollama, Gemini) and per-endpoint `extraParams`: a JSON object merged last into the native request — top-level keys replace; the owned container (Ollama `options`, Gemini `config`, endpoint `chat_template_kwargs`) merges key by key; `null` removes a key but never a container. Pipeline-owned keys (spec §9, plus Gemini `model`/`contents` and `chat_template_kwargs.enable_thinking` under the `enable_thinking` style) are refused on save with a message naming them. A payload temperature sets attempt 1 only; the retry policy's temperature wins on the validation retry. A payload output cap disables Auto (the transport's `max_tokens` is dropped on endpoints) and the run label says so; any payload adds "+ custom params". Payloads are never logged or written to analyzer files; string values ≥ 8 characters are redacted from Ollama/OpenAI/Gemini error text and the failure detail blob. (#PR)
+- **Custom request parameters for every analyzer engine (#3084, wave 5b — closes #3084).** New `analyzerExtraParamsByEngine` (Ollama, Gemini) and per-endpoint `extraParams`: a JSON object merged last into the native request — top-level keys replace; the owned container (Ollama `options`, Gemini `config`, endpoint `chat_template_kwargs`) merges key by key; `null` removes a key but never a container. Pipeline-owned keys (spec §9, including the endpoint reasoning fields and Ollama `tools` / `options.main_gpu`, plus `chat_template_kwargs.enable_thinking` under the `enable_thinking` style) are refused on save with a message naming them. They are dropped again at merge time from a payload stored before a rule existed (the names are logged, never the values), and a stored `null` on an owned container is ignored. A Gemini payload is an allowlist: only `config`, and inside it only `temperature`, `topP`, `topK`, `maxOutputTokens`, `presencePenalty`, `frequencyPenalty`, `seed` and `safetySettings`. `httpOptions`, which could redirect the API key, and `stopSequences` are refused, and `safetySettings` must be an array of `{ category, threshold }` strings. Keys named `__proto__`, `constructor` or `prototype` are refused on save and dropped at merge, at any depth. A payload temperature sets attempt 1 only; the retry policy's temperature wins on the validation retry. A payload output cap (`max_tokens`, `max_completion_tokens`, llama.cpp's `n_predict`, Ollama `options.num_predict`, Gemini `config.maxOutputTokens`) does three things. It disables Auto (the transport's `max_tokens` is dropped on endpoints). It becomes the cap that chunk sizing, the Test action and the overflow rule size against. And the run label says so, and a reasoning-overflow failure names that payload key. Test probes carry the configured payload; any payload adds "+ custom params". A persona request carries the payload without its output-cap keys, so a cap meant for chapter work never shortens a voice description, and every other payload key still applies. Saving request controls judges only the payloads that change, and an endpoint update judges its payload only when the payload or its reasoning style changes. Payloads are never logged or written to analyzer files, and are not a place for credentials. Their string values of 8 or more characters are redacted from the errors of the request that carried them, in all three transports, and never from another request's errors (P29). That covers the whole body before any excerpt is cut, a Gemini error's message and stack, and an endpoint error's cause code. (#PR)
 ```
 `RELEASE_NOTES.md`:
 ```markdown
-- **Pass your own settings straight to the model.** Want `top_k`, `min_p` or a presence penalty on your local server, or `topK` on Gemini? Each analyzer engine and every OpenAI-compatible endpoint now takes a small block of custom parameters that Castwright adds to every request. It won't let you override the parts it depends on — the model name, the output format, reasoning, the context size — and tells you exactly which keys it refused. A temperature you set there shapes the first try, while a retry still uses Castwright's own. The run label shows "+ custom params" whenever they're in play, and your values never appear in logs; if a provider error repeats one back, Castwright hides it. This completes the OpenAI-compatible analyzer request that started it all.
+- **Pass your own settings straight to the model.** Want `top_k`, `min_p` or a presence penalty on your local server, or `topK` on Gemini? Each analyzer engine and every OpenAI-compatible endpoint now takes a small block of custom parameters that Castwright adds to every request. It won't let you override the parts it depends on — the model name, the output format, reasoning, the context size, and on Gemini anything outside a short list of generation settings — and tells you exactly which keys it refused. A temperature you set there shapes the first try, while a retry still uses Castwright's own. The run label shows "+ custom params" whenever they're in play, and your values never appear in logs; if a provider error repeats one back, Castwright hides it. Keys and passwords don't belong there: each has its own field. This completes the OpenAI-compatible analyzer request that started it all.
 ```
 
 - [ ] **Step 3: On-box acceptance rows**
 Allocate from each group's `next-id` marker at ship time; bump the marker in the same commit.
 - **Group A** (GPU box, llama-swap + Ollama): *"#3084 5b — custom payload on real servers."* Observe: an endpoint with `{"top_k": 20, "min_p": 0.05, "presence_penalty": 1.5}` completes a chapter and llama-swap's request log shows those fields; Ollama with `{"options": {"min_p": 0.05}}` completes a chapter; a payload with a deliberately unsupported long string (e.g. `{"grammar_note": "castwright-onbox-probe-value"}` on a server that rejects unknown fields, or `{"options": {"num_keep": "castwright-onbox-probe-value"}}` on Ollama) produces a failure whose on-screen text and `logs/server.log` show `[redacted]`, never the value; the run label reads "+ custom params".
-- **Group E** (Gemini key): *"#3084 5b — Gemini config payload."* Observe: `{"config": {"topK": 40}}` completes a chapter; `{"config": {"maxOutputTokens": 2048}}` makes the label read "max output set by custom params"; a `config` field Gemini rejects returns `analyzer-request-rejected` with the value redacted.
+- **Group E** (Gemini key): *"#3084 5b — Gemini config payload."* Observe: `{"config": {"topK": 40}}` completes a chapter; `{"config": {"maxOutputTokens": 2048}}` makes the label read "max output set by custom params"; `{"config": {"safetySettings": [{"category": "castwright-onbox-probe-value", "threshold": "BLOCK_NONE"}]}}` (a value Gemini rejects) returns `analyzer-request-rejected`, with the value redacted on screen and in `logs/server.log`; saving `{"config": {"httpOptions": {"baseUrl": "http://127.0.0.1:1"}}}` is refused, naming `config.httpOptions`.
 Update At-a-glance counts (A +1, E +1); run `npm run register:build` and `npm run check:onbox-register`; edit the live-view html; run `npm run check:onbox-register -- --against-published <saved live page>`; publish the html to the recorded URL.
 
 - [ ] **Step 4: Plan doc and index**
-In `docs/features/284-openai-compatible-analyzer.md`: add the payload invariants (merge order, owned containers, protected keys, temperature precedence, output-cap/label rule, privacy/redaction) and fill **Ship notes** with every wave's PR number and merge SHA through this PR. Status stays **`active`** — the on-box rows from waves 2–5 are still owed, so CLAUDE.md step 8 (move to `archive/`, `stable`) does not apply yet; state that sentence in the Ship notes. In `docs/features/INDEX.md`, leave the entry under its area; update its one-line description only if it names wave progress.
+In `docs/features/284-openai-compatible-analyzer.md`: add the payload invariants (merge order; owned containers; protected keys re-applied at merge; the Gemini `config` allowlist; temperature precedence; the output-cap, label and budget rule; Test probes carrying the payload; the `safetySettings` shape and prototype-key rules; changed-only save validation; privacy, and redaction of payload values only from the errors of the request that carried them (P29)) and fill **Ship notes** with every wave's PR number and merge SHA through this PR. Status stays **`active`** — the on-box rows from waves 2–5 are still owed, so CLAUDE.md step 8 (move to `archive/`, `stable`) does not apply yet; state that sentence in the Ship notes. In `docs/features/INDEX.md`, leave the entry under its area; update its one-line description only if it names wave progress.
 
 - [ ] **Step 5: Verify**
 Run: `npm run typecheck`, `npm run check:cycles`, `npm run verify:fast:branch`, `npx playwright test --project=chromium e2e/analyzer-request-controls.spec.ts e2e/analyzer-endpoints.spec.ts`  Expected: all PASS.

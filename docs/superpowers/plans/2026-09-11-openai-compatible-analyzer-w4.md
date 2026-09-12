@@ -1,6 +1,6 @@
 # OpenAI-compatible analyzer — Wave 4 plan
 
-> Part of the [OpenAI-compatible analyzer implementation plan](2026-09-11-openai-compatible-analyzer.md). Read that file first: its Global Constraints, planning decisions (P1–P11) and interface contract bind every task below. Spec: [2026-09-10-openai-compatible-analyzer-design.md](../specs/2026-09-10-openai-compatible-analyzer-design.md).
+> Part of the [OpenAI-compatible analyzer implementation plan](2026-09-11-openai-compatible-analyzer.md). Read that file first: its Global Constraints, planning decisions (P1–P29) and interface contract bind every task below. Spec: [2026-09-10-openai-compatible-analyzer-design.md](../specs/2026-09-10-openai-compatible-analyzer-design.md).
 
 ## Wave 4 — Persona generation through the transports (spec D10, §10)
 
@@ -15,15 +15,26 @@
   - `PERSONA_GEN_ENGINE=local|gemini` stays valid.
 - `StageRunner.runFreeText` sends one unstructured, single-attempt call through whichever transport the selection names.
 - `generateVoiceStylePersona` uses `runFreeText` for all three engines.
-- **Ollama:** its free-text request is served by a non-streaming branch of `OllamaTransport`. That branch is today's `generatePersonaViaOllama` body, moved: `keep_alive`, `onCpu`, the 600 s bound after slot acquisition and the slot release in `finally` are all unchanged.
-- **Gemini:** its free-text request keeps the persona wire shape: no system instruction, temperature, output cap or JSON mime type. It uses the limiter estimate `ceil(prompt.length/4)+200`, and now gets the shared transport retry helper.
-- **Endpoint personas** get, from `OpenAITransport`: the limiter, per-endpoint concurrency, in-flight registration when `gpu !== 'none'`, and the request ceiling. They also get two checks, both applied before any call:
-  - the key-origin rule;
+- **Ollama:** its free-text request is served by a non-streaming branch of `OllamaTransport`. That branch is `generatePersonaViaOllama`'s body as PR 3b left it, moved: `keep_alive`, `onCpu`, the 600 s bound after slot acquisition, the slot release in `finally`, and W3b Task 3b.6a's known-secret redaction of a non-OK body (P22) are all unchanged. Two things change: a caller abort before the first byte reports `AnalysisAbortedError` (the job signal now reaches it), and the non-OK error is an `AnalyzerHttpError` carrying the status and the redacted excerpt instead of a plain `Error`.
+- **Gemini:** its free-text request keeps the persona wire shape: no system instruction, temperature, output cap, JSON mime type or `thinkingConfig` (wave 2's `includeThoughts` stays on stage requests only; P19). The same flag gates W2's reasoning-token count, so a persona response's `thoughtsTokenCount` is not reasoning evidence (P27, A3). It uses the limiter estimate `ceil(prompt.length/4)+200`, and now gets the shared transport retry helper. Its outcomes change: a blocked reply fails as `GeminiContentBlockedError` (`analyzer-content-blocked`) where `main` read the empty text as the empty-persona error, and a reply that is only an unterminated `<think>` block is the empty-persona error (or, on a length stop, `analyzer-reasoning-overflow`) where `main` saved it.
+- **Endpoint personas** get, from `OpenAITransport`:
+  - the limiter and per-endpoint concurrency;
+  - W3d's per-call busy registration (`registerEndpointCallInFlight`, when `gpu !== 'none'`);
+  - the served-limits warm-up (`prepare()`, which `runFreeText` awaits);
+  - the request ceiling.
+
+  A persona that returns a 2xx is recorded in `servedModels`, so a same-card persona model is an unload target like any analysis model. They also get two checks, both applied before any call:
+  - the key-origin rule, through W3b's `resolveEndpointApiKey` (no second copy);
   - a missing endpoint → `AnalyzerEndpointMissingError(endpointId, 'persona')`.
-- **Shared GPU:** `personaSharesGpu()` (local, or an endpoint on `any` or on Qwen's card) replaces the `engine === 'local'` tests in:
+- **Shared GPU:** `personaSharesGpu()` (local, or an endpoint that W3d's `endpointsSharingDevice` places on Qwen's card) replaces the `engine === 'local'` tests in:
   - `persona-gpu-plan.ts`;
   - `cast-design.ts`'s pre-pass and lazy-persona skip.
-- **Design pre-pass:** it rethrows the whole-job error classes (`AnalyzerUnreachableError`, `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`) instead of recording them per character.
+- **Design pre-pass:** it rethrows the whole-job error classes instead of recording them per character: `AnalyzerUnreachableError`, `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`, `AnalyzerTimeoutError`, and `AnalyzerHttpError` with status 401 or 403.
+- **Failure codes:** the design job's backstop ends the job with the analysis failure taxonomy's code for any error that reaches it (`auth` for a 401/403 or key-origin error, `analyzer-timeout`, `analyzer-endpoint-missing`, …) instead of `unknown` (`cast-design.ts:908-936`). **What reaches it on `46e62a34` is the pre-pass's five wholesale rethrows — not a lazy-path persona failure.** `6222e483` (second half of #3027, follow-ups `b8b12be5`, `f3d3a341`) gave the lazy `generateVoiceStylePersona` + `writeVoiceStylePersona` pair its own try/catch (`cast-design.ts:525-543`): it records a per-character failure, broadcasts `character_failed`, and continues to the next character. So this PR's backstop change is scoped to those whole-job classes, which today end as `unknown`. A lazy persona failure — a reasoning overflow included — stays a per-character failure carrying `itemFailureReason`'s reason **string** (`workspace/file-lock.ts:183-185`); it records no `FailureCode` today, and this PR adds none, because putting a code on `character_failed` is a new wire field and a separate decision. #3230 (still OPEN) asked whether the lazy path should continue per character; `6222e483` makes it do so, so it looks resolved by that commit and nothing here is blocked on it.
+- **Cancellation:** the design job's abort signal reaches every persona call (pre-pass and lazy) through `generateVoiceStylePersona(…, { signal })` and `runFreeText` to the transport, so pausing a design job aborts an in-flight persona request. A pause is a clean stop, never a per-character failure or an error event.
+  - **On the lazy path that takes an explicit abort check,** as the first statement of the per-character catch `6222e483` added (`cast-design.ts:528-543`), mirroring the pre-pass's (`:2304` in this plan's Step 3 text). Without it that catch swallows the `AnalysisAbortedError` into a `character_failed` and the loop's top-of-iteration abort check (`:388-389`) then breaks to `endJob({type:'idle'})` (`:740`) — so the job ends with no error event but WITH a spurious failure recorded against the character the user paused on. That is why this wave's pause test asserts the absence of `character_failed`, not just the absence of `error`: without that assertion it passes either way.
+  - **The backstop's `AnalysisAbortedError` branch is therefore defence in depth, not the live path.** With the lazy check in place and the pre-pass returning on abort, nothing routinely reaches it.
+- **Busy accounting — a design job marks no endpoint run (decision).** Analysis jobs and script review hold `markEndpointRunActive` for their whole life (W3d Task 3d.1). A design job does not. After the pre-pass, VoiceDesign loads on the Qwen card and must be able to evict a same-card persona endpoint, and a run mark would block that for the whole job. The transport still registers each persona call as busy, so no unload lands mid-call. Ollama's slot gate is unchanged.
 
 **Must NOT change:**
 - **Prompt and cleanup:** `buildVoiceStylePrompt`, `cleanPersona`, and the empty-persona error text.
@@ -34,17 +45,18 @@
   - `analyzer.personaGeneration.localModel`.
 - **Stage calls:** the wire shape of every transport's stage (non-free-text) request.
 - **No fallback:** no cross-provider fallback for personas. `FallbackAnalyzer` is never used.
-- **Routes:** `/voice-style` route response shapes and the cast-design SSE event shapes.
+- **Routes:** `/voice-style` route response shapes and the cast-design SSE event shapes, except that `CastDesignEvent.code` also admits a `FailureCode` (Task 4.6).
 - **Local ordering:** personas are generated before VoiceDesign loads (plan 108).
 - **Scope:** reasoning and custom payload stay W5's. This PR adds no reasoning or payload field to any request: wave 1's `TransportRequest` / `EngineRequestSettings` have neither, and wave 5 (Task 5.1) adds both fields and their forwarding from `runStage`, `runSingleAttempt` and `runFreeText`.
 
 **Entry criteria:**
 1. PR 3d is merged.
 2. Run from the worktree root:
-   `git grep -n -E "export class (OllamaAnalyzer|GeminiAnalyzer|OpenAIAnalyzer|OllamaTransport|GeminiTransport|OpenAITransport|StageRunner|TransportAnalyzer)|export function (keyOriginMatches|parseEndpointModelId|isAnyAnalyzerCallInFlight|stripThink|hasReasoningEvidence)|class (AnalyzerEndpointMissingError|AnalyzerKeyOriginError|AnalyzerUnreachableError|AnalyzerReasoningOverflowError)|getAnalyzerModels|analyzerRateLimiter =" -- server/src src/lib`
+   `git grep -n -E "export class (OllamaAnalyzer|GeminiAnalyzer|OpenAIAnalyzer|OllamaTransport|GeminiTransport|OpenAITransport|StageRunner|TransportAnalyzer)|export function (resolveEndpointApiKey|endpointsSharingDevice|parseEndpointModelId|isEndpointBusy|registerEndpointCallInFlight|markEndpointRunActive|servedModels|warmEndpointServedLimits|stripThink|hasReasoningEvidence)|class (AnalyzerEndpointMissingError|AnalyzerKeyOriginError|AnalyzerUnreachableError|AnalyzerReasoningOverflowError|AnalyzerTimeoutError|AnalyzerHttpError)|getAnalyzerModels|analyzerRateLimiter =" -- server/src src/lib`
    Every name must be found. `OpenAIAnalyzer` lives in `server/src/analyzer/openai.ts` (W3b Task 3b.12); this wave imports it as `./openai.js` and `../openai.js`.
 3. `git grep -n "generatePersonaViaOllama" -- server/src` still shows it defined in `server/src/analyzer/ollama.ts`.
 4. If W1–W3 moved it, apply Task 4.2's move from that location instead.
+5. `git grep -n "runner: StageRunner" -- server/src/analyzer/runner/transport-analyzer.ts` shows `constructor(readonly runner: StageRunner)` with no `private` or `protected`. The coordinator is making W1 declare the runner public, so this wave does not patch W1's file. If a modifier is still there, stop and report it to the coordinator.
 
 **Exit criteria:**
 - **Tests:** every test named below is green, and each mutation proof is pasted in the PR body.
@@ -62,18 +74,17 @@ Test commands used below (from the worktree root, no `cd`):
 **Files:**
 - Modify: `server/src/analyzer/runner/transport.ts` — add `FreeTextOptions` and `FreeTextInput`; widen `TransportRequest.temperature`; add `TransportRequest.freeText`.
 - Modify: `server/src/analyzer/runner/stage-runner.ts` — add `runFreeText`.
-- Modify: `server/src/analyzer/runner/transport-analyzer.ts` — expose `readonly runner`.
+- Read only: `server/src/analyzer/runner/transport-analyzer.ts` — W1 declares `constructor(readonly runner: StageRunner)` (entry criterion 5). This task does not modify it.
 - Test: Create `server/src/analyzer/runner/stage-runner.free-text.test.ts`.
 
 **Interfaces:**
-- **Consumes:** `StageRunner`, `ChatTransport`, `TransportRequest`, `TransportResult`, `OLLAMA_RETRY_POLICY` (W1), `stripThink` (W1, `runner/parse.ts`), `hasReasoningEvidence` (W2, `runner/finish.ts`), `AnalyzerReasoningOverflowError` and `GeminiContentBlockedError` (`errors.ts`).
+- **Consumes:** `StageRunner`, `ChatTransport`, `TransportRequest`, `TransportResult`, `OLLAMA_RETRY_POLICY` (W1), `stripThink` (W1, `runner/parse.ts`), `hasReasoningEvidence` (W2, `runner/finish.ts`), `ChatTransport.prepare?(signal?: AbortSignal)` (W2, bounded at 10 s and released by the caller's abort, P26), `TransportAnalyzer.runner` (W1, public `readonly`), `AnalyzerReasoningOverflowError` and `GeminiContentBlockedError` (`errors.ts`).
 - **Produces:**
   ```ts
   export interface FreeTextOptions { onCpu?: boolean; keepAlive?: string | number; absoluteMaxMs?: number }
   export interface FreeTextInput { system?: string; prompt: string; signal?: AbortSignal; temperature?: number; ollama?: FreeTextOptions }
   // TransportRequest: temperature: number | undefined;  freeText?: FreeTextOptions;
   StageRunner.runFreeText(input: FreeTextInput): Promise<string>
-  TransportAnalyzer.runner: StageRunner   // readonly, public
   ```
 - **Keeps green:**
   - every W1–W3 runner and transport suite: `npm --prefix server run test -- src/analyzer/runner src/analyzer/transports`;
@@ -181,6 +192,35 @@ describe('StageRunner.runFreeText', () => {
     expect(err.model).toBe('fake-model');
     expect(err.reason).toBe('SAFETY');
   });
+
+  it('awaits the transport prepare(signal) with the caller signal before sending (Gemini catalog warm-up)', async () => {
+    const order: string[] = [];
+    let prepareSignal: AbortSignal | undefined;
+    const transport: ChatTransport = {
+      kind: 'gemini',
+      model: 'fake-model',
+      prepare: async (signal?: AbortSignal) => {
+        prepareSignal = signal;
+        await Promise.resolve();
+        order.push('prepare');
+      },
+      send: async () => {
+        order.push('send');
+        return result('ok');
+      },
+    };
+    const runner = new StageRunner({
+      transport,
+      policy: OLLAMA_RETRY_POLICY,
+      settings: () => ({ structuredOutput: 'schema', maxOutputTokens: 4096 }),
+      adaptSchema: (s) => ({ schema: s, dropped: [] }),
+    });
+    const ac = new AbortController();
+    await runner.runFreeText({ prompt: 'P', signal: ac.signal });
+    expect(order).toEqual(['prepare', 'send']);
+    /* P26: a pause must be able to release a stalled warm-up, so the warm-up gets the caller's signal. */
+    expect(prepareSignal).toBe(ac.signal);
+  });
 });
 ```
 - [ ] **Step 2: Run it and confirm it fails**
@@ -236,6 +276,12 @@ The method reads one member: the constructor's `transport` (W1 Task 1.11 declare
       as-is for the caller to judge; a blocked response and a length stop that produced only
       reasoning throw, so neither failure is collapsed into an empty answer. */
   async runFreeText(input: FreeTextInput): Promise<string> {
+    /* Master contract: the runner awaits prepare(signal) before it reads settings (the Gemini transport
+       warms its model catalog there; P26 bounds it, and the caller's abort releases it). This is the
+       same inline call wave 2 put in the private `send`: `await this.transport.prepare?.(call.signal);`
+       followed by `const settings = this.settings();`. Free text reads no settings in wave 4; wave 5
+       (Task 5.1) adds `const settings = this.settings();` directly after this line. */
+    await this.transport.prepare?.(input.signal);
     const system = input.system ?? '';
     const sent = await this.transport.send({
       system,
@@ -243,7 +289,7 @@ The method reads one member: the constructor's `transport` (W1 Task 1.11 declare
       structuredOutput: { mode: 'off' },
       temperature: input.temperature,
       maxOutputTokens: undefined,
-      /* The persona limiter estimate from main 2b63b451 (voice-style.ts:211): ~chars/4 plus a flat margin. */
+      /* The persona limiter estimate from main 46e62a34 (voice-style.ts:211): ~chars/4 plus a flat margin. */
       estimatedInputTokens: Math.ceil((system.length + input.prompt.length) / 4) + 200,
       signal: input.signal,
       call: {},
@@ -262,7 +308,7 @@ The method reads one member: the constructor's `transport` (W1 Task 1.11 declare
     return answer.text;
   }
 ```
-In `server/src/analyzer/runner/transport-analyzer.ts`, make the runner public and read-only. Change the constructor parameter to `constructor(readonly runner: StageRunner)`. If W1 declared a `private`/`protected readonly runner` field instead, drop the access modifier. Every existing `this.runner` use keeps working.
+Do not edit `server/src/analyzer/runner/transport-analyzer.ts`. Entry criterion 5 has already confirmed that W1's `constructor(readonly runner: StageRunner)` is public; every test in this wave reads `.runner` from outside the class.
 
 - [ ] **Step 4: Run and confirm it passes**
   - **Run:** `npm --prefix server run test -- src/analyzer/runner/stage-runner.free-text.test.ts src/analyzer/runner src/analyzer/transports`, then `npm run typecheck`.
@@ -272,9 +318,11 @@ In `server/src/analyzer/runner/transport-analyzer.ts`, make the runner public an
   2. **Token estimate:** change `+ 200` to `+ 0`. Expected red: `sends ONE unstructured request…` and `counts the system text…`.
   3. **Blocked response:** delete the `if (answer.finish === 'blocked') {…}` block. Expected red: `throws GeminiContentBlockedError…` (resolves `''`).
   4. **Unterminated think:** replace the `answer` ternary with `const answer: TransportResult = { ...sent, text: think.text };`. Expected red: `treats an unterminated <think> on a length stop as reasoning evidence`.
+  5. **Warm-up:** delete `await this.transport.prepare?.(input.signal);`. Expected red: `awaits the transport prepare(signal) with the caller signal before sending` (`expected [ 'send' ] to deeply equal [ 'prepare', 'send' ]`).
+  6. **Warm-up signal:** change `prepare?.(input.signal)` to `prepare?.()`. Expected red: the same test (`expected undefined to be AbortSignal{}`).
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/runner/transport.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/runner/transport-analyzer.ts server/src/analyzer/runner/stage-runner.free-text.test.ts
+git add server/src/analyzer/runner/transport.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/runner/stage-runner.free-text.test.ts
 git commit -m "feat(server): add StageRunner.runFreeText for unstructured single-attempt calls"
 ```
 
@@ -291,14 +339,15 @@ git commit -m "feat(server): add StageRunner.runFreeText for unstructured single
 - Test: Modify `server/src/analyzer/ollama.test.ts:1394-1452` (retarget the persona describe to the runner free-text path).
 - Test: Modify `server/src/analyzer/ollama-timeout.test.ts`:
   - `:30-34` — imports;
-  - `:149-215` — the call site only; the assertions stay identical.
+  - `:149-215` — the call site only; the assertions stay identical;
+  - append two cases: a caller abort before the first byte, and a non-OK body echoing a known secret.
 
 **Interfaces:**
-- **Consumes:** `FreeTextOptions`, `TransportRequest.freeText`, `StageRunner.runFreeText`, `TransportAnalyzer.runner` (Task 4.1). From W1 it also needs `classifyConnectError`, `ANALYZER_DISPATCHER`, `acquireAnalyzerSlot`, `isAnyAnalyzerRunBusy`, `undiciFetch` and `AnalyzerHttpError`; the streaming body already imports all of them.
+- **Consumes:** `FreeTextOptions`, `TransportRequest.freeText`, `StageRunner.runFreeText` (Task 4.1), `TransportAnalyzer.runner` (W1, public). From W1 it also needs `classifyConnectError`, `ANALYZER_DISPATCHER`, `acquireAnalyzerSlot`, `isAnyAnalyzerRunBusy`, `undiciFetch`, `AnalyzerHttpError` and `AnalysisAbortedError`, and from W3b Task 3b.6a `redactKnownSecrets` and `loadKnownAnalyzerSecrets`; the streaming body already imports all of them.
 - **Produces:** `export const PERSONA_ABSOLUTE_MAX_MS = 600_000` from `transports/ollama-transport.ts`. `OllamaTransport.send(req)` serves `req.freeText` with one non-streaming call.
 - **Keeps green:**
   - the whole of `src/analyzer/ollama.test.ts` (the streaming stage path is untouched);
-  - `src/analyzer/ollama-timeout.test.ts` — all 4 cases;
+  - `src/analyzer/ollama-timeout.test.ts` — its 4 existing cases (plus the 2 this task adds);
   - W1's Ollama transport suite: `npm --prefix server run test -- src/analyzer/transports`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -307,7 +356,7 @@ In `server/src/analyzer/ollama.test.ts`, replace lines 1394-1452 (the header com
 ```ts
 /* Persona generation's Ollama path (#3084 W4, spec §10): OllamaAnalyzer's runner free-text call,
    which OllamaTransport serves with ONE non-streaming /api/chat call — the body that was
-   generatePersonaViaOllama on main 2b63b451. It carries ANALYZER_DISPATCHER too (`stream:false`
+   generatePersonaViaOllama on main 46e62a34. It carries ANALYZER_DISPATCHER too (`stream:false`
    withholds headers for the WHOLE generation), so these drive the same undici fetchMock as chat(). */
 describe('Ollama free-text (persona) call', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -399,6 +448,8 @@ describe('Ollama free-text (persona) call', () => {
 In `server/src/analyzer/ollama-timeout.test.ts`, change lines 30-34 to:
 ```ts
 import { OllamaAnalyzer, LocalUnreachableError } from './ollama.js';
+import { AnalysisAbortedError, AnalyzerHttpError } from './errors.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 ```
 Then replace lines 149-171 — from the `it('REGRESSION: …` line through the `.then(() => null, (e: Error) => e);` that closes the call. Lines 173-210 (both `expect`s and the capacity-1 slot probe) stay verbatim.
 ```ts
@@ -423,11 +474,68 @@ Then replace lines 149-171 — from the `it('REGRESSION: …` line through the `
 ```
 Then delete the now-unused `OLLAMA_URL` wrapper. Remove the outer `try {` that followed `process.env.OLLAMA_URL = url;` and its `} finally { … process.env.OLLAMA_URL … }` (main lines 162-164 and 211-214), keeping the inner capacity-1 `try/finally` intact.
 
+Then append these two cases inside `describe('OllamaAnalyzer fetch timeout', …)`, after `still honours a caller AbortSignal…`:
+```ts
+  it('a caller abort before the first byte of the free-text (persona) call is AnalysisAbortedError, not an unreachable daemon', async () => {
+    /* #3084 W4 — the design job's signal now reaches this call. The fetch signal is
+       AbortSignal.any([budget, req.signal]), so a pause aborts it before the first byte, and
+       classifyConnectError would read that AbortError as LocalUnreachableError: a paused design
+       job reported as a down daemon. The 5 s header delay keeps the abort before the first byte. */
+    const url = await startSlowOllama(5_000);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 50);
+    const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:9b' }).runner
+      .runFreeText({ prompt: 'PROMPT', signal: ac.signal, ollama: { onCpu: true } })
+      .then(
+        () => null,
+        (e: Error) => e,
+      );
+    expect(err).toBeInstanceOf(AnalysisAbortedError);
+    expect(err).not.toBeInstanceOf(LocalUnreachableError);
+  });
+
+  it('a non-OK free-text (persona) body is redacted against the known analyzer secrets before the error is built (P22)', async () => {
+    const SECRET = 'AIzaSy-persona-echo-secret-1';
+    const savedEnvKey = process.env.GEMINI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    _setUserSettingsCacheForTest({ geminiApiKey: SECRET });
+    server = createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: `runner failed for key ${SECRET}` }));
+      });
+    });
+    const url = await new Promise<string>((resolve) => {
+      server!.listen(0, '127.0.0.1', () => {
+        const addr = server!.address();
+        resolve(`http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`);
+      });
+    });
+    try {
+      const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:9b' }).runner
+        .runFreeText({ prompt: 'PROMPT', ollama: { onCpu: true } })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(AnalyzerHttpError);
+      expect((err as InstanceType<typeof AnalyzerHttpError>).bodyExcerpt).toBe('{"error":"runner failed for key [redacted]"}');
+      expect(`${(err as Error).message}\n${(err as Error).stack ?? ''}`).not.toContain(SECRET);
+    } finally {
+      _resetUserSettingsCache();
+      if (savedEnvKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = savedEnvKey;
+    }
+  });
+```
+
 - [ ] **Step 2: Run them and confirm they fail**
   - **Run:** `npm --prefix server run test -- src/analyzer/ollama.test.ts src/analyzer/ollama-timeout.test.ts`
   - **Expected:** FAIL.
     - `GPU path…` fails with `expected true to be false` (the streaming `chat()` body sends `stream: true`).
     - `REGRESSION…` fails. The streaming path has no absolute bound, so the 5 s slow server answers and the error is `null`: `the call must terminate, not hang: expected null not to be null`.
+  - The two appended cases PASS before Step 3: until the dispatch line exists, a free-text request takes `send()`'s streaming body, which already reports a caller abort as `AnalysisAbortedError` and redacts its non-OK body (W3b Task 3b.6a). They lock the non-streaming branch Step 3 adds; Step 5's mutations 5 and 6 show each can fail.
 
 - [ ] **Step 3: Implement**
 
@@ -435,7 +543,7 @@ At the top of `server/src/analyzer/transports/ollama-transport.ts`:
 - Add `FreeTextOptions` to the `../runner/transport.js` type import.
 - Add this export, moved from `ollama.ts:135-141` with its rationale:
 ```ts
-/* Absolute ceiling for a one-shot free-text (persona) call. Moved from ollama.ts (main 2b63b451
+/* Absolute ceiling for a one-shot free-text (persona) call. Moved from ollama.ts (main 46e62a34
    lines 135-141): ANALYZER_DISPATCHER removes undici's implicit 300s bound and the persona caller
    supplies no signal (see sendFreeText). Deliberately generous: the whole point of the dispatcher
    is that a large model on CPU legitimately takes minutes. Mirrors DESIGN_ABSOLUTE_MAX_MS in
@@ -446,10 +554,10 @@ Make this the first statement of `OllamaTransport.send(req)`:
 ```ts
     if (req.freeText) return this.sendFreeText(req, req.freeText);
 ```
-Add the private method. Its body is main's `generatePersonaViaOllama` (`ollama.ts:950-1027`). Every line not marked `CHANGED` is verbatim, including comments.
+Add the private method. Its body is `generatePersonaViaOllama` as PR 3b left it: main's `ollama.ts:950-1027` with W3b Task 3b.6a's redacted non-OK excerpt. Every line not marked `CHANGED` is verbatim from that state, including comments. The redaction call is 3b's, carried through the move unchanged.
 ```ts
   /** #3084 W4 — the free-text path (spec §10): one NON-streaming /api/chat call with no response
-      `format`, GPU-plan aware. Moved from ollama.ts `generatePersonaViaOllama` (main 2b63b451).
+      `format`, GPU-plan aware. Moved from ollama.ts `generatePersonaViaOllama` (main 46e62a34).
         - onCpu  → num_gpu:0 (system RAM only); the analyzer slot is still taken with onCpu=true.
         - keepAlive is caller-controlled (resident window for a bulk pre-pass; 0 for one-shot / CPU). */
   private async sendFreeText(req: TransportRequest, freeText: FreeTextOptions): Promise<TransportResult> {
@@ -525,16 +633,26 @@ Add the private method. Its body is main's `generatePersonaViaOllama` (`ollama.t
           dispatcher: this.dispatcher ?? ANALYZER_DISPATCHER, // CHANGED: the injected test dispatcher is honoured, like send()
         });
       } catch (err) {
+        /* CHANGED: the design job's abort signal now reaches this call (req.signal, #3084 W4). A pause
+           aborts the fetch before the first byte; report the clean stop it is, as send()'s streaming
+           body does, never an unreachable daemon. A budget timeout (no caller abort) classifies as before. */
+        if (req.signal?.aborted) {
+          throw new AnalysisAbortedError(`Ollama ${this.model} persona call aborted (paused or client disconnected).`);
+        }
         throw classifyConnectError(err, url);
       }
       if (!response.ok) {
+        /* CHANGED: typed per spec §1 (was a plain Error, and the excerpt local was `excerpt`). The
+           redaction is PR 3b's (W3b Task 3b.6a), carried through the move: every known analyzer secret
+           is removed BEFORE the body is sliced (P22). With no secret in the body the message text is
+           byte-identical to main's. */
         const text = await response.text().catch(() => '');
-        /* CHANGED: typed per spec §1 (was a plain Error); the message text is byte-identical. */
+        const bodyExcerpt = redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500);
         throw new AnalyzerHttpError(
           'ollama',
           response.status,
-          text.slice(0, 500),
-          `Ollama ${url} returned ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
+          bodyExcerpt,
+          `Ollama ${url} returned ${response.status} ${response.statusText}: ${bodyExcerpt}`,
         );
       }
       /* CHANGED: also reads done_reason and message.thinking, so runFreeText can tell a length stop
@@ -563,12 +681,14 @@ In `server/src/analyzer/ollama.ts`:
 
 - [ ] **Step 4: Run and confirm they pass**
   - **Run:** `npm --prefix server run test -- src/analyzer/ollama.test.ts src/analyzer/ollama-timeout.test.ts src/analyzer/transports`, then `npm run typecheck`.
-  - **Expected:** PASS (all 4 `ollama-timeout` cases).
+  - **Expected:** PASS (all 6 `ollama-timeout` cases).
 - [ ] **Step 5: Mutation proof** (restore after each):
   1. **Slot release:** in `sendFreeText`, delete `releaseSlot();` from the `finally`. Expected red: `REGRESSION: the Ollama free-text (persona) call stays bounded…` with `the analyzer slot must be released on the timeout path (capacity 1)`.
   2. **Absolute bound:** change `const signal = req.signal ? … : budget;` to `const signal = req.signal;`. Expected red: the same `REGRESSION` test, with `the call must terminate, not hang`.
   3. **Free-text dispatch:** delete the `if (req.freeText) return this.sendFreeText(…)` line. Expected red: `GPU path: sends the caller keep_alive…`.
   4. **Placement:** change `acquireAnalyzerSlot(this.model, onCpu)` to `acquireAnalyzerSlot(this.model, false)`. Expected red: `persona gen on CPU takes the limiter but no GPU slot`.
+  5. **Pause is not unreachable:** in `sendFreeText`'s fetch `catch`, delete the `if (req.signal?.aborted) { … }` block. Expected red: `a caller abort before the first byte of the free-text (persona) call is AnalysisAbortedError…` (a `LocalUnreachableError`).
+  6. **Redaction:** replace `redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500)` with `text.slice(0, 500)`. Expected red: `a non-OK free-text (persona) body is redacted…` (`bodyExcerpt` holds the secret).
 - [ ] **Step 6: Commit**
 ```bash
 git add server/src/analyzer/transports/ollama-transport.ts server/src/analyzer/ollama.ts server/src/analyzer/ollama.test.ts server/src/analyzer/ollama-timeout.test.ts
@@ -592,7 +712,7 @@ git commit -m "feat(server): serve Ollama free-text requests with the bounded no
   - `OpenAIAnalyzer` / `OpenAITransport` and the `AnalyzerEndpoint` type (W3);
   - `analyzerRateLimiter` (W3).
 - **Produces:**
-  - **Gemini:** a free-text request carries no `systemInstruction` when `system === ''`, no `temperature` when undefined, and no `maxOutputTokens` when undefined.
+  - **Gemini:** a free-text request carries no `systemInstruction` when `system === ''`, no `temperature` when undefined, no `maxOutputTokens` when undefined, and no `thinkingConfig` at all (so no wave 2 `includeThoughts`; P19). One flag, W2's `includeThoughts` local, drives both that omission and W2's `reasoningTokens` gate, so a free-text response's `thoughtsTokenCount` is not reasoning evidence (P27, A3).
   - **OpenAI:** a free-text request carries no system message when `system === ''`, no `temperature` when undefined, and no `max_tokens` when undefined.
   - **Stage requests** are unchanged on both.
 - **Keeps green:**
@@ -628,7 +748,7 @@ beforeEach(() => {
 });
 
 describe('GeminiTransport — free-text request', () => {
-  it('omits systemInstruction, JSON mode, temperature and maxOutputTokens', async () => {
+  it('omits systemInstruction, JSON mode, temperature, maxOutputTokens and thinkingConfig', async () => {
     generateContentStream.mockResolvedValue(STOP('A warm voice.'));
     const { GeminiAnalyzer } = await import('../gemini.js');
     const out = await new GeminiAnalyzer({ apiKey: 'k', model: 'gemini-3.1-flash-lite' }).runner.runFreeText({
@@ -647,6 +767,8 @@ describe('GeminiTransport — free-text request', () => {
     expect(config).not.toHaveProperty('responseJsonSchema');
     expect(config).not.toHaveProperty('temperature');
     expect(config).not.toHaveProperty('maxOutputTokens');
+    /* gemini-3.1-flash-lite thinks by wave 2's id rule, so a STAGE request carries includeThoughts (CONTROL below). */
+    expect(config).not.toHaveProperty('thinkingConfig');
   });
 
   it('acquires the limiter for the model with the persona estimate', async () => {
@@ -660,7 +782,22 @@ describe('GeminiTransport — free-text request', () => {
     acquire.mockRestore();
   });
 
-  it('CONTROL: a stage request still sends its system instruction, temperature and output cap', async () => {
+  it('reports no reasoning tokens: a free-text request asks for no thoughts, so its thoughtsTokenCount is not evidence (P27, A3)', async () => {
+    /* A fresh generator per call: a resolved value would hand the second call an exhausted one. */
+    generateContentStream.mockImplementation(async () =>
+      chunks([{ text: 'A warm voice.', candidates: [{ finishReason: 'STOP' }], usageMetadata: { thoughtsTokenCount: 321 } }]),
+    );
+    const { GeminiTransport } = await import('./gemini-transport.js');
+    const transport = new GeminiTransport({ apiKey: 'k', model: 'gemini-3.1-flash-lite' });
+    const turn = { messages: [{ role: 'user' as const, content: 'P' }], estimatedInputTokens: 10, call: {} };
+    const free = await transport.send({ ...turn, system: '', structuredOutput: { mode: 'off' }, temperature: undefined, freeText: {} });
+    const stage = await transport.send({ ...turn, system: 'SYS', structuredOutput: { mode: 'json' }, temperature: 0.2, maxOutputTokens: 8192 });
+    expect(free.usage?.reasoningTokens).toBeUndefined();
+    /* CONTROL: this model thinks by wave 2's id rule, and the stage request asked for thoughts. */
+    expect(stage.usage?.reasoningTokens).toBe(321);
+  });
+
+  it('CONTROL: a stage request still sends its system instruction, temperature, output cap and thought summaries', async () => {
     generateContentStream.mockResolvedValue(STOP('{}'));
     const { GeminiTransport } = await import('./gemini-transport.js');
     await new GeminiTransport({ apiKey: 'k', model: 'gemini-3.1-flash-lite' }).send({
@@ -677,6 +814,7 @@ describe('GeminiTransport — free-text request', () => {
     expect(config.temperature).toBe(0.2);
     expect(config.maxOutputTokens).toBe(8192);
     expect(config.responseMimeType).toBe('application/json');
+    expect(config.thinkingConfig).toEqual({ includeThoughts: true });
   });
 });
 ```
@@ -692,6 +830,7 @@ import type { AnalyzerEndpoint } from '../../workspace/analyzer-endpoints.js';
 
 let server: Server | undefined;
 const bodies: Array<Record<string, unknown>> = [];
+const gets: string[] = [];
 
 function sseChunk(delta: object, finish: string | null): string {
   return `data: ${JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', created: 0, model: 'qwen3', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
@@ -699,6 +838,13 @@ function sseChunk(delta: object, finish: string | null): string {
 
 function startFakeOpenAI(content: string): Promise<string> {
   server = createServer((req, res) => {
+    if (req.method === 'GET') {
+      /* #3084 P15 — runFreeText awaits OpenAITransport.prepare(), which lists the served models once per base URL. */
+      gets.push(req.url ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [] }));
+      return;
+    }
     let raw = '';
     req.on('data', (c) => (raw += c));
     req.on('end', () => {
@@ -727,6 +873,7 @@ function endpoint(baseUrl: string): AnalyzerEndpoint {
 
 afterEach(async () => {
   bodies.length = 0;
+  gets.length = 0;
   if (server) {
     server.closeAllConnections();
     await new Promise<void>((r) => server!.close(() => r()));
@@ -741,6 +888,9 @@ describe('OpenAITransport — free-text request', () => {
       prompt: 'PROMPT',
     });
     expect(out).toBe('A calm voice.');
+    /* runFreeText awaited the transport's prepare() (W3c Task 3c.9) before the persona request. */
+    expect(gets).toHaveLength(1);
+    expect(gets[0]).toMatch(/\/models$/);
     const body = bodies[0];
     expect(body.model).toBe('qwen3');
     expect(body.stream).toBe(true);
@@ -772,14 +922,22 @@ describe('OpenAITransport — free-text request', () => {
 - [ ] **Step 2: Run them and confirm they fail**
   - **Run:** `npm --prefix server run test -- src/analyzer/transports/gemini-transport.free-text.test.ts src/analyzer/transports/openai-transport.free-text.test.ts`
   - **Expected:** the two free-text cases FAIL.
-    - Gemini fails with `expected {…} not to have property "systemInstruction"`: W1–W3 always send it, together with `temperature` and `maxOutputTokens`.
+    - Gemini fails with `expected {…} not to have property "systemInstruction"`: W1–W3 always send it, together with `temperature`, `maxOutputTokens` and (for this thinking model) wave 2's `thinkingConfig`.
     - OpenAI fails with `expected {…} not to have property "max_tokens"` or a `messages` mismatch on the leading system turn.
+    - Gemini's `reports no reasoning tokens…` fails with `expected 321 to be undefined`: W2's `includeThoughts` local follows the id rule on every request, free text included.
   - Both CONTROL cases and the limiter case PASS.
   - If the OpenAI CONTROL fails, W3 builds a stage request differently from the spec §2 table (for example, it sends `max_completion_tokens`). Adjust the CONTROL expectation to W3's real shape before implementing, and record that in the PR body.
 
 - [ ] **Step 3: Implement**
 
-In `GeminiTransport`, rewrite exactly three properties of the `config` literal. Every other key (structured output, `thinkingConfig`, `abortSignal`) stays as W1–W3 left it. In each spread, the non-free-text branch keeps the expression W1–W3 already wrote for that property. The snippet names the request field; if W2 wraps it (for example `maxOutputTokens: capFor(req)`), keep that wrapper inside the second branch.
+In `GeminiTransport.generate`, first replace wave 2's `const includeThoughts = geminiModelThinks(this.model);` (Task 2.7) with the line below. Wave 2 reads that one local twice: in the `config` literal's `thinkingConfig` spread and in `reasoningTokens: includeThoughts ? thoughtsTokenCount : undefined`. Changing the local therefore changes the wire and the evidence gate together:
+```ts
+    /* #3084 W4 (P27, A3) — one flag for the wire and the evidence gate. A free-text (persona) request asks
+       for no thought summaries, so its thoughtsTokenCount is not reasoning evidence either. Stage requests
+       keep wave 2's id rule. */
+    const includeThoughts = !req.freeText && geminiModelThinks(this.model);
+```
+Then rewrite exactly four properties of the `config` literal. Every other key (structured output, `abortSignal`) stays as W1–W3 left it. The fourth replaces wave 2's `...(geminiModelThinks(this.model) ? { thinkingConfig: { includeThoughts: true } } : {}),` (Task 2.7), or `...(includeThoughts ? …)` if wave 2 already reads the local there, in wave 2's position. In each spread, the non-free-text branch keeps the expression W1–W3 already wrote for that property. The snippet names the request field; if W2 wraps it (for example `maxOutputTokens: capFor(req)`), keep that wrapper inside the second branch.
 ```ts
         config: {
           /* #3084 W4 — a free-text request omits what the pre-transport persona call never sent
@@ -787,7 +945,10 @@ In `GeminiTransport`, rewrite exactly three properties of the `config` literal. 
           ...(req.freeText && req.system === '' ? {} : { systemInstruction: req.system }),
           ...(req.freeText && req.temperature === undefined ? {} : { temperature: req.temperature }),
           ...(req.freeText && req.maxOutputTokens === undefined ? {} : { maxOutputTokens: req.maxOutputTokens }),
-          // …W1–W3's remaining keys unchanged (structured-output mode keys, thinkingConfig, abortSignal)…
+          /* Wave 2's thought summaries (P19) go on stage requests only. A persona request keeps today's
+             shape; wave 5 (Task 5.3) adds a thinkingConfig to it only for a non-default reasoning level. */
+          ...(includeThoughts ? { thinkingConfig: { includeThoughts: true } } : {}),
+          // …W1–W3's remaining keys unchanged (structured-output mode keys, abortSignal)…
         },
 ```
 In `OpenAITransport.send`, in the params passed to `client.chat.completions.create`, rewrite the `messages`, `temperature` and `max_tokens` entries the same way. Other keys (`model`, `stream`, `stream_options`, `response_format` from the mode table) stay as W3 left them.
@@ -806,9 +967,11 @@ If W3 derives `max_tokens` inside the transport — from `endpoint.maxOutputToke
   - **Run:** `npm --prefix server run test -- src/analyzer/transports`, then `npm --prefix server run test -- --config vitest.config.slow.ts src/analyzer/gemini.test.ts`, then `npm run typecheck`.
   - **Expected:** PASS.
 - [ ] **Step 5: Mutation proof** (restore after each):
-  1. **Gemini temperature:** replace the `temperature` spread with `temperature: req.temperature,`. Expected red: `omits systemInstruction, JSON mode, temperature and maxOutputTokens` (`not to have property "temperature"`; JSON drops `undefined`, but `toHaveProperty` sees the key).
-  2. **Gemini output cap:** replace the `maxOutputTokens` spread with an unconditional `maxOutputTokens: req.maxOutputTokens ?? 8192,`. Expected red: `omits systemInstruction, JSON mode, temperature and maxOutputTokens` (`not to have property "maxOutputTokens"`).
+  1. **Gemini temperature:** replace the `temperature` spread with `temperature: req.temperature,`. Expected red: `omits systemInstruction, JSON mode, temperature, maxOutputTokens and thinkingConfig` (`not to have property "temperature"`; JSON drops `undefined`, but `toHaveProperty` sees the key).
+  2. **Gemini output cap:** replace the `maxOutputTokens` spread with an unconditional `maxOutputTokens: req.maxOutputTokens ?? 8192,`. Expected red: `omits systemInstruction, JSON mode, temperature, maxOutputTokens and thinkingConfig` (`not to have property "maxOutputTokens"`).
   3. **OpenAI output cap:** replace the `max_tokens` spread with W3's original unconditional entry. Expected red: `sends one user message and no response_format, max_tokens or temperature`.
+  4. **Gemini thought summaries:** delete `!req.freeText && ` from the `includeThoughts` local. Expected red: `omits systemInstruction, JSON mode, temperature, maxOutputTokens and thinkingConfig` (`not to have property "thinkingConfig"`) and `reports no reasoning tokens…` (`expected 321 to be undefined`).
+  5. **One flag:** restore the local, then change it back to `geminiModelThinks(this.model)` and make the spread read `!req.freeText && geminiModelThinks(this.model)` (two flags, as before this task). Expected red: `reports no reasoning tokens…` only; the wire test stays green, which is why the flag is shared.
 - [ ] **Step 6: Commit**
 ```bash
 git add server/src/analyzer/transports/gemini-transport.ts server/src/analyzer/transports/openai-transport.ts server/src/analyzer/transports/gemini-transport.free-text.test.ts server/src/analyzer/transports/openai-transport.free-text.test.ts
@@ -821,7 +984,7 @@ git commit -m "feat(server): keep the persona wire shape for free-text Gemini an
 
 **Files:**
 - Modify: `server/src/config/types.ts:2-5` — `KnobType` gains `'analyzer-engine'`.
-- Modify: `server/src/config/types.ts:27-28` — the `options` doc.
+- Modify: `server/src/config/types.ts:27-35` — the `options` doc, and the `pattern` doc at `:29-35`. That doc says a pattern is "validated case-insensitively", which is false: `coerceAndValidate` runs `knob.pattern.test(trimmed)` with the pattern's own flags (`resolver.ts:219-221`). This is found in passing; declare it in the PR body.
 - Modify: `server/src/config/registry.ts:1180-1191`.
 - Modify: `server/src/config/registry.test.ts:1-3` (imports), `:189-198` (allowed pattern types); append a describe.
 - Modify: `src/lib/types.ts:892-894` — frontend `KnobDescriptor.type` union.
@@ -858,7 +1021,7 @@ describe('analyzer.personaGeneration.engine', () => {
   const knob = () => getKnob('analyzer.personaGeneration.engine')!;
   const CASES = JSON.parse(
     readFileSync(fileURLToPath(new URL('../analyzer/__fixtures__/model-id-cases.json', import.meta.url)), 'utf8'),
-  ) as Array<{ id: string }>;
+  ) as Array<{ id: string; engine: string; endpointId?: string; model?: string }>;
   afterEach(() => {
     delete process.env.PERSONA_GEN_ENGINE;
   });
@@ -894,11 +1057,22 @@ describe('analyzer.personaGeneration.engine', () => {
     expect(coerceAndValidate(knob(), v).ok).toBe(false);
   });
 
-  it('accepts an endpoint model id exactly when parseEndpointModelId does (shared id case table)', () => {
-    expect(CASES.length).toBeGreaterThan(0);
-    for (const c of CASES) {
-      if (c.id === 'local' || c.id === 'gemini') continue;
-      expect(coerceAndValidate(knob(), c.id).ok, c.id).toBe(parseEndpointModelId(c.id) !== null);
+  it('accepts no id that parseEndpointModelId rejects, including the table\'s endpoint-shaped negatives', () => {
+    const endpointShaped = CASES.filter((c) => c.id.startsWith('openai'));
+    const negatives = endpointShaped.filter((c) => c.engine !== 'openai');
+    expect(negatives.map((c) => c.id)).toEqual(
+      expect.arrayContaining(['openai:latest', 'openai:Lab::qwen3', 'openai:lab_1::qwen3', 'openai:::qwen3', 'openai:lab:qwen3', 'openai']),
+    );
+    for (const c of negatives) {
+      expect(parseEndpointModelId(c.id), c.id).toBeNull();
+      expect(coerceAndValidate(knob(), c.id).ok, c.id).toBe(false);
+    }
+    /* The knob is deliberately STRICTER than the parser (non-empty model, endpoint id ≤ 40), never looser. */
+    for (const c of endpointShaped) {
+      if (coerceAndValidate(knob(), c.id).ok) expect(parseEndpointModelId(c.id), c.id).not.toBeNull();
+    }
+    for (const c of endpointShaped.filter((e) => e.engine === 'openai' && e.model !== '' && (e.endpointId ?? '').length <= 40)) {
+      expect(coerceAndValidate(knob(), c.id).ok, c.id).toBe(true);
     }
   });
 
@@ -937,6 +1111,7 @@ describe('PUT /api/config — analyzer.personaGeneration.engine', () => {
     - `is an analyzer-engine knob…` fails with `expected 'enum' to be 'analyzer-engine'`.
     - `accepts "openai:lab::qwen3-30b"` fails (`ok: false, error: 'not an allowed option'`).
     - `stores an openai:<endpointId>::<model> value` fails with `expected 400 to be 200`.
+    - `accepts no id that parseEndpointModelId rejects…` fails in its last loop (`openai:lab::qwen3:30b`: `expected false to be true`), because main's enum refuses every endpoint id.
 - [ ] **Step 3: Implement**
 
 `server/src/config/types.ts`, replace line 2:
@@ -946,10 +1121,16 @@ export type KnobType = 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'd
 // coerceAndValidate's default case) whose UI picks from its static `options` plus the live
 // OpenAI-compatible endpoint models (GET /api/analyzer/models) instead of a free-text box.
 ```
-Replace the `options` doc (lines 27-28):
+Replace the `options` and `pattern` docs (lines 27-35; the `pattern?: RegExp;` line after them stays):
 ```ts
   /** For type==='enum' (the closed option set), and the static entries of a type==='analyzer-engine' picker. */
   options?: string[];
+  /** For type==='string', 'device' or 'analyzer-engine'. A closed VALUE SHAPE for an
+      otherwise free-text knob — tested against the trimmed input in coerceAndValidate's
+      string/default case (resolver.ts) with the pattern's OWN flags: case-sensitive unless
+      the RegExp carries `i`. Small, general capability (#2180): a knob with no closed
+      `options` set can still refuse a malformed value ("cuda1") at save time without being
+      forced into an enum with an unbounded option list (e.g. every "cuda:<n>" card index). */
 ```
 Replace the descriptor in `server/src/config/registry.ts:1180-1191`:
 ```ts
@@ -987,6 +1168,7 @@ Then run `npm run config:sync`.
   1. **Endpoint id length:** change `{1,40}` to `+`. Expected red: `rejects "openai:aaaa…::m"`.
   2. **Separator:** change `::` to `::?`. Expected red: `rejects "openai:lab:qwen3"`, and `refuses a malformed id with the shape error` (`expected 200 to be 400`).
   3. **Knob type:** change `type: 'analyzer-engine'` back to `type: 'string'`. Expected red: `is an analyzer-engine knob…`.
+  4. **Parser agreement:** in the pattern, change the endpoint-id class `[a-z0-9-]` to `[a-z0-9_-]`. Expected red: `accepts no id that parseEndpointModelId rejects…` (`openai:lab_1::qwen3`: `expected true to be false`). The `rejects %j` list alone stays green under this mutation.
 - [ ] **Step 6: Commit**
 ```bash
 git add server/src/config/types.ts server/src/config/registry.ts server/src/config/registry.test.ts server/src/routes/config.test.ts src/lib/types.ts server/.env.example
@@ -1008,10 +1190,11 @@ git commit -m "feat(server,frontend): let the persona engine knob name an OpenAI
   - `:115-126` — `beforeEach`;
   - `:238-357` — the config, Gemini and dispatch describes.
 - Test: Create `server/src/analyzer/voice-style.endpoint.test.ts`, a real-HTTP wiring proof.
+- Test: Modify W3b Task 3b.6a's `server/src/analyzer/transport-redaction.test.ts` — its `Ollama persona call redaction` case calls `generatePersonaViaOllama`, which this task deletes; retarget it to the moved call (Step 3).
 
 **Interfaces:**
 - **Consumes:**
-  - From W1–W3: `OllamaAnalyzer`, `GeminiAnalyzer`, `OpenAIAnalyzer`, `TransportAnalyzer.runner`, `parseEndpointModelId`, `AnalyzerEndpoint`, `keyOriginMatches`, `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`, `AnalyzerUnreachableError`, `LocalUnreachableError`, `isAnyAnalyzerCallInFlight`, `analyzerRateLimiter`, `endpointModelId`.
+  - From W1–W3: `OllamaAnalyzer`, `GeminiAnalyzer`, `OpenAIAnalyzer`, `TransportAnalyzer.runner`, `parseEndpointModelId`, `AnalyzerEndpoint`, `resolveEndpointApiKey` (W3b Task 3b.5), `endpointsSharingDevice` (W3d Task 3d.2, `server/src/gpu/endpoint-eviction.ts`), `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`, `AnalyzerUnreachableError`, `AnalysisAbortedError`, `LocalUnreachableError`, `isEndpointBusy` (W3d Task 3d.1), `servedModels` and `_resetEndpointRuntimeForTest` (W3b Task 3b.10), `analyzerRateLimiter`, `endpointModelId`.
   - User settings `analyzerEndpoints` and `analyzerEndpointKeys` (W3).
   - Task 4.1 `runFreeText`.
   - Task 4.4 knob.
@@ -1023,16 +1206,17 @@ git commit -m "feat(server,frontend): let the persona engine knob name an OpenAI
     | { engine: 'openai'; endpointId: string; model: string };
   export function resolvePersonaSelection(): PersonaSelection;
   export function personaSharesGpu(): boolean;
-  export async function generateVoiceStylePersona(character: CastCharacter, opts?: { onCpu?: boolean; keepAlive?: string | number }): Promise<string>; // signature unchanged
+  export async function generateVoiceStylePersona(character: CastCharacter, opts?: { onCpu?: boolean; keepAlive?: string | number; signal?: AbortSignal }): Promise<string>; // opts gains `signal` (every engine)
   ```
   `resolvePersonaEngine` is **removed**. Task 4.6 replaces its two production readers with `personaSharesGpu`.
 - **Keeps green:**
   - `src/routes/voice-style.test.ts` and `src/workspace/cast-lock.race.test.ts`. Both mock `generateVoiceStylePersona` and `preparePersonaBatch` by factory, and neither calls the removed or added exports.
   - `src/analyzer/ollama.test.ts` and `src/analyzer/ollama-timeout.test.ts`.
 
-**W3 dependency check, before Step 3:** run `git grep -n "keyOriginMatches(" -- server/src ':!*.test.ts'`.
-- If W3 exported a non-route helper that resolves an endpoint's API key for a selection (checking the stored origin, throwing `AnalyzerKeyOriginError`), call it in `personaRunner` instead of the inline `stored` block. The behaviour asserted by the tests below is the same.
-- Otherwise keep the inline block, and name it in the PR body as a second copy to fold into W3's helper.
+**Reused W3 helpers (no second copies).**
+- `personaRunner` resolves the endpoint key with W3b's `resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl)` (`server/src/workspace/analyzer-endpoints.ts`, Task 3b.5). It throws `AnalyzerKeyOriginError` before any request exists.
+- `personaSharesGpu` decides "same card" with W3d's `endpointsSharingDevice` (`server/src/gpu/endpoint-eviction.ts`, Task 3d.2).
+- Entry criterion 2 has already found both.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1169,6 +1353,14 @@ describe('personaSharesGpu', () => {
     process.env.PERSONA_GEN_ENGINE = 'openai:gone::qwen3';
     expect(personaSharesGpu()).toBe(true);
   });
+
+  it('an endpoint on any card shares only with a Qwen on a card (W3d same-card rule)', () => {
+    onEndpoint('any');
+    process.env.QWEN_DEVICE = 'cpu';
+    expect(personaSharesGpu()).toBe(false);
+    process.env.QWEN_DEVICE = 'cuda:1';
+    expect(personaSharesGpu()).toBe(true);
+  });
 });
 
 describe('generateVoiceStylePersona — gemini', () => {
@@ -1298,6 +1490,23 @@ describe('generateVoiceStylePersona — local and endpoint dispatch', () => {
     await expect(generateVoiceStylePersona(CHAR)).rejects.toBeInstanceOf(AnalyzerUnreachableError);
     expect(generateContentStream).not.toHaveBeenCalled();
   });
+
+  it('forwards the caller abort signal to the transport request (every engine)', async () => {
+    const ac = new AbortController();
+    process.env.PERSONA_GEN_ENGINE = 'local';
+    const { OllamaTransport } = await import('./transports/ollama-transport.js');
+    const ollamaSend = vi.spyOn(OllamaTransport.prototype, 'send').mockResolvedValue(DONE('A voice.'));
+    await generateVoiceStylePersona(CHAR, { onCpu: false, keepAlive: 0, signal: ac.signal });
+    expect(ollamaSend.mock.calls[0][0].signal).toBe(ac.signal);
+    expect(ollamaSend.mock.calls[0][0].freeText).toEqual({ onCpu: false, keepAlive: 0 });
+
+    process.env.PERSONA_GEN_ENGINE = 'openai:lab::qwen3';
+    mockSettingsPatch = { analyzerEndpoints: [ENDPOINT()] };
+    const { OpenAITransport } = await import('./transports/openai-transport.js');
+    const openaiSend = vi.spyOn(OpenAITransport.prototype, 'send').mockResolvedValue(DONE('A voice.'));
+    await generateVoiceStylePersona(CHAR, { signal: ac.signal });
+    expect(openaiSend.mock.calls[0][0].signal).toBe(ac.signal);
+  });
 });
 ```
 Also check that the kept `delegateConfigValue` helper (`:53-57`) delegates every other key to the real `configValue`. `QWEN_DEVICE` and `analyzer.ollama.temperature` resolve through it, so no change is needed.
@@ -1305,30 +1514,41 @@ Also check that the kept `delegateConfigValue` helper (`:53-57`) delegates every
 `server/src/analyzer/voice-style.endpoint.test.ts` is the wiring proof: the transport's limiter, concurrency, in-flight registration and key header reach a persona. It uses a real server and no SDK mock:
 ```ts
 /* #3084 W4 — an endpoint persona (PERSONA_GEN_ENGINE=openai:lab::qwen3) runs through OpenAITransport for
-   real: limiter keyed by the model id, the endpoint's concurrency, in-flight registration for a GPU
-   endpoint, and the key sent only under a matching origin. Real http.createServer on 127.0.0.1:0. */
+   real: limiter keyed by the model id, the endpoint's concurrency, W3d's per-call busy registration for a
+   GPU endpoint, the served-model record, and the key sent only under a matching origin. The server also
+   answers the served-models listing prepare() sends. Real http.createServer on 127.0.0.1:0. */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { createServer, type Server, type IncomingHttpHeaders } from 'node:http';
 import { _setUserSettingsCacheForTest, _resetUserSettingsCache } from '../workspace/user-settings.js';
 import type { AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
-import { isAnyAnalyzerCallInFlight } from './analyzer-concurrency.js';
+import { isEndpointBusy } from './analyzer-concurrency.js';
+import { servedModels, _resetEndpointRuntimeForTest } from './transports/endpoint-runtime.js';
 import { analyzerRateLimiter } from './rate-limit.js';
 import { endpointModelId } from './model-id.js';
+import { AnalysisAbortedError } from './errors.js';
 import { generateVoiceStylePersona } from './voice-style.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
 let server: Server | undefined;
 let active = 0;
 let peak = 0;
-const seen: Array<{ headers: IncomingHttpHeaders; inFlightDuringCall: boolean }> = [];
+let listings = 0;
+const seen: Array<{ headers: IncomingHttpHeaders; busyDuringCall: boolean }> = [];
 
 function startHeldServer(holdMs: number): Promise<string> {
   server = createServer((req, res) => {
+    if (req.method === 'GET') {
+      /* #3084 P15 — runFreeText awaits OpenAITransport.prepare(), which lists the served models. */
+      listings += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ object: 'list', data: [] }));
+      return;
+    }
     active += 1;
     peak = Math.max(peak, active);
     req.resume();
     req.on('end', () => {
-      seen.push({ headers: req.headers, inFlightDuringCall: isAnyAnalyzerCallInFlight() });
+      seen.push({ headers: req.headers, busyDuringCall: isEndpointBusy('lab') });
       setTimeout(() => {
         res.writeHead(200, { 'content-type': 'text/event-stream' });
         const chunk = (delta: object, finish: string | null) =>
@@ -1363,7 +1583,9 @@ beforeEach(() => {
   analyzerRateLimiter._reset();
   active = 0;
   peak = 0;
+  listings = 0;
   seen.length = 0;
+  _resetEndpointRuntimeForTest();
 });
 
 afterEach(async () => {
@@ -1378,7 +1600,7 @@ afterEach(async () => {
 });
 
 describe('endpoint persona wiring', () => {
-  it('sends the key under a matching origin, registers in flight (gpu any) and keys the limiter by model id', async () => {
+  it('sends the key under a matching origin, registers the call busy (gpu any), records the served model and keys the limiter by model id', async () => {
     const baseUrl = await startHeldServer(50);
     _setUserSettingsCacheForTest({
       analyzerEndpoints: [endpoint(baseUrl)],
@@ -1387,16 +1609,18 @@ describe('endpoint persona wiring', () => {
     const acquire = vi.spyOn(analyzerRateLimiter, 'acquire');
     await expect(generateVoiceStylePersona(CHAR)).resolves.toBe('A calm, low voice.');
     expect(seen[0].headers.authorization).toBe('Bearer sk-test');
-    expect(seen[0].inFlightDuringCall).toBe(true);
-    expect(isAnyAnalyzerCallInFlight()).toBe(false);
+    expect(seen[0].busyDuringCall).toBe(true);
+    expect(isEndpointBusy('lab')).toBe(false); // a call registration only: no run mark outlives the persona
+    expect(servedModels('lab')).toEqual(['qwen3']); // a 2xx persona model is an unload target (P3)
+    expect(listings).toBe(1); // prepare() warmed the served limits first
     expect(acquire.mock.calls[0][0]).toBe(endpointModelId('lab', 'qwen3'));
   });
 
-  it('does not register in flight for an endpoint on no card', async () => {
+  it('does not register an endpoint on no card as busy', async () => {
     const baseUrl = await startHeldServer(50);
     _setUserSettingsCacheForTest({ analyzerEndpoints: [endpoint(baseUrl, { gpu: 'none' })] });
     await generateVoiceStylePersona(CHAR);
-    expect(seen[0].inFlightDuringCall).toBe(false);
+    expect(seen[0].busyDuringCall).toBe(false);
     expect(seen[0].headers.authorization).toBeUndefined();
   });
 
@@ -1407,9 +1631,40 @@ describe('endpoint persona wiring', () => {
     expect(seen).toHaveLength(2);
     expect(peak).toBe(1);
   });
+
+  it('aborting the caller signal aborts an in-flight endpoint persona call', async () => {
+    let closedBeforeResponse = false;
+    let arrived!: () => void;
+    const requestArrived = new Promise<void>((r) => (arrived = r));
+    server = createServer((req, res) => {
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ object: 'list', data: [] }));
+        return;
+      }
+      res.on('close', () => {
+        if (!res.writableEnded) closedBeforeResponse = true;
+      });
+      req.resume();
+      req.on('end', () => arrived()); // never answers: only the caller's abort can end this call
+    });
+    const baseUrl = await new Promise<string>((resolve) => {
+      server!.listen(0, '127.0.0.1', () => {
+        const a = server!.address();
+        resolve(`http://127.0.0.1:${typeof a === 'object' && a ? a.port : 0}/v1`);
+      });
+    });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [endpoint(baseUrl, { gpu: 'none' })] });
+    const ac = new AbortController();
+    const pending = generateVoiceStylePersona(CHAR, { signal: ac.signal }).catch((e: unknown) => e);
+    await requestArrived;
+    ac.abort();
+    expect(await pending).toBeInstanceOf(AnalysisAbortedError);
+    await vi.waitFor(() => expect(closedBeforeResponse).toBe(true));
+  });
 });
 ```
-The limiter key assertion follows spec §5 (the analyzer limiter is keyed by the full model id). If W3 keys endpoint limits by the bare model, that is a W3 contract deviation: report it in the PR body and do not weaken this assertion silently.
+The limiter key assertion follows spec §5 (the analyzer limiter is keyed by the full model id). Busy state is W3d Task 3d.1's per-endpoint registry (`isEndpointBusy`); `servedModels` is W3b Task 3b.10's, recorded only after a 2xx. If W3 keys endpoint limits by the bare model, that is a W3 contract deviation: report it in the PR body and do not weaken this assertion silently.
 
 - [ ] **Step 2: Run them and confirm they fail**
   - **Run:** `npm --prefix server run test -- src/analyzer/voice-style.test.ts src/analyzer/voice-style.endpoint.test.ts`
@@ -1458,12 +1713,13 @@ import {
   getResolvedOllamaModel,
   getResolvedOllamaUrl,
 } from '../workspace/user-settings.js';
-import { keyOriginMatches, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
+import { resolveEndpointApiKey, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
+import { endpointsSharingDevice } from '../gpu/endpoint-eviction.js';
 import { GeminiAnalyzer, stripCodeFences } from './gemini.js';
 import { OllamaAnalyzer, resolveOllamaTemperature } from './ollama.js';
 import { OpenAIAnalyzer } from './openai.js';
 import { parseEndpointModelId } from './model-id.js';
-import { AnalyzerEndpointMissingError, AnalyzerKeyOriginError } from './errors.js';
+import { AnalyzerEndpointMissingError } from './errors.js';
 import type { StageRunner } from './runner/stage-runner.js';
 import { readPrompt } from '../config/prompts.js';
 import { configValue } from '../config/resolver.js';
@@ -1496,7 +1752,7 @@ function findEndpoint(endpointId: string): AnalyzerEndpoint | undefined {
     preparePersonaBatch must plan the GPU:
       - local Ollama: always (the rule before #3084);
       - gemini: never;
-      - an endpoint: its card is `any`, or equals Qwen's pinned `cuda:N`; a Qwen device that names no
+      - an endpoint: W3d's endpointsSharingDevice against Qwen's pinned `cuda:N` (`any` shares every card); a Qwen device that names no
         single card (`auto`, `cuda`, an unreconciled `cuda-uuid:`) fails closed; `cpu`/`mps` never share;
         `gpu: 'none'` never shares; an endpoint id missing from settings fails closed. */
 export function personaSharesGpu(): boolean {
@@ -1506,11 +1762,11 @@ export function personaSharesGpu(): boolean {
   const endpoint = findEndpoint(selection.endpointId);
   if (!endpoint) return true;
   if (endpoint.gpu === 'none') return false;
-  if (endpoint.gpu === 'any') return true;
   const qwenDevice = configValue<string>('tts.qwen.device').trim().toLowerCase();
   if (qwenDevice === 'cpu' || qwenDevice === 'mps') return false;
-  if (/^cuda:\d+$/.test(qwenDevice)) return qwenDevice === endpoint.gpu;
-  return true;
+  if (!/^cuda:\d+$/.test(qwenDevice)) return true;
+  /* W3d's same-card rule, not a second copy of it: `any` shares every card, otherwise the exact device key. */
+  return endpointsSharingDevice([endpoint], qwenDevice).length > 0;
 }
 ```
 Replace lines 163-226 (from the `generateVoiceStylePersona` doc comment to the end of the file) with:
@@ -1533,14 +1789,12 @@ function personaRunner(selection: PersonaSelection): StageRunner {
       return new GeminiAnalyzer({ apiKey, model: selection.model }).runner;
     }
     case 'openai': {
-      const endpoint = findEndpoint(selection.endpointId);
+      const settings = getCachedUserSettings();
+      const endpoint = settings.analyzerEndpoints.find((e) => e.id === selection.endpointId);
       if (!endpoint) throw new AnalyzerEndpointMissingError(selection.endpointId, 'persona');
-      const stored: { origin: string; key: string } | undefined =
-        getCachedUserSettings().analyzerEndpointKeys[endpoint.id];
-      if (stored && !keyOriginMatches(stored, endpoint.baseUrl)) {
-        throw new AnalyzerKeyOriginError(endpoint.id, endpoint.name);
-      }
-      return new OpenAIAnalyzer({ endpoint, apiKey: stored?.key ?? null, model: selection.model }).runner;
+      /* W3b's resolver: throws AnalyzerKeyOriginError for a key bound to another origin, before any request exists. */
+      const apiKey = resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl);
+      return new OpenAIAnalyzer({ endpoint, apiKey, model: selection.model }).runner;
     }
   }
 }
@@ -1552,10 +1806,11 @@ function personaRunner(selection: PersonaSelection): StageRunner {
     - gemini → Gemini through the limiter; a clear error when no key resolves.
     - openai → the endpoint through its transport; AnalyzerEndpointMissingError /
                AnalyzerKeyOriginError before any call, AnalyzerUnreachableError when it is down.
+    `opts.signal` aborts the call on every engine (the design job passes its own).
     Never falls back to another engine. */
 export async function generateVoiceStylePersona(
   character: CastCharacter,
-  opts: { onCpu?: boolean; keepAlive?: string | number } = {},
+  opts: { onCpu?: boolean; keepAlive?: string | number; signal?: AbortSignal } = {},
 ): Promise<string> {
   const selection = resolvePersonaSelection();
   const runner = personaRunner(selection);
@@ -1564,11 +1819,12 @@ export async function generateVoiceStylePersona(
     selection.engine === 'local'
       ? {
           prompt,
+          signal: opts.signal,
           /* Main's persona call sent the analyzer's first-attempt temperature to Ollama and none to Gemini. */
           temperature: resolveOllamaTemperature(),
           ollama: { onCpu: opts.onCpu, keepAlive: opts.keepAlive },
         }
-      : { prompt },
+      : { prompt, signal: opts.signal },
   );
   const persona = cleanPersona(raw);
   if (!persona) {
@@ -1581,17 +1837,37 @@ In `server/src/analyzer/ollama.ts`:
 - Delete the `/** One-shot freeform Ollama call for persona generation … */` doc comment and the whole `generatePersonaViaOllama` function.
 - Delete the `PERSONA_ABSOLUTE_MAX_MS` entry from the transport import.
 - Keep `classifyConnectError`. If W1 left it here, the transport imports it.
+
+In W3b's `server/src/analyzer/transport-redaction.test.ts`, drop `generatePersonaViaOllama` from the `./ollama.js` import (keep `OllamaAnalyzer`). In `describe('Ollama persona call redaction (#3084 P22, A8)', …)`, replace the three lines from `/* generatePersonaViaOllama reads its URL from settings (getResolvedOllamaUrl). */` through the `expect((err as Error).message).toBe(…)` statement with the block below. The server setup above it and the `surfaces(err)` / `lines` loop below it stay:
+```ts
+    /* #3084 W4 — the persona call is now OllamaAnalyzer's runner free-text path (Task 4.2), which
+       carries 3b's redaction. The URL goes straight into the analyzer. */
+    _setUserSettingsCacheForTest({ geminiApiKey: SECRET });
+    const err = await new OllamaAnalyzer({ url, model: 'qwen3.5:4b' }).runner
+      .runFreeText({ prompt: 'Describe the voice.', ollama: { onCpu: true } })
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerHttpError);
+    expect((err as Error).message).toBe(
+      `Ollama ${url} returned 500 Internal Server Error: {"error":"persona runner failed for key [redacted]"}`,
+    );
+```
+It passes as soon as it is retargeted (Task 4.2 already moved the redacted body), and Task 4.2's mutation 6 turns it red as well.
+
 - Then run `git grep -n -E "generatePersonaViaOllama|resolvePersonaEngine\b" -- server/src`. Expected remaining hits: only `src/routes/cast-design.ts`, `src/routes/cast-design.test.ts`, `src/tts/persona-gpu-plan.ts` and `src/tts/prepare-persona-batch.test.ts` (Task 4.6 removes them).
 
 - [ ] **Step 4: Run and confirm they pass**
-  - **Run:** `npm --prefix server run test -- src/analyzer/voice-style.test.ts src/analyzer/voice-style.endpoint.test.ts src/analyzer/ollama.test.ts src/analyzer/ollama-timeout.test.ts src/routes/voice-style.test.ts src/workspace/cast-lock.race.test.ts`.
+  - **Run:** `npm --prefix server run test -- src/analyzer/voice-style.test.ts src/analyzer/voice-style.endpoint.test.ts src/analyzer/ollama.test.ts src/analyzer/ollama-timeout.test.ts src/analyzer/transport-redaction.test.ts src/routes/voice-style.test.ts src/workspace/cast-lock.race.test.ts`.
   - **Expected:** PASS. `npm run typecheck` still fails only on `persona-gpu-plan.ts` and `cast-design.ts` importing the removed `resolvePersonaEngine`; Task 4.6 fixes both.
+  - **Then run:** `npm run check:cycles`. **Expected:** no new cycle. `voice-style.ts` → `gpu/endpoint-eviction.ts` is a new edge (analyzer importing gpu, which CLAUDE.md allows; the rule forbids gpu importing routes). If madge reports a cycle through it, stop and report it rather than allowlisting it.
 - [ ] **Step 5: Mutation proof** (restore after each):
   1. **Missing endpoint:** delete `if (!endpoint) throw new AnalyzerEndpointMissingError(…)`. Expected red: `endpoint missing from settings → AnalyzerEndpointMissingError…`.
-  2. **Key origin:** delete the `if (stored && !keyOriginMatches(…)) { … }` block. Expected red: `endpoint key stored for another origin…`, with `send` called.
+  2. **Key origin:** replace `resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl)` with `settings.analyzerEndpointKeys[endpoint.id]?.key ?? null`. Expected red: `endpoint key stored for another origin…`, with `send` called.
   3. **Placement scope:** replace the `runFreeText(` argument ternary with the local branch for every engine. Expected red: `endpoint: routes through OpenAITransport with no Ollama placement…`.
-  4. **Same-card test:** in `personaSharesGpu`, replace `return qwenDevice === endpoint.gpu;` with `return true;`. Expected red: `an endpoint pinned to a card shares only with a Qwen on that card…`.
+  4. **Same-card rule:** in `personaSharesGpu`, replace `return endpointsSharingDevice([endpoint], qwenDevice).length > 0;` with `return true;`. Expected red: `an endpoint pinned to a card shares only with a Qwen on that card…`.
   5. **Estimate:** in Task 4.1's `runFreeText`, change `+ 200` to `+ 100`. Expected red: `acquires the limiter with today's estimate…`.
+  6. **Signal:** in `generateVoiceStylePersona`, delete `signal: opts.signal` from both `runFreeText` arguments. Expected red:
+     - `forwards the caller abort signal to the transport request (every engine)` (`expected undefined to be AbortSignal {}`);
+     - `aborting the caller signal aborts an in-flight endpoint persona call` (times out, because the held request is never cancelled).
 - [ ] **Step 6: Commit** — held until Task 4.6 makes typecheck green. Tasks 4.5 and 4.6 land as one commit (see Task 4.6 Step 6).
 
 ---
@@ -1604,8 +1880,11 @@ In `server/src/analyzer/ollama.ts`:
   - `:16-17` — header bullet;
   - `:56-57` — imports;
   - `:273-292` — pre-pass doc and gate;
-  - `:322-323` — the wholesale rethrow;
-  - `:499-514` — the lazy-persona skip.
+  - `:321-333` — the pre-pass persona call (job signal) and the wholesale rethrow;
+  - `:499-514` — the lazy-persona skip (the ENGINE SPLIT comment and its gate);
+  - `:525-543` — the lazy persona call (job signal), inside the per-character try/catch `6222e483` added. Only the call line changes; the catch is left exactly as `main` has it;
+  - `:908-936` — the design POST route's backstop (a pause that aborted a persona call, and the classified failure code for any other error).
+- Modify: `openapi.yaml` — `CastDesignEvent.code` also admits a `FailureCode`; regenerate `src/lib/api-types.ts`.
 - Test: Modify `server/src/tts/prepare-persona-batch.test.ts:12-18, :36-66`.
 - Test: Modify `server/src/routes/cast-design.test.ts`:
   - `:52-62` — hoisted mocks;
@@ -1614,16 +1893,19 @@ In `server/src/analyzer/ollama.ts`:
   - append two tests inside `describe('cast-design persona pre-pass')`.
 
 **Interfaces:**
-- **Consumes:** from Task 4.5 `personaSharesGpu()`; from `errors.ts` (W1/W3) `AnalyzerUnreachableError`, `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`.
+- **Consumes:** from Task 4.5 `personaSharesGpu()` and `generateVoiceStylePersona`'s `signal` option; from `errors.ts` (W1/W3) `AnalyzerUnreachableError`, `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`, `AnalyzerTimeoutError`, `AnalyzerHttpError`, `AnalysisAbortedError`, and (test only) W2's `AnalyzerReasoningOverflowError`; `classifyAnalysisFailure(err, modelLabel)` (`server/src/routes/failure-taxonomy.ts`, with W2/W3b's codes: `analyzer-reasoning-overflow`, `analyzer-timeout`, `analyzer-endpoint-missing`, and `auth` for a 401/403 or `AnalyzerKeyOriginError`).
 - **Produces:**
   - `preparePersonaBatch(bookDir)` returns `resolvePersonaGpuPlan(bookDir)` whenever `personaSharesGpu()` is true, and `{ onCpu: false, keepAlive: 0 }` otherwise. The plan fields reach only the Ollama transport; an endpoint ignores them.
-  - `runPersonaPrePass` runs when `personaSharesGpu()` is true, and rethrows the three whole-job error classes.
+  - `runPersonaPrePass` runs when `personaSharesGpu()` is true. It rethrows the whole-job error classes: the three selection/reachability classes, `AnalyzerTimeoutError`, and `AnalyzerHttpError` 401/403. A pause that aborts a persona call returns without recording a per-character failure.
+  - Both persona calls (pre-pass and lazy) pass `signal: job.controller.signal`.
+  - The design POST route's backstop ends the job with `type: 'idle'` for an `AnalysisAbortedError` after a pause. It keeps its `lock-contention` branch. Every other error carries `classifyAnalysisFailure(e, 'Persona generation').code` instead of `unknown`: `auth` for a 401/403 `AnalyzerHttpError` or an `AnalyzerKeyOriginError`, `analyzer-timeout` for an `AnalyzerTimeoutError`, `analyzer-endpoint-missing` for an `AnalyzerEndpointMissingError`, and `unknown` only for an error the taxonomy does not recognise. What reaches it is the pre-pass's wholesale rethrows; a lazy persona failure does not, because `6222e483` gave that call its own per-character catch (`:525-543`). Whether the job ends is unchanged (P20).
   - The design loop's lazy persona is skipped when `personaSharesGpu()` is true.
 - **Keeps green:**
   - `src/routes/cast-design.test.ts` (all);
   - `src/routes/voice-style.test.ts`;
   - `src/workspace/cast-lock.race.test.ts`. Its factory mocks omit `personaSharesGpu`, and it never runs the pre-pass or the design loop, so the missing export is never read.
-  - `src/tts/prepare-persona-batch.test.ts`.
+  - `src/tts/prepare-persona-batch.test.ts`;
+  - `src/routes/openapi-design-parity.test.ts` (it pins `CastDesignEvent.type` and the single-design codes; `CastDesignEvent.code` has no parity case) and the frontend `src/lib/api.design-sse-event-types.test.ts`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1744,16 +2026,28 @@ Then, inside `describe('cast-design persona pre-pass', …)` and before its clos
     writeBookOnDisk(characters);
   });
 
-  it.each([
-    ['AnalyzerEndpointMissingError', async () => {
+  it.each<[string, string, () => Promise<Error>]>([
+    ['AnalyzerEndpointMissingError', 'analyzer-endpoint-missing', async () => {
       const { AnalyzerEndpointMissingError } = await import('../analyzer/errors.js');
       return new AnalyzerEndpointMissingError('lab', 'persona');
     }],
-    ['AnalyzerKeyOriginError', async () => {
+    ['AnalyzerKeyOriginError', 'auth', async () => {
       const { AnalyzerKeyOriginError } = await import('../analyzer/errors.js');
       return new AnalyzerKeyOriginError('lab', 'Lab');
     }],
-  ])('a %s in the pre-pass ends the job once instead of failing every character', async (_name, makeErr) => {
+    ['AnalyzerHttpError 401', 'auth', async () => {
+      const { AnalyzerHttpError } = await import('../analyzer/errors.js');
+      return new AnalyzerHttpError('openai', 401, 'invalid api key', 'Endpoint qwen3 returned 401: invalid api key');
+    }],
+    ['AnalyzerHttpError 403', 'auth', async () => {
+      const { AnalyzerHttpError } = await import('../analyzer/errors.js');
+      return new AnalyzerHttpError('openai', 403, 'forbidden', 'Endpoint qwen3 returned 403: forbidden');
+    }],
+    ['AnalyzerTimeoutError', 'analyzer-timeout', async () => {
+      const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
+      return new AnalyzerTimeoutError('openai', 'qwen3', 1_800_000, 'ceiling');
+    }],
+  ])('a %s in the pre-pass ends the job once (code %s) instead of failing every character', async (_name, code, makeErr) => {
     personaSharesGpuMock.mockReturnValue(true);
 
     const plan = await import('../tts/persona-gpu-plan.js');
@@ -1778,11 +2072,167 @@ Then, inside `describe('cast-design persona pre-pass', …)` and before its clos
 
     const events = parseSse(res.text);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+    expect(events.find((e) => e.type === 'error')?.code).toBe(code);
     expect(events.some((e) => e.type === 'character_failed')).toBe(false);
     expect(events.some((e) => e.type === 'idle')).toBe(false);
     expect(designSpy).not.toHaveBeenCalled();
 
     writeBookOnDisk(characters);
+  });
+
+  it('a non-auth HTTP error (500) in the pre-pass stays a per-character failure', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalyzerHttpError } = await import('../analyzer/errors.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockRejectedValue(
+      new AnalyzerHttpError('openai', 500, 'boom', 'Endpoint qwen3 returned 500: boom'),
+    );
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const extraChar = { id: 'nova', name: 'Nova', role: 'supporting', color: 'blue', voiceUuid: 'nova' };
+    writeBookOnDisk([...characters, extraChar]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'nova'] });
+
+    const events = parseSse(res.text);
+    expect(events.filter((e) => e.type === 'character_failed')).toHaveLength(2);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+
+    writeBookOnDisk(characters);
+  });
+
+  it('the pre-pass hands the job abort signal to each persona call; a pause mid-call records no failure', async () => {
+    /* #3084 W4 — with Task 4.5's real-HTTP proof (`aborting the caller signal aborts an in-flight
+       endpoint persona call`), this shows pausing a design job cancels an in-flight persona request. */
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalysisAbortedError } = await import('../analyzer/errors.js');
+    let seen: AbortSignal | undefined;
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockImplementation(async (_character, opts) => {
+      seen = opts?.signal;
+      await request(app).post(`/api/books/${bookId}/cast/design/pause`).send({});
+      throw new AnalysisAbortedError('Endpoint qwen3 call aborted (paused or client disconnected).');
+    });
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ modelKey: QWEN_KEY, characterIds: ['hart'] });
+
+    const events = parseSse(res.text);
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen!.aborted).toBe(true);
+    expect(events.some((e) => e.type === 'character_failed')).toBe(false);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(designSpy).not.toHaveBeenCalled();
+  });
+
+  it('the lazy persona call gets the job abort signal; a pause mid-call ends the job idle, not with an error', async () => {
+    personaSharesGpuMock.mockReturnValue(false);
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalysisAbortedError } = await import('../analyzer/errors.js');
+    let seen: AbortSignal | undefined;
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockImplementation(async (_character, opts) => {
+      seen = opts?.signal;
+      await request(app).post(`/api/books/${bookId}/cast/design/pause`).send({});
+      throw new AnalysisAbortedError('Endpoint qwen3 call aborted (paused or client disconnected).');
+    });
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ modelKey: QWEN_KEY, characterIds: ['hart'] });
+
+    const events = parseSse(res.text);
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen!.aborted).toBe(true);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(events.some((e) => e.type === 'idle')).toBe(true);
+    /* #3084 W4 — the load-bearing half. The lazy call sits inside the per-character catch
+       `6222e483` added, which would otherwise record the abort as a failure against the
+       character the user paused on; the job would still end `idle` with no `error`, so the
+       two assertions above pass either way. These two are what actually fail without the
+       abort check at the top of that catch. */
+    expect(events.some((e) => e.type === 'character_failed')).toBe(false);
+    expect(events.find((e) => e.type === 'idle')?.failures).toHaveLength(0);
+  });
+
+  it('a lazy persona failure stays a per-character failure with its reason string — a reasoning overflow included (#3027/2, #3230)', async () => {
+    /* #3084 W4 — CHARACTERISATION, green before and after this PR. `6222e483` (second half of
+       #3027) gave the lazy call its own try/catch (cast-design.ts:525-543), so its error is
+       recorded per character and the loop moves on; it never reaches the route backstop, so no
+       FailureCode is written for it. P20's voice-design carve-out keeps exactly this behaviour,
+       and this case is what stops Task 4.5's move of the call into runFreeText (and the new
+       `signal` argument) from silently turning it back into a job halt. */
+    personaSharesGpuMock.mockReturnValue(false);
+
+    const vs = await import('../analyzer/voice-style.js');
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    const overflow = new AnalyzerReasoningOverflowError('openai', 'openai:lab::qwen3', 900);
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockRejectedValueOnce(overflow);
+
+    const qwen = await import('./qwen-voice.js');
+    const designSpy = vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-nova', url: '/v/nova.mp3' });
+
+    /* hart has no voiceStyle, so the lazy fallback fires and throws; nova HAS one, so it designs
+       normally. Order [hart, nova] puts the failure first — a job halt would leave nova undesigned. */
+    const extraChar = { id: 'nova', name: 'Nova', role: 'supporting', color: 'blue', voiceUuid: 'nova', voiceStyle: 'a dry, clipped baritone' };
+    writeBookOnDisk([...characters, extraChar]);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ modelKey: QWEN_KEY, characterIds: ['hart', 'nova'] });
+
+    const events = parseSse(res.text);
+    /* Per character, not job-wide: no terminal error event at all. */
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    const failed = events.find((e) => e.type === 'character_failed' && e.characterId === 'hart');
+    expect(failed).toBeDefined();
+    /* itemFailureReason passes a non-lock error's message through verbatim — a reason STRING, no code. */
+    expect(failed?.errorReason).toBe(overflow.message);
+    expect(failed).not.toHaveProperty('code');
+    /* The run continues to the next character and ends idle with the failure listed. */
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'nova')).toBe(true);
+    expect(designSpy).toHaveBeenCalledTimes(1);
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle?.failures).toHaveLength(1);
+    expect(idle?.failures?.[0].characterId).toBe('hart');
+
+    writeBookOnDisk(characters);
+  });
+
+  it('a design job marks no endpoint run, so VoiceDesign can still evict a same-card persona endpoint (#3084 P1)', async () => {
+    personaSharesGpuMock.mockReturnValue(true);
+
+    const conc = await import('../analyzer/analyzer-concurrency.js');
+    const mark = vi.spyOn(conc, 'markEndpointRunActive');
+
+    const plan = await import('../tts/persona-gpu-plan.js');
+    vi.spyOn(plan, 'preparePersonaBatch').mockResolvedValue({ onCpu: false, keepAlive: 0 });
+
+    const vs = await import('../analyzer/voice-style.js');
+    vi.spyOn(vs, 'generateVoiceStylePersona').mockResolvedValue('A persona.');
+
+    const qwen = await import('./qwen-voice.js');
+    vi.spyOn(qwen, 'designQwenVoiceForCharacter').mockResolvedValue({ voiceId: 'qwen-hart', url: '/v/hart.mp3' });
+
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({ modelKey: QWEN_KEY, characterIds: ['hart'] });
+
+    expect(res.status).toBe(200);
+    expect(mark).not.toHaveBeenCalled();
   });
 ```
 - [ ] **Step 2: Run them and confirm they fail**
@@ -1790,7 +2240,11 @@ Then, inside `describe('cast-design persona pre-pass', …)` and before its clos
   - **Expected:** FAIL.
     - `prepare-persona-batch`: the first case fails with `expected { onCpu: false, keepAlive: 0 } to deeply equal { onCpu: false, keepAlive: 300 }`, because `preparePersonaBatch` still reads the removed `resolvePersonaEngine`.
     - `cast-design`: every test fails at import or first call, because `cast-design.ts` still imports and calls `resolvePersonaEngine`, which the mock no longer provides (`… is not a function`).
-    - After Step 3's gate swap alone, the two new cases are still red: `expected 'idle' …`, since line 323 records the error per character.
+    - After Step 3's gate swap alone, these stay red:
+      - the `it.each` rows (`character_failed` present), since line 323 records the error per character;
+      - both signal cases (`expected undefined to be an instance of AbortSignal`);
+      - the `AnalyzerEndpointMissingError`, `AnalyzerTimeoutError` and auth rows, with `expected 'unknown' to be …` (the backstop still writes `unknown`).
+    - **Not red, and must not be:** `a lazy persona failure stays a per-character failure…` characterises behaviour already on `main` (`6222e483`). It passes before Step 3 and has to stay green through it — if Step 3 turns it red, the move into `runFreeText` has re-broken #3027's second half.
 - [ ] **Step 3: Implement**
 
 `server/src/tts/persona-gpu-plan.ts`:
@@ -1832,6 +2286,9 @@ import {
   AnalyzerUnreachableError,
   AnalyzerEndpointMissingError,
   AnalyzerKeyOriginError,
+  AnalyzerTimeoutError,
+  AnalyzerHttpError,
+  AnalysisAbortedError,
 } from '../analyzer/errors.js';
 ```
 - Lines 273-292 (the pre-pass doc through its gate) become:
@@ -1852,22 +2309,30 @@ import {
 
     Failure modes:
     - `AnalyzerUnreachableError` (incl. Ollama's `LocalUnreachableError`),
-      `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError` → PROPAGATE
-      (wholesale job abort — every remaining character would fail identically).
+      `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`, `AnalyzerTimeoutError`,
+      `AnalyzerHttpError` 401/403 → PROPAGATE (wholesale job abort — every remaining
+      character would fail identically).
+    - A pause that aborted the call (the job signal reaches the transport) → return;
+      nothing is recorded.
     - Any other per-character error → recorded to `job.failures` +
       `character_failed` broadcast + continue (design loop will skip
       characters whose persona we could not set). */
 async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<void> {
   if (!personaSharesGpu()) return;
 ```
+- Line 321 becomes `persona = await generateVoiceStylePersona(character, { ...prep, signal: job.controller.signal });`.
 - Line 323 becomes:
 ```ts
+        /* A pause aborted the call (the job signal reaches the transport): a clean stop, not a failure. */
+        if (job.controller.signal.aborted) return;
         if (
           err instanceof AnalyzerUnreachableError ||
           err instanceof AnalyzerEndpointMissingError ||
-          err instanceof AnalyzerKeyOriginError
+          err instanceof AnalyzerKeyOriginError ||
+          err instanceof AnalyzerTimeoutError ||
+          (err instanceof AnalyzerHttpError && (err.httpStatus === 401 || err.httpStatus === 403))
         ) {
-          throw err; // wholesale — propagate
+          throw err; // wholesale — every remaining character would fail the same way
         }
 ```
 - Lines 499-514 (the ENGINE SPLIT comment through the `resolvePersonaEngine() === 'local'` block) become:
@@ -1890,20 +2355,98 @@ async function runPersonaPrePass(job: DesignJob, tasks: DesignTask[]): Promise<v
           continue;
         }
 ```
-Lines 515-517 (`persona = await generateVoiceStylePersona(character);` and the write) stay.
+Line 526 becomes `persona = await generateVoiceStylePersona(character, { signal: job.controller.signal });`. The `writeVoiceStylePersona` call at `:527` stays as it is.
+
+The `catch (e)` at `:528-543` keeps its per-character shape — recording to `job.failures`, broadcasting `character_failed`, then `continue` — and this PR must not widen or bypass it. It gains exactly one line, as its first statement, because the job signal now reaches this call:
+```ts
+        } catch (e) {
+          /* #3084 W4 — a pause aborted the call (the job signal now reaches the transport): a clean
+             stop, not a failure. Mirrors the pre-pass catch. Without this the abort would be recorded
+             as a `character_failed` against the character the user paused on, and the loop's abort
+             check (`:388-389`) would then end the job `idle` carrying that spurious failure. */
+          if (job.controller.signal.aborted) return;
+```
+Everything already in that catch, from `const message = …` through `continue;`, is unchanged.
+
+**No ride-out-comment fix is owed any more.** An earlier draft of this task corrected the `#2292` comment at `main :680-687`, which named `ensureCharacterVoiceUuid` and `writeVoiceStylePersona` as persist steps inside a `try` they actually ran before. `6222e483`'s follow-ups fixed that upstream: `ensureCharacterVoiceUuid` now really does run inside the per-character `try`, and `46e62a34`'s comment (`:713-721`) correctly lists `ensureCharacterVoiceUuid`, `designQwenVoiceForCharacter`, `applyOverrideToCastFiles` and `persistEmotionVariant`. Leave it alone; do not re-apply the old edit, and do not claim it as a finding in the PR body.
+
+In the design POST route's backstop (`void runDesignJob(job, …).catch((e) => { … })`, main `:908-936`), keep the `lock-contention` branch, insert the pause branch after it, and replace the final `unknown` branch's body. Add `import { classifyAnalysisFailure } from './failure-taxonomy.js';` (merge it into an existing `./failure-taxonomy.js` import if the file has one). The backstop becomes:
+```ts
+    if (isLockAcquisitionTimeout(e)) {
+      endJob(job, {
+        type: 'error',
+        code: 'lock-contention',
+        message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
+      });
+    } else if (e instanceof AnalysisAbortedError && job.controller.signal.aborted) {
+      /* #3084 W4 — defence in depth for a pause. Both persona paths now stop cleanly before this
+         point: the pre-pass returns on abort, and the lazy call's own per-character catch
+         (`:528-543`, from `6222e483`) returns on abort too. Nothing routinely reaches this branch;
+         it exists so that any abort that DOES escape the loop reads as a clean stop rather than a
+         `code: 'unknown'` halt. */
+      endJob(job, {
+        type: 'idle',
+        done: job.done,
+        total: job.total,
+        skipped: job.skipped,
+        clonedSkips: job.clonedSkips,
+        failures: job.failures,
+      });
+    } else {
+      /* #3084 W4 — every other error that escapes the design loop carries the analysis failure
+         taxonomy's code: `auth` for a refused key (401/403) or a key bound to another origin,
+         `analyzer-endpoint-missing`, `analyzer-timeout`, and `unknown` only when the taxonomy
+         recognises nothing. In practice that is the pre-pass's wholesale rethrows. The LAZY
+         persona call does NOT arrive here: it has had its own per-character catch since
+         `6222e483` (second half of #3027), so its failure is a `character_failed` carrying a
+         reason string and the job carries on — which is what #3230 asked for, and is P20's
+         voice-design carve-out. The code is a variable, not a literal: the taxonomy owns this
+         set, and `CastDesignEvent.code` admits any `FailureCode`. The message stays the curated one. */
+      endJob(job, {
+        type: 'error',
+        code: classifyAnalysisFailure(e, 'Persona generation').code,
+        message: requestFailureMessage(e, (e as Error).message || 'Cast design failed.'),
+      });
+    }
+```
+The `AnalyzerHttpError` / `AnalyzerKeyOriginError` imports stay: `runPersonaPrePass`'s rethrow condition uses them.
+
+`openapi.yaml`, `components.schemas.CastDesignEvent`:
+- In its `description`, replace `` `unknown` (defensive catch-all for any other unexpected throw escaping the design loop). `` with `` any other throw escaping the design loop — a whole-job persona-engine failure included — carries its analysis `FailureCode` (#3084 W4: `auth`, `analyzer-endpoint-missing`, `analyzer-timeout`, …), and `unknown` when the taxonomy recognises nothing. A per-character persona failure does not escape the loop and is reported as `character_failed` instead. ``
+- Replace the `code` property's `type: string` + `enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]` lines with the block below, keeping its `description`:
+```yaml
+        code:
+          anyOf:
+            - type: string
+              enum: [sidecar_unavailable, gpu_contention, unsupported_language, lock-contention, language_unset, unknown]
+            - $ref: '#/components/schemas/FailureCode'
+```
+Then run `npm run openapi:types`. `src/lib/api.ts` reads no `CastDesignEvent['code']` member by literal (`git grep -n "sidecar_unavailable\|gpu_contention" -- src` prints only `src/lib/api-types.ts`), so the widened union compiles unchanged.
 
 - [ ] **Step 4: Run and confirm they pass**
   - **Run:** `npm --prefix server run test -- src/tts/prepare-persona-batch.test.ts src/routes/cast-design.test.ts src/routes/voice-style.test.ts src/workspace/cast-lock.race.test.ts src/analyzer/voice-style.test.ts src/analyzer/voice-style.endpoint.test.ts`.
-  - **Then run:** `npm run typecheck` and `git grep -n -E "resolvePersonaEngine|generatePersonaViaOllama" -- server/src`.
+  - **Then run:** `npm --prefix server run test -- src/routes/openapi-design-parity.test.ts`, `npm test -- src/lib/api.design-sse-event-types.test.ts`, `npm run typecheck` and `git grep -n -E "resolvePersonaEngine|generatePersonaViaOllama" -- server/src`.
   - **Expected:** PASS; tsc clean; the grep finds nothing.
+  - **What this proves together:** `the pre-pass hands the job abort signal to each persona call…` shows the job signal reaches `generateVoiceStylePersona`. Task 4.5's `aborting the caller signal aborts an in-flight endpoint persona call` shows that signal cancels a real HTTP request. So pausing a design job aborts an in-flight endpoint persona call.
 - [ ] **Step 5: Mutation proof** (restore after each):
   1. **Local-only rethrow:** revert line 323 to `if (err instanceof LocalUnreachableError) throw err;` (importing `LocalUnreachableError` from `../analyzer/errors.js`). Expected red: `an endpoint unreachable error in the pre-pass ends the job wholesale…` (`errorEvent` undefined).
-  2. **Selection errors:** remove the `AnalyzerEndpointMissingError` and `AnalyzerKeyOriginError` alternatives. Expected red: both `it.each` cases (`character_failed` present, `idle` emitted).
+  2. **Selection errors:** remove the `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError` and `AnalyzerTimeoutError` alternatives. Expected red: those three `it.each` rows (`character_failed` present, `idle` emitted).
   3. **Plan gate:** in `preparePersonaBatch`, replace `!personaSharesGpu()` with `true`. Expected red: `persona shares the GPU…, idle → GPU args…`.
   4. **Pre-pass gate:** in `runPersonaPrePass`, replace `if (!personaSharesGpu()) return;` with `return;`. Expected red: `local: all personas generated before the first designQwenVoiceForCharacter…` (`preparePersonaBatch` called 0 times).
+  5. **Auth status gate:** change `(err.httpStatus === 401 || err.httpStatus === 403)` to `true`. Expected red: `a non-auth HTTP error (500) in the pre-pass stays a per-character failure` (an `error` event instead of two `character_failed`).
+  6. **Classified code:** in the backstop's final branch, replace `classifyAnalysisFailure(e, 'Persona generation').code` with `'unknown'`. Expected red: the `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`, `AnalyzerHttpError 401`, `AnalyzerHttpError 403` and `AnalyzerTimeoutError` pre-pass rows (`expected 'unknown' to be 'analyzer-endpoint-missing'`, and so on). The lazy-path case is deliberately NOT among them — its failure never reaches the backstop.
+  7. **Job signal:**
+     - In the pre-pass call, pass `prep` instead of `{ ...prep, signal: job.controller.signal }`. Expected red: `the pre-pass hands the job abort signal to each persona call…` (`seen` undefined).
+     - In the lazy call, drop `{ signal: job.controller.signal }`. Expected red: `the lazy persona call gets the job abort signal…`.
+  8. **Clean pause:**
+     - Delete `if (job.controller.signal.aborted) return;` from the pre-pass catch. Expected red: `…a pause mid-call records no failure` (`character_failed` present).
+     - Delete `if (job.controller.signal.aborted) return;` from the **lazy** catch. Expected red: `the lazy persona call gets the job abort signal; a pause mid-call ends the job idle, not with an error` — on its `character_failed`/`failures` assertions, NOT on its `error`/`idle` ones, which stay green. If the test goes red on the `error` assertion instead, the abort is escaping the catch and the diff is wrong.
+     - Delete the backstop's `AnalysisAbortedError` branch. **Expected: still GREEN** — with both per-path abort checks in place nothing reaches it. To show the branch works, instead delete it *and* the lazy catch's abort check together: expected red on the same test's `error` assertion (`code: 'unknown'` instead of `idle`).
+  9. **No run mark:** at the top of `runDesignJob`, add `const releaseRun = markEndpointRunActive(['lab']);` (importing it from `../analyzer/analyzer-concurrency.js`). Expected red: `a design job marks no endpoint run…` (`mark` called once). Remove.
+  10. **Lazy per-character catch (guards `6222e483`, not this PR's own code):** in `runDesignJob`, replace the lazy persona `catch (e) { … continue; }` body with `throw e;`. Expected red: `a lazy persona failure stays a per-character failure…` (an `error` event appears, `nova` is never designed, `designSpy` called 0 times). Restore.
 - [ ] **Step 6: Commit** (Tasks 4.5 and 4.6 together)
 ```bash
-git add server/src/analyzer/voice-style.ts server/src/analyzer/voice-style.test.ts server/src/analyzer/voice-style.endpoint.test.ts server/src/analyzer/ollama.ts server/src/tts/persona-gpu-plan.ts server/src/tts/prepare-persona-batch.test.ts server/src/routes/cast-design.ts server/src/routes/cast-design.test.ts
+git add server/src/analyzer/voice-style.ts server/src/analyzer/voice-style.test.ts server/src/analyzer/voice-style.endpoint.test.ts server/src/analyzer/transport-redaction.test.ts server/src/analyzer/ollama.ts server/src/tts/persona-gpu-plan.ts server/src/tts/prepare-persona-batch.test.ts server/src/routes/cast-design.ts server/src/routes/cast-design.test.ts openapi.yaml src/lib/api-types.ts
 git commit -m "feat(server): generate personas through the analyzer transports for every engine"
 ```
 
@@ -2268,16 +2811,18 @@ In `docs/features/284-openai-compatible-analyzer.md`, append to `## Invariants t
 ```markdown
 7. **Persona generation.** A persona runs through the selected engine's transport with no cross-provider fallback (`server/src/analyzer/voice-style.ts`).
    - **Ollama:** the call stays non-streaming with a caller `keep_alive` and CPU placement. It is bounded by `PERSONA_ABSOLUTE_MAX_MS`, which starts after the analyzer slot is acquired, and the slot is released on every path (`server/src/analyzer/transports/ollama-transport.ts`, `ollama-timeout.test.ts`).
-   - **Gemini:** the limiter estimate stays `ceil(prompt.length / 4) + 200`, and the persona wire carries no system instruction, temperature or output cap.
+   - **Gemini:** the limiter estimate stays `ceil(prompt.length / 4) + 200`, and the persona wire carries no system instruction, temperature or output cap. It asks for no thoughts, so its `thoughtsTokenCount` is not reasoning evidence (one flag, P27).
    - **Shared card:** a persona engine that shares the Qwen card (local, or a same-card endpoint) is generated before VoiceDesign loads (`server/src/routes/cast-design.ts`).
+   - **Cancellation and whole-job errors:** the design job's abort signal reaches every persona call, and a pause is a clean stop (a local persona call aborted before its first byte included). An unreachable, missing, key-mismatched, timed-out or 401/403 persona engine ends the job once.
+   - **Failure codes:** any error that ends a design job carries its failure-taxonomy code (`auth` for a key problem), and `unknown` only when the taxonomy recognises nothing. A lazy-path persona failure does **not** end the job: since `6222e483` (#3027 second half) it is a per-character `character_failed` carrying `itemFailureReason`'s reason string, a reasoning overflow included (P20's voice-design carve-out). #3230 asked for that behaviour and looks resolved by that commit.
 ```
 Under `### Automated coverage`, add after the `Routes (server)` bullet:
 ```markdown
 - **Persona generation (server and frontend).**
   - The runner's free-text path, and each transport's free-text wire shape against a stage-request control.
   - The persona engine knob's grammar, pinned to the shared id case table.
-  - Selection errors before any call (missing endpoint, key origin), and endpoint wiring over a real server (key header, in-flight registration, concurrency 1).
-  - The same-card rule, and the design pre-pass's wholesale errors.
+  - Selection errors before any call (missing endpoint, key origin), and endpoint wiring over a real server (key header, per-call busy registration, served-model record, served-models listing, concurrency 1).
+  - The same-card rule (W3d's `endpointsSharingDevice`), the design pre-pass's wholesale errors and their codes, and the job signal reaching the persona call (a pause aborts a real in-flight endpoint request).
   - The Advanced Settings picker.
 ```
 Under `### Manual acceptance walkthrough`, add:
@@ -2291,20 +2836,30 @@ In `docs/release-notes-next.md`, find the section holding W3's `#3084` entries (
 - **Persona generation can use any analyzer engine, including an OpenAI-compatible endpoint model.**
   - **Setting:** `analyzer.personaGeneration.engine` (`PERSONA_GEN_ENGINE`) accepts `local`, `gemini` or `openai:<endpointId>::<model>`, picked in Advanced Settings from the analyzer model catalog. Existing `local` / `gemini` values keep working.
   - **Path:** every persona call runs through `StageRunner.runFreeText` and the engine's transport.
-  - **Endpoints:** an endpoint persona gets the analyzer limiter, the endpoint's concurrency and request ceiling, GPU in-flight accounting and the key-origin rule. A missing endpoint fails as `AnalyzerEndpointMissingError` (source `persona`) before any call.
+  - **Endpoints:** an endpoint persona gets:
+    - the analyzer limiter, and the endpoint's concurrency and request ceiling;
+    - the served-limits warm-up;
+    - per-call busy registration on a GPU endpoint. A design job marks no endpoint run, so VoiceDesign can still evict a same-card endpoint between calls;
+    - the key-origin rule. A missing endpoint fails as `AnalyzerEndpointMissingError` (source `persona`) before any call.
   - **Ollama:** it keeps its non-streaming call, `keep_alive` window, CPU placement and 600 s bound.
   - **Gemini:** it keeps its request shape and limiter estimate, and now retries rate-limit and server errors through the shared transport retry helper.
   - **Shared card:** a persona engine on the Qwen card follows the local ordering in Design full cast (personas before VoiceDesign loads).
-  - **Errors:** an unreachable, missing or key-mismatched persona endpoint ends the design job once instead of failing every character. There is still no cross-provider fallback. (#PR, refs #3084)
+  - **Errors:** an unreachable, missing, key-mismatched or timed-out persona engine, or one that answers 401/403, ends the design job once instead of failing every character. Any error that ends the design job now carries its failure code (`auth` for a key problem, `analyzer-endpoint-missing`, `analyzer-timeout`, …) instead of `unknown`; `CastDesignEvent.code` admits a `FailureCode`. A lazy-path persona failure is not one of those — it stays a per-character failure and the job carries on, as on `main` since #3027. There is still no cross-provider fallback.
+  - **Persona outcomes that change:**
+    - **Every engine:** a reply that is only an unterminated `<think>` block is now the empty-persona error, or `analyzer-reasoning-overflow` when a length stop cut it off. On `main` that text was saved as the persona, because `cleanPersona` strips only a closed `<think>…</think>` block.
+    - **Ollama:** a reply the length limit cut off after only thinking (`done_reason: "length"`, empty content, non-empty `thinking`) now fails as `analyzer-reasoning-overflow`, where `main` reported the empty-persona error.
+    - **Gemini:** a blocked reply now fails as `GeminiContentBlockedError` (`analyzer-content-blocked`), where `main` read its empty text as the empty-persona error. A Gemini persona asks for no thought summaries, so a reported `thoughtsTokenCount` is not reasoning evidence: an empty length stop with no `<think>` block stays the empty-persona error.
+  - **Ollama non-OK body:** the persona call keeps PR 3b's known-secret redaction through the move and now fails as an `AnalyzerHttpError` carrying the status and the redacted excerpt, where it was a plain `Error`.
+  - **Cancellation:** pausing Design full cast now cancels a persona request in flight (the job's abort signal reaches the transport) and stops cleanly. (#PR, refs #3084)
 ```
 At the top of the in-progress `# Castwright 1.15.0` section of `RELEASE_NOTES.md`, add:
 ```markdown
-- **You can write your cast's voice descriptions with your own model server.** If you've connected an OpenAI-compatible server — llama.cpp, LM Studio, vLLM and the like — for analysis, you can now pick one of its models to write each character's voice description too, under Persona generation engine in Advanced configuration. It shares the same limits and graphics-card coordination as analysis, and if that server is missing or can't be reached, Castwright tells you once and stops rather than quietly switching to Gemini. Gemini voice descriptions also ride out a brief rate limit or server hiccup now instead of failing that character.
+- **You can write your cast's voice descriptions with your own model server.** If you've connected an OpenAI-compatible server — llama.cpp, LM Studio, vLLM and the like — for analysis, you can now pick one of its models to write each character's voice description too, under Persona generation engine in Advanced configuration. It shares the same limits and graphics-card coordination as analysis, and if that server is missing or can't be reached, Castwright tells you once and stops rather than quietly switching to Gemini. Gemini voice descriptions also ride out a brief rate limit or server hiccup now instead of failing that character. And pausing Design full cast now also stops a voice description that's still being written. A model that never gets past its thinking no longer has that half-finished thinking saved as a character's voice description: Castwright reports it, and says so when the model ran out of room while thinking. And when Gemini's safety filter blocks a voice description, Castwright now says it was blocked instead of calling it empty.
 ```
 Replace `#PR` with the PR number once it is opened.
 
 - [ ] **Step 3: Generated artifacts and checks.**
-  - **OpenAPI:** untouched. Config descriptors are not in `openapi.yaml`, and no wire shape changed, so there is no `openapi:types`.
+  - **OpenAPI:** Task 4.6 widened `CastDesignEvent.code`. Run `npm run openapi:types`, then `git diff --exit-code src/lib/api-types.ts` (exit 0: committed in Task 4.6). Config descriptors are not in `openapi.yaml`.
   - **Config:** `npm run config:check`, which Task 4.4 already synced.
   - **Typecheck:** `npm run typecheck`.
   - **Branch battery:** `npm run verify:fast:branch`.
@@ -2326,13 +2881,17 @@ PR title: `feat(server,frontend): generate personas through the analyzer transpo
 ```markdown
 ## Summary
 - `analyzer.personaGeneration.engine` accepts `local`, `gemini` or `openai:<endpointId>::<model>` (new `analyzer-engine` knob type, picked in Advanced Settings from the analyzer model catalog); `PERSONA_GEN_ENGINE=local|gemini` keeps working.
-- Persona calls for every engine run through `StageRunner.runFreeText` and the engine transport. Ollama's non-streaming persona call, `keep_alive`, CPU placement and 600 s bound moved into `OllamaTransport` unchanged; Gemini keeps its wire shape and limiter estimate and gains the shared retry helper; endpoint personas get the limiter, concurrency, ceiling, in-flight accounting and key-origin rule, and a missing endpoint fails before any call.
-- `personaSharesGpu()` (local, or an endpoint on the Qwen card) replaces `engine === 'local'` in `preparePersonaBatch` and Design full cast. The pre-pass ends the job once on an unreachable, missing or key-mismatched persona engine.
+- Persona calls for every engine run through `StageRunner.runFreeText` and the engine transport. Ollama's non-streaming persona call, `keep_alive`, CPU placement and 600 s bound moved into `OllamaTransport` unchanged; Gemini keeps its wire shape and limiter estimate and gains the shared retry helper; endpoint personas get the limiter, concurrency, ceiling, served-limits warm-up, per-call busy registration and the key-origin rule, and a missing endpoint fails before any call. A design job marks no endpoint run; the reason is in the plan's Delivers section.
+- `personaSharesGpu()` (local, or an endpoint that W3d's `endpointsSharingDevice` places on the Qwen card) replaces `engine === 'local'` in `preparePersonaBatch` and Design full cast. The pre-pass ends the job once on an unreachable, missing, key-mismatched, timed-out or 401/403 persona engine (`auth` for key problems). The job's abort signal reaches every persona call.
+- Also fixed, found in passing: the `pattern` doc in `server/src/config/types.ts` said patterns are validated "case-insensitively". `coerceAndValidate` actually tests them with the pattern's own flags (`resolver.ts:219-221`), and the doc now says so.
+- Any error that ends Design full cast carries its failure-taxonomy code instead of `unknown` (`CastDesignEvent.code` admits a `FailureCode`). A local persona call a pause aborts before its first byte reports a clean stop, not an unreachable daemon. Persona outcomes change: an unterminated `<think>` reply is the empty-persona error on every engine; an Ollama thinking-only length stop is `analyzer-reasoning-overflow`; a blocked Gemini reply is `GeminiContentBlockedError`; and a Gemini persona's `thoughtsTokenCount` is not reasoning evidence, because it asks for no thoughts (one flag gates the wire and the count, P27).
+- The Ollama persona call's non-OK body keeps PR 3b's known-secret redaction through the move (P22), and is now an `AnalyzerHttpError` carrying the status and the redacted excerpt instead of a plain `Error`. W3b's `transport-redaction.test.ts` persona case now drives the moved call.
+- #3230 is not an open decision for this PR. `6222e483` (second half of #3027) already made the lazy persona path per-character, and this PR keeps it that way — a lazy persona failure, reasoning overflow included, is a `character_failed` with a reason string, not a job halt. The issue is left OPEN for the owner to verify and close (Refs #3230).
 - Plan: docs/features/284-openai-compatible-analyzer.md (invariant 7). Spec D10 / §10.
 
 ## Test plan
-- [ ] server: stage-runner.free-text, ollama, ollama-timeout, gemini/openai-transport.free-text, registry, config route, voice-style, voice-style.endpoint (real HTTP), prepare-persona-batch, cast-design
-- [ ] frontend: persona-engine-options, override-row, advanced, a11y
+- [ ] server: stage-runner.free-text, ollama, ollama-timeout, transport-redaction (retargeted persona case), gemini/openai-transport.free-text, registry, config route, voice-style, voice-style.endpoint (real HTTP), prepare-persona-batch, cast-design, openapi-design-parity
+- [ ] frontend: persona-engine-options, override-row, advanced, a11y, api.design-sse-event-types
 - [ ] mutation proofs (outputs pasted below)
 - [ ] `npm run typecheck`, `npm run config:check`, `npm run verify:fast:branch`, slow-lane gemini.test.ts
 - On-box: no new row — see Task 4.8 Step 4 reasoning (covered by W3's same-card eviction row).
