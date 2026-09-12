@@ -29,26 +29,31 @@ export function sidecarCommand(platform, repoRoot) {
 const RESTART43_STREAK_WINDOW_MS = 600_000; // 10 min
 const RESTART43_STREAK_TRIP_COUNT = 3;
 
-/* Generic crash-loop retry for any unexpected non-zero, non-43 exit (#3206).
+/* Generic crash-loop retry for code-42 exits only (#3206).
    Code 42 (CUDA device-side assert / "poison") is the driving case — before
    PR #3148 both start.ps1/start.sh retried it unconditionally, and the
    supervised path (sidecar-supervisor.ts) still does. This path is
-   deliberately code-agnostic and kept SEPARATE from the code-43 streak above:
-   43 is a planned memory-recycle event with its own fixed-2s/3-in-10-minutes
-   shape, and folding a poison exit into that cap/message would misdiagnose
-   it. Values duplicated (not imported) from sidecar-supervisor.ts's
-   DEFAULT_BACKOFFS_MS/DEFAULT_MAX_CONSECUTIVE_FAILURES — that file is TS
-   compiled separately from this .mjs script and does not export them. */
+   kept SEPARATE from the code-43 streak above: 43 is a planned memory-recycle
+   event with its own fixed-2s/3-in-10-minutes shape, and folding a poison exit
+   into that cap/message would misdiagnose it. Values duplicated (not imported)
+   from sidecar-supervisor.ts's DEFAULT_BACKOFFS_MS/DEFAULT_MAX_CONSECUTIVE_FAILURES
+   — that file is TS compiled separately from this .mjs script and does not
+   export them. A child that lived past QUICK_DEATH_MS before exiting is a
+   fresh incident and resets the counter (#2106); one that dies fast is part
+   of the crash loop. */
 const CRASH_LOOP_BACKOFFS_MS = [2_000, 5_000, 15_000];
 const CRASH_LOOP_MAX_CONSECUTIVE_FAILURES = 5;
+const QUICK_DEATH_MS = 30_000; // Child lifetime threshold for fresh-incident detection
 
 export async function launchSidecarWithRestart(platform, repoRoot, spawn = realSpawn) {
   let restart43Timestamps = [];
   let crashLoopFailures = 0;
+  let lastSpawnAt = Date.now(); // Track when we spawned so we can detect fresh incidents
 
   const launch = () => {
     return new Promise((resolve, reject) => {
       const { file, args } = sidecarCommand(platform, repoRoot);
+      lastSpawnAt = Date.now(); // Record spawn time for this attempt
       const child = spawn(file, args, { stdio: 'inherit', windowsHide: true });
 
       child.on('exit', (code) => {
@@ -88,9 +93,11 @@ export async function launchSidecarWithRestart(platform, repoRoot, spawn = realS
             // In tests, process.exit may throw; reject the promise so await completes
             reject(err);
           }
-        } else {
-          // Any other unexpected non-zero exit (including 42): generic crash-loop retry,
-          // separate from the code-43 streak above.
+        } else if (code === 42) {
+          // Code 42 (CUDA poison): generic crash-loop retry with fresh-incident reset.
+          // A child that lived past QUICK_DEATH_MS is a fresh incident, not part of a crash loop.
+          const freshIncident = Date.now() - lastSpawnAt >= QUICK_DEATH_MS;
+          if (freshIncident) crashLoopFailures = 0;
           crashLoopFailures += 1;
 
           if (crashLoopFailures > CRASH_LOOP_MAX_CONSECUTIVE_FAILURES) {
@@ -113,6 +120,14 @@ export async function launchSidecarWithRestart(platform, repoRoot, spawn = realS
             setTimeout(() => {
               resolve(launch());
             }, delayMs);
+          }
+        } else {
+          // Any other unexpected non-zero, non-43 exit: propagate immediately, no retry.
+          try {
+            process.exit(code);
+          } catch (err) {
+            reject(err);
+            return;
           }
         }
       });
