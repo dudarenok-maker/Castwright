@@ -1,5 +1,5 @@
 /* In-app Qwen3-TTS installer routes (qwen-default phase 3). Mirrors the Ollama
-   install routes (server/src/routes/ollama-health.ts) so Account → Models can
+   install routes (server/src/routes/ollama-health.ts) so Admin → Model Manager can
    install Qwen without a terminal:
 
      GET  /api/qwen/detect          — install-state probe (no job)

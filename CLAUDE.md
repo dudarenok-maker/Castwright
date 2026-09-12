@@ -492,7 +492,7 @@ Design rationale:
   when both exist.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
-  is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not
+  is chosen in the UI (Admin → Model Manager → Server configuration) / `user-settings.json`, not
   by env — `ANALYZER` no longer selects the engine (retired 2026-07-15); a stray
   `ANALYZER=gemini` in an old `.env` is inert.** The default is **local**.
   - **Local (default)** — calls a local Ollama model (with Gemini as an opt-out

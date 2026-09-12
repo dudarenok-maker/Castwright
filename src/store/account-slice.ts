@@ -112,13 +112,13 @@ export const accountSlice = createSlice({
     },
     /* Dual-model TTS mode — when true the sidecar may keep two TTS
        engines resident in GPU memory at once. Off by default; toggled
-       from the Account view's TTS-sidecar card. */
+       from the Model Manager's Voice engine section. */
     setDualModelEnabled: (s, a: PayloadAction<boolean>) => {
       s.dualModelEnabled = a.payload;
     },
     /* Plan 111 — number of chapters the generation queue synthesises
-       concurrently (1–4, default 2). Set from the Account view's TTS-sidecar
-       card; read by the queue dispatcher. Queue/synthesis concurrency only —
+       concurrently (1–4, default 2). Set from the Model Manager's Voice
+       engine section; read by the queue dispatcher. Queue/synthesis concurrency only —
        the GPU semaphore is the separate VRAM guard. */
     setGenerationWorkers: (s, a: PayloadAction<number>) => {
       s.generationWorkers = a.payload;

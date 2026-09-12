@@ -1037,7 +1037,7 @@ export function classifyConnectError(err: unknown, url: string): Error {
   const innerCode = e?.cause?.code ?? e?.code;
   if (innerCode && UNREACHABLE_CODES.has(innerCode)) {
     return new LocalUnreachableError(
-      `Ollama at ${url} is unreachable (${innerCode}). Start the daemon or set ANALYZER=gemini.`,
+      `Ollama at ${url} is unreachable (${innerCode}). Start the daemon or switch to Gemini in Admin → Model Manager.`,
       err,
     );
   }
@@ -1046,7 +1046,7 @@ export function classifyConnectError(err: unknown, url: string): Error {
      in some configs). Treat as unreachable. */
   if (e?.name === 'TypeError' && /fetch failed/i.test(e?.message ?? '')) {
     return new LocalUnreachableError(
-      `Ollama at ${url} is unreachable (fetch failed). Start the daemon or set ANALYZER=gemini.`,
+      `Ollama at ${url} is unreachable (fetch failed). Start the daemon or switch to Gemini in Admin → Model Manager.`,
       err,
     );
   }

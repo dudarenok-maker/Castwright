@@ -78,7 +78,8 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
   /* Plan 43 — auto-start the TTS sidecar at server boot. On by default
      because Kokoro v1 (the engine default) is cheap to keep resident
      (~1 GB VRAM, ~1 s load). Users running Coqui or sharing VRAM with
-     the analyzer can toggle off in the Account view. Flip in lockstep
+     the analyzer can toggle off in the Model Manager's Voice engine
+     section. Flip in lockstep
      with server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   autoStartSidecar: true,
   /* #3141 step 2 — these three are now READ-ONLY, resolver-derived
@@ -92,7 +93,7 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
   analyzerPhase1MinLagChapters: 10,
   /* Off by default — keeping two TTS engines resident in GPU memory at
      once is a deliberate VRAM commitment the user opts into in the
-     Account view. Flip in lockstep with
+     Model Manager's Voice engine section. Flip in lockstep with
      server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   dualModelEnabled: false,
   /* Plan 111 — 1 concurrent generation worker by default. Queue/synthesis

@@ -1,4 +1,4 @@
-/* Ollama health proxy. The Account view + analysis route polls this to tell
+/* Ollama health proxy. The Model Manager view + analysis route polls this to tell
    the user "Local analyzer: connected / unreachable / model not pulled" right
    next to the Engine label. Mirrors server/src/routes/sidecar-health.ts —
    same envelope shape, same 2s probe ceiling, just a different upstream.

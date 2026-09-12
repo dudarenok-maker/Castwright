@@ -826,7 +826,7 @@ export function ManuscriptView({
   const jobActiveForBook = useAppSelector((s) => !!(bookId && s.scriptReview?.activeStreams[bookId]));
 
   /* srv-48 fix — the script-review model follows the user's configured
-     analyzer default (Account → Defaults → Analysis model), NOT a hardcoded
+     analyzer default (Admin → Model Manager → Defaults for new books → Analysis model), NOT a hardcoded
      model. A local Ollama id (contains ':') routes the review to the local
      engine and warms it via `selectAnalyzerForPhase`, exactly like the main
      analysis path; a Gemini id keeps the cloud path. This fixes the review

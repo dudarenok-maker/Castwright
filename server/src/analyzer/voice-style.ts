@@ -200,7 +200,7 @@ async function generateViaGemini(character: CastCharacter): Promise<string> {
   if (!apiKey) {
     throw new Error(
       'GEMINI_API_KEY is required to generate voice-style personas. ' +
-        'Set it from Account → Server configuration → Gemini API key, ' +
+        'Set it in Admin → Model Manager → Gemini API key, ' +
         'or in server/.env for CI / power users.',
     );
   }

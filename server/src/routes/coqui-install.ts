@@ -1,5 +1,5 @@
 /* In-app Coqui XTTS v2 installer routes. Mirrors the Qwen install routes
-   (server/src/routes/qwen-install.ts) so Account → Models can pre-fetch the
+   (server/src/routes/qwen-install.ts) so Admin → Model Manager can pre-fetch the
    XTTS v2 weights without a terminal:
 
      GET  /api/coqui/detect          — install-state probe (no job)

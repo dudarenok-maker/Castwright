@@ -5,7 +5,8 @@ import { GeminiKeyField } from './account-forms';
 /* fe-50: the "Get a Gemini API key" link points at the wiki walkthrough page
    (which owns the fragile aistudio.google.com URL), not straight to Google, so
    a Google URL move is a wiki edit rather than an app release. Renders wherever
-   GeminiKeyField is used — the setup wizard step and the Account surface. */
+   GeminiKeyField is used — the setup wizard step and the Model Manager's
+   Server configuration section. */
 describe('GeminiKeyField — "Get a Gemini API key" link (fe-50)', () => {
   it('links to the wiki walkthrough page with safe external-link attributes', () => {
     render(<GeminiKeyField status="unset" onSave={vi.fn()} />);

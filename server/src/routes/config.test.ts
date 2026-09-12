@@ -522,7 +522,7 @@ describe('PUT /api/config — device knob UUID translation (Plan 2 §2.1)', () =
   });
 
   it('does not fetch the sidecar device list when the patch has no device knob', async () => {
-    const res = await request(app).put('/api/config').send({ 'analyzer.engine': 'local' });
+    const res = await request(app).put('/api/config').send({ 'analyzer.ollama.temperature': 0.3 });
     expect(res.status).toBe(200);
     expect(fetchMock).not.toHaveBeenCalled();
   });

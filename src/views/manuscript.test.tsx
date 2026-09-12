@@ -1090,7 +1090,7 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
   }
 
   /* srv-48 regression — the script-review trigger must POST the user's
-     CONFIGURED analyzer model (Account → Defaults → Analysis model), not a
+     CONFIGURED analyzer model (Admin → Model Manager → Defaults for new books → Analysis model), not a
      hardcoded Gemini model. The prior code shipped `const REVIEW_MODEL =
      'gemma-4-31b-it'` (a Gemini id), which overrode the local engine on the
      server for EVERY review — so a local-analyzer user's script-review

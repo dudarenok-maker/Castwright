@@ -3501,7 +3501,7 @@ export interface components {
             /** @enum {string} */
             defaultTtsModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "qwen3-tts-1.7b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
-             * @description Set by the Account view to true when the user deliberately picks a
+             * @description Set by the Model Manager to true when the user deliberately picks a
              *     default TTS model that differs from the resolved (Qwen-when-installed)
              *     default — pins their choice so the server stops preferring Qwen.
              *     The server also auto-latches this on any genuine change to

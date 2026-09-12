@@ -13,8 +13,8 @@
 //      and eslint.config.mjs (clean; doesn't reference either token).
 //   3. server/tts-sidecar/scripts/**  (excluding any tests/ subdir, though
 //      none exists there today) — the sidecar's installer/bootstrap CLIs,
-//      all reachable from the running app (VenvBootstrap route, Account →
-//      Models UI) or as documented manual troubleshooting commands.
+//      all reachable from the running app (VenvBootstrap route, Admin →
+//      Model Manager UI) or as documented manual troubleshooting commands.
 //   4. server/src/**  (*.ts/*.mts, excluding any tests/ subdir, though none
 //      exists there today) — the TypeScript backend, added after a sweep
 //      found the production server's own entry point (index.ts) and two

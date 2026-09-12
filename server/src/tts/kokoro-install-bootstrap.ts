@@ -1,7 +1,7 @@
 /* In-app Kokoro install bootstrap (fs-21). Spawns
  * server/tts-sidecar/scripts/install-kokoro.mjs and surfaces its
  * `[install-kokoro]` step lines so a deployer can install the Kokoro weights
- * from Account → Models without a terminal. Progress is STEP-based (no single
+ * from Admin → Model Manager without a terminal. Progress is STEP-based (no single
  * byte total for the ONNX download).
  *
  * State machine:

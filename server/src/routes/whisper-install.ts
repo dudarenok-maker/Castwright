@@ -1,5 +1,5 @@
 /* In-app Whisper ASR installer routes (srv-31, plan 186). Mirrors the Qwen
-   install routes so Account → Models can install the ASR content-QA engine
+   install routes so Admin → Model Manager can install the ASR content-QA engine
    without a terminal:
 
      GET  /api/whisper/detect             — install-state probe (no job)

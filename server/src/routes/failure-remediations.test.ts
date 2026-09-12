@@ -23,3 +23,18 @@ describe('FAILURE_REMEDIATIONS.cloned-voice-broken (#1979)', () => {
     expect(remediation).toMatch(/reassign the character/i);
   });
 });
+
+/* ANALYZER env var was retired as the engine selector on 2026-07-15; engine
+   selection moved to per-account settings in Model Manager. Remediation text
+   must not reference the dead ANALYZER= path. */
+describe('FAILURE_REMEDIATIONS — no ANALYZER= references', () => {
+  it('no remediation text contains ANALYZER= or set ANALYZER', () => {
+    for (const [key, remedy] of Object.entries(FAILURE_REMEDIATIONS)) {
+      const text = `${remedy.userMessage}\n${remedy.remediation}\n${
+        'helpDetail' in remedy && remedy.helpDetail ? remedy.helpDetail : ''
+      }`;
+      expect(text, `${key} remediation`).not.toMatch(/ANALYZER=/);
+      expect(text, `${key} remediation`).not.toMatch(/set ANALYZER/i);
+    }
+  });
+});

@@ -234,7 +234,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
   if (!apiKey) {
     throw new Error(
       'GEMINI_API_KEY is required when analyzer engine is Gemini. ' +
-        'Set it from Account → Server configuration → Gemini API key, ' +
+        'Set it in Admin → Model Manager → Gemini API key, ' +
         'or in server/.env for CI / power users.',
     );
   }

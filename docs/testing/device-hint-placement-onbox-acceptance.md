@@ -94,7 +94,7 @@ To observe the header directly anyway, temporarily add one line in
 (`main.py:12011`): `log.info("device_hint=%s", device_hint)`. Revert it after
 the run — it is not part of the shipped code.
 
-**Do not open Account → Advanced Settings at any point before the render.**
+**Do not open Admin → Advanced configuration at any point before the render.**
 That screen is what used to be the only thing warming the GPU device list, and
 this criterion exists to prove the derive now warms it itself.
 

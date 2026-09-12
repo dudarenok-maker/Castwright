@@ -25,8 +25,8 @@ describe('QwenStatusNotice', () => {
     render(<QwenStatusNotice />);
     await waitFor(() => expect(screen.getByTestId('qwen-status-notice')).toBeInTheDocument());
     expect(screen.getByText(/render in Kokoro/i)).toBeInTheDocument();
-    const link = screen.getByRole('link', { name: /Account → Models/i });
-    expect(link).toHaveAttribute('href', '#/account');
+    const link = screen.getByRole('link', { name: /Admin → Model Manager/i });
+    expect(link).toHaveAttribute('href', '#/models');
   });
 
   it('renders nothing when Qwen is installed (no nagging installed users)', async () => {

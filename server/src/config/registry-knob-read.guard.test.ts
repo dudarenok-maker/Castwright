@@ -46,17 +46,14 @@
    between the two modules (see that function's own comment) — a real,
    override-honouring read site in a different shape, not a gap.
 
-   UNTRIAGED FINDING — `analyzer.engine` (env `ANALYZER`). Not a recogniser
-   miss: `analyzer/index.ts` explicitly says "the ANALYZER env no longer
-   selects the engine — see getResolvedAnalysisEngine", and that function
-   (`workspace/user-settings.ts`) reads `getCachedUserSettings().analysisEngine`
-   — a SEPARATE legacy user-settings JSON field, not the config-override store
-   `analyzer.engine` writes to via `PUT /api/config`. A saved Advanced Settings
-   override for `analyzer.engine` is therefore read by NOTHING that drives
-   engine selection — the same silent-ignore shape #3139 found for the
-   rate-limit knobs, just not one of the five keys #3141 already tracks.
-   Reported here rather than fixed (out of scope for this guard); see
-   `KNOWN_UNREAD` below.
+   Unread knobs are tracked: all registered knobs are either read by some live
+   code path (via `configValue()`/`getKnob()`/`readConfigOverrides()` with a
+   literal key), or tracked in `KNOWN_UNREAD` when they have no read path yet
+   (temporarily, pending implementation of the reader — see #3141). `KNOWN_UNREAD`
+   is exact-set-equality asserted, so a stale entry signals a rebase/merge defect
+   (the knob was deleted or a reader was wired but the list was not updated),
+   and a missing entry signals a knob left unread by mistake (new code added to
+   the registry before readers are wired). See `KNOWN_UNREAD` below.
 
    BLIND SPOTS (documented, not silently accepted):
      - Textual, not data-flow: a resolver-backed helper reached through a
@@ -220,9 +217,7 @@ const DECLARED_DYNAMIC_READERS: Array<{ pattern: RegExp; file: string; contains:
     so this guard can assert the failing set is precisely this set: a new
     unread knob (not on this list) fails, and a listed key that becomes read
     also fails, so the list can't go stale in either direction. */
-const KNOWN_UNREAD = new Set<string>([
-  'analyzer.engine', // UNTRIAGED — reported on #3141
-]);
+const KNOWN_UNREAD = new Set<string>([]);
 
 function collectReadKeys(files: string[]): Set<string> {
   const keys = new Set<string>();

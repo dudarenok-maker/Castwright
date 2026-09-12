@@ -971,10 +971,9 @@ async function runScriptReviewJob(
       );
       if (blockedErr) {
         /* Terminal, actionable error. The message already names the model +
-           reason + remediation ("switch GEMINI_MODEL to a gemma-* model or set
-           ANALYZER=local"); `model` drives the status pill, `remediation` the
-           panel copy. Renders generically in the frontend else-branch toast (no
-           Retry — retrying the same model is futile). */
+           reason + remediation (from FAILURE_REMEDIATIONS); `model` drives the
+           status pill, `remediation` the panel copy. Renders generically in the
+           frontend else-branch toast (no Retry — retrying the same model is futile). */
         send({
           kind: 'error',
           code: 'content_blocked',

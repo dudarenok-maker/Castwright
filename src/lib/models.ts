@@ -7,7 +7,8 @@
      - upload screen "Analysis model" dropdown
      - re-parse modal "Analyse with"
      - analysing view's per-run override
-   Account view's "Default analysis model" also reads this list. */
+   The Model Manager's "Defaults for new books → Analysis model" picker also
+   reads this list. */
 
 export interface ModelOption {
   id: string;
