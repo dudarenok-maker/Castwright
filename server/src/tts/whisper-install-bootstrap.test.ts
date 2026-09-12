@@ -1,22 +1,18 @@
-/* KokoroInstallBootstrap state machine. Runs the whole install offline: stubbed
-   detectFn drives the install-state (boolean), stubbed spawnFn emits fake
-   `[install-kokoro]` progress + an exit code. No real download.
-
-   Unlike Coqui/Whisper/Qwen, Kokoro's detect() is BINARY (installed: boolean),
-   not a multi-state enum — see the module doc comment in
-   kokoro-install-bootstrap.ts. detectSequence below queues booleans, not
-   state strings. */
+/* WhisperInstallBootstrap state machine (srv-31, plan 186). Runs the whole
+   install offline: stubbed detectFn drives the install-state, stubbed spawnFn
+   emits fake `[install-whisper]` progress + an exit code. No real pip/download. */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { KokoroInstallBootstrap, type KokoroInstallOptions } from './kokoro-install-bootstrap.js';
+import { WhisperInstallBootstrap, type WhisperInstallOptions } from './whisper-install-bootstrap.js';
+import type { WhisperInstallState } from './whisper-install-detect.js';
 
 /* Every bootstrap under test gets the offline seams: no real supervisor hold,
    no real pip swap. */
-const OFFLINE: Pick<KokoroInstallOptions, 'holdSidecarFn' | 'restoreOrtFn' | 'generationActiveFn'> = {
+const OFFLINE: Pick<WhisperInstallOptions, 'holdSidecarFn' | 'restoreOrtFn' | 'generationActiveFn'> = {
   generationActiveFn: () => false,
   holdSidecarFn: (fn) => fn(),
   restoreOrtFn: async () => 'not-needed',
@@ -45,11 +41,11 @@ async function until(pred: () => boolean): Promise<void> {
   });
 }
 
-/* detectFn that returns each queued boolean in order (last one repeats). */
-function detectSequence(states: boolean[]) {
+/* detectFn that returns each queued state in order (last one repeats). */
+function detectSequence(states: WhisperInstallState[]) {
   let i = 0;
   const calls = { count: 0 };
-  const fn = (): boolean => {
+  const fn = (): WhisperInstallState => {
     calls.count++;
     const s = states[Math.min(i, states.length - 1)];
     i++;
@@ -58,25 +54,27 @@ function detectSequence(states: boolean[]) {
   return { fn, calls };
 }
 
-describe('KokoroInstallBootstrap', () => {
-  it('detect() reports installed=true only when detectFn returns true', async () => {
-    const bInstalled = new KokoroInstallBootstrap({ repoRoot: '/repo', detectFn: () => true, ...OFFLINE });
-    const bMissing = new KokoroInstallBootstrap({ repoRoot: '/repo', detectFn: () => false, ...OFFLINE });
-    expect((await bInstalled.detect()).installed).toBe(true);
-    expect((await bInstalled.detect()).state).toBe('installed');
-    expect((await bMissing.detect()).installed).toBe(false);
-    expect((await bMissing.detect()).state).toBe('not-installed');
+describe('WhisperInstallBootstrap', () => {
+  it('detect() reports installed only for ready', async () => {
+    for (const [state, installed] of [
+      ['not-installed', false],
+      ['model-missing', false],
+      ['ready', true],
+    ] as const) {
+      const b = new WhisperInstallBootstrap({ repoRoot: '/repo', detectFn: () => state, ...OFFLINE });
+      expect((await b.detect()).installed).toBe(installed);
+    }
   });
 
   it('installs: detect not-installed → installing → installed on exit 0', async () => {
     let spawned = 0;
-    const { fn: detectFn } = detectSequence([false, true]);
-    const b = new KokoroInstallBootstrap({
+    const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+    const b = new WhisperInstallBootstrap({
       repoRoot: '/repo',
       detectFn,
       spawnFn: () => {
         spawned++;
-        return makeFakeChild(0, { stdout: '[install-kokoro] downloading\n' }) as never;
+        return makeFakeChild(0, { stdout: '[install-whisper] Downloading model\n' }) as never;
       },
       ...OFFLINE,
     });
@@ -86,11 +84,11 @@ describe('KokoroInstallBootstrap', () => {
     expect(b.getJob(job.id)?.step).toContain('installed');
   });
 
-  it('short-circuits to installed WITHOUT spawning when detectFn already returns true', async () => {
+  it('short-circuits to installed without spawning when already ready', async () => {
     let spawned = 0;
-    const b = new KokoroInstallBootstrap({
+    const b = new WhisperInstallBootstrap({
       repoRoot: '/repo',
-      detectFn: () => true,
+      detectFn: () => 'ready',
       spawnFn: () => {
         spawned++;
         return makeFakeChild(0) as never;
@@ -103,21 +101,21 @@ describe('KokoroInstallBootstrap', () => {
   });
 
   it('errors with the stderr tail when the installer exits non-zero', async () => {
-    const b = new KokoroInstallBootstrap({
+    const b = new WhisperInstallBootstrap({
       repoRoot: '/repo',
-      detectFn: () => false,
-      spawnFn: () => makeFakeChild(1, { stderr: 'ERROR: Kokoro download failed\n' }) as never,
+      detectFn: () => 'not-installed',
+      spawnFn: () => makeFakeChild(1, { stderr: 'ERROR: pip failed to resolve faster-whisper\n' }) as never,
       ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
     expect(b.getJob(job.id)?.error).toMatch(/exited with code 1/);
-    expect(b.getJob(job.id)?.error).toMatch(/download failed/);
+    expect(b.getJob(job.id)?.error).toMatch(/pip failed/);
   });
 
-  it('errors when the installer exits 0 but the weight files are still missing', async () => {
-    const { fn: detectFn } = detectSequence([false, false]);
-    const b = new KokoroInstallBootstrap({
+  it('errors when the installer exits 0 but model is still missing', async () => {
+    const { fn: detectFn } = detectSequence(['not-installed', 'model-missing']);
+    const b = new WhisperInstallBootstrap({
       repoRoot: '/repo',
       detectFn,
       spawnFn: () => makeFakeChild(0) as never,
@@ -125,20 +123,22 @@ describe('KokoroInstallBootstrap', () => {
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
-    expect(b.getJob(job.id)?.error).toMatch(/weight files are still missing/i);
+    expect(b.getJob(job.id)?.error).toMatch(/model is still missing/i);
   });
 
-  it('recheck promotes a job to installed once the weight files are present', async () => {
-    let installed = false;
-    const b = new KokoroInstallBootstrap({
+  it('recheck promotes a job to installed once the model is present', async () => {
+    /* Spawn that exits 0 but detect still model-missing → job errors; then
+       a later recheck sees 'ready' and promotes. */
+    let state: WhisperInstallState = 'not-installed';
+    const b = new WhisperInstallBootstrap({
       repoRoot: '/repo',
-      detectFn: () => installed,
+      detectFn: () => state,
       spawnFn: () => makeFakeChild(0) as never,
       ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
-    installed = true;
+    state = 'ready';
     const rechecked = await b.recheck(job.id);
     expect(rechecked?.status).toBe('installed');
   });
@@ -148,7 +148,7 @@ describe('KokoroInstallBootstrap', () => {
      runtime restore runs inside that same hold. The hold is the supervisor's
      own scoped primitive; here it is a recording pass-through. */
   describe('install runs inside the sidecar hold (#2192 / #3039)', () => {
-    function recordingHold(calls: string[]): KokoroInstallOptions['holdSidecarFn'] {
+    function recordingHold(calls: string[]): WhisperInstallOptions['holdSidecarFn'] {
       return async (fn) => {
         calls.push('hold');
         try {
@@ -161,8 +161,8 @@ describe('KokoroInstallBootstrap', () => {
 
     it('[HEADLINE] hold → installer → ORT restore → release, then the job is installed', async () => {
       const calls: string[] = [];
-      const { fn: detectFn } = detectSequence([false, true]);
-      const b = new KokoroInstallBootstrap({
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn,
@@ -183,10 +183,10 @@ describe('KokoroInstallBootstrap', () => {
 
     it("an installer failure still releases the hold, still runs the ORT restore, and is the job's error", async () => {
       const calls: string[] = [];
-      const b = new KokoroInstallBootstrap({
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot: '/repo',
-        detectFn: () => false,
+        detectFn: () => 'not-installed',
         spawnFn: () => {
           calls.push('spawn');
           return makeFakeChild(1, { stderr: 'ERROR: pip failed\n' }) as never;
@@ -203,16 +203,16 @@ describe('KokoroInstallBootstrap', () => {
       /* The restore succeeded, so the installer's own failure is reported
          verbatim — not through the restore-failed template (#3043 S1). */
       expect(b.getJob(job.id)?.error).toMatch(/exited with code 1.*pip failed/);
-      expect(b.getJob(job.id)?.error).not.toMatch(/^Kokoro installed, but restoring the GPU ONNX runtime afterwards failed/);
+      expect(b.getJob(job.id)?.error).not.toMatch(/^Whisper ASR installed, but restoring the GPU ONNX runtime afterwards failed/);
       expect(b.getJob(job.id)?.error).toMatch(/runtime was checked and is intact/);
     });
 
     it('already installed: never enters the hold, never spawns', async () => {
       const calls: string[] = [];
-      const b = new KokoroInstallBootstrap({
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot: '/repo',
-        detectFn: () => true,
+        detectFn: () => 'ready',
         spawnFn: () => {
           calls.push('spawn');
           return makeFakeChild(0) as never;
@@ -227,10 +227,10 @@ describe('KokoroInstallBootstrap', () => {
 
     it("a refused hold (adopted sidecar, mid-respawn, …) is the job's error, and the installer never runs", async () => {
       let spawned = 0;
-      const b = new KokoroInstallBootstrap({
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot: '/repo',
-        detectFn: () => false,
+        detectFn: () => 'not-installed',
         spawnFn: () => {
           spawned++;
           return makeFakeChild(0) as never;
@@ -246,10 +246,10 @@ describe('KokoroInstallBootstrap', () => {
       expect(spawned).toBe(0);
     });
 
-    it('an ORT-restore failure AFTER a successful install is an error that says Kokoro landed and what to run — not a failed Kokoro install', async () => {
+    it('an ORT-restore failure AFTER a successful install is an error that says Whisper landed and what to run — not a failed Whisper install', async () => {
       const calls: string[] = [];
-      const { fn: detectFn } = detectSequence([false, true]);
-      const b = new KokoroInstallBootstrap({
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn,
@@ -267,10 +267,10 @@ describe('KokoroInstallBootstrap', () => {
       await until(() => b.getJob(job.id)?.status === 'error');
       expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']); // the hold still released
       const error = b.getJob(job.id)?.error ?? '';
-      expect(error).toMatch(/^Kokoro installed, but restoring the GPU ONNX runtime/);
+      expect(error).toMatch(/^Whisper ASR installed, but restoring the GPU ONNX runtime/);
       expect(error).toMatch(/network down/);
       expect(error).toMatch(/install-ort\.mjs/);
-      expect(error).not.toMatch(/install-kokoro\.mjs exited/);
+      expect(error).not.toMatch(/install-whisper\.mjs exited/);
     });
   });
 
@@ -286,7 +286,7 @@ describe('KokoroInstallBootstrap', () => {
     });
 
     function tempRepo(profile: string): { repoRoot: string; sp: string } {
-      const repoRoot = mkdtempSync(join(tmpdir(), 'kokoro-install-repo-'));
+      const repoRoot = mkdtempSync(join(tmpdir(), 'whisper-install-repo-'));
       roots.push(repoRoot);
       const venvDir = join(repoRoot, 'server', 'tts-sidecar', '.venv');
       const sp = join(venvDir, 'Lib', 'site-packages');
@@ -307,8 +307,8 @@ describe('KokoroInstallBootstrap', () => {
       vi.stubEnv('CASTWRIGHT_ACCELERATOR_PROFILE', 'cpu'); // the sidecar-child-only var: must be IGNORED
       const { repoRoot, sp } = tempRepo('nvidia');
       const spawned: { cmd: string; args: string[] }[] = [];
-      const { fn: detectFn } = detectSequence([false, true]);
-      const b = new KokoroInstallBootstrap({
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot,
         detectFn,
@@ -327,7 +327,7 @@ describe('KokoroInstallBootstrap', () => {
       await until(() => b.getJob(job.id)?.status === 'installed');
       const venvPython = process.platform === 'win32' ? join('Scripts', 'python.exe') : join('bin', 'python');
       expect(spawned[0].cmd).toBe('node');
-      expect(spawned[0].args[0]).toMatch(/install-kokoro\.mjs$/);
+      expect(spawned[0].args[0]).toMatch(/install-whisper\.mjs$/);
       expect(spawned.slice(1).map((s) => s.cmd.endsWith(venvPython))).toEqual([true, true, true]);
       expect(spawned.slice(1).map((s) => s.args.slice(0, 3))).toEqual([
         ['-m', 'pip', 'uninstall'],
@@ -343,8 +343,8 @@ describe('KokoroInstallBootstrap', () => {
       vi.stubEnv('SIDECAR_VENV_DIR', undefined);
       const { repoRoot } = tempRepo('cpu');
       const spawned: string[] = [];
-      const { fn: detectFn } = detectSequence([false, true]);
-      const b = new KokoroInstallBootstrap({
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot,
         detectFn,
@@ -363,8 +363,8 @@ describe('KokoroInstallBootstrap', () => {
       vi.stubEnv('ACCELERATOR', undefined);
       vi.stubEnv('SIDECAR_VENV_DIR', undefined);
       const { repoRoot } = tempRepo('nvidia');
-      const { fn: detectFn } = detectSequence([false, true]);
-      const b = new KokoroInstallBootstrap({
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot,
         detectFn,
@@ -376,7 +376,7 @@ describe('KokoroInstallBootstrap', () => {
       });
       const job = b.start();
       await until(() => b.getJob(job.id)?.status === 'error');
-      expect(b.getJob(job.id)?.error).toMatch(/Kokoro installed, but restoring/);
+      expect(b.getJob(job.id)?.error).toMatch(/Whisper ASR installed, but restoring/);
       expect(b.getJob(job.id)?.error).toMatch(/pip uninstall blew up/);
       expect(b.getJob(job.id)?.error).not.toMatch(/A new release/);
     });
@@ -409,9 +409,9 @@ describe('KokoroInstallBootstrap', () => {
       '[notice] A new release of pip is available: 24.0 -> 24.1\r\n' +
       '[notice] To update, run: python.exe -m pip install --upgrade pip\r\n';
 
-    const b = new KokoroInstallBootstrap({
+    const b = new WhisperInstallBootstrap({
       repoRoot: '/repo',
-      detectFn: () => false,
+      detectFn: () => 'not-installed',
       spawnFn: () => makeFakeChild(1, { stderr: stderrFixture }) as never,
       ...OFFLINE,
     });
@@ -431,14 +431,14 @@ describe('KokoroInstallBootstrap', () => {
      restoring… failed" template. */
   describe('the installer outcome and the restore outcome are reported separately', () => {
     const failingInstaller = (): unknown =>
-      makeFakeChild(1, { stderr: 'ERROR: Kokoro weights download failed: connection timeout\n' });
+      makeFakeChild(1, { stderr: 'ERROR: HuggingFace download failed: connection timeout\n' });
 
     it('installer FAILS + restore SUCCEEDS: reports the installer failure, says the runtime is intact, points at a retry', async () => {
       let restoreCalled = false;
-      const b = new KokoroInstallBootstrap({
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot: '/repo',
-        detectFn: () => false,
+        detectFn: () => 'not-installed',
         spawnFn: () => failingInstaller() as never,
         holdSidecarFn: (fn) => fn(),
         restoreOrtFn: async () => {
@@ -453,10 +453,10 @@ describe('KokoroInstallBootstrap', () => {
       // The restore still runs on the installer-failure path (that is the fix
       // this path exists for) — but it SUCCEEDED here...
       expect(restoreCalled).toBe(true);
-      // ...so the message must not blame it, must not claim Kokoro landed, and
+      // ...so the message must not blame it, must not claim Whisper landed, and
       // must not send the operator to install-ort.mjs.
-      expect(error).toMatch(/Kokoro weights download failed/);
-      expect(error).not.toMatch(/^Kokoro installed/);
+      expect(error).toMatch(/HuggingFace download failed/);
+      expect(error).not.toMatch(/Whisper ASR installed/);
       expect(error).not.toMatch(/restoring the GPU ONNX runtime afterwards failed/);
       expect(error).not.toMatch(/install-ort\.mjs/);
       expect(error).toMatch(/runtime was checked and is intact/);
@@ -464,10 +464,10 @@ describe('KokoroInstallBootstrap', () => {
     });
 
     it('installer FAILS + restore FAILS: reports the installer failure AND names the runtime repair', async () => {
-      const b = new KokoroInstallBootstrap({
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot: '/repo',
-        detectFn: () => false,
+        detectFn: () => 'not-installed',
         spawnFn: () => failingInstaller() as never,
         holdSidecarFn: (fn) => fn(),
         restoreOrtFn: async () => {
@@ -478,19 +478,19 @@ describe('KokoroInstallBootstrap', () => {
       await until(() => b.getJob(job.id)?.status === 'error');
       const error = b.getJob(job.id)?.error ?? '';
 
-      expect(error).toMatch(/Kokoro weights download failed/);
-      expect(error).not.toMatch(/^Kokoro installed/);
+      expect(error).toMatch(/HuggingFace download failed/);
+      expect(error).not.toMatch(/Whisper ASR installed/);
       // Both facts present, in that order — the installer's first.
       expect(error).toMatch(/pip uninstall onnxruntime exited with code 1/);
       expect(error).toMatch(/install-ort\.mjs/);
-      expect(error.indexOf('Kokoro weights download')).toBeLessThan(error.indexOf('pip uninstall'));
+      expect(error.indexOf('HuggingFace')).toBeLessThan(error.indexOf('pip uninstall'));
     });
 
-    it('installer SUCCEEDS + restore FAILS: reports that Kokoro DID land and only the runtime needs repair', async () => {
-      const b = new KokoroInstallBootstrap({
+    it('installer SUCCEEDS + restore FAILS: reports that Whisper DID land and only the runtime needs repair', async () => {
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => false,
         repoRoot: '/repo',
-        detectFn: () => false,
+        detectFn: () => 'not-installed',
         spawnFn: () => makeFakeChild(0) as never,
         holdSidecarFn: (fn) => fn(),
         restoreOrtFn: async () => {
@@ -501,18 +501,18 @@ describe('KokoroInstallBootstrap', () => {
       await until(() => b.getJob(job.id)?.status === 'error');
       const error = b.getJob(job.id)?.error ?? '';
 
-      expect(error).toMatch(/Kokoro installed, but restoring the GPU ONNX runtime afterwards failed/);
+      expect(error).toMatch(/Whisper ASR installed, but restoring the GPU ONNX runtime afterwards failed/);
       expect(error).toMatch(/install-ort\.mjs/);
       // Nothing from an installer failure — there wasn't one.
-      expect(error).not.toMatch(/Kokoro weights download failed/);
+      expect(error).not.toMatch(/HuggingFace/);
     });
 
     it('when a chapter is being generated, the installer refuses immediately without holding the sidecar', async () => {
       const calls: string[] = [];
-      const b = new KokoroInstallBootstrap({
+      const b = new WhisperInstallBootstrap({
         generationActiveFn: () => true,
         repoRoot: '/repo',
-        detectFn: () => false,
+        detectFn: () => 'not-installed',
         spawnFn: () => {
           calls.push('spawn');
           return makeFakeChild(0) as never;
@@ -541,9 +541,9 @@ describe('KokoroInstallBootstrap', () => {
       try {
         const calls: string[] = [];
         let killed = false;
-        const b = new KokoroInstallBootstrap({
+        const b = new WhisperInstallBootstrap({
           repoRoot: '/repo',
-          detectFn: () => false,
+          detectFn: () => 'not-installed',
           spawnFn: () => {
             calls.push('spawn');
             /* A child that emits nothing and never closes — the stalled-download

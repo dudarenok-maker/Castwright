@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,7 +563,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**49 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**50 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
@@ -1310,7 +1310,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A108 -->
+<!-- next-id: A109 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -4568,6 +4568,37 @@ resident.
 on a shared-device box — and confirm the Kokoro load now blocks until the design releases,
 matching the unit-level proof above.
 *Cost:* short — one concurrent repro, same shape as the unit test but against real weights.
+
+### A108 · Coqui/Kokoro/Whisper installer hold-down and idle watchdog ([#3056](https://github.com/dudarenok-maker/Castwright/issues/3056), PR [#3197](https://github.com/dudarenok-maker/Castwright/pull/3197)) · **GPU box with a real sidecar, Qwen resident**
+
+Ported from #3039 (Qwen3-TTS): all four in-app TTS installers now run with the sidecar
+held down and restore the GPU ONNX runtime afterwards. Two safety mechanisms added to
+Coqui/Kokoro/Whisper shipped without on-box acceptance: (1) an idle watchdog that kills
+a child (installer or pip step) that produces no output for 30 minutes, releasing the
+sidecar hold so the queue recovers — without it a stalled installer deadlocks the sidecar
+indefinitely; (2) an active-generation refusal that stops the installer immediately if
+a chapter is rendering, rather than silently aborting it.
+
+*Criteria:*
+1. Coqui XTTS installer via Admin → Model Manager: click **Install Coqui XTTS v2**, observe
+   the installer runs with the sidecar held (the UI says "Stopping the voice engine…"
+   and any queued chapter waits), completes successfully, and leaves the GPU ONNX
+   runtime intact (`pip check` clean after install).
+2. Same installer clicked mid-render: a chapter mid-render triggers the "Cannot install while a chapter is being
+   generated" refusal, not a silent abort. Kokoro and Whisper follow the same two paths.
+
+*Note on idle watchdog coverage:* The idle watchdog mechanism (kill a child that produces no output for 30 minutes) is
+not independently observable in the above criteria — both would pass unchanged on a box where the watchdog code was deleted.
+The watchdog is tested in the unit suite (`childIdleTimeoutMs` is an injectable constructor option, and unit tests shorten it
+and assert the kill and hold-release), but an on-box stall scenario would require a real stuck installer or pip process and
+cannot be readily reproduced in this row's current setup.
+
+*Cost:* low — each of the three engines needs one successful install from the UI
+(Admin → Model Manager, account-logged, real install-*.mjs script, real pip swap, real venv
+I/O but not a multi-minute download, ~30s per engine if the weights are already present
+or pre-cached) and one refusal attempt with a chapter queued to render (Qwen, since
+it's the fastest to boot). No golden-audio comparison, no complex fixture setup, no
+timeout tolerance tuning.
 
 ## Group B — local Ollama analyzer only
 

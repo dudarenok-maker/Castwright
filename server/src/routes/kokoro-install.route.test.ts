@@ -18,7 +18,18 @@ import {
 import {
   KokoroInstallBootstrap,
   type KokoroInstallJobStatus,
+  type KokoroInstallOptions,
 } from '../tts/kokoro-install-bootstrap.js';
+
+/* Offline seams for the install path (#2192 / #3039): no real sidecar hold,
+   no real pip swap into a venv, and no fail-closed generation gate
+   (routes/generation.ts is not loaded here, so the real gate reads "a render
+   may be running" and would refuse every install). */
+const OFFLINE: Pick<KokoroInstallOptions, 'holdSidecarFn' | 'restoreOrtFn' | 'generationActiveFn'> = {
+  holdSidecarFn: (fn) => fn(),
+  restoreOrtFn: async () => 'not-needed',
+  generationActiveFn: () => false,
+};
 
 function makeApp() {
   const app = express();
@@ -55,7 +66,7 @@ afterEach(() => {
 describe('GET /api/kokoro/detect', () => {
   it('returns installed:true when weights are present', async () => {
     setKokoroInstallBootstrap(
-      new KokoroInstallBootstrap({ repoRoot: '/repo', detectFn: () => true }),
+      new KokoroInstallBootstrap({ repoRoot: '/repo', detectFn: () => true, ...OFFLINE }),
     );
     const res = await request(makeApp()).get('/api/kokoro/detect');
     expect(res.status).toBe(200);
@@ -64,7 +75,7 @@ describe('GET /api/kokoro/detect', () => {
 
   it('returns installed:false when weights are absent', async () => {
     setKokoroInstallBootstrap(
-      new KokoroInstallBootstrap({ repoRoot: '/repo', detectFn: () => false }),
+      new KokoroInstallBootstrap({ repoRoot: '/repo', detectFn: () => false, ...OFFLINE }),
     );
     const res = await request(makeApp()).get('/api/kokoro/detect');
     expect(res.body).toEqual({ state: 'not-installed', installed: false });
@@ -81,6 +92,7 @@ describe('POST /api/kokoro/install + poll', () => {
            install probe) → installed. */
         detectFn: () => calls++ > 0,
         spawnFn: () => fakeChild(0) as never,
+        ...OFFLINE,
       }),
     );
     const app = makeApp();
@@ -95,7 +107,7 @@ describe('POST /api/kokoro/install + poll', () => {
 
   it('404s polling an unknown job id', async () => {
     setKokoroInstallBootstrap(
-      new KokoroInstallBootstrap({ repoRoot: '/repo', detectFn: () => true }),
+      new KokoroInstallBootstrap({ repoRoot: '/repo', detectFn: () => true, ...OFFLINE }),
     );
     const res = await request(makeApp()).get('/api/kokoro/install/does-not-exist');
     expect(res.status).toBe(404);
@@ -110,6 +122,7 @@ describe('POST /api/kokoro/install/:id/recheck', () => {
         repoRoot: '/repo',
         detectFn: () => installed,
         spawnFn: () => fakeChild(0) as never,
+        ...OFFLINE,
       }),
     );
     const app = makeApp();

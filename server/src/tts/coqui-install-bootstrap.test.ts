@@ -1,11 +1,22 @@
 /* CoquiInstallBootstrap state machine. Runs the whole install offline: stubbed
    detectFn drives the install-state, stubbed spawnFn emits fake
-   `[install-coqui]` progress + an exit code. No real download. */
+   `[install-coqui]` progress + an exit code. No real pip/download. */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { CoquiInstallBootstrap } from './coqui-install-bootstrap.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { CoquiInstallBootstrap, type CoquiInstallOptions } from './coqui-install-bootstrap.js';
 import type { CoquiInstallState } from './coqui-install-detect.js';
+
+/* Every bootstrap under test gets the offline seams: no real supervisor hold,
+   no real pip swap. */
+const OFFLINE: Pick<CoquiInstallOptions, 'holdSidecarFn' | 'restoreOrtFn' | 'generationActiveFn'> = {
+  generationActiveFn: () => false,
+  holdSidecarFn: (fn) => fn(),
+  restoreOrtFn: async () => 'not-needed',
+};
 
 function makeFakeChild(exitCode: number, opts: { stdout?: string; stderr?: string } = {}) {
   const child = new EventEmitter() as EventEmitter & {
@@ -51,7 +62,7 @@ describe('CoquiInstallBootstrap', () => {
       ['ready', true],
       ['loaded', true],
     ] as const) {
-      const b = new CoquiInstallBootstrap({ repoRoot: '/repo', detectFn: () => state });
+      const b = new CoquiInstallBootstrap({ repoRoot: '/repo', detectFn: () => state, ...OFFLINE });
       expect((await b.detect()).installed).toBe(installed);
     }
   });
@@ -66,6 +77,7 @@ describe('CoquiInstallBootstrap', () => {
         spawned++;
         return makeFakeChild(0, { stdout: '[install-coqui] Pre-fetching XTTS v2\n' }) as never;
       },
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'installed');
@@ -82,6 +94,7 @@ describe('CoquiInstallBootstrap', () => {
         spawned++;
         return makeFakeChild(0) as never;
       },
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'installed');
@@ -94,6 +107,7 @@ describe('CoquiInstallBootstrap', () => {
       detectFn: () => 'weights-missing',
       spawnFn: () =>
         makeFakeChild(1, { stderr: 'ERROR: XTTS v2 pre-fetch failed\n' }) as never,
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
@@ -107,6 +121,7 @@ describe('CoquiInstallBootstrap', () => {
       repoRoot: '/repo',
       detectFn,
       spawnFn: () => makeFakeChild(0) as never,
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
@@ -119,6 +134,7 @@ describe('CoquiInstallBootstrap', () => {
       repoRoot: '/repo',
       detectFn: () => state,
       spawnFn: () => makeFakeChild(0) as never,
+      ...OFFLINE,
     });
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
@@ -139,9 +155,457 @@ describe('CoquiInstallBootstrap', () => {
           stdout: '[install-coqui] Installing coqui-tts (opt-in)\n',
         }) as never;
       },
+      ...OFFLINE,
     });
     const job = boot.start();
     await until(() => boot.getJob(job.id)?.status === 'installed');
     expect(spawned).toBe(1);
+  });
+
+  /* #2192 / #3039 — the install runs INSIDE the supervisor's maintenance hold
+     (the sidecar maps the onnxruntime DLL pip has to replace), and the ONNX
+     runtime restore runs inside that same hold. The hold is the supervisor's
+     own scoped primitive; here it is a recording pass-through. */
+  describe('install runs inside the sidecar hold (#2192 / #3039)', () => {
+    function recordingHold(calls: string[]): CoquiInstallOptions['holdSidecarFn'] {
+      return async (fn) => {
+        calls.push('hold');
+        try {
+          return await fn();
+        } finally {
+          calls.push('release');
+        }
+      };
+    }
+
+    it('[HEADLINE] hold → installer → ORT restore → release, then the job is installed', async () => {
+      const calls: string[] = [];
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot: '/repo',
+        detectFn,
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(0) as never;
+        },
+        holdSidecarFn: recordingHold(calls),
+        restoreOrtFn: async () => {
+          calls.push('ort');
+          return 'swapped';
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'installed');
+      expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']);
+    });
+
+    it("an installer failure still releases the hold, still runs the ORT restore, and is the job's error", async () => {
+      const calls: string[] = [];
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(1, { stderr: 'ERROR: pip failed\n' }) as never;
+        },
+        holdSidecarFn: recordingHold(calls),
+        restoreOrtFn: async () => {
+          calls.push('ort');
+          return 'swapped';
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']);
+      /* The restore succeeded, so the installer's own failure is reported
+         verbatim — not through the restore-failed template (#3043 S1). */
+      expect(b.getJob(job.id)?.error).toMatch(/exited with code 1.*pip failed/);
+      expect(b.getJob(job.id)?.error).not.toMatch(/^Coqui XTTS v2 installed, but restoring the GPU ONNX runtime afterwards failed/);
+      expect(b.getJob(job.id)?.error).toMatch(/runtime was checked and is intact/);
+    });
+
+    it('already installed: never enters the hold, never spawns', async () => {
+      const calls: string[] = [];
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot: '/repo',
+        detectFn: () => 'ready',
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(0) as never;
+        },
+        holdSidecarFn: recordingHold(calls),
+        restoreOrtFn: async () => 'not-needed',
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'installed');
+      expect(calls).toEqual([]);
+    });
+
+    it("a refused hold (adopted sidecar, mid-respawn, …) is the job's error, and the installer never runs", async () => {
+      let spawned = 0;
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => {
+          spawned++;
+          return makeFakeChild(0) as never;
+        },
+        holdSidecarFn: async () => {
+          throw new Error('The voice engine on this port was started outside Castwright, so it cannot be stopped for the install.');
+        },
+        restoreOrtFn: async () => 'not-needed',
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(b.getJob(job.id)?.error).toMatch(/started outside Castwright/);
+      expect(spawned).toBe(0);
+    });
+
+    it('an ORT-restore failure AFTER a successful install is an error that says Coqui landed and what to run — not a failed Coqui install', async () => {
+      const calls: string[] = [];
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot: '/repo',
+        detectFn,
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(0) as never;
+        },
+        holdSidecarFn: recordingHold(calls),
+        restoreOrtFn: async () => {
+          calls.push('ort');
+          throw new Error('pip install --force-reinstall --no-deps onnxruntime-gpu>=1.26,<1.27 exited with code 1. network down');
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']); // the hold still released
+      const error = b.getJob(job.id)?.error ?? '';
+      expect(error).toMatch(/^Coqui XTTS v2 installed, but restoring the GPU ONNX runtime/);
+      expect(error).toMatch(/network down/);
+      expect(error).toMatch(/install-ort\.mjs/);
+      expect(error).not.toMatch(/install-coqui\.mjs exited/);
+    });
+  });
+
+  /* The DEFAULT wiring — real resolveVenvRuntimeProfile + real
+     restoreOrtRuntime against a temp venv; only the subprocess is a fake,
+     and it is the SAME spawnFn seam the installer uses, awaited — never a
+     spawnSync. */
+  describe('default ORT restore wiring', () => {
+    const roots: string[] = [];
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
+    });
+
+    function tempRepo(profile: string): { repoRoot: string; sp: string } {
+      const repoRoot = mkdtempSync(join(tmpdir(), 'coqui-install-repo-'));
+      roots.push(repoRoot);
+      const venvDir = join(repoRoot, 'server', 'tts-sidecar', '.venv');
+      const sp = join(venvDir, 'Lib', 'site-packages');
+      mkdirSync(join(sp, 'onnxruntime', 'capi'), { recursive: true });
+      // The venv was built for `profile` — the stamp is what the sidecar reads.
+      writeFileSync(join(venvDir, '.venv-stamp.json'), JSON.stringify({ pythonTag: 'cp312', profile, reqHash: 'x' }));
+      // …but pip just clobbered it with the plain CPU build.
+      writeFileSync(join(sp, 'onnxruntime', 'capi', 'build_and_package_info.py'), "package_name = 'onnxruntime'\n");
+      mkdirSync(join(sp, 'onnxruntime-1.29.0.dist-info'));
+      writeFileSync(join(sp, 'onnxruntime-1.29.0.dist-info', 'INSTALLER'), 'pip\n');
+      writeFileSync(join(sp, 'onnxruntime-1.29.0.dist-info', 'RECORD'), 'x\n');
+      return { repoRoot, sp };
+    }
+
+    it('nvidia-stamped venv: after the installer, pip swaps the GPU runtime back through spawnFn (async), profile from the STAMP not an env var', async () => {
+      vi.stubEnv('ACCELERATOR', undefined);
+      vi.stubEnv('SIDECAR_VENV_DIR', undefined);
+      vi.stubEnv('CASTWRIGHT_ACCELERATOR_PROFILE', 'cpu'); // the sidecar-child-only var: must be IGNORED
+      const { repoRoot, sp } = tempRepo('nvidia');
+      const spawned: { cmd: string; args: string[] }[] = [];
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot,
+        detectFn,
+        spawnFn: (cmd, args) => {
+          spawned.push({ cmd, args: [...args] });
+          if (args.includes('--force-reinstall')) {
+            // The GPU wheel landing, as the real pip step would.
+            mkdirSync(join(sp, 'onnxruntime_gpu-1.26.0.dist-info'));
+            writeFileSync(join(sp, 'onnxruntime_gpu-1.26.0.dist-info', 'METADATA'), 'Version: 1.26.0\n');
+          }
+          return makeFakeChild(0) as never;
+        },
+        holdSidecarFn: (fn) => fn(),
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'installed');
+      const venvPython = process.platform === 'win32' ? join('Scripts', 'python.exe') : join('bin', 'python');
+      expect(spawned[0].cmd).toBe('node');
+      expect(spawned[0].args[0]).toMatch(/install-coqui\.mjs$/);
+      expect(spawned.slice(1).map((s) => s.cmd.endsWith(venvPython))).toEqual([true, true, true]);
+      expect(spawned.slice(1).map((s) => s.args.slice(0, 3))).toEqual([
+        ['-m', 'pip', 'uninstall'],
+        ['-m', 'pip', 'install'],
+        ['-m', 'pip', 'install'],
+      ]);
+      expect(spawned[2].args).toContain('--force-reinstall');
+      expect(existsSync(join(sp, 'onnxruntime-1.26.0.dist-info', 'INSTALLER'))).toBe(true); // marker written last
+    });
+
+    it('cpu-stamped venv: no pip after the installer (plain onnxruntime is correct there)', async () => {
+      vi.stubEnv('ACCELERATOR', undefined);
+      vi.stubEnv('SIDECAR_VENV_DIR', undefined);
+      const { repoRoot } = tempRepo('cpu');
+      const spawned: string[] = [];
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot,
+        detectFn,
+        spawnFn: (cmd) => {
+          spawned.push(cmd);
+          return makeFakeChild(0) as never;
+        },
+        holdSidecarFn: (fn) => fn(),
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'installed');
+      expect(spawned).toEqual(['node']);
+    });
+
+    it('a failing pip step surfaces its stderr in the job error (async close path, not spawnSync)', async () => {
+      vi.stubEnv('ACCELERATOR', undefined);
+      vi.stubEnv('SIDECAR_VENV_DIR', undefined);
+      const { repoRoot } = tempRepo('nvidia');
+      const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot,
+        detectFn,
+        spawnFn: (_cmd, args) =>
+          (args.includes('uninstall')
+            ? makeFakeChild(1, { stderr: 'ERROR: pip uninstall blew up\n[notice] A new release of pip is available\n' })
+            : makeFakeChild(0)) as never,
+        holdSidecarFn: (fn) => fn(),
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(b.getJob(job.id)?.error).toMatch(/Coqui XTTS v2 installed, but restoring/);
+      expect(b.getJob(job.id)?.error).toMatch(/pip uninstall blew up/);
+      expect(b.getJob(job.id)?.error).not.toMatch(/A new release/);
+    });
+  });
+
+  /* #3039 — a pip failure dump often ends with pip's own routine "new release
+     available" notice printed AFTER the real error; the job's error field
+     must still surface the actual failure, not just that trailing notice.
+     The old slice(-3) logic would miss the WinError 5 when the error is
+     buried in a longer traceback. This fixture reproduces the real captured
+     shape: CRLF-terminated lines with the traceback, error message several
+     lines up, followed by blank lines and notice lines.
+     The OLD code filtered NOTHING: it split the raw CRLF text and took the
+     last 3 lines, which on this shape are a blank line and pip's two
+     [notice] lines — so the real error never reached the operator at all.
+     NEW extractInstallErrorDetail filters notices FIRST, then keeps the last
+     5 remaining lines, so it captures the full error context including
+     WinError 5.
+     This test MUST fail if slice(-3) is used (verifies the fix works). */
+  it('surfaces the real error even when pip prints its update notice after it', async () => {
+    const stderrFixture =
+      'Traceback (most recent call last):\r\n' +
+      '  File "C:\\\\Python\\\\lib\\\\site-packages\\\\pip.py", line 123\r\n' +
+      '    from onnxruntime import capi\r\n' +
+      'OSError: [WinError 5] Access is denied: ' +
+      "'onnxruntime\\\\capi\\\\onnxruntime_providers_shared.dll'\r\n" +
+      'Check the permissions. The DLL is in use.\r\n' +
+      'See the sidecar logs for more details.\r\n' +
+      '\r\n' +
+      '[notice] A new release of pip is available: 24.0 -> 24.1\r\n' +
+      '[notice] To update, run: python.exe -m pip install --upgrade pip\r\n';
+
+    const b = new CoquiInstallBootstrap({
+      repoRoot: '/repo',
+      detectFn: () => 'not-installed',
+      spawnFn: () => makeFakeChild(1, { stderr: stderrFixture }) as never,
+      ...OFFLINE,
+    });
+    const job = b.start();
+    await until(() => b.getJob(job.id)?.status === 'error');
+    expect(b.getJob(job.id)?.error).toMatch(/WinError 5/);
+    /* Also verify that the notice lines are filtered out and the error message
+       carries the real error, not the notice. */
+    expect(b.getJob(job.id)?.error).not.toMatch(/A new release/);
+  });
+
+  /* Mirrors QwenInstallBootstrap (#3043 S1): an installer failure and a
+     restore failure are two INDEPENDENT facts, and neither is reported as
+     the other. The installer's own message is verbatim and first; a restore
+     failure is appended as context, never a substitute; and a restore
+     failure occurring alone still lands through its own "installed, but
+     restoring… failed" template. */
+  describe('the installer outcome and the restore outcome are reported separately', () => {
+    const failingInstaller = (): unknown =>
+      makeFakeChild(1, { stderr: 'ERROR: XTTS v2 pre-fetch failed: connection timeout\n' });
+
+    it('installer FAILS + restore SUCCEEDS: reports the installer failure, says the runtime is intact, points at a retry', async () => {
+      let restoreCalled = false;
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => failingInstaller() as never,
+        holdSidecarFn: (fn) => fn(),
+        restoreOrtFn: async () => {
+          restoreCalled = true;
+          return 'swapped';
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      const error = b.getJob(job.id)?.error ?? '';
+
+      // The restore still runs on the installer-failure path (that is the fix
+      // this path exists for) — but it SUCCEEDED here...
+      expect(restoreCalled).toBe(true);
+      // ...so the message must not blame it, must not claim Coqui landed, and
+      // must not send the operator to install-ort.mjs.
+      expect(error).toMatch(/XTTS v2 pre-fetch failed/);
+      expect(error).not.toMatch(/Coqui XTTS v2 installed/);
+      expect(error).not.toMatch(/restoring the GPU ONNX runtime afterwards failed/);
+      expect(error).not.toMatch(/install-ort\.mjs/);
+      expect(error).toMatch(/runtime was checked and is intact/);
+      expect(error).toMatch(/Retry the install/);
+    });
+
+    it('installer FAILS + restore FAILS: reports the installer failure AND names the runtime repair', async () => {
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => failingInstaller() as never,
+        holdSidecarFn: (fn) => fn(),
+        restoreOrtFn: async () => {
+          throw new Error('pip uninstall onnxruntime exited with code 1.');
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      const error = b.getJob(job.id)?.error ?? '';
+
+      expect(error).toMatch(/XTTS v2 pre-fetch failed/);
+      expect(error).not.toMatch(/Coqui XTTS v2 installed/);
+      // Both facts present, in that order — the installer's first.
+      expect(error).toMatch(/pip uninstall onnxruntime exited with code 1/);
+      expect(error).toMatch(/install-ort\.mjs/);
+      expect(error.indexOf('XTTS v2 pre-fetch')).toBeLessThan(error.indexOf('pip uninstall'));
+    });
+
+    it('installer SUCCEEDS + restore FAILS: reports that Coqui DID land and only the runtime needs repair', async () => {
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => false,
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => makeFakeChild(0) as never,
+        holdSidecarFn: (fn) => fn(),
+        restoreOrtFn: async () => {
+          throw new Error('pip uninstall onnxruntime exited with code 1.');
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      const error = b.getJob(job.id)?.error ?? '';
+
+      expect(error).toMatch(/Coqui XTTS v2 installed, but restoring the GPU ONNX runtime afterwards failed/);
+      expect(error).toMatch(/install-ort\.mjs/);
+      // Nothing from an installer failure — there wasn't one.
+      expect(error).not.toMatch(/XTTS v2 pre-fetch failed/);
+    });
+
+    it('when a chapter is being generated, the installer refuses immediately without holding the sidecar', async () => {
+      const calls: string[] = [];
+      const b = new CoquiInstallBootstrap({
+        generationActiveFn: () => true,
+        repoRoot: '/repo',
+        detectFn: () => 'not-installed',
+        spawnFn: () => {
+          calls.push('spawn');
+          return makeFakeChild(0) as never;
+        },
+        holdSidecarFn: async (fn) => {
+          calls.push('hold');
+          try {
+            return await fn();
+          } finally {
+            calls.push('release');
+          }
+        },
+        restoreOrtFn: async () => {
+          calls.push('ort');
+          return 'not-needed';
+        },
+      });
+      const job = b.start();
+      await until(() => b.getJob(job.id)?.status === 'error');
+      expect(b.getJob(job.id)?.error).toMatch(/while a chapter is being generated/);
+      expect(calls).toEqual([]);
+    });
+
+    it('a child that goes completely silent is killed and reported as stalled, releasing the hold', async () => {
+      vi.useFakeTimers();
+      try {
+        const calls: string[] = [];
+        let killed = false;
+        const b = new CoquiInstallBootstrap({
+          repoRoot: '/repo',
+          detectFn: () => 'not-installed',
+          spawnFn: () => {
+            calls.push('spawn');
+            /* A child that emits nothing and never closes — the stalled-download
+               shape. makeFakeChild always settles, so this one is hand-built. */
+            const proc = new EventEmitter() as EventEmitter & {
+              stdout: EventEmitter;
+              stderr: EventEmitter;
+              kill: () => boolean;
+            };
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.kill = () => {
+              killed = true;
+              return true;
+            };
+            return proc as never;
+          },
+          holdSidecarFn: async (fn) => {
+            calls.push('hold');
+            try {
+              return await fn();
+            } finally {
+              calls.push('release');
+            }
+          },
+          restoreOrtFn: async () => {
+            calls.push('ort');
+            return 'not-needed';
+          },
+          generationActiveFn: () => false,
+          childIdleTimeoutMs: 20,
+        });
+        const job = b.start();
+        await vi.advanceTimersByTimeAsync(100);
+
+        expect(killed).toBe(true);
+        // The hold released — without that the sidecar never comes back.
+        expect(calls).toEqual(['hold', 'spawn', 'ort', 'release']);
+        expect(b.getJob(job.id)?.error).toMatch(/no output for .* minutes/);
+        expect(b.getJob(job.id)?.error).toMatch(/stalled/);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
