@@ -186,14 +186,20 @@ export const STEPS = [
            in sync-agent-skills.mjs — not against this worktree's disk copy of
            .claude/skills/** above. That real input is main's committed tree, not
            a disk path, so it has no representation in this step's globs/extraFiles
-           at all. A secondary worktree that pulls main without re-running
-           `npm run skills:sync` can see test:hooks [cached] printed on the exact
-           commit the guard exists to check, in that worktree only — the primary
-           checkout that actually merges busts its own cache via its own changed
-           .claude/skills/** files, and the gap self-heals at the stale worktree's
-           next real cache miss. Same #1847 trap as fixtures/** above, but with no
-           fix possible short of a new "git ref" input kind (rejected, disproportionate
-           for this) or always running test:hooks (rejected, a permanent tax). */
+           at all. A secondary worktree that has NOT pulled the change, while the
+           box's shared main ref has advanced underneath it (linked worktrees share
+           the same .git/refs), can see test:hooks [cached] on the exact commit the
+           guard exists to check — the disk bytes are unchanged, so the cache hash
+           matches. Additionally, the mirror itself (~/.agents/skills/) is shared
+           machine state and can go stale independent of any tracked file changing:
+           if writeMirroredFile() throws partway through syncAgentSkills (lines
+           296-304), the mirror is left partially written with zero tracked file
+           changes in any worktree, so even the primary checkout's test:hooks can
+           print [cached] despite the mirror disagreeing with main. The gap
+           self-heals at an affected worktree's next real cache miss. Same #1847
+           trap as fixtures/** above, but with no fix possible short of a new "git
+           ref" input kind (rejected, disproportionate for this) or always running
+           test:hooks (rejected, a permanent tax). */
         /* docs/testing/** is an input because review-gate-mechanism.test.mjs's
            linkScanSet() now reads every .md file under this directory as TEXT
            at RUNTIME, alongside CLAUDE.md/CONTRIBUTING.md/.claude/skills/**
