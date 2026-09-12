@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="21" data-publish-id="b4f8f1bdb197"></div>
+  <div hidden data-published-as="22" data-publish-id="5d7d67491128"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -724,9 +724,14 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A108</span><span class="iname">#3056 — Coqui/Kokoro/Whisper installer hold-down and idle watchdog · **0 of 2 run · 2 owed**</span><span class="risk">Not yet published</span><span class="chev">›</span></summary>
+      <summary><span class="num">A108</span><span class="iname">#3056 &#8212; Coqui/Kokoro/Whisper installer hold-down and idle watchdog</span><span class="risk">GPU box with a real sidecar, Qwen resident</span><span class="chev">›</span></summary>
       <div class="body">
-        <p class="body-placeholder">Not yet published — run `npm run register:build` after adding row content, or fill in manually and re-run --check.</p>
+        <p>Ported from #3039 (Qwen3-TTS): all four in-app TTS installers now run with the sidecar held down and restore the GPU ONNX runtime afterwards. Two safety mechanisms added to Coqui/Kokoro/Whisper shipped without on-box acceptance: (1) an idle watchdog that kills a child (installer or pip step) that produces no output for 30 minutes, releasing the sidecar hold so the queue recovers &#8212; without it a stalled installer deadlocks the sidecar indefinitely; (2) an active-generation refusal that stops the installer immediately if a chapter is rendering, rather than silently aborting it.</p>
+        <ul>
+          <li>Coqui XTTS installer via Admin &#8594; Model Manager: click <b>Install Coqui XTTS v2</b>, observe the installer runs with the sidecar held (the UI says &#8220;Stopping the voice engine&#8230;&#8221; and any queued chapter waits), completes successfully, and leaves the GPU ONNX runtime intact (<code>pip check</code> clean after install).</li>
+          <li>Same installer clicked mid-render: a chapter mid-render (or with a chapter queued to render immediately) triggers the &#8220;Cannot install while a chapter is being generated&#8221; refusal, not a silent abort. Kokoro and Whisper follow the same two paths.</li>
+        </ul>
+        <p class="src">GPU box with a real sidecar, Qwen resident (the installer test itself does not require Qwen, but the chapter-mid-render scenario does) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3056">#3056</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/3197">PR #3197</a> &#183; no separate run sheet &#183; low &#8212; each of the three engines needs one successful install from the UI (Admin &#8594; Model Manager, account-logged, real install-*.mjs script, real pip swap, real venv I/O but not a multi-minute download, ~30s per engine if the weights are already present or pre-cached) and one refusal attempt with a chapter queued to render (Qwen, since it&#39;s the fastest to boot). No golden-audio comparison, no complex fixture setup, no timeout tolerance tuning.</p>
       </div>
     </details>
     <details class="item">

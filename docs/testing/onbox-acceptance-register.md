@@ -4560,7 +4560,7 @@ a chapter is rendering, rather than silently aborting it.
 does not require Qwen, but the chapter-mid-render scenario does).
 
 *Criteria:*
-1. Coqui XTTS installer via Account → Models: click **Install Coqui XTTS v2**, observe
+1. Coqui XTTS installer via Admin → Model Manager: click **Install Coqui XTTS v2**, observe
    the installer runs with the sidecar held (the UI says "Stopping the voice engine…"
    and any queued chapter waits), completes successfully, and leaves the GPU ONNX
    runtime intact (`pip check` clean after install).
@@ -4569,7 +4569,7 @@ does not require Qwen, but the chapter-mid-render scenario does).
    generated" refusal, not a silent abort. Kokoro and Whisper follow the same two paths.
 
 *Cost:* low — each of the three engines needs one successful install from the UI
-(Account → Models, account-logged, real install-*.mjs script, real pip swap, real venv
+(Admin → Model Manager, account-logged, real install-*.mjs script, real pip swap, real venv
 I/O but not a multi-minute download, ~30s per engine if the weights are already present
 or pre-cached) and one refusal attempt with a chapter queued to render (Qwen, since
 it's the fastest to boot). No golden-audio comparison, no complex fixture setup, no
