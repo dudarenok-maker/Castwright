@@ -1,5 +1,5 @@
 /* In-app Coqui XTTS v2 install bootstrap. Mirrors qwen-install-bootstrap.ts so
- * a deployer can pre-fetch the XTTS v2 weights from Account → Models without a
+ * a deployer can pre-fetch the XTTS v2 weights from Admin → Model Manager without a
  * terminal. Differences from the Qwen flow:
  *
  *   - `coqui-tts` is opt-in (not in base.txt); `install-coqui.mjs` pip-installs

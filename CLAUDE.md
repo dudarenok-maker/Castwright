@@ -492,7 +492,7 @@ Design rationale:
   when both exist.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep). **The analyzer engine
-  is chosen in the UI (Account → analyzer settings) / `user-settings.json`, not
+  is chosen in the UI (Admin → Model Manager → Server configuration) / `user-settings.json`, not
   by env — `ANALYZER` no longer selects the engine (retired 2026-07-15); a stray
   `ANALYZER=gemini` in an old `.env` is inert.** The default is **local**.
   - **Local (default)** — calls a local Ollama model (with Gemini as an opt-out
@@ -627,9 +627,9 @@ Design rationale:
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
   and leaves every other body verbatim — `git grep requestFailureMessage`
-  enumerates all twelve sites (`book-state` ×4, `voice-library` ×3, `voices`,
-  `qwen-voice`, `voice-style`, `single-design`, `cast-design`'s defensive
-  outer), alongside the two merge routes' own explicit
+  enumerates all thirteen sites (`book-state` ×4, `voice-library` ×3, `voices`,
+  `qwen-voice`, `voice-style`, `single-design`, `script-review`, `cast-design`'s
+  defensive outer), alongside the two merge routes' own explicit
   `LOCK_CONTENTION_REQUEST_ERROR` branch; and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no

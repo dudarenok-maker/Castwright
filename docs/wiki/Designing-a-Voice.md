@@ -12,9 +12,9 @@ Open a cast member's profile drawer — a character with no voice yet is flagged
 
 Edit the persona text (or click "Regenerate" for a fresh draft), pick **Qwen
 (bespoke)** as the voice engine, and click **Design & preview**. Generating
-persona text needs a `GEMINI_API_KEY` set from Account → Server
-Configuration (or in `server/.env` for CI / power users) — the drawer warns
-inline when it's missing.
+persona text needs a `GEMINI_API_KEY` set from Admin → Model Manager →
+Server configuration (or in `server/.env` for CI / power users) — the drawer
+warns inline when it's missing.
 
 Design runs on the GPU, one character at a time. The top bar shows a
 "Designing · N%" pill while it works, and it's safe to close the drawer —

@@ -38,7 +38,7 @@ If a chapter (often **chapter 1**) fails the instant analysis starts with `Gemin
 Two ways around it:
 
 - **Stay on the cloud, switch model.** Set `GEMINI_MODEL=gemma-4-31b-it` in `server/.env` and restart — the `gemma-*` family isn't subject to the recitation filter. Trade-off: gemma is weaker and can grind on very long chapters.
-- **Go fully local (most robust for copyrighted manuscripts).** Set `ANALYZER=local` in `server/.env`, run Ollama with `ollama pull qwen3.5:4b`, and restart. Local models apply no content filter at all. See [Installing Castwright](Installing-Castwright).
+- **Go fully local (most robust for copyrighted manuscripts).** Switch to Local Ollama in Admin → Model Manager, run Ollama with `ollama pull qwen3.5:4b`. Local models apply no content filter at all. See [Installing Castwright](Installing-Castwright).
 
 After editing `server/.env`, click **Try again** in the app — it resumes from the first uncached chapter.
 
@@ -70,7 +70,7 @@ When a render goes wrong, Castwright names the failure instead of shrugging. Eve
 
 **What to do:** Unload any models you are not generating with (the analyzer Ollama, or a second voice engine) from the model pills, then retry. On an 8 GB card keep only one heavy voice engine loaded.
 
-**If you've turned on "Qwen codec device" (Advanced Settings → Voice engine & device):** this opt-in setting moves part of Qwen's decode work onto the GPU for a speed boost, but it noticeably raises Qwen's own VRAM footprint. On-box testing on an 8 GB card (RTX 4070 Laptop) at a real production batch size (32) measured the dedicated VRAM peak rising from ~5.2 GB (codec off) to ~7.9 GB (codec on) — even after lowering "Qwen codec chunk size" from its default (300) to 100 — with the excess spilling into Windows' much slower shared-memory GPU fallback and then poisoning the CUDA context (every request 503s until the sidecar auto-restarts). This is a real capacity limit on 8 GB cards at larger batch sizes, not a bug: if you see this, turn "Qwen codec device" back to its default (off), or try a smaller batch size before re-enabling it. See [issue #1374](https://github.com/dudarenok-maker/Castwright/issues/1374) and the [follow-up on VRAM accounting](https://github.com/dudarenok-maker/Castwright/issues/1396).
+**If you've turned on "Qwen codec device" (Advanced Settings → Device & offload options):** this opt-in setting moves part of Qwen's decode work onto the GPU for a speed boost, but it noticeably raises Qwen's own VRAM footprint. On-box testing on an 8 GB card (RTX 4070 Laptop) at a real production batch size (32) measured the dedicated VRAM peak rising from ~5.2 GB (codec off) to ~7.9 GB (codec on) — even after lowering "Qwen codec chunk size" from its default (300) to 100 — with the excess spilling into Windows' much slower shared-memory GPU fallback and then poisoning the CUDA context (every request 503s until the sidecar auto-restarts). This is a real capacity limit on 8 GB cards at larger batch sizes, not a bug: if you see this, turn "Qwen codec device" back to its default (off), or try a smaller batch size before re-enabling it. See [issue #1374](https://github.com/dudarenok-maker/Castwright/issues/1374) and the [follow-up on VRAM accounting](https://github.com/dudarenok-maker/Castwright/issues/1396).
 
 ### Computer ran out of memory
 
@@ -94,15 +94,15 @@ When a render goes wrong, Castwright names the failure instead of shrugging. Eve
 
 **What you saw:** The analyzer could not be reached or stopped responding — the local Ollama daemon is down, or the analyzer service returned a server error.
 
-**What to do:** Check that Ollama is running (ollama serve), or switch the analyzer in server/.env (ANALYZER=gemini with a GEMINI_API_KEY). Then retry the chapter or resume the run.
+**What to do:** Check that Ollama is running (ollama serve), or switch the analyzer to Gemini in Admin → Model Manager with a GEMINI_API_KEY. Then retry the chapter or resume the run.
 
-When GEMINI_API_KEY is set, an unreachable Ollama silently retries against Gemini, so this error usually means no fallback was configured — or both engines failed.
+When GEMINI_API_KEY is set and Cloud fallback is on, an unreachable Ollama retries against Gemini, so this error usually means no fallback was configured (check Cloud fallback in Admin → Model Manager), or both engines failed.
 
 ### Gemini blocked the chapter (copyright filter)
 
 **What you saw:** Gemini blocked this chapter — its recitation filter refused the source text. The gemini-* models reject text they recognise as copyrighted, and a published book's opening chapter is the classic trigger.
 
-**What to do:** Switch the analyzer to a gemma-* model (set GEMINI_MODEL=gemma-4-31b-it in server/.env — the gemma family is not subject to the recitation filter) or to the local Ollama analyzer (ANALYZER=local). Restart, then click Retry.
+**What to do:** Switch the analyzer to a gemma-* model (set GEMINI_MODEL=gemma-4-31b-it in server/.env — the gemma family is not subject to the recitation filter) or to Local Ollama in Admin → Model Manager, then click Retry.
 
 The block is deterministic — retrying the same model on the same text fails identically, so it is not a transient error. gemma-* runs on a separate API bucket without recitation filtering; any local Ollama model (e.g. qwen3.5:4b) avoids the filter entirely and is the most robust choice for copyrighted manuscripts.
 
@@ -304,7 +304,7 @@ In Advanced Configuration each voice engine has its own device pin, listed by th
 
 ### Can I design voices without a Gemini API key?
 
-Yes — voice design's description-writing step follows the same analyzer engine you've already chosen (Local or Gemini, in Advanced settings). Set the analyzer to Local and Castwright drafts each character's voice from a model running entirely on your machine, so a fully offline setup, or one with no cloud key, can still design a full cast from scratch. Gemini stays the default for the richest descriptions; Local is the road for a no-key or offline setup.
+Yes — voice design's description-writing step has its own engine, **Persona generation engine** in Advanced settings. Set it to Local and Castwright drafts each character's voice from a model running entirely on your machine, so a fully offline setup, or one with no cloud key, can still design a full cast from scratch. Gemini is its default for the richest descriptions; Local is the road for a no-key or offline setup.
 
 ### Why is my character gasping, sighing, or laughing when the book doesn't say so?
 
@@ -370,4 +370,4 @@ The analysis-model menu lists the models you've already installed into Ollama �
 
 ### I chose a model on my machine, but the analysis ran on Gemini
 
-When your analyzer engine is set to Local and Ollama can't be reached, Castwright falls back to Gemini — if you've added a Gemini API key — so a stalled daemon doesn't stall your book. The on-machine models still show in the menu while Ollama is down, which is why a "Local" choice can land on Gemini. Want it to stop and tell you instead? Start Ollama before you analyse, or set the analyzer engine to Gemini outright.
+When your analyzer engine is set to Local and Ollama can't be reached, Castwright falls back to Gemini — if you've added a Gemini API key and Cloud fallback is on — so a stalled daemon doesn't stall your book. The on-machine models still show in the menu while Ollama is down, which is why a "Local" choice can land on Gemini. Want it to stop and tell you instead? Start Ollama before you analyse, turn off Cloud fallback in analyzer settings, or set the analyzer engine to Gemini outright.

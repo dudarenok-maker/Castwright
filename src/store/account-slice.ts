@@ -39,6 +39,7 @@ const initialState: AccountState = {
   apiKeyStatus: 'unset',
   workspaceRoot: '',
   workspaceSource: 'default',
+  corruptSettingsFile: false,
   status: 'idle',
   error: null,
   hydrated: false,
@@ -123,13 +124,13 @@ export const accountSlice = createSlice({
     },
     /* Dual-model TTS mode — when true the sidecar may keep two TTS
        engines resident in GPU memory at once. Off by default; toggled
-       from the Account view's TTS-sidecar card. */
+       from the Model Manager's Voice engine section. */
     setDualModelEnabled: (s, a: PayloadAction<boolean>) => {
       s.dualModelEnabled = a.payload;
     },
     /* Plan 111 — number of chapters the generation queue synthesises
-       concurrently (1–4, default 2). Set from the Account view's TTS-sidecar
-       card; read by the queue dispatcher. Queue/synthesis concurrency only —
+       concurrently (1–4, default 2). Set from the Model Manager's Voice
+       engine section; read by the queue dispatcher. Queue/synthesis concurrency only —
        the GPU semaphore is the separate VRAM guard. */
     setGenerationWorkers: (s, a: PayloadAction<number>) => {
       s.generationWorkers = a.payload;
@@ -144,6 +145,12 @@ export const accountSlice = createSlice({
     },
     setBackupRetention: (s, a: PayloadAction<number>) => {
       s.backupRetention = a.payload;
+    },
+    /* Update corruption flag when app writes complete successfully. The server
+       returns this flag alongside every write response, so the UI banner state
+       can stay in sync without re-fetching the whole account settings. */
+    setCorruptSettingsFile: (s, a: PayloadAction<boolean>) => {
+      s.corruptSettingsFile = a.payload;
     },
   },
   extraReducers: (builder) => {

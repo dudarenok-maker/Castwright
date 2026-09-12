@@ -23,6 +23,7 @@ import {
   getResolvedGeminiApiKey,
   getResolvedGenerationWorkers,
   getResolvedTtsModelKey,
+  isUserSettingsFileCorrupt,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
@@ -35,10 +36,14 @@ interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
   workspaceSource: 'env' | 'default' | 'override';
   /* The EFFECTIVE default TTS model after the Qwen-when-installed resolution
      (getResolvedTtsModelKey). Distinct from the STORED `defaultTtsModelKey`
-     (which the Account picker shows + round-trips): the frontend seeds the
+     (which the Model Manager picker shows + round-trips): the frontend seeds the
      session engine from this so a fresh box with Qwen installed defaults to
      Qwen, while the stored key stays Kokoro until the user explicitly picks. */
   resolvedTtsModelKey: UserSettings['defaultTtsModelKey'];
+  /* Server-computed, not part of the persisted UserSettings shape — see
+     isUserSettingsFileCorrupt() in workspace/user-settings.ts. Recomputed
+     fresh on every response, same as apiKeyStatus/workspaceRoot/workspaceSource. */
+  corruptSettingsFile: boolean;
 }
 
 function envDerived(settings: UserSettings): UserSettingsResponse {
@@ -54,14 +59,15 @@ function envDerived(settings: UserSettings): UserSettingsResponse {
        the GEN_WORKERS env never reaches the dispatcher and can't cap concurrency
        — it was a deploy knob that did nothing. When the env is unset,
        getResolvedGenerationWorkers() returns the on-disk account value, so the
-       Account-tab UI is unchanged. */
+       Model Manager UI is unchanged. */
     generationWorkers: getResolvedGenerationWorkers(),
     /* Read-only effective default (Qwen-when-installed, else Kokoro). The
-       stored `defaultTtsModelKey` above is left untouched so the Account
+       stored `defaultTtsModelKey` above is left untouched so the Model Manager
        picker shows what's saved and a no-op round-trip can't pollute it. */
     resolvedTtsModelKey: getResolvedTtsModelKey(),
     workspaceRoot: WORKSPACE_ROOT,
     workspaceSource: WORKSPACE_SOURCE,
+    corruptSettingsFile: isUserSettingsFileCorrupt(),
   };
 }
 
@@ -93,7 +99,7 @@ const geminiKeyPayloadSchema = z.object({
 });
 
 /* PUT /api/user/settings/gemini-key { key: string | null }
-   - Sets the UI-managed Gemini API key (Account view → Server configuration).
+   - Sets the UI-managed Gemini API key (Admin → Model Manager → Server configuration).
    - Pass `null` to clear it.
    - Response is the same shape as GET /api/user/settings — caller can swap
      it into local state without a follow-up GET.

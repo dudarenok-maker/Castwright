@@ -1,7 +1,7 @@
 /* In-app Whisper ASR install bootstrap (srv-31, plan 186). Mirrors
  * qwen-install-bootstrap.ts: spawns server/tts-sidecar/scripts/install-whisper.mjs
  * and surfaces its `[install-whisper]` step lines so a deployer can install the
- * ASR engine from Account → Models without a terminal. Progress is STEP-based
+ * ASR engine from Admin → Model Manager without a terminal. Progress is STEP-based
  * (no single byte total for the HF download).
  *
  * Unlike Qwen there is no resolver-cache sync — ASR is never an auto-selected

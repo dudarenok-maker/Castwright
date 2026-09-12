@@ -231,7 +231,9 @@ export function AnalysingView({
      flips, analysis useEffect re-runs… and at any link in the chain a
      leaked fetch or a stale render could pile up against Ollama. With
      an explicit click the user controls when the analysis kicks off,
-     and the server log shows exactly one [analysis] entry per click. */
+     and the server log shows one `[analysis] start` line per run actually
+     started (plus a `request received` line for every POST, including the
+     stream middleware's subscribe and any rejoin). */
   const [analysisStarted, setAnalysisStarted] = useState(false);
   /* True only while re-attaching to an already-running job after a page
      reload — set when the cold-boot rehydrate finds a `running` snapshot,
@@ -400,9 +402,9 @@ export function AnalysingView({
        leaked the previous fetch's TCP connection — the cleanup only set
        `cancelled = true` to drop incoming results, but the underlying
        request kept the server's analysis loop busy. At concurrency=1
-       the server's log filled with `[analysis] manuscript=...` ↔
-       `[analysis] aborted (client disconnected)` pairs as the browser
-       eventually pruned the orphaned fetches, breaking every retry. */
+       the server's log filled with per-request start ↔ `[analysis]
+       aborted` pairs as the browser eventually pruned the orphaned
+       fetches, breaking every retry. */
     const controller = new AbortController();
     analysisControllerRef.current = controller;
     hasStartedOnceRef.current = true;
@@ -609,7 +611,9 @@ export function AnalysingView({
           /* Server-side pause / displacement. Reflect in the snapshot
              so the pill renders the paused variant, but DO NOT clear
              the snapshot — keep the pill visible so the user can
-             navigate back to the analysing view and resume. */
+             navigate back to the analysing view and resume. Update conn
+             state to keep the sticky bar in sync (paused → idle). */
+          setConn('idle');
           dispatch(analysisActions.setPaused({ manuscriptId }));
           return;
         }
@@ -1438,6 +1442,42 @@ export function AnalysingView({
               progressByPhase,
               liveByPhase,
               maxPhase: phase,
+              /* An idle page (never started, no rehydrated snapshot) must not
+                 render phase 0 as active just because it's the pipeline
+                 frontier (#3169) — analysisStarted covers the explicit-click/
+                 retry/demo-capture/cold-boot-running paths, resuming covers
+                 the #865 reload bridge, and hasStartedOnceRef covers a
+                 cold-boot rehydrate of a paused/halted snapshot so those
+                 still render exactly as they do today. activeStreamSnapshot
+                 (the same cross-navigation signal the rehydrate effect above
+                 acts on) is ALSO checked directly rather than relying solely
+                 on hasStartedOnceRef: that ref is written by the rehydrate
+                 effect with no setState, so on the very first render it
+                 hasn't re-rendered yet and `started` would read false —
+                 correcting only once some unrelated effect happens to
+                 re-render. Reading the selector value instead is present
+                 on the first render, so a cold-boot paused/halted snapshot
+                 never produces a pending flash. A lingering snapshot for
+                 this manuscript is always running/paused/halted — a
+                 completed run's snapshot is torn down via
+                 clearActiveStream, so this can't wrongly mark a
+                 never-started view as started.
+                 F3 (#3169 fix wave) — `!!manuscriptId &&` guards against
+                 both sides being `undefined`: with no `manuscriptId` prop
+                 and no snapshot, the bare `===` read `undefined ===
+                 undefined` as true, rendering an idle view as active. The
+                 rehydrate effect this comment says it mirrors already
+                 returns early on `!manuscriptId` — this term
+                 needs the same guard to actually mirror it. */
+              started:
+                analysisStarted ||
+                resuming ||
+                hasStartedOnceRef.current ||
+                (!!manuscriptId && activeStreamSnapshot?.manuscriptId === manuscriptId),
+              runState:
+                activeStreamSnapshot && activeStreamSnapshot.manuscriptId === manuscriptId
+                  ? (activeStreamSnapshot.state ?? 'running')
+                  : 'running',
             });
             return (
               <PhaseCard
@@ -1446,6 +1486,8 @@ export function AnalysingView({
                 activePhaseId={phase}
                 isPhaseActive={phaseState === 'active'}
                 isPhaseDone={phaseState === 'done'}
+                isPhasePaused={phaseState === 'paused'}
+                isPhaseHalted={phaseState === 'halted'}
                 phaseProgress={progressByPhase[p.id] ?? 0}
                 phaseLogs={logs[p.id] ?? []}
                 live={liveByPhase[p.id] ?? null}

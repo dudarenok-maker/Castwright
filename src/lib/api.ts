@@ -65,6 +65,7 @@ import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
+import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -2850,6 +2851,7 @@ export class AnalysisError extends Error {
   }
 }
 
+
 async function realAnalyseManuscript(
   manuscriptId: string,
   opts: AnalyseOpts = {},
@@ -2894,14 +2896,14 @@ async function realAnalyseManuscript(
           selector: { manuscriptId },
           shape: '409',
           onRetry: () => realAnalyseManuscript(manuscriptId, opts).then(resolve, reject),
-          onDismiss: () => reject(new Error(msg)),
+          onDismiss: () => reject(new AnalysisError(msg, ANALYSIS_STREAM_FAILED)),
         });
-        if (!accepted) reject(new Error(msg));
+        if (!accepted) reject(new AnalysisError(msg, ANALYSIS_STREAM_FAILED));
       });
     }
-    throw new Error(msg);
+    throw new AnalysisError(msg, ANALYSIS_STREAM_FAILED);
   }
-  if (!res.body) throw new Error(`Analysis stream failed (${res.status}).`);
+  if (!res.body) throw new AnalysisError(`Analysis stream failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -3022,7 +3024,7 @@ async function realAnalyseManuscript(
     }
   }
 
-  if (!result) throw new Error('Analysis stream ended without a result event.');
+  if (!result) throw new AnalysisError('Analysis stream ended without a result event.', ANALYSIS_STREAM_NO_RESULT);
   return result;
 }
 
@@ -5610,7 +5612,12 @@ async function realRunAnalysisForChapters(
       signal,
     },
   );
-  if (!res.ok || !res.body) throw new Error(`Subset analysis failed (${res.status}).`);
+  /* Same two connection-level codes as realAnalyseManuscript — the stream
+     middleware subscribes through this reader too (kind: 'subset') and
+     classifies on `code`, so a plain Error here would land in its generic
+     terminal branch and paint a designed no-result exit as a dead run. */
+  if (!res.ok || !res.body)
+    throw new AnalysisError(`Subset analysis failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -5733,7 +5740,11 @@ async function realRunAnalysisForChapters(
     }
   }
 
-  if (!result) throw new Error('Subset analysis stream ended without a result event.');
+  if (!result)
+    throw new AnalysisError(
+      'Subset analysis stream ended without a result event.',
+      ANALYSIS_STREAM_NO_RESULT,
+    );
   return result;
 }
 
@@ -6936,6 +6947,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   apiKeyStatus: 'unset',
   workspaceRoot: '(mock)/audiobook-workspace',
   workspaceSource: 'default',
+  corruptSettingsFile: false,
   analyzerKeepAliveByModel: {},
 };
 
@@ -7027,12 +7039,22 @@ async function realCheckCompanionApk(): Promise<CompanionApkAvailability> {
     return { available: false, sizeBytes: null };
   }
 }
-async function realDismissWhatsNew(): Promise<void> {
+async function realDismissWhatsNew(): Promise<{ ok: boolean; corruptSettingsFile?: boolean }> {
   const res = await fetch('/api/info/dismiss-whats-new', { method: 'POST' });
   if (!res.ok)
     throw new Error(
       `Dismiss what's-new failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
+  /* Any 2xx IS a successful dismiss. The body carries the settings-corruption
+     flag (DismissWhatsNewResponse), but a 204 or a body-stripping intermediary
+     must not turn a server-side success into a thrown error — before #3195
+     this call never read the body at all, so a parse failure is a failure
+     mode this PR introduced and must absorb (#3195 Q1). */
+  const body = (await res.json().catch(() => null)) as { corruptSettingsFile?: unknown } | null;
+  return {
+    ok: true,
+    corruptSettingsFile: typeof body?.corruptSettingsFile === 'boolean' ? body.corruptSettingsFile : undefined,
+  };
 }
 async function realUpgradeStage(file: File): Promise<UpgradeStageResult> {
   const form = new FormData();
@@ -7221,11 +7243,12 @@ async function mockCheckCompanionApk(): Promise<CompanionApkAvailability> {
   await wait(20);
   return { available: false, sizeBytes: null };
 }
-export async function mockDismissWhatsNew(): Promise<void> {
+export async function mockDismissWhatsNew(): Promise<{ ok: boolean; corruptSettingsFile: boolean }> {
   await wait(20);
   /* The latch alone carries the dismiss: buildMockAppInfo hardcodes
      showWhatsNew:false, so there is no state write to make. */
   demoWhatsNewDismissed = true;
+  return { ok: true, corruptSettingsFile: false };
 }
 /* Next minor above the running version, so the staged mock candidate stays a
    genuine upgrade over the version-tracking chrome (was frozen at
@@ -8102,30 +8125,31 @@ async function realCompleteSetup(): Promise<SetupCompleteResponse> {
 }
 
 export async function mockCompleteSetup(): Promise<SetupCompleteResponse> {
-  return { completedAt: '2026-06-12T00:00:00.000Z' };
+  return { completedAt: '2026-06-12T00:00:00.000Z', corruptSettingsFile: false };
 }
 
 // --- tour status ---
 type TourStatus = { completedAt: string | null };
+type TourCompleteResponse = { completedAt: string; corruptSettingsFile: boolean };
 
 async function realGetTourStatus(): Promise<TourStatus> {
   const res = await fetch('/api/tour/status');
   if (!res.ok) throw new Error(`tour status ${res.status}`);
   return (await res.json()) as TourStatus;
 }
-async function realCompleteTour(): Promise<TourStatus> {
+async function realCompleteTour(): Promise<TourCompleteResponse> {
   const res = await fetch('/api/tour/complete', { method: 'POST' });
   if (!res.ok) throw new Error(`tour complete ${res.status}`);
-  return (await res.json()) as TourStatus;
+  return (await res.json()) as TourCompleteResponse;
 }
 
 let mockTourCompletedAt: string | null = null;
 export async function mockGetTourStatus(): Promise<TourStatus> {
   return { completedAt: mockTourCompletedAt };
 }
-export async function mockCompleteTour(): Promise<TourStatus> {
+export async function mockCompleteTour(): Promise<TourCompleteResponse> {
   mockTourCompletedAt = new Date().toISOString();
-  return { completedAt: mockTourCompletedAt };
+  return { completedAt: mockTourCompletedAt, corruptSettingsFile: false };
 }
 export function _resetMockTour(): void {
   mockTourCompletedAt = null;

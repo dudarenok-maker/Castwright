@@ -1,5 +1,5 @@
 /* Per-phase analyzer selection — plan 88 (pipelined two-model
-   analyzer) + plan 88 phase-2 (Account-tab UI surface).
+   analyzer) + plan 88 phase-2 (Model Manager UI surface).
 
    Adds a phase-aware selector on top of the existing `selectAnalyzer`
    from `./index.ts`. When `ANALYZER_PHASE0_MODEL` /
@@ -11,13 +11,13 @@
    Precedence chain (plan 88 phase-2):
      1. explicit env (`ANALYZER_PHASE{0,1}_MODEL`) — ops wins for triage
      2. per-request `opts.model` — UI dropdown for a specific run
-     3. user-settings JSON `analyzerPhase{0,1}Model` — Account tab
+     3. user-settings JSON `analyzerPhase{0,1}Model` — Model Manager
      4. hardcoded default via `selectAnalyzer({})`
 
    Env wins over `opts.model` so an ops override at the process
    boundary can't be silently shadowed by a per-request choice. (This
    inverts the plan-88-phase-1 precedence where `opts.model` won; the
-   Account-tab surface gives users a saved-default they can override,
+   Model Manager surface gives users a saved-default they can override,
    while env stays the triage trump card.)
 
    Fall-through invariant: when NEITHER env var nor user-settings is

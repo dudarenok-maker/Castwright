@@ -110,7 +110,7 @@ process... if you find another agent mid-generation, wait or record the row as
 still owed rather than competing for the GPU"), PID 42352 was left untouched
 for the entire run.
 
-## 4. The click-through — Account → Models → Qwen → Install
+## 4. The click-through — Admin → Model Manager → Installed models → Qwen → Install
 
 Screenshots in `step-5c-a40-screens/` (all captured live during this run):
 

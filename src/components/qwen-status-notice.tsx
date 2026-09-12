@@ -2,7 +2,7 @@
 
    Shown on the cast-selection surfaces when Qwen ISN'T installed: tells the
    user their books render in Kokoro and that installing Qwen unlocks bespoke
-   per-character voices, linking to Account → Models (where <QwenInstall/>
+   per-character voices, linking to Admin → Model Manager (where <QwenInstall/>
    lives). Renders NOTHING when Qwen is installed — installed users aren't
    nagged. Self-contained (one-shot /api/qwen/detect probe, no redux), matching
    the <QwenInstall/> pattern. */
@@ -47,8 +47,8 @@ export function QwenStatusNotice() {
         <span className="font-medium">Qwen3-TTS isn't installed.</span> Characters render in Kokoro
         until you install it. For the best quality — a unique designed voice per character — install
         Qwen3-TTS in{' '}
-        <a href="#/account" className="underline font-medium hover:text-amber-950">
-          Account → Models
+        <a href="#/models" className="underline font-medium hover:text-amber-950">
+          Admin → Model Manager
         </a>
         .
       </p>

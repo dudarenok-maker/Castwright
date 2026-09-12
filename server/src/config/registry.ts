@@ -1021,7 +1021,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Requests-per-minute cap for gemma-4-31b-it. Override to adjust the free-tier limit (default 30 RPM from AI Studio 2026-05-16). The limiter waits proactively so no 429s are issued.',
     type: 'integer', min: 1,
     default: 30, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpm in analyzer/rate-limit.ts
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
   {
     key: 'rate.tpm.gemma',
@@ -1031,7 +1031,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Input-tokens/min for gemma-4-31b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
     type: 'integer', min: 0,
     default: 16000, // ← BUILTIN_LIMITS['gemma-4-31b-it'].tpm in analyzer/rate-limit.ts (line 41); 0/"unlimited" = Infinity sentinel
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
   {
     key: 'rate.rpd.gemma',
@@ -1041,7 +1041,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Requests-per-day cap for gemma-4-31b-it. Default 14400 (free-tier from AI Studio 2026-05-16). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
     type: 'integer', min: 1,
     default: 14400, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpd in analyzer/rate-limit.ts
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
   {
     key: 'rate.rpm.gemma26',
@@ -1051,7 +1051,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Requests-per-minute cap for gemma-4-26b-a4b-it (free tier 30). The limiter waits proactively so no 429s are issued.',
     type: 'integer', min: 1,
     default: 30,
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
   {
     key: 'rate.tpm.gemma26',
@@ -1061,7 +1061,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Input-tokens/min for gemma-4-26b-a4b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
     type: 'integer', min: 0,
     default: 16000,
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
   {
     key: 'rate.rpd.gemma26',
@@ -1071,7 +1071,7 @@ export const KNOBS: ConfigKnob[] = [
     help: 'Requests-per-day cap for gemma-4-26b-a4b-it (free tier 14400). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
     type: 'integer', min: 1,
     default: 14400,
-    apply: 'restart-server', risk: 'low',
+    apply: 'live', risk: 'low',
   },
 
   // ── audio-loudness ────────────────────────────────────────────────────────
@@ -1118,16 +1118,6 @@ export const KNOBS: ConfigKnob[] = [
 
   // ── analyzer-models ───────────────────────────────────────────────────────
   {
-    key: 'analyzer.engine',
-    env: 'ANALYZER',
-    group: 'analyzer-models',
-    label: 'Analyzer engine',
-    help: '"local" routes through the Ollama daemon (auto-falls back to Gemini when Ollama is unreachable and GEMINI_API_KEY is set). "gemini" always goes direct to the Gemini API.',
-    type: 'enum', options: ['local', 'gemini'],
-    default: 'local', // ← ANALYZER default in server/.env.example (line 14)
-    apply: 'live', risk: 'medium',
-  },
-  {
     key: 'analyzer.ollama.url',
     env: 'OLLAMA_URL',
     group: 'analyzer-models',
@@ -1142,7 +1132,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'OLLAMA_MODEL',
     group: 'analyzer-models',
     label: 'Ollama model',
-    help: 'Ollama model tag passed to /api/chat as the last-resort fallback. The Account-tab model picker takes precedence when it has Ollama tag shape (contains ":")',
+    help: 'Ollama model tag passed to /api/chat as the last-resort fallback. The Model Manager model picker takes precedence when it has Ollama tag shape (contains ":")',
     type: 'string',
     default: 'qwen3.5:4b', // ← OLLAMA_MODEL default in server/.env.example (line 23) + DEFAULT_OLLAMA_MODEL in user-settings.ts
     apply: 'live', risk: 'medium',
@@ -1205,7 +1195,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_PHASE0_MODEL',
     group: 'analyzer-models',
     label: 'Phase-0 model override',
-    help: 'When set, drives Phase 0 (cast detection) with this specific model while Phase 1 uses ANALYZER_PHASE1_MODEL. Leave empty to use the legacy single-model ANALYZER path for both phases. The two analyzers hit independent rate-limit buckets, so quota is effectively doubled.',
+    help: 'When set, drives Phase 0 (cast detection) with this specific model while Phase 1 uses ANALYZER_PHASE1_MODEL. Leave empty to use the selected analyzer engine (chosen in Admin → Model Manager) for both phases. The two analyzers hit independent rate-limit buckets, so quota is effectively doubled.',
     type: 'string',
     default: '', // ← ANALYZER_PHASE0_MODEL unset by default in server/.env.example (line 60)
     apply: 'live', risk: 'medium',
@@ -1215,7 +1205,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_PHASE1_MODEL',
     group: 'analyzer-models',
     label: 'Phase-1 model override',
-    help: 'When set, drives Phase 1 (sentence attribution) with this specific model while Phase 0 uses ANALYZER_PHASE0_MODEL. Leave empty to use the legacy single-model ANALYZER path.',
+    help: 'When set, drives Phase 1 (sentence attribution) with this specific model while Phase 0 uses ANALYZER_PHASE0_MODEL. Leave empty to use the selected analyzer engine (chosen in Admin → Model Manager).',
     type: 'string',
     default: '', // ← ANALYZER_PHASE1_MODEL unset by default in server/.env.example (line 61)
     apply: 'live', risk: 'medium',

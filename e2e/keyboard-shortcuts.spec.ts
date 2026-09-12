@@ -3,7 +3,7 @@
  *
  * The unit tests pin the slice, the keybinding hook, and the Account card in
  * isolation; this spec proves the whole chain in a real browser: rebinding
- * play/pause in Account → Advanced changes the live (redux-persist) binding,
+ * play/pause in Account → Device-local changes the live (redux-persist) binding,
  * and pressing that key on the Listen view toggles the mini-player's <audio>.
  * Crosses router + redux + layout + keyboard seams that jsdom can't fully
  * model — exactly the bar CLAUDE.md sets for an e2e.
@@ -23,7 +23,7 @@ test.beforeEach(async ({ page }) => {
 
 test.describe('fe-2 — rebindable play/pause shortcut', () => {
   test('rebinding to K in Account toggles the mini-player on the Listen view', async ({ page }) => {
-    /* 1. Rebind play/pause → K in Account → Advanced. */
+    /* 1. Rebind play/pause → K in Account → Device-local. */
     await page.goto('/#/account');
     await waitForRouteReady(page);
     const binding = page.getByTestId('account-play-pause-binding');

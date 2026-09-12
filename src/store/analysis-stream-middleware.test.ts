@@ -25,6 +25,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
+import { notificationsSlice } from './notifications-slice';
 
 const pauseAnalysisSpy = vi.fn().mockResolvedValue(undefined);
 const analyseManuscriptMock = vi.fn();
@@ -34,20 +35,30 @@ vi.mock('../lib/api', () => {
   /* Re-derive AnalysisError inside the factory so `e instanceof AnalysisError`
      in the middleware lines up with what tests throw. Vitest hoists vi.mock
      to the top of the file, so the class must be defined here (referencing
-     a top-level class would hit a TDZ error). Shape mirrors
-     src/lib/api.ts:664-680. */
+     a top-level class would hit a TDZ error). Shape mirrors the
+     `AnalysisError` class in src/lib/api.ts — same positional constructor
+     (message, code, detail?, prevCharCount?, nextCharCount?, remediation?). */
   class AnalysisError extends Error {
     code: string;
     detail?: string;
     prevCharCount?: number;
     nextCharCount?: number;
-    constructor(message: string, code: string, detail?: string, prev?: number, next?: number) {
+    remediation?: string;
+    constructor(
+      message: string,
+      code: string,
+      detail?: string,
+      prev?: number,
+      next?: number,
+      remediation?: string,
+    ) {
       super(message);
       this.name = 'AnalysisError';
       this.code = code;
       this.detail = detail;
       this.prevCharCount = prev;
       this.nextCharCount = next;
+      this.remediation = remediation;
     }
   }
   return {
@@ -64,6 +75,7 @@ vi.mock('../lib/api', () => {
 
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
 import { AnalysisError } from '../lib/api';
+import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 
 interface CapturedAnalysisCall {
   manuscriptId: string;
@@ -99,7 +111,7 @@ const baseSnapshot: AnalysisStreamSnapshot = {
 
 function buildStore() {
   return configureStore({
-    reducer: { analysis: analysisSlice.reducer },
+    reducer: { analysis: analysisSlice.reducer, notifications: notificationsSlice.reducer },
     middleware: (getDefault) => getDefault().concat(analysisStreamMiddleware),
   });
 }
@@ -410,6 +422,9 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(store.getState().analysis.activeStream?.state).toBe('paused');
+    /* The setPaused dispatch closes the handle via the PAUSE_TYPE hook —
+       the catch branch has no explicit closeHandle() of its own. */
+    expect(captured[0]?.signal.aborted).toBe(true);
   });
 
   it('flips state to halted when the SSE rejects with AnalysisError code=attribution_drift', async () => {
@@ -428,6 +443,8 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     const snap = store.getState().analysis.activeStream;
     expect(snap?.state).toBe('halted');
     expect(snap?.haltCode).toBe('attribution_drift');
+    /* The setHalted dispatch closes the handle via the HALTED_TYPE hook. */
+    expect(captured[0]?.signal.aborted).toBe(true);
   });
 
   it('does NOT poison the snapshot when an AbortError surfaces from the SSE (clean cancel)', async () => {
@@ -449,6 +466,227 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(store.getState().analysis.activeStream?.state).toBe('paused');
+  });
+
+  describe('connection-level failures on the middleware\'s own SSE (#3198)', () => {
+    /* The middleware's subscribe stream is a SECOND connection alongside
+       the view's. What its failure means depends on the code api.ts
+       attached (src/lib/analysis-stream-codes.ts):
+
+       - `stream_no_result` — a clean 200 that ended with no `result`
+         frame. Says nothing about the run (the subset route ends this way
+         by design; the main route broadcasts every final frame to every
+         subscriber), so it must be a QUIET close: no halt, no toast, and
+         the next tick re-subscribes. Round 5 stamped a fabricated 500 on
+         this case and halted — permanently, since ticks never rewrote
+         `state` — painting a live run as dead (pass 5, 🔴 17).
+       - `stream_failed` (non-2xx on the subscribe POST) and any plain
+         Error (fetch rejection, truncated frame) — terminal for THIS
+         connection: halt + toast, because when the view is unmounted this
+         is the only connection there is (pass 4, 🔴 10). If the view's
+         connection is in fact alive, its next tick lifts the halt (slice
+         heal, tested below).
+
+       Each test names the mutation that reddens it; a test that stays
+       green under its own mutation is the defect this file has shipped
+       before (pass 5, 🟠 19). */
+
+    async function openAndReject(
+      kind: 'main' | 'subset',
+      err: unknown,
+    ): Promise<{ store: ReturnType<typeof buildStore>; first: CapturedAnalysisCall }> {
+      const store = buildStore();
+      store.dispatch(
+        analysisActions.setActiveStream(
+          kind === 'subset' ? { ...baseSnapshot, kind: 'subset', subsetChapterIds: [4] } : baseSnapshot,
+        ),
+      );
+      store.dispatch(
+        analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+      );
+      const first = captured[0]!;
+      first.reject(err);
+      await Promise.resolve();
+      await Promise.resolve();
+      return { store, first };
+    }
+
+    it.each(['main', 'subset'] as const)(
+      '%s route: a clean end without a result (stream_no_result) is a quiet close — no halt, no toast, re-subscribes on the next tick',
+      async (kind) => {
+        /* Mutation: delete the `ANALYSIS_STREAM_NO_RESULT` branch in the
+           middleware's catch → falls into the generic AnalysisError branch →
+           `state` reads 'halted' and a toast lands → red. */
+        const { store, first } = await openAndReject(
+          kind,
+          new AnalysisError('Analysis stream ended without a result event.', ANALYSIS_STREAM_NO_RESULT),
+        );
+        expect(first.signal.aborted).toBe(true);
+        const snap = store.getState().analysis.activeStream;
+        expect(snap?.state).toBe('running');
+        expect(snap?.haltCode).toBeUndefined();
+        expect(store.getState().notifications.toasts).toHaveLength(0);
+        /* Reconnect path intact: the next tick re-opens because the handle
+           was closed (pass 3, 🟠 3 — a silent branch that forgets
+           closeHandle() never re-subscribes again). */
+        store.dispatch(
+          analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.2 }),
+        );
+        expect(captured).toHaveLength(2);
+        expect(captured[1]?.kind).toBe(kind);
+      },
+    );
+
+    it('a non-2xx subscribe POST (stream_failed) is terminal: halted with the real reason + one toast', async () => {
+      /* Mutation: widen the quiet-close branch to `e.code === ANALYSIS_STREAM_FAILED`
+         as well → state stays 'running', no toast → red. This is the
+         classification boundary: a clean no-result end is quiet, a refused
+         POST is not. */
+      const { store, first } = await openAndReject(
+        'main',
+        new AnalysisError('Analysis stream failed (500).', ANALYSIS_STREAM_FAILED),
+      );
+      expect(first.signal.aborted).toBe(true);
+      const snap = store.getState().analysis.activeStream;
+      expect(snap?.state).toBe('halted');
+      expect(snap?.haltCode).toBe(ANALYSIS_STREAM_FAILED);
+      expect(snap?.haltReason).toBe('Analysis stream failed (500).');
+      expect(store.getState().notifications.toasts).toHaveLength(1);
+    });
+
+    it('a plain Error (fetch rejection / truncated frame) is terminal: halted as stream_failed + one toast, handle closed', async () => {
+      /* Mutation: delete the plain-Error fallthrough at the end of the
+         middleware's catch (restore a bare `closeHandle()`) → `state` stays
+         'running', `haltCode` undefined, 0 toasts → red. This is the branch
+         pass 5 measured as uncovered (🟠 19 item 2), and the behaviour
+         pass 4 found silenced (🔴 10). */
+      const { store, first } = await openAndReject('main', new TypeError('Failed to fetch'));
+      expect(first.signal.aborted).toBe(true);
+      const snap = store.getState().analysis.activeStream;
+      expect(snap?.state).toBe('halted');
+      expect(snap?.haltCode).toBe(ANALYSIS_STREAM_FAILED);
+      expect(snap?.haltReason).toBe('Failed to fetch');
+      const toasts = store.getState().notifications.toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0]).toMatchObject({ kind: 'error', message: 'Failed to fetch' });
+    });
+
+    it('a live tick after a connection-level halt lifts it and re-subscribes (the halt is not permanent)', async () => {
+      /* PROBE_K from pass 5, as a test: fail the middleware's socket, then
+         deliver the ticks the view's own healthy SSE would. The run is
+         provably alive, so the snapshot must read 'running' again — with the
+         stale haltReason gone — and the middleware must have re-opened.
+         Mutation: delete the `ANALYSIS_STREAM_FAILED` heal in
+         applyAnalysisSnapshotTick → `state` stays 'halted' after four
+         advancing ticks → red. */
+      const { store } = await openAndReject('main', new TypeError('Failed to fetch'));
+      expect(store.getState().analysis.activeStream?.state).toBe('halted');
+      for (let i = 1; i <= 4; i++) {
+        store.dispatch(
+          analysisActions.applyAnalysisSnapshotTick({
+            manuscriptId: 'm1',
+            phaseId: 1,
+            phaseProgress: i * 0.2,
+            lastTickAt: 1000 + i,
+          }),
+        );
+      }
+      const snap = store.getState().analysis.activeStream;
+      expect(snap?.state).toBe('running');
+      expect(snap?.haltCode).toBeUndefined();
+      expect(snap?.haltReason).toBeUndefined();
+      expect(snap?.phaseId).toBe(1);
+      expect(snap?.phaseProgress).toBeCloseTo(0.8);
+      /* Re-subscribed on the first of those ticks (handle was closed by the
+         HALTED_TYPE hook), and only once. */
+      expect(captured).toHaveLength(2);
+    });
+
+    it('a tick does NOT lift an analyzer-level halt (attribution_drift is a verdict on the run, not on a socket)', async () => {
+      /* Control for the heal above: only ANALYSIS_STREAM_FAILED is lifted.
+         Mutation: drop the `haltCode === ANALYSIS_STREAM_FAILED` term from the
+         heal → this reads 'running' → red. */
+      const { store } = await openAndReject('main', new AnalysisError('drift', 'attribution_drift'));
+      store.dispatch(
+        analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, phaseProgress: 0.5 }),
+      );
+      const snap = store.getState().analysis.activeStream;
+      expect(snap?.state).toBe('halted');
+      expect(snap?.haltCode).toBe('attribution_drift');
+    });
+
+    it('does NOT oscillate halted→running→halted on every tick under persistent failure (#3172 finding 27)', async () => {
+      /* PROBE_M from pass 6: persistent middleware-side failure (the socket keeps
+         failing on every reconnect attempt) paired with a healthy view socket
+         that keeps ticking should NOT flip the card halted/streaming on every
+         single tick. Without damping, the cycle is:
+         1. first tick: open fails, dispatch halt
+         2. second tick: heal lifts halt, re-open fails, dispatch halt
+         3. third tick: heal lifts halt, re-open fails, dispatch halt
+         ...repeat forever, yielding 6 complete cycles + 7 POSTs in just 6 ticks.
+         With damping, the second failure should NOT immediately re-open on the
+         next tick, so the halt survives briefly and the oscillation stops. */
+      vi.useFakeTimers();
+      try {
+        const store = buildStore();
+        store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+        store.dispatch(
+          analysisActions.applyAnalysisSnapshotTick({
+            manuscriptId: 'm1',
+            phaseId: 0,
+            phaseProgress: 0.1,
+          }),
+        );
+        expect(captured).toHaveLength(1);
+        /* First open fails immediately. */
+        lastCall().reject(new TypeError('Failed to fetch'));
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(store.getState().analysis.activeStream?.state).toBe('halted');
+        expect(captured).toHaveLength(1); // only the failed open
+
+        /* First tick AFTER the heal — middleware should NOT immediately re-open
+           on the very next tick if the reopen fails again within a short window.
+           With damping, we expect at most one re-open attempt on the first
+           healing tick, then the damping window prevents further retries on
+           subsequent ticks. */
+        for (let i = 0; i < 6; i++) {
+          const prevCapturedCount = captured.length;
+          store.dispatch(
+            analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId: 'm1',
+              phaseId: 0,
+              phaseProgress: 0.1 + i * 0.05,
+              lastTickAt: 1000 + i,
+            }),
+          );
+          const healedState = store.getState().analysis.activeStream;
+          expect(healedState?.state, `tick ${i}: state should be healed`).toBe('running');
+
+          if (captured.length > prevCapturedCount) {
+            /* If there was a new open attempt, it will fail; reject it. */
+            const lastCall = captured[captured.length - 1]!;
+            lastCall.reject(new TypeError('Failed to fetch'));
+            await Promise.resolve();
+            await Promise.resolve();
+          }
+          /* Don't advance time — stay within the damping window. This simulates
+             rapid ticks within the damping period. Without damping, the middleware
+             would try to reopen on every single tick (7 total: 1 initial + 6).
+             With damping, it should try again only on the first healing tick (so
+             2 total: 1 initial + 1 after heal), then skip subsequent ticks. */
+        }
+
+        /* Without damping, we'd see 6 more POST attempts (one per tick) for 7 total.
+           With damping set to skip 2 ticks after failure, we skip ticks 1-2, then try again
+           on tick 3, which fails and resets the damping. So we expect: 1 initial + 1 after
+           first heal + 1 more after damping expires = 3 total. The key is that we're NOT
+           oscillating on every tick (7 total). */
+        expect(captured.length, `Should significantly dampen oscillation; without damping would see 7 attempts`).toBeLessThan(6);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('handles cross-manuscript displacement (close old handle, open new on first tick)', () => {

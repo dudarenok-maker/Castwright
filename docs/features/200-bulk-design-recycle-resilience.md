@@ -8,8 +8,8 @@ owner: null
 
 > Status: active
 > Key files: `server/src/routes/cast-design.ts`, `server/tts-sidecar/start.ps1`,
-> `server/tts-sidecar/sidecar-restart-policy.ps1`, `server/src/tts/spawn-sidecar.ts`,
-> `server/tts-sidecar/main.py` (`/health`)
+> `server/tts-sidecar/start.sh`, `server/src/tts/spawn-sidecar.ts`,
+> `server/src/tts/sidecar-supervisor.ts`, `server/tts-sidecar/main.py` (`/health`)
 > URL surface: indirect — the "Design full cast" pill (see `195-design-full-cast.md`)
 > OpenAPI ops: `POST /api/books/{bookId}/cast/design` (SSE)
 
@@ -54,9 +54,12 @@ the pressure-relief valve but makes the whole path *self-healing* instead of
 
 ## Invariants to preserve
 
-- `start.ps1`'s supervisor loop relaunches uvicorn on BOTH 42 (poison) and 43
-  (recycle); every other exit code breaks the loop (no tight respawn cycle).
-  Decision lives in `sidecar-restart-policy.ps1` (`Test-SidecarShouldRestart`).
+- Both `start.ps1` (Windows) and `start.sh` (POSIX) are single-shot launchers —
+  they spawn uvicorn once and propagate its real exit code immediately. Node's
+  `sidecar-supervisor.ts` owns all restart logic for both code 42 and 43
+  (poison and recycle). The standalone launcher path (`scripts/launch-sidecar.mjs`,
+  used when `autoStartSidecar` is off) has its own minimal code-43 safeguard with
+  the same 3-in-10-minute streak cap as the supervisor (issue #3121).
 - `cast-design.ts` rides out an "unreachable"-class design error up to
   `MAX_RECYCLE_RIDEOUTS` (2): wait for the respawn (`ensureSidecarEngineReady`)
   and retry the SAME character. Only after the budget is exhausted (genuinely
@@ -77,13 +80,16 @@ Automated (all green locally):
 - `server/src/routes/cast-design.test.ts` — rides out a recycle and completes
   (retries the character; no `error` event); halts with `sidecar_unavailable`
   only after `MAX_RECYCLE_RIDEOUTS` retries are exhausted.
-- `scripts/tests/sidecar-restart-policy.Tests.ps1` — `Test-SidecarShouldRestart`
-  table: 42→restart, 43→restart, 0/1/130→stop. Existing `sidecar-start.Tests.ps1`
-  still green (dot-source placed after the venv check).
+- `scripts/tests/sidecar-start.Tests.ps1` — exit-code propagation assertions:
+  no restart loop wrapping uvicorn, no reference to deleted restart helpers,
+  and `exit $code` present. Both Windows and POSIX launchers propagate real
+  exit codes; Node's supervisor owns the restart logic.
 - `server/src/tts/spawn-sidecar.test.ts` — a ceiling-mismatch sidecar is replaced
   (even in dev); a matching-ceiling sidecar is still adopted (no false replace).
 - `server/tts-sidecar/tests/test_smoke.py` — `/health` reports
   `mem_restart_mb` / `vram_restart_mb`.
+- `server/src/tts/sidecar-supervisor.test.ts` — code-43 streak tracking and
+  auto-revert trip firing (already had these).
 
 Manual / live-GPU acceptance (owed): on the 8 GB box, with the sidecar started
 via `start-prod.bat` (correct `.env`), "Design full cast" over a multi-voice

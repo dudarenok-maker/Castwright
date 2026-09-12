@@ -1,7 +1,7 @@
 /* In-app Qwen3-TTS install bootstrap (qwen-default phase 3).
  *
  * Mirrors server/src/ollama/install-bootstrap.ts (the in-app Ollama installer)
- * so a deployer can install the Qwen engine from Account → Models without a
+ * so a deployer can install the Qwen engine from Admin → Model Manager without a
  * terminal. Differences from the Ollama flow:
  *
  *   - There is no vendor binary to download. `server/tts-sidecar/scripts/

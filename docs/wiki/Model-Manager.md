@@ -105,7 +105,7 @@ opt in.
 | Knob | What it does | Default | Range |
 |---|---|---|---|
 | Voice engine URL | Base URL of the TTS sidecar | `http://localhost:9000` | string, private/loopback host only |
-| Analyzer engine | Routes analysis through Gemini direct vs. local Ollama for THIS account | `gemini` | gemini / local |
+| Analyzer engine | Routes analysis through Gemini direct vs. local Ollama for THIS account | `local` | local / gemini |
 | Ollama URL | Base URL of the local Ollama daemon | `http://localhost:11434` | string |
 | Gemini API key | API key for Gemini analyzer/persona calls | (unset) | string |
 
@@ -113,12 +113,13 @@ The Gemini API key field carries a **"Get a Gemini API key"** link to a
 one-minute [step-by-step walkthrough](Getting-a-Gemini-API-Key), so you don't
 have to hunt for where Google issues one.
 
-> **Not the same knob as [Advanced Settings](Advanced-Settings)'s "Analyzer
-> engine."** This one is your per-account preference (defaults to
-> `gemini`, matching the free-tier-friendly out-of-the-box experience);
-> Advanced Settings' `analyzer.engine` is the lower-level server/env
-> config knob (defaults to `local`), used only when no per-account
-> preference is set. Same English label, two different controls.
+> **Your analyzer engine choice is here in the Model Manager.** It's saved
+> to your account and defaults to `local` (Ollama daemon) — or `gemini` to
+> run analysis directly through the free Gemini API. When the engine is
+> `gemini`, a Gemini API key is required; when it's `local`, the analyzer
+> falls back to Gemini if the local daemon becomes unreachable, a Gemini API key
+> is set, and Cloud fallback is on. This is the only control that decides your
+> engine — any stray `ANALYZER` setting in `server/.env` is ignored.
 
 ## Install / update analyzer (Ollama)
 

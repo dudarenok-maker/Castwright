@@ -8,21 +8,39 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { api } from '../lib/api';
 import { useAppInfo } from '../lib/use-app-info';
+import { useAppDispatch } from '../store';
+import { accountActions } from '../store/account-slice';
 import { latestReleaseNote } from '../lib/release-notes';
 
 export function WhatsNewBanner() {
   const { info, refresh } = useAppInfo();
+  const dispatch = useAppDispatch();
   const [dismissing, setDismissing] = useState(false);
 
   if (!info?.showWhatsNew) return null;
 
   const onDismiss = async () => {
     setDismissing(true);
+    let result: Awaited<ReturnType<typeof api.dismissWhatsNew>> | undefined;
     try {
-      await api.dismissWhatsNew();
-      await refresh();
+      result = await api.dismissWhatsNew();
     } catch {
       /* leave the banner up if the dismiss call fails; the user can retry */
+      setDismissing(false);
+      return;
+    }
+    /* From here the dismiss HAS succeeded server-side, so nothing below may
+       keep the banner up (#3195 Q1): the corruption-flag sync is best-effort
+       (the field is absent from an older server's or a body-stripped
+       response) and the refresh runs regardless of it. */
+    try {
+      if (typeof result?.corruptSettingsFile === 'boolean') {
+        dispatch(accountActions.setCorruptSettingsFile(result.corruptSettingsFile));
+      }
+      await refresh();
+    } catch {
+      /* a failed refresh only delays the banner leaving until the next
+         app-info fetch — the server-side flag is already cleared */
     } finally {
       setDismissing(false);
     }

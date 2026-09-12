@@ -22,7 +22,7 @@ import { ListenView } from '../views/listen';
 import { StatsView } from '../views/stats';
 import { AdvancedView } from '../views/advanced';
 
-import { accountSlice } from '../store/account-slice';
+import { accountSlice, fetchAccountSettings } from '../store/account-slice';
 import { librarySlice } from '../store/library-slice';
 import { tourSlice } from '../store/tour-slice';
 import { uiSlice } from '../store/ui-slice';
@@ -32,7 +32,7 @@ import { analysisSlice } from '../store/analysis-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { configSlice } from '../store/config-slice';
 
-import type { Chapter, Character, Voice, LibraryAuthor } from '../lib/types';
+import type { Chapter, Character, Voice, LibraryAuthor, UserSettings } from '../lib/types';
 import type { EditableBookMeta } from '../store/book-meta-slice';
 import { api } from '../lib/api';
 
@@ -121,13 +121,6 @@ vi.mock('../lib/api', () => {
             'tts.qwen.codecChunkSize': {
               key: 'tts.qwen.codecChunkSize',
               effective: 300,
-              source: 'default',
-              locked: false,
-              overridden: false,
-            },
-            'analyzer.engine': {
-              key: 'analyzer.engine',
-              effective: 'local',
               source: 'default',
               locked: false,
               overridden: false,
@@ -396,8 +389,17 @@ describe('a11y — advanced configuration view', () => {
     });
 
     const store = configureStore({
-      reducer: { config: configSlice.reducer, ui: uiSlice.reducer },
+      reducer: { config: configSlice.reducer, ui: uiSlice.reducer, account: accountSlice.reducer },
     });
+    // Hydrate account settings so the analyzer device block renders
+    const accountState = store.getState().account;
+    store.dispatch(
+      fetchAccountSettings.fulfilled(
+        { ...accountState, analysisEngine: 'local' } as UserSettings,
+        '',
+        undefined,
+      ),
+    );
     const { container } = render(
       <Provider store={store}>
         <AdvancedView />

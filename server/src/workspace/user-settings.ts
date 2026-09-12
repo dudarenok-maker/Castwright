@@ -11,9 +11,9 @@
 
 import { z } from 'zod';
 import { dirname } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
-import { readJson, writeJsonAtomic } from './state-io.js';
+import { readJsonWithRecovery, writeJsonAtomic } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
 import { resolveSidecarPort } from '../tts/sidecar-owner.js';
 import {
@@ -185,7 +185,7 @@ export const userSettingsSchema = z.object({
      Optional with a `true` default so legacy user-settings.json
      files load unchanged and a fresh install gets TTS-on-boot. */
   autoStartSidecar: z.boolean().optional(),
-  /* Plan 88 phase-2 — Account-tab surface for the per-phase analyzer
+  /* Plan 88 phase-2 — Model Manager surface for the per-phase analyzer
      model knobs. Each `null`/`undefined` means "fall through to env /
      hardcoded default" per the precedence chain enforced in
      server/src/analyzer/select-analyzer.ts: explicit env >
@@ -211,7 +211,7 @@ export const userSettingsSchema = z.object({
   /* Plan 49 — UI-managed Gemini API key. Stored plaintext (same trust
      model as server/.env, which is gitignored and single-user). The
      env var GEMINI_API_KEY still wins when present (for CI / power
-     users); this field is the "I set it from the Account view" slot.
+     users); this field is the "I set it from the Model Manager" slot.
      The general PUT /api/user/settings still strips this field (see
      FORBIDDEN_KEYS) — the only sanctioned write path is
      `writeGeminiApiKey()` invoked from the dedicated
@@ -308,7 +308,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      defaultTtsModelKey. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   autoStartSidecar: true,
-  /* Plan 88 phase-2 — Account-tab surface for the per-phase analyzer
+  /* Plan 88 phase-2 — Model Manager surface for the per-phase analyzer
      knobs. `null` means "fall through to env / hardcoded default" so
      a fresh user-settings.json doesn't pin a value the deployer may
      not have intended. */
@@ -347,34 +347,186 @@ let cached: UserSettings | null = null;
 let explicitlySetKeys: Set<string> = new Set();
 let writeChain: Promise<unknown> = Promise.resolve();
 
+/** How many prior `user-settings.json` snapshots to keep on disk, mirroring
+    state-migrate.ts's STATE_BACKUP_KEEP for the same recovery window (last
+    completed write, the one before it, one earlier). Own constant rather
+    than sharing state.json's — the two files rotate independently. */
+export const USER_SETTINGS_BACKUP_KEEP = 3;
+
+/** True when the last readUserSettings() had to fall all the way back to
+    in-memory defaults because neither the main file nor any `.bak.N` parsed.
+    Cleared when a read/recovery succeeds, or when a write completes via one
+    of the clearCorruptFlagAfterWrite() sites. Drives the corruption banner
+    (task 3 of #3175). */
+let settingsFileCorrupt = false;
+
+/** Identity of the on-disk file the cache was populated from: its mtime AND
+    its byte size (#3175 P8 — mtime alone has a ~1 ms floor on NTFS, so a
+    same-tick rewrite is invisible to it; a size pairing catches most of
+    those). `null` means the cache was populated while NO file existed (a
+    fresh install's boot warm-up), so any file that later appears — created
+    by a sibling worktree's server, a restore, or the user — is a change and
+    triggers a re-read (#3175 Q4). The five sanctioned writers re-stamp this
+    from the file they just wrote; an out-of-band write leaves it stale and
+    the next readUserSettings() re-reads. */
+type FileStamp = { mtimeMs: number; size: number };
+let cachedFileStamp: FileStamp | null = null;
+
+/** In-flight read promise: when a disk read is executing, concurrent async
+    callers await this same promise instead of each independently racing to
+    read from disk. */
+let inFlightRead: Promise<UserSettings> | null = null;
+
+/** stat the settings file into a FileStamp; `null` when it is absent or
+    cannot be stat'd (a transient EPERM under an antivirus hold counts as
+    "unknown", and the caller keeps serving what it has). */
+function statFileStamp(): FileStamp | null {
+  try {
+    const stat = statSync(USER_SETTINGS_PATH);
+    return { mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch {
+    return null;
+  }
+}
+
+/** Is the in-memory cache still the same content as the file on disk?
+    Compares the file's current stamp with the one recorded at population.
+    Inequality (not `<=`) so a restore that copies an OLDER file back —
+    which can carry an older mtime — still counts as a change. A file that
+    is absent NOW but existed at population is treated as unchanged: the
+    only known way for it to vanish out from under a warm cache is the
+    rotate-then-rename window of a sibling process's own atomic write, and
+    serving the last-known settings across that window beats resetting
+    every resolver to factory defaults for one read. */
+function cacheMatchesDisk(): boolean {
+  const now = statFileStamp();
+  if (now === null) return true;
+  return (
+    cachedFileStamp !== null && now.mtimeMs === cachedFileStamp.mtimeMs && now.size === cachedFileStamp.size
+  );
+}
+
+export function isUserSettingsFileCorrupt(): boolean {
+  return settingsFileCorrupt;
+}
+
 /** Reads from disk; falls back to defaults when the file is missing or
     malformed. Cached in-process so the hot paths (selectAnalyzer, sidecar
-    URL resolution) don't re-parse JSON on every request. */
+    URL resolution) don't re-parse JSON on every request.
+
+    Malformed JSON on the main file recovers from the newest parseable
+    `.bak.N` snapshot (see readJsonWithRecovery); only when NOTHING parses —
+    main file and every backup — does this fall back to in-memory defaults,
+    flagging the corruption via isUserSettingsFileCorrupt() instead of
+    throwing (a throw here would leave `cached` unset forever, so every
+    subsequent call — boot warm-up, the sidecar supervisor, every route —
+    would re-attempt and re-fail the same parse until the process restarts).
+
+    Detects out-of-band changes (a hand-repair, a restore, a sibling
+    worktree's server writing the shared file) by comparing the file's
+    current mtime+size against the stamp recorded when the cache was
+    populated (see cachedFileStamp); on a mismatch the file is re-read.
+    `cached` is NEVER cleared while that re-read is in flight — the ~18
+    synchronous resolvers below read `cached` directly, and a null gap would
+    hand every one of them a factory default for the duration (#3175 Q3:
+    measured flipping a saved `allowCloudFallback: false` to `true`). The
+    re-read computes into locals and swaps the cache in one synchronous
+    assignment, so a sync reader sees either the pre-change or the
+    post-change settings, never a default. */
 export async function readUserSettings(): Promise<UserSettings> {
-  if (cached) return cached;
+  // If another read is already in flight, await it instead of racing
+  if (inFlightRead) return inFlightRead;
+  if (cached && cacheMatchesDisk()) return cached;
+
+  // Start the in-flight read before any awaits below, so concurrent callers
+  // see it and await the same promise instead of each racing independently
+  const readPromise = performUserSettingsRead();
+  inFlightRead = readPromise;
+  try {
+    return await readPromise;
+  } finally {
+    inFlightRead = null;
+  }
+}
+
+/** Everything the read path derives from disk, committed to the module
+    globals in ONE synchronous step (see commitRead) so no `await` can sit
+    between a partially-updated cache and its stamp/flag/key-set. */
+type ReadOutcome = {
+  settings: UserSettings;
+  explicitKeys: Set<string>;
+  corrupt: boolean;
+  stamp: FileStamp | null;
+};
+
+function commitRead(outcome: ReadOutcome): UserSettings {
+  cached = outcome.settings;
+  explicitlySetKeys = outcome.explicitKeys;
+  settingsFileCorrupt = outcome.corrupt;
+  cachedFileStamp = outcome.stamp;
+  return cached;
+}
+
+/** The disk read proper. Touches no module global until commitRead — every
+    `await` in here runs with the previous `cached` still fully in place. */
+async function performUserSettingsRead(): Promise<UserSettings> {
   await migrateLegacyUserSettings({
     from: LEGACY_USER_SETTINGS_PATH,
     to: USER_SETTINGS_PATH,
     overridden: SETTINGS_PATH_OVERRIDDEN,
   });
-  const raw = await readJson<unknown>(USER_SETTINGS_PATH);
+  let raw: unknown;
+  try {
+    raw = await readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, { keep: USER_SETTINGS_BACKUP_KEEP });
+  } catch (err) {
+    /* Main file AND every backup are unparseable (or no backup exists yet —
+       the first corruption ever seen). readJsonWithRecovery already tried
+       every candidate; only log here, once, for this terminal case — a
+       successful backup recovery below logs its own single warning instead.
+       The stamp is the CORRUPT file's, so a hand-repair changes it and the
+       next read picks the repair up. */
+    console.warn(
+      `[user-settings] ${USER_SETTINGS_PATH} and its backups are all unreadable (${(err as Error).message}); ` +
+        'using in-memory defaults.',
+    );
+    return commitRead({
+      settings: { ...DEFAULT_USER_SETTINGS },
+      explicitKeys: new Set(),
+      corrupt: true,
+      stamp: statFileStamp(),
+    });
+  }
   if (!raw) {
-    cached = { ...DEFAULT_USER_SETTINGS };
-    explicitlySetKeys = new Set();
-    return cached;
+    /* No file on disk (readJsonWithRecovery returns null for an absent
+       path; nothing on the read path creates one). A `null` stamp records
+       exactly that, so the file appearing later — before this process has
+       written anything — is detected as a change (#3175 Q4). */
+    return commitRead({
+      settings: { ...DEFAULT_USER_SETTINGS },
+      explicitKeys: new Set(),
+      corrupt: false,
+      stamp: null,
+    });
   }
   // Track which keys were explicitly in the file before merging with defaults (#2632 N2)
-  explicitlySetKeys = new Set(Object.keys(raw as Record<string, unknown>));
+  const explicitKeys = new Set(Object.keys(raw as Record<string, unknown>));
 
   const migrated = migrateLegacyEagerLoadFields(raw);
   if (migrated !== raw) {
-    await writeJsonAtomic(USER_SETTINGS_PATH, migrated).catch((err) => {
-      console.warn('[user-settings] eager-load migration write failed (non-fatal):', err);
-    });
+    await writeJsonAtomic(USER_SETTINGS_PATH, migrated, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } }).catch(
+      (err) => {
+        console.warn('[user-settings] eager-load migration write failed (non-fatal):', err);
+      },
+    );
   }
   const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(migrated as object) });
-  cached = parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS };
-  return cached;
+  // A successful read or backup recovery means the corruption episode, if any, is over.
+  return commitRead({
+    settings: parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS },
+    explicitKeys,
+    corrupt: false,
+    stamp: statFileStamp(),
+  });
 }
 
 /** Synchronous cached view. Returns the in-memory copy if any prior
@@ -395,6 +547,44 @@ export function wasKeyExplicitlySet(key: string): boolean {
 }
 
 const patchSchema = userSettingsSchema.partial();
+
+/** Helper to snapshot corrupt settings bytes before they're overwritten.
+    Called before each write to ensure a corruption episode doesn't get
+    clobbered by a routine save. Creates a `.corrupt-<timestamp>` diagnostic
+    snapshot containing the last-known corrupt bytes (if any) so a user can
+    hand-inspect/recover them later. Must be called BEFORE writeJsonAtomic
+    so the snapshot captures the corrupt bytes, not the freshly-written data. */
+async function snapshotCorruptBytesBeforeWrite(): Promise<void> {
+  if (settingsFileCorrupt && existsSync(USER_SETTINGS_PATH)) {
+    await copyFile(USER_SETTINGS_PATH, `${USER_SETTINGS_PATH}.corrupt-${Date.now()}`);
+  }
+}
+
+/** Helper to clear the corruption flag after a successful write.
+    Called after writeJsonAtomic succeeds so the banner goes away. */
+function clearCorruptFlagAfterWrite(): void {
+  settingsFileCorrupt = false;
+}
+
+/** A stamp no real file can carry. Recorded when a writer cannot vouch that
+    the file on disk is the one it just wrote, so the next readUserSettings()
+    re-reads instead of trusting `cached`. */
+const STAMP_FORCE_REREAD: FileStamp = { mtimeMs: -1, size: -1 };
+
+/** Re-stamp the cache from the file a writer just wrote, so the next read
+    doesn't mistake this process's own write for an out-of-band change and
+    re-parse the JSON (#3175 P1). The stat happens AFTER writeJsonAtomic's
+    rename resolves, so a sibling process writing in that gap could get ITS
+    file recorded against OUR `cached = merged` — guarded by checking the
+    stat'd size against the byte length writeJsonAtomic serialises: a
+    mismatch (or a failed stat) records STAMP_FORCE_REREAD, and the next
+    read self-heals from disk exactly as it would have with no stamp at
+    all. */
+function stampCacheAfterWrite(written: UserSettings): void {
+  const now = statFileStamp();
+  const expectedSize = Buffer.byteLength(JSON.stringify(written, null, 2), 'utf8');
+  cachedFileStamp = now !== null && now.size === expectedSize ? now : STAMP_FORCE_REREAD;
+}
 
 /** Merges `patch` into the on-disk file, validating each field. Returns the
     new merged settings. Concurrent PUTs are serialised through `writeChain`
@@ -432,7 +622,10 @@ export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
     ) {
       merged.defaultTtsModelKeyExplicit = true;
     }
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    await snapshotCorruptBytesBeforeWrite();
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
+    stampCacheAfterWrite(merged);
     cached = merged;
     // Track that sentKeys are now explicitly set in the file (#2632 N2)
     for (const key of sentKeys) {
@@ -451,6 +644,7 @@ const FORBIDDEN_KEYS = new Set([
   'apiKeyStatus',
   'workspaceRoot',
   'workspaceSource',
+  'corruptSettingsFile',
   'geminiApiKey',
   'apiKey',
   'gemini_api_key',
@@ -811,7 +1005,10 @@ export async function writeGeminiApiKey(key: string | null): Promise<UserSetting
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, geminiApiKey: normalised };
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    await snapshotCorruptBytesBeforeWrite();
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
+    stampCacheAfterWrite(merged);
     cached = merged;
     return merged;
   });
@@ -821,7 +1018,7 @@ export async function writeGeminiApiKey(key: string | null): Promise<UserSetting
 
 /** Plan 49 — resolve the Gemini API key from the canonical fallback chain:
       1. process.env.GEMINI_API_KEY (wins for CI / power users)
-      2. cached user-settings.geminiApiKey (UI-saved via Account view)
+      2. cached user-settings.geminiApiKey (UI-saved via the Model Manager)
       3. null (no key configured)
     Trims whitespace on both sources so a stray trailing newline in `.env`
     doesn't masquerade as a real key. Returns null instead of throwing —
@@ -847,7 +1044,10 @@ export async function writeUpgradeMeta(patch: {
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, ...patch };
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    await snapshotCorruptBytesBeforeWrite();
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
+    stampCacheAfterWrite(merged);
     cached = merged;
     return merged;
   });
@@ -870,7 +1070,10 @@ export async function writeSetupCompletedAt(ts: string | null): Promise<UserSett
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, setupCompletedAt: ts };
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    await snapshotCorruptBytesBeforeWrite();
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
+    stampCacheAfterWrite(merged);
     cached = merged;
     return merged;
   });
@@ -890,7 +1093,10 @@ export async function writeTourCompletedAt(ts: string | null): Promise<UserSetti
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, tourCompletedAt: ts };
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    await snapshotCorruptBytesBeforeWrite();
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
+    stampCacheAfterWrite(merged);
     cached = merged;
     return merged;
   });
@@ -927,10 +1133,13 @@ export async function clearAllConfigOverrides(): Promise<void> {
 /** Test-only: drop the in-process cache so the next read re-parses disk. */
 export function _resetUserSettingsCache(): void {
   cached = null;
+  cachedFileStamp = null;
+  inFlightRead = null;
   explicitlySetKeys = new Set(); // Reset tracked keys alongside cached settings
   writeChain = Promise.resolve();
   lastKnownEngineInstallState.qwen = 'not-installed';
   lastKnownEngineInstallState.coqui = 'not-installed';
+  settingsFileCorrupt = false;
   // #2632 N26: clear both srv-21 warn-dedup latches too, or a later test that
   // reuses a rejected value a prior test already latched gets ZERO warnings —
   // and would misread as a passing dedupe test rather than a suppressed one.

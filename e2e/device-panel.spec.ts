@@ -1,5 +1,5 @@
 /* side-14 — the fs-43 "Will it run on my machine?" panel lives on the Model
-   Manager view (#/models, per fs-43's "first-run / Account → Models"
+   Manager view (#/models, per fs-43's "first-run / Model Manager"
    placement). Mock mode ships a ready devices map (kokoro active on cuda),
    so the ground-truth headline + per-engine rows must render there. */
 
