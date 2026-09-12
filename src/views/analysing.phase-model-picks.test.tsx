@@ -13,6 +13,7 @@ import { analysisSlice } from '../store/analysis-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { AnalysingView } from './analysing';
+import { api } from '../lib/api';
 import type { AnalyseOpts, AnalyseResponse } from '../lib/api';
 
 let capturedOpts: AnalyseOpts | undefined;
@@ -29,6 +30,7 @@ vi.mock('../lib/api', async () => {
         capturedOpts = opts;
         return new Promise<AnalyseResponse>(() => {});
       },
+      getOllamaHealth: vi.fn(),
     },
   };
 });
@@ -63,6 +65,7 @@ function makeStore(opts: {
       } as ReturnType<typeof uiSlice.getInitialState>,
       account: {
         ...accountSlice.getInitialState(),
+        defaultAnalysisModel: 'gemini-2.5-flash',
         analyzerPhase0Model: opts.splitActive ? 'gemma-4-31b-it' : null,
         analyzerPhase1Model: opts.splitActive ? 'gemini-3.1-flash-lite' : null,
       } as ReturnType<typeof accountSlice.getInitialState>,
@@ -126,9 +129,10 @@ describe('AnalysingView — per-run phase-model picks reach the start request (#
   });
 
   it('when only one phase is picked, the un-picked phase gets the account defaultAnalysisModel (#3192 C2)', async () => {
-    // Account has defaultAnalysisModel: 'gemini-2.5-flash', but user picks only Phase 1
-    // The un-picked Phase 0 should explicitly receive the account default, not the
-    // server's registry default. This test verifies phase0Model carries the account default.
+    // Strengthened per N9: selectedModel, defaultAnalysisModel, and model prop are now DIFFERENT
+    // so a regression that substitutes the wrong one of the three is actually caught.
+    // Account has a distinct defaultAnalysisModel, but user picks only Phase 1.
+    // The un-picked Phase 0 should explicitly receive the account default, not selectedModel or the model prop.
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -140,7 +144,7 @@ describe('AnalysingView — per-run phase-model picks reach the start request (#
       preloadedState: {
         ui: {
           ...uiSlice.getInitialState(),
-          selectedModel: 'gemini-2.5-flash',
+          selectedModel: 'gemini-2.5-flash-ui',
           selectedModelExplicit: false,
           analyzerPhasePicks: {
             m1: { phase0: undefined, phase1: 'gemini-3.1-flash-lite' },
@@ -148,7 +152,7 @@ describe('AnalysingView — per-run phase-model picks reach the start request (#
         } as ReturnType<typeof uiSlice.getInitialState>,
         account: {
           ...accountSlice.getInitialState(),
-          defaultAnalysisModel: 'gemini-2.5-flash',
+          defaultAnalysisModel: 'gemini-2.5-flash-account',
           // No per-phase split configured
           analyzerPhase0Model: null,
           analyzerPhase1Model: null,
@@ -158,9 +162,105 @@ describe('AnalysingView — per-run phase-model picks reach the start request (#
     await renderAndStart(store);
     // Phase 1 is explicitly picked
     expect(capturedOpts?.phase1Model).toBe('gemini-3.1-flash-lite');
-    // Phase 0 (un-picked) should get the account's defaultAnalysisModel, not undefined
-    expect(capturedOpts?.phase0Model).toBe('gemini-2.5-flash');
+    // Phase 0 (un-picked) should get the account's defaultAnalysisModel, not selectedModel or the model prop
+    expect(capturedOpts?.phase0Model).toBe('gemini-2.5-flash-account');
     // The single-model field should not be sent in split mode
     expect(capturedOpts?.model).toBeUndefined();
+  });
+
+  it('C3 (N9 strengthened): a saved per-phase override on the un-picked phase must survive a pick on the other phase (#3192 C3)', async () => {
+    // Strengthened per N9: make the three values (selectedModel, account.defaultAnalysisModel, model prop)
+    // distinct so the test can distinguish which one was actually sent.
+    // Repro: saved split with Phase 0 override = gemma-4-31b-it, Phase 1 override = gemini-3.1-flash-lite.
+    // User picks ONLY Phase 1 for this run (same as the saved value, just to isolate the logic).
+    // Phase 0's saved override must be sent, not discarded in favor of the account default.
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          selectedModel: 'gemini-2.5-flash-ui',
+          selectedModelExplicit: false,
+          analyzerPhasePicks: {
+            m1: { phase0: undefined, phase1: 'gemini-3.1-flash-lite' },
+          },
+        } as ReturnType<typeof uiSlice.getInitialState>,
+        account: {
+          ...accountSlice.getInitialState(),
+          defaultAnalysisModel: 'gemini-2.5-flash-account',
+          // Saved split: Phase 0 = Gemma (cast detection), Phase 1 = Gemini (attribution)
+          analyzerPhase0Model: 'gemma-4-31b-it',
+          analyzerPhase1Model: 'gemini-3.1-flash-lite',
+        } as ReturnType<typeof accountSlice.getInitialState>,
+      },
+    });
+    await renderAndStart(store);
+    // Phase 1 is picked (overriding the saved value, but with the same value in this test)
+    expect(capturedOpts?.phase1Model).toBe('gemini-3.1-flash-lite');
+    // Phase 0 (un-picked) MUST use its saved override (gemma), NOT the account default
+    expect(capturedOpts?.phase0Model).toBe('gemma-4-31b-it');
+    expect(capturedOpts?.model).toBeUndefined();
+  });
+
+  it('C4: effectiveModelIds must mirror the actual request so the readiness gate catches local models (#3192 C4)', async () => {
+    // Repro at shipped defaults: defaultAnalysisModel = qwen3.5:4b (local Ollama).
+    // No saved split. User picks Phase 1 to a cloud model for this run only.
+    // effectiveModelIds must include qwen3.5:4b for Phase 0 so the isLocalAnalyzer gate
+    // sees it and gates on Ollama health, not fires immediately against a cold Ollama.
+    // Mock Ollama as reachable with qwen3.5:4b resident so the button is clickable.
+    vi.mocked(api.getOllamaHealth).mockResolvedValue({
+      status: 'reachable',
+      url: 'http://localhost:11434',
+      resident: ['qwen3.5:4b'],
+      models: ['qwen3.5:4b'],
+    });
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          selectedModel: 'qwen3.5:4b',
+          selectedModelExplicit: false,
+          analyzerPhasePicks: {
+            // Only Phase 1 is picked
+            m1: { phase0: undefined, phase1: 'gemini-3.1-flash-lite' },
+          },
+        } as ReturnType<typeof uiSlice.getInitialState>,
+        account: {
+          ...accountSlice.getInitialState(),
+          // Shipped default: local Ollama model
+          defaultAnalysisModel: 'qwen3.5:4b',
+          // No saved split
+          analyzerPhase0Model: null,
+          analyzerPhase1Model: null,
+        } as ReturnType<typeof accountSlice.getInitialState>,
+      },
+    });
+    await renderAndStart(store);
+    expect(capturedOpts?.phase0Model).toBe('qwen3.5:4b');
+    expect(capturedOpts?.phase1Model).toBe('gemini-3.1-flash-lite');
+    expect(capturedOpts?.model).toBeUndefined();
+  });
+
+  it('N10: picks survive when selectedModelExplicit is true (the explicit override collapses the split)', async () => {
+    // N7's gate: picks should be cleared only when they were actually sent.
+    // When selectedModelExplicit is true, picks are NOT sent (collapsed server-side),
+    // so they should NOT be cleared either.
+    const store = makeStore({ phase0Pick: 'gemma-4-31b-it', explicit: true });
+    await renderAndStart(store);
+    // Picks should NOT be cleared
+    expect(store.getState().ui.analyzerPhasePicks.m1).toEqual({ phase0: 'gemma-4-31b-it', phase1: undefined });
   });
 });

@@ -344,16 +344,16 @@ export function AnalysingView({
      the per-phase dropdowns to a cloud model. Reading it directly left the view
      "stuck on Ollama" — probing the daemon, blocking Start on VRAM residency —
      for a Gemini run that never calls Ollama. Mirror requestModel exactly:
-       - split engaged, no explicit pick → the saved per-phase models (a blank
-         phase falls through to the server's own default, which the client
-         can't see; treat as not-local so a cloud deployment isn't gated on an
-         Ollama it never calls);
+       - split engaged, no explicit pick → the saved per-phase models plus any
+         per-run picks (a blank phase without a pick falls back to the account
+         default, which the client now knows and sends);
        - otherwise → the single per-run model (or the built-in default). */
   const effectiveModelIds = useMemo<string[]>(() => {
     if ((splitActive || hasPhasePick) && !selectedModelExplicit) {
-      return [phase0Pick ?? phase0Model, phase1Pick ?? phase1Model].filter(
-        (id): id is string => Boolean(id),
-      );
+      return [
+        phase0Pick ?? phase0Model ?? defaultAnalysisModel,
+        phase1Pick ?? phase1Model ?? defaultAnalysisModel,
+      ].filter((id): id is string => Boolean(id));
     }
     return [model ?? MODEL_OPTIONS[0].id];
   }, [
@@ -364,6 +364,7 @@ export function AnalysingView({
     phase1Pick,
     phase0Model,
     phase1Model,
+    defaultAnalysisModel,
     model,
   ]);
   const isLocalAnalyzer = effectiveModelIds.some((id) => engineForModelId(id) === 'local');
@@ -495,8 +496,14 @@ export function AnalysingView({
         const payload = await api.analyseManuscript(manuscriptId, {
           signal: controller.signal,
           model: requestModel,
-          phase0Model: selectedModelExplicit ? undefined : (phase0Pick ?? (phase1Pick ? defaultAnalysisModel : undefined)),
-          phase1Model: selectedModelExplicit ? undefined : (phase1Pick ?? (phase0Pick ? defaultAnalysisModel : undefined)),
+          phase0Model:
+            selectedModelExplicit || (!splitActive && !hasPhasePick)
+              ? undefined
+              : phase0Pick ?? phase0Model ?? defaultAnalysisModel,
+          phase1Model:
+            selectedModelExplicit || (!splitActive && !hasPhasePick)
+              ? undefined
+              : phase1Pick ?? phase1Model ?? defaultAnalysisModel,
           fresh: retry.fresh || undefined,
           allowStage1Shrink: retry.allowStage1Shrink || undefined,
           onPhase: ({ phaseId, progress, live, model: serverModel }) => {

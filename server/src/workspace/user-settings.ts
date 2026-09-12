@@ -104,7 +104,8 @@ function migrateLegacyEagerLoadFields(raw: unknown): unknown {
    For the case where both a saved field AND an env var are set, the
    migration only captures the saved value; the new env → override → default
    chain will then apply env priority (whereas the old saved → env → default
-   chain gave saved priority). This combination has no test coverage.
+   chain gave saved priority). This precedence change is intentional and reflects
+   the registry's design (env first, then saved Advanced Settings, then default).
    Mirrors migrateLegacyEagerLoadFields above: pure raw-in/raw-out, only
    fires while the legacy fields are still present on disk, and never
    clobbers an override the user already set explicitly through Advanced
