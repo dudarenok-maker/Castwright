@@ -34,27 +34,12 @@
 import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { detectQwenInstallStateOnDisk } from './qwen-install-detect.js';
-import { getActiveSupervisor } from './sidecar-supervisor.js';
 import { resolveVenvRuntimeProfile } from './spawn-sidecar.js';
 import { restoreOrtRuntime, type OrtRestoreOutcome } from './ort-restore.js';
 import { isAnyGenerationActive } from '../gpu/active-generation-gate.js';
 import { resolveSidecarVenvDir } from '../diagnostics/venv.js';
+import { runChild, defaultHoldSidecar, DEFAULT_CHILD_IDLE_TIMEOUT_MS } from './install-bootstrap-shared.js';
 import type { QwenInstallState } from '../workspace/user-settings.js';
-
-/* #3039 — pull the actionable line(s) out of the installer's stderr tail.
-   pip prints its own routine "[notice] A new release of pip is available…"
-   line AFTER a real failure (including a WinError 5 traceback), so a naive
-   "last N lines" slice can surface only that notice and hide the actual
-   error the job.error field exists to report. Drop pip's own notice lines
-   first, then take the tail of what's left. Windows stderr is CRLF-terminated,
-   so split on both LF and CR to avoid empty strings in the lines array. */
-function extractInstallErrorDetail(stderrTail: string): string {
-  const lines = stderrTail
-    .trim()
-    .split(/[\r\n]+/)
-    .filter((line) => line.length > 0 && !/^\[notice\]/i.test(line.trim()));
-  return lines.slice(-5).join(' ').trim();
-}
 
 export type QwenInstallJobStatus = 'detecting' | 'installing' | 'installed' | 'error';
 
@@ -107,10 +92,6 @@ export interface QwenInstallOptions {
       it, with POST /api/sidecar/restart inert behind the hold (#3043 M2). */
   childIdleTimeoutMs?: number;
 }
-
-/** 30 minutes of complete silence from a child. Far past any healthy step's
-    quiet window, far short of "forever". */
-const DEFAULT_CHILD_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 export class QwenInstallBootstrap {
   private jobs = new Map<string, QwenInstallJob>();
@@ -305,13 +286,20 @@ export class QwenInstallBootstrap {
 
   private spawnInstaller(job: QwenInstallJob): Promise<void> {
     const script = join(this.repoRoot, 'server', 'tts-sidecar', 'scripts', 'install-qwen3.mjs');
-    return this.runChild('node', [script, ...this.installArgs], {
-      onStdoutLine: (line) => {
-        const m = line.match(/\[install-qwen3\]\s*(.+)/);
-        if (m) this.update(job, { step: m[1].trim() });
+    return runChild(
+      this.spawnFn,
+      this.repoRoot,
+      'node',
+      [script, ...this.installArgs],
+      {
+        onStdoutLine: (line) => {
+          const m = line.match(/\[install-qwen3\]\s*(.+)/);
+          if (m) this.update(job, { step: m[1].trim() });
+        },
+        failure: (code, detail) => `install-qwen3.mjs exited with code ${code}.${detail ? ` ${detail}` : ''}`,
       },
-      failure: (code, detail) => `install-qwen3.mjs exited with code ${code}.${detail ? ` ${detail}` : ''}`,
-    });
+      { engineLabel: 'install-qwen3', childIdleTimeoutMs: this.childIdleTimeoutMs },
+    );
   }
 
   /** Default restoreOrtFn: the sidecar venv, the profile the sidecar will
@@ -327,92 +315,10 @@ export class QwenInstallBootstrap {
       profile: resolveVenvRuntimeProfile(venvDir),
       platform: process.platform,
       runPip: (args) =>
-        this.runChild(python, ['-m', 'pip', ...args], {
+        runChild(this.spawnFn, this.repoRoot, python, ['-m', 'pip', ...args], {
           failure: (code, detail) => `pip ${args.join(' ')} exited with code ${code}.${detail ? ` ${detail}` : ''}`,
-        }),
+        }, { engineLabel: 'install-qwen3', childIdleTimeoutMs: this.childIdleTimeoutMs }),
       log: (m) => console.log(`[qwen-install] ${m}`),
-    });
-  }
-
-  /** Spawn + await one child through spawnFn. Never blocks the event loop —
-      the installer and the pip swap both run for minutes. Resolves on exit 0;
-      rejects with `failure(code, stderrDetail)` otherwise. */
-  private runChild(
-    cmd: string,
-    args: readonly string[],
-    hooks: { onStdoutLine?: (line: string) => void; failure: (code: number | null, detail: string) => string },
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      let proc: ChildProcess;
-      try {
-        /* Piped stdio (NOT inherit) so the installer's `[install-qwen3]`
-           step lines and pip's stderr can be read. */
-        proc = this.spawnFn(cmd, args, { cwd: this.repoRoot, windowsHide: true });
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)));
-        return;
-      }
-      let stderrTail = '';
-      /* Idle watchdog (#3043 M2). Rearmed on every byte either stream emits,
-         so a slow-but-live download is never touched; a child that has gone
-         completely quiet is killed and reported, which is what releases the
-         hold — without it the sidecar stays down indefinitely and the one
-         documented recovery route (POST /api/sidecar/restart) is inert behind
-         `if (stopped || held) return`. */
-      let idleTimer: NodeJS.Timeout | null = null;
-      let settled = false;
-      const clearIdle = (): void => {
-        if (idleTimer) clearTimeout(idleTimer);
-        idleTimer = null;
-      };
-      const armIdle = (): void => {
-        clearIdle();
-        idleTimer = setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          try {
-            proc.kill();
-          } catch {
-            /* already gone — the reject below is still the outcome */
-          }
-          reject(
-            new Error(
-              `${cmd} produced no output for ${Math.round(this.childIdleTimeoutMs / 60_000)} minutes ` +
-                'and was stopped as stalled. The voice engine has been released. Retry the install (downloads resume).',
-            ),
-          );
-        }, this.childIdleTimeoutMs);
-        idleTimer.unref?.();
-      };
-      armIdle();
-      proc.stdout?.on('data', (b: Buffer) => {
-        armIdle();
-        if (!hooks.onStdoutLine) return;
-        for (const line of b.toString('utf8').split('\n')) hooks.onStdoutLine(line);
-      });
-      proc.stderr?.on('data', (b: Buffer) => {
-        armIdle();
-        /* Keep only the tail — a pip/HF failure dump can be huge; the last
-           few lines carry the actionable error. #3039: widened from 2000 to
-           4000 chars so a real error isn't pushed entirely out of the window
-           by pip's own routine notice line(s) printed after it — see
-           extractInstallErrorDetail, which then filters those notice lines
-           back out. */
-        stderrTail = (stderrTail + b.toString('utf8')).slice(-4000);
-      });
-      proc.on('error', (err) => {
-        clearIdle();
-        if (settled) return;
-        settled = true;
-        reject(err);
-      });
-      proc.on('close', (code) => {
-        clearIdle();
-        if (settled) return; // the idle watchdog already reported this child
-        settled = true;
-        if (code === 0) resolve();
-        else reject(new Error(hooks.failure(code, extractInstallErrorDetail(stderrTail))));
-      });
     });
   }
 
@@ -437,10 +343,4 @@ export class QwenInstallBootstrap {
     this.active = null;
     this.nextId = 1;
   }
-}
-
-/** Default holdSidecarFn — see QwenInstallOptions.holdSidecarFn. */
-function defaultHoldSidecar<T>(fn: () => Promise<T>): Promise<T> {
-  const supervisor = getActiveSupervisor();
-  return supervisor ? supervisor.withSidecarHeld(fn) : fn();
 }

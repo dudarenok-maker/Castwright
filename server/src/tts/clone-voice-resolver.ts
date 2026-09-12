@@ -885,14 +885,15 @@ export interface ResolveDesignedVoiceDeps {
     last-known GPU list reports an index-1 card.
 
     The hint is ADVISORY on the wire, not a hard pin: the sidecar threads
-    `X-Device-Hint` into `reservation(preferred=...)`, which restricts its
-    ONE try_hold to that card alone and falls back to ordinary unconstrained
-    placement only if the hinted card cannot fit the derive at all (see
-    `_parse_device_hint` and `PlacementController._resolve_admission` in
-    `main.py`). That degrade-on-can't-fit is real, but it does not make a
-    WRONG hint cheap in general — only in the case where the hinted card is
-    actually out of room. This one can be wrong in two ways it cannot
-    detect, and they cost differently:
+    `X-Device-Hint` into `reservation(preferred=...)`, which now applies a
+    75%-tolerance check before attempting the hinted card (see `_parse_device_hint`
+    and `PlacementController._resolve_admission` in `main.py`): the hint wins
+    only when its free headroom is at least 75% of the unconstrained winner's;
+    otherwise preferred is dropped and placement falls through to ordinary
+    unconstrained placement. This tolerance makes a WRONG hint cheaper than it
+    was before — not free, but no longer catastrophic in the case where the
+    hinted card is merely occupied rather than actually out of room. This one
+    can be wrong in two ways it cannot detect, and they cost differently:
 
     - #3061 review N1 — a stale-POPULATED cache. The earlier version of this
       comment claimed absent/stale lists "never hint at a card that doesn't
@@ -904,22 +905,22 @@ export interface ResolveDesignedVoiceDeps {
       placement falls through to the free card unconstrained placement
       would have picked anyway — cheap, as designed.
     - `cuda:1` may simply be the busier card on this box, or the operator's
-      own `tts.qwen.device` pin. Unlike the case above, this does NOT
-      degrade gracefully: `_resolve_admission`'s hinted-device try_hold only
-      checks whether `cuda:1` itself has room, never whether some other
-      card is materially freer, so a `cuda:1` that merely FITS wins
-      outright — even while `cuda:0` sits nearly empty. A hint can
-      therefore park this derive on the exact card Qwen is generating on
-      instead of the free one, silently, with no error and no retry: the
-      one contention outcome `#3058` exists to avoid. Whether "advisory"
-      should instead mean "wins only when competitive with the
-      alternative" is an open design question — see #3097.
+      own `tts.qwen.device` pin. #3097 (decided in #3107, implemented via
+      #3165) closed this gap: `_resolve_admission`'s `preferred` handling now
+      weighs the hinted device's free headroom against the unconstrained
+      winner's before honoring it — the hint wins only when its free headroom
+      is at least 75% of the winner's; otherwise `preferred` is dropped and
+      placement falls through to the ordinary unconstrained candidates. A
+      `cuda:1` that merely fits no longer wins outright while `cuda:0` sits
+      nearly empty — only a `cuda:1` that is competitive with the alternative
+      does.
 
     Under a hard pin (not what this is) a wrong value costs a ~60 s
     capacity-retry stall and a silent stock-catalogue-voice substitution,
     which is strictly worse than either case above — which is why the
     sidecar must keep treating this as a preference rather than a pin. But
-    "preference" here means "wins if it fits," not "wins only when nothing
+    "preference" here means "wins if it fits AND is within 75% of the best
+    alternative," not "wins if it fits" and not "wins only when nothing
     better exists."
 
     #3061 review C1 — `ensureGpuDeviceListWarm()` is not optional here. The

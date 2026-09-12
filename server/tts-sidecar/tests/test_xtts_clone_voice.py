@@ -1353,13 +1353,16 @@ def test_clone_voice_route_x_device_hint_overrides_best_fit_placement(
     monkeypatch, tmp_path
 ) -> None:
     """#3058 — the lazy Coqui derive's escape hatch. Without a hint,
-    unconstrained best-fit picks GPU0 here (much more free headroom). An
+    unconstrained best-fit picks GPU0 here (more free headroom). An
     `X-Device-Hint: cuda:1` header must override that and land the
     reservation on GPU1 specifically — proving the header value actually
     reaches `reservation()`'s `preferred` argument (NOT `pinned`, per #3061
     review C3 — see `test_clone_voice_route_hint_is_advisory_and_falls_back_
     when_hinted_card_is_full` for the other half of that distinction), not
-    just that the call succeeds."""
+    just that the call succeeds. GPU1's free headroom (14000-500=13500) stays
+    within #3097/#3165's 75%-of-winner tolerance (>= 0.75 * (18000-500) = 13125)
+    so the hint is honored, proving the plumbing without colliding with tolerance-
+    edge cases which test_placement.py covers."""
     eng, _voices_dir, _tts = _install_engine(monkeypatch, tmp_path)
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.delenv("COQUI_DEVICE", raising=False)
@@ -1367,8 +1370,8 @@ def test_clone_voice_route_x_device_hint_overrides_best_fit_placement(
         main._placement,
         "probe",
         lambda: [
-            {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 24000, "freeMb": 20000},
-            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 16000, "freeMb": 10000},
+            {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 24000, "freeMb": 18000},
+            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 16000, "freeMb": 14000},
         ],
     )
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
@@ -1414,8 +1417,8 @@ def test_clone_voice_route_without_hint_header_is_unaffected_regression(
         main._placement,
         "probe",
         lambda: [
-            {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 24000, "freeMb": 20000},
-            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 16000, "freeMb": 10000},
+            {"kind": "cuda", "index": 0, "label": "g0", "totalMb": 24000, "freeMb": 18000},
+            {"kind": "cuda", "index": 1, "label": "g1", "totalMb": 16000, "freeMb": 14000},
         ],
     )
     calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []

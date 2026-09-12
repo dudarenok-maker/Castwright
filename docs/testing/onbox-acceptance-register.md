@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,7 +563,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**49 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**50 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
@@ -1310,7 +1310,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A108 -->
+<!-- next-id: A109 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -2496,7 +2496,7 @@ every mechanism test while leaving the whole book wrong.
   full dispatch path and found no per-sentence language mechanism — `langCode` is
   resolved once per chapter (`synthesise-chapter.ts:1371`) and threaded uniformly
   into every title, single-group and batched call, including the sidecar's
-  per-item `language` override (`main.py:8151`, `:8228`) — and ruled out the
+  per-item `language` override (`main.py:8184`, `:8261`) — and ruled out the
   #1998 whole-book English-manifest fallback (every cloned group's `cloned` flag
   is set correctly by `buildSentenceGroups`/`resolveGroup`). Genuinely blocked
   pending a real render: needs the same chapter re-rendered with the same cloned
@@ -4506,7 +4506,7 @@ Coqui derive — the designed-voice self-heal in `resolveDesignedVoicesForChapte
 never does, and Qwen ignores the header entirely. The single POST that carries it is
 `/xtts/clone-voice` (`deriveEngineArtifact`, `server/src/tts/derive-engine-artifact.ts:145-147`),
 never `/synthesize`. Against an already-resident Coqui, or under a `COQUI_DEVICE` pin, the
-hint is a documented no-op (`main.py:5183-5187`, `:11994-11998`) — the prerequisite above is
+hint is a documented no-op (`main.py:5216-5220`, `:12027-12031`) — the prerequisite above is
 the state in which the hint can actually do anything.
 
 **There is no log line for this on the success path.** `_parse_device_hint` and the
@@ -4515,9 +4515,11 @@ honoured; the only `log.warning` calls (`main.py:4164/4172/4180/4183`) fire on t
 *rejection* paths (oversized header, unresolved uuid, non-device-key value, unparsable
 value). And the hint does **not** "hint Coqui off Qwen's card" — `try_hold`/`best_fit`
 already pick the roomiest card, so on this box, where `cuda:1` is the 16 GB card, an
-*unhinted* derive can land there anyway, and a hint can equally park the derive on the exact
-card Qwen is generating on when that card merely fits (the corrected comment at
-`clone-voice-resolver.ts:906-916` is the authority here, not this row's earlier wording).
+*unhinted* derive can land there anyway. **A hinted derive no longer wins by merely fitting
+on the hinted card** — #3097 added a 75%-tolerance check: the hint wins only if the hinted
+card's free headroom is at least 75% of the unconstrained winner's; otherwise `preferred` is
+dropped and placement falls back to ordinary unconstrained placement (the corrected comment at
+`clone-voice-resolver.ts:907-916` describes this tolerance and is the authority here).
 Confirm the mechanism only via the run sheet's discriminating placement criterion, which
 forces `cuda:0` to be the momentarily roomier card so a hinted vs. unhinted derive provably
 diverge — VRAM/log inspection under the box's normal (`cuda:1`-favoring) state proves
@@ -4566,6 +4568,37 @@ resident.
 on a shared-device box — and confirm the Kokoro load now blocks until the design releases,
 matching the unit-level proof above.
 *Cost:* short — one concurrent repro, same shape as the unit test but against real weights.
+
+### A108 · Coqui/Kokoro/Whisper installer hold-down and idle watchdog ([#3056](https://github.com/dudarenok-maker/Castwright/issues/3056), PR [#3197](https://github.com/dudarenok-maker/Castwright/pull/3197)) · **GPU box with a real sidecar, Qwen resident**
+
+Ported from #3039 (Qwen3-TTS): all four in-app TTS installers now run with the sidecar
+held down and restore the GPU ONNX runtime afterwards. Two safety mechanisms added to
+Coqui/Kokoro/Whisper shipped without on-box acceptance: (1) an idle watchdog that kills
+a child (installer or pip step) that produces no output for 30 minutes, releasing the
+sidecar hold so the queue recovers — without it a stalled installer deadlocks the sidecar
+indefinitely; (2) an active-generation refusal that stops the installer immediately if
+a chapter is rendering, rather than silently aborting it.
+
+*Criteria:*
+1. Coqui XTTS installer via Admin → Model Manager: click **Install Coqui XTTS v2**, observe
+   the installer runs with the sidecar held (the UI says "Stopping the voice engine…"
+   and any queued chapter waits), completes successfully, and leaves the GPU ONNX
+   runtime intact (`pip check` clean after install).
+2. Same installer clicked mid-render: a chapter mid-render triggers the "Cannot install while a chapter is being
+   generated" refusal, not a silent abort. Kokoro and Whisper follow the same two paths.
+
+*Note on idle watchdog coverage:* The idle watchdog mechanism (kill a child that produces no output for 30 minutes) is
+not independently observable in the above criteria — both would pass unchanged on a box where the watchdog code was deleted.
+The watchdog is tested in the unit suite (`childIdleTimeoutMs` is an injectable constructor option, and unit tests shorten it
+and assert the kill and hold-release), but an on-box stall scenario would require a real stuck installer or pip process and
+cannot be readily reproduced in this row's current setup.
+
+*Cost:* low — each of the three engines needs one successful install from the UI
+(Admin → Model Manager, account-logged, real install-*.mjs script, real pip swap, real venv
+I/O but not a multi-minute download, ~30s per engine if the weights are already present
+or pre-cached) and one refusal attempt with a chapter queued to render (Qwen, since
+it's the fastest to boot). No golden-audio comparison, no complex fixture setup, no
+timeout tolerance tuning.
 
 ## Group B — local Ollama analyzer only
 

@@ -14,9 +14,20 @@ import {
 import {
   WhisperInstallBootstrap,
   type WhisperInstallJobStatus,
+  type WhisperInstallOptions,
 } from '../tts/whisper-install-bootstrap.js';
 import type { WhisperInstallState } from '../tts/whisper-install-detect.js';
 import { _setUserSettingsCacheForTest, _resetUserSettingsCache } from '../workspace/user-settings.js';
+
+/* Offline seams for the install path (#2192 / #3039): no real sidecar hold,
+   no real pip swap into a venv, and no fail-closed generation gate
+   (routes/generation.ts is not loaded here, so the real gate reads "a render
+   may be running" and would refuse every install). */
+const OFFLINE: Pick<WhisperInstallOptions, 'holdSidecarFn' | 'restoreOrtFn' | 'generationActiveFn'> = {
+  holdSidecarFn: (fn) => fn(),
+  restoreOrtFn: async () => 'not-needed',
+  generationActiveFn: () => false,
+};
 
 function makeApp() {
   const app = express();
@@ -49,7 +60,7 @@ afterEach(() => {
 describe('GET /api/whisper/detect', () => {
   it('returns the install-state + installed flag', async () => {
     setWhisperInstallBootstrap(
-      new WhisperInstallBootstrap({ repoRoot: '/repo', detectFn: () => 'ready' }),
+      new WhisperInstallBootstrap({ repoRoot: '/repo', detectFn: () => 'ready', ...OFFLINE }),
     );
     const res = await request(makeApp()).get('/api/whisper/detect');
     expect(res.body).toEqual({ state: 'ready', installed: true });
@@ -57,7 +68,7 @@ describe('GET /api/whisper/detect', () => {
 
   it('reports not-installed as installed:false', async () => {
     setWhisperInstallBootstrap(
-      new WhisperInstallBootstrap({ repoRoot: '/repo', detectFn: () => 'not-installed' }),
+      new WhisperInstallBootstrap({ repoRoot: '/repo', detectFn: () => 'not-installed', ...OFFLINE }),
     );
     const res = await request(makeApp()).get('/api/whisper/detect');
     expect(res.body).toEqual({ state: 'not-installed', installed: false });
@@ -73,6 +84,7 @@ describe('POST /api/whisper/install + poll', () => {
         repoRoot: '/repo',
         detectFn: () => states[Math.min(i++, states.length - 1)],
         spawnFn: () => fakeChild(0) as never,
+        ...OFFLINE,
       }),
     );
     const app = makeApp();
@@ -89,6 +101,7 @@ describe('POST /api/whisper/install + poll', () => {
         repoRoot: '/repo',
         detectFn: () => 'model-missing',
         spawnFn: () => fakeChild(0) as never,
+        ...OFFLINE,
       }),
     );
     const app = makeApp();
@@ -99,7 +112,7 @@ describe('POST /api/whisper/install + poll', () => {
   });
 
   it('404s polling an unknown job id', async () => {
-    setWhisperInstallBootstrap(new WhisperInstallBootstrap({ repoRoot: '/repo', detectFn: () => 'ready' }));
+    setWhisperInstallBootstrap(new WhisperInstallBootstrap({ repoRoot: '/repo', detectFn: () => 'ready', ...OFFLINE }));
     const res = await request(makeApp()).get('/api/whisper/install/nope');
     expect(res.status).toBe(404);
   });
@@ -129,6 +142,7 @@ describe('POST /api/whisper/install + poll', () => {
         capturedArgs.push(args);
         return fakeChild(0) as never;
       },
+      ...OFFLINE,
     });
     setWhisperInstallBootstrap(bootstrap);
     const app = makeApp();
@@ -166,6 +180,7 @@ describe('POST /api/whisper/install/:id/recheck', () => {
         repoRoot: '/repo',
         detectFn: () => cur,
         spawnFn: () => fakeChild(0) as never,
+        ...OFFLINE,
       }),
     );
     const app = makeApp();
