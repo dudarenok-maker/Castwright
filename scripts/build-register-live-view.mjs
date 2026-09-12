@@ -14,8 +14,8 @@
 //   node scripts/build-register-live-view.mjs            # write the result
 //   node scripts/build-register-live-view.mjs --check     # report, change nothing; exit 1 on drift
 //
-// No npm dependencies: onbox-register-check.yml runs this with no `npm ci`
-// step. node builtins and scripts/lib/* only.
+// No npm dependencies: runs within the CI verify.yml `lint-and-checks` job
+// which handles `npm ci` separately. node builtins and scripts/lib/* only.
 
 import { writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';

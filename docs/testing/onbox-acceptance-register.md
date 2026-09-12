@@ -7,7 +7,7 @@ at PR time.
 A row here is a debt: the code is merged and users have it, but nobody has
 watched it work. Empty register = done.
 
-`npm run check:onbox-register` (CI: `.github/workflows/onbox-register-check.yml`,
+`npm run check:onbox-register` (CI: `verify.yml`'s `lint-and-checks` job,
 ops-43) mechanically checks this file's own internal arithmetic — glance-table
 counts against body row headings, and the stated total against the glance
 table — on every PR that touches it. It cannot tell you a row is missing,
@@ -80,8 +80,8 @@ The token is now LIVE: `npm run check:onbox-register -- --stamped-since <ref>`
 counter moving — catching cases where a branch reverts the live view to an
 older revision, or where a conflict was resolved by taking one side wholesale
 over the other. The check reads the base ref's copy and the working tree's,
-which CI makes `merge(base, head)`, and **reports** an unstamped change in
-content (see #3138 for the decision whether to enforce it as a merge gate).
+which CI makes `merge(base, head)`, and **enforces it as a merge gate** (PR #3236
+folds the check into `verify.yml`'s required `lint-and-checks` job).
 In CI, `<ref>` is `HEAD^1` (the base branch's tip at merge time). **By hand,
 never pass `HEAD^1`**: outside CI's merge commit it need not be the base your branch
 will merge onto, so the check can fail to catch an unstamped edit — for example
