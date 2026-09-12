@@ -570,10 +570,11 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
     app.use('/api/manuscripts', analysisRouter);
 
     const manuscriptId = `test-subset-unresolvable-titles-${Date.now()}-${Math.random()}`;
-    // Register a stub manuscript; hintsById may not have all chapters populated
-    // in some scenarios, testing the titlePart empty-fallback path.
+    // Register a stub manuscript with only 10 chapters, then use chapter ids
+    // well beyond that range so titles won't resolve, testing the titlePart
+    // empty-fallback path.
     registerStubManuscript(manuscriptId, 10);
-    const job = buildLiveJobStub(manuscriptId, 'subset', [3, 100]); // 100 is non-existent
+    const job = buildLiveJobStub(manuscriptId, 'subset', [101, 102]); // both unresolvable
     __testRegisterJobForTest(job as unknown as Parameters<typeof __testRegisterJobForTest>[0]);
     try {
       const res = await supertest(app)
@@ -582,12 +583,11 @@ describe('D2/F2 (#3169) — every POST that reaches the server logs under [analy
         .buffer(true);
       expect(res.status).toBe(200);
       expect(res.text).toContain('subset_in_progress');
-      // N4 assertion — the message format is correct: either
-      // "…for this manuscript: Chapter 3, …" (titles resolved)
-      // or "…for this manuscript. Wait for it…" (titles not resolved / empty).
-      // No dangling colon or fragment in either case.
+      // N8 assertion — verify the empty-fallback path: when chapter ids don't
+      // resolve, titlePart is empty, so the message ends with
+      // "…for this manuscript. Wait for it to finish" with NO colon.
       expect(res.text).toMatch(
-        /for this manuscript(: .+)?. Wait for it to finish/,
+        /for this manuscript\. Wait for it to finish/,
       );
     } finally {
       removeManuscript(manuscriptId);

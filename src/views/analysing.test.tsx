@@ -1489,6 +1489,10 @@ describe('AnalysingView — failed-chapter retry', () => {
     /* The regression: main must stay paused. No second analyseManuscript
        call — capturedOpts (reset to undefined above) stays undefined. */
     expect(capturedOpts).toBeUndefined();
+
+    /* B3: verify the restored snapshot has state: 'paused' (not 'running'),
+       so layout.tsx's stall detection won't incorrectly mark the pill as stalled. */
+    expect(store.getState().analysis.activeStream?.state).toBe('paused');
   });
 
   it('a chapter-resolved SSE event drops the matching panel row mid-stream', async () => {

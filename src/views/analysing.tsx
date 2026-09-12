@@ -927,7 +927,15 @@ export function AnalysingView({
         if (err instanceof AnalysisError && err.code === 'subset_in_progress') {
           subsetInProgressRef.current = true;
           if (priorSnapshot) {
-            dispatch(analysisActions.setActiveStream(priorSnapshot));
+            /* B3 fix: when the main SSE was aborted (pausedMainForRetry is true),
+               we're not re-subscribing to it, so restore with state: 'paused'
+               instead of the original 'running'. This prevents layout.tsx's stall
+               detection from marking the pill as stalled 30s later. */
+            dispatch(
+              analysisActions.setActiveStream(
+                pausedMainForRetry ? { ...priorSnapshot, state: 'paused' } : priorSnapshot,
+              ),
+            );
           } else {
             dispatch(analysisActions.clearActiveStream());
           }

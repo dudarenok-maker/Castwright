@@ -2216,6 +2216,44 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
   });
 
+  /* B4 regression: the Include button (not Re-analyse)'s subset_in_progress path
+     must also restore the prior snapshot. This exercizes the include-flow path
+     that handleInclude takes (vs. handleReanalyse for Re-analyse) — both paths
+     had their priorSnapshot restore added in B2, but only handleReanalyse had a
+     test, so the include path could silently regress. */
+  it('B4 — Include flow: a rejected subset_in_progress collision restores the other job\'s snapshot', async () => {
+    const store = makeIncludeStore();
+    const otherJobSnapshot: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 40,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'subset',
+      subsetChapterIds: [5],
+    };
+    store.dispatch(analysisActions.setActiveStream(otherJobSnapshot));
+
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(
+      new AnalysisError(
+        'A different subset re-analysis is already in progress for this manuscript: Chapter 5.',
+        'subset_in_progress',
+      ),
+    );
+    renderInclude(store);
+
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+
+    await screen.findByText(
+      /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+    );
+
+    expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
+  });
+
   it('on success, merges sentences into the manuscript slice, characters into cast, and clears the row excluded flag', async () => {
     const store = makeIncludeStore();
     setChapterExcludedSpy.mockResolvedValue({
