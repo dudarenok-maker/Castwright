@@ -54,6 +54,7 @@ test('npm run check:onbox-register routes flags to check-onbox-register.mjs, not
         encoding: 'utf8',
         timeout: 30000,
         shell: true,
+        windowsHide: true,
       }
     );
 
@@ -96,6 +97,7 @@ test('npm run check:onbox-register with no flags still runs both commands', () =
     encoding: 'utf8',
     timeout: 30000,
     shell: true,
+    windowsHide: true,
   });
 
   const combinedOutput = (result.stdout || '') + (result.stderr || '');
