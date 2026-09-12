@@ -110,18 +110,6 @@ export const accountSlice = createSlice({
     setCoverPickerDefaultTab: (s, a: PayloadAction<UserSettings['coverPickerDefaultTab']>) => {
       s.coverPickerDefaultTab = a.payload;
     },
-    /* Plan 88 phase-2 — Account-tab Analyzer card. `null` clears the
-       saved value so the server-side selector falls through to env /
-       hardcoded default. */
-    setAnalyzerPhase0Model: (s, a: PayloadAction<string | null>) => {
-      s.analyzerPhase0Model = a.payload;
-    },
-    setAnalyzerPhase1Model: (s, a: PayloadAction<string | null>) => {
-      s.analyzerPhase1Model = a.payload;
-    },
-    setAnalyzerPhase1MinLagChapters: (s, a: PayloadAction<number | null>) => {
-      s.analyzerPhase1MinLagChapters = a.payload;
-    },
     /* Dual-model TTS mode — when true the sidecar may keep two TTS
        engines resident in GPU memory at once. Off by default; toggled
        from the Model Manager's Voice engine section. */

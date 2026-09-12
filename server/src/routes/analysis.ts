@@ -78,12 +78,7 @@ import {
   type MissingSpeaker,
 } from '../analyzer/roster-coverage.js';
 import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
-import {
-  readUserSettings,
-  getCachedUserSettings,
-  getResolvedGeminiApiKey,
-  type UserSettings,
-} from '../workspace/user-settings.js';
+import { readUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
 import {
   clearAnalysisCache,
   loadAnalysisCache,
@@ -576,11 +571,11 @@ function engineLabel(engine: 'local' | 'gemini', modelId: string): string {
    knobs are active. Otherwise the sequential stub (Phase 1 waits for
    `markPhase0AllDone()` exactly like today's hard phase gate). Exported
    for unit testing. */
-export function createWatermarkForJob(userSettings?: UserSettings): PhaseWatermark {
-  if (!isPerPhaseModelSelectionActive(userSettings)) {
+export function createWatermarkForJob(): PhaseWatermark {
+  if (!isPerPhaseModelSelectionActive()) {
     return createSequentialWatermark();
   }
-  return createPhaseWatermark({ minLagChapters: resolvePhase1MinLagChapters(userSettings) });
+  return createPhaseWatermark({ minLagChapters: resolvePhase1MinLagChapters() });
 }
 
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
@@ -3353,23 +3348,35 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     return res.end();
   }
 
+  /* #3141 step 4 — optional per-run phase model picks, carried on the
+     analysis request itself and never written to settings. Empty/absent
+     values are ignored, not rejected. */
+  const requestedPhase0Model =
+    typeof req.body?.phase0Model === 'string' && req.body.phase0Model.trim().length > 0
+      ? req.body.phase0Model
+      : undefined;
+  const requestedPhase1Model =
+    typeof req.body?.phase1Model === 'string' && req.body.phase1Model.trim().length > 0
+      ? req.body.phase1Model
+      : undefined;
   /* `allowStage1Shrink` is the user's opt-in when the route refused a
      stage1 write because the new roster would replace a much larger
      existing one (see stage1ShrinkRefused comment). The analysing
      view's "Accept smaller roster" button re-fires the same request
      with this flag so the next attempt skips the gate. */
   const allowStage1Shrink = req.body?.allowStage1Shrink === true;
-  /* Plan 118 — read the user-settings snapshot once at request start and
-     resolve the Phase 0 (cast detection) analyzer via the per-phase
-     selector, so the saved `analyzerPhase0Model` is honoured rather than
-     ignored (the old `selectAnalyzer({ model })` only ever saw the
-     per-request model + the GEMINI_MODEL default). The same snapshot is
-     threaded into the job so every per-phase / watermark / lag decision
-     reflects one read-once view of the file. */
-  const userSettings = await readUserSettings();
+  /* Plan 118 / #3141 step 1 — resolve the Phase 0 (cast detection) analyzer
+     via the per-phase selector, so a saved Advanced Settings override
+     (`analyzer.phase0.model`) is honoured rather than ignored (the old
+     `selectAnalyzer({ model })` only ever saw the per-request model + the
+     GEMINI_MODEL default). */
   let selection: AnalyzerSelection;
   try {
-    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, userSettings });
+    selection = selectAnalyzerForPhase({
+      phase: 'phase0',
+      model: requestedModel,
+      phaseModel: requestedPhase0Model,
+    });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
     clearInterval(keepAlive);
@@ -3511,7 +3518,8 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     requestedFresh,
     allowStage1Shrink,
     requestedModel,
-    userSettings,
+    requestedPhase0Model,
+    requestedPhase1Model,
   });
 });
 
@@ -3519,16 +3527,19 @@ export interface MainAnalyzerJobOpts {
   requestedFresh: boolean;
   allowStage1Shrink: boolean;
   /* Plan 88 — when the route layer received an explicit `model` in the
-     request body, that per-request id wins (precedence priority 2). Both
+     request body, that per-request id wins (precedence priority 3). Both
      phases resolve through `selectAnalyzerForPhase`, so a present
      `requestedModel` collapses the split to a single model for this run;
-     when absent, the saved per-phase models (priority 3) apply. */
+     when absent, the saved per-phase override (priority 4) applies. */
   requestedModel: string | undefined;
-  /* Plan 118 — read-once user-settings snapshot from request start, so
-     per-phase model resolution and the watermark / lag decisions all see
-     the same view of the file. Optional: tests and any legacy caller may
-     omit it and the job falls back to the in-process cache. */
-  userSettings?: UserSettings;
+  /* #3141 step 4 — this request's own `phase0Model` / `phase1Model` picks
+     (priority 2, only losing to an explicit env pin). Phase 0's selection
+     already consumed `requestedPhase0Model` in the route handler before
+     `selection` was built; it still travels into the job body so
+     `pipelinedPerPhase` below can tell a per-run split from the legacy
+     single-model path. */
+  requestedPhase0Model?: string | undefined;
+  requestedPhase1Model?: string | undefined;
 }
 
 /* Detached analyzer loop body. Runs as a background promise spawned
@@ -3609,6 +3620,9 @@ export async function runMainAnalyzerJob(
      they always were. */
   let activeModelId = selection.model;
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
+  /* `lastStep` mirrors the most recent phase milestone to the server log (so a
+     stall's last log line names where it wedged) and feeds the fatal-error log
+     below (so a failure names its phase, not just a stack). */
   let lastStep = 'init';
 
   try {
@@ -3645,26 +3659,15 @@ export async function runMainAnalyzerJob(
     const abortController = job.controller;
     const analyzer = selection.analyzer;
     const recordRef = record;
-    /* Read-once user-settings snapshot — the handler passes one in; legacy
-       callers / tests fall back to the in-process cache. Drives both the
-       Phase 1 model resolution and the watermark / lag below so they agree
-       with the Phase 0 resolution done in the route handler. Named
-       `runUserSettings` (not `userSettings`) because D1 (#3169) widened
-       this function's try to start above this declaration, putting it in
-       the same block as the unrelated, later `const userSettings =
-       await readUserSettings()` fresh read the minor-cast fold pass makes
-       further down (a live re-read, not a duplicate of this snapshot) —
-       the two used to sit in different blocks (this one outside the old
-       try) and so could share a name; now they can't. */
-    const runUserSettings = opts.userSettings ?? getCachedUserSettings();
 
-    /* Plan 88 / 118 — pipelined two-model analyzer.
+    /* Plan 88 / 118 / #3141 step 1 — pipelined two-model analyzer.
        Both phases resolve through `selectAnalyzerForPhase`, which applies
-       the documented precedence (env ANALYZER_PHASE{0,1}_MODEL > per-request
-       `model` > saved `analyzerPhase{0,1}Model` > default). So:
-         - No per-phase models + no per-request model → both phases run the
+       the documented precedence (env ANALYZER_PHASE{0,1}_MODEL > per-run
+       `phase0Model`/`phase1Model` > per-request `model` > saved Advanced
+       Settings override > default). So:
+         - No per-phase override + no per-request model → both phases run the
            same default model (single-model path, unchanged).
-         - Per-phase models set + no per-request model → Phase 0 and Phase 1
+         - Per-phase overrides set + no per-request model → Phase 0 and Phase 1
            run DIFFERENT models, splitting the load across two free-tier
            rate-limit buckets.
          - A per-request `model` (priority 2) collapses both phases to that
@@ -3679,7 +3682,7 @@ export async function runMainAnalyzerJob(
     const phase1Selection: AnalyzerSelection = selectAnalyzerForPhase({
       phase: 'phase1',
       model: opts.requestedModel,
-      userSettings: runUserSettings,
+      phaseModel: opts.requestedPhase1Model,
     });
     const phase1Analyzer = phase1Selection.analyzer;
     /* Mutable for the same reason as activeModelId — Phase 1's stage2Call.onFallback
@@ -3698,16 +3701,17 @@ export async function runMainAnalyzerJob(
        when it is. */
     const escalationAnalyzer =
       configValue<string>('analyzer.structure.escalation') === 'cloud' ? buildCloudEscalationAnalyzer() : undefined;
-    const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive(runUserSettings);
+    const hasPerRunPhasePick = Boolean(opts.requestedPhase0Model) || Boolean(opts.requestedPhase1Model);
+    const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive(hasPerRunPhasePick);
     if (pipelinedPerPhase) {
       console.log(
         `[analysis] manuscript=${manuscriptId} pipelined ` +
           `phase0=${selection.engine}:${selection.model} ` +
           `phase1=${phase1Selection.engine}:${phase1Selection.model} ` +
-          `lag=${resolvePhase1MinLagChapters(runUserSettings)}`,
+          `lag=${resolvePhase1MinLagChapters()}`,
       );
     }
-    const watermark: PhaseWatermark = createWatermarkForJob(runUserSettings);
+    const watermark: PhaseWatermark = createWatermarkForJob();
 
     /* Best-effort GPU/CPU detection for the first-chapter ETA rate (issue 3).
        Only meaningful for local Ollama; cloud engines pass 'unknown' → the
@@ -6518,7 +6522,13 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      Start click can log it more than once. `model` and `manuscriptId` are both request-supplied text,
      both stringified (F2/F6, hardened post-review) as a log-injection
      guard, same as the parent route. */
-  const body = req.body as { chapterIds?: unknown; model?: unknown; allowStage1Shrink?: unknown };
+  const body = req.body as {
+    chapterIds?: unknown;
+    model?: unknown;
+    phase0Model?: unknown;
+    phase1Model?: unknown;
+    allowStage1Shrink?: unknown;
+  };
   const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
   const requestedChapterCount = Array.isArray(body?.chapterIds) ? body.chapterIds.length : 0;
   console.log(
@@ -6678,19 +6688,33 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     return;
   }
 
-  /* Plan 118 — resolve cast (Phase 0) and attribution (Phase 1) analyzers
-     via the per-phase selector so a saved split applies to the subset
-     retry too. This path is sequential (no watermark); the split only
-     changes which model each pass uses. */
-  const userSettings = await readUserSettings();
+  /* #3141 step 4 — optional per-run phase model picks for the subset retry
+     too, never persisted. Empty/absent values are ignored, not rejected. */
+  const requestedPhase0Model =
+    typeof body?.phase0Model === 'string' && body.phase0Model.trim().length > 0
+      ? body.phase0Model
+      : undefined;
+  const requestedPhase1Model =
+    typeof body?.phase1Model === 'string' && body.phase1Model.trim().length > 0
+      ? body.phase1Model
+      : undefined;
+  /* Plan 118 / #3141 step 1 — resolve cast (Phase 0) and attribution
+     (Phase 1) analyzers via the per-phase selector so a saved Advanced
+     Settings override applies to the subset retry too. This path is
+     sequential (no watermark); the split only changes which model each
+     pass uses. */
   let selection: AnalyzerSelection;
   let phase1Selection: AnalyzerSelection;
   try {
-    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, userSettings });
+    selection = selectAnalyzerForPhase({
+      phase: 'phase0',
+      model: requestedModel,
+      phaseModel: requestedPhase0Model,
+    });
     phase1Selection = selectAnalyzerForPhase({
       phase: 'phase1',
       model: requestedModel,
-      userSettings,
+      phaseModel: requestedPhase1Model,
     });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });

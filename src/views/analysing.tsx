@@ -29,7 +29,7 @@ import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
-import { uiActions } from '../store/ui-slice';
+import { uiActions, selectPhaseModelPick } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
 import { selectAnalyzerSplitIsActive, fetchAnalyzerModels } from '../store/account-slice';
@@ -310,8 +310,17 @@ export function AnalysingView({
      per-run override (priority 2). */
   const splitActive = useAppSelector((s) => selectAnalyzerSplitIsActive(s.account));
   const selectedModelExplicit = useAppSelector((s) => s.ui.selectedModelExplicit);
+  const defaultAnalysisModel = useAppSelector((s) => s.account.defaultAnalysisModel);
   const phase0Model = useAppSelector((s) => s.account.analyzerPhase0Model);
   const phase1Model = useAppSelector((s) => s.account.analyzerPhase1Model);
+  /* #3141 step 5 — per-run picks from the analysing view's PhaseModelSwap
+     control (never persisted to settings). A pick counts as split mode for
+     the requestModel/effectiveModelIds logic below, same as a saved
+     per-phase split, but a per-run pick is cleared once its run has been
+     requested (see the analysis effect) so a later run starts from settings. */
+  const phase0Pick = useAppSelector((s) => selectPhaseModelPick(s.ui, manuscriptId, 0));
+  const phase1Pick = useAppSelector((s) => selectPhaseModelPick(s.ui, manuscriptId, 1));
+  const hasPhasePick = Boolean(phase0Pick || phase1Pick);
   /* Live local Ollama tags for the failed-retry model picker (curated ∪ live),
      so a model the user just pulled is selectable here. Fetched only AFTER a
      failure (gated on `error` below) — a healthy cloud run never probes Ollama,
@@ -327,7 +336,7 @@ export function AnalysingView({
   useEffect(() => {
     if (error) void dispatch(fetchAnalyzerModels());
   }, [dispatch, error]);
-  const requestModel = splitActive && !selectedModelExplicit ? undefined : model;
+  const requestModel = (splitActive || hasPhasePick) && !selectedModelExplicit ? undefined : model;
   /* The model id(s) the run will ACTUALLY execute on. The readiness/engine
      gate MUST derive from these, not from ui.selectedModel: ui.selectedModel is
      re-seeded from the account default on every boot (ui-slice.ts), so a user
@@ -335,17 +344,29 @@ export function AnalysingView({
      the per-phase dropdowns to a cloud model. Reading it directly left the view
      "stuck on Ollama" — probing the daemon, blocking Start on VRAM residency —
      for a Gemini run that never calls Ollama. Mirror requestModel exactly:
-       - split engaged, no explicit pick → the saved per-phase models (a blank
-         phase falls through to the server's own default, which the client
-         can't see; treat as not-local so a cloud deployment isn't gated on an
-         Ollama it never calls);
+       - split engaged, no explicit pick → the saved per-phase models plus any
+         per-run picks (a blank phase without a pick falls back to the account
+         default, which the client now knows and sends);
        - otherwise → the single per-run model (or the built-in default). */
   const effectiveModelIds = useMemo<string[]>(() => {
-    if (splitActive && !selectedModelExplicit) {
-      return [phase0Model, phase1Model].filter((id): id is string => Boolean(id));
+    if ((splitActive || hasPhasePick) && !selectedModelExplicit) {
+      return [
+        phase0Pick ?? phase0Model ?? defaultAnalysisModel,
+        phase1Pick ?? phase1Model ?? defaultAnalysisModel,
+      ].filter((id): id is string => Boolean(id));
     }
     return [model ?? MODEL_OPTIONS[0].id];
-  }, [splitActive, selectedModelExplicit, phase0Model, phase1Model, model]);
+  }, [
+    splitActive,
+    hasPhasePick,
+    selectedModelExplicit,
+    phase0Pick,
+    phase1Pick,
+    phase0Model,
+    phase1Model,
+    defaultAnalysisModel,
+    model,
+  ]);
   const isLocalAnalyzer = effectiveModelIds.some((id) => engineForModelId(id) === 'local');
   /* Engine tag captured into the cross-navigation snapshot (read by the
      reverse-local-analyzer guard). Mirror the effective-local derivation so a
@@ -463,11 +484,26 @@ export function AnalysingView({
         state: 'running',
       }),
     );
+    /* #3141 step 5 — the picks are being sent on this request now; clear them
+       so a later run (retry, or a fresh Start on this manuscript) starts from
+       settings instead of silently repeating a one-off choice. An explicit
+       per-run override collapses the split server-side, so picks are never
+       sent alongside one — nothing to clear in that case since they didn't
+       affect this run. */
+    if (hasPhasePick && !selectedModelExplicit) dispatch(uiActions.clearPhaseModelPicks({ manuscriptId }));
     (async () => {
       try {
         const payload = await api.analyseManuscript(manuscriptId, {
           signal: controller.signal,
           model: requestModel,
+          phase0Model:
+            selectedModelExplicit || (!splitActive && !hasPhasePick)
+              ? undefined
+              : phase0Pick ?? phase0Model ?? defaultAnalysisModel,
+          phase1Model:
+            selectedModelExplicit || (!splitActive && !hasPhasePick)
+              ? undefined
+              : phase1Pick ?? phase1Model ?? defaultAnalysisModel,
           fresh: retry.fresh || undefined,
           allowStage1Shrink: retry.allowStage1Shrink || undefined,
           onPhase: ({ phaseId, progress, live, model: serverModel }) => {
@@ -1327,9 +1363,10 @@ export function AnalysingView({
               {/* Per-phase model chips + swap dropdowns live inside each
                   PhaseCard (plan 95). The legacy single-`<select>` picker
                   that used to live here wrote to ui.selectedModel and bumped
-                  the retry nonce on every change; per-phase pickers persist
-                  to UserSettings and take effect from the next chapter, no
-                  in-flight abort. */}
+                  the retry nonce on every change; per-phase pickers are a
+                  per-run-only pick (#3141 step 5, ui.analyzerPhasePicks),
+                  never persisted to UserSettings, sent on the next start
+                  request, no in-flight abort. */}
               <button
                 onClick={() => dispatch(uiActions.goHome())}
                 className="text-ink/60 hover:text-ink underline-offset-2 hover:underline"
@@ -1554,6 +1591,7 @@ export function AnalysingView({
                 isResuming={resuming}
                 bookId={bookId}
                 droppedQuotesRefreshKey={droppedQuotesRefreshKey}
+                manuscriptId={manuscriptId}
               />
             );
           })}

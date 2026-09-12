@@ -1,36 +1,39 @@
-import { useEffect, useState } from 'react';
 import { MODEL_OPTIONS, buildLocalModelOptions, buildModelOptionGroups } from '../../lib/models';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
   fetchAnalyzerModels,
-  saveAccountSettings,
   selectAnalyzerPhase0Model,
   selectAnalyzerPhase1Model,
 } from '../../store/account-slice';
+import { uiActions, selectPhaseModelPick } from '../../store/ui-slice';
 
 interface PhaseModelSwapProps {
+  manuscriptId: string | null | undefined;
   phaseId: 0 | 1;
-  /** True when the phase is currently mid-stream. Mid-run swap is allowed
-      but the toast surfaces that it only takes effect on the next chapter
-      per the warm-up-window memory. */
-  isActive: boolean;
+  /** True while a run is live for this manuscript (connecting or streaming).
+      The control renders read-only — still showing the current pick — while
+      a run is live, since the pick only ever applies to the *next* run
+      started from this view. */
+  isRunLive: boolean;
 }
 
-const TOAST_MS = 4000;
-
-/* Inline dropdown for swapping a phase's analyzer model from the analysing
-   view, without round-tripping through the Model Manager. Writes to the same
-   UserSettings keys (`analyzerPhase{0,1}Model`) the Model Manager picker uses —
-   the change is persisted server-side via PUT /api/user/settings and
-   takes effect from the next chapter forward, never mid-chapter. */
-export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
+/* Inline dropdown for choosing a phase's analyzer model for the NEXT
+   analysis run started from this view. Dispatches a per-run pick
+   (ui-slice's `analyzerPhasePicks`, keyed by manuscript id) rather than
+   writing to UserSettings — the choice never changes the saved account
+   default and never affects a run already in flight. */
+export function PhaseModelSwap({ manuscriptId, phaseId, isRunLive }: PhaseModelSwapProps) {
   const dispatch = useAppDispatch();
+  /* The saved account default, shown when no per-run pick is set for this
+     manuscript. */
   const current = useAppSelector((s) =>
     phaseId === 0 ? selectAnalyzerPhase0Model(s.account) : selectAnalyzerPhase1Model(s.account),
   );
-  const rawValue = useAppSelector((s) =>
+  const accountValue = useAppSelector((s) =>
     phaseId === 0 ? s.account.analyzerPhase0Model : s.account.analyzerPhase1Model,
   );
+  const pick = useAppSelector((s) => selectPhaseModelPick(s.ui, manuscriptId, phaseId));
+  const rawValue = pick ?? accountValue;
   /* A per-run override (explicit pick on the analysis-failed card) collapses
      both phases onto the override server-side, so the saved per-phase model
      is moot for this run. Show the override, disabled, so this dropdown can't
@@ -43,7 +46,6 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
   const overrideModelId = useAppSelector(
     (s) => (s as { ui?: { selectedModel?: string } }).ui?.selectedModel ?? '',
   );
-  const [toast, setToast] = useState<string | null>(null);
 
   /* Dynamic curated ∪ live-Ollama-tag union so a pulled-but-uncurated tag is
      selectable here. localAnalyzerModels is seeded by fetchAnalyzerModels
@@ -56,30 +58,15 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
   const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
   const modelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
 
-  useEffect(() => {
-    if (!toast) return;
-    const id = setTimeout(() => setToast(null), TOAST_MS);
-    return () => clearTimeout(id);
-  }, [toast]);
+  const disabled = isRunLive || !manuscriptId;
 
   const onChange = (raw: string) => {
+    if (disabled || !manuscriptId) return;
     const next = raw === '' ? null : raw;
-    /* No-op if the user picked the sentinel and the slice is already null,
-       or the same id. Avoids a spurious save + toast. */
+    /* No-op if the user picked the sentinel and there's already no pick, or
+       re-picked the same value. */
     if (next === rawValue) return;
-    const patch =
-      phaseId === 0 ? { analyzerPhase0Model: next } : { analyzerPhase1Model: next };
-    void dispatch(saveAccountSettings(patch));
-    /* Toast contextualizes the swap timing based on run state: when actively
-       streaming (isActive), the in-flight chapter finishes on the old model;
-       when paused or halted (not isActive), the swap only affects future runs.
-       The select's title attribute describes the active case specifically,
-       explaining that the swap applies from the next chapter. */
-    setToast(
-      isActive
-        ? 'Applies from the next chapter — current chapter finishes on the previous model'
-        : 'Applies from next chapter',
-    );
+    dispatch(uiActions.setPhaseModelPick({ manuscriptId, phaseId, modelId: next }));
   };
 
   if (overrideActive) {
@@ -106,18 +93,23 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
     <span className="inline-flex items-center gap-2">
       <select
         value={rawValue ?? ''}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => void dispatch(fetchAnalyzerModels())}
         data-testid={`phase-model-swap-${phaseId}`}
         title={
-          isActive
-            ? `Swap the Phase ${phaseId} model. Applies from the next chapter; the in-flight chapter completes on the current model.`
-            : `Swap the Phase ${phaseId} model for future analyses.`
+          disabled
+            ? 'A run is in progress — pick a model for the next run started from this view.'
+            : `Choose the Phase ${phaseId} model for the next run started from this view. Does not change your saved settings.`
         }
-        className="px-2.5 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-        aria-label={`Phase ${phaseId} model swap`}
+        className={`px-2.5 py-1 rounded-full border text-[11px] font-medium focus:outline-hidden focus:ring-2 focus:ring-magenta/30 ${
+          disabled
+            ? 'border-ink/10 bg-ink/5 text-ink/50 cursor-not-allowed'
+            : 'border-ink/15 bg-white text-ink'
+        }`}
+        aria-label={`Phase ${phaseId} model for the next run`}
       >
-        <option value="">(use server default)</option>
+        <option value="">(use saved default)</option>
         {modelGroups.map((g) => (
           <optgroup key={g.engine} label={g.label}>
             {g.models.map((m) => (
@@ -128,18 +120,9 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
           </optgroup>
         ))}
       </select>
-      {toast && (
-        <span
-          className="text-[11px] text-emerald-700 font-medium"
-          role="status"
-          data-testid={`phase-model-swap-${phaseId}-toast`}
-        >
-          {toast}
-        </span>
-      )}
       {/* Suppress unused-var warning for `current` — kept as documentation
           that the slice's effective value is read; the <select> shows the
-          raw user-setting (with the "(use server default)" sentinel
+          raw user-setting (with the "(use saved default)" sentinel
           mapped to ""). */}
       <span aria-hidden="true" data-current-effective={current} className="hidden" />
     </span>

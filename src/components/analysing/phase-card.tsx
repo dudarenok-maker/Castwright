@@ -406,6 +406,12 @@ interface PhaseCardProps {
   isResuming?: boolean;
   bookId: string | null | undefined;
   droppedQuotesRefreshKey: number;
+  /** #3141 step 5 — the manuscript this run belongs to, threaded down to
+      PhaseModelChip (reads a per-run pick) and PhaseModelSwap (writes one).
+      Optional so existing callers/tests that predate per-run picks keep
+      compiling; PhaseModelSwap disables itself and PhaseModelChip falls
+      back to the saved model when absent. */
+  manuscriptId?: string | null;
 }
 
 /* One row inside the analysing-stage phase list. Phase 0 (cast detection),
@@ -431,6 +437,7 @@ export function PhaseCard({
   isResuming,
   bookId,
   droppedQuotesRefreshKey,
+  manuscriptId,
 }: PhaseCardProps) {
   const isActive = isPhaseActive ?? activePhaseId === p.id;
   const isDone = isPhaseDone ?? activePhaseId > p.id;
@@ -497,8 +504,13 @@ export function PhaseCard({
                 phaseId={p.id as 0 | 1}
                 state={chipState}
                 serverModel={serverModelByPhase?.[p.id]}
+                manuscriptId={manuscriptId}
               />
-              <PhaseModelSwap phaseId={p.id as 0 | 1} isActive={isActive} />
+              <PhaseModelSwap
+                manuscriptId={manuscriptId}
+                phaseId={p.id as 0 | 1}
+                isRunLive={conn === 'streaming' || conn === 'connecting'}
+              />
             </div>
           )}
         </div>

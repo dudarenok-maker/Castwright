@@ -3318,13 +3318,16 @@ export interface components {
              */
             allowCloudFallback: boolean;
             /**
-             * @description Base URL of the local Ollama daemon. Falls through to OLLAMA_URL
-             *     env then http://localhost:11434 in the server resolver. Re-read
-             *     on every analysis request, like sidecarUrl. The Ollama *model*
-             *     tag is not stored separately — `defaultAnalysisModel` doubles
-             *     as the Ollama tag when it has Ollama shape (contains ':').
+             * @description #3141 step 2 — READ-ONLY effective value from the config
+             *     resolver (env OLLAMA_URL > saved Advanced Settings override
+             *     `analyzer.ollama.url` > registry default
+             *     `http://localhost:11434`). No longer a stored Account field;
+             *     edit it via Advanced Settings, not this endpoint's PUT (which
+             *     now rejects this key with 400). The Ollama *model* tag is not
+             *     stored separately — `defaultAnalysisModel` doubles as the
+             *     Ollama tag when it has Ollama shape (contains ':').
              */
-            ollamaUrl: string;
+            readonly ollamaUrl: string;
             /**
              * @description Optional override for the WORKSPACE_DIR env var. Read once at
              *     server startup — changes require a server restart to apply
@@ -3384,32 +3387,35 @@ export interface components {
              */
             autoStartSidecar?: boolean;
             /**
-             * @description Plan 88 phase-2 — optional override for Phase 0 (cast
-             *     detection) analyzer model. When `null`, falls through to the
-             *     `ANALYZER_PHASE0_MODEL` env var, then opts.model, then the
-             *     hardcoded default (`gemma-4-31b-it`). When set, MUST be one
-             *     of the ids from src/lib/models.ts MODEL_OPTIONS. Env var
-             *     still wins so ops can override at the process boundary for
-             *     triage; per-request `opts.model` then wins over user-settings.
+             * @description #3141 step 2 — READ-ONLY effective value from the config
+             *     resolver (env `ANALYZER_PHASE0_MODEL` > saved Advanced Settings
+             *     override `analyzer.phase0.model` > registry default). `null`
+             *     when the resolved value is the empty-string default (no
+             *     per-phase override configured — the legacy single-model
+             *     ANALYZER path is used for both phases). No longer a stored
+             *     Account field; edit it via Advanced Settings, not this
+             *     endpoint's PUT (which now rejects this key with 400).
              *     See [docs/features/archive/88-analyzer-per-phase-model.md].
              */
-            analyzerPhase0Model?: string | null;
+            readonly analyzerPhase0Model?: string | null;
             /**
-             * @description Plan 88 phase-2 — optional override for Phase 1 (attribution)
-             *     analyzer model. Same precedence as `analyzerPhase0Model`:
-             *     env > opts.model > user-settings > hardcoded default
-             *     (`gemini-3.1-flash-lite`).
+             * @description #3141 step 2 — READ-ONLY effective value from the config
+             *     resolver, same precedence and null-when-empty convention as
+             *     `analyzerPhase0Model` but for Phase 1 (attribution) via
+             *     `ANALYZER_PHASE1_MODEL` / `analyzer.phase1.model`. Edit via
+             *     Advanced Settings; this endpoint's PUT rejects this key with 400.
              */
-            analyzerPhase1Model?: string | null;
+            readonly analyzerPhase1Model?: string | null;
             /**
-             * @description Plan 88 phase-2 — minimum chapter lag between Phase 0 cast
-             *     detection and Phase 1 attribution. `null` falls through to
-             *     `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` env then the default
-             *     (`10`). `0` releases the lag entirely; `10` anchors
-             *     attribution to the roster-author model's interpretive
-             *     baseline (recommended).
+             * @description #3141 step 2 — READ-ONLY effective value from the config
+             *     resolver (env `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` > saved
+             *     Advanced Settings override `analyzer.phase1.minLagChapters` >
+             *     registry default `10`). Minimum chapter lag between Phase 0
+             *     cast detection and Phase 1 attribution; `0` releases the lag
+             *     entirely. Edit via Advanced Settings; this endpoint's PUT
+             *     rejects this key with 400.
              */
-            analyzerPhase1MinLagChapters?: number | null;
+            readonly analyzerPhase1MinLagChapters: number;
             /**
              * @description When true, the TTS sidecar is allowed to keep two TTS engines
              *     (e.g. Kokoro + Qwen) resident in GPU memory simultaneously so a
@@ -3479,6 +3485,13 @@ export interface components {
          *     workspaceRoot, workspaceSource, corruptSettingsFile) are ignored.
          *     Any `geminiApiKey`-shaped field is dropped — the API key only lives
          *     in server/.env.
+         *     #3141 step 2 — `ollamaUrl`, `analyzerPhase0Model`,
+         *     `analyzerPhase1Model`, and `analyzerPhase1MinLagChapters` are NOT
+         *     accepted here (unlike the other read-only fields above, these are
+         *     rejected outright with 400, not silently ignored): they are
+         *     resolver-derived effective values now edited via Advanced Settings
+         *     `configOverrides` (`analyzer.ollama.url`, `analyzer.phase0.model`,
+         *     `analyzer.phase1.model`, `analyzer.phase1.minLagChapters`).
          */
         UserSettingsPatch: {
             displayName?: string;
@@ -3499,7 +3512,6 @@ export interface components {
             /** @enum {string} */
             analysisEngine?: "local" | "gemini";
             allowCloudFallback?: boolean;
-            ollamaUrl?: string;
             workspaceDirOverride?: string | null;
             exportSyncFolder?: string | null;
             minorCastMinLines?: number;
@@ -3508,9 +3520,6 @@ export interface components {
             /** @enum {string} */
             defaultThemePreference?: "light" | "dark" | "system";
             autoStartSidecar?: boolean;
-            analyzerPhase0Model?: string | null;
-            analyzerPhase1Model?: string | null;
-            analyzerPhase1MinLagChapters?: number | null;
             dualModelEnabled?: boolean;
             /** @description Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin). */
             analyzerKeepAliveByModel?: {
@@ -6859,7 +6868,18 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Optional model id override, applied to both phases for this run. */
+                    model?: string;
+                    /** @description Optional Phase 0 (cast detection) model id, applied to this run only — never saved to settings. */
+                    phase0Model?: string;
+                    /** @description Optional Phase 1 (attribution) model id, applied to this run only — never saved to settings. */
+                    phase1Model?: string;
+                };
+            };
+        };
         responses: {
             /** @description Final analysis payload (also delivered as the terminal SSE event) */
             200: {
@@ -6903,6 +6923,10 @@ export interface operations {
                     chapterIds: number[];
                     /** @description Optional model id override (matches the full-book endpoint). */
                     model?: string;
+                    /** @description Optional Phase 0 (cast detection) model id, applied to this run only — never saved to settings. */
+                    phase0Model?: string;
+                    /** @description Optional Phase 1 (attribution) model id, applied to this run only — never saved to settings. */
+                    phase1Model?: string;
                 };
             };
         };

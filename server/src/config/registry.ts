@@ -1134,7 +1134,7 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Ollama model',
     help: 'Ollama model tag passed to /api/chat as the last-resort fallback. The Model Manager model picker takes precedence when it has Ollama tag shape (contains ":")',
     type: 'string',
-    default: 'qwen3.5:4b', // ← OLLAMA_MODEL default in server/.env.example (line 23) + DEFAULT_OLLAMA_MODEL in user-settings.ts
+    default: 'qwen3.5:4b', // ← OLLAMA_MODEL default in server/.env.example (line 23) + DEFAULT_USER_SETTINGS.defaultAnalysisModel
     apply: 'live', risk: 'medium',
   },
   {
@@ -1217,7 +1217,7 @@ export const KNOBS: ConfigKnob[] = [
     label: 'Phase-1 minimum lag (chapters)',
     help: 'Minimum number of Phase-0 chapters that must complete ahead of any Phase-1 dispatch. Ensures the roster is populated before attribution starts. Set to 0 to release the lag entirely. Only active when the per-phase model split is configured.',
     type: 'integer', min: 0,
-    default: 10, // ← DEFAULT_PHASE1_MIN_LAG_CHAPTERS in analyzer/select-analyzer.ts (line 111)
+    default: 10, // ← DEFAULT_PHASE1_MIN_LAG_CHAPTERS in analyzer/select-analyzer.ts (line 136)
     apply: 'live', risk: 'medium',
   },
   {

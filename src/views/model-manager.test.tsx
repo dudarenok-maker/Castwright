@@ -130,7 +130,7 @@ const SETTINGS_FIXTURE: UserSettings = {
   minorCastMinLines: 3,
   analyzerPhase0Model: null,
   analyzerPhase1Model: null,
-  analyzerPhase1MinLagChapters: null,
+  analyzerPhase1MinLagChapters: 10,
   apiKeyStatus: 'unset',
   workspaceRoot: '/ws',
   workspaceSource: 'env',
@@ -630,29 +630,47 @@ describe('ModelManagerView — voice engine preferences', () => {
   });
 });
 
-describe('ModelManagerView — analyzer split', () => {
-  it('reflects persisted phase pickers + min-lag', async () => {
+describe('ModelManagerView — analyzer split (#3141 step 3 — read-only, edited in Advanced Settings)', () => {
+  it('renders the resolved phase models + min-lag read-only, each linking to Advanced Settings', async () => {
     renderManager({
       analyzerPhase0Model: 'gemma-4-31b-it',
       analyzerPhase1Model: 'gemini-3.1-flash-lite',
       analyzerPhase1MinLagChapters: 5,
     });
-    expect(((await screen.findByTestId('account-analyzer-phase0-model')) as HTMLSelectElement).value).toBe(
-      'gemma-4-31b-it',
-    );
-    expect((screen.getByTestId('account-analyzer-phase1-min-lag') as HTMLInputElement).value).toBe('5');
+    const phase0 = await screen.findByTestId('account-analyzer-phase0-model');
+    expect(phase0.tagName).not.toBe('SELECT');
+    expect(phase0).toHaveTextContent('Gemma 4 31B');
+    expect(screen.getByTestId('account-analyzer-phase1-min-lag')).toHaveTextContent('5');
+    const links = screen.getAllByRole('link', { name: /edit in advanced settings/i });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute('href', '#/advanced');
+    }
   });
 
-  it('round-trips the analyzer fields, sending null for a blanked min-lag', async () => {
+  it('shows "Not set" for a phase model with no override', async () => {
+    renderManager({ analyzerPhase0Model: null, analyzerPhase1Model: null });
+    expect(await screen.findByTestId('account-analyzer-phase0-model')).toHaveTextContent('Not set');
+    expect(screen.getByTestId('account-analyzer-phase1-model')).toHaveTextContent('Not set');
+  });
+
+  it('never sends the four retired fields on save', async () => {
     putUserSettings.mockResolvedValue(SETTINGS_FIXTURE);
     const user = userEvent.setup();
-    renderManager({ analyzerPhase1MinLagChapters: 5 });
-    fireEvent.change(await screen.findByTestId('account-analyzer-phase1-min-lag'), {
-      target: { value: '' },
+    renderManager({
+      analyzerPhase0Model: 'gemma-4-31b-it',
+      analyzerPhase1Model: 'gemini-3.1-flash-lite',
+      analyzerPhase1MinLagChapters: 5,
+      ollamaUrl: 'http://localhost:11434',
     });
+    await user.click(await screen.findByTestId('account-dual-model-enabled'));
     await user.click(screen.getByRole('button', { name: /save changes/i }));
     await waitFor(() => expect(putUserSettings).toHaveBeenCalledTimes(1));
-    expect(putUserSettings.mock.calls[0][0].analyzerPhase1MinLagChapters).toBeNull();
+    const patch = putUserSettings.mock.calls[0][0] as Record<string, unknown>;
+    expect(patch).not.toHaveProperty('analyzerPhase0Model');
+    expect(patch).not.toHaveProperty('analyzerPhase1Model');
+    expect(patch).not.toHaveProperty('analyzerPhase1MinLagChapters');
+    expect(patch).not.toHaveProperty('ollamaUrl');
   });
 });
 
