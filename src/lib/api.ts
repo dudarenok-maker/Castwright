@@ -5924,6 +5924,7 @@ function realStreamGeneration({
       if (!shouldReconnect || cancelled) break;
       const backoff = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
       attempt += 1;
+      if (attempt >= RECONNECT_MAX_ATTEMPTS) break;
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => {
           controller.signal.removeEventListener('abort', cancelDuringWait);
