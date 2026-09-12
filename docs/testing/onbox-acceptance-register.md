@@ -4546,35 +4546,6 @@ log instrumentation, a VRAM-fill scenario to construct the discriminating placem
 `GPU_RESERVE_MB`, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the
 run sheet's pin/stale-cache scenarios.
 
-### A108 · #3056 — Coqui/Kokoro/Whisper installer hold-down and idle watchdog · **0 of 2 run · 2 owed**
-
-Ported from #3039 (Qwen3-TTS): all four in-app TTS installers now run with the sidecar
-held down and restore the GPU ONNX runtime afterwards. Two safety mechanisms added to
-Coqui/Kokoro/Whisper shipped without on-box acceptance: (1) an idle watchdog that kills
-a child (installer or pip step) that produces no output for 30 minutes, releasing the
-sidecar hold so the queue recovers — without it a stalled installer deadlocks the sidecar
-indefinitely; (2) an active-generation refusal that stops the installer immediately if
-a chapter is rendering, rather than silently aborting it.
-
-*Prerequisites:* GPU box with a real sidecar, Qwen resident (the installer test itself
-does not require Qwen, but the chapter-mid-render scenario does).
-
-*Criteria:*
-1. Coqui XTTS installer via Admin → Model Manager: click **Install Coqui XTTS v2**, observe
-   the installer runs with the sidecar held (the UI says "Stopping the voice engine…"
-   and any queued chapter waits), completes successfully, and leaves the GPU ONNX
-   runtime intact (`pip check` clean after install).
-2. Same installer clicked mid-render: a chapter mid-render (or with a cover letter
-   queued to render immediately) triggers the "Cannot install while a chapter is being
-   generated" refusal, not a silent abort. Kokoro and Whisper follow the same two paths.
-
-*Cost:* low — each of the three engines needs one successful install from the UI
-(Admin → Model Manager, account-logged, real install-*.mjs script, real pip swap, real venv
-I/O but not a multi-minute download, ~30s per engine if the weights are already present
-or pre-cached) and one refusal attempt with a chapter queued to render (Qwen, since
-it's the fastest to boot). No golden-audio comparison, no complex fixture setup, no
-timeout tolerance tuning.
-
 ### A107 · `/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter ([#3086](https://github.com/dudarenok-maker/Castwright/issues/3086), [#3101](https://github.com/dudarenok-maker/Castwright/issues/3101), PR [#3142](https://github.com/dudarenok-maker/Castwright/pull/3142)) · **single 8 GB GPU card, DirectML profile, real Kokoro weights**
 
 #3086 observed a raw Kokoro `/synthesize` call completing while a VoiceDesign forward was
@@ -4595,6 +4566,37 @@ resident.
 on a shared-device box — and confirm the Kokoro load now blocks until the design releases,
 matching the unit-level proof above.
 *Cost:* short — one concurrent repro, same shape as the unit test but against real weights.
+
+### A108 · Coqui/Kokoro/Whisper installer hold-down and idle watchdog ([#3056](https://github.com/dudarenok-maker/Castwright/issues/3056), PR [#3197](https://github.com/dudarenok-maker/Castwright/pull/3197)) · **GPU box with a real sidecar, Qwen resident**
+
+Ported from #3039 (Qwen3-TTS): all four in-app TTS installers now run with the sidecar
+held down and restore the GPU ONNX runtime afterwards. Two safety mechanisms added to
+Coqui/Kokoro/Whisper shipped without on-box acceptance: (1) an idle watchdog that kills
+a child (installer or pip step) that produces no output for 30 minutes, releasing the
+sidecar hold so the queue recovers — without it a stalled installer deadlocks the sidecar
+indefinitely; (2) an active-generation refusal that stops the installer immediately if
+a chapter is rendering, rather than silently aborting it.
+
+*Criteria:*
+1. Coqui XTTS installer via Admin → Model Manager: click **Install Coqui XTTS v2**, observe
+   the installer runs with the sidecar held (the UI says "Stopping the voice engine…"
+   and any queued chapter waits), completes successfully, and leaves the GPU ONNX
+   runtime intact (`pip check` clean after install).
+2. Same installer clicked mid-render: a chapter mid-render triggers the "Cannot install while a chapter is being
+   generated" refusal, not a silent abort. Kokoro and Whisper follow the same two paths.
+
+*Note on idle watchdog coverage:* The idle watchdog mechanism (kill a child that produces no output for 30 minutes) is
+not independently observable in the above criteria — both would pass unchanged on a box where the watchdog code was deleted.
+The watchdog is tested in the unit suite (`childIdleTimeoutMs` is an injectable constructor option, and unit tests shorten it
+and assert the kill and hold-release), but an on-box stall scenario would require a real stuck installer or pip process and
+cannot be readily reproduced in this row's current setup.
+
+*Cost:* low — each of the three engines needs one successful install from the UI
+(Admin → Model Manager, account-logged, real install-*.mjs script, real pip swap, real venv
+I/O but not a multi-minute download, ~30s per engine if the weights are already present
+or pre-cached) and one refusal attempt with a chapter queued to render (Qwen, since
+it's the fastest to boot). No golden-audio comparison, no complex fixture setup, no
+timeout tolerance tuning.
 
 ## Group B — local Ollama analyzer only
 
