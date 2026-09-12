@@ -1,5 +1,5 @@
 /* In-app venv bootstrap routes (fs-21 decision Z). Mirrors kokoro-install.ts
-   so Account → Models can bootstrap the Python venv without a terminal:
+   so Admin → Model Manager can bootstrap the Python venv without a terminal:
 
      GET  /api/setup/venv/detect              — venv + python probe (no job)
      POST /api/setup/venv/bootstrap           — kick off bootstrap-venv.mjs (202 + job)

@@ -11,7 +11,7 @@ LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
 memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
-attribution — 117 knobs across 12 groups in total. High-risk groups (marked
+attribution — 116 knobs across 12 groups in total. High-risk groups (marked
 with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
@@ -122,15 +122,10 @@ your own on-disk copy; nothing here changes until you explicitly edit.
   <img alt="Analyzer models & endpoints" src="images/advanced-settings/04-analyzer-models-endpoints.png">
 </picture>
 
-> **Not the same knob as [Model Manager](Model-Manager)'s "Analyzer
-> engine."** This one is the server/env-level config knob (defaults to
-> `local` — see `server/.env.example`); Model Manager's is your per-account
-> preference (defaults to `gemini`), which takes precedence when set. Same
-> English label, two different controls.
+> Your analyzer engine choice lives in **[Model Manager](Model-Manager)** and is saved per account.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
-| Analyzer engine | "local" routes through Ollama (auto-falls back to Gemini when Ollama is unreachable and a key is set); "gemini" always goes direct | `local` | local / gemini | live | medium |
 | Ollama URL | Base URL of the local Ollama daemon | `http://localhost:11434` | string | live | medium |
 | Ollama model | Model tag for the /api/chat fallback | `qwen3.5:4b` | string | live | medium |
 | Gemini analyzer model | Model used directly or as Ollama-unreachable fallback | `gemini-3.5-flash-lite` | string | live | medium |

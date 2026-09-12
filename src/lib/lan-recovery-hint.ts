@@ -23,5 +23,5 @@ export function recoveryHint(): string {
   // location.port is '' on the :443 forwarder path — never promise a port we don't know.
   return window.location.port
     ? `Open https://localhost:${window.location.port} on this computer and use “Authorize this browser”.`
-    : 'Open Castwright on this computer and use “Authorize this browser” under Account → LAN access.';
+    : 'Open Castwright on this computer and use “Authorize this browser” under Admin → LAN access.';
 }

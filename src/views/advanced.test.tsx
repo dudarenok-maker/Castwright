@@ -9,9 +9,10 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configSlice } from '../store/config-slice';
 import { uiSlice } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
+import { accountSlice, fetchAccountSettings } from '../store/account-slice';
 import { AdvancedView } from './advanced';
 import { api } from '../lib/api';
-import type { ConfigResponse, GpuDevicesResponse } from '../lib/types';
+import type { ConfigResponse, GpuDevicesResponse, UserSettings } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -147,19 +148,28 @@ const FIXTURE_CONFIG: ConfigResponse = {
   envCleanupCandidates: [],
 };
 
-/* Build a minimal store with config + ui + notifications slices. */
+/* Build a minimal store with config + ui + notifications + account slices. */
 function makeStore() {
   return configureStore({
     reducer: {
       config: configSlice.reducer,
       ui: uiSlice.reducer,
       notifications: notificationsSlice.reducer,
+      account: accountSlice.reducer,
     },
   });
 }
 
-function renderView() {
+function renderView(analysisEngine: 'local' | 'gemini' = 'local') {
   const store = makeStore();
+  const currentState = store.getState().account;
+  store.dispatch(
+    fetchAccountSettings.fulfilled(
+      { ...currentState, analysisEngine } as UserSettings,
+      '',
+      undefined,
+    ),
+  );
   return {
     store,
     ...render(
@@ -468,13 +478,9 @@ describe('AdvancedView — back-to-Admin breadcrumb', () => {
 
 /* ── Analyzer read-only device row (Plan 2 §2.4) ─────────────────────────── */
 
-/* The `analyzer.engine` knob (server group 'analyzer-models') is deliberately
-   left OUT of `descriptors` here — only its live `values` entry is fixtured.
-   Adding it to `descriptors` would render a second, genuinely-editable
-   "Analyzer engine" <select>, which would collide with the
-   `queryByRole('combobox', { name: /analyzer/i })` assertion below (that
-   query is meant to prove THIS row — the read-only one — renders no
-   combobox at all). */
+/* The analyzer-device row now reads the saved account analysisEngine instead
+   of a config knob (removed because the engine is a saved account setting).
+   The fixture omits any 'analyzer.engine' config value since it no longer exists. */
 const CONFIG_WITH_TTS_ENGINE_GROUP: ConfigResponse = {
   ...FIXTURE_CONFIG,
   groups: [
@@ -489,13 +495,6 @@ const CONFIG_WITH_TTS_ENGINE_GROUP: ConfigResponse = {
   ],
   values: {
     ...FIXTURE_CONFIG.values,
-    'analyzer.engine': {
-      key: 'analyzer.engine',
-      effective: 'local',
-      source: 'default',
-      locked: false,
-      overridden: false,
-    },
   },
 };
 
@@ -552,23 +551,29 @@ describe('AdvancedView — analyzer read-only row (Plan 2 §2.4, issue #1225)', 
     expect(link).toHaveAttribute('href', expect.stringMatching(/local-llm/));
   });
 
-  it('hides the row entirely when the analyzer engine is gemini (§2.4 gate)', async () => {
-    mockGetConfig.mockResolvedValue({
-      ...CONFIG_WITH_ANALYZER_MODELS_GROUP,
-      values: {
-        ...CONFIG_WITH_ANALYZER_MODELS_GROUP.values,
-        'analyzer.engine': {
-          key: 'analyzer.engine',
-          effective: 'gemini',
-          source: 'default',
-          locked: false,
-          overridden: false,
-        },
-      },
-    });
+  it('hides the row entirely when the account analysis engine is gemini (§2.4 gate)', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
     mockGetAnalyzerDevice.mockResolvedValue({ device: 'cuda' });
 
-    renderView();
+    renderView('gemini');
+    await screen.findAllByText('Text-to-speech');
+    expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
+  });
+
+  it('hides the row when account settings are not yet loaded', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
+    mockGetAnalyzerDevice.mockResolvedValue({ device: 'cuda' });
+
+    // Create store and render without dispatching fetchAccountSettings.fulfilled
+    // so account stays hydrated=false
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <AdvancedView />
+      </Provider>,
+    );
+
+    // Even though the default engine is local, the row should be hidden until account hydrates
     await screen.findAllByText('Text-to-speech');
     expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
   });
@@ -625,20 +630,8 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
     expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
   });
 
-  it('hides the whole block, including the split warning, when the analyzer engine is not local', async () => {
-    mockGetConfig.mockResolvedValue({
-      ...CONFIG_WITH_ANALYZER_MODELS_GROUP,
-      values: {
-        ...CONFIG_WITH_ANALYZER_MODELS_GROUP.values,
-        'analyzer.engine': {
-          key: 'analyzer.engine',
-          effective: 'gemini',
-          source: 'default',
-          locked: false,
-          overridden: false,
-        },
-      },
-    });
+  it('hides the whole block, including the split warning, when the account analysis engine is not local', async () => {
+    mockGetConfig.mockResolvedValue(CONFIG_WITH_ANALYZER_MODELS_GROUP);
     mockGetAnalyzerGpuSplit.mockResolvedValue({
       reachable: true,
       split: true,
@@ -648,7 +641,7 @@ describe('AdvancedView — analyzer GPU-split warning (#2367 Task 3)', () => {
       dataUnavailable: false,
     });
 
-    renderView();
+    renderView('gemini');
     expect(screen.queryByText(/Analyzer \(Ollama\) device/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Model split across GPUs/)).not.toBeInTheDocument();
   });

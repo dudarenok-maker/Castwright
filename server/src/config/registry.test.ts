@@ -48,6 +48,11 @@ describe('config registry', () => {
     expect(knobByEnv('NOT_A_REAL_ENV')).toBeUndefined();
   });
 
+  it('analyzer.engine is not a registered knob (the engine is a saved account setting)', () => {
+    expect(getKnob('analyzer.engine')).toBeUndefined();
+    expect(knobByEnv('ANALYZER')).toBeUndefined();
+  });
+
   it('the ACCELERATOR knob is a rebuild-on-change enum (auto/nvidia/amd/cpu)', () => {
     const k = knobByEnv('ACCELERATOR');
     expect(k?.key).toBe('tts.accelerator');

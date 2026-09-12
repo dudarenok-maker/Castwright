@@ -185,7 +185,7 @@ export const userSettingsSchema = z.object({
      Optional with a `true` default so legacy user-settings.json
      files load unchanged and a fresh install gets TTS-on-boot. */
   autoStartSidecar: z.boolean().optional(),
-  /* Plan 88 phase-2 — Account-tab surface for the per-phase analyzer
+  /* Plan 88 phase-2 — Model Manager surface for the per-phase analyzer
      model knobs. Each `null`/`undefined` means "fall through to env /
      hardcoded default" per the precedence chain enforced in
      server/src/analyzer/select-analyzer.ts: explicit env >
@@ -211,7 +211,7 @@ export const userSettingsSchema = z.object({
   /* Plan 49 — UI-managed Gemini API key. Stored plaintext (same trust
      model as server/.env, which is gitignored and single-user). The
      env var GEMINI_API_KEY still wins when present (for CI / power
-     users); this field is the "I set it from the Account view" slot.
+     users); this field is the "I set it from the Model Manager" slot.
      The general PUT /api/user/settings still strips this field (see
      FORBIDDEN_KEYS) — the only sanctioned write path is
      `writeGeminiApiKey()` invoked from the dedicated
@@ -308,7 +308,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      defaultTtsModelKey. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   autoStartSidecar: true,
-  /* Plan 88 phase-2 — Account-tab surface for the per-phase analyzer
+  /* Plan 88 phase-2 — Model Manager surface for the per-phase analyzer
      knobs. `null` means "fall through to env / hardcoded default" so
      a fresh user-settings.json doesn't pin a value the deployer may
      not have intended. */
@@ -1018,7 +1018,7 @@ export async function writeGeminiApiKey(key: string | null): Promise<UserSetting
 
 /** Plan 49 — resolve the Gemini API key from the canonical fallback chain:
       1. process.env.GEMINI_API_KEY (wins for CI / power users)
-      2. cached user-settings.geminiApiKey (UI-saved via Account view)
+      2. cached user-settings.geminiApiKey (UI-saved via the Model Manager)
       3. null (no key configured)
     Trims whitespace on both sources so a stray trailing newline in `.env`
     doesn't masquerade as a real key. Returns null instead of throwing —

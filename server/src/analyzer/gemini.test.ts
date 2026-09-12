@@ -149,7 +149,7 @@ describe('GeminiAnalyzer.runStage1 — streaming chunk feedback', () => {
     /* A recitation/safety block returns a candidate carrying the stop reason
        but zero text — gemini-* models trip RECITATION on copyrighted source.
        Surface the reason instead of an opaque "empty response" so the operator
-       knows to switch GEMINI_MODEL (gemma-*) or set ANALYZER=local. */
+       knows to switch GEMINI_MODEL (gemma-*) or switch to Local Ollama in Model Manager. */
     generateContentStream.mockResolvedValue(
       asyncFromArray([{ text: '', candidates: [{ finishReason: 'RECITATION' }] }]),
     );

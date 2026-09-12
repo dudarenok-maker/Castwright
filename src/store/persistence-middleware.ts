@@ -90,7 +90,7 @@ const TOAST_ON_PERSIST_FAILURE: Record<string, PersistFailureHandler> = {
 };
 
 /* Read the user-tuned autosave debounce (fe-2) at flush-scheduling time so a
-   change in the Account → Advanced panel takes effect on the next edit, with no
+   change in the Account → Device-local panel takes effect on the next edit, with no
    reload. Falls back to the default when the slice is absent (older persisted
    blob / partial test state). */
 function debounceMs(s: PersistableRootState): number {

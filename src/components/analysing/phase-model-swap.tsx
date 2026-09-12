@@ -19,8 +19,8 @@ interface PhaseModelSwapProps {
 const TOAST_MS = 4000;
 
 /* Inline dropdown for swapping a phase's analyzer model from the analysing
-   view, without round-tripping through the Account tab. Writes to the same
-   UserSettings keys (`analyzerPhase{0,1}Model`) the Account picker uses —
+   view, without round-tripping through the Model Manager. Writes to the same
+   UserSettings keys (`analyzerPhase{0,1}Model`) the Model Manager picker uses —
    the change is persisted server-side via PUT /api/user/settings and
    takes effect from the next chapter forward, never mid-chapter. */
 export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {

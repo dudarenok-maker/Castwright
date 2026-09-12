@@ -31,7 +31,7 @@ describe('recoveryHint', () => {
   it('omits the port on loopback when the :443 forwarder hides it (location.port === "")', () => {
     vi.stubGlobal('location', { hostname: 'localhost', port: '' });
     expect(recoveryHint()).toBe(
-      'Open Castwright on this computer and use “Authorize this browser” under Account → LAN access.',
+      'Open Castwright on this computer and use “Authorize this browser” under Admin → LAN access.',
     );
   });
 

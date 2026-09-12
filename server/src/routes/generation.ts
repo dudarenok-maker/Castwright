@@ -992,8 +992,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     const list = [...requiredEngines].sort().join(' + ');
     const message =
       `This book mixes TTS engines (${list}) but dual-model mode is off. Generation ` +
-      `will still run, but turning on "Keep both TTS engines loaded" in Account ` +
-      `settings avoids engine-swap latency.`;
+      `will still run, but turning on "Keep both voice engines loaded" in ` +
+      `Admin → Model Manager → Voice engine avoids engine-swap latency.`;
     console.warn(`[generation] ${message}`);
     send({
       type: 'warning',

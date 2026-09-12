@@ -1,5 +1,5 @@
 /* In-app Kokoro install routes (fs-21). Mirrors the Coqui/Whisper install
-   routes so Account → Models can install the Kokoro ONNX weights without a
+   routes so Admin → Model Manager can install the Kokoro ONNX weights without a
    terminal:
 
      GET  /api/kokoro/detect              — install-state probe (no job)
