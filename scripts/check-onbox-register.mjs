@@ -748,8 +748,8 @@ function parseLiveViewSections(html) {
 // "discharged" (nothing in the baseline to contradict it), that was a
 // fail-OPEN hole with the same shape and stakes as the one round 2 closed:
 // an internally-inconsistent register CAN reach `main` (the register's own
-// consistency check is neither required nor unconditionally path-triggered
-// — see `.github/workflows/onbox-register-check.yml`), and from that point
+// consistency check is a required step in `verify.yml`'s `lint-and-checks` job
+// on every PR), and from that point
 // every `--against-published` run against it would be silently vacuous.
 // Delegating to `checkRegister` — rather than hand-rolling a wider version
 // of the same narrow test — is what makes "can't be trusted" mean the same
@@ -1589,7 +1589,7 @@ export function resolveStampedSinceBaseline(repoRoot, liveViewPath, ref, gitRunn
 // account and the incident that motivated it, PR #2297). This CLI's own
 // output was measured as tiny on its OK path — see the "extend the guard fix
 // beyond scripts/" commit — but that measurement never covered the FAILURE
-// path: onbox-register-check.yml runs this on ubuntu with stdout/stderr on a
+// path: verify.yml's lint-and-checks job runs this on ubuntu with stdout/stderr on a
 // pipe, and a register with many mismatches can queue well more than a
 // trivial number of console.error writes before exiting, which is exactly
 // the shape that truncates on POSIX. Every process.exit() call below is
@@ -1622,7 +1622,7 @@ function runCheckOnboxRegisterCli() {
     } catch (err) {
       if (err.code === 'ENOENT') {
         console.error(
-          `Not found: ${relPath} — if it moved, update scripts/check-onbox-register.mjs and .github/workflows/onbox-register-check.yml`,
+          `Not found: ${relPath} — if it moved, update scripts/check-onbox-register.mjs (or report it to the verify.yml lint-and-checks job maintainer)`,
         );
         throw new CliExitError(1);
       }
@@ -1753,9 +1753,8 @@ function runCheckOnboxRegisterCli() {
   // Deliberately the same comparator, not a second one: the published page
   // IS the tracked live-view.html's own content, wrapped in a publish
   // skeleton the class-name-anchored parsers don't look at. Run BY HAND as
-  // the last step before publishing — not wired into
-  // onbox-register-check.yml, which has no such file to read and no network
-  // access to fetch one.
+  // the last step before publishing — not wired into the CI checks, which
+  // have no such file to read and no network access to fetch one.
   const againstPublishedIdx = process.argv.indexOf('--against-published');
 
   // --discharging <id>[,<id>...] (#2272): names row IDs the operator asserts

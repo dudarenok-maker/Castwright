@@ -5,7 +5,7 @@
 // a648f31a as "their entire output is 96-136 bytes, far below any
 // truncation risk". That measurement only covered the OK path. The FAILURE
 // path emits one console.error PER reported error before exiting, and
-// .github/workflows/onbox-register-check.yml runs this on ubuntu with
+// verify.yml's lint-and-checks job runs this on ubuntu with
 // stdout/stderr on a pipe (ASYNCHRONOUS there, unlike Windows — see
 // scripts/build-release-zip.mjs's own die()/CliError comment for the fuller
 // account) — a register with many mismatches can queue far more than a
