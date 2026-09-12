@@ -49,6 +49,7 @@ const SERVER_FIXTURE: UserSettings = {
   apiKeyStatus: 'set',
   workspaceRoot: '/some/path',
   workspaceSource: 'env',
+  corruptSettingsFile: false,
 };
 
 function makeStore() {

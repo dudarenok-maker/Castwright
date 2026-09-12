@@ -10,6 +10,7 @@ import {
   getResolvedGeminiApiKey,
   getResolvedSetupCompletedAt,
   writeSetupCompletedAt,
+  isUserSettingsFileCorrupt,
 } from '../workspace/user-settings.js';
 import { getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { selectTtsProvider } from '../tts/index.js';
@@ -105,7 +106,7 @@ export const setupReadinessRouter = Router();
 setupReadinessRouter.post('/complete', async (_req: Request, res: Response) => {
   const ts = new Date().toISOString();
   await writeSetupCompletedAt(ts);
-  res.json({ completedAt: ts });
+  res.json({ completedAt: ts, corruptSettingsFile: isUserSettingsFileCorrupt() });
 });
 
 setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {

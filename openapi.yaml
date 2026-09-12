@@ -4139,6 +4139,28 @@ paths:
         '409': { description: Entry has no consent record to revoke }
         '502': { description: Revoke failed (write or artifact-purge error) }
 
+  /api/info/dismiss-whats-new:
+    post:
+      summary: Dismiss the what's-new banner
+      operationId: dismissWhatsNew
+      responses:
+        '200':
+          description: Dismiss successful.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DismissWhatsNewResponse' }
+
+  /api/tour/complete:
+    post:
+      summary: Mark the guided tour complete
+      operationId: completeTour
+      responses:
+        '200':
+          description: Tour completion timestamp.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TourCompleteResponse' }
+
   /api/setup/readiness:
     get:
       summary: First-run readiness probe
@@ -4597,6 +4619,7 @@ components:
         - apiKeyStatus
         - workspaceRoot
         - workspaceSource
+        - corruptSettingsFile
       properties:
         displayName:
           type: string
@@ -4846,13 +4869,27 @@ components:
             user-settings.json's workspaceDirOverride was used at boot,
             `env` when WORKSPACE_DIR was, `default` when the built-in
             `../audiobook-workspace` fallback applied.
+        corruptSettingsFile:
+          type: boolean
+          readOnly: true
+          description: |
+            True when the last readUserSettings() had to fall all the way
+            back to in-memory defaults because neither user-settings.json
+            nor any `.bak.N` snapshot parsed. Computed fresh per request
+            (not persisted); clears the next time a read succeeds (the
+            server re-reads the file whenever its mtime/size changes on
+            disk — a hand-repair, a restore, or another Castwright
+            checkout writing the shared file) or a write succeeds (any of
+            the five settings writers). Server-computed — ignored if sent
+            on a PUT.
 
     UserSettingsPatch:
       type: object
       description: |
         Partial update payload. Read-only fields (apiKeyStatus,
-        workspaceRoot, workspaceSource) are ignored. Any `geminiApiKey`-
-        shaped field is dropped — the API key only lives in server/.env.
+        workspaceRoot, workspaceSource, corruptSettingsFile) are ignored.
+        Any `geminiApiKey`-shaped field is dropped — the API key only lives
+        in server/.env.
         #3141 step 2 — `ollamaUrl`, `analyzerPhase0Model`,
         `analyzerPhase1Model`, and `analyzerPhase1MinLagChapters` are NOT
         accepted here (unlike the other read-only fields above, these are
@@ -8449,9 +8486,24 @@ components:
 
     SetupCompleteResponse:
       type: object
-      required: [completedAt]
+      required: [completedAt, corruptSettingsFile]
       properties:
         completedAt: { type: string, description: ISO-8601 timestamp just written. }
+        corruptSettingsFile: { type: boolean, description: Whether the user-settings file is currently corrupted and recoverable. }
+
+    TourCompleteResponse:
+      type: object
+      required: [completedAt, corruptSettingsFile]
+      properties:
+        completedAt: { type: string, description: ISO-8601 timestamp just written. }
+        corruptSettingsFile: { type: boolean, description: Whether the user-settings file is currently corrupted and recoverable. }
+
+    DismissWhatsNewResponse:
+      type: object
+      required: [ok, corruptSettingsFile]
+      properties:
+        ok: { type: boolean, description: Whether the dismiss operation succeeded. }
+        corruptSettingsFile: { type: boolean, description: Whether the user-settings file is currently corrupted and recoverable. }
 
     SetupSmokeResponse:
       type: object

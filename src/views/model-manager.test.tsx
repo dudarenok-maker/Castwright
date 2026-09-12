@@ -134,6 +134,7 @@ const SETTINGS_FIXTURE: UserSettings = {
   apiKeyStatus: 'unset',
   workspaceRoot: '/ws',
   workspaceSource: 'env',
+  corruptSettingsFile: false,
 };
 
 const INVENTORY: ModelInventoryResponse = {

@@ -1600,3 +1600,40 @@ describe('Layout — resident-model Stop control in the global TTS notice banner
     expect(screen.queryByRole('button', { name: /^stop/i })).toBeNull();
   });
 });
+
+describe('Layout — settings-corruption banner (#3175 layer 3)', () => {
+  it('renders the settings-corrupt alert when account.corruptSettingsFile is true', async () => {
+    const store = makeStore();
+    store.dispatch({ type: 'account/fetch/fulfilled', payload: { corruptSettingsFile: true } });
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    expect(await screen.findByText(/unreadable and has been reset to defaults/i)).toBeInTheDocument();
+  });
+
+  it('renders no alert when account.corruptSettingsFile is false', async () => {
+    const store = makeStore();
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText(/unreadable and has been reset to defaults/i)).toBeNull();
+    });
+  });
+});

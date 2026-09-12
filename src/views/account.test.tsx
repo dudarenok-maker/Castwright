@@ -50,6 +50,7 @@ const SERVER_FIXTURE: UserSettings = {
   apiKeyStatus: 'unset',
   workspaceRoot: '/users/mike/workspace',
   workspaceSource: 'env',
+  corruptSettingsFile: false,
 };
 
 function renderView(initial: Partial<UserSettings> = {}) {

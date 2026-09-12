@@ -62,6 +62,7 @@ import { TtsNoticeBanner } from './tts-notice-banner';
 import { WhatsNewBanner } from './whats-new-banner';
 import { BulkReassignUndoBanner } from './bulk-reassign-undo-banner';
 import { UpdateNotifierBanner } from './update-notifier-banner';
+import { SettingsCorruptBanner } from './settings-corrupt-banner';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
 import { useSetupDiagnosis } from '../lib/use-setup-diagnosis';
 import {
@@ -1653,6 +1654,7 @@ export function Layout() {
           on the server's showWhatsNew flag (no-op in mock mode). */}
       <WhatsNewBanner />
       <BulkReassignUndoBanner />
+      <SettingsCorruptBanner />
 
       {/* fe-27 — "update available" notifier; self-gated, dark in mock mode. */}
       <UpdateNotifierBanner />

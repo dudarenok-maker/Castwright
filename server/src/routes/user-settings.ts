@@ -23,6 +23,7 @@ import {
   getResolvedGeminiApiKey,
   getResolvedGenerationWorkers,
   getResolvedTtsModelKey,
+  isUserSettingsFileCorrupt,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import { configValue } from '../config/resolver.js';
@@ -60,6 +61,10 @@ interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
   analyzerPhase0Model: string | null;
   analyzerPhase1Model: string | null;
   analyzerPhase1MinLagChapters: number;
+  /* Server-computed, not part of the persisted UserSettings shape — see
+     isUserSettingsFileCorrupt() in workspace/user-settings.ts. Recomputed
+     fresh on every response, same as apiKeyStatus/workspaceRoot/workspaceSource. */
+  corruptSettingsFile: boolean;
 }
 
 function envDerived(settings: UserSettings): UserSettingsResponse {
@@ -92,6 +97,7 @@ function envDerived(settings: UserSettings): UserSettingsResponse {
     analyzerPhase1MinLagChapters: configValue<number>('analyzer.phase1.minLagChapters'),
     workspaceRoot: WORKSPACE_ROOT,
     workspaceSource: WORKSPACE_SOURCE,
+    corruptSettingsFile: isUserSettingsFileCorrupt(),
   };
 }
 

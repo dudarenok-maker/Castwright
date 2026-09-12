@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
@@ -182,23 +182,51 @@ describe('user-settings router', () => {
     expect(['env', 'default', 'override']).toContain(res.body.workspaceSource);
   });
 
+  /* #3175 layer 2 — surfaces isUserSettingsFileCorrupt() (layer 1) over the
+     API so the frontend banner (layer 3) has something to read. */
+  it('GET reports corruptSettingsFile=true after a total recovery failure, false once fixed', async () => {
+    const clean = await request(app).get('/api/user/settings');
+    expect(clean.body.corruptSettingsFile).toBe(false);
+
+    /* Total-failure path requires every `.bak.N` to also be unparseable —
+       earlier tests in this file may have left a valid one via PUT. */
+    const dir = dirname(userSettingsPath);
+    const base = basename(userSettingsPath);
+    for (const name of readdirSync(dir)) {
+      if (name.startsWith(`${base}.bak.`)) rmSync(join(dir, name), { force: true });
+    }
+    writeFileSync(userSettingsPath, '{ this is not valid json');
+    resetCache();
+    const corrupt = await request(app).get('/api/user/settings');
+    expect(corrupt.body.corruptSettingsFile).toBe(true);
+
+    // A subsequent successful write clears the flag on the next GET.
+    const saved = await request(app).put('/api/user/settings').send({ displayName: 'Repaired' });
+    expect(saved.body.corruptSettingsFile).toBe(false);
+    const after = await request(app).get('/api/user/settings');
+    expect(after.body.corruptSettingsFile).toBe(false);
+  });
+
   it('PUT ignores read-only fields submitted in the body', async () => {
     const res = await request(app).put('/api/user/settings').send({
       displayName: 'Adversary',
       apiKeyStatus: 'set', // can't be promoted by the client
       workspaceRoot: '/etc/secret', // can't be retargeted by the client
       workspaceSource: 'env',
+      corruptSettingsFile: true, // can't be forced by the client either
     });
 
     expect(res.status).toBe(200);
     // Echoed values come from the env-derived layer, not the body.
     expect(res.body.apiKeyStatus).toBe('unset');
     expect(res.body.workspaceRoot).not.toBe('/etc/secret');
+    expect(res.body.corruptSettingsFile).toBe(false);
 
     const onDisk = JSON.parse(readFileSync(userSettingsPath, 'utf8'));
     expect(onDisk.apiKeyStatus).toBeUndefined();
     expect(onDisk.workspaceRoot).toBeUndefined();
     expect(onDisk.workspaceSource).toBeUndefined();
+    expect(onDisk.corruptSettingsFile).toBeUndefined();
   });
 
   it('PUT rejects an out-of-range enum with 400', async () => {

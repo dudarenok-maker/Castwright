@@ -57,6 +57,7 @@ const SERVER_FIXTURE: UserSettings = {
   apiKeyStatus: 'unset',
   workspaceRoot: '/users/mike/workspace',
   workspaceSource: 'env',
+  corruptSettingsFile: false,
   backupEnabled: true,
   backupCadence: 'daily',
   backupRetention: 14,

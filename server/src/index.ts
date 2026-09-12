@@ -118,29 +118,26 @@ const runDir = resolveRunDir(repoRoot);
    isMainModule guard at the bottom of the file (mirrors the same pattern
    already used in scripts/bump-version.mjs). */
 /** #3174 (G4) — the boot-time `readUserSettings()` warm-up is detached
-    (`void bootWarmUserSettings()`); `readUserSettings()` itself does NOT
-    fall through to defaults when the read rejects instead of returning
-    (missing is fine — `readJson` returns `null` for that, and the caller
-    substitutes defaults). A reject can come from `JSON.parse` on a
-    genuinely malformed file, from `readFile` itself (a locked/unreadable
-    file — e.g. an antivirus or OneDrive hold at boot), or from the legacy-
-    settings migration's `copyFile` failing; nothing on that path catches
-    any of them. Before this wrapper existed that throw escaped as a
-    process-level unhandledRejection. This only makes the failure loud and
-    contained; it does NOT add recovery (`.bak` fallback, default
-    substitution, or a boot refusal) for a malformed file — that is a
-    separate design decision tracked in #3175. Extracted into its own
-    exported function (mirroring `runShutdownSequence` above) so the
-    containment is unit-testable without running the real boot sequence,
-    since `main()` itself only runs when this module is the directly
-    invoked entry point (see the `isDirectlyInvoked` guard at the bottom of
-    this file). */
+    (`void bootWarmUserSettings()`). Since #3175, `readUserSettings()` never
+    rejects for a MALFORMED file: it recovers from the newest parseable
+    `.bak.N`, or falls back to in-memory defaults with the corruption flag
+    set (a missing file was always fine — it reads as defaults). What can
+    still reject is `readFile`/`stat` itself (a locked/unreadable file —
+    e.g. an antivirus or OneDrive hold at boot) or the legacy-settings
+    migration's `copyFile` failing; nothing on that path catches those.
+    Before this wrapper existed such a throw escaped as a process-level
+    unhandledRejection. This only makes the failure loud and contained.
+    Extracted into its own exported function (mirroring `runShutdownSequence`
+    above) so the containment is unit-testable without running the real
+    boot sequence, since `main()` itself only runs when this module is the
+    directly invoked entry point (see the `isDirectlyInvoked` guard at the
+    bottom of this file). */
 export async function bootWarmUserSettings(): Promise<void> {
   try {
     await readUserSettings();
   } catch (err) {
     console.error(
-      '[server] user-settings.json could not be read at boot (it may be malformed, locked, or unreadable -- not auto-recovered; if it is malformed, see #3175)',
+      '[server] user-settings.json could not be read at boot (a malformed file recovers from its .bak.N backups or falls back to defaults on its own, so this is a locked/unreadable file or a failed legacy-settings migration)',
       err,
     );
   }
@@ -183,9 +180,11 @@ async function main(): Promise<void> {
   /* Warm the user-settings cache so sync resolvers (getResolvedSidecarUrl)
      see real values from disk before the first request lands.
      Fire-and-forget: a MISSING file falls through to defaults inside
-     readUserSettings(); a MALFORMED one does not (`readJson` rethrows
-     JSON.parse's failure) -- bootWarmUserSettings (#3174) is what makes
-     that failure loud and contained. See its own doc comment / #3175. */
+     readUserSettings(), and since #3175 so does a MALFORMED one (via its
+     `.bak.N` backups, else defaults + the corruption flag). Only a
+     locked/unreadable file or a failed legacy migration still rejects --
+     bootWarmUserSettings (#3174) is what makes that failure loud and
+     contained. See its own doc comment. */
   void bootWarmUserSettings();
 
   /* One-shot wipe-and-fresh for change-logs written before the
