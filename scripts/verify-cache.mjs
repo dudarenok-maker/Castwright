@@ -171,15 +171,6 @@ export const STEPS = [
            and leave the guard stale-green. Same #1847 trap as fixtures/**
            above, with the enumeration failure mode on top. */
         '.claude/skills/**',
-        /* .claude/agents/** is an input for the same reason .claude/skills/**
-           is: review-gate-mechanism.test.mjs reads the six role definitions as
-           TEXT at RUNTIME to check them against model-routing's role table.
-           Without this glob a definitions-only diff — flipping an `effort:`
-           value being the obvious one — prints test:hooks [cached] and runs
-           the guard on nothing, locally AND in cloud CI (ci-scope.mjs derives
-           from this same STEPS[]). The guard would certify the value it just
-           stopped checking. Same #1847 trap as fixtures/** above. */
-        '.claude/agents/**',
         /* Residual gap, accepted not fixed (#3010): review-gate-mechanism.test.mjs's
            skills-mirror drift guard compares `~/.agents/skills/` against what
            `main` has COMMITTED — via `readCommittedOnMain`/`git show main:<path>`
@@ -192,14 +183,23 @@ export const STEPS = [
            guard exists to check — the disk bytes are unchanged, so the cache hash
            matches. Additionally, the mirror itself (~/.agents/skills/) is shared
            machine state and can go stale independent of any tracked file changing:
-           if writeMirroredFile() throws partway through syncAgentSkills (lines
-           296-304), the mirror is left partially written with zero tracked file
-           changes in any worktree, so even the primary checkout's test:hooks can
-           print [cached] despite the mirror disagreeing with main. The gap
-           self-heals at an affected worktree's next real cache miss. Same #1847
+           a partial sync failure or out-of-band write can leave the mirror
+           desynchronised with no tracked file changes anywhere. At an affected
+           checkout's next real cache miss, the drift guard runs and goes RED —
+           but nothing is actually fixed until `npm run skills:sync` is run
+           successfully. Same #1847
            trap as fixtures/** above, but with no fix possible short of a new "git
            ref" input kind (rejected, disproportionate for this) or always running
            test:hooks (rejected, a permanent tax). */
+        /* .claude/agents/** is an input for the same reason .claude/skills/**
+           is: review-gate-mechanism.test.mjs reads the six role definitions as
+           TEXT at RUNTIME to check them against model-routing's role table.
+           Without this glob a definitions-only diff — flipping an `effort:`
+           value being the obvious one — prints test:hooks [cached] and runs
+           the guard on nothing, locally AND in cloud CI (ci-scope.mjs derives
+           from this same STEPS[]). The guard would certify the value it just
+           stopped checking. Same #1847 trap as fixtures/** above. */
+        '.claude/agents/**',
         /* docs/testing/** is an input because review-gate-mechanism.test.mjs's
            linkScanSet() now reads every .md file under this directory as TEXT
            at RUNTIME, alongside CLAUDE.md/CONTRIBUTING.md/.claude/skills/**
