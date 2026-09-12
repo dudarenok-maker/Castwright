@@ -12,7 +12,8 @@ import type { WhisperInstallState } from './whisper-install-detect.js';
 
 /* Every bootstrap under test gets the offline seams: no real supervisor hold,
    no real pip swap. */
-const OFFLINE: Pick<WhisperInstallOptions, 'holdSidecarFn' | 'restoreOrtFn'> = {
+const OFFLINE: Pick<WhisperInstallOptions, 'holdSidecarFn' | 'restoreOrtFn' | 'generationActiveFn'> = {
+  generationActiveFn: () => false,
   holdSidecarFn: (fn) => fn(),
   restoreOrtFn: async () => 'not-needed',
 };
@@ -162,6 +163,7 @@ describe('WhisperInstallBootstrap', () => {
       const calls: string[] = [];
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn,
         spawnFn: () => {
@@ -182,6 +184,7 @@ describe('WhisperInstallBootstrap', () => {
     it("an installer failure still releases the hold, still runs the ORT restore, and is the job's error", async () => {
       const calls: string[] = [];
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
         spawnFn: () => {
@@ -207,6 +210,7 @@ describe('WhisperInstallBootstrap', () => {
     it('already installed: never enters the hold, never spawns', async () => {
       const calls: string[] = [];
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'ready',
         spawnFn: () => {
@@ -224,6 +228,7 @@ describe('WhisperInstallBootstrap', () => {
     it("a refused hold (adopted sidecar, mid-respawn, …) is the job's error, and the installer never runs", async () => {
       let spawned = 0;
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
         spawnFn: () => {
@@ -245,6 +250,7 @@ describe('WhisperInstallBootstrap', () => {
       const calls: string[] = [];
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn,
         spawnFn: () => {
@@ -303,6 +309,7 @@ describe('WhisperInstallBootstrap', () => {
       const spawned: { cmd: string; args: string[] }[] = [];
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot,
         detectFn,
         spawnFn: (cmd, args) => {
@@ -338,6 +345,7 @@ describe('WhisperInstallBootstrap', () => {
       const spawned: string[] = [];
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot,
         detectFn,
         spawnFn: (cmd) => {
@@ -357,6 +365,7 @@ describe('WhisperInstallBootstrap', () => {
       const { repoRoot } = tempRepo('nvidia');
       const { fn: detectFn } = detectSequence(['not-installed', 'ready']);
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot,
         detectFn,
         spawnFn: (_cmd, args) =>
@@ -427,6 +436,7 @@ describe('WhisperInstallBootstrap', () => {
     it('installer FAILS + restore SUCCEEDS: reports the installer failure, says the runtime is intact, points at a retry', async () => {
       let restoreCalled = false;
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
         spawnFn: () => failingInstaller() as never,
@@ -455,6 +465,7 @@ describe('WhisperInstallBootstrap', () => {
 
     it('installer FAILS + restore FAILS: reports the installer failure AND names the runtime repair', async () => {
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
         spawnFn: () => failingInstaller() as never,
@@ -477,6 +488,7 @@ describe('WhisperInstallBootstrap', () => {
 
     it('installer SUCCEEDS + restore FAILS: reports that Whisper DID land and only the runtime needs repair', async () => {
       const b = new WhisperInstallBootstrap({
+        generationActiveFn: () => false,
         repoRoot: '/repo',
         detectFn: () => 'not-installed',
         spawnFn: () => makeFakeChild(0) as never,
