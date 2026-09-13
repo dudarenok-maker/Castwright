@@ -16,7 +16,11 @@ function mountStore(
     analyzerPhase1MinLagChapters: number | null;
     defaultAnalysisModel: string;
   }>,
-  ui?: Partial<{ selectedModel: string; selectedModelExplicit: boolean }>,
+  ui?: Partial<{
+    selectedModel: string;
+    selectedModelExplicit: boolean;
+    analyzerPhasePicks: Record<string, { phase0?: string; phase1?: string }>;
+  }>,
 ) {
   return configureStore({
     reducer: { account: accountSlice.reducer, ui: uiSlice.reducer },
@@ -187,6 +191,55 @@ describe('PhaseModelChip', () => {
         { selectedModel: 'qwen3.5:4b', selectedModelExplicit: false },
       );
       expect(screen.getByTestId('phase-model-chip-0').textContent).toContain('Gemma 4 31B');
+    });
+  });
+
+  describe('#3141 step 5 — per-run pick (PhaseModelSwap) takes display precedence', () => {
+    it('shows the per-run pick over the saved per-phase model when the split is on', () => {
+      renderChip(
+        { analyzerPhase0Model: 'gemma-4-31b-it', analyzerPhase1Model: 'gemini-3.1-flash-lite' },
+        { phaseId: 0, state: 'streaming', manuscriptId: 'm1' },
+        { analyzerPhasePicks: { m1: { phase0: 'qwen3.5:9b' } } },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.textContent).toContain('Qwen3.5 9B (local)');
+      expect(chip.textContent).not.toContain('Gemma');
+    });
+
+    it('shows the per-run pick even when no split is saved (a pick counts as split mode)', () => {
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 1, state: 'streaming', manuscriptId: 'm1' },
+        { selectedModel: 'gemini-2.5-flash', analyzerPhasePicks: { m1: { phase1: 'gemma-4-31b-it' } } },
+      );
+      const chip = screen.getByTestId('phase-model-chip-1');
+      expect(chip.textContent).toContain('Gemma 4 31B');
+      expect(chip.textContent).not.toContain('Gemini 2.5 Flash');
+    });
+
+    it('an explicit per-run override still wins over a phase pick', () => {
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 0, state: 'streaming', manuscriptId: 'm1' },
+        {
+          selectedModel: 'qwen3.5:4b',
+          selectedModelExplicit: true,
+          analyzerPhasePicks: { m1: { phase0: 'gemma-4-31b-it' } },
+        },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.textContent).toContain('Qwen3.5 4B');
+      expect(chip.textContent).not.toContain('Gemma');
+    });
+
+    it('ignores another manuscript\'s pick', () => {
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 0, state: 'streaming', manuscriptId: 'm2' },
+        { selectedModel: 'gemini-2.5-flash', analyzerPhasePicks: { m1: { phase0: 'gemma-4-31b-it' } } },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.textContent).toContain('Gemini 2.5 Flash');
     });
   });
 

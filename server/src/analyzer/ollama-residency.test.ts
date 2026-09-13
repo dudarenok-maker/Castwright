@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-vi.mock('../workspace/user-settings.js', () => ({
+vi.mock('../config/ollama-resolved.js', () => ({
   getResolvedOllamaUrl: () => 'http://localhost:11434',
 }));
 

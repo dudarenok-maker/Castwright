@@ -21,11 +21,10 @@ import {
   probeSidecarHealth,
   type SidecarHealthResult,
 } from './sidecar-health.js';
-import { getResolvedOllamaUrl } from '../workspace/user-settings.js';
+import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { resolveKeepAliveSeconds, hasKeepAliveOverride } from '../analyzer/ollama.js';
 import {
   getResolvedTtsModelKey,
-  getResolvedOllamaModel,
   getResolvedAnalysisEngine,
 } from '../workspace/user-settings.js';
 import { engineForModelKey, type TtsEngine } from '../tts/index.js';

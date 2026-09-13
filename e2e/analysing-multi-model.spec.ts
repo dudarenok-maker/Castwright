@@ -10,8 +10,9 @@
  *      is no longer in viewport, sticky bar IS).
  *   4. Clicking the sticky bar's Pause button transitions activeStream.state
  *      to 'paused' in Redux + flips the button label to "Resume analysis".
- *   5. Picking a new model in the Phase 0 swap dropdown dispatches
- *      saveAccountSettings with the right patch + surfaces the toast.
+ *   5. The Phase 0 swap dropdown renders read-only while a run is live
+ *      (#3141 step 5 — it's a per-run pick for the NEXT run, not a
+ *      settings write, so it has nothing to do mid-run).
  *
  * The mock analysis stream (src/mocks/canned-data.ts) drives all four phases
  * in ~7.6 s before advancing the stage to confirm — assertions race that
@@ -20,14 +21,6 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { bootFreshBookIntoAnalysing } from './helpers';
-
-async function readAccountSlice(page: Page) {
-  return await page.evaluate(() => {
-    const w = window as unknown as { __store__: { getState: () => unknown } };
-    const state = w.__store__.getState() as { account: Record<string, unknown> };
-    return state.account;
-  });
-}
 
 async function readAnalysisStream(page: Page) {
   return await page.evaluate(() => {
@@ -153,33 +146,26 @@ test.describe('plan 95 — analysing multi-model UI + sticky bar', () => {
     await expect(chip0).not.toContainText('Gemini');
   });
 
-  test('Phase 0 model swap writes the saveAccountSettings patch + surfaces the toast', async ({
+  test('Phase 0 model swap is read-only while a run is live (#3141 step 5 — per-run pick, not a settings write)', async ({
     page,
   }) => {
+    /* #3141 step 5 superseded this control's old behavior (dispatching
+       saveAccountSettings + a toast while the run kept streaming): the
+       swap now only ever applies to the NEXT run started from this view,
+       so it renders disabled — still showing the current pick — for the
+       duration of any live run. See analyzer-settings-ownership.spec.ts's
+       "a per-run phase pick does not change settings" for the idle-view
+       per-run-pick path this control actually drives. */
     await bootFreshBookIntoAnalysing(page);
     await page.getByRole('button', { name: /Start analysis/i }).click();
-    await expect(page.getByTestId('phase-model-swap-0')).toBeVisible({ timeout: 5_000 });
+    const swap0 = page.getByTestId('phase-model-swap-0');
+    await expect(swap0).toBeVisible({ timeout: 5_000 });
 
-    /* Capture the current persisted value (the default — null in the slice
-       since the user hasn't touched the picker yet). */
-    const before = await readAccountSlice(page);
-    expect(before.analyzerPhase0Model).toBeNull();
-
-    /* Pick a non-default model. The mock putUserSettings handler in
-       src/lib/api.ts persists the patch into the in-memory slice. */
-    await page.getByTestId('phase-model-swap-0').selectOption('gemini-3.1-flash-lite');
-
-    /* Toast: active-run wording mentions the in-flight chapter completing
-       on the previous model. */
-    await expect(page.getByTestId('phase-model-swap-0-toast')).toBeVisible();
-    await expect(page.getByTestId('phase-model-swap-0-toast')).toContainText(
-      /Applies from the next chapter/i,
+    await expect(swap0).toBeDisabled();
+    await expect(swap0).toHaveAttribute(
+      'title',
+      'A run is in progress — pick a model for the next run started from this view.',
     );
-
-    /* Slice reflects the new value. */
-    await expect
-      .poll(async () => (await readAccountSlice(page)).analyzerPhase0Model, { timeout: 5_000 })
-      .toBe('gemini-3.1-flash-lite');
   });
 
   test('live ticker shows "section M/N" sub-bar when mock emits sectionsDone/sectionsTotal', async ({

@@ -269,6 +269,12 @@ export interface AnalyseOpts {
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
       Sent as JSON body to POST /api/manuscripts/:id/analysis. */
   model?: string;
+  /** #3141 step 5 — per-run picks from the analysing view's PhaseModelSwap
+      control (never written to UserSettings). Take effect for this run only;
+      the server's phaseModel precedence (env → phaseModel → model → saved
+      per-phase settings → default) applies them ahead of `model` above. */
+  phase0Model?: string;
+  phase1Model?: string;
   /** Discard any cached partial progress for this manuscript before running.
       The "Start fresh" button in the analysing view sets this. */
   fresh?: boolean;
@@ -2873,14 +2879,21 @@ async function realAnalyseManuscript(
     onSeriesPrior,
     onWarning,
     model,
+    phase0Model,
+    phase1Model,
     fresh,
     allowStage1Shrink,
   } = opts;
-  const hasBody = model !== undefined || fresh !== undefined || allowStage1Shrink !== undefined;
+  const hasBody =
+    model !== undefined ||
+    phase0Model !== undefined ||
+    phase1Model !== undefined ||
+    fresh !== undefined ||
+    allowStage1Shrink !== undefined;
   const res = await fetch(`/api/manuscripts/${encodeURIComponent(manuscriptId)}/analysis`, {
     method: 'POST',
     headers: hasBody ? { 'Content-Type': 'application/json' } : undefined,
-    body: hasBody ? JSON.stringify({ model, fresh, allowStage1Shrink }) : undefined,
+    body: hasBody ? JSON.stringify({ model, phase0Model, phase1Model, fresh, allowStage1Shrink }) : undefined,
     signal,
   });
   if (!res.ok) {
@@ -7354,8 +7367,30 @@ async function mockPutGeminiKey(key: string | null): Promise<UserSettings> {
   return { ...MOCK_USER_SETTINGS };
 }
 
+/* #3141 step 2 — ollamaUrl and the three analyzer-phase fields moved to
+   Advanced Settings (configOverrides); the real PUT rejects them with 400
+   (server/src/routes/user-settings.ts RETIRED_ANALYZER_FIELDS). Mirrored
+   here so a mis-migrated caller fails the same way under
+   VITE_USE_MOCKS=true as it would against the real server. */
+const RETIRED_ANALYZER_FIELDS = [
+  'ollamaUrl',
+  'analyzerPhase0Model',
+  'analyzerPhase1Model',
+  'analyzerPhase1MinLagChapters',
+] as const;
+
 async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
   await wait(50);
+  const offending = RETIRED_ANALYZER_FIELDS.filter(
+    (field) => field in (patch as Record<string, unknown>),
+  );
+  if (offending.length > 0) {
+    throw new Error(
+      `User settings save failed (400): ${offending.join(', ')} ${
+        offending.length > 1 ? 'are' : 'is'
+      } managed in Advanced Settings and cannot be set here.`,
+    );
+  }
   /* Strip read-only fields a misbehaving caller might submit so the mock
      path enforces the same invariant as the server. */
   const {
@@ -7366,9 +7401,6 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     sidecarUrl,
     workspaceDirOverride,
     exportSyncFolder,
-    analyzerPhase0Model,
-    analyzerPhase1Model,
-    analyzerPhase1MinLagChapters,
     dualModelEnabled,
     analyzerKeepAliveByModel,
   } = patch;
@@ -7383,9 +7415,6 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         sidecarUrl,
         workspaceDirOverride,
         exportSyncFolder,
-        analyzerPhase0Model,
-        analyzerPhase1Model,
-        analyzerPhase1MinLagChapters,
         dualModelEnabled,
         analyzerKeepAliveByModel,
       }).filter(([, v]) => v !== undefined),
@@ -10610,6 +10639,9 @@ const mock = {
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
    record type from the same `../lib/api` surface as the other admin types. */
 export type { ResourceTelemetryRecord, AnalyzerEvalRecord } from './types';
+/* #3141 step 5 — re-export so tests can type analyseManuscript's mock return
+   from the same `../lib/api` surface instead of reaching into `./types`. */
+export type { AnalyseResponse } from './types';
 /* Device-auth — re-export so consumers import from one surface. */
 export type { PublicDevice } from './types';
 /* Re-export config types so the config slice + view import from a single source. */

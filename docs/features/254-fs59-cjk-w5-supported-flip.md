@@ -66,17 +66,17 @@ Both TTS engines render CJK acceptably:
   the Latin tranche, English personas per the fs-62 won't-fix precedent).
 
 **CJK attribution quality is analyzer-model-dependent** — there is no
-per-language analyzer auto-routing (the analyzer model is a per-phase user
-setting, `analyzerPhase0Model`/`analyzerPhase1Model`; see fs-44/settings
-docs), so this is an **operator recommendation**, not an enforced default:
+per-language analyzer auto-routing (the analyzer model is configured per-phase
+via Advanced Settings, `analyzer.phase0.model`/`analyzer.phase1.model`; see
+fs-44/settings docs), so this is an **operator recommendation**, not an enforced default:
 
 | Analyzer model | Recall | Coverage | Precision |
 |---|---|---|---|
 | Local Qwen (recommended for CJK) | ~62% | ~72% | 100% |
 | General lite default | weaker, unstable | — | — |
 
-**Operator recommendation:** select a local Qwen analyzer model
-(`analyzerPhase0Model`/`analyzerPhase1Model`) for CJK books. The general lite
+**Operator recommendation:** select a local Qwen analyzer model in Advanced Settings
+(`analyzer.phase0.model` and `analyzer.phase1.model`) for CJK books. The general lite
 default is measurably weaker and less stable on CJK attribution — precision
 stays perfect (no false character assignments) but recall/coverage suffer, and
 the demotion gate (below) can trip more often as a result.
@@ -207,7 +207,7 @@ a local Qwen analyzer model per the operator recommendation above.
   only opens zh/ja; fs-70 is the broader XTTS-only-language-set follow-up.
 - **Per-language analyzer auto-routing** — deliberately not built. The Qwen
   recommendation for CJK stays a documented operator choice
-  (`analyzerPhase0Model`/`analyzerPhase1Model`), not an enforced default.
+  (`analyzer.phase0.model` / `analyzer.phase1.model` in Advanced Settings), not an enforced default.
 - **Kokoro CJK support** — Kokoro's voice catalog stays English-only
   (fs-69, [#1302](https://github.com/dudarenok-maker/Castwright/issues/1302));
   unaffected by this flip.

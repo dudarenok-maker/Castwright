@@ -52,6 +52,7 @@ function makeStore({
     voiceReadinessGate: null,
     cloneReadinessGate: null,
     startGenerationPending: false,
+    analyzerPhasePicks: {},
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,

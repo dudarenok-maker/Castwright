@@ -118,8 +118,9 @@ owner: null
   describe blocks are removed (no reducer exists for them any more).
 - **e2e:** not added — this removes a settings control rather than adding
   new UI-visible behaviour; the existing Model Manager / Advanced Settings
-  e2e coverage (`e2e/model-manager-analyzer-knobs.spec.ts`,
-  `e2e/advanced-settings.spec.ts`) doesn't reference the removed checkbox, so
+  e2e coverage at the time (`e2e/model-manager-analyzer-knobs.spec.ts`, later
+  removed by #3141 step 6 when the fields it covered became read-only;
+  `e2e/advanced-settings.spec.ts`) didn't reference the removed checkbox, so
   no spec update was needed.
 
 ### Manual acceptance walkthrough

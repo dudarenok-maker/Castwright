@@ -10,6 +10,7 @@
    analysis-pipelining.test.ts so no network / Ollama calls are made. */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync, existsSync } from 'node:fs';
 import { runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
 import { clearAnalysisCache } from '../store/analysis-cache.js';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
@@ -19,6 +20,7 @@ import { putManuscript, removeManuscript } from '../store/manuscripts.js';
 import { GeminiContentBlockedError } from '../analyzer/errors.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
 import { FallbackAnalyzer } from '../analyzer/index.js';
+import { USER_SETTINGS_PATH } from '../workspace/user-settings.js';
 
 /* ── spy analyzer / selection helpers (mirrors analysis-pipelining.test.ts) */
 
@@ -162,22 +164,30 @@ function registerStubManuscript(id: string, count: number): void {
 
 /* ── vi.mock for select-analyzer so the route picks our spy analyzers. ── */
 
+/* #3141 step 4 — the route-level suite below also needs a Phase 0 override
+   (so the POST route never constructs a real Ollama/Gemini analyzer) and a
+   record of every call's opts, so a test can assert what the route parsed
+   out of req.body without re-implementing the parsing itself. */
 vi.mock('../analyzer/select-analyzer.js', async () => {
   const actual = await vi.importActual<typeof import('../analyzer/select-analyzer.js')>(
     '../analyzer/select-analyzer.js',
   );
   return {
     ...actual,
-    selectAnalyzerForPhase: (opts: { phase: 'phase0' | 'phase1' }) => {
+    selectAnalyzerForPhase: (opts: { phase: 'phase0' | 'phase1'; phaseModel?: string; model?: string }) => {
       const g = globalThis as Record<string, unknown>;
+      (g.__phase_model_test_calls as unknown[] | undefined)?.push({ ...opts });
       if (opts.phase === 'phase1' && g.__phase_model_test_phase1_selection) {
         return g.__phase_model_test_phase1_selection;
+      }
+      if (opts.phase === 'phase0' && g.__phase_model_test_phase0_selection) {
+        return g.__phase_model_test_phase0_selection;
       }
       return actual.selectAnalyzerForPhase(
         opts as Parameters<typeof actual.selectAnalyzerForPhase>[0],
       );
     },
-    isPerPhaseModelSelectionActive: () => {
+    isPerPhaseModelSelectionActive: (_hasPerRunPhasePick?: boolean) => {
       /* Always return false (sequential mode) — keeps Phase 1 simple and
          deterministic without needing to fiddle with lag semaphores. */
       return false;
@@ -193,8 +203,34 @@ function clearPhase1Selection(): void {
   delete (globalThis as Record<string, unknown>).__phase_model_test_phase1_selection;
 }
 
+function setPhase0Selection(sel: AnalyzerSelection): void {
+  (globalThis as Record<string, unknown>).__phase_model_test_phase0_selection = sel;
+}
+
+function clearPhase0Selection(): void {
+  delete (globalThis as Record<string, unknown>).__phase_model_test_phase0_selection;
+}
+
+interface CapturedSelectorCall {
+  phase: 'phase0' | 'phase1';
+  phaseModel?: string;
+  model?: string;
+}
+
+function startCapturingSelectorCalls(): CapturedSelectorCall[] {
+  const calls: CapturedSelectorCall[] = [];
+  (globalThis as Record<string, unknown>).__phase_model_test_calls = calls;
+  return calls;
+}
+
+function stopCapturingSelectorCalls(): void {
+  delete (globalThis as Record<string, unknown>).__phase_model_test_calls;
+}
+
 afterEach(() => {
   clearPhase1Selection();
+  clearPhase0Selection();
+  stopCapturingSelectorCalls();
 });
 
 /* ── captured-events helper ── */
@@ -385,6 +421,57 @@ describe('phase events name the effective model after a silent local→gemini fa
       expect(phase0Models, 'phase-0 events must name the effective Gemini fallback model').toContain(
         FALLBACK_MODEL,
       );
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+    }
+  }, 60_000);
+});
+
+/* ── Suite: the route honours a per-run phase1Model from the request body
+   (#3141 step 4) ──────────────────────────────────────────────────────── */
+
+describe('POST /:id/analysis honours a per-run phase1Model (#3141 step 4)', () => {
+  it('routes req.body.phase1Model into the Phase 1 selector as phaseModel, and never touches user-settings.json', async () => {
+    const express = (await import('express')).default;
+    const supertest = (await import('supertest')).default;
+    const { analysisRouter } = await import('./analysis.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/manuscripts', analysisRouter);
+
+    const manuscriptId = `test-route-phase1model-${Date.now()}-${Math.random()}`;
+    registerStubManuscript(manuscriptId, 1);
+
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+
+    setPhase0Selection(buildSelection(buildSpyPhase0Analyzer(), 'phase0-route-test-model'));
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-route-test-model'));
+    const calls = startCapturingSelectorCalls();
+
+    const settingsBefore = existsSync(USER_SETTINGS_PATH) ? readFileSync(USER_SETTINGS_PATH) : null;
+
+    try {
+      const res = await supertest(app)
+        .post(`/api/manuscripts/${manuscriptId}/analysis`)
+        .send({ fresh: true, phase1Model: 'route-test-phase1-override' })
+        .buffer(true);
+      expect(res.status).toBe(200);
+
+      const phase0Call = calls.find((c) => c.phase === 'phase0');
+      const phase1Call = calls.find((c) => c.phase === 'phase1');
+      expect(phase0Call, 'route must call selectAnalyzerForPhase for phase0').toBeDefined();
+      expect(phase0Call?.phaseModel, 'no phase0Model was sent, so opts.phaseModel must be undefined').toBeUndefined();
+      expect(phase1Call, 'route must call selectAnalyzerForPhase for phase1').toBeDefined();
+      expect(phase1Call?.phaseModel).toBe('route-test-phase1-override');
+
+      const settingsAfter = existsSync(USER_SETTINGS_PATH) ? readFileSync(USER_SETTINGS_PATH) : null;
+      expect(
+        settingsAfter,
+        'a per-run phase1Model must never be written to user-settings.json',
+      ).toEqual(settingsBefore);
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);

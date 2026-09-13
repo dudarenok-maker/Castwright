@@ -46,7 +46,7 @@ const SERVER_FIXTURE: UserSettings = {
   minorCastMinLines: 3,
   analyzerPhase0Model: null,
   analyzerPhase1Model: null,
-  analyzerPhase1MinLagChapters: null,
+  analyzerPhase1MinLagChapters: 10,
   apiKeyStatus: 'unset',
   workspaceRoot: '/users/mike/workspace',
   workspaceSource: 'env',

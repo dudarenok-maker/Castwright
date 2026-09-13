@@ -27,7 +27,8 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
-import { getResolvedGeminiApiKey, getResolvedOllamaModel } from '../workspace/user-settings.js';
+import { getResolvedGeminiApiKey } from '../workspace/user-settings.js';
+import { getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { geminiRateLimiter } from './rate-limit.js';
 import { stripCodeFences } from './gemini.js';
 import { readPrompt } from '../config/prompts.js';

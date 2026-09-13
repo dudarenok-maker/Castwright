@@ -45,9 +45,11 @@ vi.mock('../workspace/user-settings.js', () => ({
   getResolvedAnalysisEngine: () => getResolvedAnalysisEngine(),
   getResolvedGeminiApiKey: () => getResolvedGeminiApiKey(),
   getResolvedSetupCompletedAt: () => getResolvedSetupCompletedAt(),
-  getResolvedOllamaModel: () => getResolvedOllamaModel(),
   writeSetupCompletedAt: (ts: string) => writeSetupCompletedAt(ts),
   readConfigOverrides: () => ({}),
+}));
+vi.mock('../config/ollama-resolved.js', () => ({
+  getResolvedOllamaModel: () => getResolvedOllamaModel(),
 }));
 
 import { setupReadinessRouter } from './setup-readiness.js';

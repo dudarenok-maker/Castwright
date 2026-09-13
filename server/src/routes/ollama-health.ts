@@ -9,7 +9,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../workspace/user-settings.js';
+import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import {
   resolveAnalyzerNumCtx,
   resolveAnalyzerNumGpu,

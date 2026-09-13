@@ -33,8 +33,10 @@ vi.mock('@google/genai', () => ({
 let mockApiKey: string | null = 'test-key';
 vi.mock('../workspace/user-settings.js', () => ({
   getResolvedGeminiApiKey: () => mockApiKey,
-  getResolvedOllamaModel: () => 'llama2',
   readConfigOverrides: () => ({}),
+}));
+vi.mock('../config/ollama-resolved.js', () => ({
+  getResolvedOllamaModel: () => 'llama2',
 }));
 
 // vi.hoisted: this test file has a static top-level `import ... from './voice-style.js'`
@@ -258,7 +260,7 @@ describe('persona generation config', () => {
   });
 
   it('resolvePersonaLocalModel: blank inherits the analyzer model; explicit wins', async () => {
-    const { getResolvedOllamaModel } = await import('../workspace/user-settings.js');
+    const { getResolvedOllamaModel } = await import('../config/ollama-resolved.js');
     expect(resolvePersonaLocalModel()).toBe(getResolvedOllamaModel()); // blank ⇒ inherit
     process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:9b';
     expect(resolvePersonaLocalModel()).toBe('qwen3.5:9b');

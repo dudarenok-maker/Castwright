@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { PrimaryButton, Checkbox } from './primitives';
-import { FieldRow, GeminiKeyField, analyzerModelLabel } from './account-forms';
+import { FieldRow, ReadOnlyRow, GeminiKeyField, analyzerModelLabel } from './account-forms';
 import {
   SettingsAccordion,
   SettingsSection,
@@ -30,6 +30,30 @@ import { isPrivateHostUrl } from '../lib/sidecar-url';
 import { OllamaInstall } from './ollama-install';
 import { ModelPullStatus } from './model-pull-status';
 
+/* #3141 step 3 — read-only display for a field whose editing moved to
+   Advanced Settings (ollamaUrl, the two per-phase analyzer models, the
+   phase-1 min lag). Every save from this form used to include these four
+   values; the server now rejects them with 400, so they render here as
+   text with a link to where they're actually edited. */
+function AdvancedSettingsValue({ testId, value }: { testId: string; value: string }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <span
+        data-testid={testId}
+        className="px-3 py-2 rounded-xl border border-ink/10 bg-ink/3 text-sm text-ink/70"
+      >
+        {value}
+      </span>
+      <a
+        href="#/advanced"
+        className="text-xs font-medium text-magenta hover:underline min-h-[44px] fine-pointer:min-h-0 inline-flex items-center"
+      >
+        Edit in Advanced Settings →
+      </a>
+    </div>
+  );
+}
+
 /* Synthetic ConfigGroup descriptors — these sections have no per-knob
    override tracking, so overriddenCount is always 0 and risk is 'low'.
    All sections default open (collapsedByDefault: false). */
@@ -43,7 +67,7 @@ const GROUP_DEFAULTS: ConfigGroup = {
 const GROUP_ANALYZER_SPLIT: ConfigGroup = {
   id: 'model-analyzer-split',
   label: 'Two-model analyzer split (advanced)',
-  help: 'Optional. By default both analysis passes run on your default analysis model. Pick a model for EACH phase to split the work: Phase 0 (cast detection) and Phase 1 (sentence attribution) then run on different models concurrently, with Phase 1 starting a few chapters behind Phase 0 (the minimum chapter lag below). This spreads load across two free-tier rate-limit buckets — e.g. Gemma 4 31B (14,400/day) for cast detection and Gemini 3.1 Flash Lite (500/day) for attribution — and finishes sooner. Leave both blank for the single-model default. Server env vars (ANALYZER_PHASE{0,1}_MODEL / ANALYZER_PHASE1_MIN_LAG_CHAPTERS) still override for ops triage.',
+  help: 'Optional. By default both analysis passes run on your default analysis model. Split the work by picking a model for EACH phase — Phase 0 (cast detection) and Phase 1 (sentence attribution) then run on different models concurrently, with Phase 1 starting a few chapters behind Phase 0 (the minimum chapter lag below). This spreads load across two free-tier rate-limit buckets — e.g. Gemma 4 31B (14,400/day) for cast detection and Gemini 3.1 Flash Lite (500/day) for attribution — and finishes sooner. These three fields are shown below read-only; edit them in Advanced Settings.',
   risk: 'low',
   collapsedByDefault: false,
 };
@@ -113,16 +137,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
   const [allowCloudFallback, setAllowCloudFallback] = useState<boolean>(
     account.allowCloudFallback ?? true,
   );
-  const [ollamaUrl, setOllamaUrl] = useState(account.ollamaUrl);
-  const [analyzerPhase0Model, setAnalyzerPhase0Model] = useState<string | null>(
-    account.analyzerPhase0Model ?? null,
-  );
-  const [analyzerPhase1Model, setAnalyzerPhase1Model] = useState<string | null>(
-    account.analyzerPhase1Model ?? null,
-  );
-  const [analyzerPhase1MinLagChapters, setAnalyzerPhase1MinLagChapters] = useState<number | null>(
-    account.analyzerPhase1MinLagChapters ?? null,
-  );
   const [autoStartSidecar, setAutoStartSidecar] = useState<boolean>(
     account.autoStartSidecar ?? true,
   );
@@ -141,10 +155,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     setSidecarUrl(account.sidecarUrl);
     setAnalysisEngine(account.analysisEngine);
     setAllowCloudFallback(account.allowCloudFallback ?? true);
-    setOllamaUrl(account.ollamaUrl);
-    setAnalyzerPhase0Model(account.analyzerPhase0Model ?? null);
-    setAnalyzerPhase1Model(account.analyzerPhase1Model ?? null);
-    setAnalyzerPhase1MinLagChapters(account.analyzerPhase1MinLagChapters ?? null);
     setAutoStartSidecar(account.autoStartSidecar ?? true);
     setDualModelEnabled(account.dualModelEnabled ?? false);
     setGenerationWorkers(account.generationWorkers ?? 1);
@@ -157,10 +167,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     account.sidecarUrl,
     account.analysisEngine,
     account.allowCloudFallback,
-    account.ollamaUrl,
-    account.analyzerPhase0Model,
-    account.analyzerPhase1Model,
-    account.analyzerPhase1MinLagChapters,
     account.autoStartSidecar,
     account.dualModelEnabled,
     account.generationWorkers,
@@ -194,10 +200,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
       sidecarUrl !== account.sidecarUrl ||
       analysisEngine !== account.analysisEngine ||
       allowCloudFallback !== (account.allowCloudFallback ?? true) ||
-      ollamaUrl !== account.ollamaUrl ||
-      analyzerPhase0Model !== (account.analyzerPhase0Model ?? null) ||
-      analyzerPhase1Model !== (account.analyzerPhase1Model ?? null) ||
-      analyzerPhase1MinLagChapters !== (account.analyzerPhase1MinLagChapters ?? null) ||
       dualModelEnabled !== (account.dualModelEnabled ?? false) ||
       generationWorkers !== (account.generationWorkers ?? 1) ||
       autoStartDirty
@@ -211,10 +213,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     sidecarUrl,
     analysisEngine,
     allowCloudFallback,
-    ollamaUrl,
-    analyzerPhase0Model,
-    analyzerPhase1Model,
-    analyzerPhase1MinLagChapters,
     dualModelEnabled,
     generationWorkers,
     autoStartDirty,
@@ -236,10 +234,6 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
       sidecarUrl,
       analysisEngine,
       allowCloudFallback,
-      ollamaUrl,
-      analyzerPhase0Model,
-      analyzerPhase1Model,
-      analyzerPhase1MinLagChapters,
       autoStartSidecar,
       dualModelEnabled,
       generationWorkers,
@@ -251,7 +245,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     }
   };
 
-  const analyzerSplitOn = !!(analyzerPhase0Model || analyzerPhase1Model);
+  const analyzerSplitOn = !!(account.analyzerPhase0Model || account.analyzerPhase1Model);
 
   const body = (
     <>
@@ -310,14 +304,14 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             <>
               <span className="font-semibold text-emerald-700">Currently ON</span> — Phase 0:{' '}
               <span className="font-medium text-ink">
-                {analyzerModelLabel(analyzerPhase0Model)}
+                {analyzerModelLabel(account.analyzerPhase0Model)}
               </span>{' '}
               · Phase 1:{' '}
               <span className="font-medium text-ink">
-                {analyzerModelLabel(analyzerPhase1Model)}
+                {analyzerModelLabel(account.analyzerPhase1Model)}
               </span>{' '}
-              · lag {analyzerPhase1MinLagChapters ?? 10} chapter
-              {(analyzerPhase1MinLagChapters ?? 10) === 1 ? '' : 's'}.
+              · lag {account.analyzerPhase1MinLagChapters} chapter
+              {account.analyzerPhase1MinLagChapters === 1 ? '' : 's'}.
             </>
           ) : (
             <>
@@ -330,80 +324,33 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             </>
           )}
         </p>
-        <FieldRow
+        <ReadOnlyRow
           label="Phase 0 model (cast detection)"
-          sublabel="Drives the cast-roster pass. Gemma 4 31B is the recommended default — high free-tier headroom (14,400/day) and strong at character identification."
+          sublabel="Drives the cast-roster pass. Now edited in Advanced Settings."
         >
-          <select
-            value={analyzerPhase0Model ?? ''}
-            onChange={(e) => setAnalyzerPhase0Model(e.target.value === '' ? null : e.target.value)}
-            data-testid="account-analyzer-phase0-model"
-            className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-          >
-            <option value="">(use server default)</option>
-            {analyzerModelGroups.map((g) => (
-              <optgroup key={g.engine} label={g.label}>
-                {g.models.map((m) => (
-                  <option key={m.id} value={m.id} title={m.hint}>
-                    {m.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </FieldRow>
-        <FieldRow
-          label="Phase 1 model (attribution)"
-          sublabel="Drives the per-sentence speaker-attribution pass. Gemini 3.1 Flash Lite is the recommended default — fast, comfortably parses a novel in the 500/day free-tier bucket."
-        >
-          <select
-            value={analyzerPhase1Model ?? ''}
-            onChange={(e) => setAnalyzerPhase1Model(e.target.value === '' ? null : e.target.value)}
-            data-testid="account-analyzer-phase1-model"
-            className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-          >
-            <option value="">(use server default)</option>
-            {analyzerModelGroups.map((g) => (
-              <optgroup key={g.engine} label={g.label}>
-                {g.models.map((m) => (
-                  <option key={m.id} value={m.id} title={m.hint}>
-                    {m.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </FieldRow>
-        <FieldRow
-          label="Phase 1 minimum chapter lag"
-          sublabel="0 releases the lag; 10 anchors attribution to the roster-author model's interpretive baseline (recommended). Leave blank to use the server default."
-        >
-          <input
-            type="number"
-            min={0}
-            max={50}
-            step={1}
-            value={
-              analyzerPhase1MinLagChapters === null || analyzerPhase1MinLagChapters === undefined
-                ? ''
-                : analyzerPhase1MinLagChapters
-            }
-            onChange={(e) => {
-              const raw = e.target.value;
-              if (raw === '') {
-                setAnalyzerPhase1MinLagChapters(null);
-                return;
-              }
-              const parsed = parseInt(raw, 10);
-              if (Number.isFinite(parsed)) {
-                setAnalyzerPhase1MinLagChapters(Math.max(0, Math.min(50, parsed)));
-              }
-            }}
-            placeholder="(use server default)"
-            data-testid="account-analyzer-phase1-min-lag"
-            className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
+          <AdvancedSettingsValue
+            testId="account-analyzer-phase0-model"
+            value={analyzerModelLabel(account.analyzerPhase0Model, 'Not set')}
           />
-        </FieldRow>
+        </ReadOnlyRow>
+        <ReadOnlyRow
+          label="Phase 1 model (attribution)"
+          sublabel="Drives the per-sentence speaker-attribution pass. Now edited in Advanced Settings."
+        >
+          <AdvancedSettingsValue
+            testId="account-analyzer-phase1-model"
+            value={analyzerModelLabel(account.analyzerPhase1Model, 'Not set')}
+          />
+        </ReadOnlyRow>
+        <ReadOnlyRow
+          label="Phase 1 minimum chapter lag"
+          sublabel="Now edited in Advanced Settings."
+        >
+          <AdvancedSettingsValue
+            testId="account-analyzer-phase1-min-lag"
+            value={String(account.analyzerPhase1MinLagChapters)}
+          />
+        </ReadOnlyRow>
       </SettingsSection>
 
       <SettingsSection group={GROUP_VOICE_ENGINE} overriddenCount={0}>
@@ -517,20 +464,14 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             }
           />
         </FieldRow>
-        <FieldRow
+        <ReadOnlyRow
           label="Ollama URL"
           sublabel={
-            'Local Ollama daemon endpoint. Default: http://localhost:11434. The Ollama model tag is whatever you pick above under "Analysis model" — pull it once with `ollama pull <tag>` before first run.'
+            'Local Ollama daemon endpoint. The Ollama model tag is whatever you pick above under "Analysis model" — pull it once with `ollama pull <tag>` before first run. Now edited in Advanced Settings.'
           }
         >
-          <input
-            type="text"
-            value={ollamaUrl}
-            onChange={(e) => setOllamaUrl(e.target.value)}
-            placeholder="http://localhost:11434"
-            className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-          />
-        </FieldRow>
+          <AdvancedSettingsValue testId="account-ollama-url" value={account.ollamaUrl} />
+        </ReadOnlyRow>
         <GeminiKeyField
           status={account.apiKeyStatus}
           onSave={(key) => dispatch(saveGeminiApiKey(key))}

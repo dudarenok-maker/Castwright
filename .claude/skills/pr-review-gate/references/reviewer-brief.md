@@ -73,6 +73,22 @@ recite:
     missing-try/catch status-corruption bug, both already found and fixed
     in the design doc's own round-2/3 history). Checkable: does the brief
     cite the design doc by path/commit, not just restate a summary of it?
+13. **A fix written to the reported repro rather than to the invariant it
+    violated** — the fix satisfies the finding's exact scenario and passes
+    its paired test, but breaks the configurations the finding did not happen
+    to name. The bug is one level of abstraction higher than the fix targets:
+    the invariant itself, not one path that violates it. The regression test
+    inherited the repro's own blind spot by hard-coding the values the repro
+    held fixed, so a future regression that substitutes a different value is
+    not caught (PR #3192 C2→C3: a fix for "when only Phase 1 is picked, Phase 0
+    should get the account default" was written to that exact repro,
+    hard-coding `analyzerPhase{0,1}Model: null`, and broke the wider
+    invariant "a saved Advanced Settings override should never be discarded by
+    a pick on a different phase"; the fix conditioned on whether the *other*
+    phase was picked, not on whether this phase already had a model the server
+    would resolve). Checkable: does the fix's condition name the invariant,
+    or the repro's state? Does the paired test vary the conditions the repro
+    held fixed?
 
 ### Keeping the catalogue current
 
