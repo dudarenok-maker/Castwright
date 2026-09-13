@@ -101,7 +101,12 @@ SDK `@google/genai` 2.19.0. `D` = `server/node_modules/@google/genai/dist/genai.
      - **3.5 Flash-Lite and 3.1 Flash-Lite:** `minimal` / `low` / `medium` / `high` (`minimal` is the default).
      - **3.1 Pro:** `low` / `medium` / `high`, with no `minimal`.
      - **No off on 3.x.** Thinking page: "You cannot disable thinking for Gemini 3.1 Pro. Gemini 3 Flash and Flash-Lite also do not support full thinking-off."
-     - **Conflicting default statements for 3.8 / 3.7 Flash.** The owner-review read recorded `low` on the thinking page and `medium` on the 3.8 page (latest-model: "Medium (default): Best quality for most tasks."). A second fetch of the thinking page the same day read its table as `medium` (Default) for "Gemini 3.8 & 3.7 Flash". So the pages changed between reads, or one read misread the table. Either way nothing may depend on a default: `model default` omits the field.
+     - **Defaults, settled: 3.8 / 3.7 Flash `medium`.** The thinking page's table, read twice on 2026-09-13, marks the default as:
+       - `medium` for 3.8 & 3.7 Flash, and for 3.6 & 3.5 Flash;
+       - `minimal` for 3.5 & 3.1 Flash-Lite;
+       - `high` for 3.1 Pro.
+
+       The 3.8 page agrees ("Medium (default): Best quality for most tasks."). An earlier owner-review read that recorded `low` for 3.8 / 3.7 was wrong. The plan uses these defaults only to gate reasoning-level overflow fixes (`defaultLevel`); the wire still omits the field at `model default`.
      - **`thinkingBudget` is still accepted for back-compat** (thinking page: "While `thinkingBudget` is accepted for backwards compatibility, using it with Gemini 3 Pro may result in unexpected performance."; gemini-3 page: "`thinking_budget` is still supported for backward compatibility, but we recommend migrating to `thinking_level`"). **The plan no longer uses it:** P9 is retired, Gemini 2.5 ids get `model default` only, and nothing sends `thinkingBudget`. The 2.5 budget facts above are kept as history only.
      - **Both fields → 400.** gemini-3 page: "You cannot use both `thinking_level` and the legacy `thinking_budget` parameter in the same request. Doing so will return a 400 error."
 3. **models.list `Model`** fields (`D:10790-10841`): name, displayName, description, version, inputTokenLimit, outputTokenLimit, supportedActions, temperature, maxTemperature, topP, topK, `thinking?: boolean`. No output-modality field ⇒ filter = supportedActions includes generateContent AND name excludes `embedding|-tts|-image|-live|imagen|veo|aqa`.

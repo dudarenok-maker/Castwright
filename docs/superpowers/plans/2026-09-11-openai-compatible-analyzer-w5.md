@@ -16,7 +16,7 @@
 
 ### PR 5a — Reasoning levels, control styles, and their Test coverage
 
-- **Branch:** `feat/server,frontend-3084-w5a-reasoning` — `node scripts/wt-new.mjs feat/server,frontend-3084-w5a-reasoning`.
+- **Branch:** `feat/server-3084-w5a-reasoning` — `node scripts/wt-new.mjs feat/server-3084-w5a-reasoning`.
 - **Delivers:** `server/src/analyzer/reasoning.ts` (levels per engine family and endpoint control style, Gemini per-model table, wire fragments, control descriptions); `analyzerReasoningByEngine` user setting (Ollama and Gemini, each keyed by model id; P18) and endpoint `reasoning` validation; every transport sends the resolved level, with `includeThoughts` beside any Gemini level that thinks (P19); the Test action adds P7's level step (acceptance only) and keys schema probes by level; the pre-run check refuses a `rejected` level, or a stored level the rules no longer offer (P17), for analysis runs and persona generation; catalog entries carry `offeredReasoningLevels`; the reasoning-overflow message names the actual control; Advanced Settings and the endpoint form offer only offered levels.
 - **Must NOT change:** today's wire defaults — Ollama still sends `think: false` for an untouched install; Gemini and endpoints send no reasoning field for an untouched install. No new `FailureCode`. No custom-payload code (PR 5b). No structured-output default change.
 - **Entry:** waves 1–4 merged; `git grep -n -E "ReasoningLevel|extraParams" server/src/analyzer/runner` prints nothing (wave 1 declared neither; Task 5.1 adds them); W3c's `runModelTest`, `plannedTestRequestCount`, `assertConfiguredCapabilitiesAllowed` and the catalog route exist.
@@ -145,30 +145,39 @@ describe('endpoint control styles', () => {
 describe('GEMINI_REASONING_TABLE — 3.x Flash family only (F2, 2026-09-13); 2.5 ids get model default only', () => {
   const THREE_X_FULL: ReasoningLevel[] = ['model-default', 'minimal', 'low', 'medium', 'high'];
   const NO_MINIMAL: ReasoningLevel[] = ['model-default', 'low', 'medium', 'high'];
-  it.each<[string, string | undefined, ReasoningLevel[]]>([
-    ['gemini-3.6-flash', 'thinkingLevel', THREE_X_FULL],
-    ['gemini-3.5-flash', 'thinkingLevel', THREE_X_FULL],
-    ['gemini-3-flash-preview', 'thinkingLevel', THREE_X_FULL],
-    ['gemini-3.5-flash-lite', 'thinkingLevel', THREE_X_FULL],
-    ['gemini-3.1-flash-lite', 'thinkingLevel', THREE_X_FULL],
-    ['gemini-3.8-flash', 'thinkingLevel', NO_MINIMAL],
-    ['gemini-3.7-flash', 'thinkingLevel', NO_MINIMAL],
-    ['gemini-3.1-pro-preview', 'thinkingLevel', NO_MINIMAL],
-    ['gemma-4-31b-it', 'gemmaOnOff', ['model-default', 'off', 'on']],
-    ['gemma-4-26b-a4b-it', 'gemmaOnOff', ['model-default', 'off', 'on']],
-    ['models/gemini-3.6-flash', 'thinkingLevel', THREE_X_FULL],
-    ['gemini-3.6-flash-lite', undefined, ['model-default']],
-    ['gemini-9-ultra', undefined, ['model-default']],
+  /* defaultLevel — the level Google's docs name as each model's own default (review item 2, 2026-09-13):
+     verified on ai.google.dev/gemini-api/docs/generate-content/thinking, two independent reads 2026-09-13.
+     Used only to decide whether a model-default overflow still has a lower rung to suggest (Task 5.5b);
+     the wire itself keeps omitting the field at model-default (unchanged). */
+  it.each<[string, string | undefined, ReasoningLevel[], ReasoningLevel | undefined]>([
+    ['gemini-3.6-flash', 'thinkingLevel', THREE_X_FULL, 'medium'],
+    ['gemini-3.5-flash', 'thinkingLevel', THREE_X_FULL, 'medium'],
+    ['gemini-3-flash-preview', 'thinkingLevel', THREE_X_FULL, 'medium'],
+    ['gemini-3.5-flash-lite', 'thinkingLevel', THREE_X_FULL, 'minimal'],
+    ['gemini-3.1-flash-lite', 'thinkingLevel', THREE_X_FULL, 'minimal'],
+    ['gemini-3.8-flash', 'thinkingLevel', NO_MINIMAL, 'medium'],
+    ['gemini-3.7-flash', 'thinkingLevel', NO_MINIMAL, 'medium'],
+    ['gemini-3.1-pro-preview', 'thinkingLevel', NO_MINIMAL, 'high'],
+    ['gemma-4-31b-it', 'gemmaOnOff', ['model-default', 'off', 'on'], undefined],
+    ['gemma-4-26b-a4b-it', 'gemmaOnOff', ['model-default', 'off', 'on'], undefined],
+    ['models/gemini-3.6-flash', 'thinkingLevel', THREE_X_FULL, 'medium'],
+    ['gemini-3.6-flash-lite', undefined, ['model-default'], undefined],
+    ['gemini-9-ultra', undefined, ['model-default'], undefined],
     /* F2 — 2.5 is retired from the table; a 2.5 id gets model-default only, exactly like an unknown id. */
-    ['gemini-2.5-flash', undefined, ['model-default']],
-    ['gemini-2.5-flash-lite', undefined, ['model-default']],
-    ['gemini-2.5-pro', undefined, ['model-default']],
-  ])('%s → %s', (model, control, levels) => {
+    ['gemini-2.5-flash', undefined, ['model-default'], undefined],
+    ['gemini-2.5-flash-lite', undefined, ['model-default'], undefined],
+    ['gemini-2.5-pro', undefined, ['model-default'], undefined],
+  ])('%s → %s (defaultLevel %s)', (model, control, levels, defaultLevel) => {
     expect(geminiReasoningRow(model)?.control).toBe(control);
     expect(offeredReasoningLevels({ engine: 'gemini', model })).toEqual(levels);
+    expect(geminiReasoningRow(model)?.defaultLevel).toBe(defaultLevel);
   });
 
-  it('never sends thinkingBudget: no Gemini request ever carries it (F2 — P9 retired)', () => {
+  it('has exactly 5 rows: 3.x Flash-Lite, 3.x Flash, 3.7/3.8 Flash, 3.1 Pro, Gemma', () => {
+    expect(GEMINI_REASONING_TABLE.length).toBe(5);
+  });
+
+  it('never sends thinkingBudget: no Gemini request ever carries it, in the fragment or the resolved settings (F2 — P9 retired)', () => {
     const ids = ['gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.5-pro', 'gemma-4-31b-it'];
     for (const model of ids) {
       for (const level of offeredReasoningLevels({ engine: 'gemini', model })) {
@@ -176,7 +185,6 @@ describe('GEMINI_REASONING_TABLE — 3.x Flash family only (F2, 2026-09-13); 2.5
         expect('thinkingBudget' in cfg).toBe(false);
       }
     }
-    expect(GEMINI_REASONING_TABLE.length).toBe(5);
   });
 
   it('maps levels to the documented wire values', () => {
@@ -519,11 +527,17 @@ const LEVEL_NO_MINIMAL: ReasoningLevel[] = ['model-default', 'low', 'medium', 'h
 /* First match wins. Flash-Lite rows precede Flash rows, and every Flash row
    also carries (?!-lite), so a new "-lite" id never inherits a Flash row. An id
    that matches nothing — including every Gemini 2.5 id — offers model-default only. */
-export const GEMINI_REASONING_TABLE: ReadonlyArray<{ match: RegExp; control: GeminiControl; levels: ReasoningLevel[] }> = [
-  { match: /^gemini-3\.(?:5|1)-flash-lite(?:$|-)/, control: 'thinkingLevel', levels: LEVEL_FULL },
-  { match: /^gemini-3(?:\.(?:5|6))?-flash(?!-lite)(?:$|-)/, control: 'thinkingLevel', levels: LEVEL_FULL },
-  { match: /^gemini-3\.(?:7|8)-flash(?!-lite)(?:$|-)/, control: 'thinkingLevel', levels: LEVEL_NO_MINIMAL },
-  { match: /^gemini-3\.1-pro(?:$|-)/, control: 'thinkingLevel', levels: LEVEL_NO_MINIMAL },
+/* defaultLevel (review item 2, 2026-09-13) — the level Google's docs name as the model's own
+   default, verified on ai.google.dev/gemini-api/docs/generate-content/thinking (two independent
+   reads, 2026-09-13). It decides only whether a model-default overflow still has a lower rung
+   to suggest (Task 5.5b's reasoningOverflowFixes); the wire keeps omitting the field at
+   model-default regardless. Gemma's gemmaOnOff row carries none — its model-default is outside
+   the thinking rule entirely (P27) and never gets a reasoning fix at all. */
+export const GEMINI_REASONING_TABLE: ReadonlyArray<{ match: RegExp; control: GeminiControl; levels: ReasoningLevel[]; defaultLevel?: ReasoningLevel }> = [
+  { match: /^gemini-3\.(?:5|1)-flash-lite(?:$|-)/, control: 'thinkingLevel', levels: LEVEL_FULL, defaultLevel: 'minimal' },
+  { match: /^gemini-3(?:\.(?:5|6))?-flash(?!-lite)(?:$|-)/, control: 'thinkingLevel', levels: LEVEL_FULL, defaultLevel: 'medium' },
+  { match: /^gemini-3\.(?:7|8)-flash(?!-lite)(?:$|-)/, control: 'thinkingLevel', levels: LEVEL_NO_MINIMAL, defaultLevel: 'medium' },
+  { match: /^gemini-3\.1-pro(?:$|-)/, control: 'thinkingLevel', levels: LEVEL_NO_MINIMAL, defaultLevel: 'high' },
   { match: /^gemma-4-/, control: 'gemmaOnOff', levels: ['model-default', 'off', 'on'] },
 ];
 
@@ -581,7 +595,8 @@ export function reasoningWireFragment(
       if (!(row?.levels ?? ['model-default']).includes(level)) throw unavailable(kind, sel.model, level);
       if (level === 'model-default' || !row) return {};
       /* P19: every request that thinks asks for thought summaries (they feed the heartbeat and never
-         enter the answer). `off` (budget 0, or Gemma's MINIMAL) does not think, so it carries none. */
+         enter the answer). `off` (Gemma's MINIMAL — the only row with an `off` level; thinkingBudget
+         is retired, F2) does not think, so it carries none. */
       const thoughts = level === 'off' ? {} : { includeThoughts: true };
       if (row.control === 'gemmaOnOff') {
         return { thinkingConfig: { thinkingLevel: level === 'on' ? 'HIGH' : 'MINIMAL', ...thoughts } };
@@ -762,7 +777,11 @@ Expected: PASS, and `check:cycles` prints its `OK` line with the count unchanged
 10. In `entryForModelTag` delete the `Object.entries(map).find(…)` fallback (`return map[key];` only). Expected red: `finds an entry saved under either tag form, preferring the normalised key` (`qwen3:latest` saved, `qwen3` asked). Restore.
 11. In `geminiRequestThinks` replace `return level !== 'off';` with `return geminiModelThinks(model);`. Expected red: `the id rule decides the default; a level that turns thinking on or off decides the request` (Gemma `on`) and `agrees with the wire for every offered level…`. Restore.
 12. In `runFreeText` move `const settings = this.settings();` above `await this.transport.prepare?.(input.signal);`. Expected red: `the free-text path reads settings AFTER prepare(signal)…` (`expected 'low' to be 'high'`). Restore.
-Paste the twelve red outputs into the PR body.
+13. In the 3.1 Pro row change `levels: LEVEL_NO_MINIMAL` → `LEVEL_FULL`. Expected red: `gemini-3.1-pro-preview → thinkingLevel (defaultLevel high)`. Restore.
+14. In the Flash-Lite row change `defaultLevel: 'minimal'` → `'low'`. Expected red: `gemini-3.5-flash-lite → thinkingLevel (defaultLevel medium)` and `gemini-3.1-flash-lite → thinkingLevel (defaultLevel medium)` (both now report `low` where `minimal` is expected). Restore.
+15. Add a sixth row matching `/^gemini-2\.5-/` (any control/levels). Expected red: `gemini-2.5-flash → undefined (defaultLevel undefined)`, `gemini-2.5-flash-lite → undefined (defaultLevel undefined)`, `gemini-2.5-pro → undefined (defaultLevel undefined)`, and `has exactly 5 rows…` (now 6). Restore.
+16. In the 3.x Flash row change `defaultLevel: 'medium'` → `'minimal'`. Expected red: `gemini-3.6-flash → thinkingLevel (defaultLevel medium)` and the other Flash rows' cases. Restore.
+Paste the sixteen red outputs into the PR body.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -2051,9 +2070,10 @@ import { reasoningWireFragment } from '../reasoning.js';
 /** Merge a reasoning fragment's thinkingConfig into the request config built by
     W2 (which may already carry includeThoughts). The fragment decides
     includeThoughts (P19): reasoningWireFragment adds it to every level that
-    thinks and leaves it off `off` (budget 0, Gemma's MINIMAL), so it accompanies
-    any request that thinks and never one that does not. The fragment never
-    carries both thinkingLevel and thinkingBudget (reasoning.test.ts pins it). */
+    thinks and leaves it off `off` (Gemma's MINIMAL — the only row with an
+    `off` level), so it accompanies any request that thinks and never one
+    that does not. The fragment never carries thinkingBudget at all — that
+    control is retired (F2); reasoning.test.ts pins it. */
 export function mergeGeminiThinkingConfig(
   config: Record<string, unknown>,
   fragment: Record<string, unknown>,
@@ -3710,137 +3730,168 @@ export interface AnalysisFailureFix {
       `#/advanced?reasoningEngine=<engine>&reasoningModel=<model>` (Task 5.5c) and Task 5.6's
       per-engine reasoning editor scrolls to and highlights that model's row. */
   reasoningSetting?: { engine: 'gemini' | 'ollama'; model: string };
-  wikiHref?: string;
+  wikiPage?: string;
 }
 ```
-This is additive to whatever wave 2 landed — no existing field renames or narrows.
+This is additive to whatever wave 2 landed — no existing field renames or narrows. `wikiHref` is renamed to `wikiPage?: string` (wave 3 review, 2026-09-13): a bare page name under `docs/wiki/`, no `#anchor` — `src/lib/wiki-links.ts:1-4` pins the GitHub wiki base and forbids anchor fragments (slugging is fragile there), and the renderer builds the absolute URL from `WIKI_BASE` + the page name.
 
-**F7 says 5a adds:** "lower the reasoning level" for Gemini, Ollama's per-model reasoning `off`, and the endpoint's `reasoning` field.
+**CRITICAL, review pass 1 (2026-09-13): `'local'` is not a `TransportKind`.** The master contract's `TransportKind` is `'ollama' | 'gemini' | 'openai'` (`errors.ts`, W1). Every branch and test below uses `'ollama'`, never `'local'` — `'local'` is `AnalysisEngine`'s value (a different type, used by `resolveReasoningSetting`'s `engine` parameter), not a transport. This draft's first version mixed the two; it is corrected throughout below.
 
-- **Gemini — "lower the reasoning level."** Two cases, corrected 2026-09-13 after coordinator review found the first draft's rule (`row.levels.indexOf(current) > 1`, unconditional) never fires when `current` is `model-default` — which is every Gemini engine's own default (spec §8 "Defaults": Gemini and endpoints are `model default`), so the single most common overflow got no reasoning fix at all, even though a 3.x Flash model at `model-default` thinks at an **unstated** level (Google's pages disagree on the 3.7/3.8 default; 3.5/3.6 Flash default to `medium`) that an explicit lower level can still undercut. Let `row = geminiReasoningRow(ctx.model)` and `current = resolveReasoningSetting(getCachedUserSettings(), { engine: 'gemini', model: ctx.model })` (the same two calls Task 5.5's `reasoningControlFor` already makes for the copy):
-  - **`current === 'model-default'` and `row.control === 'thinkingLevel'`** (every 3.x Flash / Flash-Lite / Pro row): offer a *suggestion* — `Set a lower reasoning level (try "<row.levels[1]>")` — since the model's actual default level is unknown, so this cannot be stated as a definite improvement the way an explicit-level "lower" step can. `row.levels[1]` is the row's lowest controllable rung: `minimal` on 3.5/3.6 Flash and Flash-Lite, `low` on 3.7/3.8 Flash and 3.1 Pro.
-  - **`current === 'model-default'` and `row.control === 'gemmaOnOff'`:** no fix. Gemma 4 at its default level is outside the thinking rule entirely (P27: `geminiModelThinks('gemma-4-31b-it')` is `false`), so it cannot be the model whose default overflowed — there is nothing to suggest.
-  - **`current` is an explicit level (not `model-default`):** offer the fix iff `row.levels.indexOf(current) > 1` — the original rule, unchanged, now scoped to this branch only. Index 0 is `model-default` (not reachable here), index 1 is the row's lowest real rung (nothing below it), so only index ≥ 2 has a strictly lower rung at index − 1. This still covers Gemma 4 at `on` (index 2 → the fix, pointing at the same row to pick `off`) and excludes it at `off` (index 1 → none).
-  - A 2.5 id has no row at all (F2), so neither branch fires — consistent with "cannot be controlled from Castwright yet".
-- **Ollama — "turn reasoning off for this model," unconditional.** An `AnalyzerReasoningOverflowError` on the `local` transport only ever fires when the model was thinking (reasoning evidence was present), so the current level is never `off`/`model-default`'s non-thinking state already — `off` is always a valid, always-different remedy. No level-order computation needed, unlike Gemini's graduated rungs (Ollama's named levels `low`/`medium`/`high` are Test-gated and this fix does not try to pick among them; it names the one always-available step).
-- **Endpoints — unchanged from this task's earlier draft:** `endpointField: { endpointId, field: 'reasoning' }`.
+**CRITICAL, review pass 1: no fix at the default without a lower rung.** The fix is offered only when the level the failing request **actually ran at** has a lower rung available — never unconditionally, and never re-derived from live settings at display time (a race: the setting can change between the overflow and the moment the failure renders). Two additive pieces this task needs, both **set once, at throw time**:
+- **`AnalyzerReasoningOverflowError` gains `reasoningLevel?: string`** — the level the transport resolved and actually sent on the request that overflowed. Set by the transport (Task 5.3's three `send` sites), not read back from settings. 3b separately adds `endpointId?` to the same class; this task's `reasoningLevel?` is additive beside it — confirm 3b's exact parameter shape (positional or an options object) before adding this one, and match it rather than inventing a second convention.
+- **`GEMINI_REASONING_TABLE` rows gain `defaultLevel?: ReasoningLevel`** (Task 5.1, already landed above) — the level Google's own docs name as the model's default, used only to decide whether a model-default overflow still has something lower to try.
+- **`reasoningOverflowFixes(ctx)` reads `ctx.reasoningLevel`, never settings.** It no longer calls `resolveReasoningSetting`/`getCachedUserSettings` at all — wave 2's call site builds `ctx` from the error instance (`{ transport: err.transport, model: err.model, endpointId: err.endpointId, reasoningLevel: err.reasoningLevel }`), so the fix always reflects the request that actually overflowed, not whatever is saved right now.
+
+**Rule, Gemini (`ctx.transport === 'gemini'`):**
+- `row = geminiReasoningRow(ctx.model)`. No row (a 2.5 id, F2) → no fix.
+- **`row.control === 'gemmaOnOff'`:** `ctx.reasoningLevel === 'on'` → `Turn reasoning off for <model>`. `'off'` or unset (model-default) → no fix — Gemma at its default is outside the thinking rule entirely (P27) and cannot be the model that overflowed there.
+- **`row.control === 'thinkingLevel'`:** `effective = ctx.reasoningLevel` when it is set and not `'model-default'`, otherwise `row.defaultLevel`. When `effective` is known and `row.levels.indexOf(effective) > 1`, offer `Set a lower reasoning level (try "<row.levels[indexOf(effective) - 1]>") for <model>`. When `effective` is unknown (a future row with no `defaultLevel`) at model-default, fall back to naming `row.levels[1]`, today's behaviour. One rule covers both an explicit level and a documented default: index 0 is `model-default` (nothing to lower to), index 1 is the lowest real rung (nothing below it), so only index ≥ 2 has a strictly lower rung at index − 1.
+  - Flash-Lite at model-default (`defaultLevel: 'minimal'`, index 1) → no fix.
+  - 3.8 Flash at model-default (`defaultLevel: 'medium'`, index 2 in `['model-default','low','medium','high']`) → `try "low"`.
+  - 3.1 Pro at model-default (`defaultLevel: 'high'`, index 3) → `try "medium"`.
+  - 3.6 Flash at an explicit `medium` (index 3 in the full 5-level list) → `try "low"`.
+  - Gemma at explicit `on` → the `gemmaOnOff` branch above, not this one.
+
+**Rule, Ollama (`ctx.transport === 'ollama'`):** `Turn reasoning off for <model>` only when `ctx.reasoningLevel` is `'on'` or one of the named levels (`'low' | 'medium' | 'high'`) — never when it is `'off'` or unset (model-default). An overflow at `off`/default (a model that thinks despite `think: false`, or despite no level being sent) gets no reasoning fix at all; the other fixes (context, input tokens, switch model) still apply.
+
+**Endpoints:** unchanged — `endpointField: { endpointId, field: 'reasoning' }`, `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'`.
 
 **Files:**
-- Modify: `server/src/routes/failure-taxonomy.ts` — widen `AnalysisFailureFix` (above) and extend `reasoningOverflowFixes(ctx)`'s `gemini`, `local` and `openai` branches
-- Modify: `server/src/routes/failure-taxonomy.reasoning.test.ts` (or wave 2's guard-test file, wherever `reasoningOverflowFixes` and its guard live) — append cases and mutation rows; extend the guard test itself (Step 3)
+- Modify: `server/src/routes/failure-taxonomy.ts` — widen `AnalysisFailureFix` (above), add `reasoningLevel?` to `AnalyzerReasoningOverflowError` (beside 3b's `endpointId?`), and extend `reasoningOverflowFixes(ctx)`'s `gemini`, `ollama` and `openai` branches
+- Modify: `server/src/analyzer/transports/ollama-transport.ts`, `gemini-transport.ts` — pass `reasoningLevel: req.reasoning` (or the resolved level) into `AnalyzerReasoningOverflowError` at the site each transport throws it (Task 5.3's `mapFinish`/overflow path); endpoint transports throw no `AnalyzerReasoningOverflowError` today (unaffected)
+- Modify: `server/src/routes/failure-taxonomy-fixes.test.ts` (wave 2's guard-test file for `reasoningOverflowFixes`, **not** `failure-taxonomy.reasoning.test.ts` — that file is Task 5.5's, for `classifyAnalysisFailure`'s copy) — append cases, extend the guard, add mutation rows
 - Modify: `openapi.yaml` — the `AnalysisFailureFix` (or whatever wave 2 named it) schema, adding `reasoningSetting`; regenerate `src/lib/api-types.ts` via `npm run openapi:types`
 - Modify: `src/lib/api.ts` — wherever the mock SSE/analysis-failure builder constructs `fixes` entries, thread `reasoningSetting` through unchanged (same treatment as `endpointField`)
 
 **Interfaces:**
-- Consumes: `AnalysisFailureFix`, `reasoningOverflowFixes(ctx)` (wave 2); `reasoningControlFor`'s two building blocks — `geminiReasoningRow`, `resolveReasoningSetting`, `getCachedUserSettings` (Task 5.1/5.5); `analyzerEndpointSchema` (W3b) for the guard test's field-existence check; Task 5.5c's `reasoningFocus` deep-link grammar (frontend only).
+- Consumes: `AnalysisFailureFix`, `reasoningOverflowFixes(ctx)`, `AnalyzerReasoningOverflowError` and its `endpointId?` (wave 2, extended by 3b); `geminiReasoningRow` and each row's `defaultLevel` (Task 5.1); `analyzerEndpointSchema` (W3b) for the guard test's field-existence check; Task 5.5c's `reasoningFocus` deep-link grammar (frontend only); the 3d.9a wiki-page-existence guard (extended here with this task's `wikiPage` values — see Step 3).
 - Produces:
-  - `AnalysisFailureFix.reasoningSetting?: { engine: 'gemini' | 'ollama'; model: string }` (above).
-  - For `ctx.transport === 'gemini'`, no fix when `geminiReasoningRow(ctx.model)` is absent (a 2.5 id, F2) or when the row's `control` is `gemmaOnOff` and `current` is `model-default`. Otherwise: at `current === 'model-default'` (a `thinkingLevel` row), `{ label: 'Set a lower reasoning level (try "<row.levels[1]>") for <model>', reasoningSetting: { engine: 'gemini', model: ctx.model }, wikiHref: '/wiki/Analysis-and-the-Analyzer#when-a-model-thinks-past-its-output-limit' }`; at an explicit level with `row.levels.indexOf(current) > 1`, `{ label: 'Lower the reasoning level for <model>', reasoningSetting: { engine: 'gemini', model: ctx.model }, wikiHref: '/wiki/Analysis-and-the-Analyzer#when-a-model-thinks-past-its-output-limit' }`.
-  - For `ctx.transport === 'local'`: `{ label: 'Turn reasoning off for <model>', reasoningSetting: { engine: 'ollama', model: ctx.model }, wikiHref: '/wiki/Analysis-and-the-Analyzer#when-a-model-thinks-past-its-output-limit' }`, always.
-  - For `ctx.transport === 'openai'`: `{ label: 'Lower the "<endpoint name>" reasoning setting', endpointField: { endpointId: ctx.endpointId, field: 'reasoning' }, wikiHref: '…/OpenAI-Compatible-Analyzer-Endpoints#when-a-model-thinks-past-its-output-limit' }` (F3's endpoint wiki anchor, added in 3d).
-- Guard-test extension: `reasoningSetting.engine` must be `'gemini'` or `'ollama'` (fails otherwise); no fix's `reasoningSetting` may name a Gemini model at an explicit level with no strictly-lower real rung, and no fix may be offered for a `gemmaOnOff` row at `model-default` (fails a fixture assertion, not a schema check — see Step 3).
+  - `AnalysisFailureFix.reasoningSetting?: { engine: 'gemini' | 'ollama'; model: string }`; `AnalysisFailureFix.wikiPage?: string` (renamed from `wikiHref`).
+  - `AnalyzerReasoningOverflowError.reasoningLevel?: string`.
+  - `reasoningOverflowFixes(ctx: { transport: TransportKind; model: string; endpointId?: string; reasoningLevel?: string })` — the `gemini`/`ollama`/`openai` rules above.
+- Guard-test extension: `reasoningSetting.engine` must be `'gemini'` or `'ollama'`; for every `(model, level)` pair the reasoning table can produce, the Gemini fix is present iff the rule above says it should be (no fix without a lower rung, none for `gemmaOnOff` at model-default); `wikiPage` must name a file that exists under `docs/wiki/` (3d.9a's guard, extended with this task's pages).
 
 - [ ] **Step 1: Write the failing test**
-Append to the guard-test file:
+Append to `server/src/routes/failure-taxonomy-fixes.test.ts`:
 ```ts
 describe('reasoningOverflowFixes — reasoning-level fixes (#3084 wave 5a, F7, extension accepted 2026-09-13)', () => {
-  afterEach(() => _resetUserSettingsCache());
+  const overflow = (transport: TransportKind, model: string, reasoningLevel?: string, endpointId?: string) =>
+    classifyAnalysisFailure(new AnalyzerReasoningOverflowError(transport, model, 812, endpointId, reasoningLevel), model).fixes ?? [];
 
   it('an endpoint gets a fix pointing at its own reasoning field', () => {
-    const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' });
+    const fixes = overflow('openai', 'm', undefined, 'lab');
     const reasoningFix = fixes.find((f) => f.endpointField?.field === 'reasoning');
     expect(reasoningFix).toBeDefined();
     expect(reasoningFix?.endpointField).toEqual({ endpointId: 'lab', field: 'reasoning' });
-    expect(reasoningFix?.label).toMatch(/reasoning/i);
+    expect(reasoningFix?.wikiPage).toBe('OpenAI-Compatible-Analyzer-Endpoints');
   });
 
-  it('Ollama always gets a fix pointing at its own model row', () => {
-    const fixes = reasoningOverflowFixes({ transport: 'local', model: 'q:4b' });
-    expect(fixes.find((f) => f.reasoningSetting)?.reasoningSetting).toEqual({ engine: 'ollama', model: 'q:4b' });
+  it('Ollama at on or a named level gets a fix; at off or model-default it does not', () => {
+    expect(overflow('ollama', 'q:4b', 'on').find((f) => f.reasoningSetting)?.reasoningSetting).toEqual({ engine: 'ollama', model: 'q:4b' });
+    expect(overflow('ollama', 'q:4b', 'medium').some((f) => f.reasoningSetting)).toBe(true);
+    expect(overflow('ollama', 'q:4b', 'off').some((f) => f.reasoningSetting)).toBe(false);
+    expect(overflow('ollama', 'q:4b', undefined).some((f) => f.reasoningSetting)).toBe(false);
   });
 
-  it('Gemini at a level with a lower rung gets a fix; at the lowest rung it does not', () => {
-    _setUserSettingsCacheForTest({ analyzerReasoningByEngine: { gemini: { 'gemini-3.6-flash': 'medium', 'gemini-3.8-flash': 'low' } } });
-    const canLower = reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.6-flash' });
-    expect(canLower.find((f) => f.reasoningSetting)?.reasoningSetting).toEqual({ engine: 'gemini', model: 'gemini-3.6-flash' });
-    const atFloor = reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.8-flash' });
-    expect(atFloor.some((f) => f.reasoningSetting)).toBe(false);
+  it('Gemini at an explicit level with a lower rung gets a fix naming it; at the lowest rung it does not', () => {
+    const medium = overflow('gemini', 'gemini-3.6-flash', 'medium');
+    const fix = medium.find((f) => f.reasoningSetting);
+    expect(fix?.reasoningSetting).toEqual({ engine: 'gemini', model: 'gemini-3.6-flash' });
+    expect(fix?.label).toContain('"low"');
+    expect(overflow('gemini', 'gemini-3.8-flash', 'low').some((f) => f.reasoningSetting)).toBe(false);
   });
 
-  it('Gemma 4 at on gets the fix (lower to off); at off or model-default it does not', () => {
-    _setUserSettingsCacheForTest({ analyzerReasoningByEngine: { gemini: { 'gemma-4-31b-it': 'on' } } });
-    expect(reasoningOverflowFixes({ transport: 'gemini', model: 'gemma-4-31b-it' }).some((f) => f.reasoningSetting)).toBe(true);
-    _setUserSettingsCacheForTest({ analyzerReasoningByEngine: { gemini: { 'gemma-4-31b-it': 'off' } } });
-    expect(reasoningOverflowFixes({ transport: 'gemini', model: 'gemma-4-31b-it' }).some((f) => f.reasoningSetting)).toBe(false);
-    /* Corrected 2026-09-13: Gemma at model-default is outside the thinking rule (P27) and gets no fix. */
-    _setUserSettingsCacheForTest({});
-    expect(reasoningOverflowFixes({ transport: 'gemini', model: 'gemma-4-31b-it' }).some((f) => f.reasoningSetting)).toBe(false);
+  it('Gemma 4 at explicit on gets the fix (lower to off); at off or model-default it does not', () => {
+    expect(overflow('gemini', 'gemma-4-31b-it', 'on').some((f) => f.reasoningSetting)).toBe(true);
+    expect(overflow('gemini', 'gemma-4-31b-it', 'off').some((f) => f.reasoningSetting)).toBe(false);
+    expect(overflow('gemini', 'gemma-4-31b-it', undefined).some((f) => f.reasoningSetting)).toBe(false);
   });
 
-  it('a 2.5 id (no row, F2) never gets a reasoning-level fix, at any saved level', () => {
-    _setUserSettingsCacheForTest({ analyzerReasoningByEngine: { gemini: { 'gemini-2.5-flash': 'high' } } });
-    expect(reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-2.5-flash' }).some((f) => f.reasoningSetting)).toBe(false);
+  it('a 2.5 id (no row, F2) never gets a reasoning-level fix, at any level', () => {
+    expect(overflow('gemini', 'gemini-2.5-flash', 'high').some((f) => f.reasoningSetting)).toBe(false);
   });
 
-  /* Corrected 2026-09-13 (coordinator): model-default is the common case (spec §8's Gemini default),
-     and a 3.x row at model-default thinks at an unstated level (Google's docs disagree on 3.7/3.8's
-     default), so a lower explicit level is still worth suggesting — as a suggestion, not a certainty. */
-  it('at model-default, a thinkingLevel row suggests trying its lowest rung, naming it', () => {
-    _setUserSettingsCacheForTest({});
-    const fix38 = reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.8-flash' }).find((f) => f.reasoningSetting);
-    expect(fix38?.reasoningSetting).toEqual({ engine: 'gemini', model: 'gemini-3.8-flash' });
-    expect(fix38?.label).toContain('"low"');
+  /* Review pass 1 (2026-09-13) — the level actually run, via defaultLevel, decides model-default cases. */
+  it('Flash-Lite at model-default (defaultLevel minimal) gets no level fix — already at the lowest rung', () => {
+    expect(overflow('gemini', 'gemini-3.5-flash-lite', undefined).some((f) => f.reasoningSetting)).toBe(false);
+  });
 
-    const fix36 = reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.6-flash' }).find((f) => f.reasoningSetting);
-    expect(fix36?.label).toContain('"minimal"');
+  it('3.8 Flash at model-default (defaultLevel medium) suggests trying low', () => {
+    const fix = overflow('gemini', 'gemini-3.8-flash', undefined).find((f) => f.reasoningSetting);
+    expect(fix?.label).toContain('"low"');
+  });
+
+  it('3.1 Pro at model-default (defaultLevel high) suggests trying medium', () => {
+    const fix = overflow('gemini', 'gemini-3.1-pro-preview', undefined).find((f) => f.reasoningSetting);
+    expect(fix?.label).toContain('"medium"');
   });
 });
 ```
 - [ ] **Step 2: Run it and confirm it fails**
-Run the guard-test file. Expected: FAIL — every case but the endpoint one (`endpointField` is `undefined`/absent for `reasoningSetting?` on Ollama and Gemini, since the fields don't exist yet); the endpoint case already passed under the earlier draft and stays green. The two new model-default cases fail because no fix is offered at all yet, not because of a wrong label.
+Run the guard-test file. Expected: FAIL — every case, including the endpoint one: `endpointField`/`reasoningSetting` fixes for `gemini`/`ollama`/`openai` are all added in Step 3 below, so nothing in this describe passes yet (this task's earlier draft wrongly claimed the endpoint case already passed; it did not — `reasoningOverflowFixes` had no `openai` branch before this task either).
 - [ ] **Step 3: Implement**
-In `reasoningOverflowFixes`, add a `local` branch (or extend it, if wave 2 already has one for a different fix):
+Add `reasoningLevel?: string` to `AnalyzerReasoningOverflowError`, beside 3b's `endpointId?` (confirm 3b's parameter shape first — positional vs. an options object — and match it):
 ```ts
-  if (ctx.transport === 'local') {
+export class AnalyzerReasoningOverflowError extends Error {
+  readonly code = 'ANALYZER_REASONING_OVERFLOW';
+  constructor(
+    readonly transport: TransportKind,
+    readonly model: string,
+    readonly reasoningTokens: number | undefined,
+    readonly endpointId?: string,     // 3b
+    readonly reasoningLevel?: string, // 5a — the level the transport actually sent
+  ) { super('Reasoning overflow'); }
+}
+```
+In each transport's overflow-throw site (Task 5.3), pass the level the request carried: `throw new AnalyzerReasoningOverflowError(this.kind, this.model, reasoningTokens, endpointId, req.reasoning);`.
+In `reasoningOverflowFixes`, add an `ollama` branch:
+```ts
+  if (ctx.transport === 'ollama' && (ctx.reasoningLevel === 'on' || ctx.reasoningLevel === 'low' || ctx.reasoningLevel === 'medium' || ctx.reasoningLevel === 'high')) {
     fixes.push({
       label: `Turn reasoning off for ${ctx.model}`,
       reasoningSetting: { engine: 'ollama', model: ctx.model },
-      wikiHref: '/wiki/Analysis-and-the-Analyzer#when-a-model-thinks-past-its-output-limit',
+      wikiPage: 'Analysis-and-the-Analyzer',
     });
   }
 ```
 In the `gemini` branch, after computing whatever wave 2 already computes, add:
 ```ts
   const row = geminiReasoningRow(ctx.model);
-  const current = resolveReasoningSetting(getCachedUserSettings(), { engine: 'gemini', model: ctx.model });
   if (row) {
-    if (current === 'model-default') {
-      /* Corrected 2026-09-13 — model-default is the common case (spec §8), and a thinkingLevel row's
-         actual default level is unstated (Google's docs disagree on 3.7/3.8 Flash's default), so this
-         is a suggestion, never a certainty. Gemma's gemmaOnOff row is outside the thinking rule at its
-         default (geminiModelThinks('gemma-4-…') is false, P27), so it cannot be the model that
-         overflowed here and gets no fix. */
-      if (row.control === 'thinkingLevel') {
+    if (row.control === 'gemmaOnOff') {
+      if (ctx.reasoningLevel === 'on') {
+        fixes.push({
+          label: `Turn reasoning off for ${ctx.model}`,
+          reasoningSetting: { engine: 'gemini', model: ctx.model },
+          wikiPage: 'Analysis-and-the-Analyzer',
+        });
+      }
+      /* 'off' or unset (model-default): outside the thinking rule at default (P27); no fix. */
+    } else {
+      const explicit = ctx.reasoningLevel && ctx.reasoningLevel !== 'model-default' ? (ctx.reasoningLevel as ReasoningLevel) : undefined;
+      const effective = explicit ?? row.defaultLevel;
+      if (effective) {
+        const idx = row.levels.indexOf(effective);
+        if (idx > 1) {
+          fixes.push({
+            label: `Set a lower reasoning level (try "${row.levels[idx - 1]}") for ${ctx.model}`,
+            reasoningSetting: { engine: 'gemini', model: ctx.model },
+            wikiPage: 'Analysis-and-the-Analyzer',
+          });
+        }
+      } else if (!explicit) {
+        /* No defaultLevel known for this row (none exist today, F2's table); fall back to today's rule. */
         fixes.push({
           label: `Set a lower reasoning level (try "${row.levels[1]}") for ${ctx.model}`,
           reasoningSetting: { engine: 'gemini', model: ctx.model },
-          wikiHref: '/wiki/Analysis-and-the-Analyzer#when-a-model-thinks-past-its-output-limit',
+          wikiPage: 'Analysis-and-the-Analyzer',
         });
       }
-    } else if (row.levels.indexOf(current) > 1) {
-      /* The original rule, now scoped to an explicit (non-model-default) current level: index 0 is
-         model-default (not reachable here), index 1 is the lowest real rung (nothing below it), so
-         only index >= 2 has a strictly lower rung at index - 1. Covers Gemma at 'on' (index 2) too. */
-      fixes.push({
-        label: `Lower the reasoning level for ${ctx.model}`,
-        reasoningSetting: { engine: 'gemini', model: ctx.model },
-        wikiHref: '/wiki/Analysis-and-the-Analyzer#when-a-model-thinks-past-its-output-limit',
-      });
     }
   }
 ```
-(Import `geminiReasoningRow`, `resolveReasoningSetting` from `../analyzer/reasoning.js` beside the existing `reasoningControlDescription` import, Task 5.5.)
-In the `openai` branch, keep the endpoint fix from this task's earlier draft (`endpointField: { endpointId: ctx.endpointId!, field: 'reasoning' }`).
+(Import `geminiReasoningRow` and `type ReasoningLevel` from `../analyzer/reasoning.js`. This branch reads no settings and no cache — `resolveReasoningSetting`/`getCachedUserSettings` are not imported for this purpose.)
+In the `openai` branch, keep the endpoint fix from this task's earlier draft: `endpointField: { endpointId: ctx.endpointId!, field: 'reasoning' }, wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'`.
 **OpenAPI:** add to the `AnalysisFailureFix` (or wave 2's actual schema name — `git grep -n "AnalysisFailureFix\|reasoningOverflowFixes" openapi.yaml` first) schema in `openapi.yaml`:
 ```yaml
         reasoningSetting:
@@ -3854,7 +3905,7 @@ In the `openai` branch, keep the endpoint fix from this task's earlier draft (`e
               type: string
 ```
 Run `npm run openapi:types`. In `src/lib/api.ts`'s mock fixes builder, add `reasoningSetting` to whichever fixture entries need it, unchanged pass-through.
-**Guard test.** Extend wave 2's guard test (the one asserting every `settingKey` is a registry key and every `endpointField.field` exists on `analyzerEndpointSchema`) with:
+**Guard test.** Extend wave 2's guard test (the one asserting every `settingKey` is a registry key, every `endpointField.field` exists on `analyzerEndpointSchema`, and — per 3d.9a — every `wikiPage` names a file under `docs/wiki/`) to also check the claims this task's `reasoningOverflowFixes` rule makes, not just its `engine` enum:
 ```ts
 it('every reasoningSetting.engine is gemini or ollama', () => {
   for (const fixes of ALL_FIXTURE_FIXES_LISTS) {
@@ -3863,24 +3914,45 @@ it('every reasoningSetting.engine is gemini or ollama', () => {
     }
   }
 });
+
+/* Review pass 1 (2026-09-13) — the guard checks the RULE, not just the engine enum: exhaustively,
+   for every (model, level) the table can produce, a Gemini fix exists iff there is a strictly lower
+   real rung to name, and never for gemmaOnOff at model-default. This is what would have caught the
+   original "no-op fix at the default" defect. */
+it('a Gemini reasoning fix exists iff a strictly lower rung is available for the level actually run', () => {
+  for (const row of GEMINI_REASONING_TABLE) {
+    const model = row.match.source.replace(/[\\^$().?*+[\]|]/g, '').split('-').slice(0, 2).join('-') || 'gemini-3.6-flash';
+    const levelsToCheck: (string | undefined)[] = row.control === 'gemmaOnOff' ? ['on', 'off', undefined] : [...row.levels.filter((l) => l !== 'model-default'), undefined];
+    for (const level of levelsToCheck) {
+      const fixes = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('gemini', model, 812, undefined, level), model).fixes ?? [];
+      const hasFix = fixes.some((f) => f.reasoningSetting);
+      if (row.control === 'gemmaOnOff') {
+        expect(hasFix, `${model} at ${level}`).toBe(level === 'on');
+      } else {
+        const effective = level && level !== 'model-default' ? level : row.defaultLevel;
+        const expectFix = effective !== undefined && row.levels.indexOf(effective as never) > 1;
+        expect(hasFix, `${model} at ${level ?? 'model-default'}`).toBe(expectFix);
+      }
+    }
+  }
+});
 ```
-(`ALL_FIXTURE_FIXES_LISTS` — reuse whatever the existing guard test already iterates; do not add a second enumeration mechanism.)
+(`ALL_FIXTURE_FIXES_LISTS` — reuse whatever the existing guard test already iterates; do not add a second enumeration mechanism. The exhaustive check above derives its own model id per row from the row's own regex rather than a second hard-coded fixture list, so a future row change cannot silently go unchecked.)
 - [ ] **Step 4: Run and confirm it passes**
 Run the guard-test file, then the full `failure-taxonomy` suite, then `npm run openapi:types && git diff --exit-code src/lib/api-types.ts`, then `npm run typecheck`.
 - [ ] **Step 5: Mutation proof**
-1. Delete the `local` branch's push. Expected red: `Ollama always gets a fix pointing at its own model row`. Restore.
-2. In the explicit-level branch, change `row.levels.indexOf(current) > 1` to `>= 1`. Expected red: `Gemini at a level with a lower rung gets a fix; at the lowest rung it does not` (the `atFloor` half now wrongly gets a fix). Restore.
-3. Change `> 1` to `> 0`. Same red as mutation 2, plus `Gemma 4 at on gets the fix…`'s `off` half (now wrongly offered — `off` is index 1). Restore.
-4. Delete the entire `if (current === 'model-default') { … }` block (both cases). Expected red: `at model-default, a thinkingLevel row suggests trying its lowest rung, naming it`. Restore.
-5. Drop the `row.control === 'thinkingLevel'` guard inside the `model-default` branch (offer the suggestion for every row). Expected red: `Gemma 4 at on gets the fix…`'s model-default assertion (now wrongly offered). Restore.
-6. Replace `row.levels[1]` with `row.levels[row.levels.length - 1]` (the highest rung, not the lowest). Expected red: `at model-default, a thinkingLevel row suggests trying its lowest rung, naming it` (`gemini-3.8-flash`'s label now says `"high"`, not `"low"`). Restore.
-7. Delete the endpoint fix's push (from the earlier draft). Expected red: `an endpoint gets a fix pointing at its own reasoning field`. Restore.
-8. Delete the guard test's `reasoningSetting.engine` check body (make it a no-op). Expected red: none by itself (nothing to catch yet) — pair it with mutation 9 to prove the guard fires.
-9. Temporarily push a fix with `reasoningSetting: { engine: 'openai' as any, model: 'm' }` into a fixture the guard test iterates. Expected red: `every reasoningSetting.engine is gemini or ollama`, only when mutation 8 is reverted. Restore both.
+1. Delete the `ollama` branch's push. Expected red: `Ollama at on or a named level gets a fix; at off or model-default it does not`. Restore.
+2. In the `thinkingLevel` branch, change `idx > 1` to `idx >= 1`. Expected red: `Gemini at an explicit level with a lower rung gets a fix naming it; at the lowest rung it does not` (the second half now wrongly gets a fix) and the exhaustive guard test (row 1 of every thinkingLevel row). Restore.
+3. Change `idx > 1` to `idx > 0`. Expected red: the exhaustive guard test's `index 1` cases across every `thinkingLevel` row (each now wrongly gets a fix at its lowest real rung). Restore.
+4. In the Flash-Lite table row (Task 5.1), change `defaultLevel: 'minimal'` to `defaultLevel: 'low'`. Expected red: `Flash-Lite at model-default (defaultLevel minimal) gets no level fix` (now wrongly offers "try minimal") and the exhaustive guard test's Flash-Lite, model-default case. Restore.
+5. Drop the `row.control === 'gemmaOnOff'` branch entirely (fall through every row to the `thinkingLevel` branch). Expected red: `Gemma 4 at explicit on gets the fix…`'s `off`/`model-default` halves stay correctly absent (Gemma's row has no `defaultLevel`, so the fallback branch's `!explicit` guard still suppresses them) **but** the fix's `label` now reads "Set a lower reasoning level…" instead of "Turn reasoning off…" at `on` — assert the label text, not just presence, to catch this. Restore.
+6. Delete the endpoint fix's push (from the earlier draft). Expected red: `an endpoint gets a fix pointing at its own reasoning field`. Restore.
+7. Delete the guard test's `reasoningSetting.engine` check body (make it a no-op). Expected red: none by itself (nothing to catch yet) — pair it with mutation 8 to prove the guard fires.
+8. Temporarily push a fix with `reasoningSetting: { engine: 'openai' as any, model: 'm' }` into a fixture the guard test iterates. Expected red: `every reasoningSetting.engine is gemini or ollama`, only when mutation 7 is reverted. Restore both.
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy.reasoning.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts
-git commit -m "feat(server,frontend): reasoning-level fixes for Gemini and Ollama, gated on a lower level existing"
+git add server/src/routes/failure-taxonomy.ts server/src/analyzer/transports/ollama-transport.ts server/src/analyzer/transports/gemini-transport.ts server/src/routes/failure-taxonomy-fixes.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts
+git commit -m "feat(server,frontend): reasoning-level fixes for Gemini and Ollama, gated on the level actually run having a lower rung"
 ```
 
 ### Task 5.5c: `reasoningFocus` router deep link (F7, mirrors wave 2's `?code=`/`focus` grammar)
@@ -3889,11 +3961,16 @@ git commit -m "feat(server,frontend): reasoning-level fixes for Gemini and Ollam
 
 **Why two query params, not one packed string.** A Gemini model id never contains `:`, but an Ollama tag routinely does (`qwen3.5:4b`), and `engine` is one of exactly two literals. Packing `<engine>:<model>` into one value would need an unambiguous split rule for a value the URL itself does not need escaped. Two params (`reasoningEngine`, `reasoningModel`) avoid that: each is `encodeURIComponent`-safe on its own, matching the `q.set(...)`/`URLSearchParams` style `stageToHash`'s `'ready'` case already uses (`46e62a34:src/lib/router.ts`, the `q.set('chapter', …)` / `q.set('profile', …)` calls).
 
+**Extends 2.9a's own code; does not add a parallel copy (review pass 1, 2026-09-13).** Wave 2's Task 2.9a is being told to write the `'advanced'` stage's `focusKey` field, its `AdvancedRoute` URL parsing and its `stageEqual` branch as the code this task extends — not as a separate mechanism this task duplicates beside. Concretely:
+- `stageEqual` has **exactly one** `'advanced'` branch (2.9a's), comparing both `focusKey` and `reasoningFocus`: `if (a.kind === 'advanced' && b.kind === 'advanced') return a.focusKey === b.focusKey && a.reasoningFocus?.engine === b.reasoningFocus?.engine && a.reasoningFocus?.model === b.reasoningFocus?.model;` — this task extends that one return statement (2.9a's own `focusKey === focusKey` comparison, plus this task's two extra fields), never adds a second `if (a.kind === 'advanced' …)` block.
+- `AdvancedRoute` is **one function reading three query params**: 2.9a's `focus` (→ `focusKey`) and this task's `reasoningEngine`/`reasoningModel` (→ `reasoningFocus`), hydrating one `{ kind: 'advanced', focusKey, reasoningFocus }` object in one `useHydrateStage` call — never two separate route functions or two separate hydrate calls.
+- Tests use **2.9a's `renderAtAdvanced` helper** (2.9a adds it to `src/routes/index.test.tsx`, which at `46e62a34` has no `HelpRoute` describe at all — only `SetupRoute`/`AnalysingRoute`/`BooksRoute`, via `renderAtSetup`/`renderAtAnalysing`; confirmed by reading the pinned file directly). This task's earlier draft cited a nonexistent `HelpRoute` test case and a `renderAtHash`/`getHydratedStage` pair that do not exist at `46e62a34` either — both are corrected below to `renderAtAdvanced`.
+
 **Files:**
-- Modify: `src/lib/types.ts:1073` — the `Stage` union's `{ kind: 'advanced' }` member gains `reasoningFocus?: { engine: 'gemini' | 'ollama'; model: string }` (additive; keep wave 2's `focusKey` field alongside it — confirm with `git grep -n "kind: 'advanced'" src/lib/types.ts` before editing, and do not remove or rename `focusKey`).
-- Modify: `src/lib/router.ts` — `stageToHash`'s `'advanced'` case (line 49-50 at `46e62a34`; keeps wave 2's `focusKey`-driven `?focus=` query param, and appends `reasoningEngine`/`reasoningModel` via the same `URLSearchParams` builder the `'ready'` case uses); `stageEqual` gains an `'advanced'` comparison (mirroring its existing `'help'` branch) so two different `reasoningFocus` values are not treated as the same stage.
-- Modify: `src/routes/index.tsx` — `AdvancedRoute` (`:470-474` at `46e62a34`) reads `useSearchParams()` and builds `reasoningFocus`, mirroring `HelpRoute` (`:488-494`) exactly: `const [searchParams] = useSearchParams();` then `reasoningEngine`/`reasoningModel` read off it, combined into `reasoningFocus` only when `reasoningEngine` is `'gemini'` or `'ollama'` and `reasoningModel` is non-empty (an unrecognised or partial pair yields `undefined`, never a malformed object — the view then renders with no row focused, same as no deep link at all).
-- Test: `src/lib/router.test.ts` (round-trip cases), `src/routes/index.test.tsx` or wherever `AdvancedRoute`/`HelpRoute` are already covered (append a case using the same harness).
+- Modify: `src/lib/types.ts:1073` — the `Stage` union's `{ kind: 'advanced' }` member: 2.9a adds `focusKey?: string`; this task adds `reasoningFocus?: { engine: 'gemini' | 'ollama'; model: string }` beside it, in the same PR ordering 2.9a establishes (confirm with `git grep -n "kind: 'advanced'" src/lib/types.ts` before editing — if 2.9a has not landed `focusKey` yet, stop and report the gap rather than adding `reasoningFocus` to a bare `{ kind: 'advanced' }` member that would need a second edit later).
+- Modify: `src/lib/router.ts` — `stageToHash`'s `'advanced'` case (2.9a's version, which already emits `?focus=<focusKey>`; extend its `URLSearchParams` builder with `reasoningEngine`/`reasoningModel`, do not rebuild the case); `stageEqual`'s single `'advanced'` branch (2.9a's; extend the one boolean expression, per above).
+- Modify: `src/routes/index.tsx` — `AdvancedRoute` (2.9a's version, which already reads `useSearchParams()` for `focus`; add `reasoningEngine`/`reasoningModel` reads to the same function and the same `useHydrateStage` call, combined into `reasoningFocus` only when `reasoningEngine` is `'gemini'` or `'ollama'` and `reasoningModel` is non-empty — an unrecognised or partial pair yields `undefined`, never a malformed object).
+- Test: `src/lib/router.test.ts` (round-trip cases); `src/routes/index.test.tsx`, using 2.9a's `renderAtAdvanced` helper (append a case; do not add a second helper).
 - Modify: `src/lib/failure-fixes.ts` — 2b's shared `fixHref(fix: AnalysisFailureFix): string | null`, which both "How to fix" renderers call (extended by 3d for the `endpointField` branch) — add the `reasoningSetting` branch. **No renderer changes and no inline link-building in this task or Task 5.6b:** every "How to fix" link, registry-knob, endpoint-field or reasoning-setting alike, is built by this one function; a renderer only calls `fixHref(fix)` and renders the result as an `<a href>` (or nothing, for `null`).
 - Test: `src/lib/failure-fixes.test.ts` (append a case and a mutation row).
 
@@ -3931,26 +4008,38 @@ describe('advanced stage — reasoningFocus deep link (#3084 wave 5a, F7)', () =
   });
 });
 ```
-Append to wherever `HelpRoute`'s `?code=` parsing is tested (same file/harness), for `AdvancedRoute`:
+Append to `src/routes/index.test.tsx`, using 2.9a's `renderAtAdvanced` helper (there is no `HelpRoute` describe or `renderAtHash`/`getHydratedStage` pair in this file at `46e62a34` — the file's actual harness is `renderAtSetup`/`renderAtAnalysing`-shaped, and 2.9a adds `renderAtAdvanced` in that same style, presumably returning or letting the test read the store's resulting `ui.stage`):
 ```tsx
-it('AdvancedRoute reads reasoningEngine/reasoningModel from the URL and hydrates reasoningFocus', () => {
-  renderAtHash('#/advanced?reasoningEngine=gemini&reasoningModel=gemini-3.6-flash');
-  expect(getHydratedStage()).toEqual({ kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-3.6-flash' } });
+it('AdvancedRoute reads reasoningEngine/reasoningModel from the URL and hydrates reasoningFocus beside focusKey', () => {
+  const store = makeStore();
+  renderAtAdvanced(store, '?reasoningEngine=gemini&reasoningModel=gemini-3.6-flash');
+  expect(store.getState().ui.stage).toEqual({ kind: 'advanced', focusKey: undefined, reasoningFocus: { engine: 'gemini', model: 'gemini-3.6-flash' } });
 });
 it('an unrecognised engine value hydrates no reasoningFocus', () => {
-  renderAtHash('#/advanced?reasoningEngine=openai&reasoningModel=m');
-  expect(getHydratedStage()).toEqual({ kind: 'advanced' });
+  const store = makeStore();
+  renderAtAdvanced(store, '?reasoningEngine=openai&reasoningModel=m');
+  expect(store.getState().ui.stage).toEqual({ kind: 'advanced', focusKey: undefined });
+});
+it('focus and reasoningEngine/reasoningModel both hydrate together', () => {
+  const store = makeStore();
+  renderAtAdvanced(store, '?focus=analyzer.gemini.maxInputTokensPerRequest&reasoningEngine=ollama&reasoningModel=qwen3.5:4b');
+  expect(store.getState().ui.stage).toEqual({
+    kind: 'advanced',
+    focusKey: 'analyzer.gemini.maxInputTokensPerRequest',
+    reasoningFocus: { engine: 'ollama', model: 'qwen3.5:4b' },
+  });
 });
 ```
-(`renderAtHash`/`getHydratedStage` — reuse whatever helper this file's existing `HelpRoute` case already calls; do not add a second one.)
+(If 2.9a's `renderAtAdvanced` has a different exact signature or return shape than assumed here, match it — do not invent a second helper alongside it.)
 - [ ] **Step 2: Run them and confirm they fail**
-Expected: FAIL — `stageToHash` ignores `reasoningFocus` (returns plain `#/advanced`); `AdvancedRoute` hydrates `{ kind: 'advanced' }` with no `reasoningFocus`; `fixHref`'s two new cases fail with `expected null to be '#/advanced?…'` (no `reasoningSetting` branch yet) and pass respectively (the "no link" case already returns `null`).
+Expected: FAIL — `stageToHash` ignores `reasoningFocus` (returns plain `#/advanced?focus=…` with 2.9a's param only); `AdvancedRoute` hydrates `{ kind: 'advanced', focusKey }` with no `reasoningFocus`; `fixHref`'s two new cases fail with `expected null to be '#/advanced?…'` (no `reasoningSetting` branch yet) and pass respectively (the "no link" case already returns `null`).
 - [ ] **Step 3: Implement**
-In `src/lib/types.ts`, add the field to the `'advanced'` union member (Files note above — confirm the member's exact current shape first).
-In `src/lib/router.ts`'s `stageToHash`, replace the `'advanced'` case:
+In `src/lib/types.ts`, add `reasoningFocus?: { engine: 'gemini' | 'ollama'; model: string }` to the `'advanced'` union member, beside 2.9a's `focusKey?: string` — read the member's current shape first (`git grep`, above) and add only this one field.
+In `src/lib/router.ts`'s `stageToHash`, **extend** 2.9a's `'advanced'` case (do not replace its `URLSearchParams` builder or its `focus` line — add two more `q.set` calls to the same `q`):
 ```ts
     case 'advanced': {
       const q = new URLSearchParams();
+      if (stage.focusKey) q.set('focus', stage.focusKey); // 2.9a
       if (stage.reasoningFocus) {
         q.set('reasoningEngine', stage.reasoningFocus.engine);
         q.set('reasoningModel', stage.reasoningFocus.model);
@@ -3959,24 +4048,28 @@ In `src/lib/router.ts`'s `stageToHash`, replace the `'advanced'` case:
       return `#/advanced${qs ? '?' + qs : ''}`;
     }
 ```
-(If wave 2's `focusKey` field already landed here, add its `q.set('focus', stage.focusKey)` line to the same builder rather than reintroducing a second query-string assembly.)
-In `stageEqual`, add beside the existing `'help'` branch:
+In `stageEqual`, **extend 2.9a's single `'advanced'` branch** (do not add a second `if (a.kind === 'advanced' …)`):
 ```ts
   if (a.kind === 'advanced' && b.kind === 'advanced') {
-    return a.reasoningFocus?.engine === b.reasoningFocus?.engine && a.reasoningFocus?.model === b.reasoningFocus?.model;
+    return (
+      a.focusKey === b.focusKey && // 2.9a
+      a.reasoningFocus?.engine === b.reasoningFocus?.engine &&
+      a.reasoningFocus?.model === b.reasoningFocus?.model
+    );
   }
 ```
-In `src/routes/index.tsx`'s `AdvancedRoute`, mirroring `HelpRoute`:
+In `src/routes/index.tsx`'s `AdvancedRoute`, **extend 2.9a's function** (it already reads `useSearchParams()` for `focus`; add two more reads and fold all three into one `useHydrateStage` call):
 ```tsx
 function AdvancedRoute() {
   const [searchParams] = useSearchParams();
+  const focusKey = searchParams.get('focus') ?? undefined; // 2.9a
   const reasoningEngine = searchParams.get('reasoningEngine');
   const reasoningModel = searchParams.get('reasoningModel');
   const reasoningFocus =
     (reasoningEngine === 'gemini' || reasoningEngine === 'ollama') && reasoningModel
       ? { engine: reasoningEngine, model: reasoningModel }
       : undefined;
-  useHydrateStage({ kind: 'advanced', reasoningFocus }, [reasoningEngine, reasoningModel]);
+  useHydrateStage({ kind: 'advanced', focusKey, reasoningFocus }, [focusKey, reasoningEngine, reasoningModel]);
   return <AdvancedView />;
 }
 ```
@@ -4566,8 +4659,8 @@ export function AnalyzerRequestControls() {
           <AnalyzerRequestControls />
 ```
 
-`src/views/advanced.test.tsx` — add `getAnalyzerModels: vi.fn(() => Promise.resolve({ groups: [] })),` and `putUserSettings: vi.fn(),` to the `api` mock object (`:17-29`; wave 4 Task 4.7 already added `getAnalyzerModels` there, so keep its entry and add only `putUserSettings`); add `import { accountSlice } from '../store/account-slice';` and `account: accountSlice.reducer,` to `makeStore`'s reducer (`:153-157`).
-`src/test/a11y.test.tsx` — add `getAnalyzerModels: () => Promise.resolve({ groups: [] }),` to the `api` object (`:55`; wave 4 already added it, so keep that entry if present).
+`src/views/advanced.test.tsx` — add `getAnalyzerModels: vi.fn(() => Promise.resolve({ groups: [] })),` and `putUserSettings: vi.fn(),` to the `api` mock object (`:17-29`; Task 3d.4c already added `getAnalyzerModels` there for the fallback picker, `w3cd.md:10274`, so keep its entry and add only `putUserSettings` — corrected 2026-09-13: this was wave 4's Task 4.7 in an earlier draft, but that task was rewritten to consume 3d.4c rather than add anything of its own); add `import { accountSlice } from '../store/account-slice';` and `account: accountSlice.reducer,` to `makeStore`'s reducer (`:153-157`).
+`src/test/a11y.test.tsx` — add `getAnalyzerModels: () => Promise.resolve({ groups: [] }),` to the `api` object (`:55`; Task 3d.4c already added it, `w3cd.md:10443` — keep that entry if present).
 
 W3d endpoint form: `src/components/settings/analyzer-endpoints-section.tsx` (Task 3d.8). 3d.8 renders no reasoning fields; its `validateEndpointDraft` copies `reasoningStyle` and `reasoning` from the saved endpoint (`original?.reasoningStyle ?? 'not_controllable'`, `original?.reasoning ?? 'model-default'`). Change it as follows:
 - **Import.** Add `import { REASONING_HELP, REASONING_LEVEL_LABELS, REASONING_STYLE_LABELS, levelsForEndpointStyle, type ReasoningLevel, type ReasoningStyle } from '../../lib/reasoning-levels';` and `import { settingsIssueMessages } from '../../lib/settings-issues';`.
@@ -4609,6 +4702,18 @@ W3d endpoint form: `src/components/settings/analyzer-endpoints-section.tsx` (Tas
               </select>
             </FieldRow>
 ```
+- **`ISSUE_FIELDS`/`ENDPOINT_FIELD_TEST_IDS` (review item 5, 2026-09-13).** 3d.8's own note (`w3cd.md:12889`) already flags this: "a field with no control yet (`reasoning`, `extraParams` before wave 5) opens the editor without focusing." This task supplies the control for `reasoning`, so it also closes that gap: add `'reasoning'` to `ISSUE_FIELDS` (`w3cd.md:12190`) and `reasoning: 'endpoint-reasoning'` to `ENDPOINT_FIELD_TEST_IDS` (`w3cd.md:12195`), in the same file this task already edits. `extraParams` stays unfocusable until Task 5.12 (5b) adds its control.
+
+Append to `src/components/settings/analyzer-endpoints-section.test.tsx`:
+```tsx
+it('a reasoning-overflow fix deep-link focuses the endpoint reasoning field (#3084 wave 5a)', async () => {
+  renderSectionAtHash('#/models?endpoint=lab&field=reasoning'); // or whatever query grammar Task 3d.9's own focus tests already use — match it, don't invent a second one
+  await screen.findByTestId('endpoint-row-lab');
+  fireEvent.click(screen.getByTestId('endpoint-edit-lab'));
+  expect(screen.getByTestId('endpoint-reasoning')).toHaveFocus();
+});
+```
+(`renderSectionAtHash` — reuse whatever helper Task 3d.9's own `maxOutputTokens`/`contextTokens` focus tests already use for this exact mechanism; do not add a second one. If 3d.9's focus tests pre-open the editor rather than requiring the `endpoint-edit-<id>` click shown here, match that flow instead.)
 
 - [ ] **Step 4: Run and confirm they pass**
 Run: `npm test -- src/lib/reasoning-levels.test.ts src/lib/settings-issues.test.ts src/components/settings/analyzer-request-controls.test.tsx src/views/advanced.test.tsx src/test/a11y.test.tsx src/components/settings/analyzer-endpoints-section.test.tsx`
@@ -4623,6 +4728,7 @@ Expected: PASS. Keeps green: `advanced.test.tsx` (group/OverrideRow cases), `a11
 5. In `onSave` drop the `level !== 'off'` filter from `ollamaPatch`. Expected red: `saves non-default Ollama and Gemini levels per model only` (`'q:9b': 'off'` appears). Restore.
 6. In `normalizeOllamaTag` return `tag` unchanged. Expected red: `normalizeOllamaTag: qwen3:latest → qwen3…` and `one row per Ollama model id…` (two rows). Restore.
 7. In `ollamaReasoningRows` drop `...[...levels].filter((l) => !LEVEL_ORDER.includes(l))`. Expected red: `a saved value this version does not know stays visible after the known levels (N10)`. Restore.
+8. Remove `'reasoning'` from `ISSUE_FIELDS` (or drop the `reasoning` entry from `ENDPOINT_FIELD_TEST_IDS`). Expected red: `a reasoning-overflow fix deep-link focuses the endpoint reasoning field (#3084 wave 5a)`. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -4633,56 +4739,91 @@ git commit -m "feat(frontend): offer only takeable reasoning levels in Advanced 
 
 ### Task 5.6b: `AnalyzerRequestControls` scrolls to and highlights a deep-linked model row (F7, Task 5.5c consumer)
 
-**What this closes:** Task 5.5b's `reasoningSetting` fix and Task 5.5c's `#/advanced?reasoningEngine=&reasoningModel=` deep link both exist; this task is where the "How to fix" click actually lands — the per-engine reasoning editor Task 5.6 just built scrolls to and highlights the named model's row, the same way F7 describes for a registry-knob `settingKey` fix and Advanced Settings' generated rows.
+**What this closes:** Task 5.5b's `reasoningSetting` fix and Task 5.5c's `#/advanced?reasoningEngine=&reasoningModel=` deep link both exist; this task is where the "How to fix" click actually lands.
+
+**Corrected against the real component (review pass 1, 2026-09-13).** Task 5.6 declares `export function AnalyzerRequestControls()` with **no props** — it reads everything itself, via `useAppSelector`/`useAppDispatch` and an internal `useState<CatalogModelReasoning[]>` populated by an async `api.getAnalyzerModels()` effect (empty until that resolves). Its own tests render `<Provider store={store}><AnalyzerRequestControls /></Provider>`, with no props passed. This task therefore does **not** add a `focusReasoningSetting` prop:
+- **Read the focus from the store**, the same way the component already reads `currentModel`/`savedOllama`/`savedGemini`: `const stage = useAppSelector((s) => s.ui.stage); const reasoningFocus = stage.kind === 'advanced' ? stage.reasoningFocus : undefined;` — `advanced.tsx` needs no change at all; it never held the stage or the models list to thread through as a prop.
+- **Run the effect when the rows arrive, not only on mount.** The `models` list, and the `ollamaRows`/`geminiModels` derived from it, only exist after the async fetch resolves; a deep link that lands before that resolves must still scroll once the row appears. Depend the highlight effect on `[reasoningFocus, ollamaRows, geminiModels]`, not `[reasoningFocus]` alone.
+- **Match an Ollama row by its normalised tag.** `ollamaRows`' ids are already `normalizeModelTag`-normalised (P18/N7, Task 5.6); `reasoningFocus.model` is whatever the URL carried, which may be a bare or `:latest` tag. Normalise it with `normalizeModelTag` (`src/lib/reasoning-levels.ts`, Task 5.6, the frontend mirror of the server's) before comparing.
+- **`scrollIntoView` does not exist in jsdom** — call it as `el?.scrollIntoView?.({ block: 'center' })` (the same guarded-call pattern `help.tsx:167,221` already uses in this codebase for the same reason), never `el.scrollIntoView(...)` unguarded.
 
 **Files:**
-- Modify: `src/components/settings/analyzer-request-controls.tsx` (Task 5.6) — give each rendered Gemini and Ollama model row a stable DOM id, and accept a `focusReasoningSetting` prop.
-- Modify: `src/views/advanced.tsx` — read `stage.reasoningFocus` (Task 5.5c's `Stage` field, via `useAppSelector`/the router-derived stage, whichever this view already uses to read the current route) and pass it through as `focusReasoningSetting`.
-- Test: `src/components/settings/analyzer-request-controls.test.tsx` (append), `src/views/advanced.test.tsx` (append).
+- Modify: `src/components/settings/analyzer-request-controls.tsx` (Task 5.6) — read `reasoningFocus` from the store; give each rendered Gemini and Ollama `<label>` row a stable `id` (reusing its existing `data-testid` string, not a new format); add the highlight effect.
+- Test: `src/components/settings/analyzer-request-controls.test.tsx` (append, rendered exactly as Task 5.6's own tests render it — `<Provider store={store}><AnalyzerRequestControls /></Provider>`, `api.getAnalyzerModels` mocked, and awaited).
 
 **Interfaces:**
-- Consumes: Task 5.5c's `Stage`'s `{ kind: 'advanced'; reasoningFocus?: { engine; model } }`; Task 5.6's `ollamaReasoningRows`/Gemini row rendering (by symbol, not by pinned revision — both are new in this wave).
-- Produces:
-  ```ts
-  // src/components/settings/analyzer-request-controls.tsx
-  export interface AnalyzerRequestControlsProps {
-    // …Task 5.6's existing props…
-    focusReasoningSetting?: { engine: 'gemini' | 'ollama'; model: string };
-  }
-  ```
-  Each rendered row gets `id={reasoningRowId(engine, model)}` where `reasoningRowId(engine, model) = `reasoning-row-${engine}-${encodeURIComponent(model)}`` (exported alongside the component so the test can address the same id without duplicating the format string). When `focusReasoningSetting` names a row present in the current lists, that row's element calls `scrollIntoView({ block: 'center' })` once (on mount and on prop change) and carries a highlight class for a few seconds (same pattern as any existing "just saved" flash in this file, if one exists — reuse it rather than inventing a second timing mechanism).
+- Consumes: `s.ui.stage` (`{ kind: 'advanced'; reasoningFocus?: { engine; model } }`, Task 5.5c); Task 5.6's `ollamaRows`/`geminiModels` (already computed in the component) and `normalizeModelTag` (`src/lib/reasoning-levels.ts`, Task 5.6).
+- Produces: each Ollama `<label>` row gets `id={`analyzer-reasoning-ollama-${row.id}`}` (the same string its `data-testid` already uses); each Gemini `<label>` row gets `id={`analyzer-reasoning-gemini-${m.id}`}`. When `reasoningFocus` names a row present in `ollamaRows`/`geminiModels`, that row's element scrolls into view and carries a highlight class for a few seconds (mirroring `onSave`'s own `setShowSaved` timeout pattern, `2400`ms, already in this file).
 
 - [ ] **Step 1: Write the failing tests**
 ```tsx
-it('scrolls to and highlights the deep-linked Gemini row', () => {
+it('scrolls to and highlights the deep-linked Gemini row once its data arrives', async () => {
   const scrollIntoView = vi.fn();
   Element.prototype.scrollIntoView = scrollIntoView;
-  render(<AnalyzerRequestControls {...BASE_PROPS} focusReasoningSetting={{ engine: 'gemini', model: 'gemini-3.6-flash' }} />);
-  const row = document.getElementById(reasoningRowId('gemini', 'gemini-3.6-flash'));
-  expect(row).not.toBeNull();
-  expect(scrollIntoView).toHaveBeenCalled();
-  expect(row?.className).toMatch(/highlight/);
+  vi.mocked(api.getAnalyzerModels).mockResolvedValue({
+    groups: [{ kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'ok', models: [{ id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash', offeredReasoningLevels: ['model-default', 'minimal', 'low'] }] }],
+  } as Awaited<ReturnType<typeof api.getAnalyzerModels>>);
+  const store = makeStore({ ui: { stage: { kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-3.6-flash' } } } });
+  render(<Provider store={store}><AnalyzerRequestControls /></Provider>);
+  await screen.findByTestId('analyzer-reasoning-gemini-gemini-3.6-flash');
+  await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+  expect(document.getElementById('analyzer-reasoning-gemini-gemini-3.6-flash')?.className).toMatch(/ring-2/);
 });
-it('does nothing when focusReasoningSetting names a row not currently listed', () => {
+
+it('matches an Ollama row by its normalised tag, not the raw URL value', async () => {
   const scrollIntoView = vi.fn();
   Element.prototype.scrollIntoView = scrollIntoView;
-  render(<AnalyzerRequestControls {...BASE_PROPS} focusReasoningSetting={{ engine: 'gemini', model: 'gemini-9-ultra' }} />);
+  vi.mocked(api.getAnalyzerModels).mockResolvedValue({
+    groups: [{ kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [{ id: 'qwen3.5:4b', label: 'qwen3.5:4b', offeredReasoningLevels: ['model-default', 'off', 'on'] }] }],
+  } as Awaited<ReturnType<typeof api.getAnalyzerModels>>);
+  const store = makeStore({ ui: { stage: { kind: 'advanced', reasoningFocus: { engine: 'ollama', model: 'qwen3.5:4b:latest' } } } });
+  render(<Provider store={store}><AnalyzerRequestControls /></Provider>);
+  await screen.findByTestId('analyzer-reasoning-ollama-qwen3.5:4b');
+  await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+});
+
+it('does nothing when the deep-linked row is not in the current lists', async () => {
+  const scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView = scrollIntoView;
+  vi.mocked(api.getAnalyzerModels).mockResolvedValue({ groups: [] });
+  const store = makeStore({ ui: { stage: { kind: 'advanced', reasoningFocus: { engine: 'gemini', model: 'gemini-9-ultra' } } } });
+  render(<Provider store={store}><AnalyzerRequestControls /></Provider>);
+  await waitFor(() => expect(vi.mocked(api.getAnalyzerModels)).toHaveBeenCalled());
   expect(scrollIntoView).not.toHaveBeenCalled();
 });
 ```
-Append to `src/views/advanced.test.tsx`: a case rendering `AdvancedView` at a hash carrying `reasoningFocus` (via Task 5.5c's route) and asserting `AnalyzerRequestControls` receives the matching `focusReasoningSetting` prop (spy/shallow-check, matching this file's existing prop-forwarding assertions).
+(`makeStore` — reuse whatever this file's own `Provider store={store}` case already uses to build a preloaded store; do not add a second store-construction helper.)
 - [ ] **Step 2: Run them and confirm they fail**
-Expected: FAIL — no row carries an `id` yet, `focusReasoningSetting` is not a prop, `scrollIntoView` is never called.
+Expected: FAIL — no row carries an `id` yet, `reasoningFocus` is read from nowhere, `scrollIntoView` is never called.
 - [ ] **Step 3: Implement**
-Add `export function reasoningRowId(engine: 'gemini' | 'ollama', model: string): string { return \`reasoning-row-${engine}-${encodeURIComponent(model)}\`; }` and thread it onto each row's `id`. Add the `focusReasoningSetting` prop and a `useEffect` keyed on it that looks up `document.getElementById(reasoningRowId(...))`, calls `scrollIntoView({ block: 'center' })` when found, and toggles a highlight class off after a few seconds via `setTimeout` (cleared on unmount/re-run, matching this file's other timeout cleanups).
-In `advanced.tsx`, pass `focusReasoningSetting={stage.kind === 'advanced' ? stage.reasoningFocus : undefined}` to `<AnalyzerRequestControls …>`.
+```tsx
+const stage = useAppSelector((s) => s.ui.stage);
+const reasoningFocus = stage.kind === 'advanced' ? stage.reasoningFocus : undefined;
+
+useEffect(() => {
+  if (!reasoningFocus) return;
+  const targetId =
+    reasoningFocus.engine === 'ollama'
+      ? `analyzer-reasoning-ollama-${normalizeModelTag(reasoningFocus.model)}`
+      : `analyzer-reasoning-gemini-${reasoningFocus.model}`;
+  const el = document.getElementById(targetId);
+  if (!el) return;
+  el.scrollIntoView?.({ block: 'center' });
+  el.classList.add('ring-2', 'ring-magenta/60');
+  const t = setTimeout(() => el.classList.remove('ring-2', 'ring-magenta/60'), 2400);
+  return () => clearTimeout(t);
+}, [reasoningFocus, ollamaRows, geminiModels]);
+```
+Add `import { normalizeModelTag } from '../../lib/reasoning-levels';` (Task 5.6 already exports it as the frontend mirror of the server's `normalizeModelTag`). On each Ollama `<label key={row.id} …>`, add `id={`analyzer-reasoning-ollama-${row.id}`}`. On each Gemini `<label key={m.id} …>`, add `id={`analyzer-reasoning-gemini-${m.id}`}`.
 - [ ] **Step 4: Run and confirm they pass**
 - [ ] **Step 5: Mutation proof**
-1. Delete the `id={reasoningRowId(...)}` attribute. Expected red: both new `AnalyzerRequestControls` cases (`getElementById` finds nothing). Restore.
-2. Drop the "row not listed" early-return (call `scrollIntoView` unconditionally). Expected red: `does nothing when focusReasoningSetting names a row not currently listed`. Restore.
+1. Delete the `id={...}` attribute from the Gemini `<label>`. Expected red: `scrolls to and highlights the deep-linked Gemini row once its data arrives` (`getElementById` finds nothing). Restore.
+2. Replace `document.getElementById(targetId)` with `document.getElementById(targetId) ?? document.body` (a fallback element that always exists). Expected red: `does nothing when the deep-linked row is not in the current lists` (`scrollIntoView` is now wrongly called, against `document.body`) — red on the assertion, not a `null` `TypeError`. Restore.
+3. Remove `normalizeModelTag(...)` from the Ollama branch (compare the raw URL value against `row.id` directly). Expected red: `matches an Ollama row by its normalised tag, not the raw URL value` (`qwen3.5:4b:latest` never equals the normalised `qwen3.5:4b` id). Restore.
+4. Change the effect's dependency array to `[reasoningFocus]` only. Expected red: `scrolls to and highlights the deep-linked Gemini row once its data arrives` becomes flaky/red under a slow-resolving mock (the effect fires once, before `models` has arrived, and never re-runs when the row appears) — demonstrate with a deliberately delayed `mockResolvedValue` (e.g. wrap it in a `Promise` resolved on a microtask tick) if the plain case does not reliably fail. Restore.
 - [ ] **Step 6: Commit**
 ```bash
-git add src/components/settings/analyzer-request-controls.tsx src/components/settings/analyzer-request-controls.test.tsx src/views/advanced.tsx src/views/advanced.test.tsx
+git add src/components/settings/analyzer-request-controls.tsx src/components/settings/analyzer-request-controls.test.tsx
 git commit -m "feat(frontend): scroll to and highlight a reasoning-overflow fix's model row in Advanced settings"
 ```
 
@@ -4709,7 +4850,7 @@ Add to the top section of `RELEASE_NOTES.md`:
 Replace `(#PR)` with the PR number once opened.
 
 - [ ] **Step 2b: Wiki (F3)**
-Add: `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md` — a "Reasoning" subsection, per server (llama.cpp/llama-server, llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter — F3's outline §3), each saying which `reasoningStyle` to pick and with one worked example (a launch flag or request body showing the field this wave's `reasoningWireFragment` sends: `reasoning_effort` or `chat_template_kwargs.enable_thinking`). Take verified facts from `docs/superpowers/specs/2026-09-11-openai-compatible-analyzer-planning-facts.md`; mark anything unverified "verify at implementation"; each example records the tool version it was checked against (F3's acceptance criterion). Add the "When a model thinks past its output limit" anchor Task 5.5b's `wikiHref` points at (`#when-a-model-thinks-past-its-output-limit`), naming the endpoint's `reasoning` field as the fix, mirroring wave 2's Gemini/Ollama anchor of the same name in `docs/wiki/Analysis-and-the-Analyzer.md`.
+Add: `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md` — a "Reasoning" subsection, per server (llama.cpp/llama-server, llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter — F3's outline §3), each saying which `reasoningStyle` to pick and with one worked example (a launch flag or request body showing the field this wave's `reasoningWireFragment` sends: `reasoning_effort` or `chat_template_kwargs.enable_thinking`). Take verified facts from `docs/superpowers/specs/2026-09-11-openai-compatible-analyzer-planning-facts.md`; mark anything unverified "verify at implementation"; each example records the tool version it was checked against (F3's acceptance criterion). **Corrected (review pass 1, 2026-09-13): add no second "When a model thinks past its output limit" heading.** Task 3d.9a already writes that heading on this same page (`w3cd.md:13456`), and Task 5.5b's endpoint reasoning fix points at the page via `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'` only (no anchor — `wikiHref` is retired, wave 3 review), so nothing here needs a matching anchor. This step's "Reasoning" subsection may itself cross-reference 3d.9a's existing heading in prose, but does not duplicate it.
 Modify: `docs/wiki/Advanced-Settings.md` and `docs/wiki/Analysis-and-the-Analyzer.md`, wherever they document the Settings rows this wave adds — the per-engine reasoning editor (Task 5.6) and the endpoint form's Reasoning field — with the 3.x Flash levels (F2) and the note that Gemini 2.5 offers `model-default` only. `scripts/tests/knob-docs-sync.test.mjs` (#2012, `test:hooks`) checks registry-knob labels only, not this per-model editor, so it does not gate this step — but it does gate any registry knob this wave's tasks touch (none in 5a).
 - [ ] **Step 3: On-box acceptance rows (CLAUDE.md Before-shipping step 3)**
 Allocate each ID from its group's `<!-- next-id: … -->` marker **at ship time** (never a hard-coded number) and bump the marker in the same commit. Add one row per group:
@@ -4740,7 +4881,7 @@ Run: `npm run typecheck`, `npm run check:cycles`, `npm run verify:fast:branch`  
 ```bash
 git add docs/release-notes-next.md RELEASE_NOTES.md docs/testing/onbox-acceptance-register.md docs/testing/onbox-acceptance-register-live-view.html docs/features/284-openai-compatible-analyzer.md
 git commit -m "docs(docs): release notes, on-box rows and plan invariants for analyzer reasoning controls"
-git push -u origin feat/server,frontend-3084-w5a-reasoning
+git push -u origin feat/server-3084-w5a-reasoning
 ```
 PR title: `feat(server,frontend,openapi): reasoning controls for every analyzer engine`. Body: `## Summary` (the release-notes-next entry), `## Test plan` (each task's test files, the mutation-proof red outputs from Tasks 5.1–5.6, the three register rows with their IDs), `Refs #3084`, and "Also fixed, found in passing: …" if any finding was fixed. Run the `pr-review-gate` skill at **high** depth (multi-scope); fold findings, re-review per the skill's loop.
 
@@ -4748,7 +4889,7 @@ PR title: `feat(server,frontend,openapi): reasoning controls for every analyzer 
 
 ### PR 5b — Custom request payload
 
-- **Branch:** `feat/server,frontend-3084-w5b-payload` — `node scripts/wt-new.mjs feat/server,frontend-3084-w5b-payload`, cut after PR 5a merges.
+- **Branch:** `feat/server-3084-w5b-payload` — `node scripts/wt-new.mjs feat/server-3084-w5b-payload`, cut after PR 5a merges.
 - **Delivers:** `server/src/analyzer/runner/extra-params.ts` (validation, merge, temperature precedence, output-cap detection, redaction); `analyzerExtraParamsByEngine` (Ollama, Gemini) and endpoint `extraParams` validated on save, an update judging its payload only when the payload or the reasoning style changes (A7); a persona (free-text) request carrying the payload without its output-cap keys (A4); every transport merges the payload last; a payload temperature sets attempt 1 only; a payload output cap (llama.cpp `n_predict` included) disables Auto, the label says so and overflow copy names the key; Gemini `safetySettings` shape and prototype keys (`__proto__`, `constructor`, `prototype`) validated at save and filtered at merge; payload string values ≥ 8 chars redacted from the errors of the request that carried them, in all three transports (P29), never through the global known secrets; payload never logged or persisted; editors in Advanced settings and the endpoint form; run label "+ custom params" with the e2e assertion; `Closes #3084`.
 - **Must NOT change:** any request for a user with no payload (byte-identical bodies); reasoning or structured-output behaviour; the retry policies' own temperatures; persisted analyzer file formats.
 - **Entry:** PR 5a merged.
@@ -6611,6 +6752,17 @@ function withPayloadCap(
 /* #3084 wave 5 (N13) — when a custom payload key set the output cap, that key is the setting to raise: the
    engine's max-output setting is overridden by it (P19), so naming the setting would send the user to a
    control that changes nothing. */
+/** Exported (review item 6, 2026-09-13) so Task 5.11b's endpoint payload fix can build the same
+    "custom parameter … in …" phrase this overflow copy uses, instead of hand-typing a second copy
+    of it in the fixes list. */
+export function customParamsWhere(transport: TransportKind, endpointName: string | undefined): string {
+  return transport === 'openai'
+    ? endpointName
+      ? `the "${endpointName}" endpoint's custom parameters`
+      : "this endpoint's custom parameters"
+    : `the ${transport === 'ollama' ? 'Ollama' : 'Gemini'} custom parameters (Advanced settings → Analyzer request controls)`;
+}
+
 function payloadCapSettingFor(err: AnalyzerReasoningOverflowError): string | undefined {
   const settings = getCachedUserSettings();
   const parsed = err.transport === 'openai' ? parseEndpointModelId(err.model) : null;
@@ -6618,13 +6770,7 @@ function payloadCapSettingFor(err: AnalyzerReasoningOverflowError): string | und
   const engine = err.transport === 'ollama' ? ('local' as const) : err.transport;
   const key = payloadOutputCapKey(err.transport, resolveExtraParamsSetting(settings, { engine, endpoint }));
   if (!key) return undefined;
-  const where =
-    err.transport === 'openai'
-      ? endpoint
-        ? `the "${endpoint.name}" endpoint's custom parameters`
-        : "this endpoint's custom parameters"
-      : `the ${err.transport === 'ollama' ? 'Ollama' : 'Gemini'} custom parameters (Advanced settings → Analyzer request controls)`;
-  return `the custom parameter "${key}" in ${where}`;
+  return `the custom parameter "${key}" in ${customParamsWhere(err.transport, endpoint?.name)}`;
 }
 ```
 In W2's `AnalyzerReasoningOverflowError` branch, change `const outputSetting =` to `const outputSetting = payloadCapSettingFor(err) ??`, keeping W2's three-way ternary as the right-hand operand (wrap it in parentheses). The copy then reads `Raise ${outputSetting}, …` with the payload key when one set the cap.
@@ -7029,9 +7175,15 @@ git commit -m "feat(server): redact custom payload values from upstream error te
 - Modify: `server/src/routes/failure-taxonomy.ts` — extend `reasoningOverflowFixes(ctx)`'s `openai` branch with a payload fix
 - Modify: the guard-test file (Task 5.5b's) — append a case and a mutation row
 
+**Corrected (review pass 1 + wave 3 review, 2026-09-13):** `payloadOutputCapKey` takes the transport kind as its first argument (`payloadOutputCapKey(kind: TransportKind, params: Json | undefined): string | undefined`, Task 5.8) — the earlier draft called it with one argument. The payload itself is resolved through `resolveExtraParamsSetting(settings, { engine, endpoint })` (Task 5.8), the same call Task 5.11's `payloadCapSettingFor` already makes, with the endpoint resolved explicitly rather than read off a bare `endpoint?.extraParams`. The fix's phrase reuses Task 5.11's own `customParamsWhere(transport, endpointName)` (exported there for exactly this reuse) instead of hand-typing a second copy of "the … endpoint's custom parameters". `wikiHref` is `wikiPage` (page name, no anchor — wave 3 review): `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'`, and the label itself names the "Custom payload" section (created in 5b, Task 5.12, in the same PR as this task).
+
+**Files:**
+- Modify: `server/src/routes/failure-taxonomy.ts` — extend `reasoningOverflowFixes(ctx)`'s `openai` branch with a payload fix; export `customParamsWhere` from Task 5.11's helper (above) if it is not already exported there
+- Modify: `server/src/routes/failure-taxonomy-fixes.test.ts` (Task 5.5b's guard-test file) — append a case, extend the guard's page-existence check, and add a mutation row
+
 **Interfaces:**
-- Consumes: `payloadOutputCapKey(payload)` (Task 5.8, `server/src/analyzer/runner/extra-params.ts`) — the payload key that governs the output cap for a given endpoint, when one is set; `analyzerEndpointSchema`'s `extraParams` field.
-- Produces: for `ctx.transport === 'openai'`, when the endpoint's saved `extraParams` sets an output-cap key (`payloadOutputCapKey` returns one), `reasoningOverflowFixes` appends `{ label: 'Raise the custom parameter "<key>" in the "<endpoint name>" endpoint's custom parameters', endpointField: { endpointId: ctx.endpointId, field: 'extraParams' }, wikiHref: '…/OpenAI-Compatible-Analyzer-Endpoints#custom-payload' }` (F3's 5b wiki anchor). This is the same `field: 'extraParams'` shape Task 5.11's redaction and Task 5.9's validation already treat as one endpoint field — the fix names the specific key inside it in its `label` only, since `endpointField.field` must be a schema key, not a path into one.
+- Consumes: `payloadOutputCapKey(kind, params)` and `resolveExtraParamsSetting(settings, sel)` (Task 5.8, `server/src/analyzer/runner/extra-params.ts`); `customParamsWhere(transport, endpointName)` (Task 5.11, `server/src/routes/failure-taxonomy.ts`); `analyzerEndpointSchema`'s `extraParams` field; 3d.9a's wiki-page-existence guard (extended here with this task's `wikiPage` value).
+- Produces: for `ctx.transport === 'openai'`, when the endpoint's saved `extraParams` (via `resolveExtraParamsSetting`) sets an output-cap key (`payloadOutputCapKey` returns one), `reasoningOverflowFixes` appends `{ label: 'Raise the custom parameter "<key>" in <customParamsWhere(...)>, under "Custom payload"', endpointField: { endpointId: ctx.endpointId, field: 'extraParams' }, wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' }`. This is the same `field: 'extraParams'` shape Task 5.11's redaction and Task 5.9's validation already treat as one endpoint field — the fix names the specific key inside it in its `label` only, since `endpointField.field` must be a schema key, not a path into one.
 
 - [ ] **Step 1: Write the failing test**
 ```ts
@@ -7046,6 +7198,8 @@ describe('reasoningOverflowFixes — endpoint custom-payload output cap (#3084 w
     const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' });
     const payloadFix = fixes.find((f) => f.label.includes('max_completion_tokens'));
     expect(payloadFix?.endpointField).toEqual({ endpointId: 'lab', field: 'extraParams' });
+    expect(payloadFix?.wikiPage).toBe('OpenAI-Compatible-Analyzer-Endpoints');
+    expect(payloadFix?.label).toMatch(/"Lab box".*custom parameters/);
   });
 
   it('adds no payload fix when the endpoint sets no output-cap key', () => {
@@ -7062,22 +7216,24 @@ Expected: FAIL — the first case finds no `payloadFix` (`undefined`); the secon
 - [ ] **Step 3: Implement**
 In `reasoningOverflowFixes`'s `openai` branch, after Task 5.5b's reasoning fix:
 ```ts
-  const capKey = payloadOutputCapKey(endpoint?.extraParams);
+  const capKey = payloadOutputCapKey('openai', resolveExtraParamsSetting(getCachedUserSettings(), { engine: 'openai', endpoint }));
   if (capKey) {
     fixes.push({
-      label: `Raise the custom parameter "${capKey}" in the "${endpointName}" endpoint's custom parameters`,
+      label: `Raise the custom parameter "${capKey}" in ${customParamsWhere('openai', endpoint?.name)}, under "Custom payload"`,
       endpointField: { endpointId: ctx.endpointId!, field: 'extraParams' },
-      wikiHref: '/wiki/OpenAI-Compatible-Analyzer-Endpoints#custom-payload',
+      wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints',
     });
   }
 ```
-(`endpoint` resolved the same way the branch already resolves it for the reasoning fix; import `payloadOutputCapKey` from `../analyzer/runner/extra-params.js`.)
+(`endpoint` resolved the same way the branch already resolves it for the reasoning fix; import `payloadOutputCapKey`, `resolveExtraParamsSetting` from `../analyzer/runner/extra-params.js` and `customParamsWhere` from this same file's Task 5.11 export.)
+**Guard test (3d.9a extension).** The page-existence guard needs a `reasoningOverflowFixes` call whose result carries this fix, so it actually checks `'OpenAI-Compatible-Analyzer-Endpoints'` — extend whichever fixture list the guard iterates (`ALL_FIXTURE_FIXES_LISTS` or equivalent, Task 5.5b) with an `openai` ctx whose endpoint sets an output-cap key, so this task's `wikiPage` is exercised the same way Task 5.5b's and Task 5.11b's endpoint-reasoning fix already are.
 - [ ] **Step 4: Run and confirm it passes**
 - [ ] **Step 5: Mutation proof**
-Delete the `if (capKey)` block. Expected red: `names the endpoint's own payload key when its custom parameters set the output cap`. Restore.
+1. Delete the `if (capKey)` block. Expected red: `names the endpoint's own payload key when its custom parameters set the output cap`. Restore.
+2. Change `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'` to a nonexistent page name. Expected red: the extended 3d.9a guard's page-existence check. Restore.
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/routes/failure-taxonomy.ts <guard-test file>
+git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy-fixes.test.ts
 git commit -m "feat(server): point the reasoning-overflow fix list at an endpoint's own payload output cap"
 ```
 
@@ -7420,6 +7576,18 @@ In `AnalyzerEndpointsSection`'s body (after the `hostChanged` memo), add `const 
 ```
 The submit is W3d's `save()`, which sends `validateEndpointDraft(…).input`. After the changes above it refuses while `errors.extraParams` is set, sends `extraParams` from the parsed text, and never sends `extraParamsText`. Server validation messages already flow through `settingsIssueMessages` (Task 5.6).
 
+**`ISSUE_FIELDS`/`ENDPOINT_FIELD_TEST_IDS` (review item 5, 2026-09-13).** 3d.8's own note (`w3cd.md:12889`) flags `extraParams` by name as unfocusable "before wave 5"; this task supplies its control, so it also closes that gap: add `'extraParams'` to `ISSUE_FIELDS` (`w3cd.md:12190`) and `extraParams: 'endpoint-extra-params'` to `ENDPOINT_FIELD_TEST_IDS` (`w3cd.md:12195`), in the same file this task already edits.
+
+Append to `src/components/settings/analyzer-endpoints-section.test.tsx`:
+```tsx
+it("a payload-fix deep-link focuses the endpoint's custom parameters field (#3084 wave 5b)", async () => {
+  renderSectionAtHash('#/models?endpoint=lab&field=extraParams'); // match Task 5.6's/3d.9's own focus-test grammar
+  await screen.findByTestId('endpoint-row-lab');
+  fireEvent.click(screen.getByTestId('endpoint-edit-lab'));
+  expect(screen.getByTestId('endpoint-extra-params')).toHaveFocus();
+});
+```
+
 Server label parts go in W3c's `toEntry` (`server/src/analyzer/catalog/analyzer-catalog.ts`). Its ctx already carries `endpoint` (Task 5.4). Add `import { requestControlsLabelParts, resolveExtraParamsSetting } from '../runner/extra-params.js';`, and add to its return object:
 ```ts
     requestControlLabelParts: requestControlsLabelParts(
@@ -7463,6 +7631,7 @@ Expected: PASS. Keeps green: Task 5.6 RTL cases (with the updated patch expectat
 3. In the endpoint form remove `disabled={payloadCapsOutput}`'s companion note block. Expected red: `disables the max output field when the payload sets the cap, and shows JSON errors`. Restore.
 4. Delete the `Not a place for credentials…` sentence from the Ollama/Gemini editor help. Expected red: `notes when the payload takes over the output cap` (`toHaveLength(2)`). Delete it from the endpoint form's sublabel instead. Expected red: `disables the max output field when the payload sets the cap, and shows JSON errors`. Restore both (P29).
 5. Remove `'n_predict'` from the frontend `OUTPUT_CAP.openai.keys`. Expected red: `frontend payload helpers match the server case table` at the `openai {"n_predict":1024}` row (N9). Restore.
+6. Remove `'extraParams'` from `ISSUE_FIELDS` (or drop its `ENDPOINT_FIELD_TEST_IDS` entry). Expected red: `a payload-fix deep-link focuses the endpoint's custom parameters field (#3084 wave 5b)`. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -7494,7 +7663,7 @@ Run: `npm run openapi:types` → `git diff --exit-code src/lib/api-types.ts` (ex
 ```
 
 - [ ] **Step 2b: Wiki — "Custom payload" (F3)**
-Add a "Custom payload" subsection to `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md`, per server (llama.cpp/llama-server, llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter), with worked examples: vLLM's `max_completion_tokens`, llama.cpp's sampler keys (`min_p`, `top_k`, `n_predict`), and one example per remaining server, each showing a request body or config snippet this wave's `mergeExtraParams`/`payloadOutputCapKey` actually recognises. Include the protected-key list (spec §9's pipeline-owned keys, restated here for endpoints) and the credential warning (P29 — payloads are not a place for API keys, and their string values are redacted from that request's own errors only). Take verified facts from `docs/superpowers/specs/2026-09-11-openai-compatible-analyzer-planning-facts.md`; mark anything else "verify at implementation"; each example records the tool version it was checked against.
+Add **one top-level `## Custom payload` section** to `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md` — this is the page Task 5.11b's payload fix names in its label ("… under 'Custom payload'") and points at via `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'`; the section must exist by the time this PR ships (it does, ship being this PR's last task) and must not collide with 3d.9a's existing top-level headings on the same page. Per-server detail lands as `###` subsections **under** that one heading — llama.cpp/llama-server, llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter — with worked examples: vLLM's `max_completion_tokens`, llama.cpp's sampler keys (`min_p`, `top_k`, `n_predict`), and one example per remaining server, each showing a request body or config snippet this wave's `mergeExtraParams`/`payloadOutputCapKey` actually recognises. Include the protected-key list (spec §9's pipeline-owned keys, restated here for endpoints) and the credential warning (P29 — payloads are not a place for API keys, and their string values are redacted from that request's own errors only). Take verified facts from `docs/superpowers/specs/2026-09-11-openai-compatible-analyzer-planning-facts.md`; mark anything else "verify at implementation"; each example records the tool version it was checked against.
 
 - [ ] **Step 3: On-box acceptance rows**
 Allocate from each group's `next-id` marker at ship time; bump the marker in the same commit.
@@ -7512,6 +7681,6 @@ Run: `npm run typecheck`, `npm run check:cycles`, `npm run verify:fast:branch`, 
 ```bash
 git add docs/release-notes-next.md RELEASE_NOTES.md docs/testing/onbox-acceptance-register.md docs/testing/onbox-acceptance-register-live-view.html docs/features/284-openai-compatible-analyzer.md docs/features/INDEX.md
 git commit -m "docs(docs): release notes, on-box rows and ship notes for custom analyzer payloads"
-git push -u origin feat/server,frontend-3084-w5b-payload
+git push -u origin feat/server-3084-w5b-payload
 ```
 PR title: `feat(server,frontend,openapi): custom request parameters for every analyzer engine`. Body: `## Summary` (release-notes-next entry + the four spec-gap resolutions at the top of PR 5b), `## Test plan` (task test files, the privacy test, both e2e specs, pasted mutation-proof red output from Tasks 5.8–5.12, the register row IDs), **`Closes #3084`** (this is the wave's last PR; owed on-box acceptance is recorded as rows, which never blocks a merge), and "Also fixed, found in passing: …" if any. Run `pr-review-gate` at **high** depth; fold findings per its loop.

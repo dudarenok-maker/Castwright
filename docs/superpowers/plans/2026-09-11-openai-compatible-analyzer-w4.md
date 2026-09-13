@@ -6,7 +6,7 @@
 
 ### PR 4 — persona generation runs through the stage runner's free-text path
 
-**Branch:** `feat/server,frontend-3084-w4-persona` — created with `node scripts/wt-new.mjs feat/server,frontend-3084-w4-persona` off the latest `main`. The wave map says `feat/server-3084-w4-persona`; this PR also changes the Advanced Settings picker, so the scope is multi-scope.
+**Branch:** `feat/server-3084-w4-persona` — created with `node scripts/wt-new.mjs feat/server-3084-w4-persona` off the latest `main`. Corrected 2026-09-13: `scripts/lib/branch-name.mjs`'s `SCOPE_GROUP` takes a single scope; `wt-new.mjs` refuses a comma-joined `feat/server,frontend-…` branch name outright. CONTRIBUTING.md's comma form (`feat(server,frontend): …`) is for commit-subject and PR-title scopes only, not branch names. This PR still changes both server and frontend code, and its commits/PR title keep the multi-scope `server,frontend` form — only the branch name is single-scope.
 
 **Delivers:**
 - `analyzer.personaGeneration.engine` (`PERSONA_GEN_ENGINE`) accepts `local`, `gemini`, or `openai:<endpointId>::<model>`.
@@ -996,14 +996,15 @@ Before starting this task, confirm 3d.4b has merged: `git grep -n "'analyzer-eng
 - Modify: `server/src/config/registry.test.ts` — append a describe for the persona knob (no change to the allowed-types array; that is Task 3d.4b's).
 - Modify: `server/src/routes/config.test.ts` — append a describe.
 - Regenerate: `server/.env.example`, via `npm run config:sync`. Only the help comment above `# PERSONA_GEN_ENGINE=gemini` (main line 558) changes.
-- **Also update `docs/wiki/Advanced-Settings.md`'s "Analyzer models & endpoints" row for the persona engine knob in this same PR** (its label and options text change) — `scripts/tests/knob-docs-sync.test.mjs` (#2012, `test:hooks`) fails the build if a registry knob's label has no matching row there, and this task relabels an existing knob rather than adding a new one, so the guard fires the same way a brand-new knob would.
+- **Update `docs/wiki/Advanced-Settings.md`'s existing "Analyzer models & endpoints" row for the persona engine knob in this same PR**, to reflect its new options/pattern text. **Corrected (review pass 1, 2026-09-13):** this task does not change the label `'Persona generation engine'`, and that row already exists at `Advanced-Settings.md:138`, keyed by that unchanged label — so `scripts/tests/knob-docs-sync.test.mjs` (#2012, `test:hooks`), which only checks that every registry knob's *label* has a matching row, does **not** fire here; there is no new-row guard to satisfy. Updating the row's content is still owed on its own terms (a derived-doc-staleness chore, CLAUDE.md's Incidental findings), because the row's options/help text now describes a knob type this PR changes — it just is not the guard's own job to catch that.
+- **Also update `src/lib/api.ts`'s frontend mock config catalogue entry for `analyzer.personaGeneration.engine`** (the mock `/api/config` response `src/lib/api.config.test.ts` exercises) to `type: 'analyzer-engine'`, matching the server registry change above — confirm first whether that entry is hand-maintained or generated, since `src/lib/api.config.test.ts` is listed under "Keeps green" (implying no edit needed); if it turns out to need one, this is where it lands. Task 4.7's regression test reads this mock catalogue directly (via `vi.importActual`) and depends on it already reporting `'analyzer-engine'`.
 
-**Dependency:** this wave's `feat/server,frontend-3084-w4-persona` branch cuts off `main` only after PR 3d has merged (Entry criterion 1, unchanged), because `analyzer-engine` must already exist in `KnobType`.
+**Dependency:** this wave's `feat/server-3084-w4-persona` branch cuts off `main` only after PR 3d has merged (Entry criterion 1, unchanged), because `analyzer-engine` must already exist in `KnobType`.
 
-**`findEndpointReferences` needs no new wave 4 step.** Task 3d.4b widens `server/src/workspace/analyzer-endpoints.ts`'s reference-classification guard filter (`/(\.model|Model|\.engine)$/`) to also select every `type === 'analyzer-engine'` knob, and `w3cd.md:9673-9679` pins that `findEndpointReferences` already reports `Advanced setting "analyzer.fallback.target"` for a knob it finds purely by type, not by name. Because the persona knob becomes `type: 'analyzer-engine'` in this same task, it is covered by that same filter automatically — deleting an endpoint the persona knob names now surfaces `Advanced setting "analyzer.personaGeneration.engine"` with no further wiring. This wave adds no test of its own for that path; 3d.4b's generic, type-driven test is the proof, and duplicating it here would only re-test the filter, not this knob.
+**`findEndpointReferences` needs no new wave 4 step — corrected reason (review pass 1, 2026-09-13).** `findEndpointReferences` walks the explicit array `MODEL_ID_CONFIG_KNOBS` (`server/src/workspace/analyzer-endpoints.ts`, Task 3b.5), and `analyzer.personaGeneration.engine` is already on that array (`w3ab.md:4730`'s list; kept unchanged through 3d.4b, `w3cd.md:10382`: `['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.personaGeneration.engine', 'analyzer.fallback.target']`). So the persona knob was already covered by `findEndpointReferences` **before** this task, regardless of its `KnobType` — this task's relabel to `type: 'analyzer-engine'` changes nothing about that coverage. The `type === 'analyzer-engine'` clause the earlier draft cited (`w3cd.md:9281`) belongs to a **different** mechanism: the classification **guard test** in `analyzer-endpoints.test.ts`, which checks every registry knob is *either* on `MODEL_ID_CONFIG_KNOBS` *or* on an exclusion list, catching a knob nobody remembered to list. Since the persona knob is already on `MODEL_ID_CONFIG_KNOBS`, that guard test needs nothing from this task either. This wave adds no step and no test for either mechanism.
 
 **Interfaces:**
-- **Consumes:** the `'analyzer-engine'` `KnobType` member, its `OverrideRow`/`AdvancedView` UI wiring, and the widened `findEndpointReferences` filter (all Task 3d.4b/3d.4c, per F4); `parseEndpointModelId` (W3, `server/src/analyzer/model-id.ts`) and the shared case table `server/src/analyzer/__fixtures__/model-id-cases.json` (W3). Test-only: `registry.ts` must stay pure data (`registry-imports.guard.test.ts`), so the grammar is a literal regex pinned against `parseEndpointModelId`.
+- **Consumes:** the `'analyzer-engine'` `KnobType` member and its `OverrideRow`/`AdvancedView` UI wiring (Task 3d.4b/3d.4c, per F4); `MODEL_ID_CONFIG_KNOBS`'s existing `analyzer.personaGeneration.engine` entry (Task 3b.5, unchanged by this task — see the corrected note above); `parseEndpointModelId` (W3, `server/src/analyzer/model-id.ts`) and the shared case table `server/src/analyzer/__fixtures__/model-id-cases.json` (W3). Test-only: `registry.ts` must stay pure data (`registry-imports.guard.test.ts`), so the grammar is a literal regex pinned against `parseEndpointModelId`.
 - **Produces:**
   - The persona engine knob: `type: 'analyzer-engine'`, `options: ['local', 'gemini']`, `pattern: /^(local|gemini|openai:[a-z0-9-]{1,40}::.+)$/` (no `off` — F4's per-knob rule), `default: 'gemini'`.
 - **Keeps green:**
@@ -1142,7 +1143,7 @@ Replace the descriptor in `server/src/config/registry.ts` (`main`'s enum descrip
     risk: 'medium',
   },
 ```
-Then run `npm run config:sync`, and add the persona engine knob's row (relabelled options text) to `docs/wiki/Advanced-Settings.md`'s "Analyzer models & endpoints" section (the `knob-docs-sync` guard, `test:hooks`).
+Then run `npm run config:sync`, and update the persona engine knob's existing row (`Advanced-Settings.md:138`, keyed by its unchanged label) in `docs/wiki/Advanced-Settings.md`'s "Analyzer models & endpoints" section with its new options/pattern text — not a new row, and not something `knob-docs-sync` (`test:hooks`) checks, since that guard only verifies a label has a row at all.
 
 - [ ] **Step 4: Run and confirm they pass**
   - **Run:** `npm --prefix server run test -- src/config src/routes/config.test.ts`, then `npm test -- src/lib/api.config.test.ts`, then `npm run config:check` and `npm run typecheck`.
@@ -2447,7 +2448,7 @@ git commit -m "feat(server): generate personas through the analyzer transports f
 **What this task actually does:** nothing to `src/lib/analyzer-engine-options.ts`, `override-row.tsx` or `advanced.tsx` — the wiring is descriptor-driven (`descriptor.type === 'analyzer-engine'` and `descriptor.options`), not persona-specific, so once Task 4.4 relabels `analyzer.personaGeneration.engine` to `type: 'analyzer-engine'`, 3d.4c's existing picker renders it with no additional frontend code. This task adds only persona-specific regression coverage proving that.
 
 **Files:**
-- Test: Append a describe to `src/components/settings/override-row.test.tsx` and `src/views/advanced.test.tsx`, proving the **persona** knob's row specifically (not the fallback knob's, which 3d.4c's own tests at `w3cd.md:10350-10399`/`10406-10440` already cover) offers `local`, `gemini` and every endpoint model, and keeps a saved endpoint model id selectable when the catalog no longer lists it — reusing 3d.4c's `analyzerEngineOptions`/`endpointModelOptions` fixtures rather than re-authoring them.
+- Test: Append a describe to `src/views/advanced.test.tsx` only, proving the **persona** knob's row specifically (not the fallback knob's, which 3d.4c's own tests at `w3cd.md:10350-10399`/`10406-10440` already cover) offers `local`, `gemini` and every endpoint model. No change to `src/components/settings/override-row.test.tsx` — see the corrected Step 1 note below for why the earlier draft's cases there are deleted rather than kept.
 - No change to `src/lib/analyzer-engine-options.ts`, `src/components/settings/override-row.tsx` or `src/views/advanced.tsx`.
 
 **Interfaces:**
@@ -2464,93 +2465,35 @@ git commit -m "feat(server): generate personas through the analyzer transports f
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `src/components/settings/override-row.test.tsx`, reusing Task 3d.4c's `AnalyzerEngineOption` fixtures/helpers:
-```tsx
-/* ─── persona knob reuses Task 3d.4c's analyzer-engine picker (#3084 W4, F4) ── */
+**Corrected (review pass 1, 2026-09-13): the earlier draft's `override-row.test.tsx` cases hand-built `type: 'analyzer-engine'` directly into their fixture (`makeDescriptor({ …, type: 'analyzer-engine', … })`), so they could never fail — they exercise 3d.4c's generic picker with a persona-shaped fixture, which Task 3d.4c's own fallback-knob cases and mutation 2 (delete the `analyzer-engine` branch in `KnobControl`) already prove. Deleted here rather than kept as dead weight; do not re-add them.** The regression this task actually needs to guard — "the persona knob's registry descriptor really is `type: 'analyzer-engine'`" — is Task 4.4's own job (`registry.test.ts`'s `is an analyzer-engine knob…` case), not a frontend rendering test with a fixture that assumes the answer.
 
-describe('OverrideRow — persona engine row (analyzer-engine picker, generic UI from 3d.4c)', () => {
-  const descriptor = makeDescriptor({
-    key: 'analyzer.personaGeneration.engine',
-    label: 'Persona generation engine',
-    type: 'analyzer-engine',
-    options: ['local', 'gemini'],
-    default: 'gemini',
-    min: undefined,
-    max: undefined,
-    step: undefined,
-  });
-  const models = [{ value: 'openai:lab::qwen3-30b', label: 'Lab box · qwen3-30b' }];
-
-  it('offers local, gemini and every endpoint model, and saves the picked endpoint model id', () => {
-    const onChange = vi.fn().mockResolvedValue(undefined);
-    render(
-      <OverrideRow
-        descriptor={descriptor}
-        value={makeValue({ key: descriptor.key, effective: 'gemini' })}
-        onChange={onChange}
-        onRevert={vi.fn()}
-        analyzerEndpointModels={models}
-      />,
-    );
-    const select = screen.getByRole('combobox', { name: 'Persona generation engine' }) as HTMLSelectElement;
-    expect([...select.options].map((o) => o.value)).toEqual(['local', 'gemini', 'openai:lab::qwen3-30b']);
-    expect(select.value).toBe('gemini');
-    fireEvent.change(select, { target: { value: 'openai:lab::qwen3-30b' } });
-    expect(onChange).toHaveBeenCalledWith('openai:lab::qwen3-30b');
-  });
-
-  it('keeps a saved endpoint model selectable when the catalog no longer lists it', () => {
-    render(
-      <OverrideRow
-        descriptor={descriptor}
-        value={makeValue({ key: descriptor.key, effective: 'openai:gone::qwen3', source: 'override', overridden: true })}
-        onChange={vi.fn()}
-        onRevert={vi.fn()}
-        analyzerEndpointModels={[]}
-      />,
-    );
-    const select = screen.getByRole('combobox', { name: 'Persona generation engine' }) as HTMLSelectElement;
-    expect(select.value).toBe('openai:gone::qwen3');
-    expect(screen.getByRole('option', { name: 'openai:gone::qwen3 (not in the current model list)' })).toBeInTheDocument();
-  });
-});
-```
-Append to `src/views/advanced.test.tsx` (reusing its existing `getAnalyzerModels` mock and catalog-fetch wiring — Task 3d.4c added both for the fallback knob; do not re-mock them):
+Append to `src/views/advanced.test.tsx` (reusing its existing `getAnalyzerModels` mock and catalog-fetch wiring — Task 3d.4c added both for the fallback knob; do not re-mock them). This file's `vi.mock('../lib/api')` makes `api.getConfig` a bare mock with no real behaviour, so `renderView()` still needs `mockGetConfig.mockResolvedValue(...)` to render anything — but instead of hand-typing the persona descriptor's `type` into that fixture, pull it from the real (unmocked) frontend mock config catalogue via `vi.importActual`, so this test goes red if that catalogue entry regresses to `'enum'`:
 ```tsx
 /* ── Persona engine row reuses Task 3d.4c's shared catalog fetch (#3084 W4, F4) ── */
 
 describe('AdvancedView — persona engine row (analyzer-engine picker)', () => {
-  const PERSONA_CONFIG: ConfigResponse = {
-    ...FIXTURE_CONFIG,
-    groups: [
-      { id: 'analyzer-models', label: 'Analyzer models', help: 'Models.', risk: 'low', collapsedByDefault: false },
-    ],
-    descriptors: [
-      {
-        key: 'analyzer.personaGeneration.engine',
-        group: 'analyzer-models',
-        label: 'Persona generation engine',
-        help: 'Which engine writes voice personas.',
-        type: 'analyzer-engine',
-        options: ['local', 'gemini'],
-        apply: 'live',
-        risk: 'medium',
-        isPrompt: false,
-        default: 'gemini',
-      },
-    ],
-    values: {
-      'analyzer.personaGeneration.engine': {
-        key: 'analyzer.personaGeneration.engine',
-        effective: 'gemini',
-        source: 'default',
-        locked: false,
-        overridden: false,
-      },
-    },
-  };
-
   it('lists endpoint models from the analyzer catalog in the persona engine row', async () => {
+    // Read the real (unmocked) frontend mock catalogue's descriptor for this knob, rather than
+    // hand-typing `type: 'analyzer-engine'` into a fixture — a fixture that assumes the answer
+    // cannot catch a regression in Task 4.4's frontend mock-catalogue update (review pass 1, 2026-09-13).
+    const { getConfig: realGetConfig } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    const realConfig = await realGetConfig();
+    const personaDescriptor = realConfig.descriptors.find((d) => d.key === 'analyzer.personaGeneration.engine');
+    expect(personaDescriptor?.type).toBe('analyzer-engine');
+    const PERSONA_CONFIG: ConfigResponse = {
+      ...FIXTURE_CONFIG,
+      groups: [{ id: 'analyzer-models', label: 'Analyzer models', help: 'Models.', risk: 'low', collapsedByDefault: false }],
+      descriptors: [{ ...personaDescriptor!, group: 'analyzer-models' }],
+      values: {
+        'analyzer.personaGeneration.engine': {
+          key: 'analyzer.personaGeneration.engine',
+          effective: 'gemini',
+          source: 'default',
+          locked: false,
+          overridden: false,
+        },
+      },
+    };
     mockGetConfig.mockResolvedValue(PERSONA_CONFIG);
     mockGetAnalyzerModels.mockResolvedValue({
       groups: [
@@ -2566,18 +2509,19 @@ describe('AdvancedView — persona engine row (analyzer-engine picker)', () => {
 });
 ```
 - [ ] **Step 2: Run them and confirm they fail**
-  - **Run:** `npm test -- src/components/settings/override-row.test.tsx src/views/advanced.test.tsx`
-  - **Expected:** FAIL until Task 4.4's registry change has landed (the persona knob's `descriptor.type` is still `'enum'` on `main`), then PASS with no further frontend code — Task 3d.4c's generic picker already renders any `'analyzer-engine'`-typed descriptor. If it still fails after Task 4.4 lands, the gap is in 3d.4c's wiring (see the note above this task); report it rather than re-adding the removed generic module here.
+  - **Run:** `npm test -- src/views/advanced.test.tsx`
+  - **Expected:** FAIL until Task 4.4's registry change has landed: `personaDescriptor?.type` reads `'enum'` on `main`, so `expect(personaDescriptor?.type).toBe('analyzer-engine')` fails before rendering is even reached. Once Task 4.4 lands, PASS with no further frontend code — Task 3d.4c's generic picker already renders any `'analyzer-engine'`-typed descriptor. If it still fails after Task 4.4 lands, the gap is in 3d.4c's wiring (see the note above this task); report it rather than re-adding the removed generic module here.
 - [ ] **Step 3: Implement**
 None expected in this task, per the note above. If Step 2 is still red after Task 4.4, the fix belongs to whatever narrow gap Task 3d.4c's diff left (e.g. `advanced.tsx` reading `descriptor.key === 'analyzer.fallback.target'` instead of `descriptor.type === 'analyzer-engine'`) — fix that one line, not a parallel module.
 - [ ] **Step 4: Run and confirm they pass**
-  - **Run:** `npm test -- src/components/settings/override-row.test.tsx src/views/advanced.test.tsx src/test/a11y.test.tsx src/lib/api.config.test.ts`, then `npm run typecheck`.
+  - **Run:** `npm test -- src/views/advanced.test.tsx src/test/a11y.test.tsx src/lib/api.config.test.ts`, then `npm run typecheck`.
   - **Expected:** PASS.
 - [ ] **Step 5: Mutation proof** (restore after each):
-  1. In `override-row.tsx`'s `KnobControl`, delete the `'analyzer-engine'` branch. Expected red (both this task's persona cases AND Task 3d.4c's fallback-knob cases, proving one shared code path): `offers local, gemini and every endpoint model…` here, and Task 3d.4c's own `offers off, local, gemini and every endpoint model…` case in the same file.
+  1. In `override-row.tsx`'s `KnobControl`, delete the `'analyzer-engine'` branch. Expected red (both this task's case AND Task 3d.4c's fallback-knob cases, proving one shared code path): `lists endpoint models from the analyzer catalog in the persona engine row` here, and Task 3d.4c's own `offers off, local, gemini and every endpoint model…` case in `override-row.test.tsx`.
+  2. In the frontend mock config catalogue, change the persona knob's mock entry back to `type: 'enum'`. Expected red: this task's own `expect(personaDescriptor?.type).toBe('analyzer-engine')` assertion, before rendering. Restore.
 - [ ] **Step 6: Commit**
 ```bash
-git add src/components/settings/override-row.test.tsx src/views/advanced.test.tsx
+git add src/views/advanced.test.tsx
 git commit -m "test(frontend): cover the persona engine row through the shared analyzer-engine picker"
 ```
 
@@ -2661,7 +2605,7 @@ The hardware consequence — a same-card endpoint's model yielding the card to V
 ```bash
 git add docs/features/284-openai-compatible-analyzer.md docs/release-notes-next.md RELEASE_NOTES.md
 git commit -m "docs(docs): record persona generation through the analyzer transports"
-git push -u origin feat/server,frontend-3084-w4-persona
+git push -u origin feat/server-3084-w4-persona
 ```
 PR title: `feat(server,frontend): generate personas through the analyzer transports`. The body keeps the template's sections:
 ```markdown

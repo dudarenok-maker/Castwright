@@ -13,7 +13,7 @@
 - 3b: `server/src/workspace/analyzer-endpoints.ts` (`analyzerEndpointSchema`, `AnalyzerEndpoint`, `defaultGpuForBaseUrl`, `keyOriginMatches`, `resolveUnloadUrl`, `findEndpointReferences`); user-settings `analyzerEndpoints`, `analyzerEndpointKeys` (server-only), GET-only `analyzerEndpointKeyStatus`; `transports/openai-transport.ts` `OpenAITransport` (records a model as served when its request is sent: runs, Tests and requests that then fail, P3); `transports/endpoint-runtime.ts` (`noteEndpointModelUsed`, `servedModels`, `endpointSemaphore`); `analyzer/known-secrets-gate.ts` (`knownAnalyzerSecrets`, `loadKnownAnalyzerSecrets`: every 3c/3d module reads known secrets through it, never by importing `user-settings.ts`); `analyzerSelectionErrorEvent(err)` in `routes/failure-taxonomy.ts` (3b Task 3b.1a: codes every error, never `null`, and forwards the classification's `detail`); script review's, annotate-emotion's and instruct-annotation's selection already wrapped in 3b.1a's `let selection: AnalyzerSelection; try { … }`; `OpenAIAnalyzer`; `runner/schema-adapters.ts` (`adaptSchemaForOllama|Gemini|OpenAI`, `AdaptedSchema`, `structuredOutputLabel`); knobs `analyzer.ollama.structuredOutput`, `analyzer.gemini.structuredOutput`; error classes `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`, `AnalyzerCapabilityRejectedError`; `classifyAnalysisFailure` mapping them to `analyzer-endpoint-missing`, `auth`, `analyzer-request-rejected`; routes + mocks for `createAnalyzerEndpoint`, `updateAnalyzerEndpoint`, `deleteAnalyzerEndpoint`, `putAnalyzerEndpointKey`; real-only `detectAnalyzerEndpointContext`.
 - **Assumed 3b frontend client names** (operationId → same-named function): `api.createAnalyzerEndpoint(body: AnalyzerEndpoint)`, `api.updateAnalyzerEndpoint(endpointId, body)`, `api.deleteAnalyzerEndpoint(endpointId)`, `api.putAnalyzerEndpointKey(endpointId, key: string | null)`, each resolving to the `UserSettings` GET shape; standalone `detectAnalyzerEndpointContext({ baseUrl, model?, apiKey?, endpointId?, flavor: 'llama.cpp' | 'llama-swap', allowModelLoad? })` exported from `src/lib/api.ts` (3b Task 3b.9), resolving to `{ contextTokens: number; source: 'llama.cpp /props' | 'llama-swap /props' }` and throwing `AnalyzerEndpointError` on a 400/502 (3b Task 3b.8). If 3b shipped other names or shapes, rename at the 3d call sites only.
 - **3b, owner feedback 2026-09-13 (F5, F7):** `AnalyzerEndpointError.issues: { path: string[]; message: string }[]` (Task 3b.9; the save-time 400 body is `{ error, code, issues }`, and a 409 `referenced` refusal carries each reference as an issue with `path: []`); `GET /api/user/settings` → `droppedEndpointEntries: DroppedEndpointEntrySummary[]`, where `DroppedEndpointEntrySummary = { archiveId: string | null; kind: 'endpoint' | 'key'; endpointId?; name?; origin?; issues: string[]; droppedAt: string }` — every listed entry is unacknowledged by definition, and `archiveId: null` means the archive append has not landed yet (Task 3b.6b); `api.acknowledgeDroppedEndpointEntries(archiveIds: string[])` (real + mock, operationId `acknowledgeDroppedEndpointEntries`, resolving to the GET body; no account-slice thunk, Task 3d.8a adds it); the archive file is `user-settings.invalid-endpoints.json` beside `user-settings.json` (`invalidEndpointsArchivePath()`, server-only: the GET body carries no path); `MODEL_ID_CONFIG_KNOBS` in `server/src/workspace/analyzer-endpoints.ts` (Task 3b.5); `reasoningOverflowFixes` endpoint entries carrying `endpointField: { endpointId, field }` (P34).
-- **2b (W2, P34):** `AnalysisFailureFix { label; settingKey?; endpointField?: { endpointId; field }; wikiHref? }` and `fixes?: AnalysisFailureFix[]` on `AnalysisFailure` and the SSE error payload; `src/lib/failure-fixes.ts` exporting `fixHref(fix: AnalysisFailureFix): string | null` (2b: `settingKey` → `#/advanced?focus=<settingKey>`, otherwise `null`), called by both "How to fix" renderers (`analysing.tsx` and the toast), tested in `src/lib/failure-fixes.test.ts`; the `advanced` stage's `focus?` field and its router grammar; the fixes guard test `server/src/routes/failure-taxonomy-fixes.test.ts`. Task 3d.8b adds the `endpointField` branch to `fixHref`; Task 3d.9a adds the wiki-anchor check to the guard.
+- **2b (W2, P34):** `AnalysisFailureFix { label; settingKey?; endpointField?: { endpointId; field }; wikiPage?: string }` and `reasoningOverflowFixes`, both in `server/src/routes/failure-taxonomy.ts` (a fix's `wikiPage` is a page name with no `#anchor`, per `src/lib/wiki-links.ts:1-4`; the label names the section, and the renderer builds `WIKI_BASE/<page>` through `wikiUrl`), and `fixes?: AnalysisFailureFix[]` on `AnalysisFailure` and the SSE error payload; `src/lib/failure-fixes.ts` exporting `fixHref(fix: AnalysisFailureFix): string | null` (2b: `settingKey` → `#/advanced?focus=<settingKey>`, otherwise `null`), called by both "How to fix" renderers (`analysing.tsx` and the toast), tested in `src/lib/failure-fixes.test.ts`; the `advanced` stage's `focusKey?` field and its router grammar; the fixes guard test `server/src/routes/failure-taxonomy-fixes.test.ts`. Task 3d.8b adds the `endpointField` branch to `fixHref`; Task 3d.9a adds the wiki-page check to the guard.
 - **3b thunks reject with a payload.** `createAnalyzerEndpoint`, `updateAnalyzerEndpoint`, `deleteAnalyzerEndpoint` and `saveAnalyzerEndpointKey` catch the client's `AnalyzerEndpointError` and reject with `AnalyzerEndpointRejection` = `{ error: string; code: string; issues: { path: string[]; message: string }[] }`, exported from `src/store/account-slice.ts`; each thunk is typed `{ rejectValue: AnalyzerEndpointRejection }`, so `.unwrap()` rejects with that plain object, not the class instance. Only the standalone `detectAnalyzerEndpointContext` still throws the class.
 
 **Commands** (from the worktree root; never `cd`):
@@ -26,7 +26,7 @@
 
 ### PR 3c — Catalogs, per-model rate limits, endpoint capacity, the Test action, pre-run checks
 
-**Branch:** `feat/server,openapi-3084-w3c-catalog-test` — `node scripts/wt-new.mjs feat/server,openapi-3084-w3c-catalog-test` off the latest `main`.
+**Branch:** `feat/server-3084-w3c-catalog-test` — `node scripts/wt-new.mjs feat/server-3084-w3c-catalog-test` off the latest `main`.
 
 **Delivers:**
 - `GET /api/analyzer/models` (grouped live catalogs for Ollama, Gemini and every saved endpoint, 30 s cache, `refresh=1`, served limits, Test record, structured-output label) and `POST /api/analyzer/models/preview` (list an unsaved endpoint's models for the add form's context prefill).
@@ -58,6 +58,7 @@
 - Modify: `server/src/force-rerun-triggers.test.ts` (#3163's `MAIN_COVERED` entry for `src/analyzer/rate-limit.ts`), `server/vitest.config.ts` (#3163's `rate-limit.ts` `forceRerunTriggers` line and the sentence of its comment that names it)
 - Modify: `server/src/config/direct-env-reader-guard.test.ts:63-68` (comment that cites the retired registry defaults)
 - Modify: `server/.env.example:80-98` (hand-written block, outside the managed block); the managed block at `:497-743` is regenerated by `npm run config:sync`
+- Modify: `docs/wiki/Advanced-Settings.md` — §10 "Gemini rate limits" (`:338-353`: its six `Gemma 4 …` rows, heading and image caption) and the intro's `— N knobs across M groups in total` sentence and group list (`:9-14`). **Guard:** `scripts/tests/knob-docs-sync.test.mjs` (#2012, `npm run test:hooks`) asserts that sentence (regex at `:160` at 46e62a34) and a first-column row for every registry knob label, so retiring six knobs moves both in this step.
 - Test: `server/src/analyzer/rate-limit.test.ts` (replace #3163's `describe('saved rate-limit overrides in user settings', …)`), Create `server/src/workspace/user-settings.rate-limits.test.ts`
 
 **Interfaces:**
@@ -474,8 +475,12 @@ Delete `:1015-1075` (the `// ── rate-limits ──` comment and all six knob
 
 Then run `npm run config:sync` (removes the `# ── Gemini rate limits ──` section from the managed block) and `npm run config:check`.
 
+`docs/wiki/Advanced-Settings.md`, in the same step (the knob-docs guard fails otherwise):
+- §10: delete the six `Gemma 4 31B RPM/TPM/RPD` and `Gemma 4 26B A4B RPM/TPM/RPD` rows and the table header they leave empty. Rename the heading to `## 10. Analyzer rate limits` (the group's new label), and replace the table with one paragraph: `Per-model request, token and daily caps for Gemini models and OpenAI-compatible endpoint models, edited in the per-model table in this section. GEMINI_{RPM,TPM,RPD}_<slug> environment variables still win for Gemini models. Saved gemma overrides from earlier versions are migrated into the table.` Keep the `<picture>` block; its screenshot is re-captured with the 3c.8 editor, not here.
+- Intro (`:9-14`): in the group list, `Gemini rate limits` becomes `analyzer rate limits`. In `— N knobs across M groups in total`, N drops by exactly six from its value on the branch at implementation time (`117` at 46e62a34, before any earlier wave's changes). M is unchanged, because the `rate-limits` group stays in `GROUPS` with its new label and no knobs. Verify both numbers against `allKnobs().length` and `GROUPS.length` at implementation time.
+
 - [ ] **Step 4: Run and confirm they pass**
-Run: `npm --prefix server run test -- src/analyzer/rate-limit.test.ts src/analyzer/rate-limit.endpoint.test.ts src/workspace/user-settings.rate-limits.test.ts src/workspace/analyzer-endpoints.test.ts src/config/registry.test.ts src/config/registry-knob-read.guard.test.ts src/config/direct-env-reader-guard.test.ts src/force-rerun-triggers.test.ts src/analyzer/output-heavy-tpm.test.ts src/workspace/user-settings.test.ts` then `npm run config:check`. Expected: PASS.
+Run: `npm --prefix server run test -- src/analyzer/rate-limit.test.ts src/analyzer/rate-limit.endpoint.test.ts src/workspace/user-settings.rate-limits.test.ts src/workspace/analyzer-endpoints.test.ts src/config/registry.test.ts src/config/registry-knob-read.guard.test.ts src/config/direct-env-reader-guard.test.ts src/force-rerun-triggers.test.ts src/analyzer/output-heavy-tpm.test.ts src/workspace/user-settings.test.ts`, then `npm run config:check`, then `npm run test:hooks` (`scripts/tests/knob-docs-sync.test.mjs`: no row for a retired knob, and the knob count matches). Expected: PASS.
 
 - [ ] **Step 5: Mutation proof**
 1. `rate-limit.ts` Gemini branch: delete `?? savedPositive(entry?.rpm)` → red: "resolveLimits reads a saved Gemini rpm from the user-settings map", "the limiter enforces the saved rpm…". Restore.
@@ -487,7 +492,7 @@ Run: `npm --prefix server run test -- src/analyzer/rate-limit.test.ts src/analyz
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/analyzer/rate-limit.ts server/src/analyzer/rate-limit.test.ts server/src/workspace/user-settings.ts server/src/workspace/user-settings.rate-limits.test.ts server/src/workspace/analyzer-endpoints.test.ts server/src/config/registry.ts server/src/config/registry-knob-read.guard.test.ts server/src/config/direct-env-reader-guard.test.ts server/src/force-rerun-triggers.test.ts server/vitest.config.ts server/.env.example
+git add server/src/analyzer/rate-limit.ts server/src/analyzer/rate-limit.test.ts server/src/workspace/user-settings.ts server/src/workspace/user-settings.rate-limits.test.ts server/src/workspace/analyzer-endpoints.test.ts server/src/config/registry.ts server/src/config/registry-knob-read.guard.test.ts server/src/config/direct-env-reader-guard.test.ts server/src/force-rerun-triggers.test.ts server/vitest.config.ts server/.env.example docs/wiki/Advanced-Settings.md
 git commit -m "feat(server): per-model analyzer rate limits replace the gemma rate knobs"
 ```
 
@@ -6835,7 +6840,7 @@ Run `npm run register:build` and `npm run check:onbox-register`. Save the page c
 ```bash
 git add docs/release-notes-next.md RELEASE_NOTES.md docs/testing/onbox-acceptance-register.md docs/testing/openai-analyzer-onbox-acceptance.md docs/testing/onbox-acceptance-register-live-view.html
 git commit -m "docs(docs): record W3c release notes and the live structured-output acceptance row"
-git push -u origin feat/server,openapi-3084-w3c-catalog-test
+git push -u origin feat/server-3084-w3c-catalog-test
 ```
 PR title: `feat(server,openapi,frontend): analyzer catalog, per-model limits, model Test and pre-run checks`. Body:
 - `## Summary`: the Delivers list.
@@ -6855,7 +6860,7 @@ State that #3163's `rate-limit.ts` runtime-read trigger was removed with its gua
 
 ### PR 3d — GPU coordination, eviction, fallback, selection, Settings UI: endpoints become selectable
 
-**Branch:** `feat/server,frontend-3084-w3d-selectable` — `node scripts/wt-new.mjs feat/server,frontend-3084-w3d-selectable` off `main` after PR 3c merged.
+**Branch:** `feat/server-3084-w3d-selectable` — `node scripts/wt-new.mjs feat/server-3084-w3d-selectable` off `main` after PR 3c merged.
 
 **Delivers:**
 - Per-endpoint busy accounting (P1). An endpoint is busy while a call to it is in flight (for `gpu !== 'none'`) or while an analysis or script-review run that uses it is active, including the gap between chunk calls.
@@ -9225,11 +9230,12 @@ git commit -m "feat(server,frontend): accept endpoint model ids in saved analyze
 - Modify: `server/src/analyzer/capabilities.ts` (3c Task 3c.3) — add `assertAnalyzerTargetUsable`; `server/src/analyzer/preflight.ts` (3c Task 3c.10) — `runAnalyzerPreflight`'s loop body calls it.
 - Modify: `server/src/analyzer/index.ts` — header comment `:1-10`; the user-settings import `:25-31`; the `local` branch's fallback block and its two comments (`:211-231`); Task 3d.4's `openai` branch; `FallbackAnalyzer` (`:251-397`): its comment, constructor and the eight `if (err instanceof AnalyzerUnreachableError)` blocks (W1's gates themselves stay); new `withFallback`, `fallbackSelectionFor`, `checkedTarget`, `fallbackNames`, `fallbackReasonFor`.
 - Modify: `server/src/workspace/analyzer-endpoints.ts` (3b Task 3b.5) — `MODEL_ID_CONFIG_KNOBS`; `server/src/workspace/analyzer-endpoints.test.ts` — the classification guard's knob filter.
-- Modify: `server/src/routes/config.ts` — pass 1 of `configRouter.put('/')` (`:89-128`), and its imports.
+- Modify: `server/src/routes/config.ts` — pass 1 of `configRouter.put('/')` (`:89-128`); the three `values: resolveAll()` responses (GET `:82`, PUT `:159`, reset `:218`), which build every value from `resolveKnob(knob).effective`; and its imports.
+- Modify: `server/src/config/types.ts` — `KnobValueState` gains `analyzerEngine?`; `src/lib/types.ts` — the frontend value-state type the same.
 - Modify: `server/src/routes/user-settings.ts` — `userSettingsRouter.put('/')` (`:84-95`, after Task 3d.4a), and its imports.
 - Modify: `server/src/routes/script-review.ts` — the user-settings import (`:36`, after 3c.10); the warm-fail nudge (`:762-767`); the warm-fail reason (`:774`); Task 3d.1's run mark; a local-target review pin beside `pinnedLocal` (`:798`) and its release in the `finally` (`:1046-1047`). `:748`, `:798` and the `if (pinnedLocal)` blocks keep their text (PR 3d Must NOT change): the new lines sit beside them.
-- Modify: `server/src/routes/analysis.ts` — the phase-0 `onFallback` (`:4465-4475`) and phase-1 `onFallback` (`:5368-5371`); Task 3d.1's run marks in the main and subset POSTs.
-- Modify: `server/src/routes/annotate-emotion.ts`, `server/src/routes/instruct-annotation.ts` — Task 3d.1's run mark.
+- Modify: `server/src/routes/analysis.ts` — `AnalysisJob` (`:2646-2655`, a `fallbackMarked?` field); the phase-0 `onFallback` (`:4465-4475`) and phase-1 `onFallback` (`:5368-5371`); the phase-0 chunk budget (`:4496`, W2's `resolveCapacity(…)` argument) and the phase-1 `capacity` passed to `attributeChapterStage2WithEval` (`:5461`, W2); the phase-1 tick event; the subset job's `stage1Call` (`:7030`), stage-1 chunk budget (`:7065`), stage-2 `stageCall` (`:7363`) and capacity (`:7360`). Task 3d.1's run marks are **not** widened.
+- Modify: `server/src/routes/annotate-emotion.ts`, `server/src/routes/instruct-annotation.ts` — an `onFallback` on the chapter loop's `StageCall` that marks the target, released in the loop's `finally`.
 - Modify (text this task makes false): `server/src/workspace/user-settings.ts:132-148` (the `analysisEngine` and `allowCloudFallback` schema comments), `:971-990` (`getResolvedAnalysisEngine` and `getResolvedAllowCloudFallback` docs); `openapi.yaml:4651-4668` (the `analysisEngine` and `allowCloudFallback` descriptions) + `npm run openapi:types`; `server/.env.example:12-17` (the hand-written ANALYZER note). OpenAPI has no `/api/config` or knob-type schema at 46e62a34 (`git grep -n "api/config" -- openapi.yaml` prints nothing), so the knob type needs no contract change, and the settings contract keeps `allowCloudFallback`.
 - Modify: `docs/wiki/Advanced-Settings.md` — §4 table: a new `Analyzer fallback` row, the `Gemini analyzer model` row's text; the intro's knob count (`:13`). **Guard:** `scripts/tests/knob-docs-sync.test.mjs` (#2012, run by `npm run test:hooks`) fails when a registry knob's label has no first-column row in that file, so the row lands in this step with the knob.
 - Regenerate: `server/.env.example` via `npm run config:sync`.
@@ -9242,14 +9248,16 @@ git commit -m "feat(server,frontend): accept endpoint model ids in saved analyze
   - `registry.test.ts`'s pattern-type test admits `'analyzer-engine'` (title "pattern is only declared on string/device/analyzer-engine knobs — …").
   - Frontend `KnobDescriptor.type` includes `'analyzer-engine'` (`src/lib/types.ts`).
   - Knob `analyzer.fallback.target`: env `ANALYZER_FALLBACK_TARGET`, group `analyzer-models`, label `Analyzer fallback`, `type: 'analyzer-engine'`, `options: ['off', 'local', 'gemini']`, `pattern: /^(off|local|gemini|openai:[a-z0-9-]{1,40}::.+)$/`, `default: 'gemini'`, `apply: 'live'`, `risk: 'medium'`.
-  - `server/src/analyzer/fallback-target.ts`: `resolveAnalyzerFallbackTarget(): 'off' | 'local' | 'gemini' | string`; `fallbackTargetSaveError(value: string, saved: { endpointIds: readonly string[]; geminiKey: boolean }): string | null`.
+  - `server/src/analyzer/fallback-target.ts`: `resolveAnalyzerFallbackTarget(): 'off' | 'local' | 'gemini' | string`; `fallbackTargetSaveError(value: string, saved: { endpointIds: readonly string[]; geminiKey: boolean }): string | null`; `fallbackTargetValueState(base: KnobValueState): KnobValueState`.
+  - `KnobValueState.analyzerEngine?: { localModel: string; optionLabels: Record<string, string>; sourceNote?: string }` (server `config/types.ts` and frontend `src/lib/types.ts`), set only on `analyzer.fallback.target`.
   - `server/src/analyzer/index.ts`: `fallbackSelectionFor(primary: AnalyzerSelection): AnalyzerSelection | null`; `fallbackNames(primary, target): { primary: string; target: string }`; `fallbackReasonFor(err: AnalyzerUnreachableError, names?: { primary: string; target: string }): string`; `new FallbackAnalyzer(primary, fallback, names?)`.
   - `server/src/analyzer/capabilities.ts`: `assertAnalyzerTargetUsable(target: { modelId: string; source: 'env' | 'run-pick' | 'settings'; engine: AnalysisEngine }, settings: UserSettings, digest?: string): void`.
 
 Rules (P30):
 - **Resolution.** `resolveAnalyzerFallbackTarget()` reads the knob with `resolveKnob`. An env value or a saved override is returned as is. Only when the source is `default` does the legacy step run: `getResolvedAllowCloudFallback() === false` → `off`; otherwise `gemini`. There is no write-migration: nothing rewrites `allowCloudFallback`, and Task 3d.4c removes the checkbox that wrote it. `getResolvedAllowCloudFallback` is used, not the raw field: with a warm cache it is exactly the saved `allowCloudFallback`, and before the first read it keeps its `ANALYZER_ALLOW_CLOUD_FALLBACK=0` under-ride (`user-settings.ts:982-990`), so a strict-local deployer stays strict-local.
 - **Both branches, one hop.** The `local` and `openai` branches of `selectAnalyzer` return `withFallback(primarySelection)`, which wraps `new FallbackAnalyzer(primary.analyzer, target.analyzer, fallbackNames(primary, target))` with `fallbackModel: target.model` only when `fallbackSelectionFor` returns a target. A target selection always has `fallbackModel: null` and a bare analyzer, so a `FallbackAnalyzer` never wraps another.
-- **`fallbackSelectionFor` returns `null`** when the primary is `gemini` (it raises no unreachable error); the target is `off`; the target is `gemini` and no Gemini key resolves; the target equals the primary (`local` with the saved Ollama model equal to the primary model, or the primary's own endpoint model id); or the target names an endpoint that is not saved (one `console.warn` naming the endpoint id and the knob).
+- **What `local` means.** The Ollama model a `local` selection resolves to anywhere: `getResolvedOllamaModel()` — the saved default when it is an Ollama tag, else env `OLLAMA_MODEL`, else the shipped default (`qwen3.5:4b`). With an endpoint id as the saved default, `local` is therefore `OLLAMA_MODEL` or `qwen3.5:4b`, never the endpoint id. Advanced Settings shows the concrete model ("Local Ollama — qwen3.5:4b", Task 3d.4c), and warns without refusing when that tag is not in the Ollama catalog.
+- **`fallbackSelectionFor` returns `null`** when the primary is `gemini` (it raises no unreachable error); the target is `off`; the target is `gemini` and no Gemini key resolves; the target is `local` and the primary is `local`, **whatever the two models** (they share one daemon, so an unreachable primary means an unreachable target); the target is the primary's own endpoint model id; or the target names an endpoint that is not saved (one `console.warn` naming the endpoint id and the knob).
 - **Activation checks.** The target's analyzer is built on its first call, not at selection, so a broken fallback never blocks a run whose primary works. `checkedTarget` memoises one build per selection. The build first runs `assertAnalyzerTargetUsable` with `source: 'settings'`: for an endpoint, the key-origin check then its capability record; for Gemini and Ollama, the capability record (Ollama with its installed digest, fail-open). A refusal rejects that call with the typed error, carrying the target's model id. Limiter and concurrency are the target analyzer's own.
 - **One copy of the checks.** `preflight.ts` imports `select-analyzer.ts`, which imports `index.ts`, so `index.ts` importing `preflight.ts` would add a cycle (`npm run check:cycles`). The per-target body of `runAnalyzerPreflight` moves into `assertAnalyzerTargetUsable` in `capabilities.ts`, and `runAnalyzerPreflight` calls it. 3c.10's tests are the proof that behaviour is unchanged.
 - **The announcement names both (pinned text extended, not replaced).** `fallbackReasonFor(err, names)` keeps the cause text and appends the names:
@@ -9258,8 +9266,18 @@ Rules (P30):
   Without `names` (a `FallbackAnalyzer` built directly, as `fallback.test.ts` does), it is the bare cause, `Ollama unreachable` or `Analyzer endpoint unreachable`.
 - **All eight paths announce.** On 46e62a34 five `FallbackAnalyzer` methods switch silently (`runStage1`, `runEmotionChapter`, `runStage3Chapter`, `runAttributionEscalation`, `runNonStoryClassification`); P30 says a fallback is never silent. Each gate block now calls one private `switchTo`.
 - **Both unreachable.** When the target also throws `AnalyzerUnreachableError`, `switchTo` prefixes its message with `<reason>; the fallback is unreachable too: ` and rethrows the same instance. Its class, `transport`, `cause` and code are unchanged, so classification is unchanged (Ollama's P28 signature scan still finds its original text), and the run's failure names both.
-- **Busy marks.** An endpoint target's own `OpenAITransport.send` registers its in-flight call (Task 3d.1). Every run adds its targets' endpoints to its run mark (`selection.fallbackModel`, and `phase1Selection.fallbackModel` for analysis); `endpointIdsForModelIds` ignores non-endpoint ids. An Ollama target is already held by the analysis job's unconditional `markAnalysisBusy(job.bookDir)` (`analysis.ts:3475`). Script review pins Ollama only when `selection.engine === 'local'`, so it adds `pinnedLocalFallback` (a non-local primary with a `local` target): `markReviewBusy` in the `try`, `clearReviewBusy` in the `finally`, and no `unloadResidentOllama` (the primary never loaded it).
-- **Save validation.** `fallbackTargetSaveError` refuses `gemini` with no Gemini key (env or saved) and an `openai:` id whose endpoint is not saved; each message names where to fix it. `PUT /api/config` runs it in pass 1, after coercion and before any write (400 `{ error }`). `PUT /api/user/settings` runs it when the body's `configOverrides['analyzer.fallback.target']` differs from the saved one (400 `{ error, issues: [{ path: ['configOverrides', 'analyzer.fallback.target'], message }] }`), so an unrelated save never fails on an older value. Both read `await readUserSettings()` first, so a cold cache after a restart never reports a saved endpoint or key as missing. An env value is not a save: `fallbackSelectionFor` skips it if unusable.
+- **Busy marks only once the fallback activates.** A target takes no mark at run start: a healthy primary run holds no mark for a same-card fallback endpoint, so TTS eviction is not blocked by a fallback that never runs. Task 3d.1's run marks stay primary-only.
+  - **In-flight:** already activation-only. An endpoint target's `OpenAITransport.send` registers its call (Task 3d.1), and an Ollama target takes Ollama's slot, only when called.
+  - **Run marks:** taken in the `onFallback` handler, at the first switch, and held until the run ends. Analysis: `markFallbackActive(job, fallbackModel)` adds the target's endpoint mark and chains its release into `job.releaseEndpointRun`, which `endJob` calls. Script review: `switchToFallback` takes the endpoint mark, and the Ollama review pin when the target is `local` and the primary is not; the `finally` releases both, with no `unloadResidentOllama`, since the primary never loaded Ollama. Annotate-emotion and instruct-annotation: an `onFallback` on the chapter loop's `StageCall`, released in the loop's `finally`.
+  - **Unchanged:** the analysis job's `markAnalysisBusy(job.bookDir)` (`analysis.ts:3475`) is taken for every job, whatever the engine, at 46e62a34. It is not a fallback mark, and this task leaves it.
+- **Capacity after a switch.** From the first switch, the job records the active selection (`activeEngine` / `activeModelId` for phase 0, `phase1Engine` / `phase1ModelId` for phase 1, the subset job's equivalents) and sets `job.engine`, the persisted field the reverse local-analyzer guard reads. Every later chunk budget in that job resolves `resolveCapacity` from it, so the next chapter is sized for the target. Phase-0 and phase-1 events carry the target engine. The chunk that triggered the switch goes to the target as it is; a chunk too large for the target relies on the existing force-split-on-truncation net (#1660 part 4), with no new re-split.
+- **Save validation.** `fallbackTargetSaveError` refuses `gemini` with no Gemini key (env or saved) and an `openai:` id whose endpoint is not saved; each message names where to fix it. `PUT /api/config` runs it in pass 1, after coercion and before any write (400 `{ error }`). `PUT /api/user/settings` runs it when the body's `configOverrides['analyzer.fallback.target']` differs from the saved one (400 `{ error, issues: [{ path: ['configOverrides', 'analyzer.fallback.target'], message }] }`), so an unrelated save never fails on an older value. Both read `await readUserSettings()` first, so a cold cache after a restart never reports a saved endpoint or key as missing. `local` is never refused (Task 3d.4c warns instead).
+  - **Runtime is authoritative.** The route reads settings outside `writeChain`, so an endpoint can be deleted between the check and the write (and an env value is never a save). `fallbackSelectionFor` therefore re-checks at every selection: a target naming an endpoint that is not saved is skipped with a warning and not wrapped (pinned by "a target naming an endpoint that is not saved is skipped, with a warning naming it").
+- **Advanced Settings shows the effective target.** `GET /api/config` (and the PUT and reset responses) build values from `resolveKnob(knob).effective` through `resolveAll()` (`routes/config.ts:82`, `:159`, `:218`), which does not know the legacy step. The route replaces this knob's entry with `fallbackTargetValueState(base)`:
+  - `effective` is `resolveAnalyzerFallbackTarget()`, and a legacy `off` carries `analyzerEngine.sourceNote`;
+  - `optionLabels` are `Off`, `Local Ollama — <getResolvedOllamaModel()>`, and `Gemini — <model>`, or `Gemini — no API key, fallback inactive` when no key resolves;
+  - `localModel` feeds Task 3d.4c's not-installed warning.
+- **No new cycle (madge).** `capabilities.ts` now imports `getResolvedOllamaUrl` from `user-settings.ts`, `configValue` from `config/resolver.ts` (which imports `user-settings.ts`), `resolveEndpointApiKey` from `analyzer-endpoints.ts` and `parseEndpointModelId` from `model-id.ts`. That closes a cycle only if `user-settings.ts` reaches `capabilities.ts`. It does not: at 46e62a34 it imports only `state-io`, `sidecar-url`, `tts/sidecar-owner`, `tts/clone-engines` (type) and its own neighbours; 3b adds `analyzer-endpoints.ts`, which imports only `model-id.ts`; and 3c.3 declares `modelCapabilityRecordSchema` in `user-settings.ts` rather than importing it ("so user-settings stays a leaf of the analyzer import graph"). `npm run check:cycles` in Step 4 is the check; if it reports a cycle through `capabilities.ts`, move `assertAnalyzerTargetUsable` into a new leaf `server/src/analyzer/target-checks.ts` that `capabilities.ts` does not import.
 - **References.** `MODEL_ID_CONFIG_KNOBS` gains `analyzer.fallback.target`, so deleting an endpoint the fallback names is refused with `Advanced setting "analyzer.fallback.target"`. The classification guard's filter (`/(\.model|Model|\.engine)$/`) would never select this key; it also selects every `type === 'analyzer-engine'` knob.
 - **Script review copy.** The warm-fail nudge (`script-review.ts:762-767`) names "Cloud fallback in Settings → analyzer", which Task 3d.4c removes. When the target resolves to `off` it now reads "Or choose an analyzer fallback in Advanced Settings → Analyzer fallback." The warm-fail reason (`:774`) gains the names the same way. `switchToFallback` keeps re-selecting by `selection.fallbackModel` (`script-review.test.ts:880` pins that call); the re-selected primary equals the configured target, so it is never wrapped again.
 - **Unchanged:** W1's `instanceof AnalyzerUnreachableError` gates; `AnalyzerTransportError` never falls back (Task 3d.4's rule-7 test stays green unedited); the Gemini branch; persona generation (`registry.ts:1185`); the frontend mock config catalogue, which lists neither `analyzer.gemini.model` nor the persona knob at 46e62a34, so it gains no entry.
@@ -9375,7 +9393,11 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { selectAnalyzer, fallbackSelectionFor, fallbackNames, FallbackAnalyzer, type AnalyzerSelection } from './index.js';
 import { OllamaAnalyzer } from './ollama.js';
 import { GeminiAnalyzer } from './gemini.js';
-import { AnalyzerCapabilityRejectedError, AnalyzerKeyOriginError } from './errors.js';
+import { OpenAIAnalyzer } from './openai.js';
+import { AnalyzerCapabilityRejectedError, AnalyzerKeyOriginError, AnalyzerUnreachableError, LocalUnreachableError } from './errors.js';
+
+/* The local target's first call reads the installed digest (fail-open); no daemon in unit tests. */
+vi.mock('./ollama-digest.js', () => ({ ollamaModelDigest: vi.fn().mockResolvedValue(undefined) }));
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
 
@@ -9386,6 +9408,7 @@ const sel = (engine: AnalyzerSelection['engine'], model: string) => ({ analyzer:
 afterEach(() => {
   _resetUserSettingsCache();
   delete process.env.GEMINI_API_KEY;
+  delete process.env.OLLAMA_MODEL;
   vi.restoreAllMocks();
 });
 
@@ -9398,11 +9421,18 @@ describe('selectAnalyzer — the configured fallback target (#3084 P30)', () => 
     expect(s).toMatchObject({ engine: 'openai', model: 'openai:lab::qwen3-30b', fallbackModel: 'gemini-3.5-flash-lite' });
   });
 
-  it('an endpoint primary falls back to the saved Ollama model when the target is local', () => {
-    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, defaultAnalysisModel: 'qwen3.5:4b', ...target('local') });
+  it('an endpoint primary falls back to the Ollama model a local selection resolves to when the target is local', () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, defaultAnalysisModel: 'qwen3.5:9b', ...target('local') });
     const s = selectAnalyzer({ model: 'openai:lab::qwen3-30b' });
     expect(s.analyzer).toBeInstanceOf(FallbackAnalyzer);
-    expect(s.fallbackModel).toBe('qwen3.5:4b');
+    expect(s.fallbackModel).toBe('qwen3.5:9b');
+  });
+
+  it('with an endpoint id as the saved default, local is OLLAMA_MODEL, else the shipped default — never the endpoint id', () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, defaultAnalysisModel: 'openai:lab::qwen3-30b', ...target('local') });
+    expect(selectAnalyzer({ model: 'openai:lab::qwen3-30b' }).fallbackModel).toBe('qwen3.5:4b');
+    process.env.OLLAMA_MODEL = 'llama3.1:8b';
+    expect(selectAnalyzer({ model: 'openai:lab::qwen3-30b' }).fallbackModel).toBe('llama3.1:8b');
   });
 
   it('an Ollama primary falls back to an endpoint model', () => {
@@ -9419,6 +9449,7 @@ describe('selectAnalyzer — the configured fallback target (#3084 P30)', () => 
     ['gemini with no key', {}, 'openai:lab::qwen3-30b'],
     ['the same endpoint model', target('openai:lab::qwen3-30b'), 'openai:lab::qwen3-30b'],
     ['the same Ollama model', { defaultAnalysisModel: 'qwen3.5:4b', ...target('local') }, 'qwen3.5:4b'],
+    ['local behind a local primary on another model (one daemon)', { defaultAnalysisModel: 'qwen3.5:4b', ...target('local') }, 'qwen3.5:9b'],
   ])('no wrap when the target is %s', (_name, over, model) => {
     _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, ...over });
     const s = selectAnalyzer({ model });
@@ -9441,11 +9472,19 @@ describe('selectAnalyzer — the configured fallback target (#3084 P30)', () => 
     expect(fallbackSelectionFor(s)).toBeNull();
   });
 
-  it('one hop: the target selection is bare and has no fallback of its own', () => {
-    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, ...target('local') });
-    const t = fallbackSelectionFor(sel('openai', 'openai:lab::qwen3-30b'))!;
-    expect(t).toMatchObject({ engine: 'local', fallbackModel: null });
-    expect(t.analyzer).not.toBeInstanceOf(FallbackAnalyzer);
+  it('one hop, through the real selection: the fallback analyzer is not a FallbackAnalyzer, and primary and target are each called once', async () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, defaultAnalysisModel: 'qwen3.5:4b', ...target('local') });
+    const primaryCall = vi
+      .spyOn(OpenAIAnalyzer.prototype, 'runStage1Chapter')
+      .mockRejectedValue(new AnalyzerUnreachableError('connect ECONNREFUSED 127.0.0.1:8080', 'openai'));
+    const targetCall = vi.spyOn(OllamaAnalyzer.prototype, 'runStage1Chapter').mockRejectedValue(new LocalUnreachableError('down'));
+    const s = selectAnalyzer({ model: 'openai:lab::qwen3-30b' });
+    expect(s.analyzer).toBeInstanceOf(FallbackAnalyzer);
+    expect((s.analyzer as unknown as { fallback: unknown }).fallback).not.toBeInstanceOf(FallbackAnalyzer);
+    expect(fallbackSelectionFor(s)!.fallbackModel).toBeNull();
+    await expect(s.analyzer.runStage1Chapter('m', 1, 'p', {} as never)).rejects.toBeInstanceOf(LocalUnreachableError);
+    expect(primaryCall).toHaveBeenCalledTimes(1);
+    expect(targetCall).toHaveBeenCalledTimes(1);
   });
 
   it('a target whose key is bound to another host still selects; its first call fails with the key-origin error', async () => {
@@ -9646,6 +9685,36 @@ describe('PUT /api/config — analyzer.fallback.target (#3084 P30)', () => {
     expect(res.body.error).toMatch(/^analyzer\.fallback\.target: does not match the required shape/);
   });
 });
+
+describe('GET /api/config — analyzer.fallback.target shows the effective target (#3084 P30)', () => {
+  afterEach(() => {
+    delete process.env.OLLAMA_MODEL;
+  });
+
+  it('reports off, with a source note, when only the legacy allowCloudFallback false applies', async () => {
+    await settings.mutateUserSettings(() => ({ allowCloudFallback: false, configOverrides: {} }));
+    const v = (await request(app).get('/api/config')).body.values[KEY];
+    expect(v).toMatchObject({ effective: 'off', source: 'default', overridden: false });
+    expect(v.analyzerEngine.sourceNote).toMatch(/old Model Manager "Cloud fallback" switch/);
+  });
+
+  it('labels local with the model a local selection resolves to, and gemini with no key as inactive', async () => {
+    await settings.mutateUserSettings(() => ({ allowCloudFallback: true, defaultAnalysisModel: 'openai:lab::qwen3-30b', configOverrides: {} }));
+    const v = (await request(app).get('/api/config')).body.values[KEY];
+    expect(v.effective).toBe('gemini');
+    expect(v.analyzerEngine).toEqual({
+      localModel: 'qwen3.5:4b',
+      optionLabels: { off: 'Off', local: 'Local Ollama — qwen3.5:4b', gemini: 'Gemini — no API key, fallback inactive' },
+    });
+  });
+
+  it('labels gemini with its model when a key is set, and the PUT response carries the same state', async () => {
+    process.env.GEMINI_API_KEY = 'k';
+    const res = await request(app).put('/api/config').send({ [KEY]: 'local' });
+    expect(res.body.values[KEY].effective).toBe('local');
+    expect(res.body.values[KEY].analyzerEngine.optionLabels.gemini).toBe('Gemini — gemini-3.5-flash-lite');
+  });
+});
 ```
 
 Append inside the PUT `describe` of `server/src/routes/user-settings.test.ts`:
@@ -9693,43 +9762,92 @@ In `server/src/routes/script-review.test.ts`, change the case at `:814` to:
 - title `Part 1.4 — warm fail with no analyzer fallback (target off) points the user to Advanced Settings → Analyzer fallback (#3084 P30)` (its `_setUserSettingsCacheForTest({ allowCloudFallback: false })` stays: the legacy step reads `off`);
 - `:841`: `expect(err?.message).toMatch(/choose an analyzer fallback in Advanced Settings → Analyzer fallback/i);`
 
-and append two cases beside Task 3d.1's review mark case (add `isAnyAnalyzerRunBusy` from `../tts/design-lock.js` to the imports):
+and append four cases beside Task 3d.1's review mark case (add `isAnyAnalyzerRunBusy` from `../tts/design-lock.js` and `isEndpointBusy` from `../analyzer/analyzer-concurrency.js` to the imports). Each installs its own `runReview` behaviour; a review's `runScriptReviewChapter` receives the `StageCall` as its fourth argument, as the file's `:849` case shows:
 
 ```ts
-  it('#3084 P30 — a review whose fallback target is an endpoint marks that endpoint with its own', async () => {
-    writeBook(SENTENCES);
-    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
-    const spare = analyzerEndpointSchema.parse({ id: 'spare', name: 'Spare', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'cuda:0', contextTokens: 32768 });
-    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab, spare] });
+  const lab = () => analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+  const spare = () => analyzerEndpointSchema.parse({ id: 'spare', name: 'Spare', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'cuda:0', contextTokens: 32768 });
+  const reviewOn = (fallbackModel: string) => {
     const base = (selectAnalyzerForPhaseMock.getMockImplementation() as (o: unknown) => Record<string, unknown>)({ phase: 'phase1' });
-    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'openai', model: 'openai:lab::m', fallbackModel: 'openai:spare::m' }));
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'openai', model: 'openai:lab::m', fallbackModel }));
+  };
+
+  it('#3084 P30 — a healthy review holds no mark for its fallback endpoint on the same card', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab(), spare()] });
+    reviewOn('openai:spare::m');
+    let spareBusy: boolean | undefined;
+    runReview.mockImplementation(async () => {
+      spareBusy = isEndpointBusy('spare');
+      return { ops: [] };
+    });
     reviewMarks.length = 0;
-    reviewReleases.count = 0;
     try {
       await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
-      expect(reviewMarks).toEqual([['lab', 'spare']]);
-      expect(reviewReleases.count).toBe(1);
+      expect(reviewMarks).toEqual([['lab']]);
+      expect(spareBusy).toBe(false);
     } finally {
       _resetUserSettingsCache();
       _resetEndpointBusyForTest();
     }
   });
 
-  it('#3084 P30 — an endpoint review whose fallback target is local holds the Ollama review pin while it runs, and releases it without an unload', async () => {
+  it('#3084 P30 — once the review falls back, its endpoint target is marked until the review ends', async () => {
     writeBook(SENTENCES);
-    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
-    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
-    const base = (selectAnalyzerForPhaseMock.getMockImplementation() as (o: unknown) => Record<string, unknown>)({ phase: 'phase1' });
-    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'openai', model: 'openai:lab::m', fallbackModel: 'qwen3.5:4b' }));
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab(), spare()] });
+    reviewOn('openai:spare::m');
+    let spareBusy: boolean | undefined;
+    runReview.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      call.onFallback?.({ reason: 'Analyzer endpoint unreachable (Lab · m) — switched to endpoint Spare (m)' });
+      spareBusy = isEndpointBusy('spare');
+      return { ops: [] };
+    });
+    reviewMarks.length = 0;
+    reviewReleases.count = 0;
+    try {
+      await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(reviewMarks).toEqual([['lab'], ['spare']]);
+      expect(spareBusy).toBe(true);
+      expect(reviewReleases.count).toBe(2);
+      expect(isEndpointBusy('spare')).toBe(false);
+    } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 P30 — a healthy endpoint review whose fallback target is local does not pin Ollama', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab()] });
+    reviewOn('qwen3.5:4b');
     let busyDuringCall: boolean | undefined;
-    runReview.mockImplementationOnce(async () => {
+    runReview.mockImplementation(async () => {
       busyDuringCall = isAnyAnalyzerRunBusy();
+      return { ops: [] };
+    });
+    try {
+      await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(busyDuringCall).toBe(false);
+    } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 P30 — once an endpoint review falls back to local, the Ollama review pin holds until the end, then releases without an unload', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab()] });
+    reviewOn('qwen3.5:4b');
+    let busyAfterSwitch: boolean | undefined;
+    runReview.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      call.onFallback?.({ reason: 'Analyzer endpoint unreachable (Lab · m) — switched to Ollama (qwen3.5:4b)' });
+      busyAfterSwitch = isAnyAnalyzerRunBusy();
       return { ops: [] };
     });
     unloadResidentOllamaMock.mockClear();
     try {
       await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
-      expect(busyDuringCall).toBe(true);
+      expect(busyAfterSwitch).toBe(true);
       expect(isAnyAnalyzerRunBusy()).toBe(false);
       expect(unloadResidentOllamaMock).not.toHaveBeenCalled();
     } finally {
@@ -9739,35 +9857,71 @@ and append two cases beside Task 3d.1's review mark case (add `isAnyAnalyzerRunB
   });
 ```
 
-In Task 3d.1's `server/src/routes/analysis.endpoint-run.test.ts`: the hoisted block becomes `const { marks, releases, runState } = vi.hoisted(() => ({ marks: [] as string[][], releases: { count: 0 }, runState: { fallbackModel: null as string | null } }));`, the `selectAnalyzerForPhase` mock returns `fallbackModel: runState.fallbackModel`, `afterEach` adds `runState.fallbackModel = null;`, and append inside its `describe`:
+(`runReview.mockImplementation` persists across cases; restore the file's default in its `beforeEach` if it does not already reset `runReview`.)
+
+In Task 3d.1's `server/src/routes/analysis.endpoint-run.test.ts`:
+- the hoisted block becomes `const { marks, releases, runState } = vi.hoisted(() => ({ marks: [] as string[][], releases: { count: 0 }, runState: { fallbackModel: null as string | null, activate: false, onCall: undefined as undefined | (() => void) } }));`;
+- the `selectAnalyzerForPhase` mock returns `fallbackModel: runState.fallbackModel`;
+- the fake analyzer's `runStage1Chapter` becomes `(_m: string, _c: number, _p: string, call: StageCall) => { if (runState.activate) call.onFallback?.({ reason: 'switched' }); runState.onCall?.(); return stop(); }` (import `type StageCall` from `../analyzer/types.js`);
+- `afterEach` adds `runState.fallbackModel = null; runState.activate = false; runState.onCall = undefined;`.
+
+Append inside its `describe`:
 
 ```ts
-  it('#3084 P30 — a run whose fallback target is an endpoint marks it with the primary endpoints, and releases both', async () => {
+  it('#3084 P30 — a healthy run holds no mark for its fallback endpoint on the same card, so TTS eviction is not blocked', async () => {
     seed();
     runState.fallbackModel = 'openai:spare::m';
+    let spareBusy: boolean | undefined;
+    runState.onCall = () => {
+      spareBusy = isEndpointBusy('spare');
+    };
     await request(makeApp()).post('/api/manuscripts/m_endpoint_run/analysis').send({ model: 'openai:lab::qwen3-30b' });
-    expect(marks).toEqual([['lab', 'spare']]);
-    expect(releases.count).toBe(1);
+    expect(marks).toEqual([['lab']]);
+    expect(spareBusy).toBe(false);
+  }, 20_000);
+
+  it('#3084 P30 — once the fallback activates, its endpoint is marked until the job ends, and both marks are released', async () => {
+    seed();
+    runState.fallbackModel = 'openai:spare::m';
+    runState.activate = true;
+    let spareBusy: boolean | undefined;
+    runState.onCall = () => {
+      spareBusy = isEndpointBusy('spare');
+    };
+    await request(makeApp()).post('/api/manuscripts/m_endpoint_run/analysis').send({ model: 'openai:lab::qwen3-30b' });
+    expect(marks).toEqual([['lab'], ['spare']]);
+    expect(spareBusy).toBe(true);
+    expect(releases.count).toBe(2);
+    expect(isEndpointBusy('lab')).toBe(false);
     expect(isEndpointBusy('spare')).toBe(false);
   }, 20_000);
 ```
 
-In Task 3d.1's annotate-emotion case (and the same in `instruct-annotation.test.ts`), the hoisted selection state gains `fallbackModel: null as string | null`, the mock factory returns `fallbackModel: emotionEngineState.fallbackModel`, and append:
+In Task 3d.1's annotate-emotion case (and the same in `instruct-annotation.test.ts`, with `runStage3Chapter`), the hoisted selection state gains `fallbackModel: null as string | null` and `activate: false`, the mock factory returns `fallbackModel: emotionEngineState.fallbackModel`, and the fake `runEmotionChapter` calls `call.onFallback?.({ reason: 'switched' })` first when `emotionEngineState.activate` is set. Append:
 
 ```ts
-  it('#3084 P30 — an emotion pass whose fallback target is an endpoint marks it too', async () => {
+  it('#3084 P30 — an emotion pass marks its fallback endpoint only once the fallback activates', async () => {
     writeBook(SENTENCES);
     const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
     _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
     emotionEngineState.model = 'openai:lab::m';
     emotionEngineState.fallbackModel = 'openai:spare::m';
-    emotionMarks.length = 0;
     try {
+      emotionMarks.length = 0;
       await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
-      expect(emotionMarks).toEqual([['lab', 'spare']]);
+      expect(emotionMarks).toEqual([['lab']]);
+
+      emotionEngineState.activate = true;
+      emotionMarks.length = 0;
+      emotionReleases.count = 0;
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(emotionMarks).toEqual([['lab'], ['spare']]);
+      expect(emotionReleases.count).toBe(2);
+      expect(isEndpointBusy('spare')).toBe(false);
     } finally {
       emotionEngineState.model = 'test-model';
       emotionEngineState.fallbackModel = null;
+      emotionEngineState.activate = false;
       _resetUserSettingsCache();
       _resetEndpointBusyForTest();
     }
@@ -9812,7 +9966,92 @@ Append to `server/src/routes/analysis.phase-model.test.ts`, inside the `phase ev
   }, 60_000);
 ```
 
-(add `AnalyzerUnreachableError` to its `../analyzer/errors.js` import).
+and, in the same describe, two cases for what runs after a switch:
+
+```ts
+  it('#3084 P30 — after a switch from a large-context endpoint to Ollama, the next chapter is chunked for Ollama', async () => {
+    const big = analyzerEndpointSchema.parse({ id: 'big', name: 'Big', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 262144 });
+    const ceiling = getKnob('analyzer.stage1.chunkCharBudget')!.max!;
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [big], configOverrides: { 'analyzer.stage1.chunkCharBudget': ceiling } });
+    const sentence = 'The lamp guttered and the room went quiet. ';
+    const localBudget = resolveStage1ChunkCharBudget(resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }), sentence.repeat(10), []);
+    const body = sentence.repeat(Math.ceil((localBudget * 2) / sentence.length));
+    const endpointBudget = resolveStage1ChunkCharBudget(resolveCapacity({ engine: 'openai', model: 'openai:big::qwen3-30b' }), body, []);
+    /* Preconditions: the endpoint takes each chapter in one chunk; Ollama needs at least two. */
+    expect(endpointBudget).toBeGreaterThanOrEqual(body.length);
+    expect(localBudget).toBeLessThan(body.length);
+
+    const manuscriptId = `test-fallback-capacity-${Date.now()}`;
+    putManuscript({
+      manuscriptId, format: 'plaintext', title: 'Capacity', wordCount: 1, byteSize: body.length * 2, uploadedAt: new Date().toISOString(),
+      sourceText: body + body,
+      chapterHints: [{ id: 1, title: 'One', body }, { id: 2, title: 'Two', body }] as unknown as ChapterHint[],
+    });
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const primaryCalls: number[] = [];
+    const targetCalls: number[] = [];
+    const spy = buildSpyPhase0Analyzer();
+    const primary: Analyzer = {
+      ...spy,
+      async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
+        primaryCalls.push(chapterId);
+        throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      },
+    };
+    const target: Analyzer = {
+      ...spy,
+      async runStage1Chapter(m: string, chapterId: number, p: string, call: StageCall): Promise<Stage1ChapterOutput> {
+        targetCalls.push(chapterId);
+        return spy.runStage1Chapter(m, chapterId, p, call);
+      },
+    };
+    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, target), engine: 'openai', model: 'openai:big::qwen3-30b', fallbackModel: 'qwen3.5:4b' };
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
+    const job = buildStubJob(manuscriptId);
+    try {
+      await runMainAnalyzerJob(job, getManuscriptForTest(manuscriptId), selection, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      /* Chapter 1 went to the endpoint as one chunk and to the target as that same chunk. */
+      expect(primaryCalls.filter((c) => c === 1)).toHaveLength(1);
+      /* Chapter 2 was sized for Ollama: two or more chunks. */
+      expect(targetCalls.filter((c) => c === 2).length).toBeGreaterThanOrEqual(2);
+      expect(job.engine).toBe('local');
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
+
+  it('#3084 P30 — after a phase-1 switch, phase-1 events carry the target engine', async () => {
+    const manuscriptId = `test-fallback-phase1-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const phase1Primary: Analyzer = {
+      ...buildSpyPhase1Analyzer(),
+      async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+        throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      },
+    };
+    setPhase1Selection({ analyzer: new FallbackAnalyzer(phase1Primary, buildSpyPhase1Analyzer()), engine: 'openai', model: 'openai:lab::qwen3-30b', fallbackModel: 'qwen3.5:4b' });
+    const job = buildStubJob(manuscriptId);
+    const events = attachEventCapture(job);
+    try {
+      await runMainAnalyzerJob(job, getManuscriptForTest(manuscriptId), buildSelection(buildSpyPhase0Analyzer(), 'phase0-test-model'), { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      const switched = (events as Array<CapturedEvent & { model?: string; engine?: string }>).filter((e) => e.kind === 'phase' && e.phaseId === 1 && e.model === 'qwen3.5:4b');
+      expect(switched.length).toBeGreaterThan(0);
+      expect(switched.every((e) => e.engine === 'local')).toBe(true);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+    }
+  }, 60_000);
+```
+
+(add `AnalyzerUnreachableError` to its `../analyzer/errors.js` import; import `getKnob` from `../config/registry.js`, `resolveCapacity` from `../analyzer/capacity.js`, `resolveStage1ChunkCharBudget` from `../analyzer/stage1-chunk.js`, `analyzerEndpointSchema` from `../workspace/analyzer-endpoints.js`, the user-settings test helpers, and `type StageCall` from `../analyzer/types.js`. `getManuscriptForTest(id)` is `(await import('../store/manuscripts.js')).getManuscript(id) as never`, as the file's existing cases inline it. If the phase-1 fake's `setPhase1Selection` shape differs, keep its builder and pass this selection through it.)
 
 - [ ] **Step 2: Run them and confirm they fail**
 Run: `npm --prefix server run test -- src/analyzer/fallback-target.test.ts src/config/registry.test.ts src/analyzer/select-analyzer.fallback-target.test.ts src/analyzer/fallback.endpoint-reason.test.ts src/routes/config.fallback-target.test.ts src/routes/user-settings.test.ts src/workspace/analyzer-endpoints.test.ts src/routes/script-review.test.ts src/routes/analysis.endpoint-run.test.ts src/routes/analysis.phase-model.test.ts src/routes/annotate-emotion.test.ts src/routes/instruct-annotation.test.ts`
@@ -9824,9 +10063,11 @@ Expected: FAIL.
 - `config.fallback-target.test.ts`: every case gets 400 `unknown key analyzer.fallback.target`, so the saves fail on status and the refusals fail on the message.
 - `user-settings.test.ts`: the new case receives 200.
 - `analyzer-endpoints.test.ts`: `counts the analyzer fallback target` receives `[]`.
-- `script-review.test.ts`: Part 1.4's message says "turn on Cloud fallback"; the endpoint-target mark receives `[['lab']]`; `busyDuringCall` is `false`.
-- `analysis.endpoint-run.test.ts` and the emotion/instruct cases receive `[['lab']]`.
-- `analysis.phase-model.test.ts`: the switched events carry `engine: 'gemini'`.
+- `config.fallback-target.test.ts` GET cases: `values[KEY]` has no `analyzerEngine` (and, before the knob exists, no entry at all).
+- `script-review.test.ts`: Part 1.4's message says "turn on Cloud fallback"; the two activation cases receive `[['lab']]` and `false` (nothing marks at the switch). The two healthy cases **pass** already, because nothing marks the target at all yet; mutation rows 20 and 21 prove they can fail.
+- `analysis.endpoint-run.test.ts` and the emotion/instruct cases: the activation case receives `[['lab']]`; the healthy case passes already (row 22 is its proof).
+- `analysis.phase-model.test.ts`: the phase-0 switched events carry `engine: 'gemini'`; chapter 2 reaches the target as one chunk (`expected 1 to be greater than or equal to 2`) and `job.engine` stays `'openai'`; the phase-1 switched events carry no `engine: 'local'`.
+- `select-analyzer.fallback-target.test.ts`, once the exports exist: the endpoint-default case receives `'openai:lab::qwen3-30b'` only if `local` were read from the saved default (it passes against Step 3's `getResolvedOllamaModel()`; row 4a is its proof); the widened no-wrap row receives a `FallbackAnalyzer` against a same-model-only check (row 4b).
 
 - [ ] **Step 3: Implement**
 
@@ -9855,6 +10096,17 @@ and replace the `options` / `pattern` docs (`:27-35`; the `pattern?: RegExp;` li
       forced into an enum with an unbounded option list (e.g. every "cuda:<n>" card index). */
 ```
 
+`server/src/config/types.ts` — in `KnobValueState`, after `staleReason?`:
+
+```ts
+  /** #3084 P30 — only on analyzer.fallback.target (routes/config.ts sets it): display labels for the
+      static options, the Ollama model `local` resolves to, and a note when the value comes from the
+      legacy allowCloudFallback step. */
+  analyzerEngine?: { localModel: string; optionLabels: Record<string, string>; sourceNote?: string };
+```
+
+and the same optional field on the frontend value-state type in `src/lib/types.ts` (the type `ConfigValues` maps to).
+
 `server/src/config/registry.ts` — after the `analyzer.gemini.model` descriptor (`:1150-1169`):
 
 ```ts
@@ -9863,7 +10115,7 @@ and replace the `options` / `pattern` docs (`:27-35`; the `pattern?: RegExp;` li
     env: 'ANALYZER_FALLBACK_TARGET',
     group: 'analyzer-models',
     label: 'Analyzer fallback',
-    help: 'Where analysis goes, one hop, when the local Ollama daemon or an OpenAI-compatible endpoint is unreachable (connection refused or timed out before a reply). "off": no fallback, the run fails naming the server. "local": the saved Ollama model. "gemini" (default): the Gemini analyzer model, only when a Gemini API key is set. Or pick an endpoint model. A reply that breaks off mid-stream or a proxy 502 is retried, never a fallback. The fallback is never itself wrapped, a Gemini run never falls back, and persona generation never falls back. Saving a target whose endpoint is missing, or "gemini" with no key, is refused. An install that switched the old Model Manager "Cloud fallback" off reads as "off" until this is set.',
+    help: 'Where analysis goes, one hop, when the local Ollama daemon or an OpenAI-compatible endpoint is unreachable (connection refused or timed out before a reply). "off": no fallback, the run fails naming the server. "local": the Ollama model a local run uses (the saved Ollama model, or OLLAMA_MODEL / the shipped default when the saved default is an endpoint). "gemini" (default): the Gemini analyzer model, only when a Gemini API key is set. Or pick an endpoint model. A reply that breaks off mid-stream or a proxy 502 is retried, never a fallback. The fallback is never itself wrapped, a Gemini run never falls back, and persona generation never falls back. Saving a target whose endpoint is missing, or "gemini" with no key, is refused. An install that switched the old Model Manager "Cloud fallback" off reads as "off" until this is set.',
     type: 'analyzer-engine',
     options: ['off', 'local', 'gemini'],
     /* off | local | gemini | an endpoint model id — the grammar of analyzer/model-id.ts, repeated as a
@@ -9897,8 +10149,9 @@ Create `server/src/analyzer/fallback-target.ts`:
    chosen in Advanced Settings (analyzer.fallback.target). Selection lives in index.ts
    (fallbackSelectionFor); this module only resolves the value and checks a save. */
 import { getKnob } from '../config/registry.js';
-import { resolveKnob } from '../config/resolver.js';
-import { getResolvedAllowCloudFallback } from '../workspace/user-settings.js';
+import { configValue, resolveKnob } from '../config/resolver.js';
+import type { KnobValueState } from '../config/types.js';
+import { getResolvedAllowCloudFallback, getResolvedGeminiApiKey, getResolvedOllamaModel } from '../workspace/user-settings.js';
 import { parseEndpointModelId } from './model-id.js';
 
 export type AnalyzerFallbackTarget = 'off' | 'local' | 'gemini' | string;
@@ -9922,6 +10175,28 @@ export function fallbackTargetSaveError(value: string, saved: { endpointIds: rea
     return `analyzer.fallback.target: no analyzer endpoint "${parsed.endpointId}" is saved. Add it in Model Manager → Analyzer endpoints, or pick another target.`;
   }
   return null;
+}
+
+/** The Advanced Settings value for this knob. resolveAll() builds values from resolveKnob, which
+    knows nothing of the legacy step, so routes/config.ts swaps this knob's entry for this one. */
+export function fallbackTargetValueState(base: KnobValueState): KnobValueState {
+  const effective = resolveAnalyzerFallbackTarget();
+  const localModel = getResolvedOllamaModel();
+  return {
+    ...base,
+    effective,
+    analyzerEngine: {
+      localModel,
+      optionLabels: {
+        off: 'Off',
+        local: `Local Ollama — ${localModel}`,
+        gemini: getResolvedGeminiApiKey() ? `Gemini — ${configValue<string>('analyzer.gemini.model')}` : 'Gemini — no API key, fallback inactive',
+      },
+      ...(base.source === 'default' && effective === 'off'
+        ? { sourceNote: 'Off because the old Model Manager "Cloud fallback" switch was turned off. Pick a target here to replace it.' }
+        : {}),
+    },
+  };
 }
 ```
 
@@ -9999,8 +10274,10 @@ export function fallbackSelectionFor(primary: AnalyzerSelection): AnalyzerSelect
     return checkedTarget('gemini', model, () => new GeminiAnalyzer({ apiKey, model }));
   }
   if (target === 'local') {
+    /* One daemon: an unreachable local primary means an unreachable local target, whatever the model. */
+    if (primary.engine === 'local') return null;
+    /* The model a `local` selection resolves to anywhere: the saved Ollama tag, OLLAMA_MODEL, or the shipped default. */
     const model = getResolvedOllamaModel();
-    if (primary.engine === 'local' && primary.model === model) return null;
     const url = getResolvedOllamaUrl();
     return checkedTarget('local', model, () => new OllamaAnalyzer({ url, model }), () => ollamaModelDigest(url, model).catch(() => undefined));
   }
@@ -10123,6 +10400,21 @@ export function fallbackReasonFor(err: AnalyzerUnreachableError, names?: { prima
   }
 ```
 
+Also in `server/src/routes/config.ts`, import `fallbackTargetValueState`, and replace each of the three `values: resolveAll()` (`:82`, `:159`, `:218`) with `values: clientValues()`, defined once above the routes:
+
+```ts
+/* #3084 P30 — resolveAll() reads resolveKnob, which knows nothing of the fallback target's legacy
+   step; Advanced Settings must show the target that actually applies. */
+function clientValues(): Record<string, KnobValueState> {
+  const values = resolveAll();
+  const key = 'analyzer.fallback.target';
+  if (values[key]) values[key] = fallbackTargetValueState(values[key]);
+  return values;
+}
+```
+
+(The pair-rule reads at `:144` and `:202` use `resolveKnob` for a knob no rule names, so they are unchanged.)
+
 `server/src/routes/user-settings.ts` — import `fallbackTargetSaveError` and add `readUserSettings`, `getResolvedGeminiApiKey` to the `../workspace/user-settings.js` import where absent. The PUT handler's head becomes:
 
 ```ts
@@ -10161,25 +10453,59 @@ userSettingsRouter.put('/', async (req: Request, res: Response) => {
       switchToFallback(`${warm.kind === 'load_timeout' ? 'Ollama model load timed out' : 'Ollama unreachable'} (${names.primary}) — switched to ${names.target}`);
 ```
 
-- Task 3d.1's mark: `releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([selection.model, ...(selection.fallbackModel ? [selection.fallbackModel] : [])]));`
-- Below `const pinnedLocal = selection.engine === 'local';` (`:798`, unchanged):
+- Task 3d.1's mark is unchanged (`[selection.model]` only).
+- Above `const switchToFallback` (`:722`), and in it (marks at activation only):
 
 ```ts
-  /* #3084 P30 — a local fallback target behind a non-local primary holds the same review pin, so
-     TTS eviction cannot unload Ollama mid-call after a switch. No unload at the end: the primary
-     never loaded Ollama, and an idle pin releases on its own keep-alive. */
-  const pinnedLocalFallback =
-    !pinnedLocal && selection.fallbackModel !== null && inferEngineFromModelId(selection.fallbackModel) === 'local';
+  /* #3084 P30 — the fallback target is marked busy only once the review switches to it, and stays
+     marked until the review ends (the finally below). A local target behind a non-local primary
+     takes the Ollama review pin; no unload at the end, since the primary never loaded Ollama. */
+  let releaseFallbackRun: () => void = () => {};
+  let pinnedLocalFallback = false;
 ```
 
-  In the `try`, directly after `if (pinnedLocal) markReviewBusy(located.bookDir);`: `if (pinnedLocalFallback) markReviewBusy(located.bookDir);`. In the `finally`, directly after the `if (pinnedLocal) { … }` block: `if (pinnedLocalFallback) clearReviewBusy(located.bookDir);`.
+  and inside `switchToFallback`, directly after `fellBack = true;`:
+
+```ts
+    releaseFallbackRun = markEndpointRunActive(endpointIdsForModelIds(selection.fallbackModel ? [selection.fallbackModel] : []));
+    if (selection.engine !== 'local' && selection.fallbackModel !== null && inferEngineFromModelId(selection.fallbackModel) === 'local') {
+      markReviewBusy(located.bookDir);
+      pinnedLocalFallback = true;
+    }
+```
+
+  (`selection.engine`, not `pinnedLocal`: the warm-fail path calls `switchToFallback` at `:774`, before `pinnedLocal` is declared at `:798`.) In the review `try`'s `finally`, directly after Task 3d.1's `releaseEndpointRun();`: `releaseFallbackRun(); if (pinnedLocalFallback) clearReviewBusy(located.bookDir);`. `:798` and the `if (pinnedLocal)` blocks keep their text.
 
 `server/src/routes/analysis.ts` (import `inferEngineFromModelId` from `'../analyzer/model-id.js'` if absent):
+- `AnalysisJob`, after Task 3d.1's `releaseEndpointRun?`: `/** #3084 P30 — fallback targets already marked busy (each once, at its first switch). */ fallbackMarked?: Set<string>;`. `engine` widens to `AnalysisEngine` if 3a has not already.
+- Beside `endJob`:
+
+```ts
+/* #3084 P30 — a fallback target is marked busy at its first switch, never at job start, and the
+   mark is released with the job's own (endJob calls releaseEndpointRun). */
+function markFallbackActive(job: AnalysisJob, modelId: string | null): void {
+  if (!modelId || job.fallbackMarked?.has(modelId)) return;
+  (job.fallbackMarked ??= new Set()).add(modelId);
+  const release = markEndpointRunActive(endpointIdsForModelIds([modelId]));
+  const previous = job.releaseEndpointRun;
+  job.releaseEndpointRun = () => {
+    previous?.();
+    release();
+  };
+}
+```
+
+- In `runMainAnalyzerJob`, beside `let activeModelId = selection.model;` (`:3610`): `let activeEngine: AnalysisEngine = selection.engine;`; beside `let phase1ModelId = phase1Selection.model;` (`:3687`): `let phase1Engine: AnalysisEngine = phase1Selection.engine;`.
 - Phase-0 `onFallback` (`:4465-4475`):
 
 ```ts
           onFallback: ({ reason }) => {
-            activeModelId = selection.fallbackModel ?? activeModelId;
+            if (selection.fallbackModel) {
+              activeModelId = selection.fallbackModel;
+              activeEngine = inferEngineFromModelId(selection.fallbackModel);
+              job.engine = activeEngine; // the persisted engine the reverse local-analyzer guard reads
+              markFallbackActive(job, selection.fallbackModel);
+            }
             console.log(`[analysis] ${manuscriptId}: ${reason}`); // #3084 P30 — never silent
             send({
               kind: 'phase',
@@ -10187,24 +10513,44 @@ userSettingsRouter.put('/', async (req: Request, res: Response) => {
               progress: phase0Progress(),
               label: PHASES[0].label,
               model: activeModelId,
-              engine: inferEngineFromModelId(activeModelId), // the target's engine, not always gemini
+              engine: activeEngine, // the target's engine, not always gemini
             });
           },
 ```
 
-- Phase-1 `onFallback` (`:5368-5371`): take `({ reason })` and add `console.log(\`[analysis] ${manuscriptId}: ${reason}\`);` before `tickOverall();`.
-- Task 3d.1's run marks (main POST and subset POST):
+- Phase-0 chunk budget (`:4496`): W2's `resolveCapacity({ engine: selection.engine, model: selection.model })` becomes `resolveCapacity({ engine: activeEngine, model: activeModelId })`. It is read inside the per-chapter closure, so each chapter after a switch is sized for the target.
+- Phase-1 `onFallback` (`:5368-5371`):
 
 ```ts
-  job.releaseEndpointRun = markEndpointRunActive(
-    endpointIdsForModelIds([
-      ...preflight.map((t) => t.modelId),
-      ...[selection.fallbackModel, phase1Selection.fallbackModel].filter((id): id is string => id !== null),
-    ]),
-  );
+        onFallback: ({ reason }) => {
+          if (phase1Selection.fallbackModel) {
+            phase1ModelId = phase1Selection.fallbackModel;
+            phase1Engine = inferEngineFromModelId(phase1Selection.fallbackModel);
+            job.engine = phase1Engine;
+            markFallbackActive(job, phase1Selection.fallbackModel);
+          }
+          console.log(`[analysis] ${manuscriptId}: ${reason}`);
+          tickOverall();
+        },
 ```
 
-`server/src/routes/annotate-emotion.ts` and `instruct-annotation.ts` — Task 3d.1's mark becomes `releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([selection.model, ...(selection.fallbackModel ? [selection.fallbackModel] : [])]));`.
+- Phase-1 capacity (`:5461`): W2's `capacity: resolveCapacity({ engine: phase1Selection.engine, model: phase1Selection.model })` becomes `capacity: resolveCapacity({ engine: phase1Engine, model: phase1ModelId })`. The phase-1 tick event (`sendLiveTick`, `:5200`, whose event carries `model: phase1ModelId` at `:5211`) gains `engine: phase1Engine`.
+- Subset job: add the same `onFallback` shape to its `stage1Call` (`:7030`) and its stage-2 `stageCall` (`:7363`): each updates that job's active model and engine, sets `job.engine`, calls `markFallbackActive(job, <that selection>.fallbackModel)` and logs the reason. Its stage-1 chunk budget (`:7065`) and stage-2 `capacity` (`:7360`) resolve from those active values, as above.
+- Task 3d.1's run marks in both POSTs are unchanged (primary endpoints only).
+
+`server/src/routes/annotate-emotion.ts` and `instruct-annotation.ts` — Task 3d.1's mark is unchanged. Above the loop's `try`, beside `releaseEndpointRun`: `let releaseFallbackRun: (() => void) | undefined;`. On the `StageCall` the chapter loop passes to `runEmotionChapter` (`runStage3Chapter` in instruct-annotation), add:
+
+```ts
+        /* #3084 P30 — the fallback target is marked busy only once the pass switches to it. */
+        onFallback: ({ reason }) => {
+          console.log(`[annotate-emotion] ${reason}`);
+          if (selection.fallbackModel && !releaseFallbackRun) {
+            releaseFallbackRun = markEndpointRunActive(endpointIdsForModelIds([selection.fallbackModel]));
+          }
+        },
+```
+
+and make `releaseFallbackRun?.();` the second statement of that `try`'s `finally`, after `releaseEndpointRun();`.
 
 Text this task makes false:
 - `server/src/workspace/user-settings.ts:132-138` — `(with Gemini as an opt-out fallback iff GEMINI_API_KEY is set, allowCloudFallback is on, and the local daemon is unreachable — see selectAnalyzer)` → `(falling back, one hop, to analyzer.fallback.target when the daemon is unreachable — see selectAnalyzer)`; `:142-147` becomes `/* Legacy (#3084 P30). No UI writes this any more; resolveAnalyzerFallbackTarget reads false as "off" while analyzer.fallback.target is unset. Kept so existing files still parse and a strict-local install stays strict-local. */`; `:973` `(still used for TTS + opt-out cloud fallback)` → `(still used for TTS and a gemini fallback target)`; the `getResolvedAllowCloudFallback` doc (`:979-985`) gains a first line `Legacy (#3084 P30): read only by resolveAnalyzerFallbackTarget.`
@@ -10222,10 +10568,10 @@ Text this task makes false:
 `docs/wiki/Advanced-Settings.md` §4 — after the `Gemini analyzer model` row, add:
 
 ```markdown
-| Analyzer fallback | Where analysis goes, one hop, when Ollama or an OpenAI-compatible endpoint is unreachable: `off`, `local` (the saved Ollama model), `gemini` (needs a Gemini API key) or an endpoint model. A reply that breaks off or a proxy 502 is retried, never a fallback. Saving a missing endpoint or a keyless `gemini` is refused. An install that turned the old "Cloud fallback" switch off reads as `off` until this is set | `gemini` | off / local / gemini / endpoint model | live | medium |
+| Analyzer fallback | Where analysis goes, one hop, when Ollama or an OpenAI-compatible endpoint is unreachable: `off`, `local` (the Ollama model a local run uses, shown beside it), `gemini` (needs a Gemini API key) or an endpoint model. A local primary never falls back to `local`. A reply that breaks off or a proxy 502 is retried, never a fallback. Saving a missing endpoint or a keyless `gemini` is refused. An install that turned the old "Cloud fallback" switch off reads as `off` until this is set | `gemini` | off / local / gemini / endpoint model | live | medium |
 ```
 
-and change the `Gemini analyzer model` row's "What it does" to `Model used directly, or as the fallback when Analyzer fallback is gemini`. In the intro (`:13`), set the knob count to the registry's count at implementation time (`allKnobs().length`; 3c retires six and other waves add knobs, so count, do not add one).
+and change the `Gemini analyzer model` row's "What it does" to `Model used directly, or as the fallback when Analyzer fallback is gemini`. **Knob count, same step.** `scripts/tests/knob-docs-sync.test.mjs:160` also asserts the intro's `— N knobs across M groups in total` sentence (`Advanced-Settings.md:13-14`; `117 knobs across 12 groups` at 46e62a34). This task adds one knob, so N goes up by exactly one from the value on the branch at implementation time (3c's retirement of six `rate.*.gemma*` knobs and other waves' knobs will already have moved it); M is unchanged, since `analyzer-models` already exists. Verify against `allKnobs().length` and the registry's group count, and let `npm run test:hooks` confirm.
 
 Run `npm run config:sync`, then `npm run config:check`.
 
@@ -10233,10 +10579,13 @@ Run `npm run config:sync`, then `npm run config:check`.
 Run: the Step 2 command, then `npm --prefix server run test -- src/analyzer/select-analyzer.test.ts src/analyzer/fallback.test.ts src/analyzer/fallback-analyzer.test.ts src/analyzer/preflight.test.ts src/routes/analysis.preflight.test.ts src/workspace/user-settings.test.ts src/routes/config.test.ts src/config`, then `npm run test:hooks` (`scripts/tests/knob-docs-sync.test.mjs` finds the `Analyzer fallback` row), `npm run check:cycles` (no new cycle: `index.ts` imports `capabilities.ts`, `fallback-target.ts` and `ollama-digest.ts`, none of which imports `index.ts` or `select-analyzer.ts`), `npm run config:check`, `npm run typecheck`. Expected: PASS.
 
 - [ ] **Step 5: Mutation proof** (restore after each)
-1. `index.ts` `local` branch: return the bare selection instead of `withFallback(…)` → red: `select-analyzer.test.ts` "local + Gemini key → FallbackAnalyzer wrapping Ollama with Gemini fallback" and "an Ollama primary falls back to an endpoint model". The same in the `openai` branch → red: "an endpoint primary falls back to gemini by default…" and "…the saved Ollama model when the target is local".
+1. `index.ts` `local` branch: return the bare selection instead of `withFallback(…)` → red: `select-analyzer.test.ts` "local + Gemini key → FallbackAnalyzer wrapping Ollama with Gemini fallback" and "an Ollama primary falls back to an endpoint model". The same in the `openai` branch → red: "an endpoint primary falls back to gemini by default…" and "…the Ollama model a local selection resolves to when the target is local".
+1a. `withFallback`: wrap twice — `new FallbackAnalyzer(primary.analyzer, new FallbackAnalyzer(target.analyzer, primary.analyzer), names)` → red: "one hop, through the real selection…" (the fallback analyzer is a `FallbackAnalyzer`, and the primary is called twice).
 2. `resolveAnalyzerFallbackTarget`: delete the legacy line → red: "legacy: a saved allowCloudFallback false reads off…", "no wrap when the target is legacy allowCloudFallback false", and `select-analyzer.test.ts` "local + key + allowCloudFallback OFF → bare OllamaAnalyzer".
 3. `resolveAnalyzerFallbackTarget`: move the legacy line above the `source !== 'default'` return → red: "a saved override beats the legacy step" and "env beats a saved override and the legacy step".
-4. `fallbackSelectionFor`: delete both same-as-primary returns → red: "no wrap when the target is the same endpoint model" and "…the same Ollama model".
+4. `fallbackSelectionFor`: delete both same-as-primary returns → red: "no wrap when the target is the same endpoint model", "…the same Ollama model" and "…local behind a local primary on another model (one daemon)".
+4a. `fallbackSelectionFor` `local` branch: read the model from `getCachedUserSettings().defaultAnalysisModel` instead of `getResolvedOllamaModel()` → red: "with an endpoint id as the saved default, local is OLLAMA_MODEL, else the shipped default — never the endpoint id".
+4b. Narrow the local no-wrap back to `if (primary.engine === 'local' && primary.model === model) return null;` → red: "no wrap when the target is local behind a local primary on another model (one daemon)".
 5. `fallbackReasonFor`: `return cause;` always → red: "an unreachable endpoint names itself and the target", "Ollama keeps its pinned cause text, extended with both names" and all eight `%s announces…` rows. (It keeps "without names the reason is the bare cause…" green; return the extended text even without names — `${cause} (${names?.primary}) — …` — → that case goes red.)
 6. `FallbackAnalyzer.runEmotionChapter`: replace the `switchTo` delegation with `return await this.fallback.runEmotionChapter(manuscriptId, chapterId, promptMd, call);` → red: only `runEmotionChapter announces the switch with both names…`. Repeat per method; each row is its own.
 7. `switchTo`: delete the message prefix line → red: "a target that is also unreachable fails naming both…".
@@ -10252,11 +10601,15 @@ Run: the Step 2 command, then `npm --prefix server run test -- src/analyzer/sele
 17. `registry.ts`: `type: 'string'` → red: "is an analyzer-engine knob…". `{1,40}` → `+` → red: `rejects "openai:aaaa…::m"`. Remove `off|` from the pattern → red: `accepts "off"`.
 18. `registry.test.ts`: revert the allowed list to `['string', 'device']` → red: "pattern is only declared on string/device/analyzer-engine knobs…" (`analyzer.fallback.target declares a pattern but has type "analyzer-engine"`).
 19. `script-review.ts` nudge: `=== 'off'` → `!== 'off'` → red: Part 1.4.
-20. `script-review.ts` mark: drop the `fallbackModel` spread → red: "a review whose fallback target is an endpoint marks that endpoint with its own".
-21. `script-review.ts`: delete `if (pinnedLocalFallback) markReviewBusy(located.bookDir);` → red: "an endpoint review whose fallback target is local holds the Ollama review pin…" (`busyDuringCall` false). Delete the `clearReviewBusy` line instead → red: the same case (`isAnyAnalyzerRunBusy()` stays true).
-22. `analysis.ts` main POST mark: drop the fallback models → red: "a run whose fallback target is an endpoint marks it…".
+20. `script-review.ts`: mark the fallback endpoint at review start (add `selection.fallbackModel` to Task 3d.1's mark) → red: "a healthy review holds no mark for its fallback endpoint on the same card". Delete the `markEndpointRunActive` line in `switchToFallback` instead → red: "once the review falls back, its endpoint target is marked until the review ends". Delete `releaseFallbackRun();` from the `finally` → red: the same case (`isEndpointBusy('spare')` stays true).
+21. `script-review.ts`: take the Ollama pin at review start for a local target → red: "a healthy endpoint review whose fallback target is local does not pin Ollama". Delete `markReviewBusy` in `switchToFallback` → red: "once an endpoint review falls back to local, the Ollama review pin holds…" (`busyAfterSwitch` false). Delete the `clearReviewBusy` line → red: the same case (`isAnyAnalyzerRunBusy()` stays true).
+22. `analysis.ts` main POST: add the fallback models to Task 3d.1's job-start mark → red: "a healthy run holds no mark for its fallback endpoint on the same card…". Delete `markFallbackActive(job, selection.fallbackModel)` from the phase-0 `onFallback` → red: "once the fallback activates, its endpoint is marked until the job ends…". In `markFallbackActive`, replace the chained release with `job.releaseEndpointRun = release;` → red: the same case (`isEndpointBusy('lab')` stays true).
 23. `analysis.ts` phase-0 `onFallback`: `engine: 'gemini'` → red: "after a switch to a local target, phase-0 events name the Ollama model with engine local, not gemini".
-24. `annotate-emotion.ts` mark: drop the `fallbackModel` spread → red: "an emotion pass whose fallback target is an endpoint marks it too". Repeat for `instruct-annotation.ts`.
+24. `annotate-emotion.ts`: move the fallback mark to the top of the `try` → red: "an emotion pass marks its fallback endpoint only once the fallback activates" (first run). Delete it from `onFallback` → red: the same case (second run). Repeat for `instruct-annotation.ts`.
+25. `analysis.ts` phase-0 chunk budget: keep `resolveCapacity({ engine: selection.engine, model: selection.model })` → red: "after a switch from a large-context endpoint to Ollama, the next chapter is chunked for Ollama" (chapter 2 in one chunk). Delete `job.engine = activeEngine;` → red: the same case's `job.engine` assertion.
+26. `analysis.ts` phase-1 tick event: drop `engine: phase1Engine` → red: "after a phase-1 switch, phase-1 events carry the target engine".
+27. `routes/config.ts`: return `resolveAll()` from GET instead of `clientValues()` → red: both GET cases (`effective` is `gemini` for the legacy case; no `analyzerEngine`). Do it in the PUT response only → red: "labels gemini with its model when a key is set, and the PUT response carries the same state".
+28. `fallbackTargetValueState`: label gemini with its model even with no key → red: "labels local with the model a local selection resolves to, and gemini with no key as inactive". Drop the `sourceNote` spread → red: "reports off, with a source note…".
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -10274,7 +10627,7 @@ git commit -m "feat(server): choose the analyzer fallback target in Advanced Set
 - Modify: `src/views/advanced.tsx` — imports (after `:32`), state after `gpuSplit` (`:253`), the mount effect (before `}, [dispatch]);` at `:285`), the `<OverrideRow …>` props (`:542-553`); `src/views/advanced.test.tsx` — the api mock (`:16-30`), mocked handles (`:32-38`), `beforeEach` (`:173-194`), append a describe; `src/test/a11y.test.tsx:140-147` (api mock)
 - Modify: `src/components/model-settings-form.tsx` — the `allowCloudFallback` state (`:113-115`), its effect line (`:143`) and dependency (`:159`), the `dirty` comparison (`:196`) and dependency (`:213`), the save patch (`:238`), the "Analyzer engine" sublabel (`:493`) and `local` option text (`:501`), the Cloud fallback `FieldRow` (`:505-519`); `src/components/model-settings-form.test.tsx:98-127`
 - Modify: `src/components/status-popover.tsx:77`, `:169-173`; `src/store/analysis-substage-reducers.ts:33`, `:71`; `src/store/analysis-substage-selectors.ts:46`, `:61`, `:76`; `src/components/layout.tsx:1613`; `src/store/script-review-thunk.ts:127`, `:416`; tests `src/components/status-popover.test.tsx:289-301`, `src/components/layout.test.tsx:1500-1530`, `src/store/script-review-thunk.test.ts:138`
-- Modify (text this task makes false): `src/data/help-topics.ts:338-341` (`src/data/help-topics.test.ts` stays green unedited)
+- Modify: `src/data/help-topics.ts` — the `is-my-data-private` body (`:336-342`, which says the only thing that can leave the machine is the optional Gemini analyzer) and the `does-it-work-offline` body (`:348-354`, which calls Gemini "the one part that wants a connection"); `src/data/help-topics.test.ts` (append)
 
 **Interfaces:**
 - Consumes: Task 3d.4b's `KnobDescriptor.type` `'analyzer-engine'` and knob `analyzer.fallback.target`; 3c Task 3c.6's `api.getAnalyzerModels()` → `AnalyzerCatalog`.
@@ -10283,24 +10636,28 @@ git commit -m "feat(server): choose the analyzer fallback target in Advanced Set
   // src/lib/analyzer-engine-options.ts
   export interface AnalyzerEngineOption { value: string; label: string }
   export function endpointModelOptions(catalog: AnalyzerCatalog): AnalyzerEngineOption[];
-  export function analyzerEngineOptions(staticValues: readonly string[], endpointModels: readonly AnalyzerEngineOption[], current: string): AnalyzerEngineOption[];
+  export function analyzerEngineOptions(staticValues: readonly string[], endpointModels: readonly AnalyzerEngineOption[], current: string, labels?: Readonly<Record<string, string>>): AnalyzerEngineOption[];
   // OverrideRowProps.analyzerEndpointModels?: AnalyzerEngineOption[]  — every type: 'analyzer-engine' row renders a <select>
+  // OverrideRowProps.ollamaModels?: readonly string[] | null  — installed Ollama tags, or null when unknown
   // AdvancedView loads api.getAnalyzerModels() once on mount, best-effort, and passes the options to every row
   ```
+  Wave 4's persona knob carries no `analyzerEngine` value state, so its row keeps raw labels, no note and no warning.
   - `SubstageEntry.fallbackReason?: string`, `UpdateSubstageProgressPayload.fallbackReason?: string`, and the same optional field on both `analysisSubstage` prop shapes.
 
 Rules:
-- **The picker.** An `analyzer-engine` row is a `<select>`: the knob's static `options` with their raw values as labels, then every endpoint model as `<endpoint name> · <model>`, then the saved value if neither list has it, labelled `<value> (not in the current model list)`, so the row never shows a different choice than the one in effect. This is the target's label in the row (P30). A failed catalog read leaves the static entries and the saved value, never an error. A save refusal (Task 3d.4b's 400) surfaces inline through `OverrideRow`'s existing rejection path (#2209).
+- **The picker.** An `analyzer-engine` row is a `<select>`: the knob's static `options`, labelled from the value state's `analyzerEngine.optionLabels` when present (`Off`, `Local Ollama — qwen3.5:4b`, `Gemini — gemini-3.5-flash-lite` or `Gemini — no API key, fallback inactive`, Task 3d.4b) and by their raw values otherwise; then every endpoint model as `<endpoint name> · <model>`; then the saved value if neither list has it, labelled `<value> (not in the current model list)`. The selected value is the **effective** target the server reports, including a legacy `off` (P30), so the row never shows a different choice than the one in effect. A failed catalog read leaves the static entries and the saved value, never an error. A save refusal (Task 3d.4b's 400) surfaces inline through `OverrideRow`'s existing rejection path (#2209).
+- **Source note.** When the value state carries `analyzerEngine.sourceNote` (a legacy `off`), the row shows it under the select.
+- **Local not installed (warn, never refuse).** When the effective value is `local` and the Ollama catalog listed successfully without `analyzerEngine.localModel`, the row warns: `<model> is not installed in Ollama, so this fallback would fail. Pull it with ollama pull <model>, or pick another target.` The save itself went through. An unknown catalog (a failed or missing listing) shows no warning.
 - **Cloud fallback row.** Removed with all of its state. Save never sends `allowCloudFallback`. The field stays in `AccountState` defaults (`src/lib/account-defaults.ts:23`, `:62`) and in `api-types.ts`, read by nothing in this form.
 - **Sublabel** (`:493`): `Default — Local routes analysis through the Ollama daemon on this machine, so nothing leaves the box. If it is unreachable, analysis falls back to the target set in Advanced Settings → Analyzer fallback (Gemini by default, only with a Gemini API key; off keeps it strictly local). Gemini API sends every chapter straight to Google using your Gemini API key. Pick Gemini only if you want analysis to run in the cloud.` The `local` option (`:501`) becomes `Local Ollama (default — on-device)`.
 - **Switch note.** The server's `fallbackReason` (Task 3d.4b) names both. The review thunk stores it on the substage entry, and the popover note renders it; with `fallbackActive` and no reason (a prosody entry), the note reads `Switched to the fallback analyzer`.
-- **Help topic.** `is-my-data-private` says "Cloud fallback stays on by default, and a single switch in analyzer settings turns it off for good"; the switch is now the Analyzer fallback setting. Its test (`help-topics.test.ts:38-42`) requires "on by default" and "turns it off", so the new text keeps both.
+- **Help topics.** `is-my-data-private` (`help-topics.ts:336-338`) says the one thing that can leave the machine is the optional Gemini analyzer, with "a single switch in analyzer settings". From 3d a remote endpoint (OpenRouter, or a server on another machine) is selectable and is a valid fallback target, so both statements are false. The new text says: a remote endpoint receives the text of every chapter it analyses; a fallback target receives the chapters it takes over when it activates; and the fallback is set, or turned off, in Advanced Settings → Analyzer fallback. `does-it-work-offline` names Gemini as "the one part that wants a connection" and gets the same correction. The existing guards (`help-topics.test.ts:28-42`: "local model by default", "on by default", "turns it off", and none of the overclaims) stay green; a new case pins the endpoint and fallback sentences.
 - No Playwright spec: the picker changes one control inside an existing Advanced Settings row and crosses no router, redux or layout seam; the RTL tests drive the real `AdvancedView` → `OverrideRow` render. The removed Model Manager row is pinned by `model-settings-form.test.tsx`.
 
 **Pinned strings this task changes:**
 - `src/components/status-popover.tsx:171` `Switched to Gemini — Ollama unreachable` → the stored `fallbackReason` (fallback text `Switched to the fallback analyzer`); `status-popover.test.tsx:299` and `layout.test.tsx:1527` assert the reason they seed.
 - `model-settings-form.tsx:493` sublabel and `:501` option text (above); `model-settings-form.test.tsx:98-127` (`ModelSettingsForm — Cloud fallback toggle (Part 1)`: `defaults the Cloud fallback toggle to ON (opt-out)` and `turning it off and saving PATCHes allowCloudFallback:false`) is replaced.
-- `src/data/help-topics.ts:339-341` body text.
+- `src/data/help-topics.ts` `is-my-data-private` (`:336-342`) and `does-it-work-offline` (`:348-354`) body text.
 
 Keeps green: `src/components/settings/override-row.test.tsx`, `src/views/advanced.test.tsx` (including the device-knob cases), `src/test/a11y.test.tsx`, `src/lib/api.config.test.ts`, `src/data/help-topics.test.ts`, `src/components/top-bar.test.tsx:427` (tone only), `src/store/account-slice.test.ts`, `src/views/account.test.tsx`, `src/views/model-manager.test.tsx`, e2e `model-manager-*.spec.ts`, `advanced-settings.spec.ts`.
 
@@ -10342,6 +10699,12 @@ describe('analyzerEngineOptions', () => {
 
   it('does not duplicate a current value that is already offered', () => {
     expect(analyzerEngineOptions(['off', 'local', 'gemini'], lab, 'openai:lab::qwen3-30b')).toHaveLength(4);
+  });
+
+  it('labels static entries from the server-provided labels, and falls back to the raw value', () => {
+    const labels = { off: 'Off', local: 'Local Ollama — qwen3.5:4b', gemini: 'Gemini — no API key, fallback inactive' };
+    expect(analyzerEngineOptions(['off', 'local', 'gemini'], [], 'local', labels).map((o) => o.label)).toEqual(['Off', 'Local Ollama — qwen3.5:4b', 'Gemini — no API key, fallback inactive']);
+    expect(analyzerEngineOptions(['local', 'gemini'], [], 'local').map((o) => o.label)).toEqual(['local', 'gemini']);
   });
 });
 ```
@@ -10397,8 +10760,42 @@ describe('OverrideRow — analyzer-engine picker', () => {
     render(<OverrideRow descriptor={descriptor} value={makeValue({ key: descriptor.key, effective: 'local', source: 'env', locked: true })} onChange={vi.fn()} onRevert={vi.fn()} analyzerEndpointModels={models} />);
     expect(screen.getByRole('combobox', { name: 'Analyzer fallback' })).toBeDisabled();
   });
+
+  const engineState = (over: Record<string, unknown> = {}) => ({
+    localModel: 'qwen3.5:4b',
+    optionLabels: { off: 'Off', local: 'Local Ollama — qwen3.5:4b', gemini: 'Gemini — no API key, fallback inactive' },
+    ...over,
+  });
+
+  it('shows the concrete targets the server labels, and the legacy source note', () => {
+    render(
+      <OverrideRow
+        descriptor={descriptor}
+        value={makeValue({ key: descriptor.key, effective: 'off', analyzerEngine: engineState({ sourceNote: 'Off because the old Model Manager "Cloud fallback" switch was turned off. Pick a target here to replace it.' }) })}
+        onChange={vi.fn()}
+        onRevert={vi.fn()}
+        analyzerEndpointModels={[]}
+      />,
+    );
+    expect(screen.getByRole('option', { name: 'Local Ollama — qwen3.5:4b' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Gemini — no API key, fallback inactive' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Off', selected: true })).toBeInTheDocument();
+    expect(screen.getByTestId('analyzer-engine-source-note')).toHaveTextContent('old Model Manager "Cloud fallback" switch');
+  });
+
+  it('warns, without refusing, when local names an Ollama model that is not installed; says nothing when installed or unknown', () => {
+    const value = makeValue({ key: descriptor.key, effective: 'local', source: 'override', overridden: true, analyzerEngine: engineState() });
+    const { rerender } = render(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} analyzerEndpointModels={[]} ollamaModels={['llama3.1:8b']} />);
+    expect(screen.getByTestId('analyzer-engine-local-warning')).toHaveTextContent('qwen3.5:4b is not installed in Ollama');
+    rerender(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} analyzerEndpointModels={[]} ollamaModels={['qwen3.5:4b']} />);
+    expect(screen.queryByTestId('analyzer-engine-local-warning')).toBeNull();
+    rerender(<OverrideRow descriptor={descriptor} value={value} onChange={vi.fn()} onRevert={vi.fn()} analyzerEndpointModels={[]} ollamaModels={null} />);
+    expect(screen.queryByTestId('analyzer-engine-local-warning')).toBeNull();
+  });
 });
 ```
+
+(`makeValue` must pass `analyzerEngine` through; if the helper builds a fixed shape, spread its argument.)
 
 (`shows a save refusal inline` reads the rejection the way the file's existing #2209 cases do; if they render the message through a helper such as `describeConfigSaveError`, match that helper's text instead.)
 
@@ -10437,7 +10834,40 @@ describe('AdvancedView — analyzer-engine picker', () => {
     await waitFor(() => expect(mockGetAnalyzerModels).toHaveBeenCalled());
     expect([...select.options].map((o) => o.value)).toEqual(['off', 'local', 'gemini']);
   });
+
+  it('warns in the row when the saved local target is not in the Ollama catalog', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...FALLBACK_CONFIG,
+      values: {
+        'analyzer.fallback.target': {
+          key: 'analyzer.fallback.target', effective: 'local', source: 'override', locked: false, overridden: true,
+          analyzerEngine: { localModel: 'qwen3.5:4b', optionLabels: { off: 'Off', local: 'Local Ollama — qwen3.5:4b', gemini: 'Gemini — gemini-3.5-flash-lite' } },
+        },
+      },
+    });
+    mockGetAnalyzerModels.mockResolvedValue({
+      groups: [{ kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [{ id: 'llama3.1:8b', label: 'llama3.1:8b' }] }],
+    } as Awaited<ReturnType<typeof api.getAnalyzerModels>>);
+    renderView();
+    expect(await screen.findByTestId('analyzer-engine-local-warning')).toHaveTextContent('ollama pull qwen3.5:4b');
+  });
 });
+```
+
+Append to `src/data/help-topics.test.ts`, inside its describe:
+
+```ts
+  it('says a remote OpenAI-compatible endpoint, and a fallback target when it activates, receive chapter text (#3084 P30)', () => {
+    const privacy = byId('is-my-data-private')!.body;
+    expect(privacy).toMatch(/OpenAI-compatible endpoint/);
+    expect(privacy).toMatch(/OpenRouter/);
+    expect(privacy).toMatch(/fallback target .* when it takes over/);
+    expect(privacy).toMatch(/Advanced Settings → Analyzer fallback/);
+    expect(privacy).not.toMatch(/The one thing that can leave your machine is/);
+    const offline = byId('does-it-work-offline')!.body;
+    expect(offline).toMatch(/remote OpenAI-compatible endpoint/);
+    expect(offline).not.toMatch(/is the one part that wants a connection/);
+  });
 ```
 
 In `src/test/a11y.test.tsx`, add `getAnalyzerModels: () => Promise.resolve({ groups: [] }),` to the api mock after `getAnalyzerGpuSplit: mockGetAnalyzerGpuSplit,` (`:146`).
@@ -10503,6 +10933,8 @@ Expected: FAIL.
 - The override-row and advanced picker cases: `Unable to find an accessible element with the role "combobox" and name "Analyzer fallback"` (the row renders a text input).
 - `has no Cloud fallback row…`: `Unable to find an element with the text: /Advanced Settings → Analyzer fallback/`. `saving never writes allowCloudFallback`: the patch has `allowCloudFallback: true`.
 - `status-popover.test.tsx` and `layout.test.tsx`: the note reads `Switched to Gemini — Ollama unreachable`.
+- The label, source-note and warning cases: no combobox yet, then (once the branch exists) raw option labels and no `analyzer-engine-source-note` / `analyzer-engine-local-warning`.
+- `help-topics.test.ts`: the new case fails on `/OpenAI-compatible endpoint/`.
 
 - [ ] **Step 3: Implement**
 
@@ -10533,8 +10965,10 @@ export function analyzerEngineOptions(
   staticValues: readonly string[],
   endpointModels: readonly AnalyzerEngineOption[],
   current: string,
+  /** Server-provided labels for the static entries (analyzer.fallback.target's value state); raw value otherwise. */
+  labels: Readonly<Record<string, string>> = {},
 ): AnalyzerEngineOption[] {
-  const options: AnalyzerEngineOption[] = staticValues.map((value) => ({ value, label: value }));
+  const options: AnalyzerEngineOption[] = staticValues.map((value) => ({ value, label: labels[value] ?? value }));
   for (const model of endpointModels) {
     if (!options.some((o) => o.value === model.value)) options.push(model);
   }
@@ -10554,32 +10988,49 @@ export function analyzerEngineOptions(
 ```tsx
   if (descriptor.type === 'analyzer-engine') {
     const current = String(value.effective);
-    const options = analyzerEngineOptions(descriptor.options ?? [], analyzerEndpointModels ?? [], current);
+    const engine = value.analyzerEngine;
+    const options = analyzerEngineOptions(descriptor.options ?? [], analyzerEndpointModels ?? [], current, engine?.optionLabels);
+    /* #3084 P30 — warn, never refuse: `local` names a model the Ollama catalog listed without. */
+    const localMissing = engine !== undefined && current === 'local' && Array.isArray(ollamaModels) && !ollamaModels.includes(engine.localModel);
     return (
-      <select
-        aria-label={descriptor.label}
-        aria-describedby={describedBy}
-        aria-invalid={invalid || undefined}
-        value={current}
-        disabled={disabled}
-        onChange={(e) => commitSimple(e.target.value)}
-        className={`w-full ${base}`}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+      <>
+        <select
+          aria-label={descriptor.label}
+          aria-describedby={describedBy}
+          aria-invalid={invalid || undefined}
+          value={current}
+          disabled={disabled}
+          onChange={(e) => commitSimple(e.target.value)}
+          className={`w-full ${base}`}
+        >
+          {options.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        {engine?.sourceNote && (
+          <p data-testid="analyzer-engine-source-note" className="mt-1 text-xs text-ink/60">
+            {engine.sourceNote}
+          </p>
+        )}
+        {localMissing && (
+          <p role="status" data-testid="analyzer-engine-local-warning" className="mt-1 text-xs text-amber-800">
+            {engine.localModel} is not installed in Ollama, so this fallback would fail. Pull it with ollama pull {engine.localModel}, or pick another target.
+          </p>
+        )}
+      </>
     );
   }
 ```
 
-- `OverrideRowProps`: the same `analyzerEndpointModels?` field; the signature `export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices, analyzerEndpointModels }: OverrideRowProps) {`; and `analyzerEndpointModels={analyzerEndpointModels}` on `<KnobControl …>` after `gpuDevices={gpuDevices}`.
+  (add `ollamaModels,` to `KnobControl`'s destructure, and `/** Installed Ollama tags from GET /api/analyzer/models, or null when unknown (#3084 P30). */ ollamaModels?: readonly string[] | null;` to `ControlProps`.)
+
+- `OverrideRowProps`: the same `analyzerEndpointModels?` and `ollamaModels?` fields; the signature `export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices, analyzerEndpointModels, ollamaModels }: OverrideRowProps) {`; and `analyzerEndpointModels={analyzerEndpointModels} ollamaModels={ollamaModels}` on `<KnobControl …>` after `gpuDevices={gpuDevices}`.
 
 `src/views/advanced.tsx`:
 - After `:32`: `import { endpointModelOptions, type AnalyzerEngineOption } from '../lib/analyzer-engine-options';`
-- After the `gpuSplit` state (`:253`): `const [analyzerEndpointModels, setAnalyzerEndpointModels] = useState<AnalyzerEngineOption[]>([]);`
+- After the `gpuSplit` state (`:253`): `const [analyzerEndpointModels, setAnalyzerEndpointModels] = useState<AnalyzerEngineOption[]>([]);` and `const [ollamaModels, setOllamaModels] = useState<string[] | null>(null);`
 - In the mount effect, before `}, [dispatch]);` (`:285`):
 
 ```ts
@@ -10587,11 +11038,18 @@ export function analyzerEngineOptions(
     // analyzer-engine picker with its static entries and the saved value, never an error.
     api
       .getAnalyzerModels()
-      .then((catalog) => setAnalyzerEndpointModels(endpointModelOptions(catalog)))
-      .catch(() => setAnalyzerEndpointModels([]));
+      .then((catalog) => {
+        setAnalyzerEndpointModels(endpointModelOptions(catalog));
+        const ollama = catalog.groups.find((g) => g.kind === 'ollama');
+        setOllamaModels(ollama?.status === 'ok' ? ollama.models.map((m) => m.id) : null);
+      })
+      .catch(() => {
+        setAnalyzerEndpointModels([]);
+        setOllamaModels(null);
+      });
 ```
 
-- On `<OverrideRow …>` (`:542-553`): `analyzerEndpointModels={analyzerEndpointModels}` after `gpuDevices={gpuDevices}`.
+- On `<OverrideRow …>` (`:542-553`): `analyzerEndpointModels={analyzerEndpointModels}` and `ollamaModels={ollamaModels}` after `gpuDevices={gpuDevices}`.
 
 `src/components/model-settings-form.tsx`: delete the `allowCloudFallback` `useState` (`:113-115`), `setAllowCloudFallback(account.allowCloudFallback ?? true);` (`:143`), `account.allowCloudFallback,` (`:159`), `allowCloudFallback !== (account.allowCloudFallback ?? true) ||` (`:196`), `allowCloudFallback,` from the `dirty` dependencies (`:213`) and from the save patch (`:238`), and the whole Cloud fallback `<FieldRow>` (`:505-519`). Replace the sublabel string (`:493`) and the `local` option text (`:501`) with the text in Rules. Remove `Checkbox` from the `./primitives` import only if `git grep -n "<Checkbox" -- src/components/model-settings-form.tsx` prints nothing.
 
@@ -10602,7 +11060,36 @@ Switch note:
 - `src/components/layout.tsx`: the `StatusDetail.analysisSubstage` object (`:1602-1614`) gains `fallbackReason: analysisSubstage.fallbackReason,` after `fallbackActive`.
 - `src/components/status-popover.tsx`: the prop type gains `fallbackReason?: string;` after `fallbackActive?: boolean;` (`:77`); the note (`:169-173`) renders `{analysisSubstage.fallbackReason ?? 'Switched to the fallback analyzer'}` in place of the literal.
 
-`src/data/help-topics.ts:338-341` — replace `"chapter text only when your local model isn't running. Cloud fallback stays on by default, " + 'and a single switch in analyzer settings turns it off for good — and whenever Castwright does ' +` with `"chapter text only when your local analyzer isn't reachable. That fallback to Gemini is on by default, " + 'and setting Advanced Settings → Analyzer fallback to off turns it off for good — and whenever Castwright does ' +`.
+`src/data/help-topics.ts` — the `is-my-data-private` body (`:336-342`) becomes:
+
+```ts
+    body:
+      'Your books, voices, library and rendered audio stay on your machine — nothing is uploaded to ' +
+      'a Castwright server, and there is no account. Working out who speaks each line reads your ' +
+      'chapter text on a local model by default too. Chapter text leaves your machine only when you ' +
+      'point analysis at a server that is not on it: the Gemini API, or an OpenAI-compatible endpoint ' +
+      'on another machine or a hosted service such as OpenRouter, which receives the text of every ' +
+      "chapter it analyses. The same goes for the analyzer fallback: when your chosen analyzer can't " +
+      'be reached, the fallback target (Gemini by default, if you have set a key) receives the chapters ' +
+      'it takes over, only when it takes over. That fallback is on by default, and setting Advanced ' +
+      'Settings → Analyzer fallback to off turns it off for good — and whenever Castwright does fall ' +
+      'back it tells you, rather than switching behind your back.',
+```
+
+and the `does-it-work-offline` body (`:348-354`) becomes:
+
+```ts
+    body:
+      'Yes, once the models are installed. Rendering the audio and playing it back are fully ' +
+      'offline — nothing is sent anywhere while Castwright synthesises — and working out who speaks ' +
+      'each line runs on a local Ollama model by default. Only a cloud analyzer wants a connection: ' +
+      'Gemini, or a remote OpenAI-compatible endpoint. Keep analysis on a local model or a server on ' +
+      'your own network, set Advanced Settings → Analyzer fallback to off or local, and the whole ' +
+      'pipeline works with no internet at all. Voice design follows the same analyzer engine, so a ' +
+      'no-key, fully-offline setup can still design a cast from scratch.',
+```
+
+(The new privacy case's `/fallback target .* when it takes over/` matches "the fallback target (Gemini by default, if you have set a key) receives the chapters it takes over, only when it takes over".)
 
 - [ ] **Step 4: Run and confirm they pass**
 Run: the Step 2 command, then `npx vitest run src/test/a11y.test.tsx src/lib/api.config.test.ts src/data/help-topics.test.ts src/components/top-bar.test.tsx src/store src/views/account.test.tsx src/views/model-manager.test.tsx`, then `npm run typecheck`. Expected: PASS.
@@ -10614,10 +11101,15 @@ Run: the Step 2 command, then `npx vitest run src/test/a11y.test.tsx src/lib/api
 4. `model-settings-form.tsx`: restore `allowCloudFallback,` in the save patch (with its state) → red: "saving never writes allowCloudFallback". Restore the old sublabel → red: "has no Cloud fallback row, and the engine sublabel points to…".
 5. `status-popover.tsx`: render the old literal → red: both note cases. `script-review-thunk.ts:127`: drop `fallbackReason` from the spread → red: the extended `script-review-thunk.test.ts:138` case (the stored entry has no `fallbackReason`).
 6. `endpointModelOptions`: drop the `kind === 'endpoint'` filter → red: "lists only OpenAI-compatible endpoint models, labelled with the endpoint".
+7. `analyzerEngineOptions`: ignore `labels` (always `label: value`) → red: "labels static entries from the server-provided labels…" and "shows the concrete targets the server labels, and the legacy source note".
+8. `KnobControl`: delete the `sourceNote` paragraph → red: "shows the concrete targets the server labels, and the legacy source note".
+9. `localMissing`: drop `Array.isArray(ollamaModels) &&` (treat unknown as missing) → red: "warns, without refusing, when local names an Ollama model that is not installed…" (the `null` rerender still warns). Drop `!ollamaModels.includes(…)` instead → red: the same case (the installed rerender warns).
+10. `advanced.tsx`: never call `setOllamaModels` with the listing (leave it `null`) → red: "warns in the row when the saved local target is not in the Ollama catalog".
+11. `help-topics.ts`: restore the `is-my-data-private` sentence "The one thing that can leave your machine is the optional cloud analyzer…" → red: "says a remote OpenAI-compatible endpoint, and a fallback target when it activates, receive chapter text". Restore the old `does-it-work-offline` body → red: the same case.
 
 - [ ] **Step 6: Commit**
 ```bash
-git add src/lib/analyzer-engine-options.ts src/lib/analyzer-engine-options.test.ts src/components/settings/override-row.tsx src/components/settings/override-row.test.tsx src/views/advanced.tsx src/views/advanced.test.tsx src/test/a11y.test.tsx src/components/model-settings-form.tsx src/components/model-settings-form.test.tsx src/store/analysis-substage-reducers.ts src/store/analysis-substage-selectors.ts src/store/script-review-thunk.ts src/components/layout.tsx src/components/layout.test.tsx src/components/status-popover.tsx src/components/status-popover.test.tsx src/store/script-review-thunk.test.ts src/data/help-topics.ts
+git add src/lib/analyzer-engine-options.ts src/lib/analyzer-engine-options.test.ts src/components/settings/override-row.tsx src/components/settings/override-row.test.tsx src/views/advanced.tsx src/views/advanced.test.tsx src/test/a11y.test.tsx src/components/model-settings-form.tsx src/components/model-settings-form.test.tsx src/store/analysis-substage-reducers.ts src/store/analysis-substage-selectors.ts src/store/script-review-thunk.ts src/components/layout.tsx src/components/layout.test.tsx src/components/status-popover.tsx src/components/status-popover.test.tsx src/store/script-review-thunk.test.ts src/data/help-topics.ts src/data/help-topics.test.ts
 git commit -m "feat(frontend): pick the analyzer fallback in Advanced Settings; the switch note names both analyzers"
 ```
 
@@ -11975,13 +12467,17 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
     expect(await screen.findByTestId('endpoint-row-error-lab')).toHaveTextContent('Account setting "defaultAnalysisModel"');
   });
 
+  /* The two field messages are the server's real strings, copied verbatim from 3b's exported
+     `friendlyEndpointIssueMessage(path, issue)` (w3ab Task 3b.5): `baseUrl` + `invalid_format` (zod
+     4.4.3's code for a `.url()` failure) and `concurrency` + `too_big` at the schema maximum 16. A
+     frontend test cannot import server code, so a change to that map must be copied here too. */
   it('a 400 refusal shows each issue next to its field, the rest under Save, and writes no key (F5)', async () => {
     const refusal = {
       error: 'Invalid analyzer endpoint.',
       code: 'invalid',
       issues: [
-        { path: ['baseUrl'], message: 'Base URL must use http or https.' },
-        { path: ['concurrency'], message: 'Concurrent requests must be between 1 and 16.' },
+        { path: ['baseUrl'], message: 'Base URL must be a valid URL, e.g. http://127.0.0.1:8080/v1.' },
+        { path: ['concurrency'], message: 'Concurrency must be at most 16.' },
         { path: [], message: 'The entry could not be read as a whole.' },
       ],
     };
@@ -11996,8 +12492,8 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
     fireEvent.change(screen.getByTestId('endpoint-key'), { target: { value: 'sk-local' } });
     fireEvent.click(screen.getByTestId('endpoint-save'));
     const baseUrlRow = screen.getByTestId('endpoint-base-url').closest('label')!;
-    expect(await within(baseUrlRow).findByText('Base URL must use http or https.')).toBeInTheDocument();
-    expect(within(screen.getByTestId('endpoint-concurrency').closest('label')!).getByText('Concurrent requests must be between 1 and 16.')).toBeInTheDocument();
+    expect(await within(baseUrlRow).findByText('Base URL must be a valid URL, e.g. http://127.0.0.1:8080/v1.')).toBeInTheDocument();
+    expect(within(screen.getByTestId('endpoint-concurrency').closest('label')!).getByText('Concurrency must be at most 16.')).toBeInTheDocument();
     expect(screen.getByTestId('endpoint-save-error')).toHaveTextContent('Invalid analyzer endpoint. The entry could not be read as a whole.');
     expect(screen.getByTestId('endpoint-save-error')).not.toHaveTextContent('http or https');
     expect(api.putAnalyzerEndpointKey).not.toHaveBeenCalled();
@@ -12550,7 +13046,7 @@ vi.mock('../../lib/api', async (importOriginal) => {
   return { ...actual, api: { ...actual.api, acknowledgeDroppedEndpointEntries: vi.fn() } };
 });
 
-const ARCHIVED = { archiveId: 'a1', kind: 'endpoint', endpointId: 'lab', name: 'Lab', issues: ['analyzerEndpoints.0.baseUrl: invalid_string'], droppedAt: '2026-09-13T10:00:00.000Z' };
+const ARCHIVED = { archiveId: 'a1', kind: 'endpoint', endpointId: 'lab', name: 'Lab', issues: ['analyzerEndpoints.0.baseUrl: invalid_format'], droppedAt: '2026-09-13T10:00:00.000Z' };
 const PENDING = { archiveId: null, kind: 'key', endpointId: 'box', origin: 'http://10.0.0.5:8080', issues: ['analyzerEndpointKeys.box.key: invalid_type'], droppedAt: '2026-09-13T10:00:00.000Z' };
 
 function renderBanner(entries: unknown[]) {
@@ -12576,7 +13072,7 @@ describe('DroppedEndpointEntriesBanner (#3084 P31)', () => {
     renderBanner([ARCHIVED]);
     const banner = screen.getByTestId('dropped-endpoint-banner');
     expect(banner).toHaveTextContent('Endpoint "Lab"');
-    expect(banner).toHaveTextContent('analyzerEndpoints.0.baseUrl: invalid_string');
+    expect(banner).toHaveTextContent('analyzerEndpoints.0.baseUrl: invalid_format');
     expect(banner).toHaveTextContent('so the rest of your settings still load');
     expect(banner).toHaveTextContent('user-settings.invalid-endpoints.json');
   });
@@ -12608,7 +13104,7 @@ Append inside `describe('AnalyzerEndpointsSection (#3084)')` of Task 3d.8's test
     const store = renderSection({ endpoints: [LAB] });
     store.dispatch({
       type: 'account/fetch/fulfilled',
-      payload: { droppedEndpointEntries: [{ archiveId: 'a1', kind: 'endpoint', name: 'Old box', issues: ['analyzerEndpoints.1.baseUrl: invalid_string'], droppedAt: '2026-09-13T10:00:00.000Z' }] },
+      payload: { droppedEndpointEntries: [{ archiveId: 'a1', kind: 'endpoint', name: 'Old box', issues: ['analyzerEndpoints.1.baseUrl: invalid_format'], droppedAt: '2026-09-13T10:00:00.000Z' }] },
     });
     return waitFor(() => expect(screen.getByTestId('analyzer-endpoints-section').firstElementChild).toHaveAttribute('data-testid', 'dropped-endpoint-banner'));
   });
@@ -12628,7 +13124,7 @@ describe('AdvancedView — dropped endpoint entries (#3084 P31)', () => {
     const store = renderView();
     store.dispatch({
       type: 'account/fetch/fulfilled',
-      payload: { hydrated: true, droppedEndpointEntries: [{ archiveId: 'a1', kind: 'endpoint', name: 'Old box', issues: ['analyzerEndpoints.0.baseUrl: invalid_string'], droppedAt: '2026-09-13T10:00:00.000Z' }] },
+      payload: { hydrated: true, droppedEndpointEntries: [{ archiveId: 'a1', kind: 'endpoint', name: 'Old box', issues: ['analyzerEndpoints.0.baseUrl: invalid_format'], droppedAt: '2026-09-13T10:00:00.000Z' }] },
     });
     const section = await screen.findByRole('region', { name: /Analyzer models & endpoints/ });
     expect(within(section).getByTestId('dropped-endpoint-banner')).toHaveTextContent('Endpoint "Old box"');
@@ -12765,13 +13261,13 @@ git commit -m "feat(frontend): warn about dropped analyzer endpoint entries, wit
 - Modify: `src/components/settings/analyzer-endpoints-section.tsx` (Task 3d.8) — open and focus from the stage; its test (append)
 
 **Interfaces:**
-- Consumes: 3b's endpoint fixes `{ label, endpointField: { endpointId, field }, wikiHref? }` (P34); 2b's `fixHref(fix: AnalysisFailureFix): string | null` in `src/lib/failure-fixes.ts`, which both "How to fix" renderers (`analysing.tsx` and the toast) call; Task 3d.8's `ENDPOINT_FIELD_TEST_IDS`.
+- Consumes: 3b's endpoint fixes `{ label, endpointField: { endpointId, field }, wikiPage? }` (P34); 2b's `fixHref(fix: AnalysisFailureFix): string | null` in `src/lib/failure-fixes.ts`, which both "How to fix" renderers (`analysing.tsx` and the toast) call; Task 3d.8's `ENDPOINT_FIELD_TEST_IDS`.
 - Produces: stage `{ kind: 'model-manager'; endpointId?: string; endpointField?: string }`; hash `#/models?endpoint=<id>&field=<field>`; `uiActions.openModelManager(payload?: { endpointId?: string; endpointField?: string })`.
 
 Rules:
-- `fixHref` turns an `endpointField` fix into `#/models?endpoint=<id>&field=<field>`. A fix with both `settingKey` and `endpointField` keeps 2b's `settingKey` link. The fix's `wikiHref` (the endpoints page's "When a model thinks past its output limit" anchor, Task 3d.9a) renders as 2b renders it.
+- `fixHref` turns an `endpointField` fix into `#/models?endpoint=<id>&field=<field>`. A fix with both `settingKey` and `endpointField` keeps 2b's `settingKey` link. The fix's `wikiPage` (`OpenAI-Compatible-Analyzer-Endpoints`, Task 3d.9a; its label names the "When a model thinks past its output limit" section) renders as 2b renders it, through `wikiUrl(page)`, with no `#anchor`.
 - On `#/models?endpoint=<id>&field=<field>`, Model Manager hydrates the stage with both, and the endpoints section opens that endpoint's editor once the endpoint is loaded, scrolls the field's control into view and focuses it. It handles each (endpoint, field) link once, so a later settings refresh never reopens the editor over the user's edits.
-- An endpoint that is not saved opens nothing. A field with no control yet (`reasoning`, `extraParams` before wave 5) opens the editor without focusing. `ENDPOINT_FIELD_TEST_IDS` covers `maxOutputTokens` and `contextTokens`, the two fields 3b's fixes name; 3b's guard test already proves every `endpointField.field` is a key of `analyzerEndpointSchema`'s shape.
+- An endpoint that is not saved opens nothing. A field with no control yet (`reasoning`, `extraParams` before wave 5) opens the editor without focusing. `ENDPOINT_FIELD_TEST_IDS` covers `maxOutputTokens` and `contextTokens`, the two fields 3b's fixes name; 3b Task 3b.1b's `openai` rows in `server/src/routes/failure-taxonomy-fixes.test.ts` already prove every `endpointField.field` is a key of `analyzerEndpointSchema`'s shape.
 - Plain `#/models` is unchanged.
 
 - [ ] **Step 1: Write the failing tests**
@@ -13093,7 +13589,7 @@ test('editing the host of an endpoint with a saved key asks for the key again', 
 test('a dropped endpoint entry shows a banner in Model Manager and in Advanced Settings, and Got it clears it (P31)', async ({ page }) => {
   await page.addInitScript(() => {
     (window as unknown as Record<string, unknown>).__SEED_DROPPED_ENDPOINT_ENTRIES__ = [
-      { archiveId: 'a1', kind: 'endpoint', endpointId: 'old-box', name: 'Old box', issues: ['analyzerEndpoints.0.baseUrl: invalid_string'], droppedAt: '2026-09-13T10:00:00.000Z' },
+      { archiveId: 'a1', kind: 'endpoint', endpointId: 'old-box', name: 'Old box', issues: ['analyzerEndpoints.0.baseUrl: invalid_format'], droppedAt: '2026-09-13T10:00:00.000Z' },
       { archiveId: null, kind: 'key', endpointId: 'lab', origin: 'http://10.0.0.5:8080', issues: ['analyzerEndpointKeys.lab.key: invalid_type'], droppedAt: '2026-09-13T10:00:00.000Z' },
     ];
   });
@@ -13135,7 +13631,7 @@ describe('mock settings GET — dropped endpoint entries seed (#3084 P31, e2e)',
 
   it('lists the seeded entries once, and acknowledging one removes it', async () => {
     (globalThis as Record<string, unknown>).__SEED_DROPPED_ENDPOINT_ENTRIES__ = [
-      { archiveId: 'a1', kind: 'endpoint', name: 'Old box', issues: ['analyzerEndpoints.0.baseUrl: invalid_string'], droppedAt: '2026-09-13T10:00:00.000Z' },
+      { archiveId: 'a1', kind: 'endpoint', name: 'Old box', issues: ['analyzerEndpoints.0.baseUrl: invalid_format'], droppedAt: '2026-09-13T10:00:00.000Z' },
     ];
     expect((await api.getUserSettings()).droppedEndpointEntries).toHaveLength(1);
     expect((await api.acknowledgeDroppedEndpointEntries(['a1'])).droppedEndpointEntries).toEqual([]);
@@ -13163,7 +13659,12 @@ At the top of the mock `getUserSettings` implementation (locate by `getUserSetti
 
 ```ts
   /* #3084 P31 e2e — a one-shot seed of dropped endpoint entries, consumed on the first settings
-     read so the mock acknowledge route (3b Task 3b.6b) can remove them. */
+     read so the mock acknowledge route (3b Task 3b.6b) can remove them. This task relies on 3b's
+     `mockAcknowledgeDroppedEndpointEntries`, which filters MOCK_USER_SETTINGS.droppedEndpointEntries
+     by archive id and returns the settings body (w3ab Task 3b.6b, pinned by "mock
+     acknowledgeDroppedEndpointEntries removes only the named entries"). This task's expectations
+     match it: acknowledging 'a1' removes only that entry, and a `null`-archiveId entry is never
+     named, so it stays listed. */
   const seededDrops = (globalThis as { __SEED_DROPPED_ENDPOINT_ENTRIES__?: UserSettings['droppedEndpointEntries'] }).__SEED_DROPPED_ENDPOINT_ENTRIES__;
   if (seededDrops) {
     MOCK_USER_SETTINGS.droppedEndpointEntries = seededDrops;
@@ -13198,11 +13699,12 @@ git commit -m "test(e2e): analyzer endpoints — add, pick, card-aware guard, ke
 - Modify: `docs/wiki/_Sidebar.md` (Full breadth, after `- [Model Manager](Model-Manager)`); `docs/wiki/Analysis-and-the-Analyzer.md` "Choosing an analyzer" (`:13-24`); `docs/wiki/Advanced-Settings.md` §4 (below its picture, `:119-123`, and the `Analyzer fallback` row Task 3d.4b added)
 - Modify: `src/lib/wiki-links.ts` — `WikiPage` (`:12-28`) and `ADMIN_WIKI` (`:55-61`); `src/lib/wiki-links.test.ts` (append)
 - Modify: `src/components/settings/analyzer-endpoints-section.tsx` (Task 3d.8) — the help link; its test (append)
-- Modify: `server/src/routes/failure-taxonomy-fixes.test.ts` (2b, extended by 3b) — every `wikiHref` anchor names a heading on its page
+- Modify: `server/src/routes/failure-taxonomy.ts` — `reasoningOverflowFixes`' `transport === 'openai'` branch (3b Task 3b.1b): both rows gain `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'`. 3b set none on purpose, since the page ships here and the existence guard would fail on `main` between the two merges (w3ab Task 3b.1b, "No `wikiPage` on these two rows").
+- Modify: `server/src/routes/failure-taxonomy-fixes.test.ts` (2b, extended by 3b) — its `openai` rows now expect the page, and every fix's `wikiPage` names a file under `docs/wiki/` (fixes carry a page name, never an `#anchor`: `src/lib/wiki-links.ts:1-4`)
 
 **Interfaces:**
 - Consumes: planning facts §A and §B (`docs/superpowers/specs/2026-09-11-openai-compatible-analyzer-planning-facts.md`) and the probe assets `docs/superpowers/specs/assets/2026-09-11-openai-undici-probe/`; Tasks 3b.5/3d.8 field rules; P30 (Task 3d.4b), P31 (Task 3d.8a), P32, P34; `reasoningOverflowFixes` (2b/3b).
-- Produces: the wiki page `OpenAI-Compatible-Analyzer-Endpoints`, with the anchors `#the-fields`, `#fallback`, `#chunk-size`, `#when-a-model-thinks-past-its-output-limit`, `#troubleshooting` and one `###` section per server; `WikiPage` `'OpenAI-Compatible-Analyzer-Endpoints'`; `ADMIN_WIKI.analyzerEndpoints`. Wave 5a adds a **Reasoning** bullet to each server section; 5b adds a **Custom payload** example.
+- Produces: the wiki page `OpenAI-Compatible-Analyzer-Endpoints`, with the sections "The fields", "Servers", "Fallback", "Chunk size", "When a model thinks past its output limit" and "Troubleshooting", and one `###` section per server. Nothing links to a section by `#anchor` (GitHub wiki slugging is fragile; `src/lib/wiki-links.ts:1-4`): links go to the page, and a fix's label names the section; `WikiPage` `'OpenAI-Compatible-Analyzer-Endpoints'`; `ADMIN_WIKI.analyzerEndpoints`. Wave 5a adds a **Reasoning** bullet to each server section; 5b adds a **Custom payload** example.
 
 **Acceptance criteria (P33):**
 - **Every command, config file and URL is verified** at implementation time against that tool's current documentation, and against planning facts §A/§B and the probe assets where they cover it. No flag, key, port or URL is written from memory.
@@ -13245,32 +13747,31 @@ Append inside `describe('AnalyzerEndpointsSection (#3084)')` of Task 3d.8's test
 Append to `server/src/routes/failure-taxonomy-fixes.test.ts` (from `server/src/routes/`, `../../../` is the repo root):
 
 ```ts
-  it('every wikiHref anchor names a heading on its wiki page (#3084 P33)', () => {
-    const slug = (heading: string) => heading.trim().toLowerCase().replace(/[^a-z0-9 -]/g, '').replace(/ /g, '-');
+  it('every fix wikiPage names a wiki page that exists, with no anchor (#3084 P33)', () => {
     const fixes = [
       ...reasoningOverflowFixes({ transport: 'openai', model: 'qwen3-30b', endpointId: 'lab' }),
       ...reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.5-flash' }),
       ...reasoningOverflowFixes({ transport: 'ollama', model: 'qwen3.5:4b' }),
     ];
-    for (const fix of fixes.filter((f) => f.wikiHref)) {
-      const match = /\/wiki\/([^#]+)#(.+)$/.exec(fix.wikiHref!);
-      expect(match, fix.wikiHref).not.toBeNull();
-      const file = fileURLToPath(new URL(`../../../docs/wiki/${match![1]}.md`, import.meta.url));
-      const anchors = readFileSync(file, 'utf8').split('\n').filter((l) => /^#{2,3} /.test(l)).map((l) => slug(l.replace(/^#+ /, '')));
-      expect(anchors, fix.wikiHref).toContain(match![2]);
+    expect(fixes.filter((f) => f.endpointField).map((f) => f.wikiPage)).toContain('OpenAI-Compatible-Analyzer-Endpoints');
+    for (const fix of fixes.filter((f) => f.wikiPage)) {
+      expect(fix.wikiPage, fix.label).toMatch(/^[A-Za-z0-9-]+$/);
+      expect(existsSync(fileURLToPath(new URL(`../../../docs/wiki/${fix.wikiPage}.md`, import.meta.url))), fix.wikiPage).toBe(true);
     }
   });
 ```
 
-(Import `readFileSync` from `node:fs` and `fileURLToPath` from `node:url` if the guard lacks them. 3b's endpoint fixes must use `https://github.com/dudarenok-maker/Castwright/wiki/OpenAI-Compatible-Analyzer-Endpoints#when-a-model-thinks-past-its-output-limit`; if 3b shipped another anchor, correct it here.)
+(Import `existsSync` from `node:fs` and `fileURLToPath` from `node:url` if the guard lacks them. This task gives the endpoint fixes `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'` (3b's rows have none); their labels name the "When a model thinks past its output limit" section. 2b's renderer narrows with `isWikiPage` and builds `WIKI_BASE/<page>` through `wikiUrl`; a page outside `WikiPage` renders as plain text with no link, so the page must also be in `src/lib/wiki-links.ts`'s `WikiPage` union (Step 3). No hand-written slugger and no anchor check: the `wikiPage` pattern above refuses a `#`.)
 
 - [ ] **Step 2: Run them and confirm they fail**
 Run: `npx vitest run src/lib/wiki-links.test.ts src/components/settings/analyzer-endpoints-section.test.tsx` and `npm --prefix server run test -- src/routes/failure-taxonomy-fixes.test.ts`.
-Expected: FAIL — `ENOENT: no such file or directory, open '…/docs/wiki/undefined.md'` (`ADMIN_WIKI.analyzerEndpoints` does not exist yet); the section has no `Setup guide for each server` link; the guard's endpoint `wikiHref` fails with `ENOENT … OpenAI-Compatible-Analyzer-Endpoints.md`. The Gemini and Ollama anchors (2b's `Analysis-and-the-Analyzer.md` section) already pass.
+Expected: FAIL — `ENOENT: no such file or directory, open '…/docs/wiki/undefined.md'` (`ADMIN_WIKI.analyzerEndpoints` does not exist yet); the section has no `Setup guide for each server` link; the guard fails on `expect(fixes.filter((f) => f.endpointField).map((f) => f.wikiPage)).toContain('OpenAI-Compatible-Analyzer-Endpoints')` with `expected [ undefined, undefined ] to include 'OpenAI-Compatible-Analyzer-Endpoints'` (3b's `openai` rows carry no `wikiPage`). The Gemini and Ollama fixes' `wikiPage` (`Analysis-and-the-Analyzer`) already pass.
 
 - [ ] **Step 3: Write the page, the links and the constants**
 
-`src/lib/wiki-links.ts`: add `| 'OpenAI-Compatible-Analyzer-Endpoints'` to `WikiPage`, and `analyzerEndpoints: 'OpenAI-Compatible-Analyzer-Endpoints',` to `ADMIN_WIKI` (the existing `every referenced WikiPage exists as docs/wiki/<page>.md` case then covers the file).
+`src/lib/wiki-links.ts`: add `| 'OpenAI-Compatible-Analyzer-Endpoints'` to `WikiPage` (so 2b's `isWikiPage` accepts it and the fix renders a link), and `analyzerEndpoints: 'OpenAI-Compatible-Analyzer-Endpoints',` to `ADMIN_WIKI` (the existing `every referenced WikiPage exists as docs/wiki/<page>.md` case then covers the file).
+
+`server/src/routes/failure-taxonomy.ts`: in `reasoningOverflowFixes`' `transport === 'openai'` branch (3b Task 3b.1b), add `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'` to both rows (the `maxOutputTokens` and `contextTokens` fixes). Replace 3b's comment explaining why the rows had none with `/* #3084 P33 — the endpoints wiki page ships with this PR; the label names its section. */`. If 2b types the server-side `wikiPage` against its own page list, add the page there too.
 
 `src/components/settings/analyzer-endpoints-section.tsx`: import `WikiLink` from `'../wiki-link'` and `ADMIN_WIKI` from `'../../lib/wiki-links'`; directly after `<DroppedEndpointEntriesBanner />` add `<WikiLink page={ADMIN_WIKI.analyzerEndpoints} label="Setup guide for each server" />`.
 
@@ -13284,7 +13785,7 @@ Expected: FAIL — `ENOENT: no such file or directory, open '…/docs/wiki/undef
   endpoints; see [OpenAI-Compatible Analyzer Endpoints](OpenAI-Compatible-Analyzer-Endpoints).
 ```
 
-`docs/wiki/Advanced-Settings.md` §4: below the `</picture>`, add `Setting up an OpenAI-compatible server, and how the analyzer fallback and chunk size work: [OpenAI-Compatible Analyzer Endpoints](OpenAI-Compatible-Analyzer-Endpoints).`, and end the `Analyzer fallback` row's "What it does" cell with ` — see [Fallback](OpenAI-Compatible-Analyzer-Endpoints#fallback)` (the first column, which `knob-docs-sync.test.mjs` matches, is unchanged).
+`docs/wiki/Advanced-Settings.md` §4: below the `</picture>`, add `Setting up an OpenAI-compatible server, and how the analyzer fallback and chunk size work: [OpenAI-Compatible Analyzer Endpoints](OpenAI-Compatible-Analyzer-Endpoints).`, and end the `Analyzer fallback` row's "What it does" cell with ` — see "Fallback" on [OpenAI-Compatible Analyzer Endpoints](OpenAI-Compatible-Analyzer-Endpoints)` (no `#anchor`; the first column, which `knob-docs-sync.test.mjs` matches, is unchanged).
 
 Create `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md` from this skeleton. Cited items are verified in the planning facts; resolve every `‹verify at implementation: …›` (Acceptance criteria):
 
@@ -13321,7 +13822,7 @@ analysis-model picker as `<endpoint name> · <model>`.
 | Request ceiling | 1–240 minutes, default 30: the longest one request may run after it leaves the queue. |
 | Structured output | `schema` sends Castwright's output schema; `json` asks for any JSON object; `off` sends neither. **Test** shows what a model really does. |
 | Max output tokens | `0` is Auto: the server's listed output limit, or context minus input. |
-| Max input tokens per request | Optional. When set, chunks are sized to fit it (see [Chunk size](#chunk-size)). |
+| Max input tokens per request | Optional. When set, chunks are sized to fit it (see "Chunk size" below). |
 
 ## Servers
 
@@ -13428,7 +13929,7 @@ _Checked against LiteLLM ‹verify at implementation: version› on ‹verify at
 
 - When this endpoint cannot be reached (connection refused, host not found, or no connection
   within the connect timeout), Castwright hands that call, one hop, to **Advanced Settings →
-  Analyzer fallback**: `off`, `local` (your saved Ollama model), `gemini` (the default; needs a
+  Analyzer fallback**: `off`, `local` (the Ollama model a local run uses, shown in the setting), `gemini` (the default; needs a
   Gemini API key) or another endpoint model.
 - A reply that breaks off mid-stream, a reset or a proxy's 502 is **retried**, never a fallback.
 - The fallback is never itself wrapped. If it is unreachable too, the run fails naming both.
@@ -13490,14 +13991,15 @@ Run: `npx vitest run src/lib/wiki-links.test.ts src/components/settings/analyzer
 
 - [ ] **Step 6: Mutation proof** (restore after each)
 1. Leave one `‹verify at implementation: …›` in the page → red: "the endpoints page carries every section … and no unverified placeholder".
-2. Rename `## When a model thinks past its output limit` to `## Thinking past the output limit` → red: the same case, and the guard's "every wikiHref anchor names a heading on its wiki page".
+2. Rename `## When a model thinks past its output limit` to `## Thinking past the output limit` → red: the same case (the section the fix labels name is gone). In the `openai` branch's fix, set `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints#when-a-model-thinks-past-its-output-limit'` → red: the guard's "every fix wikiPage names a wiki page that exists, with no anchor". Set it to `'OpenAI-Compatible-Analyzer-Endpoint'` → red: the same guard (no such file).
 3. Delete one `_Checked against …_` line → red: the first case (fewer version lines than code blocks).
 4. Delete the `WikiLink` → red: "links to the endpoints setup guide on the wiki".
 5. Delete `### LM Studio` → red: the first case (`LM Studio`).
+6. `failure-taxonomy.ts`: remove `wikiPage` from the `openai` branch's rows (3b's shape) → red: "every fix wikiPage names a wiki page that exists, with no anchor" (`expected [ undefined, undefined ] to include 'OpenAI-Compatible-Analyzer-Endpoints'`). Remove the page from `WikiPage` in `wiki-links.ts` instead → typecheck fails on `ADMIN_WIKI.analyzerEndpoints`, and `every referenced WikiPage exists…` no longer covers the file.
 
 - [ ] **Step 7: Commit**
 ```bash
-git add docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md docs/wiki/_Sidebar.md docs/wiki/Analysis-and-the-Analyzer.md docs/wiki/Advanced-Settings.md src/lib/wiki-links.ts src/lib/wiki-links.test.ts src/components/settings/analyzer-endpoints-section.tsx src/components/settings/analyzer-endpoints-section.test.tsx server/src/routes/failure-taxonomy-fixes.test.ts
+git add docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md docs/wiki/_Sidebar.md docs/wiki/Analysis-and-the-Analyzer.md docs/wiki/Advanced-Settings.md src/lib/wiki-links.ts src/lib/wiki-links.test.ts src/components/settings/analyzer-endpoints-section.tsx src/components/settings/analyzer-endpoints-section.test.tsx server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy-fixes.test.ts
 git commit -m "docs(docs): wiki page for OpenAI-compatible analyzer endpoints, verified per server"
 ```
 
@@ -13692,13 +14194,13 @@ git commit -m "docs(docs): on-box rows for endpoint prefill, same-card eviction 
 `docs/release-notes-next.md`:
 
 ```markdown
-- **OpenAI-compatible analyzer endpoints are selectable** (#3084, W3d). Model Manager → Analyzer endpoints adds, edits and deletes named servers (llama.cpp / llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter) with a required served context size (List models prefill from `max_model_len` / `meta.n_ctx` / `context_length`; on-demand Detect with a "may load the model" confirmation for llama-swap), an origin-bound API key that must be re-entered when the host changes, a GPU card (`none` / `any` / `cuda:N`, loopback hosts default to `any`), an optional same-origin unload URL with `{model}` substitution (one POST per model that has served the endpoint; a URL without `{model}` saves with an all-models warning), concurrency, request ceiling and structured-output mode. `selectAnalyzer` builds `OpenAIAnalyzer`. A new Advanced Settings knob, `analyzer.fallback.target` (`ANALYZER_FALLBACK_TARGET`, the first `analyzer-engine` knob type, default `gemini`; `off` / `local` / `gemini` / an endpoint model), replaces the `allowCloudFallback` rule for Ollama and endpoint primaries: one hop, only on unreachable; the target's own key-origin and capability checks run on its first call; a GPU-bound target carries the run's busy marks; the switch announcement and a both-unreachable failure name both; a missing endpoint or a keyless `gemini` is refused at save; `findEndpointReferences` counts it; a saved `allowCloudFallback: false` reads as `off` with no migration; Model Manager's Cloud fallback row is gone. `analysisEngine` accepts `openai`, and a saved `openai` engine whose default model is not an endpoint id fails before the run with `analyzer-endpoint-missing`. An endpoint is busy while a call to it is in flight or an analysis/script-review run using it is active; TTS capacity admission unloads idle endpoints on the denied card, re-checking each endpoint's busy state before every unload POST and logging one "busy; not unloading" line per endpoint per admission (Ollama's lever is untouched and keeps its own gate and latch; the endpoint lever has no latch and is reached only on an iteration where Ollama was not evicted, so a 2xx unload retries admission and the next denial re-measures free memory before either lever runs again; it is bounded by one unload POST per (endpoint, model) per admission at 10 s each — Σ served models × 10 s at worst, and an admission is one synthesize call, not one chapter — so an endpoint that goes idle mid-wait is still unloaded and a slow or hanging unload server is not re-POSTed on every poll; a model counts as unloadable once a request has been sent to it, Tests included, and leaves that set once an unload answers 2xx or 404; the failure message names every sharing endpoint still holding the card and why — no Unload URL, busy for the whole wait, every unload request failed, unloaded what it could and still short, or no model run on it since Castwright started). `Layout` now loads the config on mount and feeds the guards the device the sidecar reports for an `auto` TTS engine (a resident Qwen's own card, or CPU for an engine the sidecar runs on CPU), so the forward/reverse GPU guards and the generation hold know the TTS card in every session; they compare every live generation's card with the endpoint's and fail closed only when neither the knob nor the sidecar names one. Pickers list endpoint models and run labels show the structured-output mode. Endpoint saves show each refusal's `issues[]` next to its field; entries dropped from settings at read show a banner in Model Manager and Advanced Settings with "Got it" (entries whose archive copy is still pending say so and cannot be dismissed); an endpoint overflow fix opens that endpoint's editor at the field (`#/models?endpoint=<id>&field=<field>`). New wiki page `OpenAI-Compatible-Analyzer-Endpoints` (setup per server, fallback, chunk size, overflow, troubleshooting).
+- **OpenAI-compatible analyzer endpoints are selectable** (#3084, W3d). Model Manager → Analyzer endpoints adds, edits and deletes named servers (llama.cpp / llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter) with a required served context size (List models prefill from `max_model_len` / `meta.n_ctx` / `context_length`; on-demand Detect with a "may load the model" confirmation for llama-swap), an origin-bound API key that must be re-entered when the host changes, a GPU card (`none` / `any` / `cuda:N`, loopback hosts default to `any`), an optional same-origin unload URL with `{model}` substitution (one POST per model that has served the endpoint; a URL without `{model}` saves with an all-models warning), concurrency, request ceiling and structured-output mode. `selectAnalyzer` builds `OpenAIAnalyzer`. A new Advanced Settings knob, `analyzer.fallback.target` (`ANALYZER_FALLBACK_TARGET`, the first `analyzer-engine` knob type, default `gemini`; `off` / `local` / `gemini` / an endpoint model), replaces the `allowCloudFallback` rule for Ollama and endpoint primaries: one hop, only on unreachable; the target's own key-origin and capability checks run on its first call; a GPU-bound target carries the run's busy marks; the switch announcement and a both-unreachable failure name both; a missing endpoint or a keyless `gemini` is refused at save; `findEndpointReferences` counts it; a saved `allowCloudFallback: false` reads as `off` with no migration; Model Manager's Cloud fallback row is gone. **The default fallback for anyone who adds an endpoint is Gemini** (when a Gemini key is set): an unreachable endpoint's calls go to Gemini unless the target is switched off or retargeted in Advanced Settings → Analyzer fallback, which shows the effective target (a legacy `off` with its reason, `local` with its concrete model and a not-installed warning, and a keyless `gemini` as inactive). **A fallback target holds GPU busy marks only once it activates**, never from run start, so a healthy run does not block TTS eviction of a same-card fallback endpoint; from the switch on, the job's chunk budgets and phase events follow the target. A local primary never falls back to `local`. `analysisEngine` accepts `openai`, and a saved `openai` engine whose default model is not an endpoint id fails before the run with `analyzer-endpoint-missing`. An endpoint is busy while a call to it is in flight or an analysis/script-review run using it is active; TTS capacity admission unloads idle endpoints on the denied card, re-checking each endpoint's busy state before every unload POST and logging one "busy; not unloading" line per endpoint per admission (Ollama's lever is untouched and keeps its own gate and latch; the endpoint lever has no latch and is reached only on an iteration where Ollama was not evicted, so a 2xx unload retries admission and the next denial re-measures free memory before either lever runs again; it is bounded by one unload POST per (endpoint, model) per admission at 10 s each — Σ served models × 10 s at worst, and an admission is one synthesize call, not one chapter — so an endpoint that goes idle mid-wait is still unloaded and a slow or hanging unload server is not re-POSTed on every poll; a model counts as unloadable once a request has been sent to it, Tests included, and leaves that set once an unload answers 2xx or 404; the failure message names every sharing endpoint still holding the card and why — no Unload URL, busy for the whole wait, every unload request failed, unloaded what it could and still short, or no model run on it since Castwright started). `Layout` now loads the config on mount and feeds the guards the device the sidecar reports for an `auto` TTS engine (a resident Qwen's own card, or CPU for an engine the sidecar runs on CPU), so the forward/reverse GPU guards and the generation hold know the TTS card in every session; they compare every live generation's card with the endpoint's and fail closed only when neither the knob nor the sidecar names one. Pickers list endpoint models and run labels show the structured-output mode. Endpoint saves show each refusal's `issues[]` next to its field; entries dropped from settings at read show a banner in Model Manager and Advanced Settings with "Got it" (entries whose archive copy is still pending say so and cannot be dismissed); an endpoint overflow fix opens that endpoint's editor at the field (`#/models?endpoint=<id>&field=<field>`). New wiki page `OpenAI-Compatible-Analyzer-Endpoints` (setup per server, fallback, chunk size, overflow, troubleshooting).
 ```
 
 `RELEASE_NOTES.md`:
 
 ```markdown
-- **Analyse with your own OpenAI-compatible server.** Point Castwright at llama.cpp, llama-swap, LM Studio, vLLM or OpenRouter, tell it which graphics card the server uses, and pick its models anywhere you choose an analysis model. Castwright asks before analysing on the card your voices are using, frees that card when a voice model needs it, and shows whether the model really follows its output format. You choose where analysis goes if a server can't be reached — Gemini, your local model, another server, or nowhere — in Advanced Settings, and if a saved server setting was damaged, Castwright tells you what it removed. A new wiki page walks through setting up each server.
+- **Analyse with your own OpenAI-compatible server.** Point Castwright at llama.cpp, llama-swap, LM Studio, vLLM or OpenRouter, tell it which graphics card the server uses, and pick its models anywhere you choose an analysis model. Castwright asks before analysing on the card your voices are using, frees that card when a voice model needs it, and shows whether the model really follows its output format. If a server can't be reached, analysis falls back to Gemini by default (when you have a Gemini key); switch that off, or send it to your local model or another server, in Advanced Settings. A fallback only claims its graphics card once it actually takes over. And if a saved server setting was damaged, Castwright tells you what it removed. A new wiki page walks through setting up each server.
 ```
 
 - [ ] **Step 3: Verify** — `npm run verify:fast:branch`, `npm run test:hooks` and `npm run test:e2e`. Expected: green.
@@ -13707,7 +14209,7 @@ git commit -m "docs(docs): on-box rows for endpoint prefill, same-card eviction 
 ```bash
 git add docs/release-notes-next.md RELEASE_NOTES.md
 git commit -m "docs(docs): release notes for selectable analyzer endpoints"
-git push -u origin feat/server,frontend-3084-w3d-selectable
+git push -u origin feat/server-3084-w3d-selectable
 ```
 PR title: `feat(server,frontend): OpenAI-compatible analyzer endpoints become selectable`. Body: `## Summary` (the Delivers list), `## Test plan` (every test file, each task's mutation-proof red output, the e2e run, the three on-box rows), `Refs #3084`, **Also fixed, found in passing:** 3a's compile-forced `step-defaults.tsx` narrowing removed; `getResolvedAnalysisEngine`'s stale "cannot yield openai" comment; `NoCapacityError` gained notes rather than mislabelling an endpoint as a loaded blocker; the seven `<optgroup key={g.engine}>` keys that would collide with two endpoint groups; 3a's `AnalyzerEndpointMissingError` doc comment and 3b Task 3b.1a's three test titles, all saying "this build cannot run", false once endpoints are selectable (Task 3d.4). **Found in final plan review, fixed here:** a whole-admission endpoint eviction latch that contradicted the per-admission attempt set (deleted; attempts keyed by endpoint and model, Tasks 3d.2/3d.3); an append-only served-model set whose eviction fan-out grew with session history (a 2xx or 404 unload now removes the model); give-up notes that named only two of five causes; an endpoint run mark in annotate-emotion / instruct-annotation taken outside the `try` that releases it, and no test reset for the busy registry (`_resetEndpointBusyForTest`, Task 3d.1). **Also fixed with the fallback target (owner feedback 2026-09-13, F4):** `config/types.ts`'s false "validated case-insensitively" pattern doc; `analyzer.gemini.model`'s help and its wiki row, which called Gemini the Ollama-only fallback; five `FallbackAnalyzer` paths that switched silently; the `findEndpointReferences` classification guard, whose key-only filter could not see an `analyzer-engine` knob; script review's warm-fail nudge to a removed Cloud fallback control; `analysis.ts`'s relabel event, which hard-coded `engine: 'gemini'`; the `allowCloudFallback` descriptions in `user-settings.ts`, OpenAPI, `server/.env.example` and the privacy help topic; "two kinds of analyzer" in `Analysis-and-the-Analyzer.md`. **Pinned strings changed:** the lists in Tasks 3d.4b and 3d.4c. **Wiki:** the tool versions each example was checked against (Task 3d.9a), and any planning-facts §B item the tools' current documentation now contradicts.
 

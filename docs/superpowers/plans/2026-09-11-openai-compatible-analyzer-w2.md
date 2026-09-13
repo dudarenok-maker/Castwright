@@ -506,7 +506,7 @@ git commit -m "refactor(server): add EngineCapacity and resolveCapacity (#3084)"
 - Modify: `server/src/analyzer/stage1-chunk.ts:95-125`
 - Modify: `server/src/analyzer/stage2-chunk.ts:70-82`
 - Modify: `server/src/analyzer/chapter-chunker.ts:130-139`
-- Modify: `server/src/config/registry.ts:129` — the comment names `chapterChunkBudget('gemini')`, which no longer exists; and `:70-79`, `:82-91`, `:92-101`, `:102-111`, `:112-121`, `:122-131` — `help` text for the six chunking/cap knobs, naming each family's derivation formula (F1).
+- Modify: `server/src/config/registry.ts:129` — the comment names `chapterChunkBudget('gemini')`, which no longer exists; and `:70-79`, `:82-91`, `:92-101`, `:102-111`, `:112-121`, `:122-131`, `:953-961` — `help` text for the six chunking/cap knobs plus `analyzer.ollama.numCtx`, naming each family's derivation formula (F1).
 - Modify: `docs/wiki/Advanced-Settings.md` §2 — the five chunking rows' "What it does" column (F1, F3).
 - Modify: `server/src/routes/analysis.ts:12` (import), `:2208-2212`, `:2308`, `:4496-4497`, `:5461`, `:7065-7066`, `:7360`
 - Modify: `server/src/routes/annotate-emotion.ts:178-179` (+ import)
@@ -798,9 +798,10 @@ each names its family's formula, matching what Task 2.3 just implemented:
   before the chapter is split. Local (context-family) engines derive the
   effective budget as min(analyzer.stage1.localInputFraction × Ollama num_ctx ×
   ~2 chars/token, this ceiling), so a large or non-Latin chapter can never
-  overflow the context window. Cloud (Gemini) engines ignore this knob: their
-  body is sized instead from analyzer.gemini.maxInputTokensPerRequest, bounded
-  by the pass ceiling."`
+  overflow the context window. Cloud (Gemini) engines ignore this knob
+  entirely: their body is sized instead from
+  analyzer.gemini.maxInputTokensPerRequest alone, with no further ceiling
+  (stage 1 is the one pass that has none — see that knob's own help)."`
 - **`analyzer.stage1.localInputFraction`** (`:112-121`) — append to the existing
   `help`: `" Feeds the min(fraction × num_ctx × ~2 chars/token, analyzer.stage1.chunkCharBudget) formula above; local engines only — Gemini ignores this knob."`
 - **`analyzer.stage2.chunkCharBudget`** (`:82-91`) — replace the `help` string
@@ -819,18 +820,33 @@ each names its family's formula, matching what Task 2.3 just implemented:
 - **`analyzer.gemini.maxInputTokensPerRequest`** (`:70-79`) — append one
   sentence to the existing `help`, without yet mentioning the model TPM (PR 2b,
   Task 2.6, adds that bound and edits this same string again): `" Feeds the
-  request-cap family's body sizing in stage 1, stage 2 and the output-heavy
-  passes (cloudBodyCharBudget), each bounded further by that pass's own char
-  ceiling."`
+  request-cap family's body sizing directly in stage 1 (no further ceiling —
+  cloudBodyCharBudget only floors at 2000 chars, per token-budget.ts:47-51);
+  stage 2 and the output-heavy passes additionally cap the result at that
+  pass's own char ceiling (analyzer.stage2.chunkCharBudget /
+  analyzer.gemini.outputHeavyChunkChars)."` Stage 1's own resolver
+  (`resolveStage1ChunkCharBudget`, `stage1-chunk.ts:95-117`) takes the cloud
+  branch (`engine !== 'local'`) straight to `cloudBodyCharBudget(...)` with no
+  `Math.min` against anything else — there IS no stage-1 ceiling to name.
+- **`analyzer.ollama.numCtx`** (`registry.ts:953-961`) — F1 names this knob
+  explicitly as one of the inputs to the effective chunk size (it is the
+  context-family's `contextTokens`, feeding both `localInputFraction`
+  formulas above). Append one sentence to its EXISTING `help` (do not replace
+  it — the KV-cache-reload warning stays): `" Feeds
+  min(analyzer.stage{1,2}.localInputFraction × this × ~2 chars/token,
+  analyzer.stage{1,2}.chunkCharBudget) for local (context-family) engines;
+  Gemini engines ignore this knob entirely."`
 
 These are `help`-string-only edits (no `env`, `min`/`max`, `default` or `type`
 changes) — `config:sync` (`server/scripts/sync-env-example.ts`) does not read
 `help`, so `.env.example` is unaffected; confirmed by reading that script on
 46e62a34, which builds each managed-block line from `env`/`default`/`label`
-only. `docs/wiki/Advanced-Settings.md` §2's "What it does" column is a
-paraphrase of `help` per knob — update its five rows (Stage-1/Stage-2 chunk
-char budget, Stage-1/Stage-2 local input fraction, Gemini output-heavy chunk
-chars) to name the family split in one clause each, in the same commit.
+only. `docs/wiki/Advanced-Settings.md`'s "What it does" column is a paraphrase
+of `help` per knob — update §2's five rows (Stage-1/Stage-2 chunk char
+budget, Stage-1/Stage-2 local input fraction, Gemini output-heavy chunk
+chars) to name the family split in one clause each, and §1's "Ollama num_ctx"
+row to add the same one-clause pointer to the formula it feeds, in the same
+commit.
 `scripts/tests/knob-docs-sync.test.mjs` (#2012, run by `npm run test:hooks`)
 fails if any registry knob's `label` has no row in that file — it does not
 check `help` content, so it does not gate the wording itself, but every knob
@@ -927,12 +943,26 @@ git commit -m "refactor(server): size analyzer chunk budgets from EngineCapacity
 
 ### Task 2.4: Ship PR 2a
 
-**Files:** none beyond Tasks 2.1–2.3.
+**Files:** `docs/release-notes-next.md` and `RELEASE_NOTES.md` (Step 2, F1's help-text rewrites are user-visible); nothing else beyond Tasks 2.1–2.3.
 
 - [ ] **Step 1: Derived artifacts.**
   - OpenAPI is untouched: no regen.
   - No knob is added or changed, so there is no `config:sync`. Confirm with `npm run config:check` (PASS; the registry diff is a comment only).
-- [ ] **Step 2: Release notes** — skipped, with this reason stated in the PR body: *no shippable delta. The budget refactor is behaviour-preserving (pinned by `capacity-pinning.test.ts`).*
+- [ ] **Step 2: Release notes.** The chunk-budget refactor itself is
+  behaviour-preserving (pinned by `capacity-pinning.test.ts`), but Task 2.3's
+  help-text rewrites are user-visible Advanced Settings copy — six knobs plus
+  `analyzer.ollama.numCtx` now explain how the effective chunk size is
+  derived (F1) — so this PR is NOT a no-op for release notes. Append to
+  `docs/release-notes-next.md`'s `## 🗣️ Analyzer, script review & manuscript`
+  section:
+  ```markdown
+  - **Advanced Settings explains how each chunk-size knob derives its effective budget** — `analyzer.stage1.chunkCharBudget`, `analyzer.stage2.chunkCharBudget`, both `localInputFraction` knobs, `analyzer.gemini.outputHeavyChunkChars`, `analyzer.gemini.maxInputTokensPerRequest` and `analyzer.ollama.numCtx` all gained a help-text sentence naming the formula for their engine family; no default or behaviour changed (pinned by `capacity-pinning.test.ts`). (#<2a>, #3084)
+  ```
+  and to `RELEASE_NOTES.md`'s in-progress version section:
+  ```markdown
+  - **Advanced Settings now explains what each chunk-size setting actually controls**, instead of leaving you to guess how it interacts with the others.
+  ```
+  Commit: `git add docs/release-notes-next.md RELEASE_NOTES.md && git commit -m "docs: release notes for the chunking help-text rewrite (#3084)"`.
 - [ ] **Step 3: On-box acceptance** — not applicable. PR 2a ships no behaviour that needs hardware to prove. The wave 2 rows and the run sheet `docs/testing/3084-openai-analyzer-onbox-acceptance.md` ship in PR 2b (Task 2.10).
 - [ ] **Step 4: Regression plan** — `docs/features/284-openai-compatible-analyzer.md` already states invariant 5 (chunk budgets pinned), so it needs no edit. `docs/features/INDEX.md` needs none either.
 - [ ] **Step 5: Verify**
@@ -951,7 +981,9 @@ Body (write to a scratch file):
 
 Also fixed, found in passing: `registry.ts:129` and `chapter-chunker.ts:116-117` comments named the removed engine argument.
 
-Release notes: skipped — no shippable delta (behaviour-preserving refactor).
+Release notes: the chunk-budget refactor is behaviour-preserving, but Task
+2.3's help-text rewrites are user-visible Settings copy — see both
+release-notes files (Step 2).
 
 ## Test plan
 - [ ] `capacity-pinning.test.ts` green; `git log -- server/src/analyzer/__fixtures__/capacity-pinning.json` shows one commit (capture SHA recorded in the fixture's `capturedFrom`)
@@ -970,7 +1002,7 @@ https://claude.ai/code/session_013DFfsAoY1LtxjDgnGPSZkc
 
 ### PR 2b — Gemini catalog, Auto max output tokens, TPM-bound input cap, thought summaries, thinking window, request ceiling, reasoning overflow
 
-- **Branch:** `feat/server,frontend-3084-w2b-output-cap`. Create it with `node scripts/wt-new.mjs feat/server,frontend-3084-w2b-output-cap` off the latest `main`, after PR 2a merges. Widened from `server`-only to `server,frontend` because Task 2.9a lands real frontend component code (`reasoning-overflow-toast.tsx`, `analysing.tsx` JSX, `advanced.tsx`, `router.ts`, `routes/index.tsx`), not just server+openapi+frontend-help; the master plan is being updated to match.
+- **Branch:** `feat/server-3084-w2b-output-cap`. Create it with `node scripts/wt-new.mjs feat/server-3084-w2b-output-cap` off the latest `main`, after PR 2a merges. **Branch names take a single scope** (`scripts/lib/branch-name.mjs`'s `SCOPE_GROUP`; CONTRIBUTING.md's comma-separated scope form is for commit subjects only, not branch names — `node scripts/wt-new.mjs feat/server,frontend-…` is refused). Task 2.9a lands real frontend component code too, but the branch stays single-scope `server`; the PR title and each commit subject use the multi-scope `feat(server,openapi,frontend):` form instead.
 - **Delivers:**
   - `server/src/analyzer/catalog/gemini-catalog.ts`: a 10-minute cached `models.list`, filtered per planning facts §C.3, warmed before each request by a warm-up bounded at 10 s. The caller's abort signal releases that caller; the shared listing is cancelled only when no caller still waits (Task 2.5, P26).
   - `analyzer.gemini.maxOutputTokens` defaulting to 0 = Auto (the model's `outputTokenLimit`, else 8192), with manual values clamped to the known limit. The runner passes the resolved cap to both transports (Task 2.6).
@@ -984,7 +1016,7 @@ https://claude.ai/code/session_013DFfsAoY1LtxjDgnGPSZkc
   - any chunk budget at default settings (`capacity-pinning.test.ts` stays green, fixture untouched);
   - `analyzer.ollama.numPredict` or its semantics;
   - the Gemini structured-output mode (`json`), temperature, or either retry policy;
-  - Gemini `thinkingLevel` / `thinkingBudget` (wave 5) and Ollama `think` (stays `false`);
+  - Gemini `thinkingLevel` (wave 5; `thinkingBudget` is retired, F2) and Ollama `think` (stays `false`);
   - the idle watchdog once a request's answer text has started (`resolveStreamIdleTimeoutMs()`, 45 s), and the whole watchdog of a model that does not think at the automatic thinking window;
   - anything endpoint-shaped (wave 3).
 - **Entry criteria:**
@@ -2139,7 +2171,7 @@ git commit -m "feat(server): Gemini max output tokens default to Auto; input cap
   - `GeminiTransport` constructor `{ apiKey, model, client? }` and `send(req: TransportRequest): Promise<TransportResult>` (contract);
   - `ThinkingConfig.includeThoughts` (`genai.d.ts:14398`) and `usageMetadata.thoughtsTokenCount` (`genai.d.ts:5917`).
 - Produces:
-  - Gemini requests carry `config.thinkingConfig = { includeThoughts: true }` exactly when `geminiModelThinks(this.model)` is true. The rule is static, so a model's request shape never changes between requests (P27). Gemma is outside it and never gets `includeThoughts` here; wave 5 adds it when a reasoning level turns Gemma's thinking on (P19). This key is transport-owned (decision 9); wave 5 adds `thinkingLevel` / `thinkingBudget` beside it.
+  - Gemini requests carry `config.thinkingConfig = { includeThoughts: true }` exactly when `geminiModelThinks(this.model)` is true. The rule is static, so a model's request shape never changes between requests (P27). Gemma is outside it and never gets `includeThoughts` here; wave 5 adds it when a reasoning level turns Gemma's thinking on (P19). This key is transport-owned (decision 9); wave 5 adds `thinkingLevel` beside it (`thinkingBudget` is retired, F2).
   - `TransportResult.usage.reasoningTokens` = the last `thoughtsTokenCount` seen, **only on a request that asked for `includeThoughts`**; `undefined` otherwise.
   - Every chunk that carries thought parts but no answer text fires `call.onChunk` with `receivedBytes` / `receivedText` unchanged (P4), so the route heartbeat (`routes/analysis.ts:1184` `SILENCE_THRESHOLD_MS` warning at `:4417-4423`) sees activity during thinking.
   - Wave 1 already keeps thought text out of `text` and sets `reasoningSeen` (contract); this task pins both.
@@ -2911,6 +2943,18 @@ fails until both rows exist, since these are brand-new knob `label`s the guard
 has never seen before this task — add them in this same step, not a later
 one, and run the guard in Step 4.
 
+**The intro sentence's count, too.** The same guard's `'the intro prose knob
+count matches the real registry count (#2012 acceptance 4)'` test parses
+`Advanced-Settings.md`'s intro paragraph — `"— N knobs across M groups in
+total"` (`:14`) — and compares `N` against `allKnobs().length`. On `main` as
+read for this task, that line reads **116 knobs across 12 groups**, not the
+117 an earlier draft of this instruction assumed; re-read it at
+implementation time in case another PR moved the count between now and then.
+Task 2.8 adds exactly two knobs and no new group, so update it to **118
+knobs across 12 groups** in this same step (Task 2.6 adds no knob — it only
+lifts an existing one's `max` — so it changes no count). Getting this wrong
+by one is not cosmetic: the guard fails the build.
+
 `server/src/analyzer/transports/gemini-transport.ts`:
 - **Imports.** Add `AnalyzerTimeoutError` to the `../errors.js` import. `configValue` (wave 1 Task 1.9) and `geminiModelThinks` (Task 2.7) are already imported.
 - **Thinking window.** Add below `resolveStreamIdleTimeoutMs` (moved from `gemini.ts:73-78`):
@@ -3083,7 +3127,7 @@ The managed-block entries are generated by `npm run config:sync` in Task 2.10.
       /* #3084 P5 — silence before any answer text, past the thinking window. */
       return withCopy(
         'analyzer-timeout',
-        `${modelLabel} sent no answer text and stayed silent longer than its thinking window, so the request was stopped after ${Math.round(err.elapsedMs / 1000)} s. Raise 'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most 290000 ms), lower the model's reasoning level, or pick a faster model, then retry.`,
+        `${modelLabel} sent no answer text and stayed silent longer than its thinking window, so the request was stopped after ${Math.round(err.elapsedMs / 1000)} s. Raise 'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most 290000 ms), or pick a faster model, then retry.`,
         detail,
       );
     }
@@ -3093,7 +3137,7 @@ The managed-block entries are generated by `npm run config:sync` in Task 2.10.
         : "this endpoint's request ceiling";
     return withCopy(
       'analyzer-timeout',
-      `${modelLabel} did not finish within ${Math.round(err.elapsedMs / 1000)} s (the request ceiling). Raise ${setting}, lower the model's reasoning level, or pick a faster model, then retry.`,
+      `${modelLabel} did not finish within ${Math.round(err.elapsedMs / 1000)} s (the request ceiling). Raise ${setting}, or pick a faster model, then retry.`,
       detail,
     );
   }
@@ -3109,8 +3153,7 @@ The managed-block entries are generated by `npm run config:sync` in Task 2.10.
       "Retry the chapter. If it recurs: when a thinking Gemini model stayed silent before answering, raise " +
       "'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most " +
       "290000 ms, below the 300 s network timeout); when a request ran too long overall, raise 'Gemini request " +
-      "ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) in Advanced Settings. Or lower the model's reasoning level, " +
-      'or switch to a faster analyzer model.',
+      "ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) in Advanced Settings. Or switch to a faster analyzer model.",
   },
 ```
 
@@ -3561,17 +3604,25 @@ In `server/src/routes/failure-taxonomy.test.ts`:
 - **New tests.** Append:
 ```ts
 describe('AnalyzerReasoningOverflowError (#3084 wave 2b)', () => {
-  it('→ analyzer-reasoning-overflow, naming the Gemini max-output setting and the reasoning level', () => {
+  it('→ analyzer-reasoning-overflow: userMessage is the what-happened headline only, remediation names the setting (#3084 F7)', () => {
     const r = classifyAnalysisFailure(
       new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
       'Gemini (gemini-3.6-flash)',
     );
     expect(r.code).toBe('analyzer-reasoning-overflow');
     expect(r.userMessage).toContain('Gemini (gemini-3.6-flash)');
-    expect(r.userMessage).toContain('Gemini max output tokens');
-    expect(r.userMessage).toContain('reasoning level');
-    expect(r.remediation).toContain('reasoning');
     expect(r.detail).toContain('reasoningTokens=8100');
+    // #3084 F7 — no "raise X" advice or "then retry" in userMessage; that
+    // lives in remediation instead, which is static (per-code, not
+    // per-instance) so it names the setting but not this chapter.
+    expect(r.userMessage).not.toContain('Gemini max output tokens');
+    expect(r.userMessage).not.toContain('retry');
+    expect(r.remediation).toContain('Gemini max output tokens');
+    // #3084 F2/#13 — no wave-5-only "reasoning level" control promised yet.
+    expect(r.userMessage).not.toContain('reasoning level');
+    expect(r.remediation).not.toContain('reasoning level');
+    // #3084 F7 — the remediation step list ends with this sentence verbatim.
+    expect(r.remediation.endsWith('Then resume — finished chapters are kept.')).toBe(true);
     // #3084 F7 — no chapter was passed, so the message never invents one.
     expect(r.userMessage).toContain('a chapter');
     expect(r.userMessage).not.toMatch(/chapter\s+"|chapter\s+\d/);
@@ -4195,6 +4246,40 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
     }
   }, 30_000);
 
+  // `runSubsetAnalyzerJob`'s exact parameter list was not independently
+  // re-verified against 46e62a34 for this test (the main-route test above
+  // was); match the file's own subset-route test helpers' call shape at
+  // implementation time rather than this literal signature if they differ.
+  it('a direct stage-2 overflow on the subset (Retry) route names its chapter — no catch existed for this before (#3084 F7)', async () => {
+    const seed = await seedBook('subset-overflow', [1, 2]);
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection = buildSelection(
+      stubAnalyzer({
+        async runStage2Chapter(_m: string, chapterId: number, _p: string, _call: StageCall): Promise<Stage2ChapterOutput> {
+          if (chapterId === 2) throw new AnalyzerReasoningOverflowError('gemini', MODEL, 8100);
+          return stage2For(1);
+        },
+      }),
+      MODEL,
+    );
+    const events = captureEvents(seed.job, () => {});
+    const { runSubsetAnalyzerJob } = await import('./analysis.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    try {
+      await runSubsetAnalyzerJob(seed.job, getManuscript(seed.manuscriptId)! as never, [1, 2], {
+        requestedModel: undefined,
+      });
+      expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
+      // Before this task's fix, the subset route's Phase-1 loop had no catch
+      // at all around attributeChapterStage2WithEval, so this throw reached
+      // the terminal handler with reasoningOverflowChapter still unset.
+      expect(seed.job.reasoningOverflowChapter).toEqual({ id: 2, title: 'Chapter Two' });
+      expect(events.find((e) => e.kind === 'error')!.message).toContain('chapter "Chapter Two"');
+    } finally {
+      removeManuscript(seed.manuscriptId);
+    }
+  }, 30_000);
+
   /* #3084 P20 — an escalation call that overflows is swallowed inside
      StageRunner.runSingleAttempt (it returns null), which first reports it
      through StageCall.onReasoningOverflow. These stubs honour that contract
@@ -4807,17 +4892,16 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
 - **Classify branch.** Insert after the `AnalyzerTruncatedError` branch of `classifyAnalysisFailure`. On Ollama it names `num_ctx`, the binding limit (P6). F7 — the failure names the chapter when the caller passed one (below, wired from `job.reasoningOverflowChapter`), and never invents one when it did not:
 ```ts
   if (err instanceof AnalyzerReasoningOverflowError) {
-    const outputSetting =
-      err.transport === 'ollama'
-        ? "'Ollama num_ctx' (ANALYZER_NUM_CTX), the context window the prompt and the whole reply must fit in"
-        : err.transport === 'gemini'
-          ? "'Gemini max output tokens' (ANALYZER_MAX_OUTPUT_TOKENS; 0 = Auto, the model's own limit)"
-          : "this endpoint's max output tokens";
     const chapter = ctx?.chapter;
     const chapterLabel = chapter ? (chapter.title ? `chapter "${chapter.title}"` : `chapter ${chapter.id}`) : 'a chapter';
+    /* #3084 F7 — userMessage is the what-happened headline only: naming the
+       chapter, model and engine. It carries no "raise X" advice and no
+       "then retry" — that imperative lives in remediation instead (below),
+       which is per-code, not per-instance, so it cannot itself name the
+       chapter; naming happens here. */
     return withCopy(
       'analyzer-reasoning-overflow',
-      `${modelLabel} spent its whole output budget reasoning on ${chapterLabel} and returned no answer, so the analysis stopped. Raise ${outputSetting}, or lower the model's reasoning level, then retry.`,
+      `${modelLabel} spent its whole output budget reasoning on ${chapterLabel} and returned no answer, so the analysis stopped.`,
       `transport=${err.transport} model=${err.model}${chapter ? ` chapterId=${chapter.id}` : ''}${err.reasoningTokens ? ` reasoningTokens=${err.reasoningTokens}` : ''}`,
     );
   }
@@ -4829,11 +4913,16 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
     userMessage:
       'The analyzer model spent its whole output budget reasoning and returned no answer, so the analysis ' +
       'stopped: the same settings would overflow again on every chapter, and splitting never shrinks reasoning.',
+    /* #3084 F7 — a step list, ending in the sentence F7 requires verbatim.
+       No "lower the model's reasoning level" here in wave 2: that control
+       does not exist until 5a (Task 5.5b) adds it; mentioning it now would
+       promise a fix the UI cannot yet offer. "Switch to a different model"
+       stands in its place. */
     remediation:
-      "Give the model more room, then retry. Gemini: raise 'Gemini max output tokens' in Advanced Settings " +
-      "(0 = Auto, the model's own limit). Ollama: raise 'Ollama num_ctx' (ANALYZER_NUM_CTX), the context " +
-      "window the prompt and the whole reply must fit in. Or lower the model's reasoning level where the " +
-      'engine offers one, or pick a model that does not think.',
+      "Give the model more room: for Gemini, raise 'Gemini max output tokens' in Advanced Settings (0 = Auto, " +
+      "the model's own limit); for Ollama, raise 'Ollama num_ctx' (ANALYZER_NUM_CTX), the context window the " +
+      'prompt and the whole reply must fit in. Or switch to a different analyzer model. Then resume — ' +
+      'finished chapters are kept.',
   },
 ```
 
@@ -4859,11 +4948,11 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
       is best-effort: some call sites (an escalation call, the non-story
       classifier) know only an id at the point they catch the error and would
       need an extra lookup for a title neither has any other reason to hold;
-      those pass `{ id }` alone. The terminal handler's copy falls back to
-      "a chapter" when this whole field is undefined (an overflow the runner
-      never told which chapter — should not happen once every call site below
-      passes one, but the fallback stays so a future call site that forgets
-      degrades to vague copy, not a crash). */
+      those pass `{ id }` alone. Every call site below now passes a chapter
+      (the main and subset routes' Phase 0/Phase 1 catches, both escalation
+      hooks, and the non-story classifier), so the terminal handler's "a
+      chapter" fallback is defence-in-depth for a call site a later change
+      forgets to update, not an expected path. */
   reasoningOverflowChapter?: { id: number; title?: string };
 ```
 - **The helpers.** Directly before the doc comment of `export function attributeChapterStage2WithEval` (`:2437`), add:
@@ -4934,8 +5023,7 @@ export function buildNonStoryClassifier(opts: {
       return out.nonStory;
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      /* #3084 F7 — this classifier already has the chapter (`ch`), so the
-         overflow's chapter is never the "should not happen" fallback case. */
+      /* #3084 F7 — this classifier already has the chapter (`ch`). */
       noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title });
       return false; // Signal-2 hiccup → treat as story, degrade to Signal-1-only
     }
@@ -5018,6 +5106,57 @@ with
          reaches this job's terminal catch, as a rethrown overflow does. */
       throwIfReasoningOverflowed(job);
 ```
+  - **Subset route, Phase 1 — the direct stage-2 call has no catch (F7 finding).**
+    Re-reading `analysis.ts:7341-7365` on 46e62a34: the loop's
+    `attributeChapterStage2WithEval({ … })` call (`:7350` on) is awaited with
+    NO surrounding `try`/`catch` at all — unlike the main route's `runChapter`,
+    the subset route relies entirely on this call propagating to the route's
+    own outer catch. That means a DIRECT stage-2 overflow (not one only an
+    escalation call inside it saw) reaches the terminal handler with
+    `job.reasoningOverflowChapter` still unset — the escalation hook
+    (`onReasoningOverflow`) marks the job only when an escalation call inside
+    this same stage-2 call overflows, not when the stage-2 call itself does.
+    Wrap the call:
+```ts
+      let chapterSentences: Sentence[];
+      let subsetCoverageVerdict: CoverageVerdict; // match the existing destructured names/types exactly when implementing
+      let subsetChunkCount: number;
+      let subsetStructureReport: StructureReport | undefined;
+      try {
+        ({
+          sentences: chapterSentences,
+          coverage: subsetCoverageVerdict,
+          chunkCount: subsetChunkCount,
+          structureReport: subsetStructureReport,
+        } = await attributeChapterStage2WithEval({
+          analyzer: phase1Analyzer,
+          manuscriptId,
+          title: record.title,
+          stage1,
+          chapter: ch,
+          // … the rest of this call's existing options, unchanged
+        }));
+      } catch (err) {
+        /* #3084 P20/F7 — mark the job with the chapter that was calling the
+           model, then rethrow: the subset route has no other catch, so this
+           reaches the terminal classifyAnalysisFailure call the same way an
+           un-marked throw always has. noteReasoningOverflow is a no-op (and
+           the chapter is not recorded) for any other error. */
+        noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title });
+        throw err;
+      }
+```
+    Converting the original `const { … } = await …` into pre-declared `let`s
+    assigned inside the `try` is the minimal change that lets a `catch` wrap
+    it; keep every existing option in the `attributeChapterStage2WithEval({…})`
+    call literal exactly as `:7350` on 46e62a34 already has it — only the
+    destructuring assignment's shape changes, not the call's arguments. Test:
+    a Retry-route (`/analysis/chapters`) stage-2 call that throws
+    `AnalyzerReasoningOverflowError` directly (not via escalation) ends the
+    subset job with `analyzer-reasoning-overflow`, and the SSE `error` event's
+    `message` names the chapter that was running — mirroring the main route's
+    `after a stage-2 overflow in chapter 2, …` test, but through
+    `runSubsetAnalyzerJob` instead of `runMainAnalyzerJob`.
 - **Non-story classification, main route.** Replace the whole `const classifyNonStory = analyzer.runNonStoryClassification ? async (ch: ThirdPartyGuardChapter): Promise<boolean> => { … } : undefined;` statement (`:5814-5836`) with:
 ```ts
     const classifyNonStory = buildNonStoryClassifier({
@@ -5213,6 +5352,7 @@ Expected: PASS.
   32. In `noteReasoningOverflow`, delete `job.reasoningOverflowChapter ??= chapter;`. Expected red: `noteReasoningOverflow (#3084 P20) > records the chapter it was told about (#3084 F7)` and `… > keeps the FIRST overflow chapter, …` (`job.reasoningOverflowChapter` is `undefined` in both). Restore it.
   33. Change `job.reasoningOverflowChapter ??= chapter;` to `job.reasoningOverflowChapter = chapter;` (drop the "first wins" guard). Expected red: `noteReasoningOverflow (#3084 P20) > keeps the FIRST overflow chapter, like reasoningOverflowError, even when a later call names a different one` (`job.reasoningOverflowChapter` reads chapter 5's, not chapter 4's). Restore it.
   34. In `buildNonStoryClassifier`'s catch, drop the third argument from `noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title })`. Expected red: `buildNonStoryClassifier — no non-story call after a reasoning overflow (#3084 P20) > a classification call that overflows marks the job, reads as story, …` (`job.reasoningOverflowChapter` is `undefined`). Restore it.
+  35. In the subset route's Phase-1 loop, remove the `try`/`catch` wrapper around `attributeChapterStage2WithEval` (restore the bare `const { … } = await attributeChapterStage2WithEval({ … });`). Expected red: `a direct stage-2 overflow on the subset (Retry) route names its chapter — no catch existed for this before (#3084 F7)` (`job.reasoningOverflowChapter` is `undefined`, though the run still ends with `analyzer-reasoning-overflow` since the throw still reaches the route's outer catch — only the chapter-naming is lost). Restore it.
 - [ ] **Step 6: Commit**
 ```bash
 git add server/src/analyzer/errors.ts server/src/analyzer/types.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/dialogue-structure/escalation.test.ts server/src/analyzer/runner/finish.ts server/src/analyzer/runner/finish-reasoning-overflow.test.ts server/src/analyzer/runner/finish.test.ts server/src/analyzer/runner/stage-runner.test.ts server/src/analyzer/transports/ollama-transport.ts server/src/analyzer/transports/ollama-transport-overflow.test.ts server/src/analyzer/stage1-chunk.test.ts server/src/analyzer/stage2-chunk.test.ts server/src/analyzer/gemini.test.ts server/src/analyzer/attribution-eval/review-run.ts server/src/analyzer/attribution-eval/review-run.test.ts server/src/routes/failure-taxonomy.ts server/src/routes/failure-remediations.ts server/src/routes/failure-taxonomy.test.ts server/src/routes/analysis.ts server/src/routes/analysis.phase-model.test.ts server/src/routes/analysis.reasoning-overflow.test.ts server/src/routes/script-review.ts server/src/routes/script-review.test.ts server/src/routes/annotate-emotion.ts server/src/routes/annotate-emotion.test.ts server/src/routes/instruct-annotation.ts server/src/routes/instruct-annotation.test.ts openapi.yaml src/lib/api-types.ts src/data/help-failures.ts src/data/help-failures.test.ts src/data/help-categories.test.ts
@@ -5242,10 +5382,11 @@ git commit -m "feat(server,openapi,frontend): fail reasoning overflow instead of
 and Ollama fixes, the field, router focus, rendering, notification, guard
 test"). It is specified at a coarser grain than the rest of this file — one
 combined test-first step per surface rather than a fully separate mutation row
-for every line — because it touches eight files across three layers (server
-contract, frontend plumbing, two view components) with no existing precedent
-this file can extend line-for-line. Flagged so the coordinator can dispatch a
-task-review pass at higher scrutiny than usual.
+for every line — because it touches many files across four layers (server
+contract, the persistent stream middleware, the rejoin/last-outcome path, and
+view components) with no existing precedent this file can extend
+line-for-line. Flagged so the coordinator can dispatch a task-review pass at
+higher scrutiny than usual.
 
 **Router mechanism (confirmed).** `parseHash` does not exist in
 `src/lib/router.ts` — a comment at `src/routes/index.tsx:1126` ("Replaces
@@ -5258,106 +5399,186 @@ This task extends that mechanism for `advanced`'s new `?focus=` param, extends
 `stageToHash`'s `'advanced'` case to serialize it back, and extends
 `stageEqual` to compare it (below) — mirroring the `'help'`/`focusCode` case
 all three already have. `router.ts` itself stays pure and unit-testable;
-`AdvancedRoute` is not. Wave 5's Task 5.5c extends this same `'advanced'`
-stage with a second field, `reasoningFocus`, and keeps this task's `focusKey`
-name as-is — do not rename it.
+`AdvancedRoute` is not. **Merge readiness for wave 5:** Task 5.5c extends this
+SAME `'advanced'` stage member with a second field, `reasoningFocus`, and this
+task's `stageEqual` branch and `AdvancedRoute` are written so 5a extends them
+in place rather than adding a second `'advanced'` branch or a second route
+component — wave 5 is being told the same. Keep `focusKey`'s name exactly.
 
-**Chapter naming is already done.** Task 2.9's `noteReasoningOverflow` and
-`classifyAnalysisFailure` branch now carry and name the chapter (F7); this
-task only adds `fixes` on top of the copy Task 2.9 already produces — it does
-not touch chapter identity again.
+**Chapter naming is already done, elsewhere.** Task 2.9's
+`noteReasoningOverflow` and `classifyAnalysisFailure` branch already carry and
+name the chapter, and Task 2.9's `failure-remediations.ts` entry already ends
+`remediation` with "Then resume — finished chapters are kept." (F7). This task
+adds `fixes` on top of that copy — it does not touch chapter identity or the
+copy's ending again.
+
+**One home, one signature (per review).** `AnalysisFailureFix` and
+`reasoningOverflowFixes` live in `server/src/routes/failure-taxonomy.ts`
+itself — the master plan's contract (`docs/superpowers/plans/2026-09-11-openai-compatible-analyzer.md:277-291`)
+names that file explicitly, and wave 3ab/wave 5 both assume it lives there
+too. There is no separate `failure-taxonomy-fixes.ts` SOURCE file — only the
+GUARD TEST file keeps that name (`failure-taxonomy-fixes.test.ts`), since it
+tests a cross-cutting property (every fix's `settingKey`/`wikiPage` is real)
+rather than one function's behaviour, and 3b/5a append to it rather than
+writing a new one. The ctx shape, per the master plan and the PR review, is
+`{ transport: TransportKind; model: string; endpointId?: string }` — the SAME
+type the `AnalyzerReasoningOverflowError.transport` field already has, so the
+classify branch passes `{ transport: err.transport, model: err.model }` with
+**no cast**. `endpointId` is declared now but unused in 2b (`err` carries none
+until 3b widens `AnalyzerReasoningOverflowError`); `reasoningLevel` is 5a's
+addition to the same ctx type, not this task's.
 
 **Files:**
-- Modify: `server/src/routes/failure-taxonomy.ts:400-405` (`AnalysisFailure`, add `fixes?: AnalysisFailureFix[]`), `:481-483` (`withCopy`, unchanged — `fixes` is set only where a branch computes it, never via the static remediation map), the `AnalyzerReasoningOverflowError` branch Task 2.9 wrote — extend IN PLACE (spread `withCopy(...)`'s result and add `fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model })`; append `' Then resume — finished chapters are kept.'` to the `userMessage` template literal). Do not touch `chapter`/`chapterLabel` — that is Task 2.9's addition and already correct.
-- Create: `server/src/routes/failure-taxonomy-fixes.ts` — `AnalysisFailureFix`, `reasoningOverflowFixes(ctx)`, and the guard's registry-key/endpoint-field validator
-- Modify: `server/src/routes/analysis.ts` — the two terminal handlers' destructure of `classifyAnalysisFailure`'s result gains `fixes` (`const { code, userMessage: message, remediation, detail, fixes } = classifyAnalysisFailure(...)`) and the `endJob`/`send` call passes it through (`{ kind: 'error', code, message, remediation, detail, fixes }`). The `classifyAnalysisFailure` CALL itself — including its `{ chapter: job.reasoningOverflowChapter }` third argument — is Task 2.9's edit and is not touched again here.
-- Modify: `openapi.yaml` — add `AnalysisFailureFix` schema and a `fixes` array property on the analysis SSE error shape. **Finding:** the analysis SSE stream's `error`/`chapter-failed` events are NOT modelled in `openapi.yaml` today — `AnalysePhaseEvent` (`:5486-5492`) and `AnalyseWarningEvent` (`:5494-5513`) are the only two members of the `text/event-stream` `oneOf` at `/api/manuscripts/{manuscriptId}/analysis` (`:545-563`) and `/analysis/chapters` (`:578-611`), and neither carries `code`/`message`/`remediation`/`detail`/`fixes` — the real wire shape lives only in `src/lib/api.ts`'s local `AnalysisStreamEvent` interface. This task adds a new `AnalyseErrorEvent` schema (`kind`, `code`, `message`, `remediation`, `detail`, `fixes`) and appends it to both `oneOf` lists, closing that gap rather than leaving `fixes` as the first field ever added to an already-incomplete shape.
-- Modify: `src/lib/api-types.ts` (regenerate via `npm run openapi:types`) and its mock counterpart, `src/mocks/canned-data.ts` (or the manuscript fixture under `src/mocks/manuscripts/` that emits an `error` event, if the reasoning-overflow path has one; otherwise note it has none, since mocks behind `VITE_USE_MOCKS` never call a real analyzer and so cannot organically produce this failure — a hand-authored fixture entry is the only way to exercise it in mock mode).
-- Modify: `src/lib/api.ts:2766-2782` (`AnalysisStreamEvent`, add `fixes?: AnalysisFailureFix[]`), `:2824-2852` (`AnalysisError`, add `fixes` field + 7th constructor param), `:2997-3005` and `:5714-5721` (both terminal-error throw sites, add `payload.fixes`)
-- Modify: `src/lib/types.ts:1073` (`{ kind: 'advanced' }` → `{ kind: 'advanced'; focusKey?: string }`). Wave 5's Task 5.5c extends this same member with `reasoningFocus` — keep the field named `focusKey` exactly, since that is the name both this task's own `stageToHash`/`AdvancedRoute` code below and wave 5's later edit key off.
+- Modify: `server/src/routes/failure-taxonomy.ts` — add `AnalysisFailureFix` (interface, below) and `reasoningOverflowFixes(ctx)` near `withCopy`; extend the `AnalyzerReasoningOverflowError` branch's `return` (Task 2.9's edit) to attach `fixes` (below) — do not touch its `userMessage`/`chapter` logic, and do not touch `failure-remediations.ts`'s static entry (Task 2.9's "Then resume" ending stays put, unedited here).
+- Create: `server/src/routes/failure-taxonomy-fixes.test.ts` — the guard (test-only; no matching source file)
+- Modify: `server/src/routes/analysis.ts` — the two terminal handlers' destructure of `classifyAnalysisFailure`'s result gains `fixes` and the `endJob`/`send` call passes it through; `endJob`'s `#3004` last-outcome write (`:3078-3120`) passes `finalEv.fixes` to `writeAnalysisLastOutcome`; `buildRejoinMissEvent` (`:3025-3058`) copies `fixes` into `priorOutcome` alongside `code`/`message`/`endedAt`.
+- Modify: `server/src/store/analysis-state.ts:139-148` (`AnalysisLastOutcome`, add `fixes?: AnalysisFailureFix[]`), `:173-183` (`writeAnalysisLastOutcome`, thread it into the written payload — it is NOT truncated the way `message` is, since it's structured, not prose)
+- Modify: `openapi.yaml` — add `AnalysisFailureFix` schema (`wikiPage` not `wikiHref`, below) and a `fixes` array property on the analysis SSE error shape. **Finding, unchanged from the prior draft:** the analysis SSE stream's `error` event is NOT modelled in `openapi.yaml` today — `AnalysePhaseEvent` and `AnalyseWarningEvent` are the only two members of the `text/event-stream` `oneOf` at `/api/manuscripts/{manuscriptId}/analysis` (`:545-563`) and `/analysis/chapters` (`:578-611`); the real wire shape lives only in `src/lib/api.ts`'s local `AnalysisStreamEvent` interface. Add a new `AnalyseErrorEvent` schema (`kind`, `code`, `message`, `remediation`, `detail`, `fixes`) and append it to both `oneOf` lists.
+- Modify: `src/lib/api-types.ts` (regenerate via `npm run openapi:types`); note for mocks: mock mode (`VITE_USE_MOCKS`) never calls a real analyzer, so it cannot organically emit `analyzer-reasoning-overflow` — the Playwright e2e task below (Step 8) hand-authors a mock SSE fixture that does, rather than trying to make the ordinary mock manuscript flow produce this failure.
+- Modify: `src/lib/api.ts` — `AnalysisStreamEvent` (add `fixes?: AnalysisFailureFix[]`), `AnalysisError` (add `fixes` field + constructor param, carried from `payload.fixes` at BOTH terminal-error throw sites — the main route's and the subset route's, confirmed at `:2997-3005` and `:5714-5721` on the current checkout).
+- **CRITICAL — the persistent notification lives in the middleware, not the view (review finding).** `src/store/analysis-stream-middleware.ts:220-230` on `46e62a34` (`git show 46e62a34:src/store/analysis-stream-middleware.ts`; the generic `if (e instanceof AnalysisError) { … }` branch, its `dispatch(setHalted)`/`dispatch(pushToast)` payload lines at `:221-228`, matching the review's own citation) is the stream that survives navigation — `analysing.tsx`'s OWN stream aborts on unmount (`:662-668` on the current checkout, `controller.abort()` in the effect cleanup), so a toast pushed from the view disappears the moment the user navigates away, defeating "survives navigation" outright. **Pin drift, noted once:** on the current checkout this same branch sits at `:267-277` — a `language_unset` special case (current `:223-245`ish) was added ahead of it after `46e62a34`, shifting every line below. Re-locate by the `if (e instanceof AnalysisError) {` text, not either line number, when implementing. Modify this branch:
+  ```ts
+  if (e instanceof AnalysisError) {
+    dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message, fixes: e.fixes }));
+    dispatch(
+      e.code === 'analyzer-reasoning-overflow'
+        ? notificationsActions.pushToast({
+            kind: 'error',
+            message: e.message,
+            fixes: e.fixes,
+            dedupeKey: 'analysis-stream',
+          })
+        : notificationsActions.pushToast({
+            kind: 'error',
+            message: e.message,
+            dedupeKey: 'analysis-stream',
+          }),
+    );
+    return;
+  }
+  ```
+  Both branches share `dedupeKey: 'analysis-stream'` — the SAME key the
+  `language_unset` branch above and the generic transport-failure branch
+  below already use — so a reasoning-overflow toast REPLACES whatever plain
+  toast this manuscript's stream already pushed (the slice's own dedupe-by-key
+  merge in `pushToast`'s reducer already does this; no new merge logic is
+  needed), rather than stacking a second toast. `ToastStack` routes a
+  `t.fixes` toast to `<ReasoningOverflowToast>` instead of the generic
+  6 s-auto-dismissing `ToastItem` (below) — that toast, not the plain one, is
+  what "survives navigation" describes.
+- Modify: `src/store/analysis-slice.ts:191-201` (`setHalted`'s payload type gains `fixes?: AnalysisFailureFix[]`; `snap.haltFixes = action.payload.fixes;` stored alongside `haltCode`/`haltReason` — add the field to `ActiveStreamSnapshot`'s interface, wherever it is declared in this file)
+- Modify: `src/lib/types.ts:1073` (`{ kind: 'advanced' }` → `{ kind: 'advanced'; focusKey?: string }`)
 - Modify: `src/lib/router.ts:49-50` (`stageToHash`'s `'advanced'` case, mirroring the `'help'` case's `?code=` pattern at `:45-48`) and `:79-97` (`stageEqual` — add an `'advanced'` branch comparing `focusKey`, mirroring the existing `'help'` branch at `:93-95` that compares `focusCode`)
 - Modify: `src/routes/index.tsx:471-475` (`AdvancedRoute`, mirroring `HelpRoute` at `:491-495`)
-- Modify: `src/store/notifications-slice.ts:43-55` (`Toast`, add `fixes?: AnalysisFailureFix[]`), `:63-69` (`PushToastPayload`, same), `:75-101` (`pushToast` reducer, thread `fixes` through like `nudge`)
-- Modify: `src/components/toast-stack.tsx:32-34` (route a `t.fixes` toast to a new component, mirroring the `t.nudge` → `VoiceNudgeToast` branch)
-- Create: `src/components/reasoning-overflow-toast.tsx` — no auto-dismiss timer (mirrors `VoiceNudgeToast`'s exemption from `ToastItem`'s 6 s timer), renders the "How to fix" list via `fixHref`, a dismiss button
-- Create: `src/lib/failure-fixes.ts` — `fixHref(fix)`, the ONE place that turns a structured fix into a link (or `null`). Both `analysing.tsx` and `reasoning-overflow-toast.tsx` call it instead of each branching on `fix.settingKey` inline; 3d adds an `endpointField` branch and 5a a `reasoningSetting` branch to this same function, with no change to either renderer.
-- Modify: `src/views/analysing.tsx:145-150` (`error` state type, add `fixes`), `:655-660` (`setError`, carry `fixes` from the caught `AnalysisError`), `:1342-1344` and `:1592-1594` (the two "What to do:" blocks — render the "How to fix" list beneath `remediation` when `fixes` is non-empty), plus a new effect that dispatches `notificationsActions.pushToast` when `error?.code === 'analyzer-reasoning-overflow'`
-- Modify: `src/views/advanced.tsx` — read `focusKey` from the hydrated stage (via `useAppSelector` on `ui.stage`, the same source `AdvancedRoute` hydrates), scroll the matching `OverrideRow`/`PromptRow` into view and apply a highlight class for ~2 s
+- Modify: `src/store/notifications-slice.ts:43-55` (`Toast`, add `fixes?: AnalysisFailureFix[]`), `:63-69` (`PushToastPayload`, same), `:75-101` (`pushToast` reducer — `fixes` threads through the existing dedupe-merge path with no new branch: the reducer already overwrites `message`/`kind` on a dedupe hit, so add `existing.fixes = fixes;` beside those two lines)
+- Modify: `src/components/toast-stack.tsx:32-34` (route a `t.fixes` toast to a new component, mirroring the `t.nudge` → `VoiceNudgeToast` branch — check `t.fixes` before `t.nudge` since a future toast could carry both, though none does yet)
+- Create: `src/components/reasoning-overflow-toast.tsx` — no auto-dismiss timer (mirrors `VoiceNudgeToast`'s exemption from `ToastItem`'s 6 s timer), renders the "How to fix" list via `fixHref` + `wikiUrl`, a dismiss button
+- Create: `src/lib/failure-fixes.ts` — `fixHref(fix)`, the ONE place that turns a structured fix's `settingKey` into a link (or `null` for a label-only fix). 3d adds an `endpointField` branch and 5a a `reasoningSetting` branch to this same function; neither renderer changes.
+- Modify: `src/views/analysing.tsx` — `error` state type (add `fixes`), the catch block that calls `setError` (carry `fixes` from the caught `AnalysisError` — `const fixes = e instanceof AnalysisError ? e.fixes : undefined;`, alongside the existing `remediation` line), the RUN-LEVEL "What to do:" block only (`:1342-1344` — see the next bullet for why the per-chapter block at `:1592-1594` is explicitly excluded). **Remove nothing that pushes a toast here, because nothing here does** (the earlier draft's plan to add a `useEffect` dispatching `pushToast` from this view is dropped — the middleware bullet above is the only place that toast is now pushed; do not add a second one).
+- **Per-chapter block excluded (review finding).** `analysing.tsx:1592-1594` is inside `failedChapters.map((f) => …)` — one row PER FAILED CHAPTER, not the run-level failure block. Task 2.9's reasoning-overflow rule rethrows at every dispatch point instead of ever recording a `chapter-failed` entry (the whole point of "stop new spend" is that it is RUN-fatal, not per-chapter), so `f.code` is never `analyzer-reasoning-overflow` and this block never has `fixes` to render. Render the "How to fix" list ONLY in the run-level block (`:1342`-area); add a `error.fixes && error.fixes.length > 0` guard there and touch the per-chapter block not at all.
+- Modify: `src/views/advanced.tsx` — read `focusKey` from the hydrated stage, scroll the matching row into view and highlight it, mirroring `help.tsx`'s existing `focusCode` pattern (`ref` + a `scrolledForRef` once-per-focus guard + optional-chained `scrollIntoView?.()`, `help.tsx:220-233`) rather than `document.getElementById`.
 - Modify: `docs/wiki/Analysis-and-the-Analyzer.md` — new section "When a model thinks past its output limit"
-- Test (create): `src/lib/router.test.ts` (or the existing router test file, if one already covers `stageToHash`) — `?focus=` round-trip; `src/lib/failure-fixes.test.ts` — `fixHref`; `server/src/routes/failure-taxonomy-fixes.test.ts` — the guard; `src/components/reasoning-overflow-toast.test.tsx`; extend `server/src/routes/failure-taxonomy.test.ts`'s `AnalyzerReasoningOverflowError` describe (Task 2.9) with a `fixes` assertion.
+- Modify: `src/lib/wiki-links.ts` — add `export function isWikiPage(value: string): value is WikiPage`, checking membership in the existing `WikiPage` union (a `Set` built from the same literals, not `Object.values` — the union is type-only, not a runtime object). `'Analysis-and-the-Analyzer'` is already in the union (`:18`, confirmed by reading the file) — this task adds no new page there, only the guard function. 3d adds the new endpoints page name when it creates `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md`.
+- Test (create): `src/lib/router.test.ts` (or the existing router test file, if one already covers `stageToHash`) — `?focus=` round-trip and `stageEqual`; `src/lib/failure-fixes.test.ts` — `fixHref`; `server/src/routes/failure-taxonomy-fixes.test.ts` — the guard; `src/components/reasoning-overflow-toast.test.tsx`; extend `server/src/routes/failure-taxonomy.test.ts`'s `AnalyzerReasoningOverflowError` describe (Task 2.9) with a `fixes` assertion; extend `src/store/analysis-stream-middleware.test.ts` with the persistent-toast case (below); extend `src/routes/index.test.tsx` with a `renderAtAdvanced` helper (below); extend `src/lib/wiki-links.test.ts` with `isWikiPage` cases (below); e2e (Step 8, below).
 
 **Interfaces:**
-- Produces:
+- Produces (all in `server/src/routes/failure-taxonomy.ts`):
   ```ts
-  // server/src/routes/failure-taxonomy-fixes.ts
   export interface AnalysisFailureFix {
     label: string;
     settingKey?: string;
-    endpointField?: { endpointId: string; field: string };
-    wikiHref?: string;
+    endpointField?: { endpointId: string; field: string };  // 3b+
+    wikiPage?: string;   // a page NAME, e.g. 'Analysis-and-the-Analyzer' — never an #anchor
+    reasoningSetting?: { engine: 'gemini' | 'ollama'; model: string };  // 5a
   }
   export function reasoningOverflowFixes(ctx: {
-    transport: 'ollama' | 'gemini'; // 'openai' arrives with endpoint fixes in 3b
+    transport: TransportKind;   // 'openai' returns [] until 3b
     model: string;
+    endpointId?: string;        // unused in 2b; 3b starts passing it
   }): AnalysisFailureFix[];
   ```
-  - Gemini: `{ label: 'Lower Gemini max input tokens per request', settingKey: 'analyzer.gemini.maxInputTokensPerRequest' }`, `{ label: 'Lower the Gemini output-heavy chunk size', settingKey: 'analyzer.gemini.outputHeavyChunkChars' }`, and — only when `analyzer.gemini.maxOutputTokens` is currently set to a NON-ZERO value below the model's known limit (`getCachedGeminiModelInfo(model)?.outputTokenLimit`; skip the fix silently when Auto or unknown) — `{ label: 'Raise Gemini max output tokens (or set it back to Auto)', settingKey: 'analyzer.gemini.maxOutputTokens' }`. All three carry `wikiHref: '/wiki/Analysis-and-the-Analyzer#when-a-model-thinks-past-its-output-limit'`.
-  - Ollama: `{ label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' }`, `{ label: 'Lower the stage-1/stage-2 local input fraction', settingKey: 'analyzer.stage1.localInputFraction' }` and the stage-2 twin, same `wikiHref`.
-  - The thinking window (`analyzer.gemini.thinkingIdleTimeoutMs`) never appears: it bounds silence, not output room, so it cannot fix an overflow (F7).
-- Consumes: `getCachedGeminiModelInfo` (Task 2.5), `allKnobs`/registry key set (`server/src/config/registry.ts`), `analyzerEndpointSchema` (wave 3 — this task's guard tolerates its absence in wave 2 by only checking `settingKey` against `allKnobs()`; the `endpointField` branch of the guard is inert until 3b adds the schema and is noted as such in the guard's own test).
+  **Settled: no mirrored server union.** `wikiPage` is a plain `string` on the
+  server, in `AnalysisFailureFix`, and in the OpenAPI schema — the server has
+  no reason to import or duplicate the frontend's `WikiPage` literal union.
+  The guard (below) is what keeps a server-side `wikiPage` honest: it asserts
+  the named file exists under `docs/wiki/`, not that the string is a member of
+  any TypeScript union. On the frontend, `fixHref`'s caller (each renderer)
+  narrows the untyped `string` with `isWikiPage(value): value is WikiPage`
+  (a new export from `src/lib/wiki-links.ts`, checking membership in the
+  existing `WikiPage` union — e.g. `Object.values` isn't right for a type-only
+  union; implement it as an explicit `Set` of the same literals, or a helper
+  that checks `page in WIKI_PAGE_SET` where `WIKI_PAGE_SET` is built once from
+  the union via a const array this task adds alongside it) BEFORE calling
+  `wikiUrl(page)`. An unknown page (one the guard would have caught server-side,
+  or a genuinely stale value from an older release still on disk) renders the
+  fix's `label` with no wiki link at all, rather than a broken URL.
+  - **Gemini fixes** (2b): `{ label: 'Lower Gemini max input tokens per request', settingKey: 'analyzer.gemini.maxInputTokensPerRequest', wikiPage: 'Analysis-and-the-Analyzer' }`; `{ label: 'Lower the Gemini output-heavy chunk size', settingKey: 'analyzer.gemini.outputHeavyChunkChars', wikiPage: 'Analysis-and-the-Analyzer' }`; conditionally — only when `analyzer.gemini.maxOutputTokens` is a NON-ZERO configured value below the model's known limit (`getCachedGeminiModelInfo(model)?.outputTokenLimit`; omit entirely when Auto (`0`) or the limit is unknown) — `{ label: 'Raise Gemini max output tokens (or set it back to Auto)', settingKey: 'analyzer.gemini.maxOutputTokens', wikiPage: 'Analysis-and-the-Analyzer' }`; and always, label-only, `{ label: 'Switch to a different analyzer model', wikiPage: 'Analysis-and-the-Analyzer' }` (F13 — no `settingKey`, so `fixHref` returns `null` and it renders as plain text).
+  - **Ollama fixes** (2b): `{ label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx', wikiPage: 'Analysis-and-the-Analyzer' }`; `{ label: 'Lower the stage-1 local input fraction', settingKey: 'analyzer.stage1.localInputFraction', wikiPage: 'Analysis-and-the-Analyzer' }`; `{ label: 'Lower the stage-2 local input fraction', settingKey: 'analyzer.stage2.localInputFraction', wikiPage: 'Analysis-and-the-Analyzer' }`; and the same label-only `'Switch to a different analyzer model'` fix.
+  - **`openai`** (2b): `return [];` — 3b (Task 3b.1b) adds the branch.
+  - The thinking window (`analyzer.gemini.thinkingIdleTimeoutMs`) never appears in either branch: it bounds silence, not output room, so it cannot fix an overflow (F7).
+- Consumes: `getCachedGeminiModelInfo` (Task 2.5), `allKnobs` (`server/src/config/registry.ts`), `AnalyzerReasoningOverflowError.transport` (`TransportKind`, contract).
 
-**Guard test (server/src/routes/failure-taxonomy-fixes.test.ts):**
+**Guard test (server/src/routes/failure-taxonomy-fixes.test.ts) — proven able to fail.**
 ```ts
+import { existsSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
-import { reasoningOverflowFixes } from './failure-taxonomy-fixes.js';
+import { reasoningOverflowFixes } from './failure-taxonomy.js';
 import { allKnobs } from '../config/registry.js';
 
-describe('reasoningOverflowFixes — every settingKey is a real registry key (#3084 wave 2b, F7)', () => {
-  it('Gemini and Ollama fixes only ever name a key allKnobs() actually has', () => {
+const CONTEXTS = [
+  { transport: 'gemini' as const, model: 'gemini-3.6-flash' },
+  { transport: 'ollama' as const, model: 'qwen3.5:9b' },
+  { transport: 'openai' as const, model: 'm', endpointId: 'lab' },
+];
+
+describe('reasoningOverflowFixes — every settingKey/wikiPage is real (#3084 wave 2b, F7)', () => {
+  it('every settingKey allKnobs() actually has, across every branch including the conditional one', () => {
     const keys = new Set(allKnobs().map((k) => k.key));
-    for (const ctx of [
-      { transport: 'gemini' as const, model: 'gemini-3.6-flash' },
-      { transport: 'ollama' as const, model: 'qwen3.5:9b' },
-    ]) {
+    // Force the CONDITIONAL Gemini maxOutputTokens fix to actually appear:
+    // without a real value below the model's limit, that branch never runs
+    // and the guard would silently skip checking its settingKey.
+    process.env.ANALYZER_MAX_OUTPUT_TOKENS = '4096'; // below gemini-3.6-flash's listed 65536 (Task 2.6 fixture)
+    try {
+      const gemini = reasoningOverflowFixes(CONTEXTS[0]);
+      expect(gemini.some((f) => f.settingKey === 'analyzer.gemini.maxOutputTokens')).toBe(true);
+      for (const ctx of CONTEXTS) {
+        for (const fix of reasoningOverflowFixes(ctx)) {
+          if (fix.settingKey) expect(keys.has(fix.settingKey), fix.settingKey).toBe(true);
+        }
+      }
+    } finally {
+      delete process.env.ANALYZER_MAX_OUTPUT_TOKENS;
+    }
+  });
+
+  it('every wikiPage names a file that exists under docs/wiki/', () => {
+    for (const ctx of CONTEXTS) {
       for (const fix of reasoningOverflowFixes(ctx)) {
-        if (fix.settingKey) expect(keys.has(fix.settingKey), fix.settingKey).toBe(true);
+        if (fix.wikiPage) expect(existsSync(`docs/wiki/${fix.wikiPage}.md`), fix.wikiPage).toBe(true);
       }
     }
   });
 
   it('never offers the thinking window as a fix (it bounds time, not output room)', () => {
-    for (const ctx of [
-      { transport: 'gemini' as const, model: 'gemini-3.6-flash' },
-      { transport: 'ollama' as const, model: 'qwen3.5:9b' },
-    ]) {
+    for (const ctx of CONTEXTS) {
       expect(reasoningOverflowFixes(ctx).map((f) => f.settingKey)).not.toContain(
         'analyzer.gemini.thinkingIdleTimeoutMs',
       );
     }
   });
+
+  it('openai returns no fixes yet (3b adds them)', () => {
+    expect(reasoningOverflowFixes(CONTEXTS[2])).toEqual([]);
+  });
 });
 ```
-This is the guard F7 asks for; each wave that adds a fix (3b endpoints, 5a
-reasoning-level, 5b payload) extends this same file rather than writing a new
-one — record that convention in this task's PR body so 3b's author finds it.
-
-**Copy ending (F7).** In the `AnalyzerReasoningOverflowError` branch (Task
-2.9's edit to `failure-taxonomy.ts`'s `classifyAnalysisFailure` — re-locate by
-`if (err instanceof AnalyzerReasoningOverflowError) {`, since Task 2.9's own
-other edits above it will have shifted its line number by the time this task
-runs), append `' Then resume — finished chapters are kept.'` to the returned
-`userMessage`, and attach
-`fixes: reasoningOverflowFixes({ transport: err.transport as 'gemini' | 'ollama', model: err.model })`
-on the returned object (the branch already returns a plain object literal from
-`withCopy`; spread it and add the field, since `withCopy`'s own signature stays
-untouched for every OTHER failure code). Update Task 2.9's existing test
-(`failure-taxonomy.test.ts`, `→ analyzer-reasoning-overflow, naming the Gemini
-max-output setting and the reasoning level`) with:
-```ts
-    expect(r.userMessage).toContain('Then resume — finished chapters are kept.');
-    expect(r.fixes).toBeDefined();
-    expect(r.fixes!.some((f) => f.settingKey === 'analyzer.gemini.maxInputTokensPerRequest')).toBe(true);
-```
+Mutation row (proves the guard can actually fail, per review): change the
+Gemini branch's `settingKey: 'analyzer.gemini.maxInputTokensPerRequest'` to
+`settingKey: 'analyzer.gemini.doesNotExist'`. Expected red: `every settingKey
+allKnobs() actually has, across every branch including the conditional one`
+(`keys.has('analyzer.gemini.doesNotExist')` is `false`). Restore it. Each wave
+that adds a fix (3b endpoints, 5a reasoning-level, 5b payload) appends to this
+same guard file — record that convention in this task's PR body.
 
 **Router (pure, tested).** `stageToHash`'s `'advanced'` case becomes:
 ```ts
@@ -5368,11 +5589,7 @@ max-output setting and the reasoning level`) with:
 ```
 Test (round-trip, no DOM): `stageToHash({ kind: 'advanced' })` → `'#/advanced'`;
 `stageToHash({ kind: 'advanced', focusKey: 'analyzer.gemini.maxInputTokensPerRequest' })`
-→ `'#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest'`. `AdvancedRoute`
-(not pure — needs the react-router test harness the existing `HelpRoute`
-tests already set up, per `src/routes/index.test.tsx`) reads
-`searchParams.get('focus') ?? undefined` into `focusKey`, mirroring
-`HelpRoute`'s `focusCode` exactly.
+→ `'#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest'`.
 
 `stageEqual` (`:79-97`) gains a branch beside the existing `'help'` one
 (`:93-95`, which compares `focusCode`):
@@ -5381,36 +5598,86 @@ tests already set up, per `src/routes/index.test.tsx`) reads
     return a.focusKey === b.focusKey;
   }
 ```
-placed directly after the `'help'` branch. Without it, navigating from one
-`#/advanced?focus=<key>` link to a different key while already on the
-Advanced Settings view would read as "the same stage" (today's `stageEqual`
-falls through to `return true` for two same-`kind` stages once `bookId`
-matches, i.e. both `undefined`), so the hydrate effect would not re-run and
-the scroll-and-highlight would not fire for the second link. Test: `stageEqual({ kind: 'advanced', focusKey: 'a' }, { kind: 'advanced', focusKey: 'b' })`
-→ `false`; `stageEqual({ kind: 'advanced' }, { kind: 'advanced' })` → `true`
-(both `undefined`, unchanged from today).
+placed directly after the `'help'` branch — this is the ONE `'advanced'`
+branch wave 5's Task 5.5c extends (comparing `reasoningFocus` too) rather than
+adding a second. Without it, navigating from one `#/advanced?focus=<key>`
+link to a different key while already on the Advanced Settings view would
+read as "the same stage" (today's `stageEqual` falls through to `return true`
+for two same-`kind` stages once `bookId` matches, i.e. both `undefined`), so
+the hydrate effect would not re-run and the scroll-and-highlight would not
+fire for the second link. Test: `stageEqual({ kind: 'advanced', focusKey: 'a' }, { kind: 'advanced', focusKey: 'b' })`
+→ `false`; `stageEqual({ kind: 'advanced' }, { kind: 'advanced' })` → `true`.
+
+`AdvancedRoute` (`src/routes/index.tsx:471-475`) — the ONE route wave 5's Task
+5.5c extends (reading `reasoningEngine`/`reasoningModel` too) rather than
+adding a second — becomes:
+```tsx
+function AdvancedRoute() {
+  const [searchParams] = useSearchParams();
+  const focusKey = searchParams.get('focus') ?? undefined;
+  useHydrateStage({ kind: 'advanced', focusKey }, [focusKey]);
+  return <AdvancedView />;
+}
+```
+mirroring `HelpRoute` (`:491-495`) exactly. Test (`src/routes/index.test.tsx`)
+— 46e62a34 has ONLY `SetupRoute`/`AnalysingRoute`/`BooksRoute` describes with
+`renderAtSetup`/`renderAtAnalysing` helpers and no `HelpRoute` case at all
+(confirmed by reading the file — do not cite a `HelpRoute` test as precedent,
+there isn't one), so this task adds the FIRST test for this pattern, modelled
+on `renderAtAnalysing` (`:181-195`):
+```tsx
+function renderAtAdvanced(store: ReturnType<typeof makeStore>, path = '/advanced') {
+  return render(
+    <Provider store={store}>
+      <MemoryRouter initialEntries={[path]}>
+        <Suspense fallback={<div data-testid="suspense-loading" />}>
+          <Routes>
+            <Route path="/advanced" element={<AdvancedRoute />} />
+          </Routes>
+        </Suspense>
+      </MemoryRouter>
+    </Provider>,
+  );
+}
+
+describe('AdvancedRoute — focus query param hydrates the stage (#3084 wave 2b, F7)', () => {
+  it('reads ?focus= into ui.stage.focusKey', () => {
+    const store = makeStore();
+    renderAtAdvanced(store, '/advanced?focus=analyzer.gemini.maxInputTokensPerRequest');
+    expect(store.getState().ui.stage).toMatchObject({
+      kind: 'advanced',
+      focusKey: 'analyzer.gemini.maxInputTokensPerRequest',
+    });
+  });
+
+  it('omits focusKey with no query param', () => {
+    const store = makeStore();
+    renderAtAdvanced(store);
+    expect(store.getState().ui.stage).toMatchObject({ kind: 'advanced' });
+    expect((store.getState().ui.stage as { focusKey?: string }).focusKey).toBeUndefined();
+  });
+});
+```
 
 **Shared link helper (avoids duplicating the link logic in two renderers).**
-`analysing.tsx`'s "What to do:" blocks and the new toast component both render
-the same "How to fix" list, and later waves add more fix shapes (3d's
-`endpointField`, 5a's reasoning-level setting) — each of which is another kind
-of link. Rather than branch on `fix.settingKey`/`fix.endpointField`/etc.
-inline in both places (and every renderer having to stay in sync as waves add
-branches), this task creates one small pure module both renderers call:
+`analysing.tsx`'s run-level "What to do:" block and the new toast component
+both render the same "How to fix" list, and later waves add more fix shapes
+(3d's `endpointField`, 5a's `reasoningSetting`) — each another kind of link.
+Rather than branch on `fix.settingKey`/`fix.endpointField`/etc. inline in both
+places, this task creates one small pure module both renderers call:
 ```ts
 // src/lib/failure-fixes.ts
 import { stageToHash } from './router.js';
 import type { components } from './api-types.js';
 
-/** The openapi-generated shape, matching `src/lib/types.ts`'s own convention
-    for a schema this repo shares between client and server (e.g. `Character
-    = components['schemas']['Character'] & { … }`, `types.ts:3`). */
 type AnalysisFailureFix = components['schemas']['AnalysisFailureFix'];
 
-/** #3084 F7 — one place that turns a structured fix into a clickable link (or
-    none, for a fix that is plain text, e.g. "switch model"). 3d adds the
-    endpointField branch, 5a the reasoningSetting branch; neither renderer
-    changes when they land. */
+/** #3084 F7 — one place that turns a structured fix's settingKey into a
+    clickable link (or null, for a label-only fix, e.g. "switch model"). 3d
+    adds the endpointField branch, 5a the reasoningSetting branch; neither
+    renderer changes when they land. The wiki link (fix.wikiPage) is built
+    separately by each renderer via wikiUrl() from src/lib/wiki-links.ts —
+    that helper already exists and this module has no reason to wrap it. */
 export function fixHref(fix: AnalysisFailureFix): string | null {
   if (fix.settingKey) return stageToHash({ kind: 'advanced', focusKey: fix.settingKey });
   return null;
@@ -5428,22 +5695,21 @@ describe('fixHref (#3084 wave 2b, F7)', () => {
     );
   });
 
-  it('a fix with no link (e.g. "switch model") returns null', () => {
-    expect(fixHref({ label: 'Switch to a faster analyzer model' })).toBeNull();
+  it('a label-only fix (e.g. "switch model") returns null', () => {
+    expect(fixHref({ label: 'Switch to a different analyzer model' })).toBeNull();
   });
 });
 ```
 Mutation row: change `if (fix.settingKey) return …;` to `return
-stageToHash({ kind: 'advanced', focusKey: fix.settingKey });` unconditionally
-(drop the guard). Expected red: `fixHref … > a fix with no link … returns
-null` (receives `'#/advanced'` instead of `null` — `stageToHash`'s own `qs`
-logic treats an `undefined` `focusKey` as "no query string" and still
-returns a valid, if wrong, href rather than throwing, so only the return
-value catches this, not a crash). Restore it.
+stageToHash({ kind: 'advanced', focusKey: fix.settingKey });` unconditionally.
+Expected red: `fixHref … > a label-only fix … returns null` (receives
+`'#/advanced'` instead of `null` — `stageToHash`'s own `qs` logic treats an
+`undefined` `focusKey` as "no query string" and still returns a valid, if
+wrong, href rather than throwing, so only the return value catches this, not
+a crash). Restore it.
 
-**Rendering and the persistent notification.** In `analysing.tsx`, both
-"What to do:" blocks (`:1342-1344`, `:1592-1594`) gain, directly below the
-`remediation` paragraph:
+**Rendering — run-level only (F7, per review).** In `analysing.tsx`'s
+run-level "What to do:" block (`:1342`-area) only:
 ```tsx
 {error.fixes && error.fixes.length > 0 && (
   <div className="mt-2">
@@ -5451,10 +5717,11 @@ value catches this, not a crash). Restore it.
     <ul className="list-disc pl-5">
       {error.fixes.map((f) => {
         const href = fixHref(f);
+        const wikiPage = f.wikiPage && isWikiPage(f.wikiPage) ? f.wikiPage : null;
         return (
           <li key={f.label}>
             {href ? <a href={href}>{f.label}</a> : f.label}
-            {f.wikiHref && <a href={f.wikiHref} className="ml-1 text-xs">(why?)</a>}
+            {wikiPage && <a href={wikiUrl(wikiPage)} className="ml-1 text-xs">(why?)</a>}
           </li>
         );
       })}
@@ -5462,118 +5729,256 @@ value catches this, not a crash). Restore it.
   </div>
 )}
 ```
-`ReasoningOverflowToast` (below) imports `fixHref` the same way and renders the
-identical `href ? <a> : plain text` branch — neither component computes a link
-itself once this task lands, and neither will need to change when 3d/5a add
-new fix shapes, since `fixHref` grows a branch instead.
+importing `wikiUrl` and `isWikiPage` from `../lib/wiki-links`. `f.wikiPage` is
+an untyped `string` off the wire (server sends a plain string; see the
+Interfaces section above) — `isWikiPage` narrows it to the frontend's
+`WikiPage` union before `wikiUrl` ever sees it, so a stale or malformed page
+name renders the fix's label with no "(why?)" link at all rather than a
+broken href. The per-chapter block
+(`:1592-1594`) is untouched — see the Files list bullet above for why it can
+never have `fixes` to render. `ReasoningOverflowToast` (below) imports
+`fixHref`/`wikiUrl` the same way and renders the identical branch.
 
-A new effect, alongside the existing `setError` call in the catch block
-(`:655-660`):
+Test (`src/views/analysing.test.tsx`, using whatever helper this file's other
+error-rendering tests already use to drive the mocked stream into the catch
+block that calls `setError`):
 ```tsx
-useEffect(() => {
-  if (error?.code !== 'analyzer-reasoning-overflow') return;
-  dispatch(
-    notificationsActions.pushToast({
-      kind: 'error',
-      message: error.message,
-      fixes: error.fixes,
-      dedupeKey: `analysis-reasoning-overflow-${manuscriptId}`,
-    }),
+it('renders a "How to fix" list in the run-level block when the error carries fixes (#3084 F7)', async () => {
+  mockAnalyseRejectsWith(
+    new AnalysisError('boom', 'analyzer-reasoning-overflow', undefined, undefined, undefined, 'Then resume — finished chapters are kept.', [
+      { label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' },
+      { label: 'Switch to a different analyzer model' },
+    ]),
   );
-}, [error, manuscriptId, dispatch]);
+  renderAnalysingView(); // this file's existing render helper
+  await screen.findByText('How to fix:');
+  expect(screen.getByRole('link', { name: 'Raise Ollama num_ctx (the binding limit)' })).toHaveAttribute(
+    'href',
+    '#/advanced?focus=analyzer.ollama.numCtx',
+  );
+  expect(screen.getByText('Switch to a different analyzer model')).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'Switch to a different analyzer model' })).toBeNull();
+});
+
+it('renders no "How to fix" list when the error carries no fixes (unchanged behaviour)', async () => {
+  mockAnalyseRejectsWith(new AnalysisError('boom', 'cast_incomplete'));
+  renderAnalysingView();
+  await screen.findByText(/Analysis failed|Daily free-tier quota exhausted/);
+  expect(screen.queryByText('How to fix:')).toBeNull();
+});
+
+it('a fix carrying an unrecognised wikiPage renders the label with no "(why?)" link (#3084 F7, wiki-links review)', async () => {
+  mockAnalyseRejectsWith(
+    new AnalysisError('boom', 'analyzer-reasoning-overflow', undefined, undefined, undefined, 'x', [
+      { label: 'Switch to a different analyzer model', wikiPage: 'Not-A-Real-Wiki-Page' },
+    ]),
+  );
+  renderAnalysingView();
+  await screen.findByText('Switch to a different analyzer model');
+  expect(screen.queryByText('(why?)')).toBeNull();
+});
 ```
+Direct unit test (`src/lib/wiki-links.test.ts`, extending the existing file):
+```ts
+describe('isWikiPage (#3084 wave 2b, F7)', () => {
+  it('accepts every real page, including Analysis-and-the-Analyzer', () => {
+    expect(isWikiPage('Analysis-and-the-Analyzer')).toBe(true);
+    expect(isWikiPage('Advanced-Settings')).toBe(true);
+  });
+
+  it('rejects an unknown string', () => {
+    expect(isWikiPage('Not-A-Real-Wiki-Page')).toBe(false);
+  });
+});
+```
+Mutation row: change `isWikiPage`'s body to `return true;` unconditionally.
+Expected red: `isWikiPage … > rejects an unknown string` and the
+`analysing.test.tsx` case above (`(why?)` now renders for the bogus page).
+Restore it.
+
+`mockAnalyseRejectsWith`/`renderAnalysingView` are placeholders for whatever
+this file's existing tests already call to inject a rejected analyse stream
+and mount the view — match their real names at implementation time rather
+than inventing new ones.
+
+**The persistent toast — pushed from the middleware, not this view.** No
+effect is added to `analysing.tsx` for this. The middleware bullet in Files
+above is the ONLY dispatch site for the reasoning-overflow toast; `error`
+state here exists purely for this view's own inline rendering while mounted.
 `ToastStack` routes a `t.fixes` toast to `<ReasoningOverflowToast>` (new,
 mirroring `VoiceNudgeToast`'s exemption from `ToastItem`'s 6 s
-`AUTO_DISMISS_MS` timer — `toast-stack.tsx:32-34`'s ternary gains a third arm,
-checked before the `nudge` arm since the two fields are mutually exclusive in
-practice but the check order should not rely on that): it renders the same
-"How to fix" list plus a dismiss button (`dispatch(notificationsActions.dismissToast(toast.id))`).
-Because toasts live in the global `notifications` slice, this toast is visible
-from any view until dismissed — that IS "survives navigation": no new
-persistence mechanism is needed, only exemption from the existing 6 s timer.
+`AUTO_DISMISS_MS` timer): it renders the same "How to fix" list plus a
+dismiss button (`dispatch(notificationsActions.dismissToast(toast.id))`).
+Because toasts live in the global `notifications` slice and the middleware
+(not the view) pushes this one, it is visible from any view until dismissed —
+navigating away from the Analysing view neither removes it nor re-pushes it.
 
-**Advanced Settings scroll-and-highlight.** `AdvancedView` (or its route
-wrapper) reads `focusKey` and, once the matching descriptor's group section is
-open (may need to programmatically expand `SettingsAccordion` to that
-section first) and the row has mounted, calls
-`document.getElementById('knob-' + focusKey)?.scrollIntoView({ block: 'center' })`
-and toggles a highlight class for ~2 s via `setTimeout`. This needs `id={'knob-' + d.key}`
-added to `OverrideRow`'s and `PromptRow`'s root element — neither has a DOM id
-today (`advanced.tsx:540-553`, `132`-ish for `PromptRow`; re-locate exactly
-when implementing, since this task did not read those two components' JSX in
-full).
+Test (`src/store/analysis-stream-middleware.test.ts`, extending the existing
+suite):
+```ts
+it('a reasoning-overflow AnalysisError pushes ONE persistent toast carrying fixes, replacing the plain one (#3084 F7)', async () => {
+  const fixes = [{ label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' }];
+  // … drive the middleware's stream to reject with
+  // new AnalysisError('…', 'analyzer-reasoning-overflow', undefined, undefined, undefined, undefined, fixes)
+  // (see the existing suite's helper for how an AnalysisError rejection is injected)
+  const toasts = store.getState().notifications.toasts;
+  expect(toasts).toHaveLength(1);
+  expect(toasts[0]).toMatchObject({ dedupeKey: 'analysis-stream', fixes });
+});
+
+it('a non-reasoning-overflow AnalysisError still pushes the plain toast, with no fixes field (unchanged behaviour)', async () => {
+  // … reject with an AnalysisError whose code is, say, 'cast_incomplete' …
+  const toasts = store.getState().notifications.toasts;
+  expect(toasts).toHaveLength(1);
+  expect(toasts[0].fixes).toBeUndefined();
+});
+```
+Mutation row: change the ternary's condition from
+`e.code === 'analyzer-reasoning-overflow'` to `true`. Expected red: `a
+non-reasoning-overflow AnalysisError still pushes the plain toast, with no
+fixes field` (the toast now carries `fixes: undefined` explicitly passed —
+adjust the assertion if this reads as equivalent; the REAL red this mutation
+proves is `'cast_incomplete'`'s toast picking up the reasoning-overflow
+RENDERING PATH in `ReasoningOverflowToast` when it has no `fixes` to show,
+which the component test below pins directly). Restore it.
+
+**Advanced Settings scroll-and-highlight — mirrors `help.tsx`'s existing
+pattern exactly**, rather than `document.getElementById` (jsdom-unsafe
+without the optional chaining `help.tsx:167,221` already establishes as this
+codebase's convention):
+```tsx
+const focusedRef = useRef<HTMLDivElement | null>(null);
+const scrolledForRef = useRef<string | undefined>(undefined);
+useEffect(() => {
+  if (!focusKey) return;
+  if (scrolledForRef.current === focusKey) return;
+  if (focusedRef.current) {
+    focusedRef.current.scrollIntoView?.({ block: 'center' });
+    scrolledForRef.current = focusKey;
+  }
+}, [focusKey, /* the section-expanded state, so this re-runs once the row actually mounts */]);
+```
+with `ref={d.key === focusKey ? focusedRef : undefined}` on the matching
+`OverrideRow`/`PromptRow`, and a highlight class applied for ~2 s keyed off
+`scrolledForRef.current === focusKey` (a `useState` toggle cleared by
+`setTimeout`, same shape as `help.tsx`'s). If `focusKey`'s row's group starts
+collapsed, this effect must also expand that group first — mirror
+`help.tsx:210-218`'s late-hydration merge into `expanded` state.
+
+Test (`src/views/advanced.test.tsx`):
+```tsx
+it('scrolls the focused row into view and highlights it once (#3084 wave 2b, F7)', () => {
+  const scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView = scrollIntoView; // jsdom has none; stub it directly, same as other view tests do
+  renderAdvancedAt({ focusKey: 'analyzer.gemini.maxInputTokensPerRequest' }); // use whatever render helper this file's other tests already use
+  expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  expect(screen.getByLabelText(/Gemini max input tokens per request/i).closest('[data-highlighted]')).toBeTruthy();
+});
+```
 
 **Wiki section.** `docs/wiki/Analysis-and-the-Analyzer.md`, new section "When
 a model thinks past its output limit": what a reasoning overflow is (the model
 spent its whole output budget on hidden reasoning and returned no answer text
 — splitting the chapter cannot help, since the same settings overflow again on
 a smaller chunk too), the settings that fix it per engine (mirroring
-`reasoningOverflowFixes`'s two branches), and a note that the thinking window
-is a different knob that bounds silence, not output room. Link it from the
-`wikiHref` above; the endpoint half of this same heading is 3d's job (F3), not
-this task's.
+`reasoningOverflowFixes`'s branches, including "switch model"), and a note
+that the thinking window is a different knob that bounds silence, not output
+room. The endpoint half of this same heading is 3d's job (F3), not this
+task's.
 
-- [ ] **Step 1: Write the failing tests** — the guard test above; the router
-  round-trip; `failure-taxonomy.test.ts`'s extended assertions; a
-  `reasoning-overflow-toast.test.tsx` asserting no timer fires within 6 s of
-  mount (fake clock) and that a dismiss button removes the toast.
+- [ ] **Step 1: Write the failing tests** — the guard test (proven able to
+  fail, above); the router round-trip + `stageEqual`; the `AdvancedRoute`
+  tests; `failure-taxonomy.test.ts`'s extended assertions; the middleware's
+  two new cases; a `reasoning-overflow-toast.test.tsx` asserting no timer
+  fires within 6 s of mount (fake clock) and that a dismiss button removes
+  the toast; `analysing.test.tsx`'s run-level "How to fix" rendering case;
+  `advanced.test.tsx`'s scroll-and-highlight case.
 - [ ] **Step 2: Run and confirm each fails** — `reasoningOverflowFixes is not
-  a function`; the router test fails on the unchanged `'#/advanced'` case;
-  `failure-taxonomy.test.ts`'s new assertions fail (`r.fixes` is `undefined`,
-  no "Then resume" text); the toast test fails since the component doesn't
-  exist yet.
+  a function`; the router/`stageEqual` tests fail on the unchanged
+  `'#/advanced'` case and the missing branch; the `AdvancedRoute` tests fail
+  (stage never gains `focusKey`); `failure-taxonomy.test.ts`'s new assertions
+  fail (`r.fixes` is `undefined`); the middleware tests fail (one toast, no
+  `fixes`, for BOTH cases — the branch doesn't exist yet); the toast/view
+  tests fail since neither component/behaviour exists yet.
 - [ ] **Step 3: Implement** — per the Files/Interfaces above, in this order:
-  `failure-taxonomy-fixes.ts` → the `failure-taxonomy.ts` branch edit → the
-  two `analysis.ts` terminal sites → the openapi schema + `npm run
-  openapi:types` → `types.ts` / `router.ts` / `routes/index.tsx` → the
-  notifications-slice / toast-stack / new toast component → `analysing.tsx` →
+  `failure-taxonomy.ts`'s new exports → its branch edit → `analysis.ts`'s two
+  terminal sites + the `#3004` last-outcome path → `analysis-state.ts` → the
+  openapi schema + `npm run openapi:types` → `types.ts` / `router.ts` /
+  `routes/index.tsx` → `analysis-slice.ts` → the notifications-slice /
+  toast-stack / new toast component → the middleware → `analysing.tsx` →
   `advanced.tsx` → the wiki section.
 - [ ] **Step 4: Run and confirm it passes** —
   ```
   node scripts/tests/knob-docs-sync.test.mjs
-  npm --prefix server run test -- src/routes/failure-taxonomy.test.ts src/routes/failure-taxonomy-fixes.test.ts src/routes/analysis.test.ts
+  npm --prefix server run test -- src/routes/failure-taxonomy.test.ts src/routes/failure-taxonomy-fixes.test.ts src/routes/analysis.test.ts src/store/analysis-state.test.ts
   npm run openapi:types
-  npx vitest run src/lib/router.test.ts src/lib/failure-fixes.test.ts src/routes/index.test.tsx src/components/reasoning-overflow-toast.test.tsx src/views/analysing.test.tsx src/views/advanced.test.tsx src/store/notifications-slice.test.ts
+  npx vitest run src/lib/router.test.ts src/lib/failure-fixes.test.ts src/lib/wiki-links.test.ts src/routes/index.test.tsx src/components/reasoning-overflow-toast.test.tsx src/views/analysing.test.tsx src/views/advanced.test.tsx src/store/notifications-slice.test.ts src/store/analysis-stream-middleware.test.ts src/store/analysis-slice.test.ts
   npm run typecheck
   ```
-- [ ] **Step 5: Mutation proof** (lighter than usual, per the scope note):
-  1. In `reasoningOverflowFixes`, return `[]` unconditionally. Expected red:
-     the extended `failure-taxonomy.test.ts` assertion (`r.fixes` is `[]`, no
-     `maxInputTokensPerRequest` entry). Restore it.
-  2. Delete the `fix.settingKey` existence check's `keys.has` call (replace
-     with `true`). Expected red: none — this IS the check the guard test
-     exists to run; deleting it makes the guard vacuous, which is why the
-     guard test asserts on `allKnobs()` directly rather than trusting the
-     function's own claim. Restore it, and note in the PR body that this
-     mutation cannot be proven red by a unit test alone; it is caught by
-     inspection (the guard's whole purpose is invalidated, not one behaviour).
-  3. In `ToastStack`, remove the `t.fixes` branch so a fixes-toast falls
-     through to plain `ToastItem`. Expected red: the toast test (`AUTO_DISMISS_MS`
-     fires within 6 s). Restore it.
-  4. In `stageToHash`'s `'advanced'` case, drop the `qs` suffix. Expected red:
+- [ ] **Step 5: Mutation proof** (lighter than usual, per the scope note; the
+  guard's own mutation row and `fixHref`'s are already given above with their
+  test blocks):
+  1. In `reasoningOverflowFixes`, return `[]` unconditionally for every
+     transport. Expected red: the extended `failure-taxonomy.test.ts`
+     assertion (`r.fixes` is `[]`, no `maxInputTokensPerRequest` entry).
+     Restore it.
+  2. In `ToastStack`, remove the `t.fixes` branch so a fixes-toast falls
+     through to plain `ToastItem`. Expected red: the toast test
+     (`AUTO_DISMISS_MS` fires within 6 s). Restore it.
+  3. In `stageToHash`'s `'advanced'` case, drop the `qs` suffix. Expected red:
      the router round-trip test. Restore it.
-  5. Delete the appended `' Then resume — finished chapters are kept.'` from
-     the `AnalyzerReasoningOverflowError` branch's `userMessage`. Expected
-     red: the extended `failure-taxonomy.test.ts` assertion (`r.userMessage`
-     no longer contains that sentence). Restore it.
-  6. In `fixHref`, change `if (fix.settingKey) return …;` to `return
-     stageToHash({ kind: 'advanced', focusKey: fix.settingKey });`
-     unconditionally. Expected red: `fixHref … > a fix with no link … returns
-     null`. Restore it.
+  4. In the middleware's `AnalysisError` branch, change
+     `e.code === 'analyzer-reasoning-overflow'` to `false`. Expected red: `a
+     reasoning-overflow AnalysisError pushes ONE persistent toast carrying
+     fixes …` (the toast carries no `fixes`). Restore it.
+  5. In `endJob`, drop `fixes` from the object passed to
+     `writeAnalysisLastOutcome`. Expected red: an `analysis-state.test.ts`
+     case asserting the written file's `fixes` field round-trips (add one,
+     mirroring the existing last-outcome persistence tests at
+     `analysis-state.test.ts:175-` — read that describe block's shape before
+     writing the new case).
+  6. In `stageEqual`, delete the new `'advanced'` branch. Expected red:
+     `stageEqual({ kind: 'advanced', focusKey: 'a' }, { kind: 'advanced', focusKey: 'b' })`
+     reads `true` instead of `false`. Restore it.
+  7. In `analysing.tsx`'s run-level block, change the guard from
+     `error.fixes && error.fixes.length > 0` to `false`. Expected red:
+     `renders a "How to fix" list in the run-level block when the error
+     carries fixes (#3084 F7)` (`screen.findByText('How to fix:')` never
+     resolves). Restore it.
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy-fixes.ts server/src/routes/failure-taxonomy-fixes.test.ts server/src/routes/failure-taxonomy.test.ts server/src/routes/analysis.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts src/lib/types.ts src/lib/router.ts src/lib/failure-fixes.ts src/lib/failure-fixes.test.ts src/routes/index.tsx src/store/notifications-slice.ts src/components/toast-stack.tsx src/components/reasoning-overflow-toast.tsx src/components/reasoning-overflow-toast.test.tsx src/views/analysing.tsx src/views/advanced.tsx docs/wiki/Analysis-and-the-Analyzer.md
+git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy-fixes.test.ts server/src/routes/failure-taxonomy.test.ts server/src/routes/analysis.ts server/src/store/analysis-state.ts server/src/store/analysis-state.test.ts openapi.yaml src/lib/api-types.ts src/lib/api.ts src/lib/types.ts src/lib/router.ts src/lib/failure-fixes.ts src/lib/failure-fixes.test.ts src/lib/wiki-links.ts src/lib/wiki-links.test.ts src/routes/index.tsx src/routes/index.test.tsx src/store/analysis-slice.ts src/store/notifications-slice.ts src/store/analysis-stream-middleware.ts src/store/analysis-stream-middleware.test.ts src/components/toast-stack.tsx src/components/reasoning-overflow-toast.tsx src/components/reasoning-overflow-toast.test.tsx src/views/analysing.tsx src/views/analysing.test.tsx src/views/advanced.tsx src/views/advanced.test.tsx docs/wiki/Analysis-and-the-Analyzer.md
 git commit -m "feat(server,frontend,openapi): point a reasoning-overflow failure at the settings that fix it (#3084)"
 ```
+- [ ] **Step 7: Regression plan.** Update `docs/features/284-openai-compatible-analyzer.md` with this behaviour (the "How to fix" list, the persistent notification, the deep link) as a new invariant.
+- [ ] **Step 8: Playwright e2e (mock mode).** New spec under `e2e/`, in the
+  existing mock-mode harness (port 5174): seed a mock SSE fixture (hand-authored,
+  since ordinary mock data cannot organically produce this failure — see the
+  `api-types.ts` Files bullet above) that emits a terminal `kind: 'error',
+  code: 'analyzer-reasoning-overflow'` event carrying `fixes` for a book under
+  test. Assert: (1) the Analysing view's run-level "What to do:" block shows a
+  "How to fix" list with at least one link; (2) clicking a link navigates to
+  `#/advanced` and the corresponding row is visible and carries the highlight
+  marker within a short wait; (3) navigating back to the book list and then
+  to a different view still shows the toast (or, if the toast auto-clears on
+  a fresh mock-data reset between specs, assert it survives at least one
+  in-app navigation within the same spec, since the mock harness may not
+  preserve it across a full page reload the way a real backend's stream
+  would — confirm which is actually the case for THIS harness before writing
+  the assertion, rather than assuming). This spec is new coverage this task's
+  earlier draft only promised in prose (the spec's own Testing section) without
+  ever writing it.
 
 **Tests this task could break:**
 - `failure-taxonomy.test.ts`'s `AnalyzerReasoningOverflowError` describe (Task 2.9) — extended, not replaced;
-- `src/routes/index.test.tsx` (a new `AdvancedRoute` search-param case joins the existing `HelpRoute` ones);
+- `src/routes/index.test.tsx` — the FIRST `AdvancedRoute` case in this file (there is no prior one to join);
 - `toast-stack.test.tsx` (if one exists) and any test asserting `ToastStack`'s child count/shape for a plain error toast;
-- `analysing.test.tsx`'s existing "What to do:" assertions, which must still pass with no `fixes` present (the new block is conditional on `error.fixes?.length`);
-- anything importing `src/lib/router.ts` for its exports — `failure-fixes.ts` adds a new import of `stageToHash` from there, so a circular-import check (`npm run check:cycles`) is worth an extra look even though `router.ts` itself imports nothing from `src/lib/`.
+- `analysing.test.tsx`'s existing "What to do:" assertions, which must still pass with no `fixes` present;
+- `analysis-stream-middleware.test.ts`'s existing generic-`AnalysisError` case, which must still push exactly one plain toast for a non-reasoning-overflow code;
+- `analysis-state.test.ts`'s existing last-outcome round-trip cases, which must still pass with `fixes` absent (optional field);
+- anything importing `src/lib/router.ts` for its exports — `failure-fixes.ts` adds a new import of `stageToHash` from there; `npm run check:cycles` is worth an extra look even though `router.ts` imports nothing from `src/lib/`.
 
-**Branch scope (settled).** The PR 2b branch is `feat/server,frontend-3084-w2b-output-cap` (renamed above) — this task is why: it lands real `.tsx` component code, not just server+openapi+frontend-help. The final Ship-PR-2b commit/PR title's scope should read `feat(server,frontend):` (or `feat(server,openapi,frontend):` if the reviewer wants openapi called out explicitly per CONTRIBUTING.md's multi-scope syntax) rather than `feat(server):` alone — Task 2.10's own commit-message lines below still say `feat(server, ...)` per task and are unaffected individually; only the PR's own title, not each task commit, needs the wider scope.
+**Branch (settled).** The PR 2b branch is `feat/server-3084-w2b-output-cap` — unchanged; branch names are single-scope (`scripts/lib/branch-name.mjs`'s `SCOPE_GROUP`), so this task's frontend work does NOT widen it. Only the PR title and each commit subject use `feat(server,openapi,frontend):`.
 
 ### Task 2.10: Ship PR 2b
 
@@ -5624,12 +6029,12 @@ Settings rows need no frontend change: `src/views/advanced.tsx` renders every kn
 
 `docs/release-notes-next.md`, appended as the last bullet of `## 🗣️ Analyzer, script review & manuscript`. Use the real PR numbers of 2a and 2b.
 ```markdown
-- **Gemini output cap is Auto, thinking models get a thinking window instead of the 45 s watchdog, requests have a ceiling, and reasoning overflow stops new spend** — `analyzer.gemini.maxOutputTokens` (`ANALYZER_MAX_OUTPUT_TOKENS`) now defaults to `0` = Auto: the model's `outputTokenLimit` from a 10-minute cached `models.list()` (`catalog/gemini-catalog.ts`), `8192` when the listing is unavailable; an explicit value keeps its meaning and is clamped to the listed limit. The listing is warmed before each request by a warm-up bounded at 10 s and shared by concurrent requests: pause releases that request at once, and the listing is cancelled only when no request still waits. A timeout falls back to `8192`, and cached limits are only ever served for the current API key. Thinking Gemini models (a static id rule: Gemini 2.5 Pro and 2.5 Flash, and every 3.x) request `thinkingConfig.includeThoughts`, so thought parts feed the chunk heartbeat; `thoughtsTokenCount` is recorded as reasoning tokens only on those requests. A new `analyzer.gemini.thinkingIdleTimeoutMs` (`GEMINI_THINKING_IDLE_MS`, default `0` = automatic, maximum 290 000 because the SDK's `fetch` carries undici's fixed 300 s timeouts) bounds every silent gap before a request's answer text starts, including the wait for the first chunk and each gap between thought parts: 120 000 ms for a thinking model, the existing 45 s idle window for any other; a positive value applies to every model. Running out of it fails once as `analyzer-timeout`, naming the setting, with no retry; a model that does not think keeps today's idle retry, and once the answer text starts the 45 s idle watchdog is unchanged. Every Gemini request attempt is bounded by `analyzer.gemini.requestCeilingMs` (`ANALYZER_GEMINI_REQUEST_CEILING_MS`, 30 min) and fails as `analyzer-timeout`. Each attempt logs `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…`, with no request or response content. A `length`/`MAX_TOKENS` finish with no answer text and reasoning evidence fails as `analyzer-reasoning-overflow` instead of splitting, and stops new spend: the analysis run ends, and the job starts no new chapter, escalation window or non-story classification call, while chapters already calling the model finish and are cached for resume; script-review, emotion and instruct passes stop as they do on a content block or a daily quota; the attribution eval's review run rethrows it; an attribution-escalation call that overflows skips its window, stops every later escalation window in the job, and ends the run the same way: the job starts no further chapter in any pool (Phase 0, Phase 1 or the subset retry) and halts with `analyzer-reasoning-overflow`, while chapters already dispatched finish and cache. An empty `MAX_TOKENS` with no evidence (Gemma) still splits. An empty Ollama response at the context limit now splits the chunk (or fails as reasoning overflow when the model was thinking) instead of failing as an empty response; its copy names `num_ctx`, the binding limit. **Budget change:** the Gemini per-request input cap is now `min(analyzer.gemini.maxInputTokensPerRequest, the model's TPM)`, so a `GEMINI_TPM_<SLUG>` env var or a saved `rate.tpm.gemma*` override below 12000 now shrinks chunk bodies to fit it; defaults are unchanged. Chunk budgets resolve from an `EngineCapacity` descriptor, pinned byte-identical at defaults by a fixture captured from `main`. (#<2a>, #<2b>, #3084)
+- **Gemini output cap is Auto, thinking models get a thinking window instead of the 45 s watchdog, requests have a ceiling, and reasoning overflow stops new spend** — `analyzer.gemini.maxOutputTokens` (`ANALYZER_MAX_OUTPUT_TOKENS`) now defaults to `0` = Auto: the model's `outputTokenLimit` from a 10-minute cached `models.list()` (`catalog/gemini-catalog.ts`), `8192` when the listing is unavailable; an explicit value keeps its meaning and is clamped to the listed limit. The listing is warmed before each request by a warm-up bounded at 10 s and shared by concurrent requests: pause releases that request at once, and the listing is cancelled only when no request still waits. A timeout falls back to `8192`, and cached limits are only ever served for the current API key. Thinking Gemini models (a static id rule: Gemini 2.5 Pro and 2.5 Flash, and every 3.x) request `thinkingConfig.includeThoughts`, so thought parts feed the chunk heartbeat; `thoughtsTokenCount` is recorded as reasoning tokens only on those requests. A new `analyzer.gemini.thinkingIdleTimeoutMs` (`GEMINI_THINKING_IDLE_MS`, default `0` = automatic, maximum 290 000 because the SDK's `fetch` carries undici's fixed 300 s timeouts) bounds every silent gap before a request's answer text starts, including the wait for the first chunk and each gap between thought parts: 120 000 ms for a thinking model, the existing 45 s idle window for any other; a positive value applies to every model. Running out of it fails once as `analyzer-timeout`, naming the setting, with no retry; a model that does not think keeps today's idle retry, and once the answer text starts the 45 s idle watchdog is unchanged. Every Gemini request attempt is bounded by `analyzer.gemini.requestCeilingMs` (`ANALYZER_GEMINI_REQUEST_CEILING_MS`, 30 min) and fails as `analyzer-timeout`. Each attempt logs `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…`, with no request or response content. A `length`/`MAX_TOKENS` finish with no answer text and reasoning evidence fails as `analyzer-reasoning-overflow` instead of splitting, and stops new spend: the analysis run ends, and the job starts no new chapter, escalation window or non-story classification call, while chapters already calling the model finish and are cached for resume; script-review, emotion and instruct passes stop as they do on a content block or a daily quota; the attribution eval's review run rethrows it; an attribution-escalation call that overflows skips its window, stops every later escalation window in the job, and ends the run the same way: the job starts no further chapter in any pool (Phase 0, Phase 1 or the subset retry) and halts with `analyzer-reasoning-overflow`, while chapters already dispatched finish and cache. An empty `MAX_TOKENS` with no evidence (Gemma) still splits. An empty Ollama response at the context limit now splits the chunk (or fails as reasoning overflow when the model was thinking) instead of failing as an empty response; its copy names `num_ctx`, the binding limit. **Budget change:** the Gemini per-request input cap is now `min(analyzer.gemini.maxInputTokensPerRequest, the model's TPM)`, so a `GEMINI_TPM_<SLUG>` env var or a saved `rate.tpm.gemma*` override below 12000 now shrinks chunk bodies to fit it; defaults are unchanged. `analyzer.gemini.maxInputTokensPerRequest`'s own maximum is lifted from 60 000 to 1 000 000 to match, since Gemini 3.x accepts up to 1M input tokens. Chunk budgets resolve from an `EngineCapacity` descriptor, pinned byte-identical at defaults by a fixture captured from `main`. **The failure names what happened:** a reasoning-overflow failure now names the chapter, model and engine, and its `remediation` lists concrete settings to raise — each rendered in the Analysing view as a "How to fix" list of deep links straight to the relevant Advanced Settings row (`#/advanced?focus=<key>`, which scrolls to and briefly highlights that row), plus a persistent toast that survives navigating away until dismissed — ending "then resume — finished chapters are kept". (#<2a>, #<2b>, #3084)
 ```
 
 `RELEASE_NOTES.md`, a new first bullet under `# Castwright 1.15.0`:
 ```markdown
-- **A Gemini model that thinks before it answers no longer stalls on a long chapter.** Some Gemini models reason before replying, and that reasoning counted against a fixed 8,192-token reply limit — so on a big chapter the model could spend its whole allowance thinking and hand back nothing, and Castwright would keep cutting the chapter into smaller pieces without ever getting an answer. Castwright now lets each Gemini model reply up to its own limit, keeps showing activity while the model is thinking, and lets a thinking model stay quiet for up to two minutes at a time before its reply starts, instead of giving up after 45 seconds. When a model genuinely runs out of room while reasoning, Castwright stops starting new work, including the emotion and delivery passes, and says so plainly, naming the setting to raise, instead of grinding through every remaining chapter the same way. Chapters already in progress finish and are kept, so nothing is lost when you resume. The same goes for a local model that fills its context window before writing any answer: Castwright now splits the chapter, or tells you the model ran out of room while thinking, instead of reporting an empty reply. A Gemini request that stays silent past its thinking limit, or runs for more than half an hour, is stopped, and Castwright tells you which setting controls that limit. If you already set your own Gemini output limit, Castwright keeps it. And if you lowered a Gemma model's tokens-per-minute limit below 12,000, Castwright now sends it smaller pieces of each chapter so every request stays within that limit.
+- **A Gemini model that thinks before it answers no longer stalls on a long chapter.** Some Gemini models reason before replying, and that reasoning counted against a fixed 8,192-token reply limit — so on a big chapter the model could spend its whole allowance thinking and hand back nothing, and Castwright would keep cutting the chapter into smaller pieces without ever getting an answer. Castwright now lets each Gemini model reply up to its own limit, keeps showing activity while the model is thinking, and lets a thinking model stay quiet for up to two minutes at a time before its reply starts, instead of giving up after 45 seconds. When a model genuinely runs out of room while reasoning, Castwright stops starting new work, including the emotion and delivery passes, and says so plainly, naming the setting to raise, instead of grinding through every remaining chapter the same way. Chapters already in progress finish and are kept, so nothing is lost when you resume. The same goes for a local model that fills its context window before writing any answer: Castwright now splits the chapter, or tells you the model ran out of room while thinking, instead of reporting an empty reply. A Gemini request that stays silent past its thinking limit, or runs for more than half an hour, is stopped, and Castwright tells you which setting controls that limit. If you already set your own Gemini output limit, Castwright keeps it. And if you lowered a Gemma model's tokens-per-minute limit below 12,000, Castwright now sends it smaller pieces of each chapter so every request stays within that limit. When it does happen, Castwright now tells you exactly which chapter and model hit the limit, lists the settings that would fix it as clickable links straight to the right row in Advanced Settings, and keeps a notification on screen until you dismiss it — even if you've moved to another page — instead of a message that scrolls away.
 ```
 - [ ] **Step 3: Run sheet**
 
@@ -5944,7 +6349,7 @@ Expected: every command PASS. If `register:build` rewrote the `gcount` spans and
 Run: `npm run verify:fast:branch`  Expected: PASS.
 - [ ] **Step 7: Push and open the PR**
 ```bash
-git push -u origin feat/server,frontend-3084-w2b-output-cap
+git push -u origin feat/server-3084-w2b-output-cap
 gh pr create --title "feat(server,openapi,frontend): Gemini Auto output tokens, thinking window, reasoning overflow (#3084 wave 2b)" --body-file <path-to-body.md>
 ```
 Body:
@@ -5955,7 +6360,7 @@ Body:
 - **TPM-bound input cap (budget change):** `perRequestInputCap = min(analyzer.gemini.maxInputTokensPerRequest, resolveLimits(model).tpm)`. Defaults are unchanged (every built-in TPM is at least 16000); a `GEMINI_TPM_<SLUG>` env var or a saved `rate.tpm.gemma*` override below 12000 now shrinks chunk bodies to fit it. Pinned in `capacity.test.ts` and announced in both release-notes files.
 - **Thinking visibility (P27):** thinking models, by a static id rule and never the live catalog, request `thinkingConfig.includeThoughts`; thought parts feed the heartbeat; `thoughtsTokenCount` → `usage.reasoningTokens` only on those requests, so Gemma keeps its split recovery.
 - **Thinking window, request ceiling, timing log (P5):** `analyzer.gemini.thinkingIdleTimeoutMs` (`GEMINI_THINKING_IDLE_MS`, 0–290 000; `0` = automatic: 120 000 ms for a thinking model, the 45 s idle window otherwise; a positive value applies to every model) bounds every silent gap until the first answer text, thought parts included; after that the 45 s watchdog is unchanged. Running out of it before answer text raises `AnalyzerTimeoutError('thinking-idle')` → `analyzer-timeout` naming the setting, never retried, with no retry warning and no `onThrottle`. A model that does not think, at the automatic value, keeps today's retried `GeminiStreamIdleError`. The 290 000 maximum stays below undici's fixed 300 s timeouts on the SDK's global `fetch`. Every attempt is bounded by `analyzer.gemini.requestCeilingMs` (30 min) → `AnalyzerTimeoutError('ceiling')`; the class is pulled forward from wave 3. One `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…` line per attempt. Trade-off: a stalled request on a thinking model fails once after up to 120 s instead of two 45 s attempts. Owner approved P5 on 2026-09-13: no probe gate; thinking window default 120 s, adjustable in Advanced Settings.
-- **Reasoning overflow (P20):** `length` + no answer text + reasoning evidence → `AnalyzerReasoningOverflowError` / `analyzer-reasoning-overflow` (no split); an empty `MAX_TOKENS` with no evidence (Gemma) still splits. It stops new spend. Both routes' Phase-0 catches rethrow it and Phase 1 already ends the run on its first error; the first rethrow marks the job (`AnalysisJob.reasoningOverflowed`) and empties the book's escalation budget, so chapters still in flight start no escalation window, and `buildNonStoryClassifier` makes no further non-story call. Those chapters are not aborted: they finish and cache for resume, and the job's `halted` snapshot keeps its code (N4). Script-review, emotion and instruct passes stop as they do on a content block or daily quota; the attribution eval's review run rethrows it; an escalation call that overflows still returns `null`, but first reports through the new `StageCall.onReasoningOverflow`, which both routes wire to `noteReasoningOverflow`, so no further window is sent in that chapter or any other. Every chapter dispatch point (main Phase 0, main Phase 1 after the watermark, subset Phase 1) calls `throwIfReasoningOverflowed`, which rethrows the recorded overflow (`AnalysisJob.reasoningOverflowError`), so after an overflow only escalation saw, no later chapter starts and the run halts with the overflow code, as for a rethrown one. Alternative put to the owner (not chosen): skip the chapter and continue. The failure names what happened (chapter, model, engine) and carries structured `fixes` (Task 2.9a) so the "How to fix" list in the Analysing view and a persistent notification point at the settings to raise, ending "then resume — finished chapters are kept". Ollama now applies the same rule to an empty `done_reason: length` stream (previously the empty-response error), with `reasoningSeen` from `message.thinking`, and its copy names `num_ctx`. `AnalyzerTimeoutError` keeps its Phase 0 / Phase 1 asymmetry unchanged. Owner approved P20 on 2026-09-13: stop new spend, with a loud, actionable warning (F7).
+- **Reasoning overflow (P20):** `length` + no answer text + reasoning evidence → `AnalyzerReasoningOverflowError` / `analyzer-reasoning-overflow` (no split); an empty `MAX_TOKENS` with no evidence (Gemma) still splits. It stops new spend. Both routes' Phase-0 catches rethrow it and Phase 1 already ends the run on its first error; the first rethrow marks the job (`AnalysisJob.reasoningOverflowed`) and empties the book's escalation budget, so chapters still in flight start no escalation window, and `buildNonStoryClassifier` makes no further non-story call. Those chapters are not aborted: they finish and cache for resume, and the job's `halted` snapshot keeps its code (N4). Script-review, emotion and instruct passes stop as they do on a content block or daily quota; the attribution eval's review run rethrows it; an escalation call that overflows still returns `null`, but first reports through the new `StageCall.onReasoningOverflow`, which both routes wire to `noteReasoningOverflow`, so no further window is sent in that chapter or any other. Every chapter dispatch point (main Phase 0, main Phase 1 after the watermark, subset Phase 1) calls `throwIfReasoningOverflowed`, which rethrows the recorded overflow (`AnalysisJob.reasoningOverflowError`), so after an overflow only escalation saw, no later chapter starts and the run halts with the overflow code, as for a rethrown one. Alternative put to the owner (not chosen): skip the chapter and continue. The failure names what happened (chapter, model, engine); its `remediation` ends "Then resume — finished chapters are kept." (Task 2.9). Task 2.9a adds structured `fixes`, rendered as a "How to fix" list in the Analysing view's run-level block and, via `analysis-stream-middleware.ts`'s `AnalysisError` branch (not the view — the view's own stream aborts on unmount), a persistent toast that replaces the plain one under the same `dedupeKey` and survives navigation. Ollama now applies the same rule to an empty `done_reason: length` stream (previously the empty-response error), with `reasoningSeen` from `message.thinking`, and its copy names `num_ctx`. `AnalyzerTimeoutError` keeps its Phase 0 / Phase 1 asymmetry unchanged. Owner approved P20 on 2026-09-13: stop new spend, with a loud, actionable warning (F7).
 - **On-box:** register rows **B<next>** (capacity recalibration), **E<next>** (Gemini thinking-window timing, a measurement that gates nothing) and **E<next+1>** (thinking-model output and the Gemma split) — write the minted ids — run sheet §1–§3 created, live view republished.
 
 Also fixed, found in passing: `server/.env.example:293,301` stated the old 8192 default; the `MAX_RESPONSE_BYTES` comment (moved to `transports/gemini-transport.ts` by wave 1; `gemini.ts:62-64` on 46e62a34) named the removed `resolveMaxOutputTokens`.
@@ -5965,9 +6370,10 @@ Also fixed, found in passing: `server/.env.example:293,301` stated the old 8192 
 - [ ] `gemini.test.ts` (slow): Auto wiring, a pre-answer stall for each kind of model and a thinking-window timeout that fails once through the whole analyzer, overflow on `gemini-3.6-flash` and a split on Gemma for the same response; `ollama.test.ts` num_predict wiring
 - [ ] `analysis.phase-model.test.ts` (main-route stage 1, subset stage 1 and stage 2 overflows end the run and mark the job without aborting it; `noteReasoningOverflow`; `buildNonStoryClassifier` makes no call after an overflow), `analysis.reasoning-overflow.test.ts` (a positive control reaches escalation; after an overflow an in-flight chapter finishes and caches with no escalation window, and the `halted` snapshot keeps its code; on the main and subset routes, one overflowing escalation call stops every later window, chapter 2's stage-2 call is never sent, and the run halts with the overflow code in a `halted` snapshot; in pipelined mode, Phase 0 casts no further chapter), `script-review.test.ts`, `annotate-emotion.test.ts` and `instruct-annotation.test.ts` (an overflow ends the pass), `review-run.test.ts` (the eval rethrows)
 - [ ] `capacity-pinning.test.ts` green, fixture untouched
-- [ ] `failure-taxonomy-fixes.test.ts` (the guard: every `settingKey` a real registry key, the thinking window never offered), `router.test.ts` (`?focus=` round-trip), `failure-fixes.test.ts` (`fixHref`: a settingKey fix links, a plain-text fix returns `null`), `routes/index.test.tsx` (`AdvancedRoute` reads `focus`), `reasoning-overflow-toast.test.tsx` (no auto-dismiss, dismiss button works), `analysing.test.tsx` ("How to fix" list rendering), `advanced.test.tsx` (scroll-and-highlight) (Task 2.9a, F7)
+- [ ] `failure-taxonomy-fixes.test.ts` (the guard: every `settingKey`/`wikiPage` real — `wikiPage` checked by file existence, not a TS union, since it's a plain `string` server-side — including the conditional `maxOutputTokens` branch forced to appear; a bad `settingKey` proven red; `openai` returns `[]`; the thinking window never offered), `router.test.ts` (`?focus=` round-trip + `stageEqual`), `failure-fixes.test.ts` (`fixHref`: a settingKey fix links, a label-only fix returns `null`), `wiki-links.test.ts` (`isWikiPage` accepts real pages, rejects an unknown string), `routes/index.test.tsx` (new `renderAtAdvanced` helper; `AdvancedRoute` reads `focus`), `analysis-stream-middleware.test.ts` (a reasoning-overflow `AnalysisError` pushes one persistent toast with `fixes`, replacing the plain one under the same `dedupeKey`; any other code still pushes the plain toast), `analysis-state.test.ts` (`fixes` round-trips through the `#3004` last-outcome file), `reasoning-overflow-toast.test.tsx` (no auto-dismiss, dismiss button works), `analysing.test.tsx` (run-level "How to fix" list rendering ONLY — the per-chapter block never has `fixes`; an unrecognised `wikiPage` renders no "(why?)" link), `advanced.test.tsx` (scroll-and-highlight, `help.tsx`-pattern ref + once-per-focus guard), a subset-route (Retry) reasoning-overflow test naming its chapter (Task 2.9) (Task 2.9a, F7)
 - [ ] mutation proofs pasted (Tasks 2.5–2.9, 2.9a)
 - [ ] `npm run openapi:types`, `npm run config:check`, `npm run check:onbox-register`, `npm run verify:fast:branch`, `node scripts/tests/knob-docs-sync.test.mjs`
+- [ ] `npm run test:e2e` — new mock-mode spec (Task 2.9a Step 8): a seeded reasoning-overflow failure shows the "How to fix" list, a link lands on the highlighted Advanced Settings row, and the toast persists across an in-app navigation
 - [ ] On-box: owed as register rows B<next>, E<next> and E<next+1> (the minted ids; not run in this PR)
 
 Refs #3084

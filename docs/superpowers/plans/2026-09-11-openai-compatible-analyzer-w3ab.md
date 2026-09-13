@@ -21,8 +21,10 @@ This section covers PRs **3a** (engine value + id grammar) and **3b** (endpoints
 
 ### PR 3a — engine value + id grammar (nothing selectable)
 
-**Branch:** `refactor/server,frontend-3084-w3a-engine-ids`
-Create the worktree with `node scripts/wt-new.mjs refactor/server,frontend-3084-w3a-engine-ids`, off the latest `main`.
+**Branch:** `refactor/server-3084-w3a-engine-ids`
+Create the worktree with `node scripts/wt-new.mjs refactor/server-3084-w3a-engine-ids`, off the latest `main`.
+(`scripts/lib/branch-name.mjs` accepts a single scope per branch — the PR title and its commits
+below keep their multi-scope `refactor(server,frontend): …` form; only the branch name is single-scope.)
 
 **What it delivers.**
 - `AnalysisEngine = 'local' | 'gemini' | 'openai'` at every analyzer-engine **type** site.
@@ -1582,12 +1584,14 @@ Expected:
 
 ### PR 3b — endpoints, keys, OpenAI transport, structured output, failure codes (still not selectable)
 
-**Branch:** `feat/server,openapi-3084-w3b-endpoints`
-Create it with `node scripts/wt-new.mjs feat/server,openapi-3084-w3b-endpoints`, off `main` with PR 3a merged. Commits also carry `frontend` and `docs` scopes where the task touches `src/` or `CLAUDE.md`.
+**Branch:** `feat/server-3084-w3b-endpoints`
+Create it with `node scripts/wt-new.mjs feat/server-3084-w3b-endpoints`, off `main` with PR 3a merged.
+(`scripts/lib/branch-name.mjs` accepts a single scope per branch — the PR title keeps its multi-scope
+`feat(server,openapi): …` form.) Commits also carry `frontend` and `docs` scopes where the task touches `src/` or `CLAUDE.md`.
 
 **What it delivers.**
 - **Failure codes.** `analyzer-request-rejected`, `analyzer-invalid-output` and `analyzer-endpoint-missing` exist in all six places. `analyzer-timeout` and `AnalyzerTimeoutError` already exist from wave 2b (Task 2.8, always shipped); this PR only uses them and widens their remediation to name endpoints.
-- **Endpoint reasoning-overflow fixes (F7, Task 3b.1b).** `reasoningOverflowFixes` (wave 2, P20) gains an `openai`-transport branch: the endpoint's own `maxOutputTokens` / `contextTokens` fields and the stage input fractions, naming the endpoint by its saved name. Reasoning-level (5a) and payload (5b) fixes are not added here.
+- **Endpoint reasoning-overflow fixes (F7, Task 3b.1b).** `reasoningOverflowFixes` (wave 2, P20) gains an `openai`-transport branch: the endpoint's own `maxOutputTokens` / `contextTokens` fields and the stage input fractions, naming the endpoint by its saved name (`getCachedUserSettings()`, falling back to the id). `AnalyzerReasoningOverflowError` gains an optional `endpointId`, set by `OpenAIAnalyzer` (the only layer that knows its endpoint — the overflow itself is raised by the transport-agnostic runner) and threaded through `classifyAnalysisFailure`'s call into `reasoningOverflowFixes`, so a real endpoint overflow actually reaches these fixes rather than only a hand-built test `ctx`. Reasoning-level (5a) and payload (5b) fixes are not added here; no `wikiPage` yet (PR 3d adds it alongside the page it names).
 - **Typed errors.** `AnalyzerStreamIncompleteError`, `AnalyzerKeyOriginError` and `AnalyzerInvalidOutputError` are added. `AnalyzerEndpointMissingError` exists from PR 3a (Task 3a.2).
 - **Error mappings.**
   - 401/403 and key-origin errors map to `auth`.
@@ -1610,7 +1614,7 @@ Create it with `node scripts/wt-new.mjs feat/server,openapi-3084-w3b-endpoints`,
   - **Append failure:** a settings write never refuses because an append failed. Until the append lands, every writer writes the still-unarchived entries back into the file, raw and unchanged, so nothing is lost and saving still works.
   - **Keys:** a dropped key entry is archived with its `origin` only, never the `key` value.
   - **Test state:** `_resetUserSettingsCache()` also forgets archived and unarchived drops and any in-flight archive retry. It already clears the in-flight read (`inFlightRead = null`, `:1137`, shipped in #3195).
-- **Save-time validation and drop visibility (F5, Task 3b.6b).** Endpoint create/update, the key write and the settings PUT refuse a malformed field with 400 `{ error, code, issues: [{ path: string[], message }] }`, never echoing a key or field value (extends the routes of Tasks 3b.5/3b.7 rather than a second validator). Every entry dropped at read time (P25, above) is listed read-only on `GET /api/user/settings` as `droppedEndpointEntries`, with `path: code` issue strings (never a value); `POST /api/user/settings/dropped-endpoint-entries/acknowledge` retires the ones the user has seen. An entry whose archive append is still pending is listed too, flagged `archiveId: null`. No UI yet (PR 3d).
+- **Save-time validation and drop visibility (F5, Tasks 3b.5/3b.6b).** Endpoint create/update, the key write and the settings PUT refuse a malformed field with 400 `{ error, code, issues: [{ path: string[], message }] }`, never echoing a key or field value (extends the routes of Tasks 3b.5/3b.7 rather than a second validator). `message` is field-aware copy from `friendlyEndpointIssueMessage` (Task 3b.5, exported for PR 3d's UI test), not zod's own wording — zod 4.4.3's `.url()`/`.regex()` failures are `invalid_format`, not the zod-3 `invalid_string` an earlier draft assumed. Every entry dropped at read time (P25, above) is listed read-only on `GET /api/user/settings` as `droppedEndpointEntries`, with `path: code` issue strings (never a value), de-duplicated across restarts by a `contentHash` that never leaves the server; `POST /api/user/settings/dropped-endpoint-entries/acknowledge` retires the ones the user has seen, durably (keyed on that same hash, not the archive's per-line UUID, and serialised through the settings module's `writeChain` so two acknowledgements can't race). An entry whose archive append is still pending is listed too, flagged `archiveId: null`. No UI yet (PR 3d).
 - **Schema adapters.** Per-provider adapters (with a `dropped` snapshot per stage schema) are wired into the runner for Ollama and Gemini now, and for OpenAI through `OpenAIAnalyzer`. `structuredOutputLabel` is exported for 3d.
 - **Structured-output knobs.** `analyzer.ollama.structuredOutput` (default `schema`) and `analyzer.gemini.structuredOutput` (default `json`) are enum knobs with Settings rows and `config:sync`. The Ollama and Gemini transports honour all three modes.
 - **Endpoint storage.** `workspace/analyzer-endpoints.ts` and the user-settings fields `analyzerEndpoints` (in GET, not writable by the general PUT) and `analyzerEndpointKeys` (FORBIDDEN_KEYS; GET exposes `analyzerEndpointKeyStatus`).
@@ -3265,99 +3269,191 @@ git commit -m "fix(server): report a classified failure code from every analyzer
 
 **Depends on wave 2's `AnalysisFailureFix` / `reasoningOverflowFixes(ctx)` / its guard test.** Those are
 introduced in wave 2 (2b) by a different fixer as part of F7 (P20's "stop new spend, with a loud,
-actionable warning" — approved 2026-09-13); at the time of this task's authoring, wave 2's plan file
-has not yet landed that content, so this task cannot pin exact line numbers into it the way the rest
-of this file pins into `46e62a34`. Locate the wave-2 file's `reasoningOverflowFixes` and its guard test
-by name (`git grep -n reasoningOverflowFixes docs/superpowers/plans docs/superpowers/specs`,
-`server/src/routes/failure-taxonomy.ts`) before starting; if the exported shape differs from the
+actionable warning" — approved 2026-09-13). Both live in `server/src/routes/failure-taxonomy.ts`; the
+guard test file is `server/src/routes/failure-taxonomy-fixes.test.ts`. `ctx` is
+`{ transport: TransportKind; model: string; endpointId?: string }`, declared in 2b — **3b only reads
+`ctx.endpointId`**, the field 2b already declared for this purpose; it adds no field of its own. At the
+time of this task's authoring, wave 2's plan file has not yet landed this content, so this task cannot
+pin exact line numbers the way the rest of this file pins into `46e62a34`. Locate
+`reasoningOverflowFixes` and its guard by name before starting; if the exported shape differs from the
 contract below, treat that as a contract conflict against the decision record (F7), not something to
 improvise around.
 
-**What this task adds, per the decision record's exact contract:**
+**Review finding (CRITICAL — endpoint fixes must reach a real failure, not just a synthetic `ctx`).**
+`reasoningOverflowFixes` is only as good as what calls it. `classifyAnalysisFailure`'s
+`analyzer-reasoning-overflow` branch (wave 2) calls it with `{ transport: err.transport, model:
+err.model }` — `err` being the thrown `AnalyzerReasoningOverflowError` (W1/2b). That error has no
+`endpointId` field today, so even after this task's branch exists, a REAL endpoint overflow would call
+`reasoningOverflowFixes` with `endpointId: undefined` and silently fall through to no endpoint-specific
+fixes at all — the branch would be provably correct in isolation and dead in production. Three
+additive changes close this, all in this task:
+
+1. **`AnalyzerReasoningOverflowError` gains `endpointId?: string`** (W1/2b's class,
+   `server/src/analyzer/errors.ts`) — a 4th, optional constructor argument
+   `opts?: { endpointId?: string }`, stored as a **mutable** (not `readonly`) public field so it can be
+   attached after construction (step 2 needs this). Purely additive: every existing 3-arg call site
+   (wave 1's Ollama/Gemini paths, wave 2's `mapFinish`) compiles and behaves unchanged.
+2. **`OpenAIAnalyzer` (Task 3b.12, `server/src/analyzer/openai.ts`) attaches its own endpoint id.**
+   Per this file's own Task 3b.12 note ("The overflow itself is raised by wave 2's `mapFinish` in the
+   runner, outside the transport" — line ref in this file, not `46e62a34`, since `mapFinish` does not
+   exist yet on `main`), the shared runner that raises the error has no concept of "endpoint" — only
+   `OpenAIAnalyzer` does (it holds `endpoint` from its constructor). Add a private helper that every
+   stage method routes through:
+   ```ts
+   // server/src/analyzer/openai.ts (Task 3b.12)
+   private async withEndpointId<T>(run: () => Promise<T>): Promise<T> {
+     try {
+       return await run();
+     } catch (err) {
+       if (err instanceof AnalyzerReasoningOverflowError && err.endpointId === undefined) {
+         err.endpointId = this.endpoint.id;
+       }
+       throw err;
+     }
+   }
+   ```
+   and override each stage method `TransportAnalyzer` (W1) exposes to wrap its `super.<method>(...)`
+   call in `this.withEndpointId(...)` — enumerate `TransportAnalyzer`'s actual public stage methods at
+   implementation time (`grep -n "^  async run\|^  async annotate\|^  async " server/src/analyzer/runner/transport-analyzer.ts`
+   or wherever W1 lands it) and override every one it lists; this file cannot pin that list because
+   `TransportAnalyzer` does not exist on `main` yet. **Conflict to flag if untrue at implementation
+   time:** if `TransportAnalyzer`'s stage methods are `final` (not overridable) or funnel through a
+   single protected hook instead, override that hook once there rather than duplicating per method —
+   report this as a contract note on the PR, since it changes where this edit lands but not its effect.
+3. **`classifyAnalysisFailure`'s overflow branch passes `endpointId` through.** Change
+   `reasoningOverflowFixes({ transport: err.transport, model: err.model })` (2b) to
+   `reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId })`
+   — `err.endpointId` is `undefined` for Ollama/Gemini, so 2b's own fixes are unaffected.
+
+**What this task adds to `reasoningOverflowFixes`, per the decision record's contract (F7, `wikiHref`
+renamed to `wikiPage` per review — see below):**
 ```ts
 // server/src/routes/failure-taxonomy.ts (2b defines AnalysisFailureFix / reasoningOverflowFixes)
 if (ctx.transport === 'openai' && ctx.endpointId) {
-  const endpoint = /* the saved AnalyzerEndpoint for ctx.endpointId */;
+  const endpoint = getCachedUserSettings().analyzerEndpoints.find((e) => e.id === ctx.endpointId);
+  const name = endpoint?.name ?? ctx.endpointId;
   fixes.push(
-    { label: `Lower ${endpoint.name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' }, wikiHref: ENDPOINT_REASONING_OVERFLOW_WIKI_HREF },
-    { label: `Lower ${endpoint.name}'s context size`, endpointField: { endpointId: ctx.endpointId, field: 'contextTokens' }, wikiHref: ENDPOINT_REASONING_OVERFLOW_WIKI_HREF },
+    { label: `Lower ${name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' } },
+    { label: `Lower ${name}'s context size`, endpointField: { endpointId: ctx.endpointId, field: 'contextTokens' } },
     { label: 'Shrink Stage 1 chunks', settingKey: 'analyzer.stage1.localInputFraction' },
     { label: 'Shrink Stage 2 chunks', settingKey: 'analyzer.stage2.localInputFraction' },
   );
 }
 ```
 Per F7: reasoning-level (5a) and payload (5b) fixes are **not** added here — only the endpoint's own
-`maxOutputTokens` / `contextTokens` fields and the stage input fractions. `endpoint.name` is looked up
-from the saved `analyzerEndpoints` (Task 3b.6) so the copy names the endpoint the user gave it, never
-just its id.
+`maxOutputTokens` / `contextTokens` fields and the stage input fractions.
+
+**No `wikiPage` on these two rows, and that is deliberate, not an omission.** The decision record's F7
+section says the endpoint fixes' wiki anchor lands in **PR 3d** ("3d: the endpoint-editor deep link and
+the endpoint wiki anchor"), and item 3's new guard (below) asserts every `wikiPage` a fix names is a
+real file under `docs/wiki/` — but `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md` (F3) is written
+in PR 3d, which merges strictly after 3b. Setting `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'`
+here would make the guard fail on `main` for the entire window between 3b's merge and 3d's — this task
+leaves `wikiPage` unset on both endpoint rows, and PR 3d adds it in the same diff that adds the page
+file, so the guard is never red on `main`. Say this explicitly in 3d's task so it isn't dropped.
 
 **Files:**
-- Modify: `server/src/routes/failure-taxonomy.ts` — the `transport === 'openai'` branch of `reasoningOverflowFixes` (wave 2).
-- Modify: the guard test wave 2 adds (`every settingKey is a registry key, and every endpointField.field is a key of analyzerEndpointSchema's shape`) — extend its `endpointField.field` half if wave 2 only wrote the `settingKey` half; if wave 2 already added the `endpointField.field` half of the guard, this task only adds this branch's rows to make it exercise something.
-- Test: extend wave 2's `reasoningOverflowFixes` test file with an `openai` transport case.
+- Modify: `server/src/analyzer/errors.ts` (W1/2b) — widen `AnalyzerReasoningOverflowError`'s constructor with the optional `opts?: { endpointId?: string }` 4th argument (additive).
+- Modify: `server/src/analyzer/openai.ts` (Task 3b.12) — `withEndpointId` and the stage-method overrides.
+- Modify: `server/src/routes/failure-taxonomy.ts` — the overflow branch's `reasoningOverflowFixes(...)` call site (add `endpointId: err.endpointId`), and the `transport === 'openai'` branch of `reasoningOverflowFixes` itself (wave 2 owns the function; this task adds the branch).
+- Modify: `server/src/routes/failure-taxonomy-fixes.test.ts` (2b) — extend the guard's `endpointField.field` coverage with this branch's two rows.
+- Test: `server/src/routes/failure-taxonomy-fixes.test.ts` — the `openai` transport case (below), plus a case going through the real error class.
 
 **Interfaces:**
-- Consumes: `AnalysisFailureFix`, `reasoningOverflowFixes` (wave 2, F7); `AnalyzerEndpoint`, `analyzerEndpointSchema` (Task 3b.5); the saved `analyzerEndpoints` (Task 3b.6, to resolve `ctx.endpointId` → `endpoint.name`).
-- Produces: no new exports — an added branch inside the existing function.
+- Consumes: `AnalysisFailureFix`, `reasoningOverflowFixes` (wave 2, F7, `server/src/routes/failure-taxonomy.ts`); `AnalyzerEndpoint`, `analyzerEndpointSchema` (Task 3b.5); `getCachedUserSettings`, `_setUserSettingsCacheForTest` (`server/src/workspace/user-settings.ts`, already used throughout this file — e.g. Task 3b.1/3a.2 imports).
+- Produces: `AnalyzerReasoningOverflowError`'s widened constructor and mutable `endpointId` field; no new exports from `failure-taxonomy.ts` — an added branch inside the existing function.
 
 **Guard test extension (F7's "Each wave that adds a fix extends it").** The guard fails if any
 `endpointField.field` is not a key of `analyzerEndpointSchema.shape` — `maxOutputTokens` and
 `contextTokens` both are (Task 3b.5), so the guard passes without change to the shape it checks;
 this task's job is to add THIS branch's two `endpointField` rows to the set the guard iterates, so a
 future typo in this branch (e.g. `field: 'maxOutputToken'`) is caught the same way wave 2's Gemini/Ollama
-rows already are.
+rows already are. Also extend the guard's (new, item-3) `wikiPage` file-existence check: it must not
+choke on a fix with no `wikiPage` at all (both of this branch's rows) — assert the guard skips
+`undefined` rather than treating it as a missing file.
 
-**Wiki anchor not yet written.** `ENDPOINT_REASONING_OVERFLOW_WIKI_HREF` points at the F3 wiki page's
-"When a model thinks past its output limit" section — that page (`docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md`)
-is written in PR 3d (F3), so this task defines the constant now (a string literal, e.g.
-`'/wiki/OpenAI-Compatible-Analyzer-Endpoints#when-a-model-thinks-past-its-output-limit'`) and PR 3d's
-task is the one that makes the anchor real; note this in that PR's task instead of blocking here.
+- [ ] **Step 1: Write the failing tests**
 
-- [ ] **Step 1: Write the failing test**
-
-Append to wave 2's `reasoningOverflowFixes` test file (locate by name):
+Append to `server/src/routes/failure-taxonomy-fixes.test.ts`:
 ```ts
-it('an openai-transport overflow offers the endpoint\'s own maxOutputTokens/contextTokens and the stage fractions, naming the endpoint, never reasoning or payload (F7)', async () => {
-  await api.createAnalyzerEndpoint({ id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8080/v1', contextTokens: 32768 });
-  const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' });
-  expect(fixes).toEqual([
-    expect.objectContaining({ label: expect.stringContaining('Lab box'), endpointField: { endpointId: 'lab', field: 'maxOutputTokens' } }),
-    expect.objectContaining({ label: expect.stringContaining('Lab box'), endpointField: { endpointId: 'lab', field: 'contextTokens' } }),
-    expect.objectContaining({ settingKey: 'analyzer.stage1.localInputFraction' }),
-    expect.objectContaining({ settingKey: 'analyzer.stage2.localInputFraction' }),
-  ]);
-  expect(fixes.some((f) => f.settingKey?.includes('reasoning') || 'endpointField' in f && f.endpointField?.field === 'reasoning')).toBe(false);
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
+import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
+// (merge into this file's existing imports rather than duplicating them)
+
+describe('reasoningOverflowFixes — openai transport (#3084 F7)', () => {
+  afterEach(() => _resetUserSettingsCache());
+
+  it('offers the endpoint\'s own maxOutputTokens/contextTokens and the stage fractions, naming the endpoint, never reasoning or payload, and no wikiPage yet', () => {
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [{ id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 }],
+    });
+    const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' });
+    expect(fixes).toEqual([
+      expect.objectContaining({ label: expect.stringContaining('Lab box'), endpointField: { endpointId: 'lab', field: 'maxOutputTokens' } }),
+      expect.objectContaining({ label: expect.stringContaining('Lab box'), endpointField: { endpointId: 'lab', field: 'contextTokens' } }),
+      expect.objectContaining({ settingKey: 'analyzer.stage1.localInputFraction' }),
+      expect.objectContaining({ settingKey: 'analyzer.stage2.localInputFraction' }),
+    ]);
+    expect(fixes.every((f) => f.wikiPage === undefined)).toBe(true);
+    expect(fixes.some((f) => f.settingKey?.includes('reasoning') || ('endpointField' in f && f.endpointField?.field === 'reasoning'))).toBe(false);
+  });
+
+  it('falls back to the endpoint id when the endpoint has been deleted since the failure', () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+    const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'gone' });
+    expect(fixes[0].label).toContain('gone');
+  });
+
+  it('classifyAnalysisFailure passes the real error\'s endpointId through to the fixes (review finding)', () => {
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [{ id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 }],
+    });
+    const err = new AnalyzerReasoningOverflowError('openai', 'qwen3:30b', 512, { endpointId: 'lab' });
+    const failure = classifyAnalysisFailure(err, 'Endpoint lab (qwen3:30b)');
+    expect(failure.fixes?.some((f) => 'endpointField' in f && f.endpointField?.endpointId === 'lab')).toBe(true);
+  });
 });
 ```
 
-- [ ] **Step 2: Run and confirm failure**
+- [ ] **Step 2: Run and confirm failures**
 
-Run the wave-2 failure-taxonomy test file. Expected: FAIL — the `openai` branch does not exist yet
-(`fixes` is `[]` or the Gemini/Ollama branch's rows, depending on wave 2's `ctx.transport` default handling).
+Run `server/src/routes/failure-taxonomy-fixes.test.ts`. Expected:
+- The first two cases FAIL: the `openai` branch does not exist yet (`fixes` is `[]`).
+- The third FAILS at the `AnalyzerReasoningOverflowError('openai', 'qwen3:30b', 512, { endpointId: 'lab' })`
+  call — the constructor does not accept a 4th argument yet (TS error, or the 4th argument is silently
+  dropped and `err.endpointId` is `undefined`) — then, even once the constructor is widened, it still
+  FAILS until `classifyAnalysisFailure`'s call site is changed, because `err.endpointId` never reaches
+  `reasoningOverflowFixes`.
 
 - [ ] **Step 3: Implement**
 
-Add the `transport === 'openai'` branch shown above to `reasoningOverflowFixes`, resolving
-`endpoint.name` from the saved `analyzerEndpoints` for `ctx.endpointId` (fall back to `ctx.endpointId`
-itself if the endpoint was deleted between the failure and the fix lookup — do not throw building a
+In this order: (1) widen `AnalyzerReasoningOverflowError`; (2) add `withEndpointId` and the stage-method
+overrides to `OpenAIAnalyzer`; (3) change `classifyAnalysisFailure`'s call site to pass `endpointId:
+err.endpointId`; (4) add the `transport === 'openai'` branch to `reasoningOverflowFixes`, resolving
+`endpoint.name` from `getCachedUserSettings().analyzerEndpoints` (fall back to `ctx.endpointId` itself
+if the endpoint was deleted between the failure and the fix lookup — do not throw building a
 remediation list).
 
 - [ ] **Step 4: Run and confirm pass**
 
-Run the same file, plus `npm run typecheck` and the wave-2 guard test. Expected: PASS.
+Run the same file, plus `npm run typecheck` and the guard test. Expected: PASS.
 
 - [ ] **Step 5: Mutation proofs**
 
 | Revert | Expected red test |
 |---|---|
-| Delete the `transport === 'openai'` branch | `an openai-transport overflow offers the endpoint's own maxOutputTokens/contextTokens…` |
-| `field: 'maxOutputToken'` (typo) | the wave-2 guard test (`endpointField.field` is not a key of `analyzerEndpointSchema`'s shape) |
-| Add a `{ endpointField: { endpointId, field: 'reasoning' } }` row to this branch | the same test's `not.toBe(true)`-style reasoning/payload assertion |
-| `endpoint.name` → `ctx.endpointId` unconditionally | the same test (`label` no longer contains `'Lab box'`) |
+| Delete the `transport === 'openai'` branch | `offers the endpoint's own maxOutputTokens/contextTokens…` |
+| `field: 'maxOutputToken'` (typo) | the guard test (`endpointField.field` is not a key of `analyzerEndpointSchema`'s shape) |
+| Add a `{ endpointField: { endpointId, field: 'reasoning' } }` row to this branch | the same test's reasoning/payload assertion |
+| `endpoint.name` → `ctx.endpointId` unconditionally | `offers the endpoint's own maxOutputTokens/contextTokens…` (`label` no longer contains `'Lab box'`) and `falls back to the endpoint id…` still passes (documents the fallback is intentional, not the only path) |
+| Set `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'` on either row | `…and no wikiPage yet` (also would fail the item-3 guard once that page doesn't exist under `docs/wiki/`) |
+| In `withEndpointId`, drop the `err.endpointId === undefined` guard (always overwrite) | no test currently distinguishes this (documents a gap: nothing yet exercises a re-thrown, already-annotated overflow reaching a second `OpenAIAnalyzer` layer) — add `it('does not overwrite an endpointId a caller already set')` if `FallbackAnalyzer` can wrap two `OpenAIAnalyzer`s in a later wave |
+| Delete `err.endpointId === undefined` and instead never set `err.endpointId` at all in `withEndpointId` | `classifyAnalysisFailure passes the real error's endpointId through…` (constructed-with-opts case still passes; add a second assertion dispatching through `OpenAIAnalyzer` itself once Task 3b.12 exists, per that task's own suite) |
+| In `classifyAnalysisFailure`'s overflow branch, drop `endpointId: err.endpointId` from the `reasoningOverflowFixes(...)` call | `classifyAnalysisFailure passes the real error's endpointId through to the fixes (review finding)` |
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy.test.ts
+git add server/src/analyzer/errors.ts server/src/analyzer/openai.ts server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy-fixes.test.ts
 git commit -m "feat(server): offer endpoint-specific reasoning-overflow fixes (#3084 F7)"
 ```
 
@@ -3923,9 +4019,14 @@ git commit -m "feat(server): add per-provider structured-output schema adapters"
 - Modify: `server/src/analyzer/runner/stage-runner.ts` (W1) — where `TransportRequest.structuredOutput` is built from `z.toJSONSchema(...)` (main `ollama.ts:504`).
 - Modify: `server/src/analyzer/ollama.ts` (W1) — `OllamaAnalyzer`'s `StageRunner` options.
 - Modify: `server/src/analyzer/gemini.ts` (W1) — `GeminiAnalyzer`'s `StageRunner` options.
+- Modify: `docs/wiki/Advanced-Settings.md` — two new rows in §1 "LLM sampling parameters", and the
+  intro's "N knobs across M groups" count (review finding: a knob lands its Settings-UI row for free
+  from the registry, but the wiki row and count are hand-maintained and gated by a separate guard —
+  see below).
 - Test: `server/src/config/registry.test.ts` (add)
 - Test: `server/src/analyzer/transports/structured-output-wire.test.ts` (new)
 - Test: `server/src/analyzer/structured-output-settings.test.ts` (new)
+- Guard (existing, not new): `scripts/tests/knob-docs-sync.test.mjs` — run via `npm run test:hooks`.
 
 **Interfaces:**
 - Consumes: `buildStructuredOutputRequest`, `structuredOutputSchemaName`, `adaptSchemaForOllama`, `adaptSchemaForGemini` (Task 3b.3); `configValue` (`server/src/config/resolver.ts:176`).
@@ -4160,7 +4261,23 @@ Expected:
     apply: 'live', risk: 'medium',
   },
 ```
-The Settings rows need no hand work. `src/views/advanced.tsx` renders every descriptor in `analyzer-sampling` from `GET /api/config`, so both knobs appear there as enum selects.
+The Settings **UI** rows need no hand work — `src/views/advanced.tsx` renders every descriptor in
+`analyzer-sampling` from `GET /api/config`, so both knobs appear there as enum selects. The **wiki**
+row is separate and hand-maintained: `docs/wiki/Advanced-Settings.md` §1 "LLM sampling parameters" is
+markdown, not generated, and `scripts/tests/knob-docs-sync.test.mjs` (`:160` on `46e62a34`) fails the
+build if a knob's registry `label` has no matching first-cell row there, or if the intro's "— N knobs
+across M groups in total" sentence (`Advanced-Settings.md:14`) drifts from the registry's real count.
+Add both rows to that table, and bump the sentence:
+```markdown
+| Ollama structured output | "schema" sends the stage's JSON schema as Ollama `format`; "json" asks only for syntactically valid JSON; "off" sends no format. Every reply is still validated and retried once. | schema | schema, json, off | live | medium |
+| Gemini structured output | "json" sets responseMimeType only; "schema" also sends the stage schema as responseJsonSchema (reduced to Gemini's supported keywords); "off" sends neither. | json | schema, json, off | live | medium |
+```
+At `46e62a34` the intro reads "117 knobs across 12 groups in total" (`docs/wiki/Advanced-Settings.md:14`);
+these two knobs land in the existing `analyzer-sampling` group (section 1), so the group count (12)
+is unchanged and the knob count becomes 119 — **verify this against the registry at implementation
+time** rather than trusting the arithmetic here, since another PR may have merged a knob in the
+interim; `npm run test:hooks` (which runs `knob-docs-sync.test.mjs`) is the source of truth, not this
+sentence.
 
 `server/src/analyzer/transports/ollama-transport.ts` (W1):
 1. Add near the top:
@@ -4234,12 +4351,14 @@ npm --prefix server run test -- src/config src/analyzer/transports/structured-ou
 npm --prefix server run test:slow -- src/analyzer/gemini.test.ts
 npm run config:check
 npm run typecheck
+npm run test:hooks
 ```
 
 Expected:
 - PASS.
 - `config:check` is clean.
 - `server/.env.example`'s managed block gains `# ANALYZER_OLLAMA_STRUCTURED_OUTPUT=schema` and `# ANALYZER_GEMINI_STRUCTURED_OUTPUT=json` lines.
+- `npm run test:hooks` (which runs `scripts/tests/knob-docs-sync.test.mjs` among others) is clean: both new labels have a matching `Advanced-Settings.md` row, and the intro's knob count matches the registry.
 
 - [ ] **Step 5: Mutation proofs**
 
@@ -4251,10 +4370,11 @@ Revert one change at a time, confirm the named test goes red, then restore:
 | In `gemini-transport.ts`, restore `responseMimeType: 'application/json'` in place of the spread | `off sends neither` and `schema sends the Gemini-adapted schema…` |
 | In `gemini.ts`, `adaptSchema: adaptSchemaForOllama` (identity: keeps `$schema`) | `schema sends the Gemini-adapted schema (no $schema key)` |
 | In `registry.ts`, Gemini `default: 'schema'` | the registry test **and** `default (json) sends responseMimeType only…` |
+| Delete either new row from `docs/wiki/Advanced-Settings.md` §1, or don't bump the intro count | `scripts/tests/knob-docs-sync.test.mjs` (`npm run test:hooks`) — a missing-row assertion or the count-mismatch assertion |
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/config/registry.ts server/src/config/registry.test.ts server/.env.example server/src/analyzer/transports/ollama-transport.ts server/src/analyzer/transports/gemini-transport.ts server/src/analyzer/transports/structured-output-wire.test.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/ollama.ts server/src/analyzer/gemini.ts server/src/analyzer/structured-output-settings.test.ts
+git add server/src/config/registry.ts server/src/config/registry.test.ts server/.env.example server/src/analyzer/transports/ollama-transport.ts server/src/analyzer/transports/gemini-transport.ts server/src/analyzer/transports/structured-output-wire.test.ts server/src/analyzer/runner/stage-runner.ts server/src/analyzer/ollama.ts server/src/analyzer/gemini.ts server/src/analyzer/structured-output-settings.test.ts docs/wiki/Advanced-Settings.md
 git commit -m "feat(server): add structured-output mode knobs for the ollama and gemini analyzers"
 ```
 
@@ -4282,6 +4402,8 @@ git commit -m "feat(server): add structured-output mode knobs for the ollama and
   - `AnalyzerEndpointRefusal`
   - `parseEndpointInput`, `applyCreate`, `applyUpdate`, `applyDelete`, `applyKey`
   - `endpointKeyStatus`, `resolveEndpointApiKey`
+  - `friendlyEndpointIssueMessage(path, issue)` (review, item 4) — exported so PR 3d's own test can
+    assert against the real server string instead of re-deriving it by hand.
 
 **Deliberate shape choice.** `findEndpointReferences` takes a structural `EndpointReferenceSource` rather than importing `UserSettings`. `user-settings.ts` imports this module for `analyzerEndpointSchema`, so a type import back would be a cycle, and madge counts type edges. `UserSettings` is assignable to the parameter, so every contract caller compiles unchanged.
 
@@ -4305,6 +4427,7 @@ import {
   ENDPOINT_KEY_CONTROL_CHARACTER_RULE,
   endpointKeyStatus,
   findEndpointReferences,
+  friendlyEndpointIssueMessage,
   keyOriginMatches,
   resolveEndpointApiKey,
   resolveUnloadUrl,
@@ -4393,6 +4516,20 @@ describe('create / update / delete / key decisions', () => {
     const r = refusal(() => applyCreate(empty, { id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1' }));
     expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
     expect(r.issues.some((i) => i.path.join('.') === 'contextTokens')).toBe(true);
+  });
+  it('pins field-aware messages for a bad URL, a missing context size and a too-big request ceiling — never raw zod text (#3084 F5 review, item 4)', () => {
+    const badUrl = refusal(() => applyCreate(empty, { ...base, baseUrl: 'not a url' }));
+    expect(badUrl.issues).toEqual([{ path: ['baseUrl'], message: 'Base URL must be a valid URL, e.g. http://127.0.0.1:8080/v1.' }]);
+    const noContext = refusal(() => applyCreate(empty, { id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1' }));
+    expect(noContext.issues.find((i) => i.path.join('.') === 'contextTokens')?.message).toBe('Context size is required.');
+    const bigCeiling = refusal(() => applyCreate(empty, { ...base, requestCeilingMs: 99_000_000 }));
+    expect(bigCeiling.issues).toEqual([{ path: ['requestCeilingMs'], message: 'Request ceiling must be at most 240 minutes.' }]);
+    /* No-echo, still: the submitted values never appear anywhere in the refusal. */
+    expect(JSON.stringify([badUrl, bigCeiling])).not.toMatch(/not a url|99000000|99_000_000/);
+  });
+  it('friendlyEndpointIssueMessage falls back to the raw zod message for a path/code this map does not cover', () => {
+    const issue = { code: 'custom', path: ['extraParams'], message: 'made up for this test' } as unknown as Parameters<typeof friendlyEndpointIssueMessage>[1];
+    expect(friendlyEndpointIssueMessage('extraParams', issue)).toBe('made up for this test');
   });
   it.each(['Lab', 'lab_1', '', 'a'.repeat(41)])('refuses the endpoint id %j', (id) => {
     expect(refusal(() => applyCreate(empty, { ...base, id }))).toMatchObject({ status: 400, refusal: 'invalid' });
@@ -4665,6 +4802,60 @@ export function findEndpointReferences(settings: EndpointReferenceSource, endpoi
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** #3084 F5 review, item 4 — a raw zod message is implementation detail, not
+    something to show next to a form field: zod 4.4.3 ships "Invalid URL" for
+    a bad `baseUrl`, "Too big: expected number to be <=14400000" for an
+    over-ceiling `requestCeilingMs` (verified against the installed
+    `server/node_modules/zod` — `server/package.json` pins `"zod": "^4.0.0"`,
+    resolved to 4.4.3; a `.url()`/`.regex()` failure's `issue.code` is
+    `invalid_format`, not zod 3's `invalid_string`). This is a template map
+    per endpoint field; any path/code this map does not cover falls back to
+    the raw zod message — still never a value, since zod's own message never
+    echoes the input for these issue types (verified above). Exported so PR
+    3d's UI test can assert against the real server string instead of
+    re-deriving it by hand. */
+export function friendlyEndpointIssueMessage(path: string, issue: z.ZodIssue): string {
+  if (path === 'baseUrl' && issue.code === 'invalid_format') {
+    return 'Base URL must be a valid URL, e.g. http://127.0.0.1:8080/v1.';
+  }
+  if (path === 'unloadUrl' && issue.code === 'invalid_format') {
+    return 'Unload URL must be a valid URL, e.g. http://127.0.0.1:8080/api/models/unload.';
+  }
+  if (path === 'id' && issue.code === 'invalid_format') {
+    return 'Endpoint id must be lowercase letters, digits and hyphens, 1–40 characters.';
+  }
+  if (path === 'name' && issue.code === 'too_big') {
+    return 'Name must be 80 characters or fewer.';
+  }
+  if (path === 'contextTokens' && issue.code === 'invalid_type') {
+    return 'Context size is required.';
+  }
+  if (path === 'contextTokens' && issue.code === 'too_small') {
+    return 'Context size must be at least 512 tokens.';
+  }
+  if (path === 'gpu' && (issue.code === 'invalid_type' || issue.code === 'invalid_format')) {
+    return 'GPU card must be "none", "any", or a device key such as cuda:0.';
+  }
+  if (path === 'concurrency' && issue.code === 'too_big') {
+    return `Concurrency must be at most ${'maximum' in issue ? issue.maximum : 16}.`;
+  }
+  if (path === 'concurrency' && issue.code === 'too_small') {
+    return 'Concurrency must be at least 1.';
+  }
+  if (path === 'requestCeilingMs' && issue.code === 'too_big') {
+    const maxMs = 'maximum' in issue && typeof issue.maximum === 'number' ? issue.maximum : 14_400_000;
+    return `Request ceiling must be at most ${Math.round(maxMs / 60_000)} minutes.`;
+  }
+  if (path === 'requestCeilingMs' && issue.code === 'too_small') {
+    const minMs = 'minimum' in issue && typeof issue.minimum === 'number' ? issue.minimum : 60_000;
+    return `Request ceiling must be at least ${Math.round(minMs / 1000)} seconds.`;
+  }
+  if (path === 'maxInputTokensPerRequest' && issue.code === 'too_small') {
+    return 'Max input tokens per request must be at least 256.';
+  }
+  return issue.message; // fallback — still never a value, per the no-echo rule
+}
+
 export function parseEndpointInput(input: unknown): AnalyzerEndpoint {
   const withGpu =
     isRecord(input) && typeof input.baseUrl === 'string' && input.gpu === undefined
@@ -4676,10 +4867,13 @@ export function parseEndpointInput(input: unknown): AnalyzerEndpoint {
       400,
       'invalid',
       'Invalid analyzer endpoint.',
-      /* #3084 F5 — structured {path, message}, never the rejected value: a zod
-         issue's `.message` names the rule ("Required", "Invalid url", …), not the
-         input, so this never echoes a bad key or URL. */
-      parsed.error.issues.map((i) => ({ path: i.path.map(String), message: i.message })),
+      /* #3084 F5 — structured {path, message}, never the rejected value: a
+         field-aware template (friendlyEndpointIssueMessage) replaces zod's own
+         wording, which is implementation detail, not user-facing copy. */
+      parsed.error.issues.map((i) => {
+        const path = i.path.map(String);
+        return { path, message: friendlyEndpointIssueMessage(path.join('.'), i) };
+      }),
     );
   }
   const ep = parsed.data;
@@ -4846,6 +5040,9 @@ Revert one guard at a time, confirm the named test goes red, then restore:
 | `Object.keys(ep.extraParams).length > 0` → `false` | the same test (the `extraParams` half) |
 | Remove `'dualModelEnabled'` from `FIELD_EXCLUDED` | `every user-settings field … is classified` |
 | Delete the `hasControlCharacter(key)` refusal in `applyKey` | `refuses a key containing any control character…` |
+| In `parseEndpointInput`, pass `i.message` directly instead of `friendlyEndpointIssueMessage(path.join('.'), i)` | `pins field-aware messages for a bad URL, a missing context size and a too-big request ceiling…` (the message reverts to zod's raw "Invalid URL" / "Too big: expected number to be <=14400000" text) |
+| In `friendlyEndpointIssueMessage`, delete the `path === 'baseUrl' && issue.code === 'invalid_format'` branch | the same test (`badUrl.issues[0].message` falls through to the raw zod message) |
+| In `friendlyEndpointIssueMessage`, delete the `path === 'requestCeilingMs' && issue.code === 'too_big'` branch, or drop the `/ 60_000` conversion | the same test (either the raw zod message reappears, or the message reads "at most 14400000 minutes" instead of "240 minutes") |
 | In `hasControlCharacter`, drop `\|\| (c >= 0x7f && c <= 0x9f)` | the same test (the DEL and C1 keys are accepted) |
 
 **Contract note (reported).** The contract names `resolveUnloadUrl`'s second parameter `lastUsedModel`. It is `model` here, because P3 replaced the single last-used model with `servedModels()` (Task 3b.10); PR 3d's `evictEndpointsOnDevice` calls it once per served model.
@@ -5814,12 +6011,18 @@ hints an attacker-controlled entry chose, while `.code` is a fixed enum. The sum
 field is `codes`, never `issues`.
 
 **Files:**
-- Modify: `server/src/workspace/user-settings.ts` — `DroppedEndpointEntry` (Task 3b.6, after `entry`/`raw`): add `codes: string[]`; `zodIssues` (add sibling `zodIssueCodes`); the three `dropped.push(…)` call sites in `dropInvalidEndpointEntries` (whole-field, per-entry, key-entry) each gain a `codes` value alongside `issues`; `archiveDroppedEndpointEntries` (assign `archiveId: randomUUID()` per line in the serialised object); add `droppedEndpointEntriesAcknowledgedPath()`, `readAcknowledgedIds()`, `listDroppedEndpointEntriesSync()`, `listDroppedEndpointEntries()`, `acknowledgeDroppedEndpointEntries()` after `invalidEndpointsArchivePath()` (acknowledgement is written with the existing `writeJsonAtomic`, not a dedicated writer function). Add `randomUUID` to the top `node:crypto` import (new).
+- Modify: `server/src/workspace/user-settings.ts` — `DroppedEndpointEntry` (Task 3b.6, after `entry`/`raw`): add `codes: string[]` and `contentHash: string` (item 5, below); `zodIssues` (add sibling `zodIssueCodes`); the three `dropped.push(…)` call sites in `dropInvalidEndpointEntries` (whole-field, per-entry, key-entry) each gain a `codes` value alongside `issues`, and a `contentHash`; `archiveDroppedEndpointEntries` (skip a hash already archived — item 5 — and assign `archiveId: randomUUID()` per line in the serialised object); add `droppedEndpointEntriesAcknowledgedPath()`, `readAcknowledgedHashes()`, `listDroppedEndpointEntriesSync()`, `listDroppedEndpointEntries()`, `acknowledgeDroppedEndpointEntries()` after `invalidEndpointsArchivePath()` (acknowledgement is serialised through `writeChain`, item 6 — not a bare `writeJsonAtomic` race). Add `randomUUID`, `createHash` to the top `node:crypto` import (new), and `readFileSync` to the existing top `node:fs` import (`:14`, today only `existsSync, statSync` — see "Wrong locations" below). `FORBIDDEN_KEYS` (Task 3b.6, `:643` on `main`, THIS file — never `routes/user-settings.ts`) gains `'droppedEndpointEntries'` in the same block as `'analyzerEndpoints'`.
 - Modify: `server/src/routes/user-settings.ts`:
   - `UserSettingsResponse` — add `droppedEndpointEntries: DroppedEndpointEntrySummary[]`;
   - `envDerived` — add `droppedEndpointEntries: listDroppedEndpointEntriesSync()` (envDerived is synchronous and shared by every endpoint-CRUD 200 response, Task 3b.7; the archive and ack files are tiny, so a sync read costs nothing worth an async threading-through);
-  - `FORBIDDEN_KEYS` (Task 3b.6) — append `'droppedEndpointEntries'`, mirroring `analyzerEndpoints`;
   - new route `POST /dropped-endpoint-entries/acknowledge` on `userSettingsRouter` (not `analyzerEndpointsRouter` — the decision names it under `/api/user/settings`), body `{ archiveIds: string[] }`, 200 with the `GET` body.
+
+**Wrong locations (review, item 9).** `FORBIDDEN_KEYS` is declared and consumed entirely inside
+`server/src/workspace/user-settings.ts` (`stripForbiddenKeys`, called from `writeUserSettings`) —
+`routes/user-settings.ts` never references it. An earlier draft of this task put the `FORBIDDEN_KEYS`
+edit under the routes file; it belongs with the other `workspace/user-settings.ts` edits above.
+Likewise `readFileSync` is not already imported in `workspace/user-settings.ts` at `46e62a34` (only
+`existsSync, statSync` at `:14`) — an earlier draft assumed it was; this task adds it explicitly.
 - Modify: `openapi.yaml`:
   - `UserSettings.properties` — add `droppedEndpointEntries` (readOnly array of `DroppedEndpointEntry` — renamed in this schema to avoid colliding with Task 3b.6's internal type of the same name; call the OpenAPI schema `DroppedEndpointEntrySummary`);
   - new schema `DroppedEndpointEntrySummary`;
@@ -5830,14 +6033,34 @@ field is `codes`, never `issues`.
 - Test: `server/src/routes/user-settings.test.ts` (add).
 
 **Interfaces:**
-- Consumes: `DroppedEndpointEntry`, `unarchivedDrops`, `invalidEndpointsArchivePath`, `USER_SETTINGS_PATH` (Task 3b.6).
+- Consumes: `DroppedEndpointEntry`, `unarchivedDrops`, `invalidEndpointsArchivePath`, `writeChain`, `USER_SETTINGS_PATH` (Task 3b.6).
 - Produces:
-  - `export interface DroppedEndpointEntrySummary { archiveId: string | null; kind: 'endpoint' | 'key'; endpointId?: string; name?: string; origin?: string; issues: string[]; droppedAt: string }` (no `acknowledgedAt`: acknowledgement lives only in the sidecar file, and a listed entry is by definition unacknowledged, so nothing would ever set it)
+  - `export interface DroppedEndpointEntrySummary { archiveId: string | null; kind: 'endpoint' | 'key'; endpointId?: string; name?: string; origin?: string; issues: string[]; droppedAt: string }` — `name` is capped at 80 characters (item 10, below: it comes from a raw entry that FAILED validation, so it never went through `analyzerEndpointSchema`'s own `.max(80)`). No `acknowledgedAt`: acknowledgement lives only in the sidecar file, and a listed entry is by definition unacknowledged, so nothing would ever set it. No `contentHash` (item 5): it never leaves the server.
   - `export async function listDroppedEndpointEntries(): Promise<DroppedEndpointEntrySummary[]>`
-  - `export async function acknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<void>`
+  - `export async function acknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<void>` — serialised through `writeChain` (item 6), not a bare read-then-write.
   - `export function droppedEndpointEntriesAcknowledgedPath(): string` — beside the settings file, like `invalidEndpointsArchivePath()`.
 
-**Tests kept green:** `server/src/workspace/user-settings.endpoints.test.ts` (Task 3b.6) — `codes` is additive, so its `issues`-based assertions are untouched.
+**Content-hash de-duplication and durable acknowledgement (review, item 5).** "Got it" must survive a
+restart for the same unchanged entry — it did not, in the first draft of this task: Task 3b.6's
+`archivedDrops` de-dupe (which stops the SAME process from appending an unchanged entry twice) is an
+in-memory `Set`, so a restart forgets it, and the next read appends a FRESH archive line with a FRESH
+`archiveId` for the very same bad entry, un-acknowledged — the acknowledgement the user gave the OLD
+`archiveId` no longer applies to anything. Each archive record gains `contentHash` — sha256 of a
+canonical (sorted-key) JSON encoding of the dropped entry's raw value (`entry`/`raw`, never `droppedAt`
+or `id`, so the hash depends only on what makes it invalid). Two things use it:
+- **On append** (`archiveDroppedEndpointEntries`, Task 3b.6): before appending, also check the hashes
+  already present in the ON-DISK archive file (not just the in-memory `archivedDrops` Set) — an entry
+  whose hash is already archived is not appended again, durably, across restarts.
+- **On acknowledge:** the sidecar stores acknowledged **content hashes**, not archiveIds.
+  `acknowledgeDroppedEndpointEntries(archiveIds)` resolves each given `archiveId` to its `contentHash`
+  by reading the current archive (archiveIds map to hashes only for this one lookup — the caller still
+  passes archiveIds, matching what `listDroppedEndpointEntries` returned) and acknowledges the hash.
+  `listDroppedEndpointEntriesSync` then hides any archive line whose `contentHash` is acknowledged,
+  regardless of which `archiveId` that line currently carries. A changed or genuinely new bad entry
+  hashes differently, so it is never hidden by an old acknowledgement — it shows again.
+
+**Tests kept green:** `server/src/workspace/user-settings.endpoints.test.ts` (Task 3b.6) — `codes` and
+`contentHash` are additive, so its `issues`-based assertions are untouched.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5890,12 +6113,20 @@ describe('listDroppedEndpointEntries / acknowledgeDroppedEndpointEntries (#3084 
       const [entry] = await listDroppedEndpointEntries();
       expect(entry).toMatchObject({ kind: 'endpoint', endpointId: 'Bad_Id', name: 'Lab' });
       expect(typeof entry.archiveId).toBe('string');
-      expect(entry.issues.some((c) => c.endsWith(': invalid_string'))).toBe(true);
+      /* zod 4.4.3 (server/package.json "zod": "^4", installed 4.4.3): a .url()
+         failure is code "invalid_format" (message "Invalid URL"), not the zod-3
+         "invalid_string" this test asserted before — review item 4. */
+      expect(entry.issues.some((c) => c.endsWith(': invalid_format'))).toBe(true);
+      /* No-echo: zod's own message never contains the submitted value either
+         ("Invalid URL" names no URL), but assert on the submitted value's
+         absence directly rather than on today's exact zod wording, which is
+         not this test's contract to pin. */
       expect(entry.issues.join(' ')).not.toContain('not a url');
+      expect(JSON.stringify(entry)).not.toContain('not a url');
     });
   });
 
-  it('lists a dropped key entry with the origin only, never the key', async () => {
+  it('lists a dropped key entry with the origin only, never the key, and asserts its issues', async () => {
     writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpointKeys: { lab: { origin: 99, key: 'sk-listed-secret-1' } } }));
     _resetUserSettingsCache();
     await quietly(async () => {
@@ -5903,6 +6134,10 @@ describe('listDroppedEndpointEntries / acknowledgeDroppedEndpointEntries (#3084 
       const [entry] = await listDroppedEndpointEntries();
       expect(entry).toMatchObject({ kind: 'key', endpointId: 'lab' });
       expect(entry.origin).toBeUndefined(); // origin itself (99) failed its own schema check
+      /* #3084 F5 review, item 8 (~6250) — this case previously asserted no
+         issues content at all. `origin: 99` fails endpointKeyEntrySchema's
+         `z.string()` check on `origin`, so the code names that field. */
+      expect(entry.issues).toEqual(['origin: invalid_type']);
       expect(JSON.stringify(entry)).not.toContain('sk-listed-secret-1');
     });
   });
@@ -5918,7 +6153,19 @@ describe('listDroppedEndpointEntries / acknowledgeDroppedEndpointEntries (#3084 
     });
   });
 
-  it('acknowledging an archiveId hides it, and a fresh drop of the same shape after acknowledgement shows again', async () => {
+  it('a name over 80 characters is capped in the summary (review item 10)', async () => {
+    const longName = 'x'.repeat(200);
+    writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpoints: [{ id: 'Long_Name', name: longName, baseUrl: 'nope' }] }));
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      await readUserSettings();
+      const [entry] = await listDroppedEndpointEntries();
+      expect(entry.name).toHaveLength(80);
+      expect(entry.name).toBe(longName.slice(0, 80));
+    });
+  });
+
+  it('acknowledging an archiveId hides it, and it stays hidden across a simulated restart for the SAME unchanged entry, with no new archive line written (#3084 F5 review, item 5)', async () => {
     writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpoints: [{ id: 'Ack_Bad', name: 'A', baseUrl: 'nope' }] }));
     _resetUserSettingsCache();
     await quietly(async () => {
@@ -5926,14 +6173,74 @@ describe('listDroppedEndpointEntries / acknowledgeDroppedEndpointEntries (#3084 
       const [first] = await listDroppedEndpointEntries();
       await acknowledgeDroppedEndpointEntries([first.archiveId as string]);
       expect(await listDroppedEndpointEntries()).toEqual([]);
-      /* A later restart re-parses the same file and drops it again (Task 3b.6's
-         archivedDrops de-dupe is per-process); the fresh archive line gets a new
-         archiveId and is not pre-acknowledged. */
+      const archiveLinesBefore = readFileSync(ARCHIVE, 'utf8').trimEnd().split('\n').length;
+      /* Simulated restart: a cold cache re-reading the SAME on-disk settings
+         file. Task 3b.6's per-process archivedDrops Set would be empty here
+         (a real restart), so this is exactly the case item 5 fixes. */
+      _resetUserSettingsCache();
+      await readUserSettings();
+      expect(await listDroppedEndpointEntries()).toEqual([]);
+      const archiveLinesAfter = readFileSync(ARCHIVE, 'utf8').trimEnd().split('\n').length;
+      expect(archiveLinesAfter).toBe(archiveLinesBefore); // no duplicate line for the same hash
+    });
+  });
+
+  it('a MODIFIED bad entry (different content, same id) is listed again even after the original was acknowledged', async () => {
+    writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpoints: [{ id: 'Changed_Bad', name: 'Before', baseUrl: 'nope' }] }));
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      await readUserSettings();
+      const [first] = await listDroppedEndpointEntries();
+      await acknowledgeDroppedEndpointEntries([first.archiveId as string]);
+      writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpoints: [{ id: 'Changed_Bad', name: 'After', baseUrl: 'still nope' }] }));
       _resetUserSettingsCache();
       await readUserSettings();
       const after = await listDroppedEndpointEntries();
       expect(after).toHaveLength(1);
+      expect(after[0].name).toBe('After');
       expect(after[0].archiveId).not.toBe(first.archiveId);
+    });
+  });
+
+  it('acknowledging twice keeps the first acknowledgement (union, not replace) (#3084 F5 review, item 8)', async () => {
+    writeFileSync(
+      USER_SETTINGS_PATH,
+      JSON.stringify({
+        analyzerEndpoints: [
+          { id: 'Union_A', name: 'A', baseUrl: 'nope-a' },
+          { id: 'Union_B', name: 'B', baseUrl: 'nope-b' },
+        ],
+      }),
+    );
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      await readUserSettings();
+      const [a, b] = await listDroppedEndpointEntries();
+      await acknowledgeDroppedEndpointEntries([a.archiveId as string]);
+      await acknowledgeDroppedEndpointEntries([b.archiveId as string]);
+      expect(await listDroppedEndpointEntries()).toEqual([]);
+    });
+  });
+
+  it('two concurrent acknowledge calls do not lose either one (serialised through writeChain, review item 6)', async () => {
+    writeFileSync(
+      USER_SETTINGS_PATH,
+      JSON.stringify({
+        analyzerEndpoints: [
+          { id: 'Race_A', name: 'A', baseUrl: 'nope-a' },
+          { id: 'Race_B', name: 'B', baseUrl: 'nope-b' },
+        ],
+      }),
+    );
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      await readUserSettings();
+      const [a, b] = await listDroppedEndpointEntries();
+      await Promise.all([
+        acknowledgeDroppedEndpointEntries([a.archiveId as string]),
+        acknowledgeDroppedEndpointEntries([b.archiveId as string]),
+      ]);
+      expect(await listDroppedEndpointEntries()).toEqual([]);
     });
   });
 
@@ -5978,14 +6285,22 @@ Expected: FAIL, `does not provide an export named 'listDroppedEndpointEntries'`.
 
 `server/src/workspace/user-settings.ts`:
 
-1. Import `randomUUID` from `node:crypto` at the top.
+1. Imports. Add `readFileSync` to the existing top `node:fs` import (`:14` on `46e62a34` is
+   `import { existsSync, statSync } from 'node:fs';` — `readFileSync` is **not** already there, unlike
+   an earlier draft of this task assumed; item 9 of the review). Add `randomUUID, createHash` from
+   `node:crypto` (new import).
 
-2. Extend `DroppedEndpointEntry` (Task 3b.6) with one field after `raw: unknown;`:
+2. Extend `DroppedEndpointEntry` (Task 3b.6) with two fields after `raw: unknown;`:
 ```ts
   /** #3084 F5 — "path: code" strings, one per zodIssues() entry (or a synthetic
       code for the two non-zod refusals). Never a value: exposed to the client
       via listDroppedEndpointEntries, where `issues` (path: message) is not. */
   codes: string[];
+  /** #3084 F5 review — sha256 of a canonical (sorted-key) JSON encoding of `entry`
+      (never `droppedAt`/`id`, so it depends only on what makes the entry
+      invalid). Drives durable de-duplication and durable "Got it" — never
+      leaves the server, never appears in DroppedEndpointEntrySummary. */
+  contentHash: string;
 ```
 
 3. Add beside `zodIssues`:
@@ -5993,18 +6308,64 @@ Expected: FAIL, `does not provide an export named 'listDroppedEndpointEntries'`.
 function zodIssueCodes(error: z.ZodError): string[] {
   return error.issues.map((i) => `${i.path.join('.') || '(entry)'}: ${i.code}`);
 }
+
+/** #3084 F5 review — stable regardless of key insertion order, so re-parsing
+    the same bad entry on a later read (same process or after a restart)
+    always hashes identically. */
+function canonicalStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalStringify((value as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function droppedEntryContentHash(entry: unknown): string {
+  return createHash('sha256').update(canonicalStringify(entry)).digest('hex');
+}
 ```
 
-4. In `dropInvalidEndpointEntries`, add a `codes` entry to each of the three `dropped.push(…)` calls:
+4. In `dropInvalidEndpointEntries`, add a `codes` **and** `contentHash` entry to each of the three
+   `dropped.push(…)` calls — `contentHash` is always `droppedEntryContentHash(entry)` (the key-entry
+   case hashes the RAW `entry`, not `keyEntryOriginOnly(entry)`, so a changed key value still counts
+   as a genuinely different entry even though the archived, origin-only `entry` field looks the same):
    - whole-list-invalid: `codes: ['analyzerEndpoints: invalid_type']`
    - per-entry: `codes: parsed.success ? ['id: duplicate_id'] : zodIssueCodes(parsed.error)`
    - whole-map-invalid: `codes: ['analyzerEndpointKeys: invalid_type']`
    - key-entry: `codes: zodIssueCodes(parsed.error)`
 
-5. In `archiveDroppedEndpointEntries`, the serialised line gains an `archiveId` and a `codes` field.
-   No `acknowledgedAt`: acknowledgement lives only in the sidecar file
-   (`droppedEndpointEntriesAcknowledgedPath()`), never on the archive record — a listed entry is by
-   definition unacknowledged, so the archive line would never have anything else to hold there.
+5. In `archiveDroppedEndpointEntries`, also skip a hash the ON-DISK archive already has (durable
+   de-dupe, item 5 — the existing in-memory `archivedDrops` Set only survives one process), and the
+   serialised line gains `archiveId` and `codes`. No `acknowledgedAt`: acknowledgement lives only in
+   the sidecar file, never on the archive record.
+```ts
+function readExistingArchiveHashes(archive: string): Set<string> {
+  try {
+    return new Set(
+      readFileSync(archive, 'utf8')
+        .split('\n')
+        .filter((l) => l.trim().length > 0)
+        .map((l) => {
+          try {
+            return (JSON.parse(l) as { contentHash?: unknown }).contentHash;
+          } catch {
+            return undefined;
+          }
+        })
+        .filter((h): h is string => typeof h === 'string'),
+    );
+  } catch {
+    return new Set();
+  }
+}
+```
+Change the `fresh` filter to also exclude an already-archived hash:
+```ts
+  const onDisk = readExistingArchiveHashes(archive);
+  const fresh = dropped.filter((d) => !archivedDrops.has(archiveKey(d)) && !onDisk.has(d.contentHash));
+```
+and the serialised-line builder:
 ```ts
   const lines = fresh.map((d) =>
     `${JSON.stringify({
@@ -6015,6 +6376,7 @@ function zodIssueCodes(error: z.ZodError): string[] {
       id: d.id,
       issues: d.issues,
       codes: d.codes,
+      contentHash: d.contentHash,
       entry: d.entry,
     })}\n`,
   );
@@ -6032,14 +6394,20 @@ export interface DroppedEndpointEntrySummary {
   droppedAt: string;
 }
 
+const DROPPED_ENTRY_NAME_MAX = 80; // #3084 F5 review, item 10 — a raw entry never went through
+                                    // analyzerEndpointSchema's own .max(80), so cap it here.
+
 /** Beside the settings file, like the archive itself. A tiny JSON array of
-    acknowledged archiveIds. P25's append-only rule stays on the archive
-    file — this sidecar is what acknowledgement actually mutates. */
+    acknowledged CONTENT HASHES (item 5 — never archiveIds: an archiveId is
+    minted fresh on every append, including a restart's re-drop of the same
+    unchanged entry, so an ack keyed on archiveId would stop applying the
+    moment the process restarts). This sidecar is what acknowledgement
+    actually mutates; the archive file itself stays append-only (P25). */
 export function droppedEndpointEntriesAcknowledgedPath(): string {
   return join(dirname(USER_SETTINGS_PATH), 'user-settings.invalid-endpoints.acknowledged.json');
 }
 
-function readAcknowledgedIds(): Set<string> {
+function readAcknowledgedHashes(): Set<string> {
   try {
     const raw = JSON.parse(readFileSync(droppedEndpointEntriesAcknowledgedPath(), 'utf8'));
     return new Set(Array.isArray(raw) ? raw.filter((v) => typeof v === 'string') : []);
@@ -6048,7 +6416,11 @@ function readAcknowledgedIds(): Set<string> {
   }
 }
 
-function summariseArchiveLine(line: string): DroppedEndpointEntrySummary | null {
+/** Parses one archive line; returns its contentHash alongside the built
+    summary (or null for a line this function itself rejects),
+    so callers with different jobs (list vs. resolve-archiveId-to-hash) each
+    read the hash without re-deriving it. */
+function parseArchiveLine(line: string): { summary: DroppedEndpointEntrySummary; contentHash: string | undefined } | null {
   let rec: Record<string, unknown>;
   try {
     rec = JSON.parse(line);
@@ -6058,25 +6430,30 @@ function summariseArchiveLine(line: string): DroppedEndpointEntrySummary | null 
   if (typeof rec.archiveId !== 'string') return null; // a pre-F5 line, from before this task shipped
   const kind: 'endpoint' | 'key' = rec.field === 'analyzerEndpoints' ? 'endpoint' : 'key';
   const entry = rec.entry as Record<string, unknown> | undefined;
+  const rawName = kind === 'endpoint' && entry && typeof entry.name === 'string' ? entry.name : undefined;
   return {
-    archiveId: rec.archiveId,
-    kind,
-    endpointId: kind === 'endpoint' ? (typeof rec.id === 'string' ? rec.id : undefined) : (typeof rec.position === 'string' ? rec.position : undefined),
-    name: kind === 'endpoint' && entry && typeof entry.name === 'string' ? entry.name : undefined,
-    origin: kind === 'key' && entry && typeof entry.origin === 'string' ? entry.origin : undefined,
-    issues: Array.isArray(rec.codes) ? (rec.codes as string[]) : [],
-    droppedAt: typeof rec.droppedAt === 'string' ? rec.droppedAt : new Date(0).toISOString(),
+    summary: {
+      archiveId: rec.archiveId,
+      kind,
+      endpointId: kind === 'endpoint' ? (typeof rec.id === 'string' ? rec.id : undefined) : (typeof rec.position === 'string' ? rec.position : undefined),
+      name: rawName?.slice(0, DROPPED_ENTRY_NAME_MAX),
+      origin: kind === 'key' && entry && typeof entry.origin === 'string' ? entry.origin : undefined,
+      issues: Array.isArray(rec.codes) ? (rec.codes as string[]) : [],
+      droppedAt: typeof rec.droppedAt === 'string' ? rec.droppedAt : new Date(0).toISOString(),
+    },
+    contentHash: typeof rec.contentHash === 'string' ? rec.contentHash : undefined,
   };
 }
 
 function summarisePending(d: DroppedEndpointEntry): DroppedEndpointEntrySummary {
   const kind: 'endpoint' | 'key' = d.field === 'analyzerEndpoints' ? 'endpoint' : 'key';
   const entry = d.entry as Record<string, unknown> | undefined;
+  const rawName = kind === 'endpoint' && entry && typeof entry.name === 'string' ? entry.name : undefined;
   return {
     archiveId: null,
     kind,
     endpointId: kind === 'endpoint' ? (typeof d.id === 'string' ? d.id : undefined) : (typeof d.position === 'string' ? d.position : undefined),
-    name: kind === 'endpoint' && entry && typeof entry.name === 'string' ? entry.name : undefined,
+    name: rawName?.slice(0, DROPPED_ENTRY_NAME_MAX),
     origin: kind === 'key' && entry && typeof entry.origin === 'string' ? entry.origin : undefined,
     issues: d.codes,
     droppedAt: d.droppedAt,
@@ -6084,40 +6461,77 @@ function summarisePending(d: DroppedEndpointEntry): DroppedEndpointEntrySummary 
 }
 
 /** #3084 F5 — every unacknowledged drop: archived (from the append-only archive
-    file, minus anything in the acknowledged sidecar) plus whatever is still
-    pending an archive append (unarchivedDrops, Task 3b.6, listed with
-    archiveId: null — the user must still be told even though the append
-    hasn't landed). Synchronous: both files are small, and envDerived (sync,
-    shared by every endpoint-CRUD 200 response) needs this too. */
+    file, minus anything whose contentHash is in the acknowledged sidecar)
+    plus whatever is still pending an archive append (unarchivedDrops, Task
+    3b.6, listed with archiveId: null — the user must still be told even
+    though the append hasn't landed; also filtered against the acknowledged
+    set, for the edge case of a retried entry whose earlier attempt was
+    already acknowledged). Synchronous: both files are small, and envDerived
+    (sync, shared by every endpoint-CRUD 200 response) needs this too. */
 function listDroppedEndpointEntriesSync(): DroppedEndpointEntrySummary[] {
-  const acknowledged = readAcknowledgedIds();
+  const acknowledged = readAcknowledgedHashes();
   let archived: DroppedEndpointEntrySummary[] = [];
   try {
     archived = readFileSync(invalidEndpointsArchivePath(), 'utf8')
       .split('\n')
       .filter((l) => l.trim().length > 0)
-      .map(summariseArchiveLine)
-      .filter((s): s is DroppedEndpointEntrySummary => s !== null && !acknowledged.has(s.archiveId as string));
+      .map(parseArchiveLine)
+      .filter((p): p is NonNullable<typeof p> => p !== null && !(p.contentHash && acknowledged.has(p.contentHash)))
+      .map((p) => p.summary);
   } catch {
     archived = [];
   }
-  return [...archived, ...unarchivedDrops.map(summarisePending)];
+  const pending = unarchivedDrops.filter((d) => !acknowledged.has(d.contentHash)).map(summarisePending);
+  return [...archived, ...pending];
 }
 
 export async function listDroppedEndpointEntries(): Promise<DroppedEndpointEntrySummary[]> {
   return listDroppedEndpointEntriesSync();
 }
 
-/** #3084 F5 — an id not currently listed (already acknowledged, still pending
-    an archive append, or simply unknown) is ignored rather than refused: an
-    ack racing a retry or a duplicate click is not an error. */
+/** #3084 F5 review, item 6 — serialised through `writeChain` (the same chain
+    every settings writer and mutateUserSettings use), so two concurrent
+    acknowledge calls (a double click) read-modify-write the sidecar one at a
+    time instead of racing a lost update. */
+function readAndUnionAcknowledgedHashes(hashes: Iterable<string>): Promise<void> {
+  const next = writeChain.then(async () => {
+    const current = readAcknowledgedHashes();
+    for (const h of hashes) current.add(h);
+    await writeJsonAtomic(droppedEndpointEntriesAcknowledgedPath(), [...current]);
+  });
+  writeChain = next.catch(() => undefined);
+  return next;
+}
+
+/** #3084 F5 — an archiveId not currently on disk (already acknowledged, still
+    pending an archive append and so never had one, or simply unknown) is
+    ignored rather than refused: an ack racing a retry or a duplicate click is
+    not an error. Resolves each archiveId to its contentHash (item 5 — the
+    sidecar stores hashes, never archiveIds) by re-reading the archive once. */
 export async function acknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<void> {
-  const ids = new Set(readAcknowledgedIds());
-  for (const id of archiveIds) if (id) ids.add(id);
-  await writeJsonAtomic(droppedEndpointEntriesAcknowledgedPath(), [...ids]);
+  if (archiveIds.length === 0) return;
+  const wanted = new Set(archiveIds);
+  const hashesToAck = new Set<string>();
+  try {
+    for (const line of readFileSync(invalidEndpointsArchivePath(), 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const parsed = parseArchiveLine(line);
+      if (parsed && wanted.has(parsed.summary.archiveId as string) && parsed.contentHash) {
+        hashesToAck.add(parsed.contentHash);
+      }
+    }
+  } catch {
+    return; // no archive file yet — nothing to acknowledge
+  }
+  if (hashesToAck.size === 0) return;
+  await readAndUnionAcknowledgedHashes(hashesToAck);
 }
 ```
-`readFileSync` and `writeJsonAtomic` are already imported (Task 3b.6 / main). Export `listDroppedEndpointEntriesSync` alongside the async wrapper — `routes/user-settings.ts`'s `envDerived` needs the sync form.
+7. `FORBIDDEN_KEYS` (`:643` on `46e62a34`, Task 3b.6's edit — **this file, not `routes/user-settings.ts`**,
+   item 9 of the review) gains `'droppedEndpointEntries'` in the same block as `'analyzerEndpoints'`.
+
+Export `listDroppedEndpointEntriesSync` alongside the async wrapper — `routes/user-settings.ts`'s
+`envDerived` needs the sync form.
 
 `server/src/routes/user-settings.ts`:
 1. Import `listDroppedEndpointEntriesSync, acknowledgeDroppedEndpointEntries, type DroppedEndpointEntrySummary` from `../workspace/user-settings.js`.
@@ -6128,8 +6542,9 @@ export async function acknowledgeDroppedEndpointEntries(archiveIds: string[]): P
   droppedEndpointEntries: DroppedEndpointEntrySummary[];
 ```
 3. `envDerived`'s returned object gains `droppedEndpointEntries: listDroppedEndpointEntriesSync(),`.
-4. `FORBIDDEN_KEYS` (Task 3b.6) gains `'droppedEndpointEntries',` in the same block as `'analyzerEndpoints'`.
-5. After the GET handler, add:
+   (`FORBIDDEN_KEYS` is NOT edited here — item 9: it lives entirely in `workspace/user-settings.ts`,
+   step 1 above.)
+4. After the GET handler, add:
 ```ts
 const acknowledgeSchema = z.object({ archiveIds: z.array(z.string()) });
 
@@ -6219,12 +6634,18 @@ New path, after the `/api/analyzer/endpoints/{endpointId}/key` block:
 1. `MOCK_USER_SETTINGS` gains `droppedEndpointEntries: [],`.
 2. After the mock endpoint functions (Task 3b.9), add:
 ```ts
-async function mockAcknowledgeDroppedEndpointEntries(_archiveIds: string[]): Promise<UserSettings> {
+/* #3084 F5 review, item 7 — mockEndpointFromInput refuses at save time (matching
+   the server), so the mock CRUD functions never populate
+   MOCK_USER_SETTINGS.droppedEndpointEntries themselves. PR 3d's own tests seed
+   it directly (its mock-mode UI tests need a dropped entry to show the banner
+   against), so this must actually filter, not no-op, or 3d's "Got it" test
+   would pass for the wrong reason (nothing to hide in the first place). */
+async function mockAcknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<UserSettings> {
   await wait(50);
-  /* #3084 F5 — the mock never drops an entry to begin with (mockEndpointFromInput
-     refuses at save time, matching the server's F5 save-time validation), so
-     there is nothing to acknowledge; this exists only so mock mode can call the
-     same operationId as real mode without a 404. */
+  const acked = new Set(archiveIds);
+  MOCK_USER_SETTINGS.droppedEndpointEntries = (MOCK_USER_SETTINGS.droppedEndpointEntries ?? []).filter(
+    (e) => !acked.has(e.archiveId ?? ''),
+  );
   return mockSettingsWithEndpoints(mockEndpoints());
 }
 async function realAcknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<UserSettings> {
@@ -6235,19 +6656,45 @@ async function realAcknowledgeDroppedEndpointEntries(archiveIds: string[]): Prom
 }
 ```
 3. Add `acknowledgeDroppedEndpointEntries: realAcknowledgeDroppedEndpointEntries` / `: mockAcknowledgeDroppedEndpointEntries` to the `real` / `mock` objects.
+4. Test: `src/lib/api-analyzer-endpoints-mock.test.ts` (Task 3b.9) gains:
+```ts
+it('mock acknowledgeDroppedEndpointEntries removes only the named entries (#3084 F5 review, item 7)', async () => {
+  _setMockUserSettingsForTest({
+    droppedEndpointEntries: [
+      { archiveId: 'ack-1', kind: 'endpoint', endpointId: 'a', issues: ['baseUrl: invalid_format'], droppedAt: new Date().toISOString() },
+      { archiveId: 'ack-2', kind: 'endpoint', endpointId: 'b', issues: ['baseUrl: invalid_format'], droppedAt: new Date().toISOString() },
+    ] as never,
+  });
+  const s = await api.acknowledgeDroppedEndpointEntries(['ack-1']);
+  expect(s.droppedEndpointEntries?.map((e) => e.archiveId)).toEqual(['ack-2']);
+});
+```
 
 - [ ] **Step 5: Mutation proofs**
 
 | Revert | Expected red test |
 |---|---|
-| `summariseArchiveLine`: use `rec.issues` instead of `rec.codes` for the summary's `issues` | `lists a dropped endpoint entry with a code, not a message…` (the message text, including `'not a url'`, appears) |
-| Delete the `!acknowledged.has(...)` filter in `listDroppedEndpointEntriesSync` | `acknowledging an archiveId hides it…` (still listed after ack) |
-| `acknowledgeDroppedEndpointEntries`: skip reading the existing set first (`ids = new Set(archiveIds)`) | the same test, second ack call, if two acks ever raced (documents the union, not just replace) |
-| `archiveDroppedEndpointEntries`: drop `archiveId: randomUUID()` from the serialised line | `lists a dropped endpoint entry…` (`typeof entry.archiveId).toBe('string')` fails — `summariseArchiveLine` returns null) |
+| `parseArchiveLine`: use `rec.issues` instead of `rec.codes` for the summary's `issues` | `lists a dropped endpoint entry with a code, not a message…` (the message text, including `'not a url'`, appears) |
+| Delete the `acknowledged.has(p.contentHash)` filter in `listDroppedEndpointEntriesSync` | `acknowledging an archiveId hides it, and it stays hidden across a simulated restart…` (still listed after ack) |
+| `readAndUnionAcknowledgedHashes`: skip reading the existing set first (`current = new Set()`) | `acknowledging twice keeps the first acknowledgement (union, not replace)` (the first entry reappears) |
+| `archiveDroppedEndpointEntries`: drop `archiveId: randomUUID()` from the serialised line | `lists a dropped endpoint entry…` (`typeof entry.archiveId).toBe('string')` fails — `parseArchiveLine` returns null) |
+| `archiveDroppedEndpointEntries`: drop the `!onDisk.has(d.contentHash)` half of the `fresh` filter | `acknowledging an archiveId hides it, and it stays hidden across a simulated restart…` (`archiveLinesAfter` grows — a duplicate line for the unchanged entry, and the acknowledgement on the OLD archiveId no longer covers the NEW one, so the entry reappears) |
+| `dropInvalidEndpointEntries`: hash `{ id: d.id, ...entry }` instead of the raw `entry` (id folded into the hash) | `a MODIFIED bad entry (different content, same id) is listed again…` still passes by coincidence; add `it('two entries with different ids but byte-identical content hash the same')` if this distinction ever matters — flagged as a gap, not a currently-failing case |
+| `acknowledgeDroppedEndpointEntries`: resolve archiveId → hash by re-deriving a fresh hash from `entry` instead of reading the archived `contentHash` off disk | `acknowledging an archiveId hides it…` (a `JSON.parse`/`canonicalStringify` round-trip of the archived `entry` is not guaranteed byte-identical to the original pre-archive value, e.g. key ordering — the resolved hash can silently miss) |
+| `readAndUnionAcknowledgedHashes`: write directly with `writeJsonAtomic` instead of chaining onto `writeChain` | `two concurrent acknowledge calls do not lose either one (serialised through writeChain, review item 6)` (flaky: one call's read-modify-write can be clobbered by the other's) |
 | `envDerived`: delete `droppedEndpointEntries: listDroppedEndpointEntriesSync()` | `GET /api/user/settings exposes droppedEndpointEntries…` |
-| Remove `'droppedEndpointEntries'` from `FORBIDDEN_KEYS` | the same test's PUT half (a client could smuggle a fabricated entry back in) |
 | `summarisePending`: `archiveId: 'placeholder'` instead of `null` | `an unarchived pending entry is listed with archiveId null` |
-| Key-entry `codes` push → reuse the endpoint entry's `zodIssueCodes(...)` unconditionally instead of the key schema's | `lists a dropped key entry with the origin only…` (wrong path prefix in the code string) |
+| Key-entry `codes` push → reuse the endpoint entry's `zodIssueCodes(...)` unconditionally instead of the key schema's | `lists a dropped key entry with the origin only, never the key, and asserts its issues` (`['origin: invalid_type']` becomes a different path) |
+| `parseArchiveLine` / `summarisePending`: drop the `.slice(0, DROPPED_ENTRY_NAME_MAX)` | `a name over 80 characters is capped in the summary (review item 10)` |
+
+**Dropped, not fixed (review item 8, first sub-item).** An earlier draft had a row "remove
+`'droppedEndpointEntries'` from `FORBIDDEN_KEYS` → the general-PUT test goes red." It does not:
+`droppedEndpointEntries` is never added to `userSettingsSchema`'s shape (it is response-only, built by
+`envDerived`), so `writeUserSettings`'s `patchSchema.parse(sanitised)` (`userSettingsSchema.partial()`)
+silently strips it as an unrecognized key regardless of `FORBIDDEN_KEYS` membership — same as
+`corruptSettingsFile`, which is in `FORBIDDEN_KEYS` for the same defensive-only reason and is
+likewise unreachable via that mechanism today. The `FORBIDDEN_KEYS` entry stays (matching that
+precedent), but no mutation row claims it is what a test observes.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -8371,6 +8818,7 @@ Revert one change at a time, confirm the named test goes red, then restore:
 | In `names`, match with a plain prefix test on `'openai:' + id` (no `::` and no grammar) | the same test (`openai:m-ref2::m` is then read as `m-ref`) |
 | Delete the `notYet` block in `mockEndpointFromInput` | `until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload, as the server does` |
 | Delete the `mockHasControlCharacter(key)` refusal in `mockPutAnalyzerEndpointKey` | `refuses a key containing a control character, as the server does…` |
+| `mockAcknowledgeDroppedEndpointEntries`: return `mockSettingsWithEndpoints(mockEndpoints())` without filtering `droppedEndpointEntries` first (the pre-fix no-op) | `mock acknowledgeDroppedEndpointEntries removes only the named entries (#3084 F5 review, item 7)` |
 | In `createAnalyzerEndpoint`, drop the `try/catch` and `rejectWithValue` (back to a bare `(input) => api.createAnalyzerEndpoint(input)`) | `a refused create rejects .unwrap() with the {error, code, issues} payload intact…` (the unwrapped rejection has no `issues` property) |
 | `rejectAnalyzerEndpointError`: build the payload as `{ error: e.message }` only (drop `code`/`issues`) | the same test (`toMatchObject({ code: 'duplicate-id' })` fails, and `issues` is `undefined`) |
 | `rejectAnalyzerEndpointError`: `return rejectWithValue(e as never)` instead of rethrowing a non-`AnalyzerEndpointError` | `a non-refusal rejection still rejects .unwrap() as before, with no issues array` (the `TypeError` gets wrapped as a rejection payload instead of RTK's own serialised error, so `.message` is no longer `'network down'`) |

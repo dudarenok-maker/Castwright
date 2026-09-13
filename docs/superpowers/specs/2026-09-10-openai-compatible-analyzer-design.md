@@ -310,7 +310,7 @@ Two defects in this area were split out as prerequisites and are queued as Open 
   - **Classification unchanged:** only connect-phase errors are unreachable (§1). A proxy's 502 or a socket reset is retried and never falls back. `AnalyzerTransportError` never falls back.
   - **The knob:** `analyzer.fallback.target` (env `ANALYZER_FALLBACK_TARGET`), in Advanced Settings' `analyzer-models` group (wiki §4 "Analyzer models & endpoints"), knob type `'analyzer-engine'`.
     - **Values:** `off` | `local` | `gemini` | `openai:<endpointId>::<model>`. Default `gemini`.
-    - `local` means the saved Ollama model; `gemini` means the resolved `GEMINI_MODEL` and needs a Gemini key.
+    - `local` means `getResolvedOllamaModel()`; the Settings row shows that concrete model and warns if it isn't installed. `gemini` means the resolved `GEMINI_MODEL` and needs a Gemini key.
   - **Resolution:** `resolveAnalyzerFallbackTarget()` in `server/src/analyzer/fallback-target.ts`, in order:
     1. env;
     2. saved override;
@@ -321,19 +321,22 @@ Two defects in this area were split out as prerequisites and are queued as Open 
   - **Semantics.**
     - One global target, one hop: the fallback analyzer is never itself wrapped.
     - It applies when the selected primary (Ollama `local` or an endpoint) throws `AnalyzerUnreachableError`. A Gemini primary never falls back, as today; it raises no unreachable error.
-    - There is no wrap when the target is `off`, equals the primary (same engine and model), is `gemini` with no key, or names an endpoint that no longer exists (that last case also logs a warning).
+    - There is no wrap when the target is `off`; is `local` and the primary is `local` (whatever the two models); equals an endpoint primary; is `gemini` with no key; or names an endpoint that no longer exists.
+    - **A deleted endpoint:** that last case logs a warning. The runtime is authoritative for it: an endpoint deleted after the target was saved is skipped at run time, whatever the save check accepted.
     - `fallbackSelectionFor(primary)` in `server/src/analyzer/index.ts` builds the target selection; `selectAnalyzer` wraps with `FallbackAnalyzer(primary, target)` only when it is non-null.
     - `findEndpointReferences` counts the knob, so deleting an endpoint the fallback names is handled like any other reference (§3).
   - **When fallback activates.**
     - The target runs with its own limiter, concurrency, key-origin check and capability check; a capability refusal fails the call naming the target.
-    - A GPU-bound target (`local`, or an endpoint whose `gpu` is not `none`) takes the same in-flight and run busy marks a primary would, so TTS eviction never unloads it mid-call.
+    - A GPU-bound target (`local`, or an endpoint whose `gpu` is not `none`) takes the same in-flight and run busy marks a primary would, so TTS eviction never unloads it mid-call. The marks are taken only when fallback activates, never at selection.
+    - **After a switch:** later chunking uses the target's capacity (§6), and phase-1 events carry the target engine.
     - `onFallback` names both the primary and the target; a fallback is never silent.
     - **Announced behaviour changes (3d):**
       - **Every method announces:** on `46e62a34` five `FallbackAnalyzer` methods fall back without calling `onFallback` (`runStage1`, `runEmotionChapter`, `runStage3Chapter`, `runAttributionEscalation`, `runNonStoryClassification`). From 3d all eight announce.
       - **The switch note names both:** it renders the server's `fallbackReason`, for example `Ollama unreachable (<model>) — switched to <target>`, replacing `Switched to Gemini — Ollama unreachable`.
       - **Script review copy:** the warm-fail copy "turn on Cloud fallback in Settings → analyzer" becomes "choose an analyzer fallback in Advanced Settings → Analyzer fallback".
+      - **Release notes:** they say Gemini is the default fallback for endpoint users.
     - If the target is also unreachable, the run fails naming both.
-  - **Save validation:** a target naming a missing endpoint, or `gemini` with no key saved, is refused at save with a message. The Advanced Settings row shows the target's label.
+  - **Save validation:** a target naming a missing endpoint, or `gemini` with no key saved, is refused at save with a message. The Advanced Settings row shows the effective target, including a legacy `off`, and reads "Gemini — no API key, fallback inactive" when the target is `gemini` with no key.
   - **Unchanged:** persona generation never falls back (§10, `registry.ts:1185`).
 
 ### 5. Rate limits and concurrency
@@ -423,16 +426,19 @@ Two defects in this area were split out as prerequisites and are queued as Open 
   - **Reasoning evidence** is any of: `usage.reasoningTokens > 0`, `reasoningSeen` (reasoning deltas, Gemini thought parts), or an unterminated `<think>` block. A Gemini `thoughtsTokenCount` becomes `usage.reasoningTokens` only on a request whose wire sent `includeThoughts`, stage or free text.
   - **Fail:** a `length` finish with no answer text and reasoning evidence raises `AnalyzerReasoningOverflowError`. It maps to `analyzer-reasoning-overflow` and never splits.
     - **Stop new spend (approved by the owner 2026-09-13):** the run starts no new model calls; in-flight chapters finish and cache; resume continues from there.
-    - **The failure names what happened:** for `analyzer-reasoning-overflow`, `classifyAnalysisFailure` (`server/src/routes/failure-taxonomy.ts:492`) returns a `userMessage` naming the chapter, the model and the engine or endpoint, and saying the model spent its whole output budget thinking and gave no answer. `remediation` lists the steps in plain words and ends with "then resume — finished chapters are kept".
-    - **Structured fixes:** `AnalysisFailure` (`failure-taxonomy.ts:400`), the SSE error payload and OpenAPI gain an optional `fixes: AnalysisFailureFix[]`, built by `reasoningOverflowFixes(ctx)`. Each fix is `{ label, settingKey?, endpointField?: { endpointId, field }, wikiHref? }`. Wave 5a adds `reasoningSetting?: { engine: 'gemini' | 'ollama'; model }`, because Gemini and Ollama reasoning levels live in the per-model `analyzerReasoningByEngine` map, which is neither a registry key nor an endpoint field.
+    - **The failure names what happened:** for `analyzer-reasoning-overflow`, `classifyAnalysisFailure` (`server/src/routes/failure-taxonomy.ts:492`) returns a `userMessage` that is the headline: it names the chapter, the model and the engine or endpoint, and says the model spent its whole output budget thinking and gave no answer, with no "then retry". `remediation` lists the steps in plain words and ends with "then resume — finished chapters are kept". So the chapter is named on every path, the subset (Retry) route's Phase-1 loop gains the catch that records the chapter.
+    - **Structured fixes:** `AnalysisFailure` (`failure-taxonomy.ts:400`), the SSE error payload and OpenAPI gain an optional `fixes: AnalysisFailureFix[]`, built by `reasoningOverflowFixes(ctx)`. Each fix is `{ label, settingKey?, endpointField?: { endpointId, field }, wikiPage? }`. `wikiPage` is a page name: `src/lib/wiki-links.ts` forbids `#anchor` fragments, so the label names the section and the frontend builds `WIKI_BASE/<page>`. `AnalysisFailureFix` and `reasoningOverflowFixes` live in `server/src/routes/failure-taxonomy.ts`, and `ctx` is `{ transport, model, endpointId? }`. `AnalyzerReasoningOverflowError` gains `endpointId?` (3b, set by `OpenAITransport`) and `reasoningLevel?` (5a, the level sent). Wave 5a adds `reasoningSetting?: { engine: 'gemini' | 'ollama'; model }`, because Gemini and Ollama reasoning levels live in the per-model `analyzerReasoningByEngine` map, which is neither a registry key nor an endpoint field.
     - **What each engine offers** — only settings that exist at that wave:
-      - **Gemini:** smaller chunks (`analyzer.gemini.maxInputTokensPerRequest`, `analyzer.gemini.outputHeavyChunkChars`); max output tokens (`analyzer.gemini.maxOutputTokens`, only when set below the model's limit); switch model; lower the reasoning level (from wave 5, linked through `reasoningSetting`). At an explicit level it is offered when the model's table row has a lower level. At `model default` it is offered as "try `<the row's lowest level>`", because the default level is not known: `minimal` on 3.6 / 3.5 Flash and the Flash-Lite ids, `low` on 3.8 / 3.7 Flash and 3.1 Pro. Gemma at its default gets none, because it is outside the thinking rule.
-      - **Ollama:** `analyzer.ollama.numCtx` (the binding limit); stage input fractions; reasoning `off` for that model (from wave 5, linked through `reasoningSetting`).
+      - **Gemini:** smaller chunks (`analyzer.gemini.maxInputTokensPerRequest`, `analyzer.gemini.outputHeavyChunkChars`); max output tokens (`analyzer.gemini.maxOutputTokens`, only when set below the model's limit); a label-only "Switch to another model" (2b); lower the reasoning level (copy and fix from 5a only, linked through `reasoningSetting`).
+        - **Reasoning gating:** the level fix is offered only when the level the failing request ran at has a lower rung. That level is the explicit level, or at `model default` the row's documented `defaultLevel` (§8): 3.8 / 3.7 and 3.6 / 3.5 Flash `medium`, 3.5 / 3.1 Flash-Lite `minimal`, 3.1 Pro `high`. So Flash-Lite at its default gets no level fix.
+        - **Gemma:** `on` gets "turn reasoning off"; `off` and its default get none.
+      - **Ollama:** `analyzer.ollama.numCtx` (the binding limit); stage input fractions; "turn reasoning off" for that model (from wave 5, linked through `reasoningSetting`), only when the level sent was `on` or a named level, never at `off`.
       - **Endpoints:** the endpoint's `maxOutputTokens` and `contextTokens` (must match the server); stage input fractions; reasoning level (from wave 5); payload `max_tokens` (from 5b).
       - **Never offered:** the thinking window, which bounds time, not output.
-    - **Guard test:** it fails if any `settingKey` is not a registry key, or any `endpointField.field` is not a key of the endpoint schema's shape, so the warning can never point at a setting that does not exist. From 5a it also fails if `reasoningSetting.engine` is not `gemini` or `ollama`, or if a level fix is offered for a model with no lower rung. Each wave that adds a fix extends it.
+    - **Guard test:** it fails if any `settingKey` is not a registry key, or any `endpointField.field` is not a key of the endpoint schema's shape, so the warning can never point at a setting that does not exist. From 5a it also fails if `reasoningSetting.engine` is not `gemini` or `ollama`, or if a level fix is offered for a model with no lower rung. It checks that each `wikiPage` file exists. It lives in `server/src/routes/failure-taxonomy-fixes.test.ts`, and each wave that adds a fix extends it. It is proven able to fail: a mutated `settingKey` goes red, and the guard runs with the conditional `maxOutputTokens` fix enabled.
     - **Loud:**
-      - The analysis failure surface renders a "How to fix" list with those links, and a notification survives navigating away.
+      - The analysis failure surface renders a "How to fix" list with those links.
+      - **Notification:** raised in `src/store/analysis-stream-middleware.ts`'s `AnalysisError` branch, which owns the stream that survives navigation. It is a persistent toast carrying `fixes` under `dedupeKey: 'analysis-stream'`, replacing the plain 6 s toast for this code. `setHalted`'s payload and the #3004 last-outcome record carry `fixes`, so a rejoin shows them.
       - A `settingKey` links to `#/advanced?focus=<settingKey>`; Advanced Settings scrolls to and highlights that row. The advanced route takes no parameter today (`src/lib/router.ts:49-50`).
         - **2b:** the `Stage` union's `'advanced'` member gains `focusKey`.
         - **How:** `stageToHash` and `stageEqual` in `src/lib/router.ts` emit and compare it. `AdvancedRoute` reads it with `useSearchParams` + `useHydrateStage`, as `HelpRoute` does with `?code=` (`src/routes/index.tsx:491-496`). Both halves ship with tests.
@@ -440,11 +446,11 @@ Two defects in this area were split out as prerequisites and are queued as Open 
         - **Routing is react-router:** there is no `parseHash` any more (`src/routes/index.tsx:1126`).
       - An `endpointField` (3d) links to `#/models?endpoint=<id>&field=<field>`. The `Stage` union's `'model-manager'` member gains `endpointId` and `endpointField`, `uiActions.openModelManager(payload?)` takes them, and Model Manager opens that endpoint's editor with the field focused. A fix with both `settingKey` and `endpointField` keeps the `settingKey` link.
       - A `reasoningSetting` (5a) links to `#/advanced?reasoningEngine=<engine>&reasoningModel=<encodeURIComponent(model)>`, and Advanced Settings scrolls to and highlights that model's reasoning row. It uses two parameters because Ollama tags contain `:`, following the help route's `?code=` precedent.
-    - **Wiki anchors:** Gemini and Ollama fixes link a new "When a model thinks past its output limit" section in `docs/wiki/Analysis-and-the-Analyzer.md`; endpoint fixes link the same-named section of the endpoints wiki page (Documentation).
+    - **Wiki pages:** Gemini and Ollama fixes name the page `Analysis-and-the-Analyzer`, whose new "When a model thinks past its output limit" section the label names. Endpoint fixes name `OpenAI-Compatible-Analyzer-Endpoints`, which has the same-named section (Documentation).
     - **Staging:**
       - 2b: the Gemini and Ollama fixes, the field, router focus, rendering, notification and guard test;
       - 3b: the endpoint fixes;
-      - 3d: the endpoint-editor deep link and the endpoint wiki anchor;
+      - 3d: the endpoint-editor deep link and the endpoint wiki page link;
       - 5a: the reasoning-level fixes;
       - 5b: the payload fix.
 - **Default changes before measurement.**
@@ -468,7 +474,7 @@ Two defects in this area were split out as prerequisites and are queued as Open 
   - **Gemini 3.5 and 3.1 Flash-Lite:** `model default` / `minimal` / `low` / `medium` / `high`.
   - **Gemini 3.1 Pro:** `model default` / `low` / `medium` / `high`.
   - **No off on 3.x:** thinking cannot be disabled on 3.x, so no `off` is offered. Every 3.x level is sent as `thinkingLevel`.
-  - **No default is assumed:** Google's pages disagree on the 3.8 / 3.7 Flash default, so nothing depends on one; `model default` omits the field.
+  - **Documented default, for fixes only:** each row records `defaultLevel`, the level ai.google.dev's thinking page names as the model's default (read twice on 2026-09-13): 3.8 / 3.7 Flash `medium`, 3.6 / 3.5 Flash `medium`, 3.5 / 3.1 Flash-Lite `minimal`, 3.1 Pro `high`. It decides only whether an overflow at `model default` has a lower rung to suggest (§7). The wire still omits the field at `model default`, so no request depends on it.
   - **Gemma 4:** `model default` / `off` (`thinkingLevel: minimal`) / `on` (`thinkingLevel: high`).
   - **Gemini 2.5 and unknown ids:** `model default` only. The 2.5 `thinkingBudget` control is dropped: the owner directs focus to the current 3.x Flash family, 2.5 is legacy, and a budget branch would be code and tests for a family Google is retiring.
   - **Invariant:** a request never carries both `thinkingLevel` and `thinkingBudget`; Gemini rejects that with a 400. Nothing sends `thinkingBudget`, and a test pins that no Gemini request carries it. The Test action confirms each level.
@@ -491,14 +497,14 @@ Two defects in this area were split out as prerequisites and are queued as Open 
   - **Validation:** reasoning levels and protected keys are validated when settings are written, never when they are read. `readUserSettings` falls back to defaults for the whole file when its content parses but fails the schema (`user-settings.ts:522-525`), so validating on read could wipe every setting. An *unparseable* file is a separate path — recovered from its `.bak.N` backups, else in-memory defaults with a corruption flag (`:479-498`) — and does not reject. The risk being avoided is a refinement wiping a valid file. The one exception read *does* make is the per-entry endpoint parse: it hooks into `performUserSettingsRead` between the eager-load migration and that whole-file `safeParse`, drops only the offending entry, and never sets the corruption flag (which means the file itself was unreadable, not that one entry failed its schema).
   - **Endpoint entries are validated on save (owner rule, 2026-09-13).**
     - **Where:** endpoint create/update, the key write and the settings PUT validate every endpoint field before writing (server 3b, UI 3d).
-    - **Refusal:** a malformed entry is refused with HTTP 400 `{ error, code, issues: [{ path: string[], message }] }`. `path` is an array of segments (`[]` for a refusal naming no single field), and `code` is the machine-readable refusal kind. No issue message echoes a key or a field value.
+    - **Refusal:** a malformed entry is refused with HTTP 400 `{ error, code, issues: [{ path: string[], message }] }`. `path` is an array of segments (`[]` for a refusal naming no single field), and `code` is the machine-readable refusal kind. Issue messages are field-aware templates that state units, never raw zod text, and never echo a key or a field value.
     - **UI:** each issue is shown inline next to its field.
     - Nothing is written, and nothing is silently dropped at save.
   - **Every drop on load is visible (3b).** The read-time drop above stays exactly as planned: only the offending entry, archived first, never a file reset, never `corruptSettingsFile`.
-    - **Exposure:** `GET /api/user/settings` returns the dropped entries read-only as `droppedEndpointEntries`, each `{ archiveId: string | null, kind: 'endpoint' | 'key', endpointId?, name?, origin?, issues, droppedAt }`. `issues` are `path: code` strings from the schema, never values. Key entries carry the origin only. The field is in `FORBIDDEN_KEYS`, like `corruptSettingsFile`.
+    - **Exposure:** `GET /api/user/settings` returns the dropped entries read-only as `droppedEndpointEntries`, each `{ archiveId: string | null, kind: 'endpoint' | 'key', endpointId?, name?, origin?, issues, droppedAt }`. `issues` are `path: code` strings from the schema, never values. Key entries carry the origin only, and `name` is capped at 80 characters. The field is in `FORBIDDEN_KEYS`, like `corruptSettingsFile`.
     - **Pending archive:** an entry whose archive append has not yet succeeded (P25's append-failure path) is still listed, with `archiveId: null`, because the user must still be told. It cannot be acknowledged until it is archived.
-    - **Acknowledge:** `POST /api/user/settings/dropped-endpoint-entries/acknowledge` (operationId `acknowledgeDroppedEndpointEntries`, body `{ archiveIds }`) records those ids in a sidecar file, `user-settings.invalid-endpoints.acknowledged.json`, beside the archive. The archive stays append-only; each archive record gains `archiveId`. A `null` or unknown id is ignored, not refused. Acknowledged entries are no longer listed.
-    - **Banner (3d):** Model Manager → Analyzer endpoints, and Advanced Settings' analyzer section, show a warning for each unacknowledged dropped entry: its name or id, what was wrong, that it was removed to protect the rest of the settings, and that a copy was saved to `user-settings.invalid-endpoints.json`, "next to `user-settings.json` in your workspace folder". It never shows an absolute path: the GET carries none, and an absolute workspace path must not reach a LAN client. "Got it" acknowledges; a new drop shows again. The `console.warn` stays.
+    - **Acknowledge:** `POST /api/user/settings/dropped-endpoint-entries/acknowledge` (operationId `acknowledgeDroppedEndpointEntries`, body `{ archiveIds }`) records those ids in a sidecar file, `user-settings.invalid-endpoints.acknowledged.json`, beside the archive. The archive stays append-only; each archive record gains `archiveId` and a server-only `contentHash`. So the same unchanged entry is archived once and stays acknowledged across restarts, while a changed or new entry shows again. Acknowledgement is serialised. A `null` or unknown id is ignored, not refused. Acknowledged entries are no longer listed.
+    - **Banner (3d):** Model Manager → Analyzer endpoints, and Advanced Settings' analyzer section, show a warning for each unacknowledged dropped entry: its name or id, what was wrong, that it was removed to protect the rest of the settings, and that a copy was saved to `user-settings.invalid-endpoints.json`, "next to `user-settings.json` in your workspace folder". It never shows an absolute path: the GET carries none, and an absolute workspace path must not reach a LAN client. "Got it" acknowledges; a changed or new entry shows again. The `console.warn` stays.
     - **Before 3d:** the GET exposure has no UI. That is acceptable because endpoints are not selectable before 3d.
   - **Temperature:** a payload `temperature` / `options.temperature` sets the first attempt's temperature only; the retry policy's temperature applies after the merge (§1).
 - **Protected keys,** refused at save **and removed again at merge time**, so a value stored before a rule existed never reaches the wire:
@@ -555,7 +561,7 @@ Two defects in this area were split out as prerequisites and are queued as Open 
 | Condition | Behaviour |
 |---|---|
 | Caller abort (pause, disconnect) | `AnalysisAbortedError`, dropped quietly as today |
-| Unreachable (1c classification) | `AnalyzerUnreachableError` → one-hop fallback to the configured `analyzer.fallback.target`, unless it is `off`, equals the primary, is `gemini` with no key, or names a missing endpoint; else a hard fail naming the endpoint. A target that is also unreachable fails naming both |
+| Unreachable (1c classification) | `AnalyzerUnreachableError` → one-hop fallback to the configured `analyzer.fallback.target`, unless it is `off`, is `local` with a `local` primary, is the endpoint primary itself, is `gemini` with no key, or names a missing endpoint (skipped at run time with a warning); else a hard fail naming the endpoint. A target that is also unreachable fails naming both |
 | Ceiling, or timeout after connecting | `analyzer-timeout`, never a fallback |
 | Stream ended without a finish reason | `AnalyzerStreamIncompleteError`, retried like an idle stream |
 | 401/403, or key origin mismatch | `auth`, naming the engine/endpoint key |
@@ -571,8 +577,8 @@ Two defects in this area were split out as prerequisites and are queued as Open 
 
 ## Testing
 
-- **Characterisation before wave 1.** Pin each runner difference listed in §1 and the taxonomy outcomes for Ollama 400/404/500/503. This includes a new `gemini.test.ts` assertion on the retry request's replayed turn and temperature.
-- **Transport contract suite.** It runs against all three transports over a **real `http.createServer` and a real undici `Agent`**, following `server/src/analyzer/ollama-timeout.test.ts:61,112-114`; a stubbed `fetch` would bypass the dispatcher and could not fail. Every case asserts the **error class**, not just that the call ended:
+- **Characterisation before wave 1 (1a).** Pin each runner difference listed in §1 and the taxonomy outcomes for Ollama 400/404/500/503. This includes a new `gemini.test.ts` assertion on the retry request's replayed turn and temperature.
+- **Transport contract suite (Ollama and Gemini in 1b; OpenAI in 3b).** It runs against all three transports over a **real `http.createServer` and a real undici `Agent`**, following `server/src/analyzer/ollama-timeout.test.ts:61,112-114`; a stubbed `fetch` would bypass the dispatcher and could not fail. Every case asserts the **error class**, not just that the call ended:
   - streamed text and `finish` mapping;
   - a refused port and an unroutable host → `AnalyzerUnreachableError`;
   - a post-connect stall → `AnalyzerTimeoutError`;
@@ -585,42 +591,42 @@ Two defects in this area were split out as prerequisites and are queued as Open 
   - a ceiling that fires before headers (the SDK throws `APIUserAbortError`) → `AnalyzerTimeoutError`;
   - `reasoning_content` and `reasoning` deltas keeping the idle watchdog alive and setting `reasoningSeen`;
   - ceiling time not charged while the call waits on the semaphore.
-- **Runner.** Existing `ollama.test.ts` / `gemini.test.ts` stage behaviours move to runner tests without weakening assertions. Also:
-  - the `<think>` strip, including the unterminated case;
-  - reasoning overflow versus truncation, including an empty Gemma `MAX_TOKENS` with no reasoning evidence still splitting;
-  - a 400 producing `analyzer-request-rejected` with no second request;
-  - pre-run refusal from a Test record;
-  - a payload temperature not overriding the retry temperature;
-  - the persona free-text path.
-- **Test action.**
+- **Runner.** Existing `ollama.test.ts` / `gemini.test.ts` stage behaviours move to runner tests without weakening assertions (1b). Also:
+  - the `<think>` strip, including the unterminated case (1b);
+  - reasoning overflow versus truncation, including an empty Gemma `MAX_TOKENS` with no reasoning evidence still splitting (2b);
+  - a 400 producing `analyzer-request-rejected` with no second request (3b);
+  - pre-run refusal from a Test record (3c);
+  - a payload temperature not overriding the retry temperature (5b);
+  - the persona free-text path (4).
+- **Test action (3c; the level step in 5a).**
   - A failing control request records nothing as `rejected`.
   - The marker-key probe → `enforced` / `ignored` / `rejected`.
   - Records are discarded after a base-URL change.
   - `scope: 'all'` request counts.
 - **Pure functions.**
-  - Schema adapters, including a snapshot of `dropped` for every stage schema per provider.
-  - The id-grammar table, run against every listed `:` site.
-  - Catalog merge and fallback, and served-context prefill field selection.
-  - Limiter resolution order, including the map-read test.
-  - Capacity and budgets, with the pinning test captured from `main`; Auto output tokens.
-  - The reasoning level sets per style and family, and that no Gemini request carries `thinkingBudget`.
-  - Fallback target resolution (env, saved override, legacy `allowCloudFallback`, default) and each no-wrap case of `fallbackSelectionFor`.
-  - `reasoningOverflowFixes` per engine, and the guard that every `settingKey` and `endpointField.field` exists.
-  - Payload merge, protected keys, owned-container null refusal, and redaction length rule.
-  - Key-origin matching; unload URL `{model}` substitution.
-- **Eviction.** No unload POST while an endpoint call is in flight or a run using the endpoint is active (the run-level mark). An unload POST only for a matching card. Ollama keeps its own latch; the endpoint lever has none, and an endpoint idle only at a later poll is still asked, with every model of a `{model}` URL still eligible after a mid-loop busy skip. At most one POST per (endpoint, model) per admission, a hang included. A 2xx or 404 removes the model from the served set. Capacity is re-probed after an unload. Tests drive several endpoints, several models and several polls, not a single stub.
+  - Schema adapters, including a snapshot of `dropped` for every stage schema per provider (3b).
+  - The id-grammar table, run against every listed `:` site (3a).
+  - Catalog merge and fallback, and served-context prefill field selection (3c).
+  - Limiter resolution order, including the map-read test (3c).
+  - Capacity and budgets, with the pinning test captured from `main` (2a); Auto output tokens (Gemini 2b, endpoints 3b).
+  - The reasoning level sets per style and family, and that no Gemini request carries `thinkingBudget` (5a).
+  - Fallback target resolution (env, saved override, legacy `allowCloudFallback`, default) and each no-wrap case of `fallbackSelectionFor` (3d).
+  - `reasoningOverflowFixes` per engine, and the guard `failure-taxonomy-fixes.test.ts` that every `settingKey`, `endpointField.field` and `wikiPage` exists (2b; extended in 3b, 5a and 5b).
+  - Payload merge, protected keys, owned-container null refusal, and redaction length rule (5b).
+  - Key-origin matching; unload URL `{model}` substitution (3b).
+- **Eviction (3d).** No unload POST while an endpoint call is in flight or a run using the endpoint is active (the run-level mark). An unload POST only for a matching card. Ollama keeps its own latch; the endpoint lever has none, and an endpoint idle only at a later poll is still asked, with every model of a `{model}` URL still eligible after a mid-loop busy skip. At most one POST per (endpoint, model) per admission, a hang included. A 2xx or 404 removes the model from the served set. Capacity is re-probed after an unload. Tests drive several endpoints, several models and several polls, not a single stub.
 - **Routes.**
-  - `GET /api/analyzer/models`, the Test action, and Detect.
-  - Endpoint CRUD, including these refusals: delete-while-referenced, missing context, off-origin unload URL.
-  - The per-endpoint key write and settings validation, including a 400 with `issues` for a malformed endpoint on every write path.
-  - `droppedEndpointEntries` on the settings GET, and its acknowledge route.
+  - `GET /api/analyzer/models` and the Test action (3c), and Detect (3b).
+  - Endpoint CRUD, including these refusals: delete-while-referenced, missing context, off-origin unload URL (3b).
+  - The per-endpoint key write and settings validation, including a 400 with `issues` for a malformed endpoint on every write path (3b).
+  - `droppedEndpointEntries` on the settings GET, and its acknowledge route (3b).
 - **E2E (Playwright, mock mode).**
-  - Add an endpoint (context size required) and pick its model in the picker; the run label shows mode, "schema (not enforced)" from a mocked Test record, and "+ custom params".
-  - The GPU guard prompts for an endpoint on the TTS card and not for one on another card.
-  - Editing the host prompts for the key.
-  - A reasoning-overflow failure shows its "How to fix" links, and a setting link focuses that Advanced Settings row.
-  - A dropped endpoint entry shows its banner until "Got it".
-- **Mutation proofs** for each resolver, adapter, classifier and guard, per repo practice.
+  - Add an endpoint (context size required) and pick its model in the picker; the run label shows mode and "schema (not enforced)" from a mocked Test record (3d.9), and "+ custom params" (5b, Task 5.12 extends the same spec).
+  - The GPU guard prompts for an endpoint on the TTS card and not for one on another card (3d.9).
+  - Editing the host prompts for the key (3d.9).
+  - A reasoning-overflow failure shows its "How to fix" links, and a setting link focuses that Advanced Settings row (a new 2b Playwright task).
+  - The fallback target, a dropped endpoint entry's banner until "Got it", and a fix's endpoint deep link (3d.9).
+- **Mutation proofs** for each resolver, adapter, classifier and guard, per repo practice, in the wave that adds it.
 
 ## Documentation
 
@@ -631,7 +637,7 @@ Two defects in this area were split out as prerequisites and are queued as Open 
     3. one setup section per server;
     4. fallback (§4);
     5. chunk size (§6);
-    6. "When a model thinks past its output limit" (§7's endpoint anchor);
+    6. "When a model thinks past its output limit" (the section §7's endpoint fixes name);
     7. a troubleshooting table: unreachable vs a 502 or reset; key origin mismatch; a 400 naming a token limit; "schema (partial)" / "schema (not enforced)"; dropped malformed entries (§9).
   - **Servers:** llama.cpp (llama-server), llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter. Each section gives:
     - when to pick it;
@@ -642,7 +648,8 @@ Two defects in this area were split out as prerequisites and are queued as Open 
     - pitfalls, with the exact error the user sees and the fix.
   - **Examples are verified, never invented:** each is checked at implementation time against that tool's current documentation, and against the planning-facts probe findings where they exist. Each example block records the tool version it was checked against.
   - **Linked from:** `docs/wiki/_Sidebar.md`; `docs/wiki/Analysis-and-the-Analyzer.md` "Choosing an analyzer"; `docs/wiki/Advanced-Settings.md` §4 "Analyzer models & endpoints"; the endpoint form's help link in Model Manager; and the overflow fix links (§7).
-- **Advanced Settings wiki.** A PR that adds or changes an Advanced Settings knob updates the matching section of `docs/wiki/Advanced-Settings.md` in the same PR: for example the thinking window, request ceiling and lifted input-cap maximum in 2b, and the fallback target in 3d. `scripts/tests/knob-docs-sync.test.mjs` (#2012) already fails when a registry knob's label has no row there.
+- **Advanced Settings wiki.** A PR that adds or changes an Advanced Settings knob updates the matching section of `docs/wiki/Advanced-Settings.md` in the same PR: for example the thinking window, request ceiling and lifted input-cap maximum in 2b, and the fallback target in 3d. `scripts/tests/knob-docs-sync.test.mjs` (#2012) already fails when a registry knob's label has no row there, and asserts the "— N knobs across M groups" count in `Advanced-Settings.md:14`, which 2b (two knobs) and 3d (one) each update.
+- **Privacy help topic (3d).** `src/data/help-topics.ts:337-340` (`is-my-data-private`) says the one thing that can leave the machine is the optional Gemini analyzer, used only when the local model isn't running. 3d updates it, because a remote endpoint, and a remote fallback target, send chapter text off the machine.
 - **Analyzer wiki.** 2b adds the "When a model thinks past its output limit" section to `docs/wiki/Analysis-and-the-Analyzer.md`.
 - **Publishing.** The wiki is published by `npm run wiki:sync` (`scripts/sync-wiki.mjs`), a manual step after merge; each PR's post-merge checklist says so.
 
@@ -720,7 +727,7 @@ Findings:
 - **Gemini.**
   - Thought summaries are documented as "rolling, incremental summaries during generation" (documentation only).
   - Levels differ per model (§8); sending both `thinkingLevel` and `thinkingBudget` is a 400.
-  - Re-verified 2026-09-13 (planning facts §C): 3.8 / 3.7 Flash reject `minimal`; 3.6 / 3.5 Flash and 3.5 / 3.1 Flash-Lite accept it; 3.1 Pro has no `minimal`; no 3.x model can turn thinking off; Google's pages disagree on the 3.8 / 3.7 default.
+  - Re-verified 2026-09-13 (planning facts §C): 3.8 / 3.7 Flash reject `minimal`; 3.6 / 3.5 Flash and 3.5 / 3.1 Flash-Lite accept it; 3.1 Pro has no `minimal`; no 3.x model can turn thinking off; the thinking page documents the defaults as `medium` for 3.8 / 3.7 and 3.6 / 3.5 Flash, `minimal` for Flash-Lite and `high` for 3.1 Pro (read twice; an earlier `low` read for 3.8 / 3.7 was wrong).
   - `models.list()` has `inputTokenLimit`, `outputTokenLimit`, `supportedActions` and `thinking`, but no modality field.
   - Unsupported `responseJsonSchema` keywords are documented as ignored; size limits are not published.
   - `thoughtsTokenCount` sits in `usageMetadata`, and `maxOutputTokens` includes thinking tokens.
