@@ -577,30 +577,56 @@ export function rowsToProcesses(rows) {
  *  pwsh 7 — and a Node-side parser tuned for one silently drops every row
  *  under the other. `[long]` always serialises as a plain JSON number on
  *  both, sidestepping the ambiguity rather than chasing both formats. */
-export function collectProcessSnapshot() {
-  if (!isWindows) return [];
-  const result = spawnSync(
-    'powershell',
-    [
-      '-NoProfile',
-      '-Command',
-      "Get-CimInstance Win32_Process | " +
-        "Select-Object ProcessId,ParentProcessId,Name,CommandLine," +
-        "@{N='CreationEpochMs';E={ if ($_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { $null } }}," +
-        "@{N='CpuSeconds';E={([double]$_.UserModeTime + [double]$_.KernelModeTime)/1e7}} | " +
-        'ConvertTo-Json -Compress',
-    ],
-    { encoding: 'utf8', timeout: 15000, windowsHide: true },
-  );
-  if (result.error || result.status !== 0 || !result.stdout) return [];
-  let rows;
-  try {
-    const parsed = JSON.parse(result.stdout);
-    rows = Array.isArray(parsed) ? parsed : [parsed];
-  } catch {
-    return [];
+export function collectProcessSnapshot({
+  spawn = spawnSync,
+  windows = isWindows,
+} = {}) {
+  if (!windows) return [];
+
+  const queryArgs = [
+    '-NoProfile',
+    '-Command',
+    "Get-CimInstance Win32_Process | " +
+      "Select-Object ProcessId,ParentProcessId,Name,CommandLine," +
+      "@{N='CreationEpochMs';E={ if ($_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { $null } }}," +
+      "@{N='CpuSeconds';E={([double]$_.UserModeTime + [double]$_.KernelModeTime)/1e7}} | " +
+      'ConvertTo-Json -Compress',
+  ];
+  const spawnOpts = { encoding: 'utf8', timeout: 15000, windowsHide: true };
+
+  const attempt = () => {
+    const result = spawn('powershell', queryArgs, spawnOpts);
+    if (result.error || result.status !== 0 || !result.stdout) return null;
+    try {
+      const parsed = JSON.parse(result.stdout);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      return null;
+    }
+  };
+
+  const rows = attempt();
+  // A genuine PowerShell failure (error/non-zero-status/parse-failure) returns
+  // null above and we return [] immediately with no retry — the contract is
+  // unchanged. Only the "successful parse but empty rows" transient case
+  // retries once after a short fixed delay (#3238).
+  if (rows === null) return [];
+  if (rows.length > 0) return rowsToProcesses(rows);
+
+  // Transient empty result — retry once after a short delay.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  const retryRows = attempt();
+  if (retryRows === null) return [];
+  if (retryRows.length > 0) {
+    console.warn(
+      'collectProcessSnapshot: recovered on retry — first Win32_Process query returned empty rows',
+    );
+    return rowsToProcesses(retryRows);
   }
-  return rowsToProcesses(rows);
+  console.warn(
+    'collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)',
+  );
+  return [];
 }
 
 /** This process's own ancestor pids, resolved from `processes` — never

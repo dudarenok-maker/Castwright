@@ -1401,3 +1401,131 @@ test('S1 (declared gap, review pass 8): a *.test.mjs path handed as a DATA argum
     'known false positive -- see the DECLARED GAPS comment, not a target to silently fix here',
   );
 });
+
+// ---------------------------------------------------------------------------
+// #3238 — collectProcessSnapshot retry on transient empty Win32_Process results
+// ---------------------------------------------------------------------------
+
+const PLAUSIBLE_ROW = {
+  ProcessId: 9876,
+  ParentProcessId: 1234,
+  Name: 'node.exe',
+  CommandLine: 'node scripts/run-hooks-tests.mjs',
+  CreationEpochMs: 1_700_000_000_000,
+  CpuSeconds: 2.5,
+};
+
+const emptyArraySpawn = () => ({
+  status: 0,
+  stdout: '[]',
+  stderr: '',
+});
+
+const realRowSpawn = () => ({
+  status: 0,
+  stdout: JSON.stringify([PLAUSIBLE_ROW]),
+  stderr: '',
+});
+
+test('#3238: collectProcessSnapshot retries on empty rows and recovers when the second attempt returns real data', () => {
+  let callCount = 0;
+  const fakeSpawn = (_cmd, _args, _opts) => {
+    callCount += 1;
+    return callCount === 1 ? emptyArraySpawn() : realRowSpawn();
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(callCount, 2, 'must have called spawn exactly twice (first empty, then retry)');
+  assert.ok(result.length > 0, 'must return the recovered rows from the retry');
+  assert.equal(result[0].pid, PLAUSIBLE_ROW.ProcessId);
+  assert.equal(result[0].name, PLAUSIBLE_ROW.Name);
+});
+
+test('#3238: collectProcessSnapshot returns [] (not throws) when BOTH attempts return empty rows, and logs a still-empty warning', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return emptyArraySpawn();
+  };
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+    assert.equal(callCount, 2, 'must have called spawn twice (initial + retry)');
+    assert.deepEqual(result, [], 'must return [] when both attempts are empty');
+    assert.ok(
+      warnings.some((w) => /still empty after retry/.test(w)),
+      `expected a "still empty after retry" warning, got: ${JSON.stringify(warnings)}`,
+    );
+    assert.ok(
+      !warnings.some((w) => /recovered on retry/.test(w)),
+      'must NOT log a recovery message when the retry also returned empty',
+    );
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('#3238: collectProcessSnapshot does NOT retry on a genuine PowerShell failure (error result)', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return { error: new Error('spawn ENOENT'), status: null, stdout: '' };
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(callCount, 1, 'must have called spawn only once — no retry on genuine failure');
+  assert.deepEqual(result, [], 'must return [] on genuine failure');
+});
+
+test('#3238: collectProcessSnapshot does NOT retry on a non-zero exit status', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return { status: 1, stdout: '', stderr: 'some error' };
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(callCount, 1, 'must have called spawn only once — no retry on non-zero exit');
+  assert.deepEqual(result, [], 'must return [] on non-zero exit');
+});
+
+test('#3238: collectProcessSnapshot does NOT retry on a JSON parse failure', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return { status: 0, stdout: 'not valid json{{{', stderr: '' };
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(callCount, 1, 'must have called spawn only once — no retry on parse failure');
+  assert.deepEqual(result, [], 'must return [] on parse failure');
+});
+
+test('#3238: collectProcessSnapshot logs a recovery warning when retry succeeds', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return callCount === 1 ? emptyArraySpawn() : realRowSpawn();
+  };
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+    assert.ok(
+      warnings.some((w) => /recovered on retry/.test(w)),
+      `expected a "recovered on retry" warning, got: ${JSON.stringify(warnings)}`,
+    );
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('#3238: collectProcessSnapshot returns [] on non-Windows without calling spawn', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return realRowSpawn();
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: false });
+  assert.equal(callCount, 0, 'must not call spawn on non-Windows');
+  assert.deepEqual(result, []);
+});
